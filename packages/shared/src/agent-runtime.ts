@@ -15,6 +15,8 @@
  */
 
 import type { SessionStopDetail } from "./session-stop";
+import type { ModelSelection, ReasoningLevel } from "./model-selection";
+export { REASONING_LEVELS, type ModelSelection, type ReasoningLevel } from "./model-selection";
 
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
@@ -64,25 +66,6 @@ export const SESSION_ROLE_NAMES: Record<SessionRole, string> = {
   ticket: "Ticket Session",
   subagent: "Subagent Session",
 };
-
-/** Volli's reasoning policy, independent of any provider's type names. */
-export const REASONING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
-
-/** The selected model access for one Session attachment. */
-export interface ModelSelection {
-  providerId: string;
-  modelId: string;
-  reasoningLevel: ReasoningLevel;
-}
 
 /** Whether the singular Agent Runtime can truthfully use one account or model. */
 export type ModelAccessState = "available" | "authentication-required" | "unavailable";

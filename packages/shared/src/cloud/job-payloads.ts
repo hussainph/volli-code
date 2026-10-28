@@ -21,6 +21,10 @@
  * The kinds no ticket has typed yet stay opaque JSON objects.
  */
 
+import { REASONING_LEVELS, type ModelSelection } from "../model-selection";
+import { AUTOMATION_RUN_ATTENDANCE } from "../automation-policy";
+import type { AutomationRunAttendance } from "../automation";
+import { AUTOMATION_INSTRUCTIONS_MAX_CHARS } from "./automations";
 import type { SessionStopActor } from "../session-ledger";
 import {
   NOTICE_PROSE_LIMIT,
@@ -211,7 +215,7 @@ export type SessionNoticeJobPayload = WatchNoticeJobPayload | SubagentNoticeJobP
 /** The longest Session title a job carries. */
 export const JOB_TITLE_MAX_CHARS = 200;
 
-/** How an Automation came to run here. Arrivals today; schedule occurrences join with their producer. */
+/** Legacy enqueue-only arrival shape. Kept until the board arrival producer is upgraded. */
 export interface AutomationArrivalRunPayload {
   trigger: "arrival";
   automationId: AutomationId;
@@ -229,7 +233,48 @@ export interface AutomationArrivalRunPayload {
   armedByUserId: UserId | null;
 }
 
-export type AutomationRunPayload = AutomationArrivalRunPayload;
+/** Producer-minted identity: retained across supersede and lease retries. */
+interface AutomationRunJobBase {
+  runId: string;
+  sessionId: SessionId;
+  dueAt: number;
+  /** Superseded occurrences represented by the associated gap, not extra Runs to execute. */
+  missedCount: number;
+  attendance: AutomationRunAttendance;
+  modelOverride: ModelSelection | null;
+  requestedBySessionId: SessionId | null;
+}
+
+/** The executable contract. The clock/Run producer upgrades arrivals before the executor advertises the capability. */
+export type AutomationRunJobPayload =
+  | (AutomationRunJobBase & AutomationArrivalRunPayload)
+  | (AutomationRunJobBase & {
+      trigger: "schedule";
+      automationId: AutomationId;
+      ticketId: null;
+      armedByUserId: UserId;
+      attendance: "unattended";
+      modelOverride: null;
+      requestedBySessionId: null;
+    })
+  | (AutomationRunJobBase & {
+      trigger: "manual";
+      ticketId: TicketId | null;
+      armedByUserId: null;
+    } & (
+        | { automationId: AutomationId }
+        | { automationId: null; ticketId: TicketId; instructions: string }
+      ));
+
+/** Legacy arrivals are parseable, but MUST NOT be executed without producer-minted ids. */
+export type AutomationRunPayload = AutomationArrivalRunPayload | AutomationRunJobPayload;
+
+/** The executor uses this AFTER parseJobPayload; legacy arrivals are upgraded or drained, never executed. */
+export function isExecutableAutomationRun(
+  payload: AutomationRunPayload,
+): payload is AutomationRunJobPayload {
+  return "runId" in payload;
+}
 
 /** A payload no owning ticket has typed yet: an opaque JSON object. */
 export type JobPayloadObject = { readonly [field: string]: unknown };
@@ -494,9 +539,7 @@ function parseTyped(kind: JobKind, r: Reader): JobPayloads[JobKind] {
               }),
       } satisfies SessionDelegatePayload;
     case "automation.run":
-      r.only("trigger", "automationId", "ticketId", "from", "status", "origin", "armedByUserId");
-      r.oneOf("trigger", ["arrival"]);
-      return parseArrival(r);
+      return parseAutomationRun(r);
     case "session.notice":
       return parseSessionNotice(r);
     case "session.start":
@@ -525,6 +568,82 @@ function parseSessionCommand(r: Reader): SessionCommandJobPayload | SessionInter
       intentKind === "session.create" ? "intent creates a Session; use session.start" : null,
     ),
   };
+}
+
+function parseAutomationRun(r: Reader): AutomationRunPayload {
+  const trigger = r.oneOf("trigger", ["arrival", "schedule", "manual"]);
+  const arrivalFields = ["from", "status", "origin"];
+  const common = ["trigger", "automationId", "ticketId", "armedByUserId"];
+  // The existing gated producer writes legacy arrivals. Partial executable metadata
+  // is corruption, not permission to mint new identities on the runner.
+  if (trigger === "arrival" && !("runId" in r.row)) {
+    r.only(...common, ...arrivalFields);
+    return parseArrival(r);
+  }
+  r.only(
+    ...common,
+    "runId",
+    "sessionId",
+    "dueAt",
+    "missedCount",
+    "attendance",
+    "modelOverride",
+    "requestedBySessionId",
+    ...(trigger === "arrival"
+      ? arrivalFields
+      : trigger === "manual" && r.row.automationId === null
+        ? ["instructions"]
+        : []),
+  );
+  const base: AutomationRunJobBase = {
+    runId: r.uuid("runId"),
+    sessionId: r.uuid<SessionId>("sessionId"),
+    dueAt: r.count("dueAt"),
+    missedCount: r.count("missedCount"),
+    attendance: r.oneOf("attendance", AUTOMATION_RUN_ATTENDANCE),
+    requestedBySessionId: r.nullableUuid<SessionId>("requestedBySessionId"),
+    modelOverride: r.nullableNested("modelOverride", (m) => {
+      m.only("providerId", "modelId", "reasoningLevel");
+      return {
+        providerId: m.text("providerId", 200),
+        modelId: m.text("modelId", 200),
+        reasoningLevel: m.oneOf("reasoningLevel", REASONING_LEVELS),
+      };
+    }),
+  };
+  if (trigger === "arrival") return { ...base, ...parseArrival(r) };
+  if (trigger === "schedule") {
+    if (r.row.ticketId !== null) r.fail("a schedule targets the project");
+    if (
+      base.attendance !== "unattended" ||
+      base.modelOverride !== null ||
+      base.requestedBySessionId !== null
+    )
+      r.fail("a schedule is unattended and has no caller override or watch");
+    return {
+      ...base,
+      attendance: "unattended",
+      modelOverride: null,
+      requestedBySessionId: null,
+      trigger,
+      automationId: r.uuid<AutomationId>("automationId"),
+      ticketId: null,
+      armedByUserId: r.uuid<UserId>("armedByUserId"),
+    };
+  }
+  if (r.row.armedByUserId !== null) r.fail("a manual run uses the caller's credentials");
+  const manual = {
+    ...base,
+    trigger,
+    ticketId: r.nullableUuid<TicketId>("ticketId"),
+    armedByUserId: null,
+  } as const;
+  if (r.row.automationId !== null)
+    return { ...manual, automationId: r.uuid<AutomationId>("automationId") };
+  const instructions = r.text("instructions", AUTOMATION_INSTRUCTIONS_MAX_CHARS);
+  if (instructions.trim().length === 0) r.fail("instructions are blank");
+  if (manual.ticketId === null) r.fail("an unbound run targets a ticket");
+  return { ...manual, ticketId: manual.ticketId, automationId: null, instructions };
 }
 
 function parseArrival(r: Reader): AutomationArrivalRunPayload {

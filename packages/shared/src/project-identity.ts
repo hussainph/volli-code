@@ -5,7 +5,8 @@
  * Ported behavior-for-behavior from the Swift original.
  */
 
-import { REASONING_LEVELS, type ModelSelection } from "./agent-runtime";
+import type { ModelSelection } from "./model-selection";
+export { parseSessionModel } from "./model-selection";
 import type { AuthorityPolicyOverride } from "./authority-config";
 import type { DecisionModelSetting } from "./decision-model";
 import type { SkillModes } from "./skill";
@@ -144,21 +145,4 @@ export function validateUniquePrefix(
 export function projectColor(colorIndex: number): string {
   const index = Math.abs(Math.trunc(colorIndex)) % PROJECT_COLORS.length;
   return PROJECT_COLORS[index]!;
-}
-
-/**
- * A stored `session_model` payload as a {@link ModelSelection}, or `null` for
- * anything that is not one. Same degrade-don't-throw stance as
- * {@link parseSkillModes}; a project whose column is nonsense inherits the
- * app-wide default, which is both survivable and visible.
- */
-export function parseSessionModel(value: unknown): ModelSelection | null {
-  if (typeof value !== "object" || value === null) return null;
-  const candidate = value as Record<string, unknown>;
-  const { providerId, modelId, reasoningLevel } = candidate;
-  if (typeof providerId !== "string" || providerId.length === 0) return null;
-  if (typeof modelId !== "string" || modelId.length === 0) return null;
-  const level = REASONING_LEVELS.find((known) => known === reasoningLevel);
-  if (level === undefined) return null;
-  return { providerId, modelId, reasoningLevel: level };
 }
