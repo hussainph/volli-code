@@ -45,7 +45,8 @@ export type BoardErrorCode =
   | "id_taken"
   | "not_found"
   | "command_conflict"
-  | "project_archived";
+  | "project_archived"
+  | "corrupt_board";
 
 export type BoardErrorData = { code: BoardErrorCode; message: string };
 
@@ -232,7 +233,12 @@ export class BoardWrite {
       .unique();
     // Created with the project; a project without one is corruption, and
     // inventing one could reissue a ticket number a migration already used.
-    if (counter === null) throw new Error(`Project ${projectId} has no counter document`);
+    if (counter === null) {
+      throw boardError(
+        "corrupt_board",
+        "The project's board counter is missing. Repair is required.",
+      );
+    }
     return new BoardWrite(ctx, counter, projectId, actor, now);
   }
 

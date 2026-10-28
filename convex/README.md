@@ -135,6 +135,42 @@ A parent's stop cascades only to original watches on other runners, after the
 child projection catches up. `delegations.forParent` is visibility-checked;
 starting a child elsewhere is a separate runner-selection feature.
 
+## Session intake rejection diagnostics
+
+`sessions.accept` and the scheduled `sessions.catchUp` emit one JSON console
+line per catchable rejected execution attempt, with `event: "session_intake_rejected"`. Search
+that marker in function logs, then use the platform Request ID to correlate it
+with the mutation outcome. Capture a recurrence promptly: the CLI/dashboard's
+recent log history is not an archive.
+
+The line contains only the operation, validated Session UUID (otherwise null),
+a product-owned reason code and phase, committed `acceptedThrough`, expected
+and attempted sequences, the current allowlisted fact kind, state presence/size,
+fact count and UTF-8 sizes. Unknown cursors are null,
+not zero. Unexpected exceptions add a fixed error category and allowlisted
+source basenames/line numbers, never their message, raw stack, paths, payloads,
+provenance, tokens, or other credentials. Authentication failures do not look
+up a Session's head. Failed mutations roll back all writes; the logged head
+is never the speculative head of the rejected batch.
+
+Existing typed refusals retain their codes and additive data. Unreadable
+stored event JSON is `corrupt_history`, unreadable fold JSON `corrupt_state`,
+a missing board counter reached by signal derivation `corrupt_board`, and a
+fold invariant/shape failure `fold_failed`. These stop the current
+runner's drain visibly without dropping facts; repair and explicit Retry are
+required. Auth/preview/producer-conflict refusals likewise require recovery.
+Oversized batches still fall back to single facts; oversized single facts
+stop visibly. A fact too large for the bounded fold is still quarantined and
+accepted, not turned into a rejection. `out_of_order` still resends from the
+backend's head. An unclassified exception is sanitized as `accept_failed`
+and retries with the existing bounded backoff, just as a bare server error
+did. Older clients treat unknown codes as transient and retain their facts.
+
+Platform argument validation and commit-time failures (including exhausted
+OCC retries) occur outside the JS handler and cannot be caught by this
+boundary. Their platform request/error logs remain necessary; no error code
+here claims to identify a platform limit or contention without evidence.
+
 ## The migration import
 
 `functions/migration.ts` is the SQLite → Volli Cloud import: internal

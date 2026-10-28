@@ -28,8 +28,6 @@
  * value refuses (`$schema` in an MCP tool schema, non-ASCII keys).
  */
 
-import { ConvexError } from "convex/values";
-
 import {
   UnknownSessionEventKindError,
   assertSessionEvent,
@@ -44,7 +42,7 @@ import {
 import {
   CLOUD_SESSION_FOLD_VERSION,
   CloudSessionStateTooLargeError,
-  cloudSessionView,
+  cloudSessionView as readCloudSessionView,
   foldCloudSessionState,
   isUuid,
   readCloudSessionState,
@@ -61,6 +59,7 @@ import { visibilityForNewSession } from "./visibility";
 import { EMPTY_USAGE_TOTALS, deriveFromFact, stableJson, syncListing } from "./sessionDerived";
 import { onDelegationHead } from "./delegations";
 import { endedTurnsOf, scheduleStreamCleanup } from "./streamChunks";
+import { intakeError as acceptError, type IntakeDiagnostics } from "./sessionIntakeDiagnostics";
 
 // ── limits ──────────────────────────────────────────────────────────────────
 
@@ -78,24 +77,6 @@ const CATCH_UP_PAGE_BYTES = 4 * 1024 * 1024;
 /** A scheduled catch-up that has not finished in this long is scheduled again. */
 const CATCH_UP_RETRY_MS = 60_000;
 const QUARANTINE_DETAIL_LENGTH = 1_000;
-
-// ── errors ──────────────────────────────────────────────────────────────────
-
-type AcceptErrorCode =
-  | "invalid_request"
-  | "event_too_large"
-  | "batch_too_large"
-  | "unknown_session"
-  | "not_found"
-  | "fenced"
-  | "not_your_runner"
-  | "out_of_order"
-  | "conflict";
-
-/** Every refusal carries the Session's current head (0 before its first fact). */
-function acceptError(code: AcceptErrorCode, message: string, acceptedThrough: number) {
-  return new ConvexError({ code, message, acceptedThrough });
-}
 
 export interface AcceptReply {
   acceptedThrough: number;
@@ -202,7 +183,16 @@ function storedJson(value: unknown): string {
  * read as it is.
  */
 function storedValue(stored: unknown): unknown {
-  return typeof stored === "string" ? JSON.parse(stored) : stored;
+  try {
+    return typeof stored === "string" ? JSON.parse(stored) : stored;
+  } catch (error) {
+    throw acceptError(
+      "corrupt_history",
+      "An accepted fact's stored JSON is unreadable.",
+      null,
+      error,
+    );
+  }
 }
 
 function sameStoredJson(stored: unknown, incoming: unknown): boolean {
@@ -266,9 +256,9 @@ function storedEnvelope(row: Doc<"sessionEvents">): Envelope {
 }
 
 /**
- * A stored fact read again with this build's codec. Never throws: a kind
- * retired since it was stored reads as unknown, a decode that has grown
- * stricter as quarantined, so one old fact cannot break a read or a fold.
+ * A stored fact read again with this build's codec. A retired kind reads as
+ * unknown, a stricter decode as quarantined. Unreadable stored JSON is storage
+ * corruption, not an unknown event, and fails with typed `corrupt_history`.
  */
 export function readStoredFact(row: Doc<"sessionEvents">): Readability {
   return readFact(row.sessionId, storedEnvelope(row));
@@ -280,12 +270,20 @@ export async function acceptFacts(
   ctx: MutationCtx,
   caller: CallingRunner,
   args: { sessionId: string; generation: number; events: readonly string[] },
+  diagnostics?: IntakeDiagnostics,
 ): Promise<AcceptReply> {
   const now = Date.now();
   const { sessionId } = args;
+  if (diagnostics) diagnostics.phase = "validate";
   if (!isUuid(sessionId)) throw acceptError("invalid_request", "The session id is not a UUID.", 0);
+  if (diagnostics) diagnostics.phase = "head";
   let intake = await intakeOf(ctx, sessionId);
   const head = intake?.acceptedThrough ?? 0;
+  if (diagnostics) {
+    diagnostics.acceptedThrough = head;
+    diagnostics.expectedSequence = head + 1;
+    diagnostics.phase = "validate";
+  }
   if (args.events.length === 0 || args.events.length > MAX_ACCEPT_EVENTS) {
     throw acceptError(
       "invalid_request",
@@ -293,7 +291,7 @@ export async function acceptFacts(
       head,
     );
   }
-  const sizes = args.events.map(utf8Bytes);
+  const sizes = diagnostics?.eventBytes ?? args.events.map(utf8Bytes);
   const largest = Math.max(...sizes);
   if (largest > MAX_EVENT_BYTES) {
     throw acceptError(
@@ -314,6 +312,13 @@ export async function acceptFacts(
     readEnvelope(text, sessionId, sizes[index]!, head),
   );
 
+  if (diagnostics) {
+    diagnostics.firstSequence = envelopes[0]!.sequence;
+    diagnostics.lastSequence = envelopes.at(-1)!.sequence;
+    diagnostics.sequence = envelopes[0]!.sequence;
+    diagnostics.kind = envelopes[0]!.kind;
+    diagnostics.phase = "birth";
+  }
   let session: Doc<"sessions">;
   if (intake === null) {
     ({ session, intake } = await createFromFirstFact(ctx, caller, args, envelopes[0]!));
@@ -325,6 +330,7 @@ export async function acceptFacts(
     }
     session = row;
   }
+  if (diagnostics) diagnostics.phase = "claim";
   if (
     intake.state === "released" ||
     intake.claim.runnerId !== caller.runnerId ||
@@ -335,15 +341,25 @@ export async function acceptFacts(
   if (session.ownerUserId !== caller.ownerUserId) {
     throw acceptError("not_your_runner", "This runner does not run its owner's work.", head);
   }
+  if (diagnostics) diagnostics.phase = "validate";
   for (const [index, envelope] of envelopes.entries()) {
+    if (diagnostics) {
+      diagnostics.sequence = envelope.sequence;
+      diagnostics.kind = envelope.kind;
+    }
     if (envelope.sequence !== envelopes[0]!.sequence + index) {
       throw acceptError("out_of_order", "A batch must be contiguous.", head);
     }
   }
 
+  if (diagnostics) diagnostics.phase = "duplicates";
   let duplicates = 0;
   const fresh: Envelope[] = [];
   for (const envelope of envelopes) {
+    if (diagnostics) {
+      diagnostics.sequence = envelope.sequence;
+      diagnostics.kind = envelope.kind;
+    }
     if (envelope.sequence <= head) {
       await checkDuplicate(ctx, sessionId, envelope, head);
       duplicates += 1;
@@ -363,6 +379,10 @@ export async function acceptFacts(
   // A new fact's id must be new to the Session: the batch's and the stored ones.
   const ids = new Set<string>();
   for (const envelope of fresh) {
+    if (diagnostics) {
+      diagnostics.sequence = envelope.sequence;
+      diagnostics.kind = envelope.kind;
+    }
     const taken =
       ids.has(envelope.id) ||
       (await ctx.db
@@ -377,10 +397,15 @@ export async function acceptFacts(
     ids.add(envelope.id);
   }
 
+  if (diagnostics) diagnostics.phase = "write";
   let quarantined = 0;
   let unknownKinds = 0;
   const foldable: FoldFact[] = [];
   for (const envelope of fresh) {
+    if (diagnostics) {
+      diagnostics.sequence = envelope.sequence;
+      diagnostics.kind = envelope.kind;
+    }
     const read = readFact(sessionId, envelope);
     if (
       read.quarantine === null &&
@@ -417,13 +442,14 @@ export async function acceptFacts(
     lastAcceptedAt: now,
   });
   // Streamed text: the chunk rows of every turn this batch ended go (S3).
+  if (diagnostics) diagnostics.phase = "cleanup";
   await scheduleStreamCleanup(
     ctx,
     sessionId,
     { turnIds: endedTurnsOf(foldable.map(({ event }) => event)), messageIds: [] },
     now,
   );
-  quarantined += await advanceFold(ctx, session, head, foldable, acceptedThrough, now);
+  quarantined += await advanceFold(ctx, session, head, foldable, acceptedThrough, now, diagnostics);
   return { acceptedThrough, duplicates, quarantined, unknownKinds };
 }
 
@@ -527,18 +553,21 @@ async function createFromFirstFact(
   args: { sessionId: string; generation: number },
   first: Envelope,
 ): Promise<{ session: Doc<"sessions">; intake: Doc<"sessionIntake"> }> {
-  const unknown = (message: string) => acceptError("unknown_session", message, 0);
   const read = first.sequence === 1 ? readFact(args.sessionId, first) : null;
   const payload =
     read !== null && read.quarantine === null && read.kindKnown ? read.event.payload : null;
   const command = payload?.kind === "command.recorded" ? payload.command : null;
   const intent = command?.intent;
   if (read === null || !read.kindKnown || command === null || intent?.kind !== "session.create") {
-    throw unknown("A new session's first fact must be its session.create command at sequence 1.");
+    throw acceptError(
+      "unknown_session",
+      "A new session's first fact must be its session.create command at sequence 1.",
+      0,
+    );
   }
   if (args.generation !== 1) throw acceptError("fenced", "A new session's claim starts at 1.", 0);
   if (command.sessionId !== args.sessionId)
-    throw unknown("The creation command names another session.");
+    throw acceptError("unknown_session", "The creation command names another session.", 0);
   const born: Session = {
     id: args.sessionId,
     projectId: intent.projectId,
@@ -551,17 +580,16 @@ async function createFromFirstFact(
   if ((await sessionRow(ctx, args.sessionId)) !== null) {
     throw acceptError("conflict", "That session id is already taken.", 0);
   }
-  const notFound = (message: string) => acceptError("not_found", message, 0);
   // The runner's owner must be an active Member of the project's current Workspace.
   const project = await findVisibleProject(ctx, caller.ownerUserId, born.projectId);
-  if (project === null) throw notFound("That project does not exist.");
+  if (project === null) throw acceptError("not_found", "That project does not exist.", 0);
   if (born.ticketId !== null) {
     const ticket = await ctx.db
       .query("tickets")
       .withIndex("by_uuid", (q) => q.eq("id", born.ticketId!))
       .unique();
     if (ticket === null || ticket.projectId !== project.id || ticket.deletedAt !== null) {
-      throw notFound("That ticket does not exist.");
+      throw acceptError("not_found", "That ticket does not exist.", 0);
     }
   }
   if (born.parentSessionId !== null) {
@@ -572,7 +600,7 @@ async function createFromFirstFact(
       parent.projectId !== project.id ||
       parent.ownerUserId !== caller.ownerUserId
     ) {
-      throw notFound("That parent session does not exist.");
+      throw acceptError("not_found", "That parent session does not exist.", 0);
     }
   }
   const visibility = await visibilityForNewSession(ctx, {
@@ -643,6 +671,14 @@ function birthOf(session: Doc<"sessions">): Session {
   };
 }
 
+function cloudSessionView(state: CloudSessionState) {
+  try {
+    return readCloudSessionView(state);
+  } catch (error) {
+    throw acceptError("fold_failed", "The Session's stored fold is unreadable.", null, error);
+  }
+}
+
 async function stateDocOf(ctx: MutationCtx, sessionId: string) {
   return ctx.db
     .query("sessionStates")
@@ -656,7 +692,16 @@ async function stateDocOf(ctx: MutationCtx, sessionId: string) {
  */
 export function readStoredState(doc: Doc<"sessionStates"> | null): CloudSessionState | null {
   if (doc === null || typeof doc.state !== "string") return null;
-  return readCloudSessionState(JSON.parse(doc.state));
+  try {
+    return readCloudSessionState(JSON.parse(doc.state));
+  } catch (error) {
+    throw acceptError(
+      "corrupt_state",
+      "The Session's stored fold JSON is unreadable.",
+      null,
+      error,
+    );
+  }
 }
 
 /**
@@ -671,14 +716,20 @@ async function advanceFold(
   facts: readonly FoldFact[],
   through: number,
   now: number,
+  diagnostics?: IntakeDiagnostics,
 ): Promise<number> {
+  if (diagnostics) diagnostics.phase = "read_state";
   const doc = await stateDocOf(ctx, session.id);
+  if (diagnostics) {
+    diagnostics.hasStateDoc = doc !== null;
+    diagnostics.stateBytes = typeof doc?.state === "string" ? utf8Bytes(doc.state) : null;
+  }
   const state = readStoredState(doc);
   if ((state?.throughSequence ?? 0) !== previousHead) {
     await requestCatchUp(ctx, session.id, doc, now);
     return 0;
   }
-  return applyFold(ctx, session, doc, state, facts, through, { atHead: true });
+  return applyFold(ctx, session, doc, state, facts, through, { atHead: true }, diagnostics);
 }
 
 async function requestCatchUp(
@@ -725,6 +776,7 @@ async function applyFold(
   facts: readonly FoldFact[],
   through: number,
   options: { atHead: boolean },
+  diagnostics?: IntakeDiagnostics,
 ): Promise<number> {
   const birth = birthOf(session);
   const derivedThrough = doc?.derivedThrough ?? 0;
@@ -734,10 +786,22 @@ async function applyFold(
   for (const fact of facts) {
     const { event } = fact;
     let next: CloudSessionState;
+    if (diagnostics) {
+      diagnostics.phase = "fold";
+      diagnostics.sequence = event.sequence;
+      diagnostics.kind = event.payload.kind;
+    }
     try {
       next = foldCloudSessionState(state, birth, [event], event.sequence);
     } catch (error) {
-      if (!(error instanceof CloudSessionStateTooLargeError)) throw error;
+      if (!(error instanceof CloudSessionStateTooLargeError)) {
+        throw acceptError(
+          "fold_failed",
+          "The Session's fold could not advance over its history.",
+          null,
+          error,
+        );
+      }
       const quarantine = { code: "fold_too_large", detail: error.message };
       await ctx.db.patch(fact.rowId, { quarantine });
       await raiseQuarantine(
@@ -751,15 +815,27 @@ async function applyFold(
     }
     const nextView = cloudSessionView(next);
     if (event.sequence > derivedThrough || fact.learned) {
+      if (diagnostics) diagnostics.phase = "derive";
       await deriveFromFact(ctx, session, event, view, nextView);
     }
     state = next;
     view = nextView;
   }
   // Facts passed over (unknown, quarantined, set aside) still move the cursor.
+  if (diagnostics) diagnostics.phase = "fold";
   if (state === null || state.throughSequence < through) {
-    state = foldCloudSessionState(state, birth, [], through);
+    try {
+      state = foldCloudSessionState(state, birth, [], through);
+    } catch (error) {
+      throw acceptError(
+        "fold_failed",
+        "The Session's fold could not advance to its head.",
+        null,
+        error,
+      );
+    }
   }
+  if (diagnostics) diagnostics.phase = "store_state";
   const stored = {
     throughSequence: through,
     foldVersion: CLOUD_SESSION_FOLD_VERSION,
@@ -770,6 +846,7 @@ async function applyFold(
   if (doc === null) await ctx.db.insert("sessionStates", { sessionId: session.id, ...stored });
   else await ctx.db.patch(doc._id, stored);
   if (options.atHead) {
+    if (diagnostics) diagnostics.phase = "listing";
     const current = cloudSessionView(state);
     await syncListing(ctx, session, current);
     await onDelegationHead(ctx, session, current);
@@ -786,10 +863,19 @@ async function applyFold(
  * not conflict with live accepts landing past it; only the last step reads
  * the head, to prove nothing between the cursor and the head is missing.
  */
-export async function catchUpStep(ctx: MutationCtx, sessionId: string): Promise<void> {
+export async function catchUpStep(
+  ctx: MutationCtx,
+  sessionId: string,
+  diagnostics?: IntakeDiagnostics,
+): Promise<void> {
   const now = Date.now();
+  if (diagnostics) diagnostics.phase = "read_state";
   const session = await sessionRow(ctx, sessionId);
   const doc = await stateDocOf(ctx, sessionId);
+  if (diagnostics) {
+    diagnostics.hasStateDoc = doc !== null;
+    diagnostics.stateBytes = typeof doc?.state === "string" ? utf8Bytes(doc.state) : null;
+  }
   if (doc === null) return;
   if (session === null || session.deletedAt !== null) {
     if (doc.catchUpAt !== null) await ctx.db.patch(doc._id, { catchUpAt: null });
@@ -797,6 +883,10 @@ export async function catchUpStep(ctx: MutationCtx, sessionId: string): Promise<
   }
   const state = readStoredState(doc);
   const after = state?.throughSequence ?? 0;
+  if (diagnostics) {
+    diagnostics.phase = "catch_up";
+    diagnostics.expectedSequence = after + 1;
+  }
   const facts: FoldFact[] = [];
   let through = after;
   let bytes = 0;
@@ -812,9 +902,14 @@ export async function catchUpStep(ctx: MutationCtx, sessionId: string): Promise<
       break;
     }
     if (row.sequence !== through + 1) {
-      throw new Error(`Session ${sessionId} is missing accepted fact ${through + 1}.`);
+      if (diagnostics) diagnostics.expectedSequence = through + 1;
+      throw acceptError("corrupt_history", "The Session is missing an accepted fact.");
     }
     through = row.sequence;
+    if (diagnostics) {
+      diagnostics.sequence = row.sequence;
+      diagnostics.kind = row.kind;
+    }
     bytes += row.bytes;
     if (row.quarantine !== null) continue;
     const read = readStoredFact(row);
@@ -829,15 +924,17 @@ export async function catchUpStep(ctx: MutationCtx, sessionId: string): Promise<
   }
   if (!more) {
     const intake = await intakeOf(ctx, sessionId);
+    if (diagnostics) diagnostics.acceptedThrough = intake?.acceptedThrough ?? null;
     if (intake !== null && intake.acceptedThrough > through) {
-      throw new Error(`Session ${sessionId} is missing accepted facts after ${through}.`);
+      if (diagnostics) diagnostics.expectedSequence = through + 1;
+      throw acceptError("corrupt_history", "The Session is missing accepted facts after its fold.");
     }
   }
   if (through === after && !more) {
     if (doc.catchUpAt !== null) await ctx.db.patch(doc._id, { catchUpAt: null });
     return;
   }
-  await applyFold(ctx, session, doc, state, facts, through, { atHead: !more });
+  await applyFold(ctx, session, doc, state, facts, through, { atHead: !more }, diagnostics);
   if (more) {
     await ctx.db.patch(doc._id, { catchUpAt: now });
     await ctx.scheduler.runAfter(0, internal.sessions.catchUp, { sessionId });

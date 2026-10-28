@@ -179,6 +179,7 @@ const commented = (t: T) =>
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("a signal's todo list on its ticket", () => {
@@ -235,6 +236,51 @@ describe("a signal's todo list on its ticket", () => {
       duplicates: signal.length,
     });
     expect(await comments(t)).toHaveLength(1);
+  });
+
+  test("a missing board counter is typed, logged, and rolls back the signal's derived writes", async () => {
+    const { t, runner, projectId, ticketId } = await world();
+    const { sessionId, events, signalled } = await signalledSession({
+      projectId,
+      ticketId,
+      todoList: LIST,
+      signal: "done",
+    });
+    const { before, signal } = splitAtSignal(events, signalled);
+    await drain(t, runner, sessionId, before);
+    const counter = await t.run(async (ctx) => {
+      const row = await ctx.db.query("projectCounters").first();
+      await ctx.db.delete(row!._id);
+      const { _id: _ignoredId, _creationTime: _ignoredTime, ...copy } = row!;
+      return copy;
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(accept(t, runner, sessionId, signal)).rejects.toMatchObject({
+      data: { code: "corrupt_board", acceptedThrough: before.length },
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      event: "session_intake_rejected",
+      code: "corrupt_board",
+      phase: "derive",
+      acceptedThrough: before.length,
+      sequence: signalled.sequence,
+      kind: "session.signaled",
+    });
+    expect(log.mock.calls[0]![0]).not.toContain("Read the intake");
+    expect(await comments(t)).toEqual([]);
+    expect(await commented(t)).toEqual([]);
+    const rows = await t.run(async (ctx) => ({
+      intake: await ctx.db.query("sessionIntake").first(),
+      events: await ctx.db.query("sessionEvents").collect(),
+    }));
+    expect(rows.intake?.acceptedThrough).toBe(before.length);
+    expect(rows.events).toHaveLength(before.length);
+    // Repair plus the runner's explicit Retry replays the retained signal once.
+    await t.run((ctx) => ctx.db.insert("projectCounters", counter));
+    await accept(t, runner, sessionId, signal);
+    expect(await comments(t)).toHaveLength(1);
+    expect(log).toHaveBeenCalledTimes(1);
   });
 
   test("blocked leaves the list too, under its own heading", async () => {

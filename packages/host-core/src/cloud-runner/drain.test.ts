@@ -321,7 +321,25 @@ describe("the fact drain", () => {
   });
 
   it("stops a Session's drain, visibly, on a refusal retrying cannot fix", async () => {
-    for (const code of ["fenced", "conflict", "not_your_runner", "unknown_session"]) {
+    for (const code of [
+      "fenced",
+      "conflict",
+      "not_your_runner",
+      "unknown_session",
+      "not_found",
+      "revoked",
+      "not_a_runner",
+      "preview_access_required",
+      "parent_not_found",
+      "corrupt_history",
+      "corrupt_state",
+      "corrupt_board",
+      "fold_failed",
+      "invalid_job",
+      "id_taken",
+      "wrong_runner",
+      "not_a_member",
+    ]) {
       const backend = fakeBackend();
       const { ledger, append } = memoryLedger();
       const { store, rows } = memoryCursors();
@@ -388,19 +406,27 @@ describe("the fact drain", () => {
     expect(calls).toBeLessThanOrEqual(16);
   });
 
-  it("retries a refusal it does not know as transient", async () => {
-    const backend = fakeBackend();
-    const { ledger, append } = memoryLedger();
-    const { store, rows } = memoryCursors();
-    const drain = drainOver(backend, ledger, store);
-    backend.faults.push(() => refusal("unauthenticated", 0));
-    append("s1");
-    drain.adopt("s1");
-    drain.start();
-    await drain.idle();
-    expect(backend.heads.get("s1")).toBe(1);
-    expect(rows.get("s1")?.blocked).toBeNull();
-  });
+  it.each(["unauthenticated", "accept_failed", "runner_unavailable", "future_refusal"])(
+    "retries transient %s without advancing the cursor or discarding facts",
+    async (code) => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const { store, rows } = memoryCursors();
+      const retryHeads: number[] = [];
+      const drain = drainOver(backend, ledger, store, {
+        onRetry: (sessionId) => retryHeads.push(rows.get(sessionId)!.acceptedThrough),
+      });
+      backend.faults.push(() => refusal(code, 99)); // A rejection is never an acknowledgement.
+      append("s1");
+      drain.adopt("s1");
+      drain.start();
+      await drain.idle();
+      expect(retryHeads).toEqual([0]);
+      expect(backend.heads.get("s1")).toBe(1);
+      expect(rows.get("s1")?.acceptedThrough).toBe(1);
+      expect(rows.get("s1")?.blocked).toBeNull();
+    },
+  );
 
   it("stops at a gap in the ledger rather than sending past it", async () => {
     const backend = fakeBackend();

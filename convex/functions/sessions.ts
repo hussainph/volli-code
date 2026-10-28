@@ -75,6 +75,7 @@ import { routeFollowUp, advanceFollowUpRevision } from "./lib/followUps";
 import { tryArmSessionWatch } from "./lib/watches";
 import { listingOf } from "./lib/sessionDerived";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
+import { withIntakeDiagnostics } from "./lib/sessionIntakeDiagnostics";
 import {
   checkCommandId,
   checkSupervision,
@@ -106,18 +107,20 @@ function fail(code: string, message: string) {
  */
 export const accept = mutation({
   args: { sessionId: v.string(), generation: v.number(), events: v.array(v.string()) },
-  handler: async (ctx, args): Promise<AcceptReply> => {
-    const caller = await requireRunnerForWrite(ctx);
-    return acceptFacts(ctx, caller, args);
-  },
+  handler: async (ctx, args): Promise<AcceptReply> =>
+    withIntakeDiagnostics(args, "accept", async (diagnostics) => {
+      const caller = await requireRunnerForWrite(ctx);
+      return acceptFacts(ctx, caller, args, diagnostics);
+    }),
 });
 
 /** One step of the paged fold over the accepted history (scheduled, never called by a client). */
 export const catchUp = internalMutation({
   args: { sessionId: v.string() },
-  handler: async (ctx, { sessionId }) => {
-    await catchUpStep(ctx, sessionId);
-  },
+  handler: async (ctx, args) =>
+    withIntakeDiagnostics(args, "catch_up", (diagnostics) =>
+      catchUpStep(ctx, args.sessionId, diagnostics),
+    ),
 });
 
 /**
