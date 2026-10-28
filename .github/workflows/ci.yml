@@ -294,6 +294,7 @@ jobs:
         run: >-
           node --test apps/desktop/e2e/volli-drive/lib/core.test.mjs
           apps/desktop/e2e/volli-drive/lib/launch-gate.test.mjs
+          apps/desktop/e2e/volli-drive/lib/deployment.test.mjs
           apps/desktop/e2e/volli-drive/lib/stop.test.mjs
           apps/desktop/e2e/volli-drive/lib/fake-provider.test.mjs
           apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs

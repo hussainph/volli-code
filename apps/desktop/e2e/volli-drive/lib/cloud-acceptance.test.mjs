@@ -253,7 +253,7 @@ test("the Tray quit asks main's controller on its next turn, then waits for the 
 const supervisor = readFileSync(new URL("../supervisor.mjs", import.meta.url), "utf8");
 
 test("only a cloud instance reaches the Tray quit; native Quit stays the remote journey's own", () => {
-  // The menu-bar controller is named only in the cloud fixture module, never
+  // The menu-bar controller is named only in cloud setup modules, never
   // in the supervisor (remote-acceptance.test.mjs pins the same).
   assert.doesNotMatch(supervisor, /VOLLI_SMOKE_MENU_BAR_HOST|volliMenuBarHost/u);
   // native-quit is exactly the application's native Quit menu item.
@@ -267,14 +267,14 @@ test("only a cloud instance reaches the Tray quit; native Quit stays the remote 
   assert.equal(supervisor.match(/quitCloudLaunchFromTray\(/gu)?.length, 1);
   assert.match(
     supervisor,
-    /async function cloudTrayQuit\(\) \{\s*requireCloud\(\);\s*const result = await quitCloudLaunchFromTray\(/u,
+    /async function cloudTrayQuit\(\) \{\s*requireCloudLaunch\(\);\s*const result = await quitCloudLaunchFromTray\(/u,
   );
-  // Its one caller proves the quit; that is reached from stop (cloud spec
-  // only) and restart (which refuses non-cloud instances), nowhere else.
+  // Its one caller proves the quit; stop and restart admit cloud fixtures
+  // and explicit real deployments, but never local/remote journeys.
   assert.equal(supervisor.match(/await cloudTrayQuit\(\)/gu)?.length, 1);
   assert.match(
     supervisor,
-    /async function closeCloudInstance\(\) \{\s*requireCloud\(\);\s*const child = electronChild;\s*const pid = electronPid;\s*const trayQuit = await cloudTrayQuit\(\);/u,
+    /async function closeCloudInstance\(\) \{\s*requireCloudLaunch\(\);\s*const child = electronChild;\s*const pid = electronPid;\s*const trayQuit = await cloudTrayQuit\(\);/u,
     "the exact child and pid are taken before the Tray quit",
   );
   assert.equal(supervisor.match(/await closeCloudInstance\(\)/gu)?.length, 2);
@@ -284,14 +284,16 @@ test("only a cloud instance reaches the Tray quit; native Quit stays the remote 
   );
   assert.match(
     finalize,
-    /if \(spec\.cloud\) \{[\s\S]*?await closeCloudInstance\(\)[\s\S]*?\} else if \(app && electronExit === null\) \{\s*close = await closeAppBounded\(app\)/u,
+    /if \(spec\.cloud \|\| spec\.deployment\) \{[\s\S]*?await closeCloudInstance\(\)[\s\S]*?\} else if \(app && electronExit === null\) \{\s*close = await closeAppBounded\(app\)/u,
   );
   const restart = supervisor.slice(
     supervisor.indexOf("async function restart("),
     supervisor.indexOf("async function handle("),
   );
-  assert.match(restart, /if \(!spec\.cloud\) throw new Error/u);
-  assert.ok(restart.indexOf("if (!spec.cloud)") < restart.indexOf("await closeCloudInstance()"));
+  assert.match(restart, /requireCloudLaunch\(\)/u);
+  assert.ok(
+    restart.indexOf("requireCloudLaunch()") < restart.indexOf("await closeCloudInstance()"),
+  );
   // A restart signals nothing: a process outliving the quit fails it instead.
   assert.doesNotMatch(restart, /killExactly|SIGKILL|SIGTERM|\.kill\(/u);
   assert.match(restart, /processes outlived the quit before the restart/u);

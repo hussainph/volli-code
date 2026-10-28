@@ -48,6 +48,31 @@ describe("packed mode", () => {
   });
 });
 
+describe("real deployment refusal before any build or instance", () => {
+  for (const [args, message] of [
+    [["--deployment", "prod"], /production requires/],
+    [["--deployment", "prod", "--confirm-prod=false"], /production requires/],
+    [["--confirm-prod"], /require --deployment/],
+    [["--deployment", "staging", "--cloud"], /cannot be combined/],
+    [["--deployment", "prod", "--confirm-prod", "--build", "packed"], /dev builds only/],
+    [["--deployment", "prod", "--confirm-prod", "--app", "/unused.app"], /dev builds only/],
+    [["--deployment", "../prod"], /must be dev, staging or prod/],
+  ]) {
+    it(`refuses ${args.join(" ")}`, async () => {
+      const home = join(root, "deployment-home");
+      const evidence = join(root, "deployment-evidence");
+      const result = await execFileAsync(process.execPath, [CLI, "launch", ...args], {
+        env: { ...process.env, VOLLI_DRIVE_HOME: home, VOLLI_DRIVE_EVIDENCE: evidence },
+      }).catch((error) => error);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, message);
+      assert.doesNotMatch(result.stderr, /building the app/);
+      assert.equal(existsSync(join(home, "instances")), false);
+      assert.equal(existsSync(evidence), false);
+    });
+  }
+});
+
 describe("scripted fake turns", () => {
   for (const [args, message] of [
     [["--model", "env", "--fake-script", "unused.json"], /requires --model fake/],
