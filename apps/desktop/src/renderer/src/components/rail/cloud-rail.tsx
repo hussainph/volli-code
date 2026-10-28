@@ -25,24 +25,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui
 import { createCloudProject, useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
 import { useProjectsStore } from "@renderer/stores/projects";
 
-/** The Workspace's initial, named in full on hover. */
-export function CloudWorkspaceHead() {
-  const workspace = useCloudWorkspaceStore((state) => state.workspace);
-  if (workspace === null) return null;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div
-          aria-label={workspace.name}
-          className="app-region-no-drag flex size-9 shrink-0 items-center justify-center rounded-control border border-border text-ui font-medium text-muted-foreground"
-        >
-          {workspace.name.slice(0, 1).toUpperCase()}
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="right">{workspace.name}</TooltipContent>
-    </Tooltip>
-  );
-}
+export { WorkspaceSwitcher as CloudWorkspaceHead } from "./workspace-switcher";
 
 function countProjects(count: number): string {
   return count === 1 ? "1 project on this Mac isn’t" : `${count} projects on this Mac aren’t`;
@@ -84,6 +67,7 @@ export function LocalProjectsFoot() {
 
 /** "New project" in a cloud launch: a name and an optional prefix, in the Workspace on screen. */
 export function NewCloudProjectTile() {
+  const workspace = useCloudWorkspaceStore((state) => state.workspace);
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [prefix, setPrefix] = React.useState("");
@@ -107,6 +91,7 @@ export function NewCloudProjectTile() {
     setPrefix("");
     useProjectsStore.getState().select(result.projectId);
   };
+  if (workspace === null) return null;
   return (
     <>
       <Tooltip>

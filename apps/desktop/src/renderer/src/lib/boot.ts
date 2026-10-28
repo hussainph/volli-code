@@ -336,16 +336,18 @@ function cloudBoardSnapshot(userId: string, source: ConvexBoardSource) {
   };
   const writer = createSnapshotWriter({
     read: (savedAt) =>
-      liveBoardSnapshot({
-        userId,
-        savedAt,
-        link: useCloudLinkInputs.getState().input,
-        workspace: useCloudWorkspaceStore.getState().workspace,
-        projects: useProjectsStore.getState().projects,
-        ticketsByProject: useBoardStore.getState().ticketsByProject,
-        labelsByProject: useBoardStore.getState().labelsByProject,
-        painted: (projectId) => source.painted(projectId),
-      }),
+      useCloudWorkspaceStore.getState().projectsReady
+        ? liveBoardSnapshot({
+            userId,
+            savedAt,
+            link: useCloudLinkInputs.getState().input,
+            workspace: useCloudWorkspaceStore.getState().workspace,
+            projects: useProjectsStore.getState().projects,
+            ticketsByProject: useBoardStore.getState().ticketsByProject,
+            labelsByProject: useBoardStore.getState().labelsByProject,
+            painted: (projectId) => source.painted(projectId),
+          })
+        : null,
     save: (text) => sessionRpcClient().cloud.saveSnapshot.mutate({ text }),
     clock: { now: () => Date.now(), ...timers },
     warn: (message, error) => console.warn(message, error),
@@ -752,11 +754,13 @@ async function bootCloudLaunch(
           : useCloudLinkInputs.getState().input.snapshotAt !== null
             ? CLOUD_READ_ONLY
             : null,
-      dropped: (projectId, message) => {
+      dropped: (projectId, message, code) => {
         const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
         useBoardStore.getState().forget(projectId);
         useProjectsStore.getState().dropRemoteProject(projectId);
-        toast.warning(`${project?.name ?? "A project"} isn’t available any more: ${message}`);
+        // The Workspace follower owns the single membership-loss notice.
+        if (code !== "not_a_member")
+          toast.warning(`${project?.name ?? "A project"} isn’t available any more: ${message}`);
       },
     },
     launch.userId,

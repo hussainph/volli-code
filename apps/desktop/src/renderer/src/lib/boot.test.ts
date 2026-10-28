@@ -1694,7 +1694,15 @@ describe("a cloud launch's boot (VC-889)", () => {
       } as never);
       await startCloudBoard({ start: vi.fn() as never });
       useCloudLinkInputs.getState().update({ client: "running", authenticated: true });
-      useCloudWorkspaceStore.setState({ workspace: { id: "w1", name: "Team" } });
+      useCloudWorkspaceStore.setState({
+        workspace: { id: "w1", name: "Team" },
+        projectsReady: false,
+      });
+      // A switch's empty placeholder is not a live empty projects answer.
+      useProjectsStore.setState({ projects: [] });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mutate).not.toHaveBeenCalled();
+      useCloudWorkspaceStore.setState({ projectsReady: true });
       // A board change and a project-list change are one write, once quiet.
       useBoardStore.getState().paintBoard("nothing-listed", [], [], new Set());
       useProjectsStore.setState({ projects: [] });
@@ -1721,7 +1729,7 @@ describe("a cloud launch's boot (VC-889)", () => {
       expect(mutate).toHaveBeenCalledOnce();
     } finally {
       useCloudLinkInputs.setState({ input: INITIAL_CLOUD_LINK_INPUT });
-      useCloudWorkspaceStore.setState({ workspace: null });
+      useCloudWorkspaceStore.setState({ workspace: null, projectsReady: false });
       vi.mocked(sessionRpcClient).mockReset();
       vi.useRealTimers();
     }

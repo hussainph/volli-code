@@ -20,6 +20,13 @@ function paint(
   if (sent === null) forgetProjectPlaces(projectId);
   else noteProjectPlaces(projectId, sent);
   const chat = rows.map((row) => row.record);
+  // Workspace switches retire clients, but keep tab intent. Re-adopt only
+  // Sessions the new scope's live listing actually authorizes, never cached ids.
+  const chats = useChatSessionsStore.getState();
+  const open = new Set(Object.values(chats.openTabs).flat());
+  for (const row of chat) {
+    if (open.has(row.sessionId)) chats.adoptChatSession(row.sessionId, projectId);
+  }
   const provenance = Object.fromEntries(
     rows.flatMap((row) =>
       row.provenance.kind !== "user" ? [[row.record.sessionId, row.provenance]] : [],
@@ -60,8 +67,14 @@ export function cloudSessionReader(projectId: string | null): SessionListingRead
   const read = async (ticketId?: string) => {
     if (source === null || projectId === null)
       return { ok: false as const, error: "Cloud sessions are not connected yet" };
+    const inWorkspace = () => useProjectsStore.getState().projects.some((p) => p.id === projectId);
+    if (!inWorkspace())
+      return { ok: false as const, error: "The project is not in this Workspace." };
+    const reading = source;
     try {
-      const rows = await source.open(projectId);
+      const rows = await reading.open(projectId);
+      if (source !== reading || !inWorkspace())
+        return { ok: false as const, error: "The Workspace changed." };
       return {
         ok: true as const,
         sessions:

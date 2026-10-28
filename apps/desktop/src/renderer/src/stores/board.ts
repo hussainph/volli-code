@@ -391,7 +391,7 @@ export interface BoardState {
   selectTicket(projectId: string, ticketId: string | null): void;
   /** Replaces the project's selection with the given de-duplicated ids. */
   selectTickets(projectId: string, ticketIds: readonly string[]): void;
-  forget(projectId: string): void;
+  forget(projectId: string, options?: { preserveDrafts: boolean }): void;
 }
 
 /** The create options a caller actually supplied: `undefined` means "the host's default". */
@@ -470,10 +470,17 @@ function reconcileTicketChatTabOwners(
  * is shared by direct project removal and wholesale re-hydration so no client
  * depends on a view unmount to be disposed.
  */
-function teardownProjectChatTabs(projectId: string, slice: readonly Ticket[]): void {
+function teardownProjectChatTabs(
+  projectId: string,
+  slice: readonly Ticket[],
+  options?: { preserveDrafts: boolean },
+): void {
   const openTabs = useChatSessionsStore.getState().openTabs;
   const orphaned = [projectId, ...slice.map((ticket) => ticket.id)].filter((id) => id in openTabs);
-  if (orphaned.length > 0) useChatSessionsStore.getState().dropChatTabs(orphaned);
+  if (orphaned.length > 0) {
+    if (options === undefined) useChatSessionsStore.getState().dropChatTabs(orphaned);
+    else useChatSessionsStore.getState().dropChatTabs(orphaned, options);
+  }
 }
 
 /** Whether two tickets hold the same values: their label lists compared by element. */
@@ -1326,7 +1333,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         set({ selectedByProject: next });
       },
 
-      forget(projectId) {
+      forget(projectId, options) {
         const {
           ticketsByProject,
           labelsByProject,
@@ -1355,7 +1362,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         )
           return;
 
-        teardownProjectChatTabs(projectId, ticketsByProject[projectId] ?? []);
+        teardownProjectChatTabs(projectId, ticketsByProject[projectId] ?? [], options);
         boardSourceFor(projectId)?.close(projectId);
 
         const nextTickets = { ...ticketsByProject };

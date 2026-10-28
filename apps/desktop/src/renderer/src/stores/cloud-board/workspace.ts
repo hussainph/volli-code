@@ -37,11 +37,14 @@ export interface CloudWorkspaceState {
   readonly workspace: { readonly id: string; readonly name: string } | null;
   /** How many projects this Mac's own store holds (the footer's count). */
   readonly localProjects: number;
+  /** True only after projects.list answered for the Workspace on screen. */
+  readonly projectsReady: boolean;
 }
 
 export const useCloudWorkspaceStore = create<CloudWorkspaceState>()(() => ({
   workspace: null,
   localProjects: 0,
+  projectsReady: false,
 }));
 
 /** A `workspaces.listMine` row: the fields the follower reads. */
@@ -51,6 +54,7 @@ interface WorkspaceRow {
 }
 
 const selections = new Set<(session: CloudSession, row: WorkspaceRow) => void>();
+let selectionRequest = 0;
 
 /** Opens an accepted Workspace; hydration persists the selection with its projects. */
 export async function selectCloudWorkspace(id: string, session = cloudSession()): Promise<void> {
@@ -61,9 +65,17 @@ export async function selectCloudWorkspace(id: string, session = cloudSession())
     !useCloudLinkInputs.getState().input.online
   )
     throw new Error(CLOUD_READ_ONLY);
+  const request = ++selectionRequest;
   try {
     // Resolve after acceptance, rather than waiting for listMine's subscription to catch up.
     const row = await session.client.query(session.api.workspaces.get, { workspaceId: id });
+    if (request !== selectionRequest) return;
+    if (
+      !session.client.connectionState().isWebSocketConnected ||
+      useCloudLinkInputs.getState().input.snapshotAt !== null ||
+      !useCloudLinkInputs.getState().input.online
+    )
+      throw new Error(CLOUD_READ_ONLY);
     for (const select of selections) select(session, row);
   } catch (error) {
     throw new Error(cloudFailure(error).message, { cause: error });
@@ -92,7 +104,7 @@ export interface CloudWorkspaceDeps {
   };
   board: {
     seedProject(projectId: string): void;
-    forget(projectId: string): void;
+    forget(projectId: string, options?: { preserveDrafts: boolean }): void;
     paintBoard(
       projectId: string,
       tickets: Ticket[],
@@ -138,6 +150,10 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   let stops: (() => void)[] = [];
   let workspaceId: string | null = null;
   let answered = false;
+  let projectWatch: Watched<CloudProjectRow[]> | null = null;
+  let memberships: readonly WorkspaceRow[] | undefined;
+  let pendingMembership: string | null = null;
+  let checkingMembership: string | null = null;
   let failing = false;
   // The offline snapshot (D3): whether a live list has answered yet, whether
   // the wait for one ran out, the Workspace the snapshot on screen shows
@@ -145,16 +161,22 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   let liveAnswered = false;
   let timedOut = false;
   let snapshotWorkspace: string | null = null;
+  let snapshotName: string | null = null;
   let liveWorkspace: { id: string; name: string } | null = null;
   let current: CloudSession | null = null;
   let offlineTimer: unknown = null;
 
   const stopAll = () => {
+    projectWatch = null;
     for (const stop of stops.splice(0)) stop();
   };
 
-  function forgetAll(): void {
-    for (const project of deps.projects.getState().projects) deps.board.forget(project.id);
+  function forgetAll(preserveDrafts = false): void {
+    for (const project of deps.projects.getState().projects) {
+      if (preserveDrafts) deps.board.forget(project.id, { preserveDrafts: true });
+      else deps.board.forget(project.id);
+    }
+    deps.workspace.setState({ projectsReady: false });
   }
 
   function dropSnapshot(): void {
@@ -181,7 +203,10 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
       if (workspaceId !== null || snapshotWorkspace !== null) deps.projects.getState().clearCloud();
       dropSnapshot();
     }
-    if (closed) liveWorkspace = null;
+    if (closed) {
+      liveWorkspace = null;
+      deps.workspace.setState({ workspace: null });
+    }
     workspaceId = null;
     answered = false;
   }
@@ -193,14 +218,17 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   }
 
   function readProjects(id: string, watch: Watched<CloudProjectRow[]>): void {
+    if (id !== workspaceId || watch !== projectWatch) return;
     let rows: CloudProjectRow[] | undefined;
     try {
       rows = watch.localQueryResult();
     } catch (error) {
-      fail("the Workspace’s projects", error);
+      // listMine owns membership loss, including its single Workspace notice.
+      if (cloudFailure(error).code !== "not_a_member") fail("the Workspace’s projects", error);
+      else confirmMembership(current!, id);
       return;
     }
-    if (rows === undefined || id !== workspaceId) return;
+    if (rows === undefined) return;
     failing = false;
     settle();
     const next = projectRows(rows);
@@ -229,28 +257,45 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
       !answered && deps.persisted?.workspaceId === id ? deps.persisted.projectId : null;
     answered = true;
     state.hydrateCloud(id, next, resolveSelection(next, state.selectedProjectId, wanted));
+    deps.workspace.setState({ projectsReady: true });
   }
 
-  function openWorkspace(session: CloudSession, row: WorkspaceRow): void {
+  function openWorkspace(session: CloudSession, row: WorkspaceRow, explicit = false): void {
+    const switching = workspaceId !== null && row.workspaceId !== workspaceId;
     liveWorkspace = { id: row.workspaceId, name: row.name };
-    // The snapshot's Workspace stays named while its board is on screen.
-    if (snapshotWorkspace === null) deps.workspace.setState({ workspace: liveWorkspace });
-    if (row.workspaceId === workspaceId) return;
-    // Another Workspace (the last one left): its projects replace these. The
-    // offline snapshot stays on screen until a live list answers.
+    if (row.workspaceId === workspaceId) {
+      if (snapshotWorkspace === null) deps.workspace.setState({ workspace: liveWorkspace });
+      return;
+    }
+    // A different Workspace never inherits the snapshot's projects or drafts.
+    const otherSnapshot = snapshotWorkspace !== null && snapshotWorkspace !== row.workspaceId;
     for (const stop of stops.splice(1)) stop();
-    if (snapshotWorkspace === null) forgetAll();
+    if (otherSnapshot) {
+      forgetAll(true);
+      deps.projects.getState().clearCloud();
+      dropSnapshot();
+    }
+    if (snapshotWorkspace === null) {
+      forgetAll(true);
+      // Clear the old rail, selected ticket and Session views before the new
+      // Workspace's first (possibly slow) projects answer; persist the intent.
+      if (switching || explicit || otherSnapshot)
+        deps.projects.getState().hydrateCloud(row.workspaceId, [], null);
+    }
     workspaceId = row.workspaceId;
+    if (snapshotWorkspace === null) deps.workspace.setState({ workspace: liveWorkspace });
     answered = false;
     const watch = session.client.watchQuery(session.api.projects.list, {
       workspaceId: row.workspaceId,
     }) as Watched<CloudProjectRow[]>;
+    projectWatch = watch;
     const id = row.workspaceId;
     stops.push(watch.onUpdate(() => readProjects(id, watch)));
     readProjects(id, watch);
   }
 
   function readWorkspaces(session: CloudSession, watch: Watched<WorkspaceRow[]>): void {
+    if (session !== current) return;
     let rows: WorkspaceRow[] | undefined;
     try {
       rows = watch.localQueryResult();
@@ -260,22 +305,63 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     }
     if (rows === undefined) return;
     failing = false;
+    memberships = rows;
+    if (pendingMembership !== null) {
+      if (rows.some((row) => row.workspaceId === pendingMembership)) pendingMembership = null;
+      else {
+        // An explicit selection was verified by get after invite acceptance;
+        // an older listMine answer cannot undo it. Confirm an actual revocation.
+        confirmMembership(session, pendingMembership);
+        return;
+      }
+    }
+    applyWorkspaces(session, rows);
+  }
+
+  function confirmMembership(session: CloudSession, id: string): void {
+    if (checkingMembership === id) return;
+    checkingMembership = id;
+    void session.client
+      .query(session.api.workspaces.get, { workspaceId: id })
+      .catch((error: unknown) => {
+        if (session !== current || workspaceId !== id) return;
+        const code = cloudFailure(error).code;
+        if (code === "not_a_member" || code === "not_found") {
+          pendingMembership = null;
+          memberships = (memberships ?? []).filter((row) => row.workspaceId !== id);
+          applyWorkspaces(session, memberships);
+        } else fail("the Workspace", error);
+      })
+      .finally(() => {
+        if (checkingMembership === id) checkingMembership = null;
+      });
+  }
+
+  function applyWorkspaces(session: CloudSession, rows: readonly WorkspaceRow[]): void {
+    const previous = snapshotWorkspace ?? workspaceId;
+    if (previous !== null && !rows.some((row) => row.workspaceId === previous)) {
+      // Each non-null id is paired with its name when it opens or paints.
+      const name = snapshotWorkspace === null ? liveWorkspace!.name : snapshotName!;
+      deps.notice(`You're no longer a member of ${name}`);
+      // Never keep a removed Workspace's cached data while the fallback loads.
+      forgetAll();
+      deps.projects.getState().clearCloud();
+      deps.workspace.setState({ workspace: null });
+      workspaceId = null;
+      liveWorkspace = null;
+      answered = false;
+      for (const stop of stops.splice(1)) stop();
+      dropSnapshot();
+      settle();
+    }
     const wanted = workspaceId ?? deps.persisted?.workspaceId ?? null;
     const row = rows.find((candidate) => candidate.workspaceId === wanted) ?? rows[0];
     if (row !== undefined) {
       openWorkspace(session, row);
       return;
     }
-    // No Workspace at all: clear even a previously live Workspace after Leave.
+    // No Workspace at all; any previous scope was cleared above.
     settle();
-    if (workspaceId !== null || snapshotWorkspace !== null) {
-      forgetAll();
-      deps.projects.getState().clearCloud();
-      deps.workspace.setState({ workspace: null });
-      workspaceId = null;
-      for (const stop of stops.splice(1)) stop();
-      dropSnapshot();
-    }
   }
 
   /** Puts the last-seen board on screen, read-only, if no live list has answered meanwhile. */
@@ -284,6 +370,13 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     if (liveAnswered || current === null) return;
     const snapshot = await offline.snapshot();
     if (snapshot === null || liveAnswered || current === null) return;
+    if (workspaceId !== null && workspaceId !== snapshot.workspace.id) return;
+    // A delayed disk read must not reintroduce data after listMine revoked it.
+    if (
+      memberships !== undefined &&
+      !memberships.some((row) => row.workspaceId === snapshot.workspace.id)
+    )
+      return;
     deps.workspace.setState({ workspace: snapshot.workspace });
     const projects = [...snapshot.projects];
     const wanted =
@@ -302,6 +395,7 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
       .getState()
       .showCloudSnapshot(snapshot.workspace.id, projects, resolveSelection(projects, null, wanted));
     snapshotWorkspace = snapshot.workspace.id;
+    snapshotName = snapshot.workspace.name;
     offline.shown(snapshot.savedAt);
   }
 
@@ -321,12 +415,18 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
 
   const select = (session: CloudSession, row: WorkspaceRow) => {
     if (session !== current) return;
-    openWorkspace(session, row);
+    pendingMembership = memberships?.some((candidate) => candidate.workspaceId === row.workspaceId)
+      ? null
+      : row.workspaceId;
+    openWorkspace(session, row, true);
   };
   selections.add(select);
 
   const stopFollowing = deps.follow((session) => {
     current = session;
+    memberships = undefined;
+    pendingMembership = null;
+    checkingMembership = null;
     clear(session === null);
     if (session === null) return;
     // A client that arrived after the wait ran out still shows the snapshot.

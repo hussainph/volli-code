@@ -2205,6 +2205,15 @@ describe("ticket selection", () => {
 });
 
 describe("forget", () => {
+  it("keeps owner-keyed chat tabs on a reversible Workspace detach", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "t1", status: "todo" })] }, {});
+    useChatSessionsStore.setState({ openTabs: { p1: ["draft-1"], t1: ["chat-1"] } });
+    store.getState().forget("p1", { preserveDrafts: true });
+    expect(store.getState().ticketsByProject.p1).toBeUndefined();
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["draft-1"], t1: ["chat-1"] });
+    resetChatTabs();
+  });
   it("removes the ticket list, label list, filter record, and selection record", () => {
     const store = createBoardStore(fakeGateway());
     store

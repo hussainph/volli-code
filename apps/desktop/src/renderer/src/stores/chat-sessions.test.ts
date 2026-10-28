@@ -2520,6 +2520,26 @@ describe("setProvisionalActive", () => {
 });
 
 describe("dropChatTabs", () => {
+  it("retires a Workspace’s clients without losing its tabs, focus or typed Drafts", () => {
+    const { store } = fixture();
+    useChatDraftsStore.getState().openProvisional("draft-1", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "draft-operation",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft("draft-1", "keep me");
+    store.getState().openChatTab("p1", "draft-1");
+    store.getState().setProvisionalActive("p1", "draft-1");
+    store.getState().adoptChatSession("durable-1");
+    store.getState().openChatTab("p1", "durable-1");
+    store.getState().dropChatTabs(["p1"], { preserveDrafts: true });
+    expect(store.getState().openTabs.p1).toEqual(["draft-1", "durable-1"]);
+    expect(store.getState().provisionalActive.p1).toBe("draft-1");
+    expect(useChatDraftsStore.getState().drafts["draft-1"]?.text).toBe("keep me");
+    expect(store.getState().sessions["durable-1"]).toBeUndefined();
+    expect(getChatClient("durable-1")).toBeUndefined();
+  });
   it("deletes every named owner's entry", () => {
     const { store } = fixture();
     store.setState({

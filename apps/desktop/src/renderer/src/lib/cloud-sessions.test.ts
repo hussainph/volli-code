@@ -6,6 +6,11 @@ import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 const mocks = await vi.hoisted(async () => {
   const { createStore } = await import("zustand/vanilla");
   const rebind = vi.fn();
+  const chats = {
+    rebindChatSessions: rebind,
+    openTabs: {} as Record<string, string[]>,
+    adoptChatSession: vi.fn(),
+  };
   return {
     projects: createStore(() => ({ projects: [] as { id: string }[] })),
     rows: createStore(() => ({ byProject: {}, listingState: {} })),
@@ -14,7 +19,7 @@ const mocks = await vi.hoisted(async () => {
       listingState: {},
       listingError: {},
     })),
-    chat: { getState: () => ({ rebindChatSessions: rebind }) },
+    chat: { getState: () => chats },
     follow: null as ((session: CloudSession | null) => void) | null,
     followers: new Set<(session: CloudSession | null) => void>(),
     stop: vi.fn(),
@@ -53,6 +58,8 @@ afterEach(() => {
   mocks.projects.setState({ projects: [] });
   mocks.rows.setState({ byProject: {}, listingState: {} });
   mocks.tickets.setState({ byTicket: {}, listingState: {}, listingError: {} });
+  mocks.chat.getState().openTabs = {};
+  mocks.chat.getState().adoptChatSession.mockClear();
   vi.restoreAllMocks();
 });
 const args = { projectId: "p", paginationOpts: { cursor: null, numItems: 100 } };
@@ -82,6 +89,34 @@ const row = {
 };
 
 describe("cloud Session binding", () => {
+  it("re-adopts a kept durable tab only when its returned Workspace lists it", () => {
+    const fake = fakeCloud();
+    mocks.projects.setState({ projects: [{ id: "p" }] });
+    stop = bindCloudSessions();
+    mocks.follow!(fake.session);
+    mocks.chat.getState().openTabs = { p: ["s", "not-authorized"] };
+    fake.answer("sessions:list", args, { page: [row], isDone: true, continueCursor: "end" });
+    expect(mocks.chat.getState().adoptChatSession).toHaveBeenCalledExactlyOnceWith("s", "p");
+  });
+  it("does not reopen a departed project or return its pending listing into a new scope", async () => {
+    const fake = fakeCloud();
+    mocks.projects.setState({ projects: [{ id: "p" }] });
+    stop = bindCloudSessions();
+    mocks.follow!(fake.session);
+    const reader = cloudSessionReader("p");
+    const pending = reader.list({ projectId: "p" });
+    mocks.projects.setState({ projects: [] });
+    expect(await pending).toEqual({ ok: false, error: "The Workspace changed." });
+    expect(await reader.list({ projectId: "p" })).toEqual({
+      ok: false,
+      error: "The project is not in this Workspace.",
+    });
+    expect(fake.watchers("sessions:list", args)).toBe(0);
+    mocks.projects.setState({ projects: [{ id: "p" }] });
+    const replacing = reader.list({ projectId: "p" });
+    mocks.follow!(null);
+    expect(await replacing).toEqual({ ok: false, error: "The Workspace changed." });
+  });
   it("fails closed before connection and for a ticket whose project is unknown", async () => {
     expect(await cloudSessionReader("p").list({ projectId: "p" })).toMatchObject({ ok: false });
     const fake = fakeCloud();
@@ -178,6 +213,7 @@ describe("cloud Session binding", () => {
     fake.fail("sessions:list", args, "offline");
     expect(await pending).toEqual({ ok: false, error: "offline" });
     expect(warn).toHaveBeenCalled();
+    mocks.projects.setState({ projects: [{ id: "p" }, { id: "other" }] });
     const pending2 = cloudSessionReader("other").list({ projectId: "other" });
     fake.fail("sessions:list", { ...args, projectId: "other" }, new Error("unavailable"));
     expect(await pending2).toEqual({ ok: false, error: "unavailable" });

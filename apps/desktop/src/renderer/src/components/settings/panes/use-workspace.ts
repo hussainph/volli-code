@@ -38,7 +38,7 @@ const reads = {
 };
 
 /** Retains this scope's last live answer during a socket outage, never across scopes/clients. */
-function useRead<Value>(
+export function useWorkspaceRead<Value>(
   follow: FollowSession,
   attempt: number,
   scope: string | null,
@@ -51,8 +51,10 @@ function useRead<Value>(
   React.useEffect(() => {
     let stop: (() => void) | undefined;
     let active = true;
+    let generation = 0;
     setState({ scope, view: { kind: "loading" } });
     const stopFollow = follow((session) => {
+      const own = ++generation;
       stop?.();
       stop = undefined;
       if (!active) return;
@@ -60,7 +62,7 @@ function useRead<Value>(
       if (session === null || scope === null) return;
       const watch = read(session, scope);
       const update = () => {
-        if (!active) return;
+        if (!active || own !== generation) return;
         try {
           const value = watch.localQueryResult();
           setState({
@@ -83,7 +85,7 @@ function useRead<Value>(
   return state.scope === scope ? state.view : { kind: "loading" };
 }
 
-async function write<T>(
+export async function writeWorkspace<T>(
   current: () => CloudSession | null,
   run: (s: CloudSession) => Promise<T>,
 ): Promise<T> {
@@ -99,20 +101,11 @@ async function write<T>(
   }
 }
 
-export function useWorkspace({
-  follow = followCloudSession,
-  current = cloudSession,
-  select = selectCloudWorkspace,
-}: {
-  follow?: FollowSession;
-  current?: () => CloudSession | null;
-  select?: (workspaceId: string) => Promise<void>;
-} = {}) {
-  const workspaceId = useCloudWorkspaceStore((s) => s.workspace?.id ?? null);
+/** Shared by settings and the rail: an offline snapshot is read-only too. */
+export function useWorkspaceReadOnly(follow: FollowSession) {
   const snapshotAt = useCloudLinkInputs((s) => s.input.snapshotAt);
   const online = useCloudLinkInputs((s) => s.input.online);
   const [connected, setConnected] = React.useState(false);
-  const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     let stop: (() => void) | undefined;
     const unfollow = follow((s) => {
@@ -127,17 +120,32 @@ export function useWorkspace({
       unfollow();
     };
   }, [follow]);
-  const workspace = useRead(follow, attempt, workspaceId, reads.workspace);
-  const policy = useRead(follow, attempt, workspaceId, reads.policy);
-  const members = useRead(follow, attempt, workspaceId, reads.members);
-  const invites = useRead(follow, attempt, workspaceId, reads.invites) as Loaded<
+  return !connected || !online || snapshotAt !== null;
+}
+
+export function useWorkspace({
+  follow = followCloudSession,
+  current = cloudSession,
+  select = selectCloudWorkspace,
+}: {
+  follow?: FollowSession;
+  current?: () => CloudSession | null;
+  select?: (workspaceId: string) => Promise<void>;
+} = {}) {
+  const workspaceId = useCloudWorkspaceStore((s) => s.workspace?.id ?? null);
+  const readOnly = useWorkspaceReadOnly(follow);
+  const [attempt, setAttempt] = React.useState(0);
+  const workspace = useWorkspaceRead(follow, attempt, workspaceId, reads.workspace);
+  const policy = useWorkspaceRead(follow, attempt, workspaceId, reads.policy);
+  const members = useWorkspaceRead(follow, attempt, workspaceId, reads.members);
+  const invites = useWorkspaceRead(follow, attempt, workspaceId, reads.invites) as Loaded<
     readonly PendingInvite[]
   >;
-  const mine = useRead(follow, attempt, "viewer", reads.mine);
-  const viewer = useRead(follow, attempt, "viewer", reads.viewer);
+  const mine = useWorkspaceRead(follow, attempt, "viewer", reads.mine);
+  const viewer = useWorkspaceRead(follow, attempt, "viewer", reads.viewer);
   const commands = React.useMemo(() => {
     const scoped = <T>(run: (s: CloudSession, id: string) => Promise<T>) =>
-      write(current, (s) => {
+      writeWorkspace(current, (s) => {
         if (workspaceId === null) throw new Error("No Workspace selected.");
         return run(s, workspaceId);
       });
@@ -146,7 +154,9 @@ export function useWorkspace({
         client.mutation(api.invites.create, { workspaceId: id, email, role }),
       );
     const revoke = (inviteId: string) =>
-      write(current, ({ client, api }) => client.mutation(api.invites.revoke, { inviteId }));
+      writeWorkspace(current, ({ client, api }) =>
+        client.mutation(api.invites.revoke, { inviteId }),
+      );
     return {
       rename: (name: string) =>
         scoped(({ client, api }, id) =>
@@ -181,7 +191,7 @@ export function useWorkspace({
         return create(invite.email, invite.role);
       },
       join: async (inviteId: string) => {
-        const joined = await write(current, ({ client, api }) =>
+        const joined = await writeWorkspace(current, ({ client, api }) =>
           client.mutation(api.invites.accept, { inviteId }),
         );
         try {
@@ -204,7 +214,7 @@ export function useWorkspace({
     mine,
     viewer,
     commands,
-    readOnly: !connected || !online || snapshotAt !== null,
+    readOnly,
     retry: () => setAttempt((n) => n + 1),
   };
 }
