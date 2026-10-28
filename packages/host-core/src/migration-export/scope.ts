@@ -79,7 +79,8 @@ export function selectLocalProduct(db: Database.Database, options: ExportSelecti
   }
   const view = (table: string, predicate: string) =>
     db.exec(
-      `CREATE TEMP VIEW ${table} AS SELECT ${table === "ticket_labels" ? "r.rowid AS rowid," : ""} r.* FROM main.${table} r WHERE ${predicate}`,
+      // Both projections need physical order for durable display/filename ties.
+      `CREATE TEMP VIEW ${table} AS SELECT ${table === "ticket_labels" || table === "blob_links" ? "r.rowid AS rowid," : ""} r.* FROM main.${table} r WHERE ${predicate}`,
     );
   view("projects", "r.id IN (SELECT id FROM selected_projects)");
   view(
