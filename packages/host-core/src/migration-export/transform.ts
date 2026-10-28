@@ -3,7 +3,7 @@
  * attribution, fractional position keys and derived ids. No database, no
  * filesystem; `sources.ts` calls these per row.
  */
-import { createHash } from "node:crypto";
+import { nameBasedUuid } from "../cloud-runner/derived-id";
 import { MIGRATION_PLACEHOLDERS, type Actor, type JsonValue } from "./records";
 
 const USER = MIGRATION_PLACEHOLDERS.userId;
@@ -174,26 +174,12 @@ export function sequentialPositionKey(index: number): string {
  */
 export const MIGRATION_DERIVED_ID_NAMESPACE = "5b0f6c0e-3c1f-4f7a-9c43-6f2a1d3e8b57";
 
-function uuidBytes(uuid: string): Buffer {
-  return Buffer.from(uuid.replaceAll("-", ""), "hex");
-}
-
 /**
- * A name-based UUID for `parts` joined by `\u0000` under
- * {@link MIGRATION_DERIVED_ID_NAMESPACE}: RFC 9562's UUIDv8 (§5.8, custom),
- * built the way v5 is but over SHA-256 rather than SHA-1. An id, not a secret;
- * SHA-256 only keeps a weak hash out of the codebase.
+ * A name-based UUID for `parts` under {@link MIGRATION_DERIVED_ID_NAMESPACE}
+ * (`nameBasedUuid`: RFC 9562's UUIDv8 over SHA-256).
  */
 export function derivedId(...parts: readonly string[]): string {
-  const hash = createHash("sha256")
-    .update(uuidBytes(MIGRATION_DERIVED_ID_NAMESPACE))
-    .update(parts.join("\u0000"), "utf8")
-    .digest();
-  const bytes = hash.subarray(0, 16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return nameBasedUuid(MIGRATION_DERIVED_ID_NAMESPACE, ...parts);
 }
 
 /** The id of a project's primary repo, derived from the project id. */

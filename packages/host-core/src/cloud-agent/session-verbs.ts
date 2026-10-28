@@ -14,7 +14,12 @@ import {
   type RuntimeVerbCall,
   type RuntimeVerbResult,
 } from "@volli/shared";
-import { INLINE_ARTIFACT_MAX_BYTES } from "@volli/shared/cloud";
+import {
+  INLINE_ARTIFACT_MAX_BYTES,
+  isUuid,
+  type AutomationRunQueued,
+  type CloudAutomationDefinition,
+} from "@volli/shared/cloud";
 import type { AgentBackend } from "./agent-backend";
 import { NotYetSyncedError } from "./agent-backend";
 import type { CloudVerbCall } from "./board-verbs";
@@ -24,7 +29,7 @@ import { createCloudSessionReads, cloudSessionRefusal } from "./session-reads";
 import { failure } from "../agent-dispatch/context";
 import { dryRunResponse } from "../agent-dispatch/preview";
 import { supervisionMarker } from "../session-runtime/supervise-session";
-import { AUTOMATIONS_UNAVAILABLE_IN_CLOUD } from "../automations/availability";
+import { agentToolCommandId } from "../cloud-runner/derived-id";
 import { createCloudWatchVerb } from "./watch-verbs";
 
 export interface CloudSessionVerbsOptions {
@@ -87,6 +92,96 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
       throw new Error(`Session id ${handle} is ambiguous; nothing was touched.`);
     return matches.length === 1;
   }
+  /**
+   * `automation_run` in a cloud launch: the backend queues the Run
+   * (`automations.run`, under this Session's Agent token) on the ticket's
+   * Place when it is this Session's owner's runner, else the owner's own
+   * runner, and arms this Session's watch on the Run's Session when it starts.
+   * The tool's name and schema are the local one's; only where it runs moved.
+   * The command id is derived from the tool call, so a replayed call answers
+   * with the first call's Run.
+   */
+  async function runAutomation(
+    session: RuntimeSessionIdentity,
+    request: RuntimeVerbCall,
+  ): Promise<RuntimeVerbResult> {
+    const named = request.input["automation"];
+    const ticketKey = request.input["ticket"];
+    if (typeof named !== "string" || !named.trim())
+      return refused(
+        "automation must be the name of a saved Automation, for example 'Nightly sweep'.",
+      );
+    if (typeof ticketKey !== "string" || !ticketKey.trim())
+      return refused("ticket must be a Ticket display id, for example VC-12.");
+    const deadline = now() + CLOUD_VERB_BUDGET_MS;
+    let submitted = false;
+    try {
+      const listed = (await backend.query(
+        session.sessionId,
+        "automations:list",
+        { projectId: session.projectId },
+        { deadline },
+      )) as readonly Pick<CloudAutomationDefinition, "id" | "name">[];
+      const wanted = named.trim();
+      const matches = listed.filter(
+        (row) => row.id === wanted || row.name.trim().toLowerCase() === wanted.toLowerCase(),
+      );
+      if (matches.length === 0)
+        return refused(
+          listed.length === 0
+            ? `No Automation called ${JSON.stringify(wanted)} here, and this project lists none at all, so nothing was started. A person creates one in the app first.`
+            : `No Automation called ${JSON.stringify(wanted)} in this project, so nothing was started. This project lists: ${listed.map((row) => JSON.stringify(row.name)).join(", ")}.`,
+        );
+      if (matches.length > 1)
+        return refused(
+          `This project lists more than one Automation called ${JSON.stringify(wanted)}, so nothing was started rather than the wrong one. Ask a person which to run, or have the duplicate renamed.`,
+        );
+      const automation = matches[0]!;
+      const key = ticketKey.trim();
+      const ticket = isUuid(key)
+        ? { ticketId: key, projectId: session.projectId, key }
+        : ((await backend.query(
+            session.sessionId,
+            "board:resolveTicketKey",
+            { key },
+            { deadline },
+          )) as { ticketId: string; projectId: string; key: string });
+      if (ticket.projectId !== session.projectId)
+        return refused(`No Ticket ${key} in this project, so nothing was started.`);
+      submitted = true;
+      const queued = (await backend.mutation(
+        session.sessionId,
+        "automations:run",
+        {
+          commandId: agentToolCommandId(session.sessionId, request.toolCallId),
+          automationId: automation.id,
+          ticketId: ticket.ticketId,
+        },
+        { deadline },
+      )) as AutomationRunQueued;
+      return {
+        text: [
+          `Queued ${JSON.stringify(automation.name)} on ${ticket.key} as Session ${shortSessionId(queued.sessionId)} on ${queued.runner.name}${queued.runner.status === "online" ? "" : ` (${queued.runner.status}; it starts when that runner is back)`}.`,
+          "The Run is recorded with the automation Actor, exactly as one a person starts by hand. It opens a fresh Session that runs on its own.",
+          "This Session watches the Run's Session once it starts: a notice from Volli arrives here when its first turn ends, when it signals done or blocked, or if it is stopped. Keep working; do not poll.",
+        ].join("\n"),
+      };
+    } catch (error) {
+      if (
+        error instanceof CloudFunctionError &&
+        /could not find public function/i.test(error.message)
+      )
+        return refused("Volli Cloud cannot run Automations yet, so nothing was started.");
+      const response = responseFor(
+        error instanceof CloudOfflineError && !submitted
+          ? new CloudOfflineError(error.reason, error.message, "not_sent")
+          : error,
+      );
+      return refused(
+        `Volli refused to start the Run: ${response.ok ? "Unknown result." : response.error.message}`,
+      );
+    }
+  }
   return {
     /** Null delegates to today's local handler; no network request occurs on that path. */
     async socket(call: CloudVerbCall): Promise<AgentResponse | null> {
@@ -146,7 +241,7 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
         request.input["env"] !== undefined
       )
         return refused("Starting on another runner is not available yet. Omit env to start here.");
-      if (request.verb === "automation.run") return refused(AUTOMATIONS_UNAVAILABLE_IN_CLOUD);
+      if (request.verb === "automation.run") return runAutomation(session, request);
       const watchResult = await watch(session, request, signal);
       if (watchResult !== null) return watchResult;
       if (request.verb !== "session.send" && request.verb !== "session.stop") return null;

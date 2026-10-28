@@ -130,8 +130,8 @@ const EXECUTION_CORE = [
  *   goes; a Ticket Session holds it only by grant, and a grant can only aim it
  *   at its own Ticket, so it is told exactly that;
  * - `automation_run` — a saved Automation already describes the job. Only a
- *   Board Session whose frozen bundle holds it is told to use it; new cloud
- *   Sessions have no Automation executor yet.
+ *   Board Session whose frozen bundle holds it is told to use it (cloud
+ *   Sessions born while the cloud had no Automations hold none).
  *
  * Keyed by Role and rendered only when the frozen bundle holds
  * `session.delegate`. That condition keeps the Cache Prefix Role-static: the
@@ -140,8 +140,7 @@ const EXECUTION_CORE = [
  * construction — it composes no paragraph and is never told to delegate.
  * Sessions the condition separates are ones frozen before the verb existed,
  * which would otherwise be told to call a tool they lack. The Automation line
- * is separately bounded by that frozen tool, preserving local and previously
- * frozen prompts while withholding it from new cloud Sessions.
+ * is separately bounded by that frozen tool, preserving every frozen prompt.
  *
  * Budgeted on its own, beside the core's 150–250: the Board paragraph is 681
  * characters / ~171 estimated tokens and the Ticket one 538 / ~135, so the

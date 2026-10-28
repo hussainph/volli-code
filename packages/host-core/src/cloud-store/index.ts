@@ -29,12 +29,24 @@ import { registerSessionCommandJob, ownerGuardedInbox } from "./session-jobs";
 import { registerSessionNoticeJob, type SessionNoticeOutbox } from "./notice-jobs";
 import { createFollowUpMirror } from "./follow-up-mirror";
 import { executeFollowUpJob } from "./follow-up-jobs";
+import {
+  AUTOMATION_RUN_CAPABILITY,
+  registerAutomationRunJob,
+  type AutomationRunSessions,
+} from "./automation-jobs";
+import { createCloudRunAttention } from "./automation-attention";
 import { runGitCapturingAsync } from "../worktree/git";
 import { getTrimSettings } from "../worktree/trim-settings";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import { releaseAgentSites } from "../worktree/agent-sites";
 import { hostLogger } from "../log/root";
-import { computeWorktreeReclaim, isTicketStatus, DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
+import {
+  computeWorktreeReclaim,
+  isTicketStatus,
+  DEFAULT_AUTHORITY_POLICY,
+  type NotificationRequest,
+} from "@volli/shared";
+import type { AutomationRunContext } from "@volli/shared/cloud";
 import { retentionTtlMs } from "../worktree/retention";
 import { createCloudReportPublisher } from "./reports";
 import { createAgentBackend, runnerTokenBefore } from "../cloud-agent/agent-backend";
@@ -50,6 +62,9 @@ import { createCloudRestartRecovery } from "./recovery";
 import { createCloudTranscriptPublisher } from "./transcripts";
 import { createTranscriptPacking } from "./transcript-packing";
 import { startStreamChunks, type StreamChunks } from "../cloud-runner/stream-chunker";
+
+/** How long a claimed Automation Run waits for runtime recovery before it retries. */
+export const AUTOMATION_SESSIONS_WAIT_MS = 120_000;
 
 export interface CloudRunnerSyncConnection {
   start(): void;
@@ -167,6 +182,39 @@ export function createCloudProductStore(options: {
     runnerToken: () => active?.runnerToken?.() ?? Promise.resolve(null),
     nudgeDrain: (sessionId) => drain.nudge(sessionId),
   });
+  /** `attention.raiseFromRunner` for a Session this runner holds: `volli notify` and run-attention. */
+  async function raiseFromRunner(
+    sessionId: string,
+    args: { notifyId: string; title: string; detail: string },
+  ): Promise<{ displayName: string }> {
+    const current = active;
+    if (current?.link.status.state !== "connected")
+      throw new CloudOfflineError("link_down", "This runner is offline.", "not_sent");
+    const cursor = sqliteDrainCursorStore(db).get(sessionId);
+    if (!owner.owns(sessionId) || cursor === null)
+      throw new CloudFunctionError("forbidden", "This Session is not claimed by this runner.");
+    const deadline = Date.now() + CLOUD_VERB_BUDGET_MS;
+    const token = await runnerTokenBefore(
+      () => current.runnerToken?.() ?? Promise.resolve(null),
+      deadline,
+    );
+    if (token == null || active !== current)
+      throw new CloudOfflineError("link_down", "This runner is not linked.", "not_sent");
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs <= 0)
+      throw new CloudOfflineError(
+        "timeout",
+        "Out of time before queuing the notification.",
+        "not_sent",
+      );
+    return (await functions.call(
+      "mutation",
+      "attention:raiseFromRunner",
+      { sessionId, generation: cursor.generation, ...args },
+      token,
+      { timeoutMs },
+    )) as { displayName: string };
+  }
   const cloudSessionVerbs = createCloudSessionVerbs({
     backend: agentBackend,
     engine: owner.engine,
@@ -180,35 +228,7 @@ export function createCloudProductStore(options: {
       );
     },
     ticketDisplayIdOf: context.ticketDisplayIdOf,
-    async notify(sessionId, args) {
-      const current = active;
-      if (current?.link.status.state !== "connected")
-        throw new CloudOfflineError("link_down", "This runner is offline.", "not_sent");
-      const cursor = sqliteDrainCursorStore(db).get(sessionId);
-      if (!owner.owns(sessionId) || cursor === null)
-        throw new CloudFunctionError("forbidden", "This Session is not claimed by this runner.");
-      const deadline = Date.now() + CLOUD_VERB_BUDGET_MS;
-      const token = await runnerTokenBefore(
-        () => current.runnerToken?.() ?? Promise.resolve(null),
-        deadline,
-      );
-      if (token == null || active !== current)
-        throw new CloudOfflineError("link_down", "This runner is not linked.", "not_sent");
-      const timeoutMs = deadline - Date.now();
-      if (timeoutMs <= 0)
-        throw new CloudOfflineError(
-          "timeout",
-          "Out of time before queuing the notification.",
-          "not_sent",
-        );
-      return (await functions.call(
-        "mutation",
-        "attention:raiseFromRunner",
-        { sessionId, generation: cursor.generation, ...args },
-        token,
-        { timeoutMs },
-      )) as { displayName: string };
-    },
+    notify: raiseFromRunner,
   });
   // Shadow project paths are inert FK placeholders. Every machine-facing
   // consumer resolves the checkout through this registry, never the shadow.
@@ -229,6 +249,36 @@ export function createCloudProductStore(options: {
     cloudBoardVerbs: createCloudBoardVerbs({ backend: agentBackend }),
     cloudSessionVerbs,
   };
+  // Cloud Automation Runs: `automation.run` jobs run once runtime recovery
+  // has bound the Session services (`bindAutomations`); a job claimed before
+  // then waits for them under its renewed lease instead of spending an attempt.
+  let automationSessions: AutomationRunSessions | null = null;
+  const automationWaiters = new Set<() => void>();
+  async function boundAutomationSessions(
+    signal: AbortSignal,
+  ): Promise<AutomationRunSessions | null> {
+    if (automationSessions !== null) return automationSessions;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(wake, AUTOMATION_SESSIONS_WAIT_MS);
+      timer.unref?.();
+      function wake() {
+        clearTimeout(timer);
+        automationWaiters.delete(wake);
+        signal.removeEventListener("abort", wake);
+        resolve();
+      }
+      automationWaiters.add(wake);
+      signal.addEventListener("abort", wake, { once: true });
+    });
+    return automationSessions;
+  }
+  const runAttention = createCloudRunAttention({
+    db,
+    ownerUserId,
+    engine: owner.engine,
+    subscribe: host.sessionWakeBus.subscribe,
+    raise: raiseFromRunner,
+  });
   const followUpMirror = createFollowUpMirror({
     runtime: () => runtime,
     link: () => active?.link ?? null,
@@ -412,6 +462,24 @@ export function createCloudProductStore(options: {
       refreshFollowUps();
       active?.packing.refresh();
     },
+    /**
+     * The job kinds beyond Sessions and Working copies this store executes,
+     * for the runner's capability report (`runners.capabilities.tools`): the
+     * backend queues `automation.run` only for a runner that names it.
+     */
+    jobCapabilities: [AUTOMATION_RUN_CAPABILITY] as readonly string[],
+    /**
+     * The recovered Session services a cloud Automation Run starts through,
+     * and this Mac's notification delivery for an unattended Run's alert.
+     */
+    bindAutomations(
+      ports: AutomationRunSessions & { notify(request: NotificationRequest): void },
+    ): void {
+      const { notify, ...sessions } = ports;
+      automationSessions = sessions;
+      runAttention.bindLocal(notify);
+      for (const wake of automationWaiters) wake();
+    },
     /** The runtime lifecycle's durable outbox door, for `session.notice` jobs. */
     bindNotices(outbox: SessionNoticeOutbox): void {
       notices = outbox;
@@ -531,6 +599,20 @@ export function createCloudProductStore(options: {
         );
       // A watcher's notice: composed here, then handed to the durable outbox.
       registerSessionNoticeJob(guarded, { outbox: () => notices });
+      // A cloud Automation Run, on the runner its armer (or caller) chose.
+      registerAutomationRunJob(inbox, {
+        runnerId: parts.runnerId,
+        engine: owner.engine,
+        sessions: boundAutomationSessions,
+        runContext: async (request) => {
+          if (parts.link.query === undefined)
+            throw new Error("Runner context reads are unavailable.");
+          return (await parts.link.query("automationRunner:runContext", {
+            ...request,
+          })) as AutomationRunContext;
+        },
+        onSessionBorn: (born) => runAttention.track(born),
+      });
       // Optional specialized executors still cross the same owner gate.
       for (const [kind, executor] of Object.entries(options.sessionJobs ?? {}))
         guarded.register(kind, executor);
@@ -616,6 +698,8 @@ export function createCloudProductStore(options: {
       };
     },
     dispose() {
+      runAttention.dispose();
+      for (const wake of automationWaiters) wake();
       followUpMirror.close();
       offWake();
       active?.packing.close();

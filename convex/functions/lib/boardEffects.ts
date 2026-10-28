@@ -17,8 +17,9 @@
  * job (a defect, not a routing refusal) still fails the write, loudly.
  *
  * An Automation run is only queued for a runner that advertises the executor
- * in its capability report. Until one does (VC-569), a cloud launch leaves no
- * `automation.run` job that nothing can execute; the board fact still stands.
+ * in its capability report (a desktop runner from 0.3.0 names it), so an
+ * older build is never handed an `automation.run` job it cannot execute; the
+ * board fact still stands.
  */
 
 import {

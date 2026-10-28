@@ -16,7 +16,11 @@ import {
   type AutomationSessionPorts,
   type HostAutomations,
 } from "../automation-services";
-import { createRuntimeAutomations, type ReadyAutomationSessions } from "./automations";
+import {
+  automationPromptSupply,
+  createRuntimeAutomations,
+  type ReadyAutomationSessions,
+} from "./automations";
 import {
   createSessionRuntimeLifecycle,
   mapRecoveredSessionServices,
@@ -279,6 +283,25 @@ describe("live runtime automations", () => {
     await expect(f.ports().promptSupply("p1")).rejects.toThrow("templates unreadable");
     vi.mocked(loadSkills).mockResolvedValueOnce({ ok: false, error: "skills unreadable" });
     await expect(f.ports().promptSupply("p1")).rejects.toThrow("skills unreadable");
+  });
+
+  it("serves a cloud runner's supply from its checkout, and refuses an unlocated project", async () => {
+    vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
+    vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [skill] });
+    let path: string | null = "/checkout";
+    const supply = automationPromptSupply({
+      directories: { dataDir: "/data", homeDir: "/home" },
+      cloudEnabled: () => true,
+      project: () => ({ path, skillModes: { alpha: "off" } }),
+    });
+    await expect(supply("p1")).resolves.toEqual({ templates: [], skills: [] });
+    expect(loadPromptTemplates).toHaveBeenCalledWith({
+      projectCommandsDir: "/checkout/.volli/commands",
+      globalCommandsDir: "/data/commands",
+      cloud: true,
+    });
+    path = null;
+    await expect(supply("p1")).rejects.toThrow("not on this machine");
   });
 
   it("applies an empty mode map when the re-read project carries no skill modes", async () => {

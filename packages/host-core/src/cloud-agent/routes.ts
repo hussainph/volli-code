@@ -15,6 +15,8 @@
  * - `ledger`: this runner's Session runtime and ledger; the drain sends its
  *   facts to the backend. Works offline.
  * - `machine`: this machine's own facts and tools, unchanged.
+ * - `cloud-automation`: the backend's Automation Runs, under the Session's
+ *   Agent token; the Run's Session starts on the runner the backend chose.
  * - `person-only`: a person's client does this, never an agent.
  * - `blocked`: waits on another ticket's backend work; until then the verb
  *   keeps its interim behaviour, named here.
@@ -63,6 +65,7 @@ export type CloudRoute =
   | { readonly route: "session-target" }
   | { readonly route: "cloud-notify" }
   | { readonly route: "cloud-watch" }
+  | { readonly route: "cloud-automation" }
   | { readonly route: "ledger" }
   | { readonly route: "machine" }
   | { readonly route: "person-only" }
@@ -128,11 +131,9 @@ const ROUTES = {
   doctor: machine,
   "prompt.baseline": machine,
   "ticket.await": watches,
-  "automation.run": {
-    route: "blocked",
-    until: "VC-569",
-    interim: "Refused until Automations run through Volli Cloud.",
-  },
+  // The backend queues the Run for the owner's runner; that runner's
+  // `automation.run` executor starts its Session (`cloud-store/automation-jobs.ts`).
+  "automation.run": { route: "cloud-automation" },
   "session.stop": target,
   "session.send": target,
   // The child is born on this runner and inherits its parent's drain cursor.

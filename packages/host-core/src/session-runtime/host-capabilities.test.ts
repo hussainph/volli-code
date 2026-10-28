@@ -156,7 +156,7 @@ describe("host capabilities at Session birth", () => {
     expect(tools.some((tool) => tool.startsWith("browser_"))).toBe(false);
   });
 
-  it("offers no automation.run — direct or through Code Mode — in a launch without Automations (VC-952)", () => {
+  it("offers automation.run, direct and through Code Mode, whichever store runs the Automations", () => {
     const resolve = (capabilities: HostToolCapabilities) =>
       resolveHostToolSurface({
         capabilities,
@@ -168,7 +168,7 @@ describe("host capabilities at Session birth", () => {
         codeModeBirth,
       });
 
-    // A local launch is unchanged: the verb is there, and Code Mode routes it.
+    // A cloud launch's Run is queued by Volli Cloud; a local one's by its own Run door.
     const local = resolve(desktop);
     expect(local).toContain("automation.run");
     const localRoutes = codeModeSurfaceAtBirth({
@@ -177,20 +177,5 @@ describe("host capabilities at Session birth", () => {
       mcpTools: [],
     })?.routes;
     expect(localRoutes?.["automation.run"]).toBeDefined();
-
-    const tools = resolve({ ...desktop, automationsAvailable: false });
-    expect(tools).not.toContain("automation.run");
-    // The rest of the project bundle is untouched.
-    expect(tools).toContain("session.start");
-    expect(tools).toContain("codemode");
-    // Code Mode's routes are derived from the tools this resolver returns, so
-    // the one verb that spends an Automation has no route a program could call.
-    const routes = codeModeSurfaceAtBirth({
-      birth: codeModeBirth,
-      tools,
-      mcpTools: [],
-    })?.routes;
-    expect(Object.keys(routes ?? {})).not.toContain("automation.run");
-    expect(routes?.["automation.run"]).toBeUndefined();
   });
 });

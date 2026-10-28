@@ -102,7 +102,6 @@ import {
 import type { McpSettingsService } from "./mcp/settings";
 import type { McpVerbOptions } from "./mcp/verbs";
 import { optionalVerbText as optionalText, requiredVerbText as requiredText } from "./verb-input";
-import { AUTOMATIONS_UNAVAILABLE_IN_CLOUD } from "./automations/availability";
 import { sessionCreateCommandId } from "./session-runtime/sessions";
 import { startSessionModelOverride } from "./session-runtime/start-session";
 import type { StartSessionModelChoice } from "./session-runtime/start-session";
@@ -167,14 +166,6 @@ export interface AgentToolDoorOptions {
    * never came up this launch — the same absence the IPC transport reports.
    */
   automations: () => AutomationToolPort | null;
-  /**
-   * Whether this launch has Automations at all (VC-952). A cloud launch passes
-   * `false`: a Session already frozen with `automation.run` is refused at this
-   * door before the handler resolves a project or Ticket (the frozen rows a
-   * cloud launch keeps only as machine shadows). Absent keeps a local launch's
-   * answer.
-   */
-  automationsAvailable?: boolean;
   /** The caller's project policy, read per call: budgets, and what a watch may be woken by. */
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   /**
@@ -1131,13 +1122,6 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
       return refusal(`${request.verb} is not a verb this build can run.`);
     }
     const policy = toolDoorPolicy(request.verb);
-    // VC-952: a cloud launch has no Automations. A Session born locally can
-    // still reattach here holding the frozen tool, so refuse it at dispatch —
-    // before any handler reads projects or resolves a Ticket through this
-    // launch's shadow rows — and never let a local Run door answer.
-    if (request.verb === "automation.run" && options.automationsAvailable === false) {
-      return refusal(AUTOMATIONS_UNAVAILABLE_IN_CLOUD);
-    }
     if (request.verb === "session.start") {
       const cloud = await options.cloudSessionVerbs?.tool(session, request, signal);
       return cloud ?? startSessionTool(options, policy, session, request, signal, budgetAsk);
