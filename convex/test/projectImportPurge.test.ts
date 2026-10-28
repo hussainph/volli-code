@@ -473,6 +473,23 @@ describe("a purge, at the edges", () => {
     expectRestored(before, await snapshot(world));
   });
 
+  test("an operator's rescue abort purges the move as the driver's abort does", async () => {
+    const store = new S3StandIn().install();
+    const world = await importWorld();
+    const { mine, others } = seedObjects(store, world);
+    const before = await snapshot(world);
+    await importEverything(world);
+    await world.t.mutation(internal.projectImports.rescue, {
+      moveId: world.moveId,
+      action: { kind: "abort" },
+    });
+    await runScheduled(world);
+    expect(await status(world)).toMatchObject({ status: "purged" });
+    expectRestored(before, await snapshot(world));
+    expect(store.keys()).toEqual(others.toSorted());
+    for (const key of mine) expect(store.objects.has(key)).toBe(false);
+  });
+
   test("a move aborted before purges existed is picked up by the cron", async () => {
     new S3StandIn().install();
     const world = await importWorld();

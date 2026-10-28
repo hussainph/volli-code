@@ -66,7 +66,8 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel.js";
 import {
-  action,
+  // `rescue` takes an argument named `action`.
+  action as publicAction,
   internalMutation,
   internalQuery,
   mutation,
@@ -940,8 +941,9 @@ export const rescue = internalMutation({
         updatedAt: now,
         abortedAt: row.abortedAt ?? now,
       });
-      // The move purge sweep picks up `aborting`, including moves without a
-      // purge cursor. Until that chain is deployed this is marked for purge.
+      // The purge starts at once (`projectImportPurge.ts`), or restarts under a
+      // new run when the move was already aborting.
+      await schedulePurge(ctx, row, "person");
     } else {
       if (!isUuid(action.userId) || !isUuid(action.runnerId)) {
         throw importError(
@@ -989,6 +991,8 @@ export const rescue = internalMutation({
       },
     });
     return { status: action.kind === "abort" ? ("aborting" as const) : row.status };
+  },
+});
 
 // ── objects ──────────────────────────────────────────────────────────────────
 
@@ -1005,7 +1009,8 @@ export const authorizeObjectPut = internalQuery({
         status: row.status,
       });
     }
-    await requireOwnRunner(ctx, row.userId, row.runnerId);
+    const driver = driverOf(row);
+    await requireOwnRunner(ctx, driver.userId, driver.runnerId);
     if (!SHA256_HEX.test(args.sha256)) {
       throw importError("invalid_argument", "sha256 must be 64 lowercase hex digits.");
     }
@@ -1034,7 +1039,7 @@ export const authorizeObjectPut = internalQuery({
  * (412) a key that already holds an object. A client resuming a move HEADs a
  * refused key and compares its checksum rather than writing it again.
  */
-export const presignPut = action({
+export const presignPut = publicAction({
   args: { moveId: v.string(), key: v.string(), bytes: v.number(), sha256: v.string() },
   handler: async (ctx, args): Promise<{ request: PresignedS3Request }> => {
     const { key } = await ctx.runQuery(internal.projectImports.authorizeObjectPut, args);

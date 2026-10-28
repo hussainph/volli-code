@@ -495,8 +495,10 @@ pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","a
 pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","action":{"kind":"reassign","userId":"<replacement-user-uuid>","runnerId":"<their-runner-uuid>"}}' --deployment <ref>
 ```
 
-Abort marks the hidden move `aborting` for the purge chain; until that chain is
-deployed it remains marked for purge. Reassignment requires an active owner/admin
+Abort marks the hidden move `aborting` and starts its purge, as the driver's own
+`abort` does: `projectImports:status` shows it (`purge`, then `purged`). A purge
+that stopped (`purge.error` starting `stopped:`) names a row or key that is not
+the move's and waits for someone to look; abort again restarts it. Reassignment requires an active owner/admin
 of the **same Workspace**, with live preview access and their own non-revoked
 runner. It explicitly grants that person access to the hidden imported history.
 They resume the existing move via `projectImports.status`, using its `driver` for

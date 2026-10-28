@@ -40,7 +40,7 @@
 
 import { ConvexError, v } from "convex/values";
 
-import { S3_LIST_MAX_KEYS, migrationPrefix, parseId, projectPrefix } from "@volli/shared/cloud";
+import { S3_LIST_MAX_KEYS, migrationPrefix, projectPrefix } from "@volli/shared/cloud";
 
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel.js";
@@ -540,8 +540,8 @@ export const finish = internalMutation({
     await ctx.db.patch(row._id, { status: "purged", updatedAt: now, purgedAt: now, purge });
     await audit(ctx, {
       workspaceId: row.workspaceId,
-      // The purge runs for the person who cancelled the move.
-      actor: { kind: "person", userId: parseId("user", row.userId) },
+      // The backend's own work, whoever cancelled the move (its driver or an operator).
+      actor: { kind: "volli", reason: "migration" },
       kind: "project.import_purged",
       targetKind: "project",
       targetId: row.projectId,
