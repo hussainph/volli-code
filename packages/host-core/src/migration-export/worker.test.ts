@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
+import { profileMaintenanceActive } from "../backup/profile-maintenance";
 import { exportMigrationSnapshot, type MigrationExportProgress } from "./exporter";
 import { STATE_FILE, stagingDirOf } from "./staging";
 import { verifyMigrationExport } from "./verify";
@@ -97,6 +98,7 @@ describe("runMigrationExportInWorker", () => {
     ).rejects.toMatchObject({ code: "cancelled" });
     expect(existsSync(target.outDir)).toBe(false);
     expect(existsSync(join(stagingDirOf(target.outDir), STATE_FILE))).toBe(true);
+    expect(await profileMaintenanceActive(profile.root)).toBe(false);
 
     const resumed = await runMigrationExportInWorker(ENTRY, target, { execArgv: EXEC_ARGV });
     expect(resumed.resumed).toBe(true);
@@ -159,6 +161,7 @@ describe("runMigrationExportInWorker", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "cancelled" });
+    expect(await profileMaintenanceActive(profile.root)).toBe(false);
   });
 
   it("refuses to serve outside a worker thread", () => {

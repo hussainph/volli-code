@@ -93,6 +93,8 @@ import {
   revealWindow,
   sealQuietAppActivation,
   createDatabaseRecovery,
+  AutomaticProfileBackups,
+  runAutomaticBackupWorker,
   startOrphanScan,
   createLoginPathBootstrap,
   ADOPTION_PROBE,
@@ -1014,6 +1016,32 @@ const appStartup = app.whenReady().then(async () => {
   });
   const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
   const dbHandle: DbHandle = hostCore.database;
+  const profileBackups = dbHandle.ok
+    ? new AutomaticProfileBackups({
+        dataDir: app.getPath("userData"),
+        run: (outputPath, signal, onNotice) =>
+          runAutomaticBackupWorker(
+            join(__dirname, "automatic-backup-worker.cjs"),
+            {
+              dataDir: app.getPath("userData"),
+              dbPath,
+              outputPath,
+              blobsRoot: blobsRoot(app.getPath("userData")),
+              transcriptsRoot: join(app.getPath("userData"), "session-transcripts"),
+              appVersion: app.getVersion(),
+              now: Date.now(),
+            },
+            signal,
+            onNotice,
+          ),
+        reveal: async (directory) => {
+          const error = await shell.openPath(directory);
+          if (error) throw new Error(error);
+        },
+      })
+    : null;
+  app.once("will-quit", () => profileBackups?.stop());
+
   registerDatabaseRecoveryIpcHandlers({
     recovery: createDatabaseRecovery({ dbPath, dataDir: app.getPath("userData") }),
     degraded: !dbHandle.ok,
@@ -1640,6 +1668,7 @@ const appStartup = app.whenReady().then(async () => {
     });
     return {
       backgroundShells,
+      backups: profileBackups,
       experiments: { snapshot: readExperiments, set: setExperiment },
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
@@ -2412,7 +2441,10 @@ const appStartup = app.whenReady().then(async () => {
     // Construct the shared retention watch at its former boot point; both
     // maintenance loops still start only after the first window paints.
     void liveHost.maintenance.retention;
-    mainWindow.webContents.once("did-finish-load", () => liveHost.maintenance.start());
+    mainWindow.webContents.once("did-finish-load", () => {
+      liveHost.maintenance.start();
+      profileBackups?.start();
+    });
     app.on("browser-window-focus", () => liveHost.maintenance.triggerRetention());
   }
 

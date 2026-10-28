@@ -1,3 +1,4 @@
+import type { ProfileBackupStatus } from "@volli/shared";
 import type {
   HostWorkspaceCreateInput,
   HostWorkspaceCreateResult,
@@ -339,6 +340,9 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   /** Stops a project's live work, then detaches it (VC-796, VC-822): `../project-remove`. */
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
+  readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
+  readonly "backups.run": HostHandler<void, ProfileBackupStatus>;
+  readonly "backups.reveal": HostHandler<void, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** Where the ticket's working copy's environment setup stands (VC-584). */
   readonly "worktree.setupStatus": HostHandler<{ ticketId: string }, WorktreeSetupStatusView>;
@@ -591,6 +595,11 @@ export interface HostHandlerOptions {
   readonly db: Database.Database | null;
   /** The host's data directory: where a worktree's attachment bytes live. */
   readonly dataDir: string;
+  readonly backups?: {
+    status(): Promise<ProfileBackupStatus>;
+    run(): Promise<ProfileBackupStatus>;
+    reveal(): Promise<void>;
+  } | null;
   /** The same screenshot store Code Mode writes; absent means an explicit unavailable picture. */
   readonly pictures?: BrowserPictureStore;
   /** The recovered Session runtime, or null when this launch has none. */
@@ -1121,6 +1130,11 @@ function hostHandlerEntries(
         );
         return null;
       }),
+    "backups.status": () =>
+      present(options.backups ?? null, "Local backups are unavailable.").status(),
+    "backups.run": () => present(options.backups ?? null, "Local backups are unavailable.").run(),
+    "backups.reveal": () =>
+      done(() => present(options.backups ?? null, "Local backups are unavailable.").reveal()),
     "worktree.trimSettings": () => getTrimSettings(board()),
     // The working copy's setup gate (VC-584). A ticket with no working copy
     // on this runner has nothing to stand on: `none`. With recipes off there

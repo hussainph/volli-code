@@ -641,6 +641,12 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
       "The database file itself is never copied; restore migrates a fresh one and writes the data document into it.",
   },
   {
+    area: "backups",
+    decision: "exclude",
+    reason:
+      "Local backup bundles, receipts and maintenance pause markers; never recursively backed up.",
+  },
+  {
     area: "volli.db.backup-v*",
     decision: "exclude",
     reason: "Migration safety copies of an older schema on this machine only.",

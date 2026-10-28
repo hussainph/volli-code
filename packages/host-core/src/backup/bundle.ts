@@ -39,6 +39,7 @@ import {
   serializeBackupDataDocument,
   validateBackupDataDocument,
   validateRecordLinks,
+  writeJsonValue,
 } from "./data-document";
 import type { BackupDataDocument, BackupProblem } from "./data-document";
 
@@ -65,6 +66,9 @@ export const BLOB_PREFIX = "artifacts/blobs/";
 export const TRANSCRIPT_PREFIX = "artifacts/transcripts/";
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
+
+/** Emitted characters held before a manifest chunk is handed to the writer. */
+const MANIFEST_CHUNK_CHARACTERS = 64 * 1024;
 
 export type BackupEntryKind = "data" | "blob" | "transcript";
 
@@ -93,9 +97,12 @@ export class BackupBundleError extends Error {
   }
 }
 
-function sha256(bytes: Buffer): string {
+function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
+
+/** The SHA-256 of some bytes, lowercase hex — a bundle entry's identity. */
+export const sha256Hex = sha256;
 
 /** `sha256:<hex>` → the transcript artifact's archive path. */
 export function transcriptArtifactPath(referenceId: string): string {
@@ -199,7 +206,7 @@ export function createBackupBundle(options: CreateBackupBundleOptions): CreatedB
     createdAt: document.createdAt,
     entries: manifestEntries,
   };
-  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  const manifestBytes = serializeBackupManifest(manifest);
   // The manifest goes first so a reader (and `tar -t`) meets the inventory
   // before the bytes it describes.
   return {
@@ -207,6 +214,53 @@ export function createBackupBundle(options: CreateBackupBundleOptions): CreatedB
     manifest,
     document,
   };
+}
+
+/**
+ * Streams a manifest as the exact bytes {@link serializeBackupManifest}
+ * produces, one entry at a time.
+ *
+ * The streaming writer does not hold the entries it is writing: a profile can
+ * reference a transcript per message, and the inventory is then hundreds of
+ * thousands of records. It reads them back from its scratch database in the
+ * order it declared them and prints each one through this function, which is
+ * the SAME printer the in-memory bundle uses.
+ */
+export function* backupManifestChunks(
+  manifest: Omit<BackupManifest, "entries">,
+  entries: Iterable<BackupManifestEntry>,
+): Generator<string> {
+  let pending =
+    "{\n" +
+    `  "format": ${JSON.stringify(manifest.format)},\n` +
+    `  "bundleVersion": ${manifest.bundleVersion},\n` +
+    `  "appVersion": ${JSON.stringify(manifest.appVersion)},\n` +
+    `  "schemaVersion": ${manifest.schemaVersion},\n` +
+    `  "createdAt": ${JSON.stringify(manifest.createdAt)},\n` +
+    '  "entries": [';
+  let first = true;
+  for (const entry of entries) {
+    let text = "";
+    writeJsonValue(entry, 2, (chunk) => {
+      text += chunk;
+    });
+    // `writeJsonValue` prints a value at its depth but does not indent its
+    // opening line; the array element's own indentation belongs to the caller.
+    pending += first ? `\n    ${text}` : `,\n    ${text}`;
+    first = false;
+    if (pending.length >= MANIFEST_CHUNK_CHARACTERS) {
+      yield pending;
+      pending = "";
+    }
+  }
+  pending += first ? "]\n}\n" : "\n  ]\n}\n";
+  yield pending;
+}
+
+/** Serializes a manifest the way the bundle stores it. */
+export function serializeBackupManifest(manifest: BackupManifest): Buffer {
+  const header: Omit<BackupManifest, "entries"> = manifest;
+  return Buffer.from([...backupManifestChunks(header, manifest.entries)].join(""), "utf8");
 }
 
 export interface ReadBackupBundle {
@@ -232,6 +286,91 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The manifest's format marker and bundle version, or why the bundle cannot be
+ * read at all.
+ *
+ * Shared with the streaming verifier so both readers refuse the same manifests
+ * in the same words — including the two different refusals a version outside
+ * {@link SUPPORTED_BUNDLE_VERSIONS} earns.
+ */
+export function manifestFormatProblems(manifest: Record<string, unknown>): BackupProblem[] {
+  if (manifest.format === "volli-export") {
+    return [
+      {
+        kind: "manifest",
+        message:
+          "This is a volli-export JSON file, not a backup bundle. The JSON export is a limited data export and cannot be restored.",
+      },
+    ];
+  }
+  if (manifest.format !== BACKUP_BUNDLE_FORMAT) {
+    return [
+      { kind: "manifest", message: `Bundle manifest format is not ${BACKUP_BUNDLE_FORMAT}.` },
+    ];
+  }
+  const version = manifest.bundleVersion;
+  if (typeof version !== "number" || !Number.isInteger(version)) {
+    return [{ kind: "manifest", message: "Bundle manifest has no bundleVersion." }];
+  }
+  if (!SUPPORTED_BUNDLE_VERSIONS.includes(version)) {
+    return [
+      {
+        kind: "unsupported-version",
+        message:
+          version > BACKUP_BUNDLE_VERSION
+            ? `This backup was written by a newer version of Volli (bundle version ${version}); this build reads ${SUPPORTED_BUNDLE_VERSIONS.join(", ")}. Update Volli and try again.`
+            : `Bundle version ${version} is not supported; this build reads ${SUPPORTED_BUNDLE_VERSIONS.join(", ")}.`,
+      },
+    ];
+  }
+  return [];
+}
+
+/** The manifest's remaining header fields, checked the way {@link parseManifest} does. */
+export function manifestFieldProblems(manifest: Record<string, unknown>): BackupProblem[] {
+  const problems: BackupProblem[] = [];
+  if (typeof manifest.appVersion !== "string") {
+    problems.push({ kind: "manifest", message: "Bundle manifest has no appVersion." });
+  }
+  if (typeof manifest.schemaVersion !== "number" || !Number.isInteger(manifest.schemaVersion)) {
+    problems.push({ kind: "manifest", message: "Bundle manifest has no schemaVersion." });
+  }
+  if (typeof manifest.createdAt !== "string") {
+    problems.push({ kind: "manifest", message: "Bundle manifest has no createdAt." });
+  }
+  return problems;
+}
+
+/**
+ * One entry's shape and path safety — the checks that do not need the archive's
+ * bytes. Shared by both readers so an entry the buffer reader rejects cannot
+ * be one the streaming verifier accepts.
+ */
+export function manifestEntryProblems(index: number, entry: unknown): BackupProblem[] {
+  if (
+    !isRecord(entry) ||
+    typeof entry.path !== "string" ||
+    typeof entry.sizeBytes !== "number" ||
+    !Number.isInteger(entry.sizeBytes) ||
+    entry.sizeBytes < 0 ||
+    typeof entry.sha256 !== "string" ||
+    !SHA256_HEX.test(entry.sha256) ||
+    (entry.kind !== "data" && entry.kind !== "blob" && entry.kind !== "transcript")
+  ) {
+    return [{ kind: "manifest", message: `Bundle manifest entry ${index} is malformed.` }];
+  }
+  if (!isSafeArchivePath(entry.path)) {
+    return [
+      {
+        kind: "manifest",
+        message: `Bundle manifest entry ${JSON.stringify(entry.path)} has an unsafe path.`,
+      },
+    ];
+  }
+  return [];
+}
+
 function parseManifest(bytes: Buffer): { manifest?: BackupManifest; problems: BackupProblem[] } {
   let parsed: unknown;
   try {
@@ -242,75 +381,15 @@ function parseManifest(bytes: Buffer): { manifest?: BackupManifest; problems: Ba
   if (!isRecord(parsed)) {
     return { problems: [{ kind: "manifest", message: "Bundle manifest is not an object." }] };
   }
-  if (parsed.format === "volli-export") {
-    return {
-      problems: [
-        {
-          kind: "manifest",
-          message:
-            "This is a volli-export JSON file, not a backup bundle. The JSON export is a limited data export and cannot be restored.",
-        },
-      ],
-    };
-  }
-  if (parsed.format !== BACKUP_BUNDLE_FORMAT) {
-    return {
-      problems: [
-        { kind: "manifest", message: `Bundle manifest format is not ${BACKUP_BUNDLE_FORMAT}.` },
-      ],
-    };
-  }
-  const version = parsed.bundleVersion;
-  if (typeof version !== "number" || !Number.isInteger(version)) {
-    return { problems: [{ kind: "manifest", message: "Bundle manifest has no bundleVersion." }] };
-  }
-  if (!SUPPORTED_BUNDLE_VERSIONS.includes(version)) {
-    return {
-      problems: [
-        {
-          kind: "unsupported-version",
-          message:
-            version > BACKUP_BUNDLE_VERSION
-              ? `This backup was written by a newer version of Volli (bundle version ${version}); this build reads ${SUPPORTED_BUNDLE_VERSIONS.join(", ")}. Update Volli and try again.`
-              : `Bundle version ${version} is not supported; this build reads ${SUPPORTED_BUNDLE_VERSIONS.join(", ")}.`,
-        },
-      ],
-    };
-  }
-  const problems: BackupProblem[] = [];
-  if (typeof parsed.appVersion !== "string") {
-    problems.push({ kind: "manifest", message: "Bundle manifest has no appVersion." });
-  }
-  if (typeof parsed.schemaVersion !== "number" || !Number.isInteger(parsed.schemaVersion)) {
-    problems.push({ kind: "manifest", message: "Bundle manifest has no schemaVersion." });
-  }
-  if (typeof parsed.createdAt !== "string") {
-    problems.push({ kind: "manifest", message: "Bundle manifest has no createdAt." });
-  }
+  const formatProblems = manifestFormatProblems(parsed);
+  if (formatProblems.length > 0) return { problems: formatProblems };
+  const problems = manifestFieldProblems(parsed);
   if (!Array.isArray(parsed.entries)) {
     problems.push({ kind: "manifest", message: "Bundle manifest has no entry inventory." });
     return { problems };
   }
   for (const [index, entry] of parsed.entries.entries()) {
-    if (
-      !isRecord(entry) ||
-      typeof entry.path !== "string" ||
-      typeof entry.sizeBytes !== "number" ||
-      !Number.isInteger(entry.sizeBytes) ||
-      entry.sizeBytes < 0 ||
-      typeof entry.sha256 !== "string" ||
-      !SHA256_HEX.test(entry.sha256) ||
-      (entry.kind !== "data" && entry.kind !== "blob" && entry.kind !== "transcript")
-    ) {
-      problems.push({ kind: "manifest", message: `Bundle manifest entry ${index} is malformed.` });
-      continue;
-    }
-    if (!isSafeArchivePath(entry.path)) {
-      problems.push({
-        kind: "manifest",
-        message: `Bundle manifest entry ${JSON.stringify(entry.path)} has an unsafe path.`,
-      });
-    }
+    problems.push(...manifestEntryProblems(index, entry));
   }
   if (problems.length > 0) return { problems };
   return { manifest: parsed as unknown as BackupManifest, problems: [] };
@@ -325,7 +404,7 @@ function parseManifest(bytes: Buffer): { manifest?: BackupManifest; problems: Ba
  * the bytes would verify, and the file would then be written into the store
  * under `<B>`, leaving the record that asked for `<A>` pointing at nothing.
  */
-function expectedPathProblem(entry: BackupManifestEntry): string | null {
+export function expectedPathProblem(entry: BackupManifestEntry): string | null {
   switch (entry.kind) {
     case "data":
       return entry.path === DATA_PATH ? null : `data entry must be ${DATA_PATH}`;
@@ -345,6 +424,93 @@ function expectedPathProblem(entry: BackupManifestEntry): string | null {
       return named === entry.sha256 ? null : "transcript entry is named for a different digest";
     }
   }
+}
+
+/**
+ * The named problems both readers report for the same defects.
+ *
+ * The streaming verifier checks the same facts against a different data
+ * structure (SQLite scratch tables instead of maps); keeping the sentences
+ * here is what stops the two from drifting into two dialects of "this backup
+ * is broken".
+ */
+export function missingManifestProblem(): BackupProblem {
+  return { kind: "manifest", message: `Bundle has no ${MANIFEST_PATH}.` };
+}
+
+export function duplicateManifestEntryProblem(path: string): BackupProblem {
+  return { kind: "manifest", message: `Bundle manifest lists ${path} twice.` };
+}
+
+export function misplacedManifestEntryProblem(path: string, shape: string): BackupProblem {
+  return {
+    kind: "manifest",
+    message: `Bundle manifest entry ${path} is in the wrong place: ${shape}.`,
+  };
+}
+
+export function missingBundleFileProblem(path: string): BackupProblem {
+  return {
+    kind: "artifact-missing",
+    message: `Bundle is missing ${path}, which its manifest lists.`,
+  };
+}
+
+export function artifactSizeProblem(path: string, actual: number, expected: number): BackupProblem {
+  return {
+    kind: "artifact-corrupt",
+    message: `${path} is ${actual} bytes; the manifest says ${expected}.`,
+  };
+}
+
+export function artifactHashProblem(path: string): BackupProblem {
+  return {
+    kind: "artifact-corrupt",
+    message: `${path} does not match the SHA-256 in the manifest.`,
+  };
+}
+
+export function unlistedBundleFileProblem(path: string): BackupProblem {
+  return { kind: "manifest", message: `Bundle holds ${path}, which its manifest does not list.` };
+}
+
+export function manifestMissesDataProblem(): BackupProblem {
+  return { kind: "manifest", message: `Bundle manifest does not list ${DATA_PATH}.` };
+}
+
+export function manifestSchemaProblem(manifestSchema: number, dataSchema: number): BackupProblem {
+  return {
+    kind: "manifest",
+    message: `Bundle manifest says schema ${manifestSchema} but its data says ${dataSchema}.`,
+  };
+}
+
+export function missingBlobArtifactProblem(hash: string): BackupProblem {
+  return {
+    kind: "artifact-missing",
+    message: `Attachment ${hash} is referenced by a blob record but is not in the bundle.`,
+  };
+}
+
+export function strayBlobArtifactProblem(path: string): BackupProblem {
+  return {
+    kind: "manifest",
+    message: `Bundle carries attachment ${path}, which no blob record references.`,
+  };
+}
+
+export function missingTranscriptArtifactProblem(digest: string): BackupProblem {
+  return {
+    kind: "artifact-missing",
+    message: `Transcript ${digest} is referenced by the session ledger but is not in the bundle.`,
+  };
+}
+
+export function strayTranscriptArtifactProblem(path: string): BackupProblem {
+  return {
+    kind: "manifest",
+    message: `Bundle carries transcript ${path}, which no session record references.`,
+  };
 }
 
 /**
@@ -376,10 +542,7 @@ export function readBackupBundle(bytes: Buffer): ReadBackupBundleResult {
   const files = new Map(entries.map((entry) => [entry.path, entry.bytes]));
   const manifestBytes = files.get(MANIFEST_PATH);
   if (manifestBytes === undefined) {
-    return {
-      ok: false,
-      problems: [{ kind: "manifest", message: `Bundle has no ${MANIFEST_PATH}.` }],
-    };
+    return { ok: false, problems: [missingManifestProblem()] };
   }
   const parsed = parseManifest(manifestBytes);
   if (parsed.manifest === undefined) return { ok: false, problems: parsed.problems };
@@ -389,55 +552,37 @@ export function readBackupBundle(bytes: Buffer): ReadBackupBundleResult {
   const declared = new Set<string>();
   for (const entry of manifest.entries) {
     if (declared.has(entry.path)) {
-      problems.push({
-        kind: "manifest",
-        message: `Bundle manifest lists ${entry.path} twice.`,
-      });
+      problems.push(duplicateManifestEntryProblem(entry.path));
       continue;
     }
     declared.add(entry.path);
     const shape = expectedPathProblem(entry);
     if (shape !== null) {
-      problems.push({
-        kind: "manifest",
-        message: `Bundle manifest entry ${entry.path} is in the wrong place: ${shape}.`,
-      });
+      problems.push(misplacedManifestEntryProblem(entry.path, shape));
       continue;
     }
     const bytesForEntry = files.get(entry.path);
     if (bytesForEntry === undefined) {
-      problems.push({
-        kind: "artifact-missing",
-        message: `Bundle is missing ${entry.path}, which its manifest lists.`,
-      });
+      problems.push(missingBundleFileProblem(entry.path));
       continue;
     }
     if (bytesForEntry.length !== entry.sizeBytes) {
-      problems.push({
-        kind: "artifact-corrupt",
-        message: `${entry.path} is ${bytesForEntry.length} bytes; the manifest says ${entry.sizeBytes}.`,
-      });
+      problems.push(artifactSizeProblem(entry.path, bytesForEntry.length, entry.sizeBytes));
       continue;
     }
     const digest = sha256(bytesForEntry);
     if (digest !== entry.sha256) {
-      problems.push({
-        kind: "artifact-corrupt",
-        message: `${entry.path} does not match the SHA-256 in the manifest.`,
-      });
+      problems.push(artifactHashProblem(entry.path));
     }
   }
   for (const path of files.keys()) {
     if (path === MANIFEST_PATH) continue;
     if (!declared.has(path)) {
-      problems.push({
-        kind: "manifest",
-        message: `Bundle holds ${path}, which its manifest does not list.`,
-      });
+      problems.push(unlistedBundleFileProblem(path));
     }
   }
   if (!declared.has(DATA_PATH)) {
-    problems.push({ kind: "manifest", message: `Bundle manifest does not list ${DATA_PATH}.` });
+    problems.push(manifestMissesDataProblem());
   }
   if (problems.length > 0) return { ok: false, problems };
 
@@ -452,10 +597,7 @@ export function readBackupBundle(bytes: Buffer): ReadBackupBundleResult {
   const document = validated.document;
 
   if (document.schemaVersion !== manifest.schemaVersion) {
-    problems.push({
-      kind: "manifest",
-      message: `Bundle manifest says schema ${manifest.schemaVersion} but its data says ${document.schemaVersion}.`,
-    });
+    problems.push(manifestSchemaProblem(manifest.schemaVersion, document.schemaVersion));
   }
   problems.push(...validateRecordLinks(document));
   problems.push(...checkArtifactCoverage(document, manifest));
@@ -489,18 +631,12 @@ function checkArtifactCoverage(
   const expectedBlobs = new Set(collectBlobHashes(document).map(blobArtifactPath));
   for (const path of expectedBlobs) {
     if (!blobPaths.has(path)) {
-      problems.push({
-        kind: "artifact-missing",
-        message: `Attachment ${path.slice(BLOB_PREFIX.length)} is referenced by a blob record but is not in the bundle.`,
-      });
+      problems.push(missingBlobArtifactProblem(path.slice(BLOB_PREFIX.length)));
     }
   }
   for (const path of blobPaths) {
     if (!expectedBlobs.has(path)) {
-      problems.push({
-        kind: "manifest",
-        message: `Bundle carries attachment ${path}, which no blob record references.`,
-      });
+      problems.push(strayBlobArtifactProblem(path));
     }
   }
 
@@ -510,18 +646,12 @@ function checkArtifactCoverage(
   );
   for (const path of expectedTranscripts) {
     if (!transcriptPaths.has(path)) {
-      problems.push({
-        kind: "artifact-missing",
-        message: `Transcript ${path.slice(TRANSCRIPT_PREFIX.length)} is referenced by the session ledger but is not in the bundle.`,
-      });
+      problems.push(missingTranscriptArtifactProblem(path.slice(TRANSCRIPT_PREFIX.length)));
     }
   }
   for (const path of transcriptPaths) {
     if (!expectedTranscripts.has(path)) {
-      problems.push({
-        kind: "manifest",
-        message: `Bundle carries transcript ${path}, which no session record references.`,
-      });
+      problems.push(strayTranscriptArtifactProblem(path));
     }
   }
 

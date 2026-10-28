@@ -200,3 +200,44 @@ and the two below it end to end, including the two rebuilt usage views.
 Bundle readers and writers are host capabilities. Presentation, progress and
 cancellation belong to their callers; the versioned bundle format remains
 independent of any menu or Settings surface.
+
+## Automatic local backups
+
+After the first window loads, a background worker makes a verified bundle every
+24 hours while Volli runs. Settings → Storage shows the latest verified time
+and size, a **Back up now** action, **Show in Finder**, and any skipped/failed
+attempt. Failed automatic attempts retry at most hourly; a manual retry can run
+immediately. No account or cloud flag is needed, and no data leaves the machine.
+
+Bundles live in `<userData>/backups/`. Automatic bundles have an
+`auto-<timestamp>-<uuid>.tar.gz` name and a separate verified receipt. Retention
+keeps the newest backup on each of the last seven backed-up UTC dates, plus the
+latest snapshot from a completed UTC week (Monday–Sunday). Those sets can
+overlap. Rotation runs only after a new verified backup succeeds. It never
+removes failed bundles, unrecognised files, move-created bundles, or bundles
+with `<bundle>.kept` beside them or `kept: true` in their receipt.
+
+The worker first checks free disk conservatively for JSON expansion, a SQLite
+snapshot and disk-backed verification, with room for at least two bundle copies.
+If the check cannot be made, the attempt fails closed with a Storage notice.
+It also checks the actual bundle size before publication. Profile rows and
+artifacts are streamed rather than collected in memory; the file verifier uses
+the same v1 format, redaction, inventory and link rules as the in-memory API.
+Any completed/partial archive that fails writing or verification stays as
+`<bundle>.partial` or `<bundle>.failed`; neither is a successful backup nor a
+rotation candidate.
+
+The worker yields while current free memory is below 20% and while profile
+maintenance is active. Migration exports acquire a maintenance pause themselves.
+A whole-project move must wrap its **entire flow**, including import verification
+and commit/rollback, in `withProfileMaintenance(dataDir, work)` from
+`@volli/host-core/maintenance`; the move UI's composition is responsible for that
+longer lease. Dead-process leases do not prevent future backups. Backup/restore
+connections remain separate from the app's live database handle.
+
+The opt-in synthetic scale probe is
+`packages/host-core/scripts/benchmark-automatic-backup.mjs`. It reports time,
+whole-process peak RSS and UI-thread event-loop delay through the real worker
+protocol without opening a real profile. Set `TMPDIR` inside the worktree and run
+with Node's `--experimental-transform-types`; `BACKUP_BENCH_ROWS` defaults to
+2,150,000. This is not part of the test suite.

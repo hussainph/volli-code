@@ -816,6 +816,139 @@
         "outputValidation": "documented-yield",
         "voidOutput": false
       },
+      "backups.reveal": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "backups.run": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "lastBackup": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "sizeBytes": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "createdAt",
+                    "sizeBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "running": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "running",
+            "lastBackup",
+            "notice"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "backups.status": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "lastBackup": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "sizeBytes": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "createdAt",
+                    "sizeBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "running": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "running",
+            "lastBackup",
+            "notice"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "browserShortcuts.focusPage": {
         "compatibility": "client-local",
         "input": {

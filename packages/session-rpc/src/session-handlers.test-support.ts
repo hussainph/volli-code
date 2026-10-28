@@ -230,6 +230,9 @@ export function sessionHandlersFrom(
     "project.reorder": (input, call) =>
       need(ports.desktop?.["project.reorder"], BOARD)(input, call),
     "project.remove": (input, call) => need(ports.desktop?.["project.remove"], BOARD)(input, call),
+    "backups.status": remote("backups.status"),
+    "backups.run": remote("backups.run"),
+    "backups.reveal": remote("backups.reveal"),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
     "worktree.setupStatus": (input, call) =>

@@ -22,6 +22,8 @@
  * module computes. The receiving task is VC-903 (the migration screen).
  */
 import { Worker, parentPort, workerData, type MessagePort } from "node:worker_threads";
+import { dirname } from "node:path";
+import { withProfileMaintenance } from "../backup/profile-maintenance";
 import {
   MIGRATION_EXPORT_ERROR_CODES,
   MigrationExportError,
@@ -71,6 +73,18 @@ export function runMigrationExportInWorker(
   entry: string | URL,
   request: MigrationExportWorkerRequest,
   options: RunMigrationExportInWorkerOptions = {},
+): Promise<MigrationExportResult> {
+  // The parent owns the pause, so a terminated/crashed worker cannot leave
+  // a live-process lease behind for the rest of the app launch.
+  return withProfileMaintenance(dirname(request.sourcePath), () =>
+    startMigrationExportWorker(entry, request, options),
+  );
+}
+
+function startMigrationExportWorker(
+  entry: string | URL,
+  request: MigrationExportWorkerRequest,
+  options: RunMigrationExportInWorkerOptions,
 ): Promise<MigrationExportResult> {
   if (options.signal?.aborted) {
     return Promise.reject(new MigrationExportError("cancelled", "The export was cancelled."));
