@@ -37,7 +37,7 @@ import type {
 } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
-import { getProjectById, listProjects } from "../db/projects-repo";
+import { listProjects } from "../db/projects-repo";
 import type {
   HostHandlers,
   SessionReadHandlerInput,
@@ -232,19 +232,20 @@ function workspaceReadInput(
   { workspaceId, args }: SessionReadWorkspaceInput,
 ): AgentVerbInput | AgentResponse {
   const { db, appVersion } = state.options;
+  const projects = (state.options.projects?.() ?? listProjects(db)).filter(
+    (project) => project.id === workspaceId,
+  );
   const request: AgentRequest = {
     v: 1,
     cmd: verb,
-    args: { ...args, project: getProjectById(db, workspaceId)?.path ?? workspaceId },
+    args: { ...args, project: projects[0]?.path ?? workspaceId },
     ctx: { cwd: "/", env: {} },
   };
   const preflight = agentCommandPreflight(appVersion, request);
   if (preflight !== null) return preflight;
   return {
     request,
-    projects: (state.options.projects?.() ?? listProjects(db)).filter(
-      (project) => project.id === workspaceId,
-    ),
+    projects,
     envSession: null,
     envSessionTerminal: null,
     authenticatedSessionId: null,

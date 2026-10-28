@@ -6,6 +6,7 @@ import { startAgentSocket } from "../agent-socket";
 import type {
   AgentCommand,
   AgentResponse,
+  Project,
   SessionAttention,
   SessionAttentionKind,
   SessionInteraction,
@@ -52,7 +53,7 @@ function data(response: AgentResponse): Record<string, unknown> {
   if (!response.ok) throw new Error(response.error.message);
   return response.data as Record<string, unknown>;
 }
-function fixture(observeTerminal = false) {
+function fixture(observeTerminal = false, projects?: () => readonly Project[]) {
   db = openTestDb();
   insertProject(
     db.db,
@@ -75,6 +76,7 @@ function fixture(observeTerminal = false) {
     db: db.db,
     appVersion: "test",
     sessionEngine: engine,
+    ...(projects === undefined ? {} : { projects }),
     now: () => 10 * DAY,
     ...(observeTerminal
       ? { observeSession: () => ({ status: "working" as const, output: "$ " }) }
@@ -168,6 +170,17 @@ function fixture(observeTerminal = false) {
 }
 
 describe("session roster and detail", () => {
+  it("uses the same registered checkout selector as a cloud workspace's machine roster", async () => {
+    const project = testProject({ id: "p", path: "/registered/checkout" });
+    const f = fixture(false, () => [project]);
+    db.db.prepare("UPDATE projects SET path='/cloud-identities/hash' WHERE id='p'").run();
+    const id = await f.create("Cloud Session", DAY);
+    expect(f.ids(await f.readInWorkspace("session.list", "p", { all: true }))).toEqual([
+      id.slice(0, 8),
+    ]);
+    const handle = id.slice(0, 8);
+    expect(data(await f.readInWorkspace("session.show", "p", { id: handle }))["id"]).toBe(handle);
+  });
   it("reads every pending flat and multi-question prompt from the ledger, scrubbed and without tail truncation", async () => {
     const f = fixture();
     const id = await f.create("questions", DAY);
