@@ -504,9 +504,10 @@ function refuse(decision: Exclude<InviteAcceptance, "join" | "already_member">):
  * no-op that leaves the invite for whoever it was meant for. A suspended
  * Member is restored by unsuspend, not by an invite. A departed one comes
  * back with the invite's role. Joining also settles any other pending email
- * invites to the viewer's address there.
+ * invites to the viewer's address there. Also how `accounts.ensureViewer`
+ * joins with a pasted code, once the viewer is enrolled.
  */
-async function acceptInvite(
+export async function acceptInvite(
   ctx: MutationCtx,
   viewer: Viewer,
   invite: Doc<"workspaceInvites">,
@@ -565,18 +566,6 @@ export async function requireJoinable(
   const { decision } = acceptance;
   if (decision !== "join" && decision !== "already_member") refuse(decision);
   return decision;
-}
-
-/**
- * Joins with a code pasted at sign-in (`accounts.ensureViewer`), once the
- * viewer is enrolled. Its preview grant was redeemed in the same transaction.
- */
-export async function acceptAtSignIn(
-  ctx: MutationCtx,
-  viewer: Viewer,
-  invite: Doc<"workspaceInvites">,
-): Promise<string> {
-  return (await acceptInvite(ctx, viewer, invite)).workspaceId;
 }
 
 /** Accepts an email invite addressed to the viewer's verified email, by id (from `listMine`). */

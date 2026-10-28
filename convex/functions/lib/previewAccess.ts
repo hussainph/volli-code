@@ -43,7 +43,11 @@ export async function previewAccess(ctx: Reader, viewer: Viewer): Promise<Previe
       .query("previewAccess")
       .withIndex("by_kind_key", (q) => q.eq("kind", kind).eq("key", key))
       .unique();
-  const grants = [await byKey("user", viewer.userId)];
+  const own = await byKey("user", viewer.userId);
+  // An operator's revoked user-id grant withdraws the person: it overrides
+  // every other grant they hold or used (an address, a code, an invite's).
+  if (own !== null && own.revokedAt !== null) return "waitlisted";
+  const grants = [own];
   if (viewer.user.emailVerified && viewer.user.primaryEmail !== null) {
     const email = await byKey("email", viewer.user.primaryEmail);
     // A sponsored grant, once bound to the person who used it, serves only them.

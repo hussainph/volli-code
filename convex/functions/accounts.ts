@@ -34,8 +34,8 @@ import {
   requirePreviewAccess,
 } from "./lib/previewAccess";
 import { onFirstSignIn } from "./lib/firstSignIn";
-import { bindSponsoredEmailGrant, redeemInviteGrant } from "./lib/sponsoredPreview";
-import { acceptAtSignIn, inviteByToken, requireJoinable } from "./invites";
+import { redeemInviteGrant } from "./lib/sponsoredPreview";
+import { acceptInvite, inviteByToken, requireJoinable } from "./invites";
 import { literals } from "./lib/validators";
 
 /** How long a deletion waits before the purge, during which the person may restore the account. */
@@ -131,7 +131,6 @@ export const ensureViewer = mutation({
     const enrolled = result.previewAccess === "granted" && result.previewAgreementAccepted;
     // Joining waits for the agreement: a team code never grants without it.
     if (invite !== null) await requirePreviewAccess(ctx, viewer);
-    if (enrolled) await bindSponsoredEmailGrant(ctx, viewer);
     if (enrolled && !viewer.user.previewWorkspaceCreated) {
       // Older accounts already own a Workspace. A waitlisted account has none yet.
       const memberships = await ctx.db
@@ -141,7 +140,8 @@ export const ensureViewer = mutation({
       if (memberships === null) await onFirstSignIn(ctx, viewer);
       await ctx.db.patch(viewer.user._id, { previewWorkspaceCreated: true });
     }
-    const joinedWorkspaceId = invite === null ? null : await acceptAtSignIn(ctx, viewer, invite);
+    const joinedWorkspaceId =
+      invite === null ? null : (await acceptInvite(ctx, viewer, invite)).workspaceId;
     return { ...result, created, joinedWorkspaceId };
   },
 });

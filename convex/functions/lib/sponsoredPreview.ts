@@ -20,11 +20,12 @@
  *   in, by address or by code: an invite cannot undo Volli withdrawing them.
  * - **Lifetime.** A grant expires with its invite and is withdrawn with it
  *   (revoke, or a reissue, which sponsors again under the new sender). The
- *   person who uses it binds it to themselves for good: signing in with it
- *   (email), or joining with its code (link). A bound grant serves only that
- *   person. Sponsorship is not cascaded: revoking the sponsor or removing the
- *   invitee from the Workspace leaves the invitee's access (operators use
- *   `previewAccess:revokeSponsoredBy`).
+ *   person who joins with it binds it to themselves for good
+ *   (`redeemedByUserId`, no expiry); until then it lapses with the invite.
+ *   A bound grant serves only that person. Sponsorship is not cascaded:
+ *   revoking the sponsor or removing the invitee from the Workspace leaves
+ *   the invitee's access (operators use `previewAccess:revokeSponsoredBy`,
+ *   or revoke the person's user-id grant, which overrides every other).
  */
 
 import {
@@ -69,7 +70,7 @@ function unusedGrantOf(grant: Grant | null, invite: Invite): grant is Grant {
 }
 
 /** How many more people `sponsor` may sponsor now. */
-export async function sponsorSeatsLeft(ctx: Reader, sponsor: Doc<"users">): Promise<number> {
+async function sponsorSeatsLeft(ctx: Reader, sponsor: Doc<"users">): Promise<number> {
   const allowance = sponsor.previewSponsorSeats ?? DEFAULT_PREVIEW_SPONSOR_SEATS;
   const taken = (
     await ctx.db
@@ -210,11 +211,10 @@ async function bind(ctx: Writer, grant: Grant, viewer: Viewer): Promise<void> {
 }
 
 /**
- * Binds the sponsored grant on the viewer's verified address to them, once
- * they are enrolled (granted, agreement accepted): signing in with an email
- * invite's grant keeps the access after the invite would have expired.
+ * Binds the sponsored grant on the viewer's verified address to them as they
+ * join a Workspace: the access then outlives the invite it came with.
  */
-export async function bindSponsoredEmailGrant(ctx: Writer, viewer: Viewer): Promise<void> {
+async function bindSponsoredEmailGrant(ctx: Writer, viewer: Viewer): Promise<void> {
   const email = viewer.user.emailVerified ? viewer.user.primaryEmail : null;
   if (email === null) return;
   const grant = await ctx.db

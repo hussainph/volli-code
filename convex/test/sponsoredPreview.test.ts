@@ -1,5 +1,5 @@
 /**
- * Sponsored preview access (Amendment 31): an invite also lets its invitee
+ * Sponsored preview access: an invite also lets its invitee
  * into the invite-only preview, on its sender's allowance, and a link's code
  * pasted at sign-in joins in the same step. This is the preview's security
  * gate: every way an invite could grant more than its sender may give is
@@ -85,7 +85,7 @@ async function memberships(t: T, userId: string) {
 }
 
 describe("an email invite", () => {
-  test("sponsors its verified address; signing in binds the grant and joining keeps it", async () => {
+  test("sponsors its verified address; joining binds the grant for good", async () => {
     const t = setup();
     const alice = await sponsor(t, "alice");
     const invite = await alice.client.mutation(api.invites.create, {
@@ -124,10 +124,8 @@ describe("an email invite", () => {
     expect((await grantFor(t, invite.inviteId))!.redeemedByUserId).toBeNull();
     const signedIn = await carol.mutation(api.accounts.ensureViewer, AGREED);
     expect(signedIn).toMatchObject({ previewAccess: "granted", joinedWorkspaceId: null });
-    expect(await grantFor(t, invite.inviteId)).toMatchObject({
-      redeemedByUserId: signedIn.userId,
-      expiresAt: null,
-    });
+    // Signing in uses nothing: until she joins, the grant lapses with the invite.
+    expect((await grantFor(t, invite.inviteId))!.redeemedByUserId).toBeNull();
     // An email invite asks: signing in sets up a personal Workspace and offers the team one.
     expect(await carol.query(api.workspaces.listMine, {})).toHaveLength(1);
     await expect(carol.query(api.invites.listMine, {})).resolves.toMatchObject([
@@ -135,8 +133,27 @@ describe("an email invite", () => {
     ]);
     await carol.mutation(api.invites.accept, { inviteId: invite.inviteId });
     expect(await memberships(t, signedIn.userId)).toContain(alice.workspaceId);
-    // Used: revoking the sponsor's other invites or a lapse of time no longer matters.
+    expect(await grantFor(t, invite.inviteId)).toMatchObject({
+      redeemedByUserId: signedIn.userId,
+      expiresAt: null,
+    });
+    // Used: leaving the Workspace no longer matters (not cascaded).
+    await carol.mutation(api.members.leave, { workspaceId: alice.workspaceId });
     expect((await carol.query(api.accounts.viewer, {}))?.previewAccess).toBe("granted");
+  });
+
+  test("an invite revoked before its invitee joins takes the access back", async () => {
+    const t = setup();
+    const alice = await sponsor(t, "alice");
+    const invite = await alice.client.mutation(api.invites.create, {
+      workspaceId: alice.workspaceId,
+      email: "carol@example.com",
+      role: "member",
+    });
+    const carol = t.withIdentity(person("carol"));
+    expect((await carol.mutation(api.accounts.ensureViewer, AGREED)).previewAccess).toBe("granted");
+    await alice.client.mutation(api.invites.revoke, { inviteId: invite.inviteId });
+    expect((await carol.query(api.accounts.viewer, {}))?.previewAccess).toBe("waitlisted");
   });
 
   test("an unverified address never matches the grant, at sign-in or by code", async () => {
@@ -159,11 +176,16 @@ describe("an email invite", () => {
       unverified.mutation(api.accounts.ensureViewer, { inviteCode: invite.token, ...AGREED }),
     ).rejects.toThrow(code("invite_email_mismatch"));
     expect((await grantFor(t, invite.inviteId))!.redeemedByUserId).toBeNull();
-    // An enrolled person with no address binds nothing.
+    // A person with no address joining by link binds no address's grant.
     const noEmail = t.withIdentity(person("nobody", { email: null }));
-    const { userId } = await noEmail.mutation(api.accounts.ensureViewer, {});
-    await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
-    await noEmail.mutation(api.accounts.ensureViewer, AGREED);
+    const link = await alice.client.mutation(api.invites.create, {
+      workspaceId: alice.workspaceId,
+      email: null,
+      role: "member",
+    });
+    await expect(
+      noEmail.mutation(api.accounts.ensureViewer, { inviteCode: link.token, ...AGREED }),
+    ).resolves.toMatchObject({ joinedWorkspaceId: alice.workspaceId });
     expect((await grantFor(t, invite.inviteId))!.redeemedByUserId).toBeNull();
   });
 
@@ -214,7 +236,10 @@ describe("an email invite", () => {
       email: "carol@example.com",
       role: "member",
     });
-    await t.withIdentity(person("carol")).mutation(api.accounts.ensureViewer, AGREED);
+    const carol = t.withIdentity(person("carol"));
+    await carol.mutation(api.accounts.ensureViewer, AGREED);
+    const [mine] = await carol.query(api.invites.listMine, {});
+    await carol.mutation(api.invites.accept, { inviteId: mine!.inviteId });
     // A second account that later verifies the same address is not carol.
     const other = t.withIdentity({ ...person("carol"), subject: "user:carol-again" });
     expect((await other.mutation(api.accounts.ensureViewer, AGREED)).previewAccess).toBe(
@@ -389,7 +414,7 @@ describe("the allowance", () => {
     ).toBe("needs_access");
   });
 
-  test("a used grant keeps its seat after its invite is revoked or gone", async () => {
+  test("a used grant keeps its seat after its person leaves", async () => {
     const t = setup();
     const alice = await sponsor(t, "alice");
     await t.mutation(internal.previewAccess.setSponsorSeats, { userId: alice.userId, seats: 1 });
@@ -399,8 +424,8 @@ describe("the allowance", () => {
       role: "member",
     });
     const carol = t.withIdentity(person("carol"));
-    await carol.mutation(api.accounts.ensureViewer, AGREED);
-    await alice.client.mutation(api.invites.revoke, { inviteId: invite.inviteId });
+    await carol.mutation(api.accounts.ensureViewer, { inviteCode: invite.token, ...AGREED });
+    await carol.mutation(api.members.leave, { workspaceId: alice.workspaceId });
     expect((await carol.query(api.accounts.viewer, {}))?.previewAccess).toBe("granted");
     expect(
       (
@@ -491,8 +516,15 @@ describe("revoking", () => {
     });
     const lapsedGrant = (await grantFor(t, lapsed.inviteId))!;
     await t.run((ctx) => ctx.db.patch(lapsedGrant._id, { expiresAt: Date.now() - 1 }));
+    const unusedEmail = await alice.client.mutation(api.invites.create, {
+      workspaceId: alice.workspaceId,
+      email: "frank@example.com",
+      role: "member",
+    });
     const carol = t.withIdentity(person("carol"));
     await carol.mutation(api.accounts.ensureViewer, AGREED);
+    const [mine] = await carol.query(api.invites.listMine, {});
+    await carol.mutation(api.invites.accept, { inviteId: mine!.inviteId });
     await t.mutation(internal.previewAccess.set, {
       kind: "email",
       value: "alice@example.com",
@@ -510,9 +542,11 @@ describe("revoking", () => {
 
     await expect(
       t.mutation(internal.previewAccess.revokeSponsoredBy, { userId: alice.userId }),
-    ).resolves.toEqual({ revoked: 2 });
+    ).resolves.toEqual({ revoked: 1, withdrawn: 2 });
     expect((await carol.query(api.accounts.viewer, {}))?.previewAccess).toBe("waitlisted");
-    expect((await grantFor(t, unused.inviteId))!.revokedAt).not.toBeNull();
+    // Grants nobody used are simply gone: their addresses stay free for others to sponsor.
+    expect(await grantFor(t, unused.inviteId)).toBeNull();
+    expect(await grantFor(t, unusedEmail.inviteId)).toBeNull();
     // A lapsed grant was not live, so it is left free for someone else to sponsor.
     expect((await grantFor(t, lapsed.inviteId))!.revokedAt).toBeNull();
     expect((await viewerOf(t, alice.userId)).user.previewSponsorSeats).toBe(0);
@@ -547,6 +581,79 @@ describe("revoking", () => {
 });
 
 describe("a person Volli withdrew", () => {
+  test("revoking their user id withdraws them, whatever they joined with", async () => {
+    const t = setup();
+    const alice = await sponsor(t, "alice");
+    const link = await alice.client.mutation(api.invites.create, {
+      workspaceId: alice.workspaceId,
+      email: null,
+      role: "member",
+    });
+    const mal = t.withIdentity(person("mal"));
+    const { userId } = await mal.mutation(api.accounts.ensureViewer, {
+      inviteCode: link.token,
+      ...AGREED,
+    });
+    await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: false });
+    expect((await mal.query(api.accounts.viewer, {}))?.previewAccess).toBe("waitlisted");
+    // A new address does not bring them back either.
+    const moved = await alice.client.mutation(api.invites.create, {
+      workspaceId: alice.workspaceId,
+      email: "mal-new@example.com",
+      role: "member",
+    });
+    expect(moved.preview).toBe("sponsored");
+    const renamed = t.withIdentity({ ...person("mal"), email: "mal-new@example.com" });
+    expect((await renamed.mutation(api.accounts.ensureViewer, AGREED)).previewAccess).toBe(
+      "waitlisted",
+    );
+    // The operator restores them by re-enabling the same grant.
+    await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
+    expect((await mal.query(api.accounts.viewer, {}))?.previewAccess).toBe("granted");
+  });
+
+  test("revokeSponsoredBy with cascade withdraws a whole chain of sponsors", async () => {
+    const t = setup();
+    const root = await sponsor(t, "root");
+    let inviter = root.client;
+    let workspaceId: string = root.workspaceId;
+    const chain: { client: typeof root.client; userId: string }[] = [];
+    for (const name of ["one", "two", "three"]) {
+      const link = await inviter.mutation(api.invites.create, {
+        workspaceId,
+        email: null,
+        role: "member",
+      });
+      const client = t.withIdentity(person(name));
+      const { userId } = await client.mutation(api.accounts.ensureViewer, {
+        inviteCode: link.token,
+        ...AGREED,
+      });
+      chain.push({ client, userId });
+      inviter = client;
+      workspaceId = (await client.query(api.workspaces.listMine, {})).find(
+        (row) => row.role === "owner",
+      )!.workspaceId;
+    }
+    // Uncascaded, the operator withdraws only the first level.
+    await expect(
+      t.mutation(internal.previewAccess.revokeSponsoredBy, { userId: root.userId }),
+    ).resolves.toEqual({ revoked: 1, withdrawn: 0 });
+    expect((await chain[1]!.client.query(api.accounts.viewer, {}))?.previewAccess).toBe("granted");
+    await expect(
+      t.mutation(internal.previewAccess.revokeSponsoredBy, {
+        userId: chain[0]!.userId,
+        cascade: true,
+      }),
+    ).resolves.toEqual({ revoked: 2, withdrawn: 0 });
+    for (const { userId } of chain) {
+      expect((await viewerOf(t, userId)).user.previewSponsorSeats).toBe(0);
+    }
+    expect((await chain[2]!.client.query(api.accounts.viewer, {}))?.previewAccess).toBe(
+      "waitlisted",
+    );
+  });
+
   test("is never sponsored back in, by address or by code", async () => {
     const t = setup();
     const alice = await sponsor(t, "alice");

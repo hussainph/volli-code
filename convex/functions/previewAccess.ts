@@ -128,28 +128,48 @@ export const setSponsorSeats = internalMutation({
 });
 
 /**
- * Withdraws every live grant this person's invites carry, used or not, and
- * turns their allowance off (`setSponsorSeats` restores it), so the seats
- * freed cannot be handed out again at once. Their own access is untouched:
- * revoke it with `set`. A withdrawn grant stays revoked: no later invite
- * revives it (`set` can).
+ * Withdraws everyone this person sponsored and turns their allowance off
+ * (`setSponsorSeats` restores it), so the seats freed cannot be handed out
+ * again at once. A grant someone joined with is revoked (that person is
+ * withdrawn: no later invite sponsors them back; `set` can restore them); a
+ * grant nobody used yet is deleted, leaving its address free. Their own
+ * access is untouched: revoke it with `set`. With `cascade`, the same is done
+ * for everyone those people sponsored, and so on down the chain.
  */
 export const revokeSponsoredBy = internalMutation({
-  args: { userId: v.string() },
-  handler: async (ctx, args): Promise<{ revoked: number }> => {
-    const user = await operatorTarget(ctx, { userId: args.userId });
+  args: { userId: v.string(), cascade: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<{ revoked: number; withdrawn: number }> => {
+    const root = await operatorTarget(ctx, { userId: args.userId });
     const now = Date.now();
     let revoked = 0;
-    const grants = await ctx.db
-      .query("previewAccess")
-      .withIndex("by_sponsor", (q) => q.eq("sponsorUserId", user.id))
-      .collect();
-    for (const grant of grants) {
-      if (!liveGrant(grant)) continue;
-      await ctx.db.patch(grant._id, { revokedAt: now });
-      revoked += 1;
+    let withdrawn = 0;
+    const queue: string[] = [root.id];
+    const seen = new Set(queue);
+    for (let sponsor = queue.shift(); sponsor !== undefined; sponsor = queue.shift()) {
+      const grants = await ctx.db
+        .query("previewAccess")
+        .withIndex("by_sponsor", (q) => q.eq("sponsorUserId", sponsor))
+        .collect();
+      for (const grant of grants) {
+        if (!liveGrant(grant)) continue;
+        if (grant.redeemedByUserId === null) {
+          await ctx.db.delete(grant._id);
+          withdrawn += 1;
+          continue;
+        }
+        await ctx.db.patch(grant._id, { revokedAt: now });
+        revoked += 1;
+        if (args.cascade === true && !seen.has(grant.redeemedByUserId)) {
+          seen.add(grant.redeemedByUserId);
+          queue.push(grant.redeemedByUserId);
+        }
+      }
+      const rows = await ctx.db
+        .query("users")
+        .withIndex("by_uuid", (q) => q.eq("id", sponsor))
+        .collect();
+      for (const row of rows) await ctx.db.patch(row._id, { previewSponsorSeats: 0 });
     }
-    await ctx.db.patch(user._id, { previewSponsorSeats: 0 });
-    return { revoked };
+    return { revoked, withdrawn };
   },
 });

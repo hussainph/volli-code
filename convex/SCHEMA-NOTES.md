@@ -562,8 +562,11 @@ Run from `convex/`. Only deployment-admin credentials can invoke this
 internal function; ordinary authenticated clients and Workspace owners
 cannot. Supply codes through a trusted operator environment, not tickets or
 chat. Store and share the original code securely; only its hash is retained.
-Setting `enabled: false` revokes that grant; if a person holds several grants,
-revoke all of them to remove access. Re-enabling a code never resets its
+Setting `enabled: false` revokes that grant. Revoking a person's user-id
+grant withdraws them outright: it overrides every other grant they hold or
+used (an address, a code, an invite's), so `set {kind:"user", enabled:false}`
+is how to take one person out; re-enabling it restores them. An address or
+code grant revoked alone ends only that grant. Re-enabling a code never resets its
 account binding. Expiry is optional, in epoch milliseconds; an omitted expiry
 on an existing grant leaves it unchanged.
 
@@ -602,10 +605,15 @@ redeemed only by joining with that token: the operator-code path refuses it.
   sponsored back in, by address or by code.
 - **Lifetime.** A grant expires with its invite. Revoking the invite deletes
   its grant while it is unused; a reissue does the same and sponsors again
-  under the new sender. Using it binds it to that person (`redeemedByUserId`,
-  no expiry): signing in enrolled with the email grant's address, or joining
-  with a link's code. A bound email grant serves only that person. A link's
-  grant that its joiner did not need (they had access) is deleted on joining.
+  under the new sender. Joining binds it to that person (`redeemedByUserId`,
+  no expiry): accepting an email invite (their verified address's grant), or
+  joining with a link's code. Until then a signed-in invitee holds access
+  only while the invite is live: revoking it before they join takes the
+  access back. An invite whose sender later loses the right to send it can
+  no longer be joined, but its unused grant still admits the invitee to the
+  preview until it expires (at most the 7-day invite lifetime). A bound email
+  grant serves only that person. A link's grant that its joiner did not need
+  (they had access) is deleted on joining.
 - **Joining by code at sign-in.** `accounts.ensureViewer {inviteCode}` first
   looks the code up as a Workspace invite token. A team code is refused
   (`invite_invalid`, `invite_expired`, `invite_email_mismatch`, `suspended`)
@@ -618,14 +626,19 @@ redeemed only by joining with that token: the operator-code path refuses it.
   Any refusal rolls the whole sign-in back. Email invites still match the
   verified email, and otherwise wait for the person's explicit Join.
 - **Not cascaded.** Revoking a sponsor's own access, or removing the invitee
-  from the Workspace, leaves the invitee's access. `revokeSponsoredBy`
-  revokes every live grant a person sponsored and sets their allowance to
-  `0`; `set` with `enabled: true` turns a sponsored grant into an operator
-  grant (no seat, no invite expiry).
+  from the Workspace, leaves the invitee's access. Sponsored people get the
+  default allowance too, so sponsorship can chain. `revokeSponsoredBy`
+  revokes every grant someone joined with, deletes the ones nobody used yet
+  (their addresses stay free) and sets the sponsor's allowance to `0`; with
+  `cascade: true` it does the same down the whole chain. `set` with
+  `enabled: true` turns a sponsored grant into an operator grant (no seat, no
+  invite expiry).
 - **What clients see.** `invites.create` and `invites.list` return
   `preview: sponsored | already_granted | needs_access`; clients show
-  nothing for a value they do not know. These say whether an address can
-  use the preview, to Members who can already see the invite.
+  nothing for a value they do not know. Any preview person can invite an
+  address into their own Workspace, so these answers tell them whether that
+  address can already use the preview (or was withdrawn, when they still have
+  seats). This is accepted for the invite-only preview.
 
 On stable desktop launches, stored flags and environment opt-ins cannot
 bypass preview access. A deliberate sign-in marker permits restoring the
