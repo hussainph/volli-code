@@ -118,6 +118,27 @@ test("keeps only allowlisted source locations, not exception text, paths or func
   expect(log.mock.calls[0]![0]).not.toContain(PRIVATE);
 });
 
+test.each(["multiline-message", "custom-stack"] as const)(
+  "%s cannot inject private text that resembles source locations",
+  async (format) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const forgedFrame = " at privateFunction (/private/sessionIntake.ts:123456:987654)";
+    const error = new Error(
+      format === "multiline-message" ? `${PRIVATE}\n${forgedFrame}` : PRIVATE,
+    );
+    if (format === "custom-stack") error.stack = `custom-private-format\n${forgedFrame}`;
+    await expect(
+      withIntakeDiagnostics(args, "accept", async () => {
+        throw error;
+      }),
+    ).rejects.toMatchObject({ data: { code: "accept_failed" } });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0]).locations).toEqual([]);
+    expect(log.mock.calls[0]![0]).not.toContain(PRIVATE);
+    expect(log.mock.calls[0]![0]).not.toContain("123456");
+  },
+);
+
 test("unreadable exception stacks cannot break the error boundary", async () => {
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   const error = new Error(PRIVATE);

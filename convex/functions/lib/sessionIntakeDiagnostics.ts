@@ -102,13 +102,21 @@ const SOURCE_FILES = new Set([
 
 function sourceLocations(error: unknown) {
   try {
-    if (!(error instanceof Error) || typeof error.stack !== "string") return [];
+    if (!(error instanceof Error)) return [];
+    const stack = error.stack;
+    if (typeof stack !== "string") return [];
+    // Strip the WHOLE header, including multiline private messages that look
+    // like stack frames. Unknown/custom stack formats supply no locations.
+    const { message, name } = error;
+    const header = message ? `${name}: ${message}` : name;
+    if (!stack.startsWith(header)) return [];
     // No exception message, function name, absolute path, or raw stack is logged.
     // Keep only allowlisted source basenames and numeric locations, if supplied
     // by the runtime. Some platform errors have no JS stack at all.
-    return error.stack
+    return stack
+      .slice(header.length)
       .split("\n")
-      .slice(1, 12)
+      .slice(0, 12)
       .flatMap((line) => {
         const match = /(?:^|[\s/(])([A-Za-z_-]+)\.(?:js|ts):(\d+):(\d+)\)?$/.exec(line.trim());
         return match && SOURCE_FILES.has(match[1]!)
