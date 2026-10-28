@@ -71,7 +71,13 @@ import {
   type QueryCtx,
 } from "./_generated/server.js";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
-import { authError, requireProject, requireSessionScope, type Viewer } from "./lib/auth";
+import {
+  authError,
+  isShownProject,
+  requireProject,
+  requireSessionScope,
+  type Viewer,
+} from "./lib/auth";
 import {
   asBoardErrors,
   boardError,
@@ -988,7 +994,7 @@ export const resolveTicketKey = query({
         )
         .collect();
       for (const project of projects) {
-        if (project.deletedAt !== null) continue;
+        if (!isShownProject(project)) continue;
         if (
           parsed.qualifier !== null &&
           parsed.qualifier.toLowerCase() !== workspace.slug.toLowerCase() &&

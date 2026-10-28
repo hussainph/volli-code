@@ -8,9 +8,9 @@
  * "Every public function requires an identity").
  *
  * `_generated/api.js` is the `anyApi` proxy, which names nothing at runtime,
- * so the sweep enumerates what is actually registered: every export of every
- * function module (the same glob `convex-test` runs) that is a public query,
- * mutation or action. It then checks that this glob sees exactly the modules
+ * so the sweep enumerates what is actually registered (`public-functions.ts`):
+ * every export of every function module (the same glob `convex-test` runs)
+ * that is a public query, mutation or action. It then checks that this glob sees exactly the modules
  * codegen put in `_generated/api.d.ts`, so a module the glob misses fails
  * here rather than slipping past the sweep.
  *
@@ -22,31 +22,27 @@
 import { readFileSync } from "node:fs";
 
 import { convexTest } from "convex-test";
-import {
-  makeFunctionReference,
-  type FunctionReference,
-  type FunctionType,
-  type GenericDatabaseReader,
-  type GenericDataModel,
-  type HttpRouter,
+import type {
+  FunctionType,
+  GenericDatabaseReader,
+  GenericDataModel,
+  HttpRouter,
 } from "convex/server";
-import { jsonToConvex, type ObjectFieldType, type ValidatorJSON, type Value } from "convex/values";
 import { describe, expect, test } from "vite-plus/test";
 
-import type { api } from "../functions/_generated/api";
 import schema from "../functions/schema";
-
-const modules = import.meta.glob("../functions/**/*.ts");
+import {
+  PUBLIC,
+  call,
+  loaded,
+  modules,
+  refusalCode,
+  registered,
+  sampleArgs,
+  type PublicPath,
+} from "./public-functions";
 
 // ── the allowlists ───────────────────────────────────────────────────────────
-
-/** `"module:export"` for every public function the generated `api` declares. */
-type PathsIn<Node, Prefix extends string> = {
-  [Key in keyof Node & string]: Node[Key] extends FunctionReference<FunctionType, "public">
-    ? `${Prefix}:${Key}`
-    : PathsIn<Node[Key], Prefix extends "" ? Key : `${Prefix}/${Key}`>;
-}[keyof Node & string];
-type PublicPath = PathsIn<typeof api, "">;
 
 /**
  * Public functions that deliberately answer an anonymous caller, each with
@@ -95,133 +91,15 @@ const MUST_FIND = {
 /** Internal functions the enumeration must leave out. */
 const MUST_SKIP = ["testSeed:seedWorld", "testJobs:enqueue", "previewAccess:set"];
 
-// ── enumeration ──────────────────────────────────────────────────────────────
-
-interface Registered {
-  isQuery?: boolean;
-  isMutation?: boolean;
-  isAction?: boolean;
-  isPublic?: boolean;
-  exportArgs?: () => string;
-}
-
-interface PublicFunction {
-  path: string;
-  kind: FunctionType;
-  args: ValidatorJSON;
-}
-
-/**
- * A glob key's Convex module path, or `null` for what codegen skips: its own
- * output, the schema, and config files such as `auth.config.ts`.
- */
-function modulePathOf(key: string): string | null {
-  const path = key.replace(/^\.\.\/functions\//u, "").replace(/\.ts$/u, "");
-  if (path.startsWith("_generated/") || path === "schema") return null;
-  if (path.split("/").pop()!.includes(".")) return null;
-  return path;
-}
-
-function kindOf(fn: Registered): FunctionType | null {
-  if (fn.isQuery === true) return "query";
-  if (fn.isMutation === true) return "mutation";
-  if (fn.isAction === true) return "action";
-  return null;
-}
-
-const loaded: Array<{ modulePath: string; exports: Record<string, unknown> }> = [];
-for (const [key, load] of Object.entries(modules)) {
-  const modulePath = modulePathOf(key);
-  if (modulePath === null) continue;
-  loaded.push({ modulePath, exports: (await load()) as Record<string, unknown> });
-}
-loaded.sort((a, b) => a.modulePath.localeCompare(b.modulePath));
-
-const registered: Array<{ path: string; fn: Registered }> = loaded.flatMap(
-  ({ modulePath, exports }) =>
-    Object.entries(exports)
-      .filter(([, value]) => typeof value === "function")
-      .map(([name, value]) => ({ path: `${modulePath}:${name}`, fn: value as Registered })),
-);
-
-const PUBLIC: PublicFunction[] = registered.flatMap(({ path, fn }) => {
-  const kind = kindOf(fn);
-  if (kind === null || fn.isPublic !== true) return [];
-  return [{ path, kind, args: JSON.parse(fn.exportArgs!()) as ValidatorJSON }];
-});
+// ── calls ────────────────────────────────────────────────────────────────────
 
 const SWEPT = PUBLIC.filter(({ path }) => !(path in ANONYMOUS_FUNCTIONS));
-
-// ── arguments ────────────────────────────────────────────────────────────────
-
-/** A string every id check accepts: canonical, lowercase, version 4. */
-const SAMPLE_STRING = "00000000-0000-4000-8000-000000000000";
-
-function sample(validator: ValidatorJSON, at: string): Value {
-  switch (validator.type) {
-    case "null":
-      return null;
-    case "number":
-      return 1;
-    case "bigint":
-      return 1n;
-    case "boolean":
-      return false;
-    case "string":
-      return SAMPLE_STRING;
-    case "bytes":
-      return new ArrayBuffer(0);
-    case "any":
-      return {};
-    case "literal":
-      return jsonToConvex(validator.value);
-    case "array":
-      return [];
-    case "record":
-      return {};
-    case "union":
-      return sample(validator.value[0]!, at);
-    case "object":
-      return sampleFields(validator.value, at);
-    case "id":
-    case "commitTs":
-      throw new Error(`${at}: no generated sample for a \`${validator.type}\` argument yet.`);
-  }
-}
-
-function sampleFields(fields: Record<string, ObjectFieldType>, at: string): Record<string, Value> {
-  return Object.fromEntries(
-    Object.entries(fields)
-      .filter(([, field]) => !field.optional)
-      .map(([name, field]) => [name, sample(field.fieldType, `${at}.${name}`)]),
-  );
-}
-
-function sampleArgs({ path, args }: PublicFunction): Record<string, Value> {
-  if (args.type === "any") return {};
-  if (args.type !== "object") throw new Error(`${path}: arguments are not an object validator.`);
-  return sampleFields(args.value, path);
-}
-
-// ── calls ────────────────────────────────────────────────────────────────────
 
 function setup() {
   return convexTest(schema, modules);
 }
 
 type Tester = ReturnType<typeof setup>;
-type Args = Record<string, Value>;
-
-function call(t: Tester, fn: PublicFunction, args: Args): Promise<unknown> {
-  switch (fn.kind) {
-    case "query":
-      return t.query(makeFunctionReference<"query", Args>(fn.path), args);
-    case "mutation":
-      return t.mutation(makeFunctionReference<"mutation", Args>(fn.path), args);
-    case "action":
-      return t.action(makeFunctionReference<"action", Args>(fn.path), args);
-  }
-}
 
 /** How a call ended, as one comparable line: the refusal's code, or what went wrong. */
 async function outcome(pending: Promise<unknown>): Promise<string> {
@@ -229,9 +107,8 @@ async function outcome(pending: Promise<unknown>): Promise<string> {
     await pending;
     return "answered an anonymous caller";
   } catch (error) {
-    const data = typeof error === "object" && error !== null ? Reflect.get(error, "data") : null;
-    const code = typeof data === "object" && data !== null ? Reflect.get(data, "code") : null;
-    if (typeof code === "string") return `refused: ${code}`;
+    const code = refusalCode(error);
+    if (code !== null) return `refused: ${code}`;
     return `threw an untyped error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }

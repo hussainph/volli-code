@@ -35,7 +35,7 @@ import {
 } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
-import { authError, findMembership, type Viewer } from "./auth";
+import { authError, findMembership, isShownProject, type Viewer } from "./auth";
 import { literals, nullable } from "./validators";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
@@ -114,7 +114,7 @@ export async function liveProject(ctx: Reader, projectId: string): Promise<Doc<"
     .query("projects")
     .withIndex("by_uuid", (q) => q.eq("id", projectId))
     .unique();
-  if (project === null || project.deletedAt !== null) return null;
+  if (project === null || !isShownProject(project)) return null;
   return (await liveWorkspace(ctx, project.workspaceId)) === null ? null : project;
 }
 

@@ -70,7 +70,7 @@ import {
 } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
-import type { Viewer } from "./auth";
+import { isShownProject, type Viewer } from "./auth";
 import { boardEventVisibility } from "./visibility";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
@@ -360,8 +360,7 @@ async function references(
         .withIndex("by_uuid", (q) => q.eq("id", projectId))
         .unique();
       // A link may name a ticket of another project: resolve it only inside this Workspace.
-      const visible =
-        row !== null && row.deletedAt === null && row.workspaceId === scope.workspaceId;
+      const visible = row !== null && isShownProject(row) && row.workspaceId === scope.workspaceId;
       projects.set(projectId, visible ? row : null);
     }
     return projects.get(projectId)!;

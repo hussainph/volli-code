@@ -26,6 +26,7 @@ import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { requireSessionVisible } from "./lib/auth";
+import { projectImporting } from "./lib/jobs";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
   STREAM_CLEANUP_BATCH,
@@ -51,7 +52,13 @@ async function requireSessionRunner(ctx: MutationCtx, sessionId: string): Promis
     .query("sessions")
     .withIndex("by_uuid", (q) => q.eq("id", sessionId))
     .unique();
-  if (session === null || session.deletedAt !== null || session.placeRunnerId !== caller.runnerId) {
+  if (
+    session === null ||
+    session.deletedAt !== null ||
+    session.placeRunnerId !== caller.runnerId ||
+    // A Session of a project still being imported takes no writes until its commit.
+    (await projectImporting(ctx, session.projectId))
+  ) {
     throw streamError("not_claimed", "This runner does not run that session.");
   }
   return session;

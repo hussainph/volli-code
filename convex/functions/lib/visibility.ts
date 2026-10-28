@@ -128,6 +128,20 @@ export async function shareSession(
   const seen = new Set([session.id]);
   let descendants = 0;
   let frontier = [session.id];
+  // A subagent in another project still being imported is left alone: that
+  // project takes no writes until its import commits (`projectImports.ts`).
+  const hidden = new Map<string, boolean>();
+  const inHiddenProject = async (child: Doc<"sessions">): Promise<boolean> => {
+    if (child.projectId === session.projectId) return false;
+    if (!hidden.has(child.projectId)) {
+      const project = await ctx.db
+        .query("projects")
+        .withIndex("by_uuid", (q) => q.eq("id", child.projectId))
+        .unique();
+      hidden.set(child.projectId, project?.moveState === "importing");
+    }
+    return hidden.get(child.projectId)!;
+  };
   while (frontier.length > 0) {
     const next: string[] = [];
     for (const parentId of frontier) {
@@ -138,6 +152,7 @@ export async function shareSession(
       for (const child of children) {
         if (child.role !== "subagent" || seen.has(child.id)) continue;
         seen.add(child.id);
+        if (await inHiddenProject(child)) continue;
         if (seen.size > MAX_SHARED_DESCENDANTS + 1) {
           throw visibilityError(
             "too_many_descendants",

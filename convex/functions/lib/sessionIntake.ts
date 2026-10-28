@@ -56,6 +56,7 @@ import type { Doc, Id } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
 import { raiseQuarantine } from "./attention";
 import { findVisibleProject } from "./auth";
+import { projectImporting } from "./jobs";
 import type { CallingRunner } from "./runnerAuth";
 import { visibilityForNewSession } from "./visibility";
 import { EMPTY_USAGE_TOTALS, deriveFromFact, stableJson, syncListing } from "./sessionDerived";
@@ -319,7 +320,8 @@ export async function acceptFacts(
     ({ session, intake } = await createFromFirstFact(ctx, caller, args, envelopes[0]!));
   } else {
     const row = await sessionRow(ctx, sessionId);
-    if (row === null || row.deletedAt !== null) {
+    // A Session of a project still being imported takes no facts until its commit.
+    if (row === null || row.deletedAt !== null || (await projectImporting(ctx, row.projectId))) {
       throw acceptError("not_found", "That session does not exist.", head);
     }
     session = row;

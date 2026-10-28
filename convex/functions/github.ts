@@ -38,7 +38,7 @@ import {
   type ActionCtx,
 } from "./_generated/server.js";
 import { mintGithubToken } from "./githubTokens";
-import { requireIdentity, requireMember, requireViewer } from "./lib/auth";
+import { isShownProject, requireIdentity, requireMember, requireViewer } from "./lib/auth";
 import { GithubApiError, githubClient } from "./lib/github/client";
 import { githubError, readGithubConfig, requireGithubConfig } from "./lib/github/config";
 import { randomSecret, sha256Base64Url } from "./lib/github/crypto";
@@ -256,7 +256,7 @@ export const installationsContext = internalQuery({
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId).eq("deletedAt", null))
       .collect();
     const used = new Map<string, number>();
-    for (const project of live) {
+    for (const project of live.filter(isShownProject)) {
       const repos = await ctx.db
         .query("projectRepos")
         .withIndex("by_project", (q) => q.eq("projectId", project.id))

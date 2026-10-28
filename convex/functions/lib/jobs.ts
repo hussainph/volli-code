@@ -49,7 +49,7 @@ import {
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server.js";
-import { findMembership } from "./auth";
+import { findMembership, isShownProject } from "./auth";
 
 /** A malformed job (a producer bug), or another job under a used id. Always thrown. */
 type JobDefectCode = "invalid_job" | "id_taken";
@@ -440,6 +440,21 @@ export async function recordSettledCommand<K extends JobKind>(
   return { jobId: row.id as JobId, created: true };
 }
 
+/**
+ * Whether a project is still being imported (`projectImports.ts`): its jobs
+ * are neither handed out nor cancelled; they wait, untouched, for the commit.
+ */
+export async function projectImporting(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  projectId: string,
+): Promise<boolean> {
+  const project = await ctx.db
+    .query("projects")
+    .withIndex("by_uuid", (q) => q.eq("id", projectId))
+    .unique();
+  return project?.moveState === "importing";
+}
+
 /** Whether a runner's owner may still be handed work in a project: it is live and they are an active Member. */
 export async function ownerMayWorkOn(
   ctx: { db: GenericDatabaseReader<DataModel> },
@@ -450,7 +465,7 @@ export async function ownerMayWorkOn(
     .query("projects")
     .withIndex("by_uuid", (q) => q.eq("id", projectId))
     .unique();
-  if (project === null || project.deletedAt !== null) return false;
+  if (project === null || !isShownProject(project)) return false;
   const workspace = await ctx.db
     .query("workspaces")
     .withIndex("by_uuid", (q) => q.eq("id", project.workspaceId))

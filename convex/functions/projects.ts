@@ -26,7 +26,7 @@ import {
 
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
-import { requireMember, requireProject } from "./lib/auth";
+import { isShownProject, requireMember, requireProject } from "./lib/auth";
 import { boardError, publicRow, recordBoardEvents } from "./lib/board";
 import { withBoardReceipt } from "./lib/boardReceipts";
 import { literals } from "./lib/validators";
@@ -36,7 +36,7 @@ async function workspaceProjects(ctx: QueryCtx, workspaceId: string) {
     .query("projects")
     .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId).eq("deletedAt", null))
     .collect();
-  return projects.map(publicRow);
+  return projects.filter(isShownProject).map(publicRow);
 }
 
 /** The projects of a Workspace the viewer belongs to, archived ones included, by name. */
@@ -126,8 +126,9 @@ export const create = mutation({
             q.eq("workspaceId", args.workspaceId).eq("deletedAt", null),
           )
           .collect();
+        // A project still being imported is nobody's to see, its prefix included.
         const decision = decideCreateProject(
-          { projects: live },
+          { projects: live.filter(isShownProject) },
           { name: args.name, description: args.description, ticketPrefix: args.ticketPrefix },
         );
         const now = Date.now();
