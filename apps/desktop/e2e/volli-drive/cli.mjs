@@ -57,7 +57,7 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
          [--no-build] [--json]     start an instance (dev build only; packed
                                    apps are refused until VC-705); prints its
                                    id + evidence dir
-         [--cloud --cloud-subject s]
+         [--cloud --cloud-subject s --cloud-email email]
                                    a Volli Cloud instance against the loopback
                                    fixture backend in this environment
                                    (convex/fixture/with-backend.ts --deploy):
@@ -190,13 +190,24 @@ async function launch(flags) {
   }
   let cloud = null;
   let cloudEnv = {};
+  if (
+    flags.cloudEmail !== undefined &&
+    (!flags.cloud ||
+      typeof flags.cloudEmail !== "string" ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(flags.cloudEmail))
+  ) {
+    fail("--cloud-email requires --cloud and an email address");
+  }
   if (flags.cloud) {
     if (flags.remoteAcceptance) fail("--cloud and --remote-acceptance are separate journeys");
     if (model !== "fake") fail("--cloud requires --model fake");
     let fixtureEnv;
     try {
       fixtureEnv = cloudFixtureFromEnv(process.env);
-      cloud = { subject: cloudSubject(flags.cloudSubject) };
+      cloud = {
+        subject: cloudSubject(flags.cloudSubject),
+        ...(flags.cloudEmail ? { email: String(flags.cloudEmail) } : {}),
+      };
     } catch (error) {
       fail(error.message);
     }

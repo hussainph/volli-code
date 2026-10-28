@@ -2,14 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Project } from "@volli/shared";
 
 import type { CloudSession } from "@renderer/lib/cloud-client";
+import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
 
 import { fakeCloud, refusal } from "./fake-cloud.test-support";
-import { useCloudLinkInputs } from "../cloud-link";
+import { INITIAL_CLOUD_LINK_INPUT, useCloudLinkInputs } from "../cloud-link";
 import { projectRows, type CloudProjectRow } from "./projection";
 import { CLOUD_READ_ONLY } from "./source";
 import type { BoardSnapshot } from "./snapshot";
 import {
   createCloudProject,
+  selectCloudWorkspace,
   followCloudWorkspace,
   useCloudWorkspaceStore,
   type CloudWorkspaceDeps,
@@ -143,6 +145,93 @@ const SNAPSHOT: BoardSnapshot = {
 
 afterEach(() => {
   useCloudWorkspaceStore.setState({ workspace: null, localProjects: 0 });
+  useCloudLinkInputs.setState({ input: { ...INITIAL_CLOUD_LINK_INPUT } });
+});
+
+describe("joining and leaving a Workspace", () => {
+  it("refuses selection before the client starts, over a snapshot, or while the OS is offline", async () => {
+    await expect(selectCloudWorkspace("w2")).rejects.toThrow(NOT_CONNECTED);
+    const h = harness();
+    h.connect();
+    useCloudLinkInputs.getState().update({ snapshotAt: 42 });
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(CLOUD_READ_ONLY);
+    useCloudLinkInputs.getState().update({ snapshotAt: null, online: false });
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(CLOUD_READ_ONLY);
+    useCloudLinkInputs.getState().update({ online: true });
+    h.stop();
+  });
+  it("does not reopen a Workspace when a selection read finishes after the client closes", async () => {
+    const h = harness();
+    h.connect();
+    let answer!: (row: typeof W2) => void;
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const selecting = selectCloudWorkspace("w2", h.cloud.session);
+    h.close();
+    answer(W2);
+    await selecting;
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w2" })).toBe(0);
+    expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
+    h.stop();
+  });
+  it("does not warn about the previous Workspace’s projects on Leave", () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.answer("workspaces:listMine", {}, [W2]);
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("b")]);
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.stop();
+  });
+  it("opens the accepted Workspace before listMine catches up and persists through hydration", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    expect(useCloudWorkspaceStore.getState().workspace).toEqual({ id: "w2", name: "Team" });
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w1" })).toBe(0);
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("b")]);
+    expect(h.state.hydrateCloud).toHaveBeenLastCalledWith("w2", expect.any(Array), "b");
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, []);
+    expect(h.deps.notice).toHaveBeenCalledExactlyOnceWith("B isn’t available any more");
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    h.stop();
+  });
+  it("refuses selection offline and surfaces failed membership reads", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.connected = false;
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(CLOUD_READ_ONLY);
+    h.cloud.connected = true;
+    h.cloud.queries.set("workspaces:get", () => {
+      throw refusal("not_a_member", "You are no longer a member.");
+    });
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(
+      "You are no longer a member.",
+    );
+    h.stop();
+  });
+  it("clears a formerly live board when the last Workspace is left", () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.answer("workspaces:listMine", {}, []);
+    expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
+    expect(h.state.projects).toEqual([]);
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w1" })).toBe(0);
+    h.stop();
+  });
 });
 
 describe("the current Volli Cloud Workspace (VC-889)", () => {

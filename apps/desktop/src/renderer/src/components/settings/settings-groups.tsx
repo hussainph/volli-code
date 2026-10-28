@@ -35,6 +35,7 @@ import { hasVisibleExperiments } from "@renderer/stores/experiments";
 import { accountCategory } from "./account-category";
 import { hostsCategory } from "./hosts-category";
 import { runnersCategory } from "./runners-category";
+import { workspaceCategory } from "./workspace-category";
 import { AboutPane } from "./panes/about-pane";
 import { DisplaySection } from "./panes/display-section";
 import { GeneralPane } from "./panes/general-pane";
@@ -85,8 +86,8 @@ export interface SettingsGroupsOptions {
    */
   readonly account?: boolean;
   /**
-   * Shows Services → Runners, the person's runners with this Mac among them
-   * (VC-895): only in a Volli Cloud launch.
+   * Shows Services → Runners and Workspace: the cloud launch's runner and team settings.
+   * Neither category exists in a local launch.
    */
   readonly runners?: boolean;
 }
@@ -191,7 +192,7 @@ export function settingsGroups(
       label: "Services",
       categories: [
         ...(options.account === true ? [accountCategory()] : []),
-        ...(options.runners === true ? [runnersCategory()] : []),
+        ...(options.runners === true ? [runnersCategory(), workspaceCategory()] : []),
         ...(options.hosts === true ? [hostsCategory()] : []),
         {
           key: MODELS_CATEGORY_KEY,

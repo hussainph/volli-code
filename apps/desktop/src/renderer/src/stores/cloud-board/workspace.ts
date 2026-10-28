@@ -22,7 +22,8 @@ import type { Label, Project, Ticket } from "@volli/shared";
 import { newId } from "@volli/shared/cloud";
 import { create } from "zustand";
 
-import type { CloudSession } from "@renderer/lib/cloud-client";
+import { cloudSession, type CloudSession } from "@renderer/lib/cloud-client";
+import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
 
 import type { CloudSelection } from "../projects";
 import { useCloudLinkInputs } from "../cloud-link";
@@ -47,6 +48,26 @@ export const useCloudWorkspaceStore = create<CloudWorkspaceState>()(() => ({
 interface WorkspaceRow {
   readonly workspaceId: string;
   readonly name: string;
+}
+
+const selections = new Set<(session: CloudSession, row: WorkspaceRow) => void>();
+
+/** Opens an accepted Workspace; hydration persists the selection with its projects. */
+export async function selectCloudWorkspace(id: string, session = cloudSession()): Promise<void> {
+  if (session === null) throw new Error(NOT_CONNECTED);
+  if (
+    !session.client.connectionState().isWebSocketConnected ||
+    useCloudLinkInputs.getState().input.snapshotAt !== null ||
+    !useCloudLinkInputs.getState().input.online
+  )
+    throw new Error(CLOUD_READ_ONLY);
+  try {
+    // Resolve after acceptance, rather than waiting for listMine's subscription to catch up.
+    const row = await session.client.query(session.api.workspaces.get, { workspaceId: id });
+    for (const select of selections) select(session, row);
+  } catch (error) {
+    throw new Error(cloudFailure(error).message, { cause: error });
+  }
 }
 
 /** Everything the follower reaches. */
@@ -199,7 +220,9 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     for (const project of state.projects) {
       if (nextIds.has(project.id)) continue;
       deps.board.forget(project.id);
-      if (!fromSnapshot) deps.notice(`${project.name} isn’t available any more`);
+      // The first answer in a different Workspace replaces the old project list;
+      // those projects are not lost. Only a later answer in this Workspace can lose one.
+      if (answered && !fromSnapshot) deps.notice(`${project.name} isn’t available any more`);
     }
     for (const project of next) deps.board.seedProject(project.id);
     const wanted =
@@ -243,12 +266,14 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
       openWorkspace(session, row);
       return;
     }
-    // No Workspace at all: the live answer is that there is nothing to show.
+    // No Workspace at all: clear even a previously live Workspace after Leave.
     settle();
-    if (snapshotWorkspace !== null) {
+    if (workspaceId !== null || snapshotWorkspace !== null) {
       forgetAll();
       deps.projects.getState().clearCloud();
       deps.workspace.setState({ workspace: null });
+      workspaceId = null;
+      for (const stop of stops.splice(1)) stop();
       dropSnapshot();
     }
   }
@@ -294,6 +319,12 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     }, deps.offline.afterMs);
   }
 
+  const select = (session: CloudSession, row: WorkspaceRow) => {
+    if (session !== current) return;
+    openWorkspace(session, row);
+  };
+  selections.add(select);
+
   const stopFollowing = deps.follow((session) => {
     current = session;
     clear(session === null);
@@ -311,6 +342,7 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     current = null;
     if (offlineTimer !== null) deps.offline!.clearTimeout(offlineTimer);
     offlineTimer = null;
+    selections.delete(select);
     stopFollowing();
     stopAll();
   };

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -100,8 +102,28 @@ test("Electron gets the flag, the dev sign-in, the backend and the power seam", 
     VOLLI_SMOKE_CLOUD_RUNNER_POWER: "1",
     VOLLI_SMOKE_MENU_BAR_HOST: "1",
   });
+  assert.equal(
+    cloudElectronEnv(fixture, "robin", "robin@volli.invalid").VOLLI_ACCOUNT_DEV_EMAIL,
+    "robin@volli.invalid",
+  );
   assert.equal(cloudSubject(" wake-ab12 "), "wake-ab12");
   assert.throws(() => cloudSubject("Has Spaces"), /lowercase/);
+});
+
+test("the CLI refuses missing, invalid or non-cloud email arguments before launching", () => {
+  for (const flags of [
+    ["--cloud-email"],
+    ["--cloud", "--cloud-email"],
+    ["--cloud", "--cloud-email", "bad-email"],
+  ]) {
+    const result = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("../cli.mjs", import.meta.url)), "launch", ...flags],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--cloud-email requires --cloud and an email address/u);
+  }
 });
 
 test("a setup token is the dev issuer's own, for the same person", () => {

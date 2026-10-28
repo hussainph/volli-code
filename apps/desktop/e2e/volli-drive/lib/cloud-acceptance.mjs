@@ -150,11 +150,12 @@ export function cloudSubject(raw) {
  * fixture backend and the power smoke seam. Everything else stays
  * `electronExtraEnv`'s.
  */
-export function cloudElectronEnv(fixture, subject) {
+export function cloudElectronEnv(fixture, subject, email) {
   return {
     VOLLI_EXPERIMENTAL: "cloud",
     VOLLI_ACCOUNT_PROVIDER: "dev",
     VOLLI_ACCOUNT_DEV_SUBJECT: subject,
+    ...(email ? { VOLLI_ACCOUNT_DEV_EMAIL: email } : {}),
     VOLLI_CONVEX_URL: fixture.convexUrl,
     VOLLI_CONVEX_SITE_URL: fixture.siteUrl,
     ...(fixture.storageOrigin ? { VOLLI_CLOUD_STORAGE_ORIGIN: fixture.storageOrigin } : {}),
