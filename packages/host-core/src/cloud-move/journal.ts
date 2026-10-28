@@ -34,6 +34,16 @@ export interface MoveFailure {
   detail?: Record<string, unknown>;
 }
 
+/** The runner-local rows a handover wrote, so a roll back takes back exactly those. */
+export interface HandoverRecord {
+  checkouts: Array<{ projectRepoId: string; absPath: string }>;
+  workingCopies: Array<{ ticketId: string; projectRepoId: string; absPath: string }>;
+  /** Sessions whose drain cursors were seeded, at the imported head. */
+  cursors: Array<{ sessionId: string; acceptedThrough: number }>;
+  /** Registrations another one already held: the folder needs the person. */
+  collisions: number;
+}
+
 /** A move's resumable progress. Every field is written once its part is durable. */
 export interface MoveJournal {
   /** The published export's id and the sha256 of its `manifest.json`. */
@@ -45,7 +55,8 @@ export interface MoveJournal {
   objects?: number;
   /** Sessions whose history (transcript packs, Pi logs) is uploaded, in the plan's order. */
   history?: number;
-  /** The state a roll back started from. */
+  handover?: HandoverRecord;
+  /** The state a roll back (or a go back to local) started from. */
   rollbackFrom?: MoveState;
   /** The person confirmed losing the cloud copy's changes since the commit. */
   rollbackConfirmed?: boolean;
@@ -54,6 +65,8 @@ export interface MoveJournal {
   /** The engine run that rolled it back called `uncommit` / `abort` already. */
   uncommitted?: boolean;
   aborted?: boolean;
+  /** Where a "Go back to local" saved the cloud's changes. */
+  returnedExport?: string;
 }
 
 export interface MoveRow {

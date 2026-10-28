@@ -4,7 +4,7 @@
  * Workspace and a runner, a synthetic local profile (host-core's dry-run
  * fixture, migrated by the real migrations) holds the project she moves, and
  * the engine runs every step through `projectImports.*` and the window's own
- * signed in as her.
+ * public reads, signed in as her.
  *
  * Stand-ins, each at a port the engine names: object storage (a write-once
  * map, as the store's `If-None-Match: *` makes R2), the Session-history
@@ -29,6 +29,7 @@ import type {
   MoveObjectStore,
   MoveSessionHistory,
 } from "../../packages/host-core/src/cloud-move/ports";
+import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
 import {
   SYNTHETIC_IDS,
   writeSyntheticProfile,
@@ -97,8 +98,11 @@ export class ObjectStandIn implements MoveObjectStore {
 
 type Db = ReturnType<typeof openRawDb>;
 
-/** The Session-history port for a fixture with no transcripts or Pi logs. */
-function testHistory(): MoveSessionHistory & { uploads: string[] } {
+/**
+ * The Session-history port for a fixture with no transcripts or Pi logs; its
+ * cursors are seeded and released the way the runner's drain store is.
+ */
+function testHistory(db: Db): MoveSessionHistory & { uploads: string[] } {
   const uploads: string[] = [];
   return {
     uploads,
@@ -107,6 +111,24 @@ function testHistory(): MoveSessionHistory & { uploads: string[] } {
     async upload(_move, session) {
       uploads.push(session.sessionId);
       return { missing: [], piFilesLeftBehind: 0, packs: 0, piSegments: 0 };
+    },
+    seedCursors(ownerUserId, sessions) {
+      for (const { sessionId, acceptedThrough } of sessions) {
+        db.prepare(
+          `INSERT INTO session_drain_cursors (session_id, owner_user_id, claim_generation,
+             accepted_through, updated_at) VALUES (?, ?, 1, ?, 0)
+           ON CONFLICT (session_id) DO NOTHING`,
+        ).run(sessionId, ownerUserId, acceptedThrough);
+      }
+    },
+    releaseCursors(ownerUserId, sessions) {
+      for (const { sessionId, acceptedThrough } of sessions) {
+        db.prepare(
+          `DELETE FROM session_drain_cursors WHERE session_id = ? AND owner_user_id = ?
+             AND claim_generation = 1 AND accepted_through = ?`,
+        ).run(sessionId, ownerUserId, acceptedThrough);
+      }
+      return [];
     },
   };
 }
@@ -152,7 +174,7 @@ export async function moveWorld(): Promise<MoveWorld> {
   db.pragma("foreign_keys = ON");
   const objects = new ObjectStandIn();
   const calls = new Map<string, number>();
-  const history = testHistory();
+  const history = testHistory(db);
 
   const backendFor = (kill?: Kill, flaps?: Flaps): MoveBackend => {
     const hits = new Map<string, number>();
@@ -224,6 +246,7 @@ export async function moveWorld(): Promise<MoveWorld> {
         },
         liveWork: { busySessionIds: () => new Set<string>() },
         identity: { current: async () => ({ userId: alice.userId, runnerId }) },
+        realPath: windowReadCheck({ backend, sleep: async () => {}, foldTimeoutMs: 0 }),
         exportProject: (exportOptions) => exportMigrationSnapshot(exportOptions),
         sleep: async () => {},
         faults: async (point) => {

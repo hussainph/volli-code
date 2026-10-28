@@ -4,7 +4,7 @@
  * move is interrupted, refused, rolled back or taken back. The kill/resume
  * matrix itself is `moveEngine.matrix.test.ts` (ci-extended).
  */
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -60,11 +60,19 @@ describe("a move, start to finish", () => {
     expect(backupWrites).toBe(1);
 
     const move = engine.journal.move(moveId)!;
-    expect(move.state).toBe("committed");
+    expect(move.state).toBe("checked");
     expect(move.failure).toBeNull();
     expect(move.report).toMatchObject({ verify: { ok: true } });
-    // Still read-only here: the project is shown in Volli Cloud.
-    expect(projectFreeze(world.db, world.projectId)).toBe("committed");
+    // Every window read matches the export. Until moved Sessions are folded after the commit (VC-990), the the first
+    // fold of a moved Session, the fold wait is the one check that cannot pass.
+    const realPath = move.report!.realPath as { checks: Record<string, { failed: number }> };
+    for (const [name, { failed }] of Object.entries(realPath.checks)) {
+      expect({ name, failed }).toEqual({ name, failed: name === "sessionFolded" ? failed : 0 });
+    }
+    expect(realPath.checks.boardTicket!.failed).toBe(0);
+    expect(realPath.checks.sessionHistory!.failed).toBe(0);
+    // Still read-only here until the person finishes the move.
+    expect(projectFreeze(world.db, world.projectId)).toBe("checked");
 
     const final = await finalDigests(world, moveId);
     expect(final.status).toBe("committed");
@@ -72,6 +80,16 @@ describe("a move, start to finish", () => {
       .withIdentity(alice)
       .query(api.projects.get, { projectId: world.projectId });
     expect(shown.name).toBe("Alpha");
+
+    // The handover: the folder and every moved Session belong to this runner.
+    const cursors = world.db
+      .prepare("SELECT session_id, accepted_through FROM session_drain_cursors")
+      .all();
+    expect(cursors.length).toBeGreaterThan(0);
+    const checkouts = world.db
+      .prepare("SELECT project_id FROM project_checkout_paths WHERE runner_id = ?")
+      .all(world.runnerId);
+    expect(checkouts).toEqual([{ project_id: world.projectId }]);
     // The staging record: the manifest, its chunks and the report.
     const staged = [...world.objects.objects.keys()].filter((key) =>
       key.startsWith(`v1/m/${moveId}/`),
@@ -97,6 +115,17 @@ describe("a move, start to finish", () => {
     );
     expect(await finalDigests(world, moveId)).toEqual(before);
   });
+
+  test("Finish move archives the local copy read-only and drops the export", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    await engine.confirm(moveId);
+    expect(engine.journal.move(moveId)!.state).toBe("confirmed");
+    expect(projectFreeze(world.db, world.projectId)).toBe("confirmed");
+    expect(existsSync(join(world.root, "cloud-moves", moveId, "export"))).toBe(false);
+    expect(existsSync(join(world.root, "cloud-moves", moveId, "plan.json"))).toBe(true);
+  });
 });
 
 describe("interruptions resume", () => {
@@ -104,7 +133,7 @@ describe("interruptions resume", () => {
     world = await moveWorld();
     const { queueId, moveId } = enqueue(world);
     expect(await world.engine({ flaps: { every: 3 } }).run(queueId)).toEqual({ kind: "done" });
-    expect(world.engine().journal.move(moveId)!.state).toBe("committed");
+    expect(world.engine().journal.move(moveId)!.state).toBe("checked");
   });
 
   test("a network that stays down pauses the move, which resumes", async () => {
@@ -115,7 +144,7 @@ describe("interruptions resume", () => {
     // Frozen while it waits: nothing is undone.
     expect(projectFreeze(world.db, world.projectId)).not.toBeNull();
     expect(await world.engine().run(queueId)).toEqual({ kind: "done" });
-    expect(world.engine().journal.move(moveId)!.state).toBe("committed");
+    expect(world.engine().journal.move(moveId)!.state).toBe("checked");
   });
 
   test("a full disk pauses the export, which resumes", async () => {
@@ -147,6 +176,22 @@ describe("interruptions resume", () => {
     expect(await world.engine().run(queueId)).toEqual({ kind: "done" });
   });
 
+  test("stops at the first problem by default on the profile's first Move all", async () => {
+    world = await moveWorld();
+    const engine = world.engine();
+    const target = {
+      userId: world.userId,
+      workspaceId: world.workspaceId,
+      runnerId: world.runnerId,
+    };
+    const first = engine.enqueue({
+      projectIds: [world.projectId, "7a1f0c2e-0000-4000-8000-000000000002"],
+      target,
+      includeRemoved: true,
+    });
+    expect(first.queue.stopAtFirstProblem).toBe(true);
+  });
+
   test("a project that waits goes after the rest of the queue", async () => {
     world = await moveWorld();
     const removed = "7a1f0c2e-0000-4000-8000-000000000002";
@@ -159,8 +204,8 @@ describe("interruptions resume", () => {
       projectIds: [world.projectId, removed],
       target: { userId: world.userId, workspaceId: world.workspaceId, runnerId: world.runnerId },
       includeRemoved: true,
+      stopAtFirstProblem: false,
     });
-    expect(queue.stopAtFirstProblem).toBe(true);
     const busy = moves.find((m) => m.projectId === world!.projectId)!;
     expect(await engine.run(queue.queueId)).toEqual({
       kind: "waiting",
@@ -168,7 +213,7 @@ describe("interruptions resume", () => {
       reason: "not_idle",
     });
     const other = engine.journal.moves(queue.queueId).find((m) => m.projectId === removed)!;
-    expect(other.state).toBe("committed");
+    expect(other.state).toBe("checked");
     expect(engine.journal.move(busy.moveId)!.state).toBe("queued");
   });
 
@@ -204,6 +249,20 @@ describe("problems roll back", () => {
     expect(projectFreeze(world.db, world.projectId)).toBeNull();
     expect(existsSync(join(world.root, "cloud-moves", moveId))).toBe(false);
     expect((await finalDigests(world, moveId)).status).toBe("aborting");
+  });
+});
+
+describe("a project already in Volli Cloud", () => {
+  test("a project the backend already holds is not moved twice", async () => {
+    world = await moveWorld();
+    const first = enqueue(world);
+    await first.engine.run(first.queueId);
+    await first.engine.confirm(first.moveId);
+    await first.engine.goBackToLocal(first.moveId);
+    const again = enqueue(world);
+    expect(await again.engine.run(again.queueId)).toEqual({ kind: "done" });
+    expect(again.engine.journal.move(again.moveId)!.state).toBe("rolled_back");
+    expect(again.engine.journal.move(again.moveId)!.failure?.code).toBe("already_migrated");
   });
 });
 
@@ -300,6 +359,12 @@ describe("the person's decisions", () => {
     const rolled = await engine.rollBack(moveId);
     expect(rolled.state).toBe("rolled_back");
     expect(projectFreeze(world.db, world.projectId)).toBeNull();
+    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+      n: 0,
+    });
+    expect(world.db.prepare("SELECT COUNT(*) AS n FROM project_checkout_paths").get()).toEqual({
+      n: 0,
+    });
     expect((await finalDigests(world, moveId)).status).toBe("aborting");
   });
 
@@ -336,8 +401,36 @@ describe("the person's decisions", () => {
       body: "written in Volli Cloud",
     });
     await expect(engine.rollBack(moveId)).rejects.toMatchObject({ code: "changed_since_commit" });
-    expect(engine.journal.move(moveId)!.state).toBe("committed");
+    expect(engine.journal.move(moveId)!.state).toBe("checked");
     expect((await engine.rollBack(moveId, { confirmChanged: true })).state).toBe("rolled_back");
+  });
+
+  test("Go back to local saves the cloud's changes and unlocks the local copy", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    await engine.confirm(moveId);
+    await world.t.withIdentity(alice).mutation(api.board.createComment, {
+      commandId: crypto.randomUUID(),
+      ticketId: "7a1f0c2e-0000-4000-8000-000000000021",
+      commentId: crypto.randomUUID(),
+      body: "written in Volli Cloud",
+    });
+    const returned = await engine.goBackToLocal(moveId);
+    expect(returned.state).toBe("returned");
+    expect(projectFreeze(world.db, world.projectId)).toBeNull();
+    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+      n: 0,
+    });
+    const saved = JSON.parse(
+      readFileSync(join(returned.journal.returnedExport!, "cloud-changes.json"), "utf8"),
+    );
+    expect(JSON.stringify(saved.tickets)).toContain("written in Volli Cloud");
+    expect(
+      readFileSync(join(returned.journal.returnedExport!, "cloud-changes.md"), "utf8"),
+    ).toContain("written in Volli Cloud");
+    // Volli Cloud keeps its copy.
+    expect((await finalDigests(world, moveId)).status).toBe("committed");
   });
 
   test("a runner replaced mid-move starts the project over under a new move", async () => {

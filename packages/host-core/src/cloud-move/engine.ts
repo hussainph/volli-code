@@ -28,10 +28,11 @@
  *   project joins the queue in its place (`supersedes`), waiting for the
  *   purge if it needs the project id.
  *
- * After the commit the project is visible in Volli Cloud and the move rests
- * at `committed`, read-only here, until the person rolls it back. The steps
- * after it (the handover, the real-path check, Finish move and Go back to
- * local) are composed on top of these (`README.md`).
+ * After the commit the project is visible in Volli Cloud: the handover
+ * hands the folder and the Sessions to this runner, the real-path check
+ * reads it back through the window's own reads, and the move waits for the
+ * person (`checked`): Finish move ({@link MoveEngine.confirm}, the local copy
+ * archived read-only), Roll back, or later Go back to local.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
@@ -51,6 +52,8 @@ import { MigrationExportError, isDiskFullError } from "../migration-export/error
 import type { MigrationExportManifest } from "../migration-export/exporter";
 import { MAPPER_VERSION, MANIFEST_FILE } from "../migration-export/staging";
 import { verifyMigrationExport } from "../migration-export/verify";
+import { saveCloudChanges } from "./cloud-changes";
+import { handOver, releaseHandover } from "./handover";
 import {
   MoveBackendError,
   MoveNetworkError,
@@ -92,12 +95,11 @@ const ZSTD_LEVEL = { params: { [zlibConstants.ZSTD_c_compressionLevel]: 3 } };
 const RETRY = { attempts: 6, baseMs: 1_000, maxMs: 30_000 };
 
 /**
- * Where a move waits for the person, not for the engine: shown in Volli
- * Cloud (`committed`, `checked`), finished (`confirmed`), or going back to
- * local (`returning`, which only the person's own call drives).
+ * Where a move waits for the person, not for the engine: the checks ran
+ * (`checked`), the move is finished (`confirmed`), or going back to local
+ * (`returning`, which only the person's own call drives).
  */
 const RESTING_STATES: ReadonlySet<MoveState> = new Set<MoveState>([
-  "committed",
   "checked",
   "confirmed",
   "returning",
@@ -189,6 +191,17 @@ export interface MoveEngine {
     moveId: string,
     options?: { confirmChanged?: boolean; signal?: AbortSignal },
   ): Promise<MoveRow>;
+  /** Finish move: the local copy stays, archived read-only. */
+  confirm(moveId: string): Promise<MoveRow>;
+  /** Runs the real-path check of a moved project again (its folds may have caught up). */
+  recheck(moveId: string): void;
+  /**
+   * Go back to local, any time after the commit: the cloud's
+   * changes since the move are saved to a readable export, this runner's
+   * handover is taken back and the local copy is unlocked. Volli Cloud keeps
+   * its copy; nothing there is changed.
+   */
+  goBackToLocal(moveId: string, signal?: AbortSignal): Promise<MoveRow>;
   queue(queueId: string): { queue: QueueRow; moves: MoveRow[] } | null;
   journal: MoveJournalStore;
 }
@@ -691,6 +704,46 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     return journal.advance(move.moveId, "verified", "committed", { committedAt: now() });
   };
 
+  const handover: Step = async (move, _queue, signal) => {
+    const plan = await planOf(move, signal);
+    const record = await handOver({
+      db: ports.db,
+      history: ports.history,
+      userId: move.userId,
+      runnerId: move.runnerId,
+      exportDir: exportDir(move),
+      manifest: await manifestOf(move),
+      plan,
+    });
+    await fault("handed_over");
+    return journal.advance(move.moveId, "committed", "handed_over", {
+      journal: { handover: record },
+    });
+  };
+
+  const checkRealPaths: Step = async (move, _queue, signal) => {
+    const plan = await planOf(move, signal);
+    const realPath = await ports.realPath.check(
+      {
+        moveId: move.moveId,
+        projectId: move.projectId,
+        workspaceId: move.workspaceId,
+        exportDir: exportDir(move),
+        sessions: plan.sessionList,
+      },
+      signal,
+    );
+    const collisions = move.journal.handover?.collisions ?? 0;
+    return journal.advance(move.moveId, "handed_over", "checked", {
+      report: {
+        ...move.report,
+        realPath,
+        handover: { collisions },
+        ok: realPath.ok && collisions === 0,
+      },
+    });
+  };
+
   const STEPS: Partial<Record<MoveState, Step>> = {
     queued: prepareAndFreeze,
     frozen: exportProject,
@@ -701,6 +754,8 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     rows: uploadHistory,
     history: verify,
     verified: commit,
+    committed: handover,
+    handed_over: checkRealPaths,
   };
 
   // ── roll back ──────────────────────────────────────────────────────────────
@@ -742,6 +797,15 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       }
       move = journal.patch(move.moveId, { journal: { aborted: true } });
       await fault("rollback.aborted");
+    }
+    if (move.journal.handover !== undefined) {
+      releaseHandover({
+        db: ports.db,
+        history: ports.history,
+        userId: move.userId,
+        runnerId: move.runnerId,
+        record: move.journal.handover,
+      });
     }
     await rm(workDir(move), { recursive: true, force: true, maxRetries: 3 });
     const again = move.journal.againOnRunner;
@@ -1015,8 +1079,16 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
 
     async resume(signal) {
       for (const queue of journal.runningQueues()) await run(queue.queueId, signal);
-      // A roll back a crash interrupted outside a running queue.
+      // Whatever a crash interrupted outside a running queue: a roll back, a go back to local.
       for (const move of journal.movesIn(["rolling_back"])) await run(move.queueId, signal);
+      for (const move of journal.movesIn(["returning"])) {
+        await this.goBackToLocal(move.moveId, signal).catch((error: unknown) => {
+          log.warn("a go back to local will resume at the next launch", {
+            moveId: move.moveId,
+            error,
+          });
+        });
+      }
     },
 
     proceed(queueId) {
@@ -1052,6 +1124,75 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         }
         throw error;
       }
+    },
+
+    async confirm(moveId) {
+      const move = journal.move(moveId);
+      if (move === null || move.state !== "checked") {
+        throw new Error("Only a moved project whose checks ran can be finished.");
+      }
+      const confirmed = journal.advance(moveId, "checked", "confirmed", { confirmedAt: now() });
+      // The export and the legacy archives are plaintext copies of what moved:
+      // not kept past the move. The plan (counts and digests) stays.
+      await rm(exportDir(move), { recursive: true, force: true, maxRetries: 3 });
+      await rm(join(workDir(move), "legacy"), { recursive: true, force: true, maxRetries: 3 });
+      return confirmed;
+    },
+
+    recheck(moveId) {
+      const move = journal.move(moveId);
+      if (move === null || move.state !== "checked") {
+        throw new Error("Only a moved project whose checks ran can be checked again.");
+      }
+      journal.advance(moveId, "checked", "handed_over", { paused: null });
+      journal.setQueue(move.queueId, { state: "running" });
+    },
+
+    async goBackToLocal(moveId, signal = new AbortController().signal) {
+      let move = journal.move(moveId);
+      if (move === null) throw new Error(`Move ${moveId} does not exist.`);
+      if (move.state === "returned") return move;
+      if (move.state !== "returning") {
+        if (!COMMITTED_STATES.has(move.state)) {
+          throw new Error("Only a moved project goes back to local; roll this move back instead.");
+        }
+        move = journal.advance(moveId, move.state, "returning", {
+          paused: null,
+          journal: { rollbackFrom: move.state },
+        });
+      }
+      if (move.journal.returnedExport === undefined) {
+        const plan = JSON.parse(
+          await readFile(join(workDir(move), "plan.json"), "utf8"),
+        ) as MovePlan;
+        const saved = await saveCloudChanges({
+          backend: ports.backend,
+          sleep,
+          projectId: move.projectId,
+          committedAt: move.committedAt ?? 0,
+          plan,
+          dir: join(workDir(move), `returned-${now()}`),
+          now: now(),
+          signal,
+        });
+        move = journal.patch(moveId, {
+          journal: { returnedExport: saved.dir },
+          report: { ...move.report, returned: saved },
+        });
+        await fault("returning.saved");
+      }
+      if (move.journal.handover !== undefined) {
+        releaseHandover({
+          db: ports.db,
+          history: ports.history,
+          userId: move.userId,
+          runnerId: move.runnerId,
+          record: move.journal.handover,
+          everyCursor: true,
+        });
+      }
+      await rm(exportDir(move), { recursive: true, force: true, maxRetries: 3 });
+      return journal.advance(moveId, "returning", "returned", { returnedAt: now() });
     },
 
     queue(queueId) {

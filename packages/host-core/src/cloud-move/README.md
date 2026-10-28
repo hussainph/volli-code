@@ -15,25 +15,24 @@ A move's `cloud_moves.state` is the last step it completed; resuming runs the
 next one. Every step is idempotent, so a crash, quit or lost network anywhere
 resumes by running the step again.
 
-| State after | Step                                                                                                                                                                                                                                      |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frozen`    | Pre-flight (the project exists; no Session of it has a live turn or shell), the queue's verified backup (once per queue), then the freeze, checked for liveness again.                                                                    |
-| `exported`  | The real exporter, filtered to the project, from a fresh snapshot taken after the freeze; `verifyMigrationExport`.                                                                                                                        |
-| `reserved`  | The plan (`plan.ts`): every importer stream's records, counts and digests, per-ticket and per-Session digests, the objects. Then `projectImports.begin` with the move manifest's sha256.                                                  |
-| `staged`    | `v1/m/<moveId>/`: `manifest.json` and the convex streams' export chunks (zstd, named by hash). Transcripts, Pi logs and runner paths are never staged raw.                                                                                |
-| `objects`   | Blob bytes (streamed from disk) and legacy archives to their final, write-once keys, four at a time.                                                                                                                                      |
-| `rows`      | `projectImports.importRows`, stream by stream, ≤ 200 rows / 3 MiB a batch. Any conflict or refusal rolls the move back: a refused row is a lost row.                                                                                      |
-| `history`   | Each Session's transcript packs and Pi logs (`MoveSessionHistory.upload`). A body or Pi file left behind rolls the move back.                                                                                                             |
-| `verified`  | Before the commit, while only the import has written: the accumulators, a full read-back by project/ticket/Session index (counts, digests, ticket keys, intake heads, event contiguity), every object HEADed and a blob sample re-hashed. |
-| `committed` | `projectImports.commit`: the project is visible. The move rests here, the local copy read-only, until the person rolls it back.                                                                                                           |
-
-The states after it (`handed_over`, `checked`, `confirmed`, and `returning →
-returned` for "Go back to local") are in the journal's vocabulary already;
-their steps (the handover, the real-path check, Finish move, the escape hatch)
-are composed on top of these.
+| State after   | Step                                                                                                                                                                                                                                      |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frozen`      | Pre-flight (the project exists; no Session of it has a live turn or shell), the queue's verified backup (once per queue), then the freeze, checked for liveness again.                                                                    |
+| `exported`    | The real exporter, filtered to the project, from a fresh snapshot taken after the freeze; `verifyMigrationExport`.                                                                                                                        |
+| `reserved`    | The plan (`plan.ts`): every importer stream's records, counts and digests, per-ticket and per-Session digests, the objects. Then `projectImports.begin` with the move manifest's sha256.                                                  |
+| `staged`      | `v1/m/<moveId>/`: `manifest.json` and the convex streams' export chunks (zstd, named by hash). Transcripts, Pi logs and runner paths are never staged raw.                                                                                |
+| `objects`     | Blob bytes (streamed from disk) and legacy archives to their final, write-once keys, four at a time.                                                                                                                                      |
+| `rows`        | `projectImports.importRows`, stream by stream, ≤ 200 rows / 3 MiB a batch. Any conflict or refusal rolls the move back: a refused row is a lost row.                                                                                      |
+| `history`     | Each Session's transcript packs and Pi logs (`MoveSessionHistory.upload`). A body or Pi file left behind rolls the move back.                                                                                                             |
+| `verified`    | Before the commit, while only the import has written: the accumulators, a full read-back by project/ticket/Session index (counts, digests, ticket keys, intake heads, event contiguity), every object HEADed and a blob sample re-hashed. |
+| `committed`   | `projectImports.commit`: the project is visible.                                                                                                                                                                                          |
+| `handed_over` | Runner-local writes only: checkout and Working-copy paths registered by id, drain cursors seeded at the imported heads.                                                                                                                   |
+| `checked`     | The real-path check (`real-paths.ts`): the window's own reads, compared with the export. The move waits for the person.                                                                                                                   |
+| `confirmed`   | Finish move (`confirm`): the local copy stays, archived read-only; the export is deleted.                                                                                                                                                 |
 
 Off the forward path: `rolling_back → rolled_back` (uncommit first when shown,
-then abort, which purges the cloud copy; unfrozen) and `superseded` (moved
+then abort, which purges the cloud copy; the handover taken back; unfrozen),
+`returning → returned` ("Go back to local", below) and `superseded` (moved
 again under a new move id).
 
 ## Waiting, problems, moving again
@@ -67,20 +66,32 @@ create and submit (stopping work is always allowed), the Automation and MCP
 settings services and the worktree reclaim ask it. Reads are never refused. The marker is the move's own journal row, so
 no board row is edited. An N−1 build ignores it.
 
+## Go back to local
+
+`goBackToLocal`, any time after the commit: the changes made in Volli Cloud
+since the move (tickets with activity or born there, with bodies, comments and
+activity; Sessions active since, with the events past their moved head) are
+saved as `cloud-changes.json` and `cloud-changes.md` beside the move, every
+moved Session's drain cursor and the path registrations are taken back, and
+the local copy is writable again. Volli Cloud keeps its copy, unchanged;
+moving the project again needs that copy removed first.
+
 ## Ports
 
 `MoveEnginePorts` (`ports.ts`): the backend under the person's sign-in, the
 object store, the exporter (normally its worker), the backup writer, the
-Session-history upload, this Mac's live work and the signed-in identity.
+Session-history upload and cursor seeding, this Mac's live work, the
+signed-in identity, and the real-path check (`windowReadCheck`).
 `faults` is the kill/resume matrix's injection point.
 
 Receiving wiring:
 
 - **Moved Session history** (VC-990): `cloud-move/session-history.ts`
-  composes `sessionEventImportRecord` and `createMoveHistoryUploader` into
-  `MoveSessionHistory`.
+  composes `sessionEventImportRecord`, `createMoveHistoryUploader` and
+  `seedMovedSessionCursors`/`releaseMovedSessionCursors` into
+  `MoveSessionHistory`; the real-path check then also waits on its fold.
 - **The object store**: presigned through `projectImports.presignPut` (VC-982)
-  and a read door for the move's own keys, with the post-commit steps.
+  and a read door for the move's own keys, with the object store's own change.
 - **The backup step**: `createMoveBackupPort` over the existing automatic-backup
   worker entry (desktop's `automatic-backup-worker` bundle). Pass the profile and
   store paths, the engine's `workRoot`, and a conservative `estimatedExportBytes`
@@ -101,7 +112,8 @@ Receiving wiring:
   owns the file-based restore and scale round trip.
 - **The UI**: composes the engine in main with the account's Convex
   client, this Mac's runner registration and the runtime's live work, calls
-  `resume()` at launch, and drives `enqueue`/`run`/`proceed`/`rollBack`.
+  `resume()` at launch, and drives `enqueue`/`run`/`proceed`/`rollBack`/
+  `confirm`/`recheck`/`goBackToLocal`.
 - **Profile step** (personal settings, `cloud_move_queues.profile_step`):
   a follow-up; the queue records it as `pending`.
 
