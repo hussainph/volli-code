@@ -7,6 +7,7 @@
  *   OCC retries the loser, which then finds nothing due).
  * - Only the armer's runner can lease the Run; it reads its fenced context,
  *   completes it, and the Run row records the start.
+ * - A cancel racing a claim: exactly one wins, never both or neither.
  */
 import { randomUUID } from "node:crypto";
 
@@ -188,5 +189,55 @@ describe("the Automation clock on the pinned local backend", () => {
     const { schedule, runs } = await inspect(w.automationId);
     expect(runs).toMatchObject([{ status: "started", sessionId, trigger: "schedule" }]);
     expect(schedule!.pendingJobId).toBeNull();
+  });
+
+  test("a cancel racing a claim: exactly one of them wins", async () => {
+    const w = await world();
+    const ticketId = randomUUID();
+    await w.person.mutation(api.board.createTicket, {
+      commandId: randomUUID(),
+      projectId: w.projectId,
+      ticketId,
+      status: "todo",
+      title: "Race",
+    });
+    const reviewId = randomUUID();
+    await w.person.mutation(api.automations.create, {
+      commandId: randomUUID(),
+      projectId: w.projectId,
+      automationId: reviewId,
+      name: "Review",
+      instructions: "Review",
+      runtime: null,
+      trigger: { kind: "none" },
+    });
+    for (let round = 0; round < 4; round += 1) {
+      const { jobId } = await w.person.mutation(api.automations.run, {
+        commandId: randomUUID(),
+        automationId: reviewId,
+        ticketId,
+        runnerId: w.armer.runnerId,
+      });
+      const [claimed, cancelled] = await Promise.allSettled([
+        w.armer.client.mutation(api.runnerJobs.claim, { bootId: randomUUID() }),
+        w.person.mutation(api.automations.cancelPendingArrival, { commandId: randomUUID(), jobId }),
+      ]);
+      const leased =
+        claimed.status === "fulfilled" && claimed.value.some((c) => c.job.id === jobId);
+      expect(cancelled.status === "fulfilled").toBe(!leased);
+      const job = await backend.admin(internal.testJobs.inspect, { jobId });
+      expect(job!.status).toBe(leased ? "leased" : "cancelled");
+      if (leased) {
+        const held = (claimed as PromiseFulfilledResult<ClaimedJob[]>).value.find(
+          (c) => c.job.id === jobId,
+        )!;
+        await w.armer.client.mutation(api.runnerJobs.complete, {
+          jobId,
+          bootId: held.lease.bootId,
+          attempt: held.lease.attempt,
+          outcome: { status: "done", result: { kind: "abandoned", reason: "gone" } },
+        });
+      }
+    }
   });
 });

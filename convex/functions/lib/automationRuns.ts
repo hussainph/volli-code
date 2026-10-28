@@ -121,20 +121,21 @@ export function queuedRunRow(input: {
   };
 }
 
-const ABANDON_REASONS: ReadonlySet<string> = new Set<AutomationRunAbandonReason>([
-  "gone",
-  "left-column",
-  "disarmed",
-  "schedule-disarmed",
-  "previous_run_active",
-]);
+// A Record, so a new abandon reason fails to compile until it is read here too.
+const ABANDON_REASONS: Readonly<Record<AutomationRunAbandonReason, true>> = {
+  gone: true,
+  "left-column": true,
+  disarmed: true,
+  "schedule-disarmed": true,
+  previous_run_active: true,
+};
 
 function boundedText(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max;
 }
 
 /** A runner's `done` result for an `automation.run` job, or null when it is not one. */
-export function parseRunCompletion(raw: unknown): AutomationRunCompletion | null {
+function parseRunCompletion(raw: unknown): AutomationRunCompletion | null {
   if (typeof raw !== "object" || raw === null) return null;
   const row = raw as Record<string, unknown>;
   if (row.kind === "started") {
@@ -161,7 +162,7 @@ export function parseRunCompletion(raw: unknown): AutomationRunCompletion | null
     };
   }
   if (row.kind === "abandoned") {
-    return typeof row.reason === "string" && ABANDON_REASONS.has(row.reason)
+    return typeof row.reason === "string" && Object.hasOwn(ABANDON_REASONS, row.reason)
       ? { kind: "abandoned", reason: row.reason as AutomationRunAbandonReason }
       : null;
   }
@@ -177,7 +178,7 @@ export function parseRunCompletion(raw: unknown): AutomationRunCompletion | null
 }
 
 /** How a terminal `automation.run` job ended, as the inbox saw it. */
-export type AutomationJobEnd =
+type AutomationJobEnd =
   | { kind: "done"; result: unknown }
   | { kind: "failed"; code: string; detail: string | null }
   | { kind: "withdrawn"; code: string; reason: CloudAutomationSkipReason };
@@ -198,6 +199,8 @@ export async function settleAutomationRunJob(
   if (payload === null) return;
   await releaseSchedulePointer(ctx, payload, job.id);
   const run = await findRun(ctx, payload.runId);
+  // A Retry moved the Run to a newer job: an older job's late word is not its outcome.
+  if (run !== null && run.jobId != null && run.jobId !== job.id) return;
   const automation =
     payload.automationId === null
       ? null
@@ -324,8 +327,14 @@ export async function settleAutomationRunJob(
 
   async function settleFailed(failure: { code: string; detail: string | null }) {
     const arrival = payload!.trigger === "arrival" || run?.trigger === "arrival";
+    // A Session that exists is this Run's, so a later Retry resumes it rather than conflicting.
+    const born = await ctx.db
+      .query("sessions")
+      .withIndex("by_uuid", (q) => q.eq("id", payload!.sessionId))
+      .unique();
     await write({
       status: "failed",
+      ...(born === null ? {} : { sessionId: payload!.sessionId }),
       error: failure.detail ?? failure.code,
       // A failed arrival can be retried under this id (`automations.retryArrival`).
       ...(arrival ? { retryCommandId: globalThis.crypto.randomUUID() } : {}),

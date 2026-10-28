@@ -19,6 +19,7 @@ import {
 
 import { api, internal } from "../functions/_generated/api";
 import type { Doc } from "../functions/_generated/dataModel.js";
+import { pauseArmingsFor } from "../functions/lib/automations";
 import { automationRunWatchCommandId, onSessionFact } from "../functions/lib/watches";
 import {
   boardFixture,
@@ -79,6 +80,32 @@ async function createAutomation(as: Client, projectId: string, name: string, tri
     trigger,
   });
   return automationId;
+}
+
+async function addMember(w: { t: Tester; workspaceId: string }, userId: string) {
+  await w.t.run(async (ctx) => {
+    await ctx.db.insert("workspaceMembers", {
+      id: newId("member"),
+      workspaceId: w.workspaceId,
+      userId,
+      role: "member",
+      status: "active",
+      billingTier: "free",
+      joinedAt: NOW,
+      suspendedAt: null,
+      leftAt: null,
+      invitedByUserId: null,
+    });
+  });
+}
+
+async function setMembership(w: World, userId: string, status: "active" | "left") {
+  await w.t.run(async (ctx) => {
+    const row = (await ctx.db.query("workspaceMembers").collect()).find(
+      (member) => member.userId === userId && member.workspaceId === w.workspaceId,
+    );
+    await ctx.db.patch(row!._id, { status, leftAt: status === "left" ? NOW : null });
+  });
 }
 
 async function world(trigger: AutomationTrigger = daily(9, 30)) {
@@ -171,6 +198,16 @@ const SAT_0930 = Date.parse("2026-03-07T14:30:00Z");
 const SUN_0930 = Date.parse("2026-03-08T13:30:00Z");
 const MON_0930 = Date.parse("2026-03-09T13:30:00Z");
 const TUE_0930 = Date.parse("2026-03-10T13:30:00Z");
+
+async function personRun(w: World, patch: Record<string, unknown> = {}) {
+  return w.as.mutation(api.automations.run, {
+    commandId: command(),
+    automationId: w.reviewId,
+    ticketId: w.ticketId,
+    runnerId: w.runnerId,
+    ...patch,
+  });
+}
 
 describe("the minute clock", () => {
   test("arming owes nothing; a due schedule fires once, never early, at most a tick late", async () => {
@@ -397,6 +434,27 @@ describe("the minute clock", () => {
     expect(await runsOf(w)).toHaveLength(1);
   });
 
+  test("an armer who left pauses their schedule with one skip row and no Needs-you item", async () => {
+    const w = await world();
+    const bob = await signIn(w.t, "bob");
+    await addMember(w, bob.userId);
+    const bobRunner = await capableRunner(w.t, bob.userId);
+    await bob.as.mutation(api.automations.armSchedule, {
+      commandId: command(),
+      automationId: w.scheduleId,
+      runnerId: bobRunner,
+    });
+    await tick(w, SAT_0930 + 30_000);
+    // Left without the transactional pause: the clock still finds out.
+    await setMembership(w, bob.userId, "left");
+    await tick(w, SUN_0930 + 30_000);
+    expect(await scheduleRow(w)).toMatchObject({ pausedReason: "armer_left" });
+    const runs = await runsOf(w);
+    expect(runs.map((run) => [run.status, run.missedCount])).toEqual([["skipped", 2]]);
+    expect(runs[0]!.skipReason).toEqual({ kind: "runner-unavailable", code: "armer_left" });
+    expect(await attention(w, `a:${w.projectId}:${bob.userId}:paused`)).toBeNull();
+  });
+
   test("New York springs forward: a 02:30 schedule fires at 03:30 EDT, not before", async () => {
     const w = await world(daily(2, 30));
     const { nextFireAt } = await armSchedule(w);
@@ -435,16 +493,6 @@ describe("the minute clock", () => {
 });
 
 describe("Run commands", () => {
-  async function personRun(w: World, patch: Record<string, unknown> = {}) {
-    return w.as.mutation(api.automations.run, {
-      commandId: command(),
-      automationId: w.reviewId,
-      ticketId: w.ticketId,
-      runnerId: w.runnerId,
-      ...patch,
-    });
-  }
-
   test("a by-hand Run queues on the caller's runner, attended, and replays by command id", async () => {
     const w = await world();
     const commandId = command();
@@ -659,6 +707,31 @@ describe("Run commands", () => {
     ]);
   });
 
+  test("a client may mint the Run and Session ids, once", async () => {
+    const w = await world();
+    const runId = newId("job");
+    const sessionId = newId("session");
+    const reply = await personRun(w, { runId, sessionId });
+    expect(reply).toMatchObject({ runId, sessionId });
+    await expect(personRun(w, { runId })).rejects.toThrow(code("run_exists"));
+    await expect(personRun(w, { runId: "not-a-uuid" })).rejects.toThrow(code("invalid_request"));
+  });
+
+  test("a removed runner ends the Runs it held instead of leaving them waiting", async () => {
+    const w = await world();
+    const reply = await personRun(w);
+    vi.setSystemTime(NOW + MINUTE);
+    await claim(w);
+    await setRunner(w.t, w.runnerId, { revokedAt: NOW + MINUTE, status: "revoked" });
+    await w.t.run((ctx) => pauseArmingsFor(ctx, { runnerId: w.runnerId }, NOW + MINUTE));
+    expect((await automationJobs(w)).map((job) => job.status)).toEqual(["cancelled"]);
+    expect((await runsOf(w, w.reviewId))[0]).toMatchObject({
+      id: reply.runId,
+      status: "skipped",
+      skipReason: { kind: "runner-unavailable", code: "runner_removed" },
+    });
+  });
+
   test("cancel withdraws a waiting Run; once a runner holds it, it is starting", async () => {
     const w = await world();
     const first = await personRun(w);
@@ -812,6 +885,86 @@ describe("arrivals and the completion hook", () => {
     expect(runs[0]).toMatchObject({ id: runId, status: "started" });
     expect(runs[0]).not.toHaveProperty("retryCommandId");
   });
+
+  test("a teammate's Retry runs on their own runner, as their by-hand Run", async () => {
+    const w = await world();
+    const bob = await signIn(w.t, "bob");
+    await addMember(w, bob.userId);
+    const bobRunner = await capableRunner(w.t, bob.userId);
+    await armDoing(w);
+    await arrive(w);
+    vi.setSystemTime(NOW + MINUTE);
+    const [held] = await claim(w);
+    const runId = (held!.job.payload as { runId: string }).runId;
+    await complete(w, held!, { kind: "refused", code: "model_unavailable", detail: null });
+    await bob.as.mutation(api.automations.retryArrival, {
+      commandId: command(),
+      runId,
+      runnerId: bobRunner,
+    });
+    const retry = (await automationJobs(w)).find((job) => job.status === "queued")!;
+    expect(retry.runnerId).toBe(bobRunner);
+    expect(parseJobPayload("automation.run", retry.payload)).toMatchObject({
+      trigger: "manual",
+      runId,
+      armedByUserId: null,
+      attendance: "attended",
+    });
+  });
+
+  test.each(["refused", "failed", "started"] as const)(
+    "after a dead letter, a late %s settles only if it says the Run started",
+    async (late) => {
+      const w = await world();
+      const reply = await personRun(w);
+      vi.setSystemTime(NOW + MINUTE);
+      const [held] = await claim(w);
+      // Its last lease runs out: a dead letter.
+      await w.t.run(async (ctx) => {
+        const job = await ctx.db
+          .query("runnerJobs")
+          .withIndex("by_uuid", (q) => q.eq("id", held!.job.id))
+          .unique();
+        await ctx.db.patch(job!._id, { lease: { ...job!.lease!, attempt: 5, expiresAt: NOW } });
+      });
+      await w.t.mutation(internal.runnerJobs.expireLease, { jobId: held!.job.id, attempt: 5 });
+      expect((await runsOf(w, w.reviewId))[0]).toMatchObject({ status: "failed" });
+      const failedEvents = async () =>
+        (await projectEvents(w.t, w.projectId)).filter(
+          (event) => event.payload.kind === "automation_run_failed",
+        ).length;
+      expect(await failedEvents()).toBe(1);
+      const last = { ...held!, lease: { ...held!.lease, attempt: 5 } };
+      if (late === "failed")
+        await runnerClient(w).mutation(api.runnerJobs.complete, {
+          jobId: last.job.id,
+          bootId: last.lease.bootId,
+          attempt: 5,
+          outcome: { status: "failed", code: "late", detail: null, retryable: false },
+        });
+      else
+        await complete(
+          w,
+          last,
+          late === "started"
+            ? started(reply.sessionId)
+            : { kind: "refused", code: "late", detail: null },
+        );
+      expect(await failedEvents()).toBe(1);
+      const [run] = await runsOf(w, w.reviewId);
+      const cleared = (await attention(w, automationRunFailedAttentionId(reply.runId)))!.clearedAt;
+      if (late === "started") {
+        expect(run).toMatchObject({ status: "started", sessionId: reply.sessionId });
+        expect(cleared).not.toBeNull();
+      } else {
+        expect(run).toMatchObject({
+          status: "failed",
+          error: "The runner stopped answering while starting this Run.",
+        });
+        expect(cleared).toBeNull();
+      }
+    },
+  );
 
   test("a dead-lettered schedule Run fails; an abandoned one is skipped", async () => {
     const w = await world();

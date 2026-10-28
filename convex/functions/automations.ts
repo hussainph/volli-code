@@ -29,6 +29,7 @@ import {
   decideAutomationChange,
   decideAutomationRunRouting,
   decideScheduleArming,
+  isUuid,
   newId,
   parseId,
   type AutomationRunJobPayload,
@@ -679,6 +680,8 @@ async function queueManualRun(
     /** A person's current Mac; an agent's runner comes from its token. */
     runnerId: string | null | undefined;
     attendance: AutomationRunAttendance;
+    /** Client-minted, so an optimistic Run row agrees with the backend's. */
+    ids: { runId?: string | null; sessionId?: string | null };
   },
 ) {
   const { caller, project, ticket, automation } = input;
@@ -692,11 +695,25 @@ async function queueManualRun(
   });
   if (decision.kind === "refused") throw automationError(decision.code);
   const now = Date.now();
-  const runId = newRunId();
+  if (input.ids.runId != null && !isUuid(input.ids.runId)) throw automationError("invalid_request");
+  const runId = input.ids.runId ?? newRunId();
+  const sessionId =
+    input.ids.sessionId == null ? newId("session") : parseId("session", input.ids.sessionId);
+  // A client id is the Run's from now on; another Run under it is a client bug.
+  if (input.ids.runId != null && (await findRun(ctx, runId)) !== null)
+    throw automationError("run_exists");
+  if (
+    input.ids.sessionId != null &&
+    (await ctx.db
+      .query("sessions")
+      .withIndex("by_uuid", (q) => q.eq("id", sessionId))
+      .unique()) !== null
+  )
+    throw automationError("session_exists");
   const common = {
     trigger: "manual" as const,
     runId,
-    sessionId: newId("session"),
+    sessionId,
     dueAt: now,
     missedCount: 0,
     attendance: input.attendance,
@@ -762,6 +779,8 @@ export const run = mutation({
     ticketId: v.string(),
     modelOverride: modelOverrideArg,
     runnerId: v.optional(nullable(v.string())),
+    runId: v.optional(nullable(v.string())),
+    sessionId: v.optional(nullable(v.string())),
   },
   handler: async (ctx, { commandId, ...intent }) =>
     withBoardReceipt(
@@ -795,6 +814,7 @@ export const run = mutation({
           modelOverride: (intent.modelOverride ?? null) as ModelSelection | null,
           runnerId: intent.runnerId,
           attendance: caller.kind === "agent" ? "unattended" : "attended",
+          ids: intent,
         });
         return { projectId: project.id, reply: queued };
       },
@@ -807,6 +827,8 @@ export const runForProject = mutation({
     commandId: v.string(),
     automationId: v.string(),
     runnerId: v.optional(nullable(v.string())),
+    runId: v.optional(nullable(v.string())),
+    sessionId: v.optional(nullable(v.string())),
   },
   handler: async (ctx, { commandId, ...intent }) =>
     withBoardReceipt(
@@ -827,6 +849,7 @@ export const runForProject = mutation({
           modelOverride: null,
           runnerId: intent.runnerId,
           attendance: "attended",
+          ids: intent,
         });
         return { projectId: project.id, reply: queued };
       },
@@ -861,7 +884,8 @@ export const pendingArrivals = query({
           status: payload.status,
           origin: payload.origin,
           availableAt: job.availableAt,
-          leased: job.lease !== null && status === "leased",
+          // Held by a runner now or before: it is starting, and cannot be cancelled.
+          leased: job.lease !== null,
           runner: await runnerReply(ctx, job.runnerId),
         });
       }
@@ -938,10 +962,12 @@ export const cancelPendingArrival = mutation({
 
 /**
  * Retries a failed arrival under the command id its failure retained, so a
- * second press finds the same Run. The Run keeps its id: with its original job
- * still at hand it goes again to the same runner as the same work (the runner
- * re-checks the ticket and the column); otherwise (a moved Run, or one older
- * than the inbox keeps) it runs as the caller's by-hand Run on that ticket.
+ * second press finds the same Run. The Run keeps its id. The person whose
+ * work it was, with its original job still at hand, sends it again as it was
+ * (same runner, same Session id; the runner re-checks the ticket and the
+ * column). Anyone else, or a Run the inbox no longer keeps (a moved one, or
+ * one older than a week), runs it as the caller's own by-hand Run on that
+ * ticket: a Retry never lands on a teammate's machine.
  */
 export const retryArrival = mutation({
   args: { commandId: v.string(), runId: v.string(), runnerId: v.optional(nullable(v.string())) },
@@ -979,14 +1005,22 @@ export const retryArrival = mutation({
         let payload: AutomationRunJobPayload;
         let runnerId: string;
         let onBehalfOf: string;
-        if (original !== null && originalPayload !== null) {
+        const originalRunner =
+          original === null || originalPayload === null
+            ? null
+            : await automationRunner(ctx, original.runnerId);
+        if (
+          originalPayload !== null &&
+          originalRunner !== null &&
+          originalRunner.status !== "revoked" &&
+          originalRunner.ownerUserId === caller.viewer.userId
+        ) {
+          // The caller's own work, kept as it was: same runner, same Session id.
           payload = originalPayload;
-          runnerId = original.runnerId;
-          const runner = await automationRunner(ctx, runnerId);
-          if (runner === null || runner.status === "revoked")
-            throw automationError("runner_unavailable");
-          onBehalfOf = runner.ownerUserId;
+          runnerId = originalRunner.id;
+          onBehalfOf = originalRunner.ownerUserId;
         } else {
+          // Anyone else's Retry is their own by-hand Run: never a teammate's machine.
           const decision = decideAutomationRunRouting({
             callerUserId: caller.viewer.userId,
             callerRunner: await automationRunner(ctx, intent.runnerId),
@@ -995,13 +1029,25 @@ export const retryArrival = mutation({
           if (decision.kind === "refused") throw automationError(decision.code);
           runnerId = decision.runnerId;
           onBehalfOf = decision.onBehalfOf;
+          // A Session this Run already started on that runner is resumed, not
+          // conflicted with: the runner derives its create from the Run id.
+          const born =
+            failed.jobId == null || failed.sessionId === null
+              ? null
+              : await ctx.db
+                  .query("sessions")
+                  .withIndex("by_uuid", (q) => q.eq("id", failed.sessionId!))
+                  .unique();
           payload = {
             trigger: "manual",
             automationId: parseId("automation", automation.id),
             ticketId: parseId("ticket", ticket.id),
             armedByUserId: null,
             runId: failed.id,
-            sessionId: newId("session"),
+            sessionId:
+              born !== null && born.placeRunnerId === runnerId && born.ownerUserId === onBehalfOf
+                ? parseId("session", born.id)
+                : newId("session"),
             dueAt: now,
             missedCount: 0,
             attendance: "attended",
@@ -1025,6 +1071,7 @@ export const retryArrival = mutation({
           status: "queued",
           jobId: outcome.jobId,
           runnerId,
+          sessionId: payload.sessionId === failed.sessionId ? failed.sessionId : null,
           error: undefined,
           retryCommandId: undefined,
         });

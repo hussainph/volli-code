@@ -96,8 +96,8 @@ async function withdrawForMembership(ctx: MutationCtx, job: Doc<"runnerJobs">, n
       job,
       {
         kind: "withdrawn",
-        code: "armer_left",
-        reason: { kind: "runner-unavailable", code: "armer_left" },
+        code: NOT_A_MEMBER.code,
+        reason: { kind: "runner-unavailable", code: NOT_A_MEMBER.code },
       },
       now,
     );
@@ -322,8 +322,14 @@ export const complete = mutation({
           result: reported.result as Doc<"runnerJobs">["result"],
           ...terminal(now),
         });
-        // The Run row, its board event, attention and the caller's watch, in this transaction.
-        if (job.kind === "automation.run")
+        // The Run row, its board event, attention and the caller's watch, in this
+        // transaction. A dead letter already settled its Run as failed: a late
+        // outcome may only say it started after all.
+        if (
+          job.kind === "automation.run" &&
+          (job.status !== "expired" ||
+            (reported.result as { kind?: unknown } | null | undefined)?.kind === "started")
+        )
           await settleAutomationRunJob(ctx, job, { kind: "done", result: reported.result }, now);
         return { ack: "recorded", status: "done" };
       }

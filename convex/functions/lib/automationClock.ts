@@ -50,11 +50,11 @@ import { executablePayload, findRun, newRunId, queuedRunRow, runActor } from "./
 import { cancelJob, ownerMayWorkOn, patchQueuedJob, tryEnqueueJob } from "./jobs";
 
 /** Schedules one clock transaction fires; small enough to stay clear of OCC contention. */
-export const FIRE_PAGE_SIZE = 50;
+const FIRE_PAGE_SIZE = 50;
 
 const POLICY: Actor = { kind: "volli", reason: "policy" };
 
-export interface FirePageResult {
+interface FirePageResult {
   /** Due rows read in this page, fired or passed over. */
   read: number;
   /** Rows whose cursor this page advanced. */
@@ -149,54 +149,69 @@ function reasonCode(reason: CloudAutomationSkipReason): string {
     : reason.kind;
 }
 
+/**
+ * Reads what one due row's fire depends on and decides it, writing nothing.
+ * A row this pass cannot read is logged and passed over: one bad row must
+ * never roll back the page, or stall every other schedule every minute.
+ */
+async function readFire(ctx: MutationCtx, row: Doc<"automationSchedules">, now: number) {
+  if (row.pausedAt != null) return null;
+  try {
+    const automation = await ctx.db
+      .query("automations")
+      .withIndex("by_uuid", (q) => q.eq("id", row.automationId))
+      .unique();
+    if (automation === null || automation.deletedAt !== null) return null;
+    const project = await ctx.db
+      .query("projects")
+      .withIndex("by_uuid", (q) => q.eq("id", automation.projectId))
+      .unique();
+    // A project being moved in, deleted or archived runs nothing; it is not this
+    // schedule's armer leaving, so it neither pauses nor records a skip.
+    if (project === null || !isShownProject(project) || project.archivedAt !== null) return null;
+    const spec = parseAutomationSchedule({ ...(row.spec as object), timeZone: row.timezone });
+    if (spec === null) throw new Error("unreadable schedule");
+    const runner = await ctx.db
+      .query("runners")
+      .withIndex("by_uuid", (q) => q.eq("id", row.runnerId))
+      .unique();
+    const armerActive =
+      (runner === null || runner.ownerUserId === row.armedByUserId) &&
+      (await ownerMayWorkOn(ctx, row.armedByUserId, project.id));
+    const pending = await pendingOf(ctx, row);
+    const decision = decideScheduleFire({
+      schedule: {
+        automationId: parseId("automation", row.automationId),
+        spec,
+        timezone: row.timezone,
+        nextFireAt: row.nextFireAt,
+        pausedAt: null,
+        automationDeleted: false,
+        runnerId: parseId("runner", row.runnerId),
+        runnerStatus: runnerStatusOf(runner),
+        armerActive,
+        gapRunId: row.gapRunId ?? null,
+      },
+      pending: pending?.pending ?? null,
+      now,
+    });
+    if (decision.kind !== "ignore") parseId("user", row.armedByUserId);
+    return { automation, project, pending, decision };
+  } catch (error) {
+    console.error("automation schedule passed over", { automationId: row.automationId, error });
+    return null;
+  }
+}
+
 /** Fires one due schedule row at `now`. Returns whether its cursor moved. */
 async function fireSchedule(
   ctx: MutationCtx,
   row: Doc<"automationSchedules">,
   now: number,
 ): Promise<boolean> {
-  if (row.pausedAt != null) return false;
-  const automation = await ctx.db
-    .query("automations")
-    .withIndex("by_uuid", (q) => q.eq("id", row.automationId))
-    .unique();
-  if (automation === null || automation.deletedAt !== null) return false;
-  const project = await ctx.db
-    .query("projects")
-    .withIndex("by_uuid", (q) => q.eq("id", automation.projectId))
-    .unique();
-  // A project being moved in, deleted or archived runs nothing; it is not this
-  // schedule's armer leaving, so it neither pauses nor records a skip.
-  if (project === null || !isShownProject(project) || project.archivedAt !== null) return false;
-  const spec = parseAutomationSchedule({ ...(row.spec as object), timeZone: row.timezone });
-  if (spec === null) {
-    console.warn("automation schedule unreadable", { automationId: row.automationId });
-    return false;
-  }
-  const runner = await ctx.db
-    .query("runners")
-    .withIndex("by_uuid", (q) => q.eq("id", row.runnerId))
-    .unique();
-  const armerActive =
-    (runner === null || runner.ownerUserId === row.armedByUserId) &&
-    (await ownerMayWorkOn(ctx, row.armedByUserId, project.id));
-  const pending = await pendingOf(ctx, row);
-  const decision = decideScheduleFire({
-    schedule: {
-      automationId: parseId("automation", row.automationId),
-      spec,
-      timezone: row.timezone,
-      nextFireAt: row.nextFireAt,
-      pausedAt: null,
-      automationDeleted: false,
-      runnerId: parseId("runner", row.runnerId),
-      runnerStatus: runnerStatusOf(runner),
-      armerActive,
-      gapRunId: row.gapRunId ?? null,
-    },
-    pending: pending?.pending ?? null,
-    now,
-  });
+  const read = await readFire(ctx, row, now);
+  if (read === null) return false;
+  const { automation, project, pending, decision } = read;
   if (decision.kind === "ignore") return false;
 
   const events: { actor: Actor; draft: BoardEventDraft }[] = [];
@@ -375,6 +390,8 @@ async function pauseSchedule(
     });
   const gapRow = gap.runId === null ? null : await findRun(ctx, gap.runId);
   let gapRunId: string;
+  // A gap row already announced its skip; only a new or converted one is news.
+  let announce = gapRow === null || gapRow.status === "queued";
   if (gapRow !== null) {
     // The waiting Run itself becomes the skip, or folds into the open gap row.
     await ctx.db.patch(gapRow._id, {
@@ -392,8 +409,9 @@ async function pauseSchedule(
     const inserted = skipRow({ automation, schedule: row, ...gap, now });
     await ctx.db.insert("automationRuns", inserted);
     gapRunId = inserted.id;
+    announce = true;
   }
-  input.skipped(gapRunId, gap.reason);
+  if (announce) input.skipped(gapRunId, gap.reason);
   await ctx.db.patch(row._id, {
     nextFireAt: input.nextFireAt,
     pausedAt: now,

@@ -472,9 +472,14 @@ over without a skip. The runtime's `Intl` zone data matches Node's
 - Completion is settled in the inbox transaction that made the job terminal
   (`lib/automationRuns.ts`): started, abandoned (an arrival leaves no row),
   refused, permanent failure and dead letter; a withdrawn never-leased job
-  skips its queued row. A failed arrival gets a fresh `retryCommandId`;
-  `retryArrival` enqueues under it, keeping the Run id (and, while the
-  original job is kept, its Session id and routing).
+  skips its queued row. A job's outcome settles its Run only while the Run
+  still names that job, and after a dead letter only a late `started`
+  settles again. Removing a runner ends the Runs it had leased. A failed
+  arrival gets a fresh `retryCommandId`; `retryArrival` enqueues under it,
+  keeping the Run id. Its own armer or picker re-sends the original job;
+  anyone else's Retry is their own by-hand Run on their own runner.
+- `run` and `runForProject` take optional client-minted `runId` and
+  `sessionId` (UUIDs, refused when already used) for optimistic rows.
 - Frozen ids: the failed-Run Needs-you item `a:{runId}:failed`, and the agent
   caller's watch command `automation-run:{runId}:watch`, armed by whichever
   of the completion and the Run Session's first accept comes second.
