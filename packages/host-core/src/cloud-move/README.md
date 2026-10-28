@@ -58,6 +58,16 @@ a cross-project delegation's parent project before its child's, the named
 problem" is on for the profile's first queue unless the caller says
 otherwise; `proceed` lets a stopped queue go on.
 
+## The profile step
+
+Once per queue, before its first project: the person's own settings
+(personal `configEntries`: model defaults, the decision model, compaction,
+the Code Mode policy, unbound Automations) exported alone and imported through
+`profileImports.importPersonalSettings`. Idempotent by id; a setting the
+person already holds with other content keeps the stored one and is counted.
+A refused one is a problem (the queue stops if it stops at the first problem).
+The content-free report is `profile-<queueId>/report.json`.
+
 ## The freeze
 
 `freeze.ts`: a project with a move in a frozen state takes no write on this
@@ -114,8 +124,8 @@ Receiving wiring:
   client, this Mac's runner registration and the runtime's live work, calls
   `resume()` at launch, and drives `enqueue`/`run`/`proceed`/`rollBack`/
   `confirm`/`recheck`/`goBackToLocal`.
-- **Profile step** (personal settings, `cloud_move_queues.profile_step`):
-  a follow-up; the queue records it as `pending`.
+- **Host-wide legacy rows** (`v1/u/<userId>/legacy/`) need an upload door
+  of their own; the profile step carries personal settings only.
 
 ## Tests
 

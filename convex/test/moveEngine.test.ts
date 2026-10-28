@@ -90,6 +90,18 @@ describe("a move, start to finish", () => {
       .prepare("SELECT project_id FROM project_checkout_paths WHERE runner_id = ?")
       .all(world.runnerId);
     expect(checkouts).toEqual([{ project_id: world.projectId }]);
+    // The profile step carried the person's own settings, once.
+    const personal = await world.t.run((ctx) =>
+      ctx.db
+        .query("configEntries")
+        .withIndex("by_scope_kind_name", (q) => q.eq("scopeKey", `u:${world!.userId}`))
+        .collect(),
+    );
+    expect(personal.length).toBeGreaterThan(0);
+    const profile = JSON.parse(
+      readFileSync(join(world.root, "cloud-moves", `profile-${queueId}`, "report.json"), "utf8"),
+    );
+    expect(profile).toMatchObject({ inserted: personal.length, kept: 0, refused: {} });
     // The staging record: the manifest, its chunks and the report.
     const staged = [...world.objects.objects.keys()].filter((key) =>
       key.startsWith(`v1/m/${moveId}/`),
@@ -141,8 +153,8 @@ describe("interruptions resume", () => {
     const { queueId, moveId } = enqueue(world);
     const down = world.engine({ flaps: { every: 1 } });
     expect(await down.run(queueId)).toMatchObject({ kind: "waiting", reason: "network" });
-    // Frozen while it waits: nothing is undone.
-    expect(projectFreeze(world.db, world.projectId)).not.toBeNull();
+    // Nothing is undone while it waits.
+    expect(down.journal.move(moveId)!.failure).toBeNull();
     expect(await world.engine().run(queueId)).toEqual({ kind: "done" });
     expect(world.engine().journal.move(moveId)!.state).toBe("checked");
   });
@@ -152,7 +164,10 @@ describe("interruptions resume", () => {
     const { queueId, moveId } = enqueue(world);
     const full = world.engine({
       ports: {
-        exportProject: () => Promise.reject(new MigrationExportError("disk_full", "full")),
+        exportProject: (options) =>
+          options.profileStep === true
+            ? exportMigrationSnapshot(options)
+            : Promise.reject(new MigrationExportError("disk_full", "full")),
       },
     });
     expect(await full.run(queueId)).toMatchObject({ kind: "waiting", reason: "disk_full" });

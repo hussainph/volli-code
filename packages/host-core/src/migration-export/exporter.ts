@@ -89,6 +89,7 @@ import {
   prefixClashes,
   selectLocalProduct,
   selectionKey,
+  selectsProfile,
   type CrossProjectReference,
   type PrefixClash,
   type ExportSelection,
@@ -327,7 +328,7 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
       snapshotAt: state.snapshotAt,
       pathExists: options.pathExists,
       homeDir: options.homeDir,
-      profileStep: options.projectIds === undefined,
+      profileStep: selectsProfile(options),
     });
     const counts = EXPORT_SOURCES.map((source) => countRows(snapshot, source));
     reporter.set({
@@ -569,7 +570,7 @@ async function takeSnapshot(
     snapshotAt,
     schemaVersion,
     selection: resumeIdentity(options),
-    profileStep: options.projectIds === undefined,
+    profileStep: selectsProfile(options),
   };
   await writeFileDurably(join(staging, STATE_FILE), `${JSON.stringify(state)}\n`);
   await syncDirectory(staging);

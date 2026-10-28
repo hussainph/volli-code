@@ -36,7 +36,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
 import {
@@ -58,6 +58,7 @@ import {
   MoveBackendError,
   MoveNetworkError,
   importCalls,
+  type ImportRowsAnswer,
   refusalOf,
   withRetry,
   type ImportCalls,
@@ -73,6 +74,7 @@ import {
 } from "./journal";
 import {
   MovePlanError,
+  exportRecords,
   fileSha256,
   importRecords,
   moveManifest,
@@ -984,6 +986,95 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     return { paused: "paused" };
   };
 
+  // ── the profile step ───────────────────────────────────────────────────────
+
+  /**
+   * The person's own settings, once per queue before its first project:
+   * personal `configEntries` exported alone (`projectIds: []`,
+   * `profileStep: true`) and imported through `profileImports`. A setting the
+   * person already holds with other content (changed since an earlier move)
+   * keeps the stored one and is counted; a refused one is a problem. The
+   * content-free report is `profile-<queueId>/report.json`. Null when the
+   * queue goes on; otherwise how it ended.
+   */
+  const profileStep = async (
+    queue: QueueRow,
+    signal: AbortSignal,
+  ): Promise<{ kind: "waiting"; reason: MovePause } | { kind: "stopped" } | null> => {
+    const identity = await ports.identity.current();
+    if (identity === null || identity.userId !== queue.userId) {
+      return { kind: "waiting", reason: "signed_out" };
+    }
+    const dir = join(ports.workRoot, `profile-${queue.queueId}`);
+    const out = join(dir, "export");
+    const report = { inserted: 0, unchanged: 0, kept: 0, refused: {} as Record<string, number> };
+    try {
+      if (!existsSync(join(out, MANIFEST_FILE))) {
+        await ports.exportProject({
+          sourcePath: ports.profilePath,
+          outDir: out,
+          appVersion: ports.appVersion,
+          projectIds: [],
+          profileStep: true,
+          blobsDir: ports.stores.blobsDir,
+          transcriptsDir: ports.stores.transcriptsDir,
+          piLogsDir: ports.stores.piLogsDir,
+          homeDir: ports.homeDir,
+          signal,
+        });
+      }
+      const { manifest } = await verifyMigrationExport(out);
+      let rows: Row[] = [];
+      const flush = async () => {
+        if (rows.length === 0) return;
+        const answer = (await withRetry(
+          () =>
+            ports.backend.mutation("profileImports:importPersonalSettings", {
+              workspaceId: queue.workspaceId,
+              runnerId: queue.runnerId,
+              rows,
+            }),
+          { ...RETRY, sleep, signal },
+        )) as Pick<ImportRowsAnswer, "inserted" | "unchanged" | "conflicts" | "rejected">;
+        report.inserted += answer.inserted;
+        report.unchanged += answer.unchanged;
+        report.kept += answer.conflicts.length;
+        for (const refusal of answer.rejected) {
+          report.refused[refusal.code] = (report.refused[refusal.code] ?? 0) + 1;
+        }
+        rows = [];
+      };
+      for await (const record of exportRecords(out, manifest, "configEntries")) {
+        rows.push(record);
+        if (rows.length >= BATCH_MAX_ROWS) await flush();
+      }
+      await flush();
+    } catch (error) {
+      if (error instanceof MoveNetworkError) return { kind: "waiting", reason: "network" };
+      if (
+        isDiskFullError(error) ||
+        (error instanceof MigrationExportError && error.code === "disk_full")
+      ) {
+        return { kind: "waiting", reason: "disk_full" };
+      }
+      if ((error as { name?: string } | null)?.name === "AbortError") {
+        return { kind: "waiting", reason: "paused" };
+      }
+      log.warn("the profile step failed", { queueId: queue.queueId, error });
+      report.refused[refusalOf(error)?.code ?? "profile_step_failed"] = 1;
+    }
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "report.json"), JSON.stringify(report));
+    await rm(out, { recursive: true, force: true, maxRetries: 3 });
+    const problem = Object.keys(report.refused).length > 0;
+    journal.setQueue(queue.queueId, { profileStep: problem ? "skipped" : "done" });
+    if (problem && queue.stopAtFirstProblem) {
+      journal.setQueue(queue.queueId, { state: "stopped" });
+      return { kind: "stopped" };
+    }
+    return null;
+  };
+
   // ── queues ─────────────────────────────────────────────────────────────────
 
   const run = async (queueId: string, signal: AbortSignal = new AbortController().signal) =>
@@ -993,6 +1084,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         const queue = journal.queue(queueId);
         if (queue === null) throw new Error(`Move queue ${queueId} does not exist.`);
         const moves = journal.moves(queueId);
+        if (queue.profileStep === "pending" && queue.state === "running") {
+          const outcome = await profileStep(queue, signal);
+          if (outcome !== null) return { ...outcome, moveId: moves[0]?.moveId ?? queueId };
+          continue;
+        }
         // A done queue may still hold a roll back a crash interrupted.
         const open = moves.filter(
           (move) => !SETTLED_STATES.has(move.state) && !RESTING_STATES.has(move.state),
