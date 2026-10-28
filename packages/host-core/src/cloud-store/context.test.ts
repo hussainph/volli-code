@@ -108,16 +108,18 @@ describe("cloud runner context", () => {
     });
   });
 
-  it("repairs a legacy shadow path without touching its registered checkout", async () => {
+  it("repairs legacy shadow paths on Cloud launch without starting another Session", async () => {
     const f = fixture();
     chooseFolder(f);
     await f.birth();
     f.db.prepare("UPDATE projects SET path='/repo/cloud-context-test' WHERE id='p'").run();
-    await f.birth("second");
+    f.makeContext();
     expect(f.db.prepare("SELECT path FROM projects WHERE id='p'").get()).toEqual({
       path: shadowPath(f.db),
     });
     expect(f.registry.checkouts.ofProject("p")?.absPath).toBe("/repo/cloud-context-test");
+    // The stale shadow no longer claims this folder from the local product.
+    insertProject(f.db, testProject({ id: "local", path: "/repo/cloud-context-test" }));
   });
   it("keeps offline birth durable and refuses only the new ticket's first attach", async () => {
     const f = fixture();

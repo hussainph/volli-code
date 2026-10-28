@@ -57,6 +57,8 @@ function assembleSessionServices(options: {
   /** Launch-selected view of the host writer. Never selected by lower layers. */
   sessionEngine?: SessionEngine;
   sessionBirth?: SessionsOptions["sessionBirth"];
+  /** Cloud checkouts come from the runner registry, never FK shadow paths. */
+  projectPath?(projectId: string): string | null;
   /** The frozen board's start event is not a cloud write; its accept fold owns that history. */
   recordSessionStarted?: SessionsOptions["recordSessionStarted"] | null;
 }) {
@@ -75,8 +77,16 @@ function assembleSessionServices(options: {
                 "The project for this Session was not found.",
               );
             }
+            const path =
+              options.projectPath === undefined ? project.path : options.projectPath(projectId);
+            if (path === null) {
+              throw new StructuredSessionsError(
+                "SKILL_NOT_FOUND",
+                "Choose the folder for this project on this Mac before using its skills.",
+              );
+            }
             const read = await loadSkills({
-              projectSkillsDir: projectSkillsDir(project.path),
+              projectSkillsDir: projectSkillsDir(path),
               globalSkillsDir: globalSkillsDir(homeDir),
             });
             if (!read.ok) {
@@ -111,8 +121,11 @@ function assembleSessionServices(options: {
           index: async (projectId, injectedNames) => {
             const project = getProjectById(sessionDb, projectId);
             if (!project) return null;
+            const path =
+              options.projectPath === undefined ? project.path : options.projectPath(projectId);
+            if (path === null) return null;
             const read = await loadSkills({
-              projectSkillsDir: projectSkillsDir(project.path),
+              projectSkillsDir: projectSkillsDir(path),
               globalSkillsDir: globalSkillsDir(homeDir),
             });
             if (!read.ok) return null;

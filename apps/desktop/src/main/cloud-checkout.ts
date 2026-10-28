@@ -185,6 +185,8 @@ export function createCloudCheckoutPort(options: {
     const folder = await checkFolder(picked, checks);
     for (const project of options.localProjects()) {
       if (project.id === site.projectId) continue;
+      // A renamed/missing folder can leave an old registration behind. Its
+      // literal path is still comparable; a failed read is not a failed link.
       const localPath = await checks.realpath(project.path).catch(() => project.path);
       if (localPath !== folder) continue;
       const confirmed = await options.confirmLocalProject({

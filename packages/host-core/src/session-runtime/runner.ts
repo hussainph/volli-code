@@ -216,11 +216,8 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           recordSessionStarted: null,
           ownsSession: store.cloud.ownsSession,
           projectIds: store.cloud.projectIds,
-          projects: () =>
-            store.cloud.projectIds().flatMap((id) => {
-              const project = db === null ? undefined : getProjectById(db, id);
-              return project === undefined ? [] : [project];
-            }),
+          projects: store.cloud.agentCommands.projects,
+          projectPath: store.cloud.projectPath,
           inProcessWatches: false,
           recovery: store.cloud.recovery,
           bindRuntime: store.cloud.bindRuntime,
@@ -248,6 +245,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
                   ).get(id) !== undefined,
           projectIds: undefined,
           projects: undefined,
+          projectPath: undefined,
           inProcessWatches: true,
           recovery: undefined,
           bindRuntime: undefined,
@@ -421,6 +419,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     delegation,
     ...(sessionEngine === null ? {} : { sessionEngine }),
     ...(product.sessionBirth === undefined ? {} : { sessionBirth: product.sessionBirth }),
+    ...(product.projectPath === undefined ? {} : { projectPath: product.projectPath }),
     ...(product.recordSessionStarted === undefined
       ? {}
       : { recordSessionStarted: product.recordSessionStarted }),
