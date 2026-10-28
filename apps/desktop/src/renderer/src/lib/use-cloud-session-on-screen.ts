@@ -1,12 +1,18 @@
 /** Viewer presence follows the visible chat surface, not the resident chat client. */
 import * as React from "react";
 import { launchStore } from "@renderer/stores/launch";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { followCloudSession, type CloudSession } from "./cloud-client";
 import { showCloudSession } from "./cloud-session-transport";
 
 export function useCloudSessionOnScreen(sessionId: string | null): void {
+  const isDraft = useChatDraftsStore(
+    (state) => sessionId !== null && state.drafts[sessionId]?.provisional?.phase === "draft",
+  );
   React.useEffect(() => {
-    if (launchStore() !== "cloud" || sessionId === null) return;
+    // An untouched or refused Draft has no backend Session to watch. Begin
+    // the bounded arrival window only once promotion actually created one.
+    if (launchStore() !== "cloud" || sessionId === null || isDraft) return;
     let stopViewer: (() => void) | null = null;
     let current: CloudSession | null = null;
     const sync = () => {
@@ -26,5 +32,5 @@ export function useCloudSessionOnScreen(sessionId: string | null): void {
       stopFollowing();
       stopViewer?.();
     };
-  }, [sessionId]);
+  }, [sessionId, isDraft]);
 }

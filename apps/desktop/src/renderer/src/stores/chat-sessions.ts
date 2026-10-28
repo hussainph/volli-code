@@ -494,11 +494,11 @@ export function createChatSessionsStore(
           // Use the transport's actual wire validation before create/attach.
           // A refused first message must leave this identity a retryable Draft,
           // not a locally attached Session that promotion will try to attach again.
+          const first =
+            firstMessage === undefined
+              ? staged.held[0]
+              : (staged.held.find(({ id }) => id === firstMessage.id) ?? firstMessage);
           try {
-            const first =
-              firstMessage === undefined
-                ? staged.held[0]
-                : (staged.held.find(({ id }) => id === firstMessage.id) ?? firstMessage);
             if (first !== undefined) edge.validateMessage?.(sessionId, first);
           } catch (failure) {
             toastError(errorMessage(failure));
@@ -518,12 +518,12 @@ export function createChatSessionsStore(
               ...(provisional.model === undefined || provisional.modelIsDefault === true
                 ? {}
                 : { model: provisional.model }),
-              ...(provisional.modelIsDefault === true && staged.held[0] !== undefined
+              ...(provisional.modelIsDefault === true && first !== undefined
                 ? {
                     // Clipped here as the decision clips it: the hint is optional
                     // and must never be what stops the create.
                     autoSelect: {
-                      request: staged.held[0].text.slice(0, AUTO_SELECT_MAX_REQUEST_CHARS),
+                      request: first.text.slice(0, AUTO_SELECT_MAX_REQUEST_CHARS),
                     },
                   }
                 : {}),

@@ -542,6 +542,13 @@ describe("promoteChatSession", () => {
       cloudMessageSubmit({ sessionId, commandId: message.id, message: queuedWireMessage(message) });
     };
     openDraft();
+    useChatDraftsStore
+      .getState()
+      .setProvisionalModel(
+        DRAFT_ID,
+        { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" },
+        { fromDefault: true },
+      );
     // UTF-8 plus artifact overhead, not JS string length or raw text alone.
     const oversized = { id: "first-message", text: "🙂".repeat(17_000) };
     useChatDraftsStore.getState().holdMessage(DRAFT_ID, oversized);
@@ -560,6 +567,7 @@ describe("promoteChatSession", () => {
     useChatDraftsStore.getState().holdMessage(DRAFT_ID, shorter);
     await expect(store.getState().promoteChatSession(DRAFT_ID, shorter)).resolves.toBe(true);
     expect(ticketStarts).toHaveLength(1);
+    expect(ticketStarts[0]).toMatchObject({ autoSelect: { request: shorter.text } });
     expect(attaches).toHaveLength(1);
     await vi.waitFor(() => expect(store.getState().sessions[DRAFT_ID]?.projection).not.toBeNull());
     useChatDraftsStore
