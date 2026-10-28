@@ -127,6 +127,37 @@ describe("Choose the folder…", () => {
     expect(control()!.disabled).toBe(false);
   });
 
+  it.each(["chosen", "cancelled"] as const)(
+    "waits for main's local-project confirmation before refreshing the picker state (%s)",
+    async (outcome) => {
+      const rpc = standIn(outcome === "chosen" ? ["missing", "located"] : ["missing"]);
+      let confirm!: (choice: CloudCheckoutChoice) => void;
+      rpc.checkouts.chooseFolder.mutate.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            confirm = resolve;
+          }),
+      );
+      await render(rpc);
+      await act(async () => control()!.click());
+      expect(control()!.disabled).toBe(true);
+      expect(rpc.checkouts.status.query).toHaveBeenCalledOnce();
+      // Main owns the native warning and keeps this call pending until the
+      // person cancels or explicitly selects “Use this folder anyway”.
+      await act(async () =>
+        confirm(outcome === "chosen" ? { outcome, projectRepoId: REPO } : { outcome }),
+      );
+      if (outcome === "chosen") {
+        expect(control()).toBeNull();
+        expect(rpc.checkouts.status.query).toHaveBeenCalledTimes(2);
+      } else {
+        expect(control()!.disabled).toBe(false);
+        expect(rpc.checkouts.status.query).toHaveBeenCalledOnce();
+      }
+      expect(toast.error).not.toHaveBeenCalled();
+    },
+  );
+
   it("is disabled while the picker is open", async () => {
     const rpc = standIn(["missing"]);
     let answer!: (choice: CloudCheckoutChoice) => void;

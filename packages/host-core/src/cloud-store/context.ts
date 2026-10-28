@@ -63,7 +63,6 @@ export function createCloudContext(options: {
   ownerUserId: string;
   engine: SessionEngine;
   registry(): RunnerPathRegistry;
-  runnerId?(): string | null;
   identityRoot?: string;
   query(input: CloudLocationRequest): Promise<CloudRunnerContext>;
 }) {
@@ -169,21 +168,14 @@ export function createCloudContext(options: {
         });
         preparedContexts.set(identity(input), facts);
       }
-      const runnerId =
-        options.runnerId === undefined ? options.registry().runnerId : options.runnerId();
-      // The registry's read-only lookup names the folder. A frozen local
-      // project needs no read here: the INSERT below runs only when no row
-      // exists and the UPDATE touches only a shadow row, so its path and
-      // prefix were never written.
-      const checkout =
-        runnerId === null ? null : options.registry().checkouts.ofProject(input.projectId);
-      // An unlocated identity gets an inert, unique machine path, never a
-      // guessed checkout. Location preparation still requires the real registry.
+      // Shadow rows are FK identities, never checkouts. A real folder may
+      // already belong to a different local project (projects.path is UNIQUE).
+      // Location preparation reads the real path only from the runner registry;
+      // frozen local rows with the same id keep their original path and prefix.
       const placeholder = join(
         identityRoot,
         createHash("sha256").update(`${ownerUserId}\0${input.projectId}`).digest("hex"),
       );
-      const checkoutPath = checkout?.absPath ?? placeholder;
       withTransaction(db, () => {
         const project = prepared(db, "SELECT id FROM projects WHERE id = ?").get(input.projectId);
         if (project === undefined) {
@@ -193,7 +185,7 @@ export function createCloudContext(options: {
             VALUES (?, 'Volli Cloud project', ?, ?, 0, 0, ?, ?)`,
           ).run(
             input.projectId,
-            checkoutPath,
+            placeholder,
             facts?.ticketPrefix ?? "CLOUD",
             Date.now(),
             Date.now(),
@@ -207,7 +199,7 @@ export function createCloudContext(options: {
             db,
             `UPDATE projects SET path = ? WHERE id = ? AND EXISTS
             (SELECT 1 FROM cloud_shadow_rows WHERE kind='project' AND id=projects.id)`,
-          ).run(checkoutPath, input.projectId);
+          ).run(placeholder, input.projectId);
         }
         if (
           input.ticketId !== null &&

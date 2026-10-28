@@ -147,7 +147,6 @@ export function createCloudProductStore(options: {
     ownerUserId,
     engine: host.sessionEngine,
     registry,
-    runnerId: () => active?.runnerId ?? options.runnerId(),
     query: async (input) => {
       const live = link();
       if (live.query === undefined) throw new Error("Runner context reads are unavailable.");

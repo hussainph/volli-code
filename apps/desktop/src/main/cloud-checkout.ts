@@ -13,9 +13,11 @@
  *    Nothing is shown for a project the backend refuses.
  * 2. The system folder picker. Closing it changes nothing.
  * 3. The folder is checked here (an existing directory this app can write,
- *    never the disk root or the home folder itself), stored in the local
- *    registry for this runner only, and its path-free checkout metadata
- *    (branch, head) queued for Volli Cloud.
+ *    never the disk root or the home folder itself). If it belongs to a
+ *    different local project, a native confirmation explains that using it
+ *    does not move that project's tickets or history.
+ * 4. The folder is stored in the local registry for this runner only, and its
+ *    path-free checkout metadata (branch, head) queued for Volli Cloud.
  *
  * No answer carries the path. With the `cloud` flag off, or in a launch that
  * is not a Volli Cloud one, every call answers unavailable.
@@ -80,6 +82,33 @@ export function folderPicker(
   };
 }
 
+/** The native confirmation keeps local project names and paths off the wire. */
+export function localProjectConfirmation(
+  showMessageBox: (options: {
+    type: "question";
+    message: string;
+    detail: string;
+    buttons: string[];
+    defaultId: number;
+    cancelId: number;
+    noLink: boolean;
+  }) => Promise<{ response: number }>,
+): (request: { localProjectName: string; cloudProjectName: string }) => Promise<boolean> {
+  return async ({ localProjectName, cloudProjectName }) => {
+    // TODO(VC-969): offer “Move to Volli Cloud” when the move flow is available.
+    const { response } = await showMessageBox({
+      type: "question",
+      message: `This folder is already the local Volli project “${localProjectName}”.`,
+      detail: `Using it for “${cloudProjectName}” will not move its local tickets or Session history to Volli Cloud. The two projects will share the folder, but keep separate histories.`,
+      buttons: ["Cancel", "Use this folder anyway"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    return response === 1;
+  };
+}
+
 export const CHECKOUTS_CLOUD_OFF = "Volli Cloud is off. Turn it on in Settings → Experimental.";
 export const CHECKOUTS_NOT_CLOUD = "Project folders on this Mac belong to a Volli Cloud launch.";
 
@@ -129,6 +158,12 @@ export function createCloudCheckoutPort(options: {
   enabled(): boolean;
   store: CloudCheckoutStore | null;
   pickFolder: FolderPicker;
+  /** Visible local projects only, never cloud shadow identities. */
+  localProjects(): readonly { id: string; name: string; path: string }[];
+  confirmLocalProject(request: {
+    localProjectName: string;
+    cloudProjectName: string;
+  }): Promise<boolean>;
   checks?: FolderChecks;
 }): CloudCheckoutPort {
   const { store, pickFolder } = options;
@@ -146,7 +181,19 @@ export function createCloudCheckoutPort(options: {
     const site = await cloud.site(projectId);
     const picked = await pickFolder({ title: `Choose the folder for ${site.projectName}` });
     if (picked === null) return { outcome: "cancelled" };
-    const folder = await checkFolder(picked, options.checks);
+    const checks = options.checks ?? NODE_CHECKS;
+    const folder = await checkFolder(picked, checks);
+    for (const project of options.localProjects()) {
+      if (project.id === site.projectId) continue;
+      const localPath = await checks.realpath(project.path).catch(() => project.path);
+      if (localPath !== folder) continue;
+      const confirmed = await options.confirmLocalProject({
+        localProjectName: project.name,
+        cloudProjectName: site.projectName,
+      });
+      if (!confirmed) return { outcome: "cancelled" };
+      break;
+    }
     // Registered under the project and repository Volli Cloud answered for.
     await cloud.choose({
       projectId: site.projectId,

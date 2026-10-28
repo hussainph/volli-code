@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { LOCAL_RUNNER } from "@volli/shared";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
@@ -76,7 +78,47 @@ function chooseFolder(f: ReturnType<typeof fixture>) {
   });
 }
 
+const shadowPath = (db: TestDb["db"]) =>
+  join(dirname(db.name), "cloud-identities", createHash("sha256").update("a\0p").digest("hex"));
+
 describe("cloud runner context", () => {
+  it("starts on a folder already owned by a different local project without changing it", async () => {
+    const f = fixture();
+    chooseFolder(f);
+    insertProject(f.db, testProject({ id: "local", path: "/repo/cloud-context-test" }));
+    const local = f.db.prepare("SELECT * FROM projects WHERE id='local'").get();
+
+    const session = await f.birth();
+    expect(await f.context.brief(session)).toContain("VC-42");
+    expect(f.registry.checkouts.ofProject("p")?.absPath).toBe("/repo/cloud-context-test");
+    expect(f.db.prepare("SELECT path FROM projects WHERE id='p'").get()).toEqual({
+      path: shadowPath(f.db),
+    });
+    expect(f.db.prepare("SELECT * FROM projects WHERE id='local'").get()).toEqual(local);
+  });
+
+  it("keeps an existing shadow inert when a checkout is chosen after its first birth", async () => {
+    const f = fixture();
+    await f.birth();
+    insertProject(f.db, testProject({ id: "local", path: "/repo/cloud-context-test" }));
+    chooseFolder(f);
+    await f.birth("second");
+    expect(f.db.prepare("SELECT path FROM projects WHERE id='p'").get()).toEqual({
+      path: shadowPath(f.db),
+    });
+  });
+
+  it("repairs a legacy shadow path without touching its registered checkout", async () => {
+    const f = fixture();
+    chooseFolder(f);
+    await f.birth();
+    f.db.prepare("UPDATE projects SET path='/repo/cloud-context-test' WHERE id='p'").run();
+    await f.birth("second");
+    expect(f.db.prepare("SELECT path FROM projects WHERE id='p'").get()).toEqual({
+      path: shadowPath(f.db),
+    });
+    expect(f.registry.checkouts.ofProject("p")?.absPath).toBe("/repo/cloud-context-test");
+  });
   it("keeps offline birth durable and refuses only the new ticket's first attach", async () => {
     const f = fixture();
     chooseFolder(f);
@@ -133,7 +175,7 @@ describe("cloud runner context", () => {
     expect(f.query).toHaveBeenCalledTimes(1);
     expect(f.db.prepare("SELECT name,path FROM projects WHERE id='p'").get()).toEqual({
       name: "Volli Cloud project",
-      path: "/repo/cloud-context-test",
+      path: shadowPath(f.db),
     });
     expect(f.db.prepare("SELECT title,body,status FROM tickets WHERE id='t'").get()).toEqual({
       title: "Volli Cloud ticket",
@@ -232,6 +274,7 @@ it("allocates machine shadow numbers without colliding with diverged frozen disp
     testTicket("p", { id: "local-ticket", ticketNumber: 42, title: "Local board item" }),
   );
   const frozen = f.db.prepare("SELECT * FROM tickets WHERE id='local-ticket'").get();
+  const frozenProject = f.db.prepare("SELECT * FROM projects WHERE id='p'").get();
   const session = await f.birth();
   expect(f.db.prepare("SELECT ticket_number FROM tickets WHERE id='t'").get()).toEqual({
     ticket_number: -1,
@@ -240,4 +283,5 @@ it("allocates machine shadow numbers without colliding with diverged frozen disp
   expect(f.context.ticketDisplayIdOf("t")).toBe("VC-42");
   expect(f.makeContext().ticketDisplayIdOf("t")).toBe("VC-42");
   expect(f.db.prepare("SELECT * FROM tickets WHERE id='local-ticket'").get()).toEqual(frozen);
+  expect(f.db.prepare("SELECT * FROM projects WHERE id='p'").get()).toEqual(frozenProject);
 });
