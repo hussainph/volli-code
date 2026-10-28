@@ -195,7 +195,15 @@ the person-authorized import below shares.
 `functions/projectImports.ts` is "Move to Volli Cloud" for one project, called
 with the person's own sign-in. The person who begins a move must stay an owner
 or admin of the target Workspace with live preview access, on a runner of their
-own; anyone else reads `not_found` for the move.
+own; anyone else reads `not_found` for the move. Deployment operators can use
+internal `projectImports:rescue` to abort a stranded move or assign a replacement
+driver (active owner/admin of the same Workspace, live preview access, their own
+runner). The old driver's access is fenced; imported attribution, placement and
+manifest mapping remain unchanged. Resume using `status.driver` for authorization
+and `status.importTarget` for verification. This grants access to the original
+person's hidden import, not ownership of their Sessions. Committed moves and gone
+Workspaces are refused. Commands: the deployment runbook's **Rescue a stuck
+project move** section.
 
 - `begin` reserves the move (`projectImports`, keyed by the client's move id)
   with the manifest's promise: a count and a `MigrationDigest` value for every

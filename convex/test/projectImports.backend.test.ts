@@ -121,3 +121,48 @@ test("a move lands hidden, reads back to its manifest, and commits only when com
     name: "zz-hidden-project",
   });
 }, 120_000);
+
+test("anonymous clients and Workspace people cannot call the internal operator rescue", async () => {
+  const owner = backend.client(`user:${randomUUID()}`);
+  const member = backend.client(`user:${randomUUID()}`);
+  const { userId } = await owner.mutation(api.accounts.ensureViewer, {});
+  const { userId: memberId } = await member.mutation(api.accounts.ensureViewer, {});
+  await enrollBackendPreview(backend, owner, userId);
+  await enrollBackendPreview(backend, member, memberId);
+  const world = await backend.admin(internal.testSeed.seedWorld, {
+    ownerUserId: userId,
+    memberUserIds: [memberId],
+    runners: 1,
+  });
+  const moveId = randomUUID();
+  const records = moveRecords();
+  const target = { userId, workspaceId: world.workspaceId, runnerId: world.runnerIds[0]! };
+  await owner.mutation(api.projectImports.begin, {
+    moveId,
+    projectId: randomUUID(),
+    workspaceId: world.workspaceId,
+    runnerId: target.runnerId,
+    manifestSha256: MANIFEST_SHA,
+    expected: expectedFor(records, target),
+  });
+  for (const client of [backend.client(), owner, member]) {
+    for (const action of [
+      { kind: "abort" as const },
+      { kind: "reassign" as const, userId, runnerId: target.runnerId },
+    ]) {
+      // Deliberately bypass the generated type fence to probe real transport.
+      await expect(
+        client.mutation(internal.projectImports.rescue as never, { moveId, action } as never),
+      ).rejects.toThrow();
+    }
+  }
+  await expect(owner.query(api.projectImports.status, { moveId })).resolves.toMatchObject({
+    status: "reserved",
+  });
+  await expect(
+    backend.admin(internal.projectImports.rescue, {
+      moveId,
+      action: { kind: "abort" },
+    }),
+  ).resolves.toEqual({ status: "aborting" });
+});

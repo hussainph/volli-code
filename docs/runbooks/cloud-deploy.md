@@ -477,6 +477,44 @@ and error exposure; production log redaction and an automated variable inventory
 VC-951 supplies the checked-deploy/self-check commands above; their availability and
 actual hosted results must be verified before this preparation becomes a deployment.
 
+## Rescue a stuck project move (deployment operators only)
+
+Use this only when a move's importer can no longer drive it (lost Workspace
+role/membership, preview access or account). With deployment-admin credentials,
+select the intended deployment explicitly:
+
+```sh
+pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","action":{"kind":"abort"}}' --deployment <ref>
+pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","action":{"kind":"reassign","userId":"<replacement-user-uuid>","runnerId":"<their-runner-uuid>"}}' --deployment <ref>
+```
+
+Abort marks the hidden move `aborting` for the purge chain; until that chain is
+deployed it remains marked for purge. Reassignment requires an active owner/admin
+of the **same Workspace**, with live preview access and their own non-revoked
+runner. It explicitly grants that person access to the hidden imported history.
+They resume the existing move via `projectImports.status`, using its `driver` for
+authorization and its **unchanged `importTarget`** for row mapping and manifest
+verification. Existing rows, Session ownership, runner placement and manifest
+counts/digests are not rewritten. Private Sessions still belong to their original
+owner after commit; this does not transfer Session ownership or make a departed
+person's runner usable. If the project must instead land under the replacement's
+identity/runner, abort, await `purged`, then start a fresh move with a new manifest.
+Do not begin a new move or recompute the promise while resuming this one. Replaying
+`begin` uses the replacement's driver runner and the original manifest promise.
+Ordinary client calls recheck the replacement's
+live access; the former driver cannot drive it even if access is restored.
+
+Every rescue records the operator action in `auditLog`, not the identity of the
+admin-key holder; record that operator identity in your incident log. Account loss
+(including deletion) does not transfer ownership: the original user ids stay on
+the history, including for any account-retention cleanup. Use abort rather than
+reassign if the history should be erased instead of preserved.
+
+Committed moves, purged
+moves and gone Workspaces are refused, and a purge already started cannot be
+reassigned. Uncommitting a committed move remains its driver's operation, not an
+operator escape hatch. Workspace owners/admins cannot call this internal function.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
