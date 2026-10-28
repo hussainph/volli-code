@@ -11,6 +11,7 @@ import {
   SESSION_INTERRUPT_FORMAT,
   SESSION_NOTICE_FORMAT,
   parseJobPayload,
+  isExecutableAutomationRun,
 } from "./job-payloads";
 import { JOB_KINDS, type JobKind } from "./jobs";
 
@@ -254,6 +255,21 @@ const manual = {
 const unbound = { ...manual, automationId: null, instructions: "Review this" };
 
 describe("executable Automation job contract", () => {
+  test("legacy arrivals are readable but not executable", () => {
+    expect(
+      isExecutableAutomationRun(parseJobPayload("automation.run", VALID["automation.run"])),
+    ).toBe(false);
+  });
+
+  test("escaped instructions still obey the whole serialized payload bound", () => {
+    expect(
+      refusal("automation.run", {
+        ...unbound,
+        instructions: "\u0000".repeat(AUTOMATION_INSTRUCTIONS_MAX_CHARS),
+      }),
+    ).toMatch(/larger than 65536 characters/);
+  });
+
   test.each([
     { ...VALID["automation.run"], ...runMeta },
     scheduled,
@@ -267,7 +283,9 @@ describe("executable Automation job contract", () => {
     unbound,
     { ...unbound, instructions: "x".repeat(AUTOMATION_INSTRUCTIONS_MAX_CHARS) },
   ])("round-trips complete identities and each trigger through JSON", (payload) => {
-    expect(parseJobPayload("automation.run", JSON.parse(JSON.stringify(payload)))).toEqual(payload);
+    const parsed = parseJobPayload("automation.run", JSON.parse(JSON.stringify(payload)));
+    expect(parsed).toEqual(payload);
+    expect(isExecutableAutomationRun(parsed)).toBe(true);
   });
 
   test.each([

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 
-import type { AutomationTrigger } from "../automation";
+import { parseAutomationSkipReason, type AutomationTrigger } from "../automation";
 import type { AutomationSchedule } from "../automation-schedule";
 import {
   AUTOMATION_INSTRUCTIONS_MAX_CHARS,
@@ -10,6 +10,8 @@ import {
   decideAutomationRunRouting,
   decideScheduleArming,
   decideScheduleFire,
+  automationAbandonSkipReason,
+  parseCloudAutomationSkipReason,
   type AutomationRunner,
   type CloudAutomationDefinition,
   type CloudAutomationSchedule,
@@ -69,7 +71,7 @@ const schedule: CloudAutomationSchedule = {
   gapRunId: null,
 };
 const pending: PendingAutomationScheduleRun = {
-  jobId: "job",
+  jobId: parseId("job", "55555555-2222-4333-8444-555555555555"),
   runId: "run",
   dueAt: due,
   missedCount: 0,
@@ -340,7 +342,7 @@ describe("cloud clock: wait, coalesced", () => {
       expect(result.kind).toBe("supersede");
       if (result.kind !== "supersede") throw new Error("expected supersede");
       expect(result).toMatchObject({
-        jobId: "job",
+        jobId: pending.jobId,
         runId: "run",
         dueAt: now,
         missedCount,
@@ -377,11 +379,33 @@ describe("cloud clock: wait, coalesced", () => {
       dueAt: at("2026-03-09T09:30:00Z"),
       missedCount: 3,
       gap: {
-        runId: "gap",
+        runId: null,
         dueAt: at("2026-03-08T09:30:00Z"),
         missedCount: 3,
         reason: { kind: "superseded" },
       },
+    });
+  });
+
+  test("a stale gap pointer cannot rewrite a finished gap; skip settles the waiting Run", () => {
+    const tomorrow = at("2026-03-07T09:30:00Z");
+    expect(
+      decideScheduleFire({
+        schedule: { ...schedule, nextFireAt: tomorrow, gapRunId: "finished-gap" },
+        pending,
+        now: tomorrow,
+      }),
+    ).toMatchObject({ kind: "supersede", gap: { runId: null, missedCount: 1 } });
+    expect(
+      decideScheduleFire({
+        schedule: { ...schedule, armerActive: false, gapRunId: "finished-gap" },
+        pending,
+        now: due,
+      }),
+    ).toMatchObject({
+      kind: "skip",
+      settlePending: { jobId: pending.jobId, runId: pending.runId },
+      gap: { runId: pending.runId, missedCount: 2 },
     });
   });
 
@@ -410,6 +434,7 @@ describe("cloud clock: wait, coalesced", () => {
       expect(result).toMatchObject({
         kind: "skip",
         pauseReason,
+        settlePending: waiting === null ? null : { jobId: waiting.jobId, runId: waiting.runId },
         gap: {
           runId: waiting === null ? null : "gap",
           dueAt: due,
@@ -507,5 +532,55 @@ describe("stored zones and DST", () => {
       nextFireAt: at("2026-03-10T06:30:00Z"),
       gap: { dueAt: at("2026-03-08T07:30:00Z"), missedCount: 2 },
     });
+  });
+});
+
+// The local reader is deliberately frozen. Cloud readers admit the new arms.
+describe("cloud skipped-occurrence contract", () => {
+  test.each([
+    { kind: "runner-asleep", runnerId },
+    { kind: "runner-unavailable", code: "runner_removed" },
+    { kind: "superseded" },
+  ])("reads cloud reasons without widening the signed-out vocabulary", (reason) => {
+    expect(parseCloudAutomationSkipReason(reason)).toEqual(reason);
+    expect(parseAutomationSkipReason(reason)).toEqual({ kind: "unknown" });
+  });
+
+  test.each([
+    null,
+    "superseded",
+    {},
+    { kind: "future" },
+    { kind: "runner-asleep" },
+    { kind: "runner-asleep", runnerId: "not-a-uuid" },
+    { kind: "runner-unavailable" },
+    { kind: "runner-unavailable", code: "" },
+  ])("keeps unknown/malformed reasons as an unreadable skip", (reason) => {
+    expect(parseCloudAutomationSkipReason(reason)).toEqual({ kind: "unknown" });
+  });
+
+  test.each([
+    { kind: "app-closed" },
+    { kind: "not-observed" },
+    { kind: "run-refused", code: "future", error: "Kept verbatim" },
+  ])("also reads migrated local reasons", (reason) => {
+    expect(parseCloudAutomationSkipReason(reason)).toEqual(reason);
+  });
+
+  test.each([
+    "gone",
+    "left-column",
+    "disarmed",
+    "schedule-disarmed",
+    "previous_run_active",
+  ] as const)("one backend mapping for abandoned %s", (reason) => {
+    expect(automationAbandonSkipReason(reason)).toEqual({
+      kind: "run-refused",
+      code: reason,
+      error: expect.any(String),
+    });
+    expect(parseCloudAutomationSkipReason(automationAbandonSkipReason(reason))).toEqual(
+      automationAbandonSkipReason(reason),
+    );
   });
 });

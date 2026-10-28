@@ -244,7 +244,7 @@ interface AutomationRunJobBase {
   requestedBySessionId: SessionId | null;
 }
 
-/** The executable contract. B3b-3 must upgrade arrivals before B3b-4 advertises the capability. */
+/** The executable contract. The clock/Run producer upgrades arrivals before the executor advertises the capability. */
 export type AutomationRunJobPayload =
   | (AutomationRunJobBase & AutomationArrivalRunPayload)
   | (AutomationRunJobBase & {
@@ -252,15 +252,28 @@ export type AutomationRunJobPayload =
       automationId: AutomationId;
       ticketId: null;
       armedByUserId: UserId;
+      attendance: "unattended";
+      modelOverride: null;
+      requestedBySessionId: null;
     })
   | (AutomationRunJobBase & {
       trigger: "manual";
       ticketId: TicketId | null;
       armedByUserId: null;
-    } & ({ automationId: AutomationId } | { automationId: null; instructions: string }));
+    } & (
+        | { automationId: AutomationId }
+        | { automationId: null; ticketId: TicketId; instructions: string }
+      ));
 
 /** Legacy arrivals are parseable, but MUST NOT be executed without producer-minted ids. */
 export type AutomationRunPayload = AutomationArrivalRunPayload | AutomationRunJobPayload;
+
+/** The executor uses this AFTER parseJobPayload; legacy arrivals are upgraded or drained, never executed. */
+export function isExecutableAutomationRun(
+  payload: AutomationRunPayload,
+): payload is AutomationRunJobPayload {
+  return "runId" in payload;
+}
 
 /** A payload no owning ticket has typed yet: an opaque JSON object. */
 export type JobPayloadObject = { readonly [field: string]: unknown };
@@ -608,6 +621,9 @@ function parseAutomationRun(r: Reader): AutomationRunPayload {
       r.fail("a schedule is unattended and has no caller override or watch");
     return {
       ...base,
+      attendance: "unattended",
+      modelOverride: null,
+      requestedBySessionId: null,
       trigger,
       automationId: r.uuid<AutomationId>("automationId"),
       ticketId: null,
@@ -626,7 +642,7 @@ function parseAutomationRun(r: Reader): AutomationRunPayload {
   const instructions = r.text("instructions", AUTOMATION_INSTRUCTIONS_MAX_CHARS);
   if (instructions.trim().length === 0) r.fail("instructions are blank");
   if (manual.ticketId === null) r.fail("an unbound run targets a ticket");
-  return { ...manual, automationId: null, instructions };
+  return { ...manual, ticketId: manual.ticketId, automationId: null, instructions };
 }
 
 function parseArrival(r: Reader): AutomationArrivalRunPayload {

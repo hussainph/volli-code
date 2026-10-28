@@ -348,22 +348,6 @@ describe("parseAutomationSkipReason", () => {
     ).toEqual({ kind: "run-refused", code: "MODEL_REQUIRED", error: "No model" });
   });
 
-  it("reads cloud skip reasons and degrades malformed new arms", () => {
-    for (const reason of [
-      { kind: "runner-asleep", runnerId: "runner" },
-      { kind: "runner-unavailable", code: "runner_removed" },
-      { kind: "superseded" },
-    ])
-      expect(parseAutomationSkipReason(reason)).toEqual(reason);
-    for (const reason of [
-      { kind: "runner-asleep" },
-      { kind: "runner-asleep", runnerId: "" },
-      { kind: "runner-unavailable" },
-      { kind: "runner-unavailable", code: "" },
-    ])
-      expect(parseAutomationSkipReason(reason)).toEqual({ kind: "unknown" });
-  });
-
   it("keeps a refusal code this build no longer knows, verbatim", () => {
     // Historical evidence, like a Run's recorded reasoning level: printed as
     // recorded rather than rewritten into today's vocabulary.

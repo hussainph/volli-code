@@ -1,11 +1,14 @@
 /**
  * Cloud Automation policy and the backend ↔ runner contract. No clock or store.
  *
- * Receiving-task wiring: B3b-2 uses change/arming decisions in its mutations;
- * B3b-3 uses schedule-fire in the minute cron, produces executable job payloads,
- * serves fenced runContext and consumes completion; B3b-4 consumes that context
- * before Sessions.start and completes the inbox job. B3b-5 may optimistically
- * project these decisions, but displays the backend's nextFireAt, not its clock.
+ * Receiving-task wiring: the cloud Automation records task uses change/arming
+ * decisions in its mutations. The clock/Run task uses schedule-fire in the
+ * minute cron, routing in manual/agent Run mutations, produces executable
+ * payloads, serves fenced runContext and consumes completion. The runner
+ * executor task consumes that context before Sessions.start and completes
+ * the inbox job. The cloud UI task uses the limits in its editor and reads
+ * skips with parseCloudAutomationSkipReason; it may optimistically project
+ * decisions but displays the backend's nextFireAt, not its own clock.
  * The signed-out scheduler deliberately keeps its existing skip-while-closed rule.
  */
 import {
@@ -14,15 +17,26 @@ import {
   isValidAutomationRuntime,
   parseAutomationRuntime,
   parseAutomationTrigger,
+  parseAutomationSkipReason,
   type ArmedRunAbandonReason,
   type AutomationDraft,
+  type AutomationRuntime,
   type AutomationRunAttendance,
   type AutomationSkipReason,
   type ResolvedAutomationModel,
 } from "../automation";
 import { nextScheduleOccurrence, type AutomationSchedule } from "../automation-schedule";
 import type { TicketStatus } from "../ticket";
-import type { AutomationId, ProjectId, RunnerId, SessionId, TicketId, UserId } from "./ids";
+import {
+  isUuid,
+  type AutomationId,
+  type JobId,
+  type ProjectId,
+  type RunnerId,
+  type SessionId,
+  type TicketId,
+  type UserId,
+} from "./ids";
 import type { AutomationRunJobPayload } from "./job-payloads";
 import type { RunnerStatus } from "./runners";
 
@@ -30,13 +44,54 @@ import type { RunnerStatus } from "./runners";
 export const AUTOMATION_NAME_MAX_CHARS = 200;
 export const AUTOMATION_INSTRUCTIONS_MAX_CHARS = 32_000;
 
-export interface CloudAutomationDefinition extends AutomationDraft {
+export interface CloudAutomationDefinition extends Omit<AutomationDraft, "runtime"> {
+  /** Preserve invalid imported pins so the executor refuses, never silently inherits. */
+  runtime: AutomationRuntime;
   id: AutomationId;
   projectId: ProjectId;
   deletedAt: number | null;
 }
 
-type Refused = { kind: "refused"; code: string };
+type AutomationDecisionRefusalCode =
+  | "automation_not_found"
+  | "automation_not_in_project"
+  | "automation_exists"
+  | "invalid_draft"
+  | "draft_too_large"
+  | "name_taken"
+  | "invalid_runtime"
+  | "invalid_trigger"
+  | "forbidden"
+  | "wrong_trigger"
+  | "runner_unavailable"
+  | "runner_not_yours"
+  | "runner_needs_update"
+  | "runner_not_live";
+type Refused = { kind: "refused"; code: AutomationDecisionRefusalCode };
+
+/** Cloud-only additions keep the frozen signed-out skip vocabulary unchanged. */
+export type CloudAutomationSkipReason =
+  | AutomationSkipReason
+  | { kind: "runner-asleep"; runnerId: RunnerId }
+  | { kind: "runner-unavailable"; code: string }
+  | { kind: "superseded" };
+
+/** Open on read: malformed/new reasons still preserve the skipped occurrence. */
+export function parseCloudAutomationSkipReason(raw: unknown): CloudAutomationSkipReason {
+  if (typeof raw === "object" && raw !== null) {
+    const record = raw as Record<string, unknown>;
+    if (record.kind === "superseded") return { kind: "superseded" };
+    if (record.kind === "runner-asleep" && isUuid(record.runnerId))
+      return { kind: "runner-asleep", runnerId: record.runnerId as RunnerId };
+    if (
+      record.kind === "runner-unavailable" &&
+      typeof record.code === "string" &&
+      record.code.length > 0
+    )
+      return { kind: "runner-unavailable", code: record.code };
+  }
+  return parseAutomationSkipReason(raw);
+}
 
 /** Inputs are untrusted draft values; malformed triggers must not silently save as `none`. */
 export function decideAutomationChange(input: {
@@ -97,10 +152,11 @@ function runnerProblem(
   runner: AutomationRunner | null,
   callerUserId: UserId,
   live: boolean,
-): string | null {
+): AutomationDecisionRefusalCode | null {
   if (runner === null || runner.status === "revoked") return "runner_unavailable";
   if (runner.ownerUserId !== callerUserId) return "runner_not_yours";
   if (!runner.tools.includes("automation.run")) return "runner_needs_update";
+  // Arming needs a runner accepting new work, not merely emitting heartbeats.
   if (live && runner.status !== "online" && runner.status !== "degraded") return "runner_not_live";
   return null;
 }
@@ -114,7 +170,7 @@ interface ArmingInput {
   runner: AutomationRunner | null;
 }
 
-function armingProblem(input: ArmingInput): string | null {
+function armingProblem(input: ArmingInput): AutomationDecisionRefusalCode | null {
   if (input.automation === null || input.automation.deletedAt !== null)
     return "automation_not_found";
   if (input.automation.projectId !== input.projectId) return "automation_not_in_project";
@@ -176,7 +232,11 @@ export function decideScheduleArming(input: ArmingInput & { disarm: boolean; now
   };
 }
 
-/** By-hand/agent Runs use an owned ticket Place, else the caller's current runner. Never a teammate's. */
+/**
+ * By-hand/agent Runs use an owned ticket Place, else the caller's current runner.
+ * An owned but unusable Place refuses rather than silently changing machines.
+ * Asleep/offline is usable: the Run waits. Never borrow a teammate's credentials.
+ */
 export function decideAutomationRunRouting(input: {
   callerUserId: UserId;
   callerRunner: AutomationRunner | null;
@@ -200,12 +260,16 @@ export interface CloudAutomationSchedule {
   runnerId: RunnerId;
   runnerStatus: RunnerStatus | "removed";
   armerActive: boolean;
-  /** The open skip row for the waiting job; closed when that job is leased. */
+  /**
+   * The skip row belonging to the current never-leased pending Run.
+   * EVERY enqueue replaces this with its new gap id, or null (even if the
+   * old job was leased). No hook in the generic claim path is required.
+   */
   gapRunId: string | null;
 }
 
 export interface PendingAutomationScheduleRun {
-  jobId: string;
+  jobId: JobId;
   runId: string;
   dueAt: number;
   /** Number of superseded occurrences already covered by this waiting job's gap row. */
@@ -220,7 +284,7 @@ export interface AutomationScheduleGap {
   runId: string | null;
   dueAt: number;
   missedCount: number;
-  reason: AutomationSkipReason;
+  reason: CloudAutomationSkipReason;
 }
 
 export type ScheduleFireDecision =
@@ -229,6 +293,11 @@ export type ScheduleFireDecision =
       kind: "skip";
       nextFireAt: number;
       pauseReason: "runner_removed" | "armer_left";
+      /** Cancel the job. Convert this queued Run to the gap if ids match;
+       * otherwise delete it after merging into the existing gap row. Both
+       * are unstarted projections; the single skip retains every occurrence.
+       */
+      settlePending: { jobId: JobId; runId: string } | null;
       gap: AutomationScheduleGap;
     }
   | {
@@ -240,7 +309,7 @@ export type ScheduleFireDecision =
     }
   | {
       kind: "supersede";
-      jobId: string;
+      jobId: JobId;
       runId: string;
       dueAt: number;
       missedCount: number;
@@ -252,8 +321,9 @@ export type ScheduleFireDecision =
  * Wait, coalesced: keep only the latest due occurrence, with one skip per gap.
  * Commit the returned job/Run/gap AND nextFireAt in one transaction. A patch
  * also advances the job's availableAt to dueAt. A skip pauses the schedule,
- * cancels its never-leased job, and raises one armer attention item. Only a
- * never-leased job may be patched. A leased/retry job starts a new gap; the
+ * settles its never-leased job/Run via settlePending, and raises one armer
+ * attention item. Only a never-leased job may be patched. A leased/retry job
+ * starts a new gap; the
  * executor's fresh-context single-flight check handles previous_run_active.
  */
 export function decideScheduleFire(input: {
@@ -282,6 +352,8 @@ export function decideScheduleFire(input: {
     nextFireAt = occurrence(dueAt);
   }
   const patchable = pending !== null && pending.status === "queued" && pending.attempt === 0;
+  // A stale schedule pointer must never rewrite a finished gap from an older job.
+  const openGapRunId = patchable && pending.missedCount > 0 ? schedule.gapRunId : null;
   if (
     !schedule.armerActive ||
     schedule.runnerStatus === "revoked" ||
@@ -292,15 +364,16 @@ export function decideScheduleFire(input: {
       kind: "skip",
       nextFireAt,
       pauseReason,
+      settlePending: patchable ? { jobId: pending.jobId, runId: pending.runId } : null,
       gap: {
-        runId: patchable ? schedule.gapRunId : null,
+        runId: openGapRunId ?? (patchable ? pending.runId : null),
         dueAt,
         missedCount: count + (patchable ? pending.missedCount + 1 : 0),
         reason: { kind: "runner-unavailable", code: pauseReason },
       },
     };
   }
-  const reason: AutomationSkipReason =
+  const reason: CloudAutomationSkipReason =
     schedule.runnerStatus === "asleep"
       ? { kind: "runner-asleep", runnerId: schedule.runnerId }
       : { kind: "superseded" };
@@ -314,7 +387,7 @@ export function decideScheduleFire(input: {
       missedCount,
       nextFireAt,
       gap: {
-        runId: schedule.gapRunId,
+        runId: openGapRunId,
         dueAt: count === 1 ? pending.dueAt : previousDueAt,
         missedCount,
         reason,
@@ -333,7 +406,7 @@ export function decideScheduleFire(input: {
 
 /** runContext is fenced against the inbox's CURRENT lease, not just the runner id. */
 export interface AutomationRunContextRequest {
-  jobId: string;
+  jobId: JobId;
   bootId: string;
   attempt: number;
 }
@@ -366,10 +439,10 @@ export type AutomationRunContext =
     };
 
 /**
- * B3b-4 uses operationId `automation-run:{runId}` (create command suffix
+ * The runner executor uses operationId `automation-run:{runId}` (create command suffix
  * `:create`) and stable derived message ids; these derivations freeze when
  * the executor ships. Complete only after Session start AND first-message delivery.
- * B3b-3 records started + event + automatic caller watch (the Session's first
+ * The backend clock/Run task records started + event + automatic caller watch (the Session's first
  * accept may still be in flight); abandoned arrivals leave no Run row, other
  * abandons become skipped; refused/dead-letter becomes failed + armer attention.
  */
@@ -382,6 +455,26 @@ export type AutomationRunCompletion =
     }
   | {
       kind: "abandoned";
-      reason: ArmedRunAbandonReason | "schedule-disarmed" | "previous_run_active";
+      reason: AutomationRunAbandonReason;
     }
   | { kind: "refused"; code: string; detail: string | null };
+
+/** Cloud arming is the switch: there is no machine-local `switched-off` state. */
+export type AutomationRunAbandonReason =
+  | Exclude<ArmedRunAbandonReason, "switched-off">
+  | "schedule-disarmed"
+  | "previous_run_active";
+
+/** The backend completion hook uses this for skipped schedule/manual Runs; arrivals leave no row. */
+export function automationAbandonSkipReason(
+  reason: AutomationRunAbandonReason,
+): AutomationSkipReason {
+  const errors: Record<AutomationRunAbandonReason, string> = {
+    gone: "The Automation or its target no longer exists.",
+    "left-column": "The ticket left the column.",
+    disarmed: "The column is no longer armed with this Automation.",
+    "schedule-disarmed": "The schedule is no longer armed on this runner.",
+    previous_run_active: "The previous Run is still active.",
+  };
+  return { kind: "run-refused", code: reason, error: errors[reason] };
+}
