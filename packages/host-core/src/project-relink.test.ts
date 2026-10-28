@@ -77,6 +77,23 @@ describe("relinkProject", () => {
     expect(listTicketsByProject(ctx.db, "p1").map((ticket) => ticket.title)).toEqual(["Relink me"]);
   });
 
+  // VC-993: a project moving to Volli Cloud keeps its folder until its move settles.
+  it("refuses a project that is moving to Volli Cloud, and changes nothing", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", name: "Volli", path: "/Users/me/volli" }));
+    ctx.db.exec(`
+      INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+      INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+        runner_id, state, app_version, mapper_version, created_at, updated_at)
+      VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+    `);
+
+    const outcome = await relinkProject(deps(), { projectId: "p1", path: "/Users/me/code/volli" });
+
+    expect(outcome).toEqual({ ok: false, error: expect.stringContaining("moving to Volli Cloud") });
+    expect(getProjectById(ctx.db, "p1")?.path).toBe("/Users/me/volli");
+  });
+
   // The duplicate this ticket exists to prevent, seen from the other side: the
   // folder is fine, it is simply somebody else's. Refusing leaves BOTH rows as
   // they were rather than pointing two projects at one checkout.

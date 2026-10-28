@@ -1,6 +1,11 @@
 /** The one host composition of the Session writer and its post-commit observers. */
 import type Database from "better-sqlite3";
-import type { HostNoticeOutbox, OpenNativeBinding, SessionEngine } from "@volli/session-engine";
+import type {
+  HostNoticeOutbox,
+  OpenNativeBinding,
+  SessionEngine,
+  SubmitSessionCommandRequest,
+} from "@volli/session-engine";
 import type { SessionLedger, SessionProjection } from "@volli/shared";
 import type { Logger } from "./log/logger";
 import { readAutomationRunAttendance } from "./db/automations-repo";
@@ -18,6 +23,7 @@ import {
   type SessionActivityWatchPorts,
   type SessionReadWatch,
 } from "./session-control";
+import { assertProjectWritable, assertSessionWritable } from "./cloud-move/freeze";
 import { createHostSessionEngine } from "./sessions/engine";
 import type { AttentionDeliveryPort } from "./ports/attention";
 import type { HostEventBus } from "./ports/events";
@@ -87,6 +93,33 @@ export interface HostSessionServices {
   readonly [SESSION_RUNTIME]: SessionRuntimeSlot;
 }
 
+/** Commands that only ever stop work: a frozen project still takes them. */
+const STOPPING_INTENTS: ReadonlySet<SubmitSessionCommandRequest["intent"]["kind"]> = new Set([
+  "session.stop",
+  "executor.stop",
+  "executor.interrupt",
+] as const);
+
+/**
+ * The engine with the move freeze in front of its two person-intent writes
+ * (VC-993): a project moving to Volli Cloud starts no Session and takes no
+ * command, except one that stops work. Runtime observations still land, and
+ * a cloud launch's drain carries any past the moved head.
+ */
+function freezeGatedEngine(db: Database.Database, engine: SessionEngine): SessionEngine {
+  return {
+    ...engine,
+    createSession: async (request) => {
+      assertProjectWritable(db, request.projectId);
+      return engine.createSession(request);
+    },
+    submit: async (request) => {
+      if (!STOPPING_INTENTS.has(request.intent.kind)) assertSessionWritable(db, request.sessionId);
+      return engine.submit(request);
+    },
+  };
+}
+
 export function createHostSessionServices(
   db: Database.Database,
   ports: HostSessionPorts,
@@ -109,9 +142,10 @@ export function createHostSessionServices(
   });
   // The process's one Engine decorator: every committed Session Event is
   // announced here, after its transaction, to every observer below.
-  const sessionWakeBus = createSessionWakeBus(createHostSessionEngine(sessionLedger), {
-    db,
-  });
+  const sessionWakeBus = createSessionWakeBus(
+    freezeGatedEngine(db, createHostSessionEngine(sessionLedger)),
+    { db },
+  );
   const publishSessionActivity: SessionActivityWatchPorts["publish"] = (notice) =>
     ports.events.publish("session-activity", notice);
   const publishSessionRow = (sessionId: string): void => {

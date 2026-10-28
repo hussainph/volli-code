@@ -308,6 +308,16 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     reason: "Runner-local identity provenance, never authoritative cloud board rows.",
   },
   {
+    table: "cloud_move_queues",
+    disposition: "runner",
+    reason: "This machine's move runs: the move itself, never part of what moves.",
+  },
+  {
+    table: "cloud_moves",
+    disposition: "runner",
+    reason: "Each project move's journal and freeze marker stay on this machine.",
+  },
+  {
     table: "job_journal",
     disposition: "runner",
     reason: "Outcomes owed under this runner's leases.",

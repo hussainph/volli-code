@@ -25,6 +25,7 @@ import {
 } from "./project-removed-migration";
 import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
 import { SESSION_FOLLOW_UP_IDENTITIES_MIGRATION } from "./session-follow-up-identities-migration";
+import { CLOUD_MOVES_MIGRATION } from "./cloud-moves-migration";
 import {
   applySpawnLedgerParkedColumn,
   SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
@@ -2837,6 +2838,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 67,
     name: "follow-up message identities — runner-local dedupe proof after reply retention (VC-696)",
     sql: SESSION_FOLLOW_UP_IDENTITIES_MIGRATION,
+  },
+  {
+    version: 68,
+    name: "cloud moves — the Move to Volli Cloud journal and project freeze marker (VC-993)",
+    sql: CLOUD_MOVES_MIGRATION,
   },
 ];
 

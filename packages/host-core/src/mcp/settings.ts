@@ -23,6 +23,7 @@ import {
   putMcpServer,
   selectedMcpToolDefinitions,
 } from "../db/mcp-servers-repo";
+import { ProjectFrozenError, assertProjectWritable } from "../cloud-move/freeze";
 import { getProjectById, isProjectAttached } from "../db/projects-repo";
 import { createMcpProtocolClientOpener } from "./client";
 import { MemoryMcpCredentialStore, type McpCredentialStore } from "./credential-store";
@@ -323,6 +324,8 @@ export class McpSettingsService {
     secrets?: unknown;
     signal?: AbortSignal;
   }): Promise<McpServerResult> {
+    const frozen = this.#frozen(input.projectId);
+    if (frozen !== null) return frozen;
     const prepared = this.#prepare(input.projectId, input.server);
     if (!prepared.ok) return prepared;
     const existing = getMcpServer(this.#db, prepared.server.id);
@@ -599,6 +602,8 @@ export class McpSettingsService {
    * for older Sessions; a person signs in or stores the value again.
    */
   remove(input: { projectId: string; serverId: string }): McpMutationResult {
+    const frozen = this.#frozen(input.projectId);
+    if (frozen !== null) return frozen;
     if (!deleteMcpServer(this.#db, input.projectId, input.serverId)) {
       return { ok: false, error: "MCP server not found." };
     }
@@ -673,7 +678,20 @@ export class McpSettingsService {
     return message(error);
   }
 
+  /** A project moving to (or moved to) Volli Cloud keeps its MCP configuration as it is (VC-993). */
+  #frozen(projectId: string): { ok: false; error: string } | null {
+    try {
+      assertProjectWritable(this.#db, projectId);
+      return null;
+    } catch (error) {
+      if (!(error instanceof ProjectFrozenError)) throw error;
+      return { ok: false, error: error.message };
+    }
+  }
+
   #owned(projectId: string, serverId: string): McpServerResult {
+    const frozen = this.#frozen(projectId);
+    if (frozen !== null) return frozen;
     const server = getMcpServer(this.#db, serverId);
     return server === undefined || server.projectId !== projectId
       ? { ok: false, error: "MCP server not found." }

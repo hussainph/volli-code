@@ -13,6 +13,7 @@ import type Database from "better-sqlite3";
 import { displayTicketId } from "@volli/shared";
 import type { Logger } from "./log/logger";
 import { hostLogger } from "./log/root";
+import { ProjectFrozenError, projectFreeze } from "./cloud-move/freeze";
 import { getProjectById, isProjectAttached, isProjectRemoved } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
@@ -142,6 +143,11 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
     // A removed project is detached, not deleted (VC-822): its Automations
     // stay, but none of them is edited, scheduled or run until it is back.
     findProject: (projectId) => isProjectAttached(db, projectId),
+    // A project moving to Volli Cloud keeps its Automations as they are (VC-993).
+    projectFrozen: (projectId) => {
+      const state = projectFreeze(db, projectId);
+      return state === null ? null : new ProjectFrozenError(projectId, state).message;
+    },
     findAutomation: (automationId) => getAutomation(db, automationId),
     listAutomationsForProject: (projectId) => listAutomationsForProject(db, projectId),
     runsForTicket: (ticketId) => listRunsForTicket(db, ticketId),

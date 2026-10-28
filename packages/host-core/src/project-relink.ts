@@ -29,6 +29,7 @@
 import { rename, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type Database from "better-sqlite3";
+import { ProjectFrozenError, projectFreeze } from "./cloud-move/freeze";
 import { validateProjectRelink } from "@volli/shared";
 import type {
   FolderIdentity,
@@ -161,6 +162,11 @@ export async function relinkProject(
 
   const project = getProjectById(deps.db, request.projectId);
   if (project === undefined) return { ok: false, error: "Unknown project" };
+  // A project moving to Volli Cloud keeps its folder until its move settles (VC-993).
+  const frozen = projectFreeze(deps.db, project.id);
+  if (frozen !== null) {
+    return { ok: false, error: new ProjectFrozenError(project.id, frozen).message };
+  }
 
   const candidatePath = resolve(request.path);
   const candidate = await probeFolder(candidatePath);

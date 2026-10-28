@@ -25,6 +25,7 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
+import { projectFreeze } from "../cloud-move/freeze";
 import { getAllAppState, setAppState } from "../db/app-state-repo";
 import { recordTicketEvent } from "../db/events-repo";
 import { prepared } from "../db/prepared";
@@ -232,6 +233,8 @@ export async function reclaimIfStale(
   const db = deps.worktree.db;
   const ticket = getTicketRow(db, ticketId);
   if (!ticket) return SKIP("unknown ticket");
+  // A project moving to Volli Cloud is read-only, its worktrees included (VC-993).
+  if (projectFreeze(db, ticket.project_id) !== null) return SKIP("moving to Volli Cloud");
   if (prepared(db, "SELECT 1 FROM working_copy_paths WHERE ticket_id = ?").get(ticketId))
     return SKIP("runner-managed working copy");
   if (ticket.worktree_path === null) return SKIP("no worktree");

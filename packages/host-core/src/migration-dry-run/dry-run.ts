@@ -63,6 +63,7 @@ import {
 } from "../migration-export/exporter";
 import type { StreamName } from "../migration-export/sources";
 import { derivedId } from "../migration-export/transform";
+import { legacyArchiveName } from "../migration-export/legacy-archives";
 import { verifyMigrationExport } from "../migration-export/verify";
 import type { ConvexAdmin } from "./convex-admin";
 import { selectLocalProduct } from "../migration-export/scope";
@@ -79,13 +80,6 @@ const READ_PAGE_ROWS = 256;
 const READ_PAGE_BYTES = 4 * 1024 * 1024;
 const SESSION_EVENT_READ_ROWS = 128;
 const ZSTD_LEVEL = { params: { [zlibConstants.ZSTD_c_compressionLevel]: 3 } };
-
-/** The local Automation ledger, kept as one archive per project. */
-const AUTOMATION_LEDGER_TABLES = new Set([
-  "automation_commands",
-  "automation_events",
-  "automation_command_receipts",
-]);
 
 const PLACEHOLDER_VALUES = new Set<string>(Object.values(MIGRATION_PLACEHOLDERS));
 
@@ -763,9 +757,7 @@ export async function runMigrationDryRun(
         const projectId = record.projectId as string | null;
         if (projectId !== null && removedProjects.has(projectId)) continue;
         const table = String(record.table);
-        const name = AUTOMATION_LEDGER_TABLES.has(table)
-          ? "automation-ledger"
-          : table.replaceAll("_", "-");
+        const name = legacyArchiveName(table);
         const key =
           projectId === null
             ? migrationKey(migrationId, `legacy-host-${name}.ndjson.zst`)

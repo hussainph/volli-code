@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:backend": "vp test run --config vite.backend.config.ts",
+    "test:matrix": "vp test run --config vite.matrix.config.ts",
     "with-backend": "node fixture/with-backend.ts"
   },
   "dependencies": {

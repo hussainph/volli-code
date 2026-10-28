@@ -23,6 +23,7 @@ import {
   readScheduleCursors,
   rebaseScheduleCursor,
 } from "./automations/schedule-cursor";
+import { projectFreeze } from "./cloud-move/freeze";
 import { getProjectById, isProjectAttached, isProjectRemoved } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
@@ -66,6 +67,10 @@ vi.mock("./automations/sqlite-ledger", () => ({
 vi.mock("./automations/enablement");
 vi.mock("./automations/schedule-cursor");
 vi.mock("./db/projects-repo");
+vi.mock("./cloud-move/freeze", async (importActual) => ({
+  ...(await importActual<typeof import("./cloud-move/freeze")>()),
+  projectFreeze: vi.fn(),
+}));
 vi.mock("./db/tickets-repo");
 vi.mock("./db/automations-repo");
 vi.mock("./db/pending-armed-runs-repo");
@@ -204,6 +209,14 @@ describe("construction", () => {
     expect(listProjectRunsForAutomation).toHaveBeenCalledWith(db, query);
     deps.skipsForAutomation(query);
     expect(listSkippedOccurrencesForAutomation).toHaveBeenCalledWith(db, query);
+  });
+
+  it("asks the move freeze before an Automation edit (VC-993)", () => {
+    const deps = fixture().serviceDeps();
+    vi.mocked(projectFreeze).mockReturnValueOnce(null).mockReturnValueOnce("frozen");
+    expect(deps.projectFrozen!("p1")).toBeNull();
+    expect(deps.projectFrozen!("p1")).toContain("moving to Volli Cloud");
+    expect(projectFreeze).toHaveBeenCalledWith(db, "p1");
   });
 
   it("publishes mutations and rebases a schedule cursor at the command's instant", () => {

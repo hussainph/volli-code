@@ -28,6 +28,11 @@ import type { AutomationEngine } from "./engine";
 export interface AutomationServicePorts {
   engine: AutomationEngine;
   findProject(projectId: string): boolean;
+  /**
+   * Why a project takes no Automation edit now (it is moving to Volli Cloud,
+   * VC-993), or null. Asked of every new edit, never of a replay.
+   */
+  projectFrozen?(projectId: string): string | null;
   findAutomation(automationId: string): Automation | undefined;
   listAutomationsForProject(projectId: string): Automation[];
   runsForTicket(ticketId: string): AutomationRun[];
@@ -182,6 +187,14 @@ export function createAutomationService(deps: AutomationServicePorts) {
     return automationPinProblem(await deps.inspectModelAccess(), input.runtime);
   }
 
+  const frozenIn = (projectId: string): string | null => deps.projectFrozen?.(projectId) ?? null;
+  /** A new edit of a project's Automation, while that project is frozen. */
+  const frozenFor = async (commandId: string, automationId: string): Promise<string | null> => {
+    const projectId = deps.findAutomation(automationId)?.projectId ?? null;
+    if (projectId === null || (await deps.engine.hasCommand(commandId))) return null;
+    return frozenIn(projectId);
+  };
+
   return {
     list(projectId: string): AutomationReadOutcome {
       if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
@@ -231,6 +244,8 @@ export function createAutomationService(deps: AutomationServicePorts) {
     }): Promise<AutomationArmingOutcome> {
       if (!(await deps.engine.hasCommand(input.commandId))) {
         if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+        const frozen = frozenIn(input.projectId);
+        if (frozen !== null) return { ok: false, error: frozen };
         if (input.automationId !== null) {
           const automation = deps.findAutomation(input.automationId);
           if (automation === undefined) return { ok: false, error: "Unknown automation" };
@@ -289,6 +304,8 @@ export function createAutomationService(deps: AutomationServicePorts) {
     }): Promise<AutomationColumnOrderOutcome> {
       if (!(await deps.engine.hasCommand(input.commandId))) {
         if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+        const frozen = frozenIn(input.projectId);
+        if (frozen !== null) return { ok: false, error: frozen };
         if (new Set(input.rankedAutomationIds).size !== input.rankedAutomationIds.length) {
           return { ok: false, error: "An automation can hold only one rank in a column." };
         }
@@ -381,6 +398,8 @@ export function createAutomationService(deps: AutomationServicePorts) {
       automationId: string;
       enabled: boolean;
     }): Promise<AutomationEnablementOutcome> {
+      const frozen = await frozenFor(input.commandId, input.automationId);
+      if (frozen !== null) return { ok: false, error: frozen };
       const outcome = await deps.engine.setEnabled(input);
       if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
       // The switch is what decides whether a schedule may fire here, so the
@@ -417,6 +436,8 @@ export function createAutomationService(deps: AutomationServicePorts) {
         if (input.projectId !== null && !deps.findProject(input.projectId)) {
           return { ok: false, error: "Unknown project" };
         }
+        const frozen = input.projectId === null ? null : frozenIn(input.projectId);
+        if (frozen !== null) return { ok: false, error: frozen };
         const problem = await writeProblem(input);
         if (problem !== null) return { ok: false, error: problem };
       }
@@ -450,6 +471,8 @@ export function createAutomationService(deps: AutomationServicePorts) {
       runtime: ValidAutomationRuntime;
     }): Promise<AutomationWriteOutcome> {
       const prior = deps.findAutomation(input.automationId);
+      const frozen = await frozenFor(input.commandId, input.automationId);
+      if (frozen !== null) return { ok: false, error: frozen };
       // Same replay rule as create: validation guards a new command, never
       // hides an already-accepted receipt behind changed Model Access.
       if (!(await deps.engine.hasCommand(input.commandId))) {
@@ -499,6 +522,8 @@ export function createAutomationService(deps: AutomationServicePorts) {
       // Scope is read before the projection disappears. A retried delete uses
       // the command receipt and has no new mutation broadcast to manufacture.
       const existing = deps.findAutomation(input.automationId);
+      const frozen = await frozenFor(input.commandId, input.automationId);
+      if (frozen !== null) return { ok: false, error: frozen };
       const outcome = await deps.engine.delete(input);
       if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
       if (!outcome.replayed) {
