@@ -38,6 +38,11 @@ export interface MigrationExportWorkerRequest {
   sourcePath: string;
   outDir: string;
   appVersion: string;
+  projectIds?: readonly string[];
+  includeRemovedProjects?: boolean;
+  transcriptsDir?: string;
+  piLogsDir?: string;
+  blobsDir?: string;
   fresh?: boolean;
   integrityCheck?: boolean;
   chunkMaxBytes?: number;

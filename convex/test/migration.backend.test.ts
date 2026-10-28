@@ -53,13 +53,14 @@ type Report = {
     spilled: Record<string, number>;
   };
   objects: { blobs: { copied: number }; legacyRows: number };
+  history: { transcriptArtifacts: number; piLogSlices: number; bytes: number };
   invariants: Record<string, number>;
 };
 
 describe("the migration dry run", () => {
   test("imports a synthetic profile, verifies it, and a second run changes nothing", () => {
     const profileDir = join(work, "profile");
-    const fixture = node("migration-dry-run-fixture.mjs", [profileDir]);
+    const fixture = node("migration-dry-run-fixture.mjs", [profileDir, "--move"]);
     expect(fixture.status, fixture.stderr).toBe(0);
     const dbPath = fixture.stdout.trim();
     const before = statSync(dbPath).mtimeMs;
@@ -91,7 +92,7 @@ describe("the migration dry run", () => {
       expect(entry.conflicts, stream).toBe(0);
       expect(entry.rerun?.inserted ?? 0, stream).toBe(0);
     }
-    expect(report.streams.tickets).toMatchObject({ inserted: 4, skippedRemoved: 1 });
+    expect(report.streams.tickets).toMatchObject({ inserted: 5, skippedRemoved: 1 });
     expect(report.streams.boardEvents!.inserted).toBe(5);
     expect(report.streams.configEntries!.inserted).toBeGreaterThan(0);
     expect(report.sessions).toMatchObject({
@@ -101,8 +102,15 @@ describe("the migration dry run", () => {
       quarantined: 1,
       spilled: { oversize: 1, "field name the backend refuses": 1 },
     });
-    expect(report.objects.blobs.copied).toBe(1);
-    expect(report.objects.legacyRows).toBe(1);
+    expect(report.objects.blobs.copied).toBe(2);
+    expect(report.objects.legacyRows).toBe(4);
+    expect(report.history.transcriptArtifacts).toBe(2048);
+    expect(report.history.piLogSlices).toBeGreaterThan(1);
+    expect(report.history.bytes).toBeGreaterThan(50 * 1024 * 1024);
+    expect(report.streams.projects!.inserted).toBe(2);
+    expect(report.streams.sessions!.inserted).toBe(3);
+    expect(report.streams.runnerJobs!.inserted).toBe(0);
+    expect(report.streams.automationArmings!.inserted).toBe(0);
     expect(
       Object.keys(report.invariants).filter((name) => name.startsWith("structuralPathHits")),
     ).toEqual([]);

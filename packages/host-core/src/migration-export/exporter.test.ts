@@ -54,6 +54,7 @@ function options(overrides: Partial<MigrationExportOptions> = {}): MigrationExpo
     sourcePath: profile.dbPath,
     outDir: join(work, "export"),
     appVersion: "0.3.0-test",
+    includeRemovedProjects: true,
     now: () => 1_800_000_000_000,
     ...overrides,
   };
@@ -435,18 +436,9 @@ describe("a full export", () => {
       ["attempt-1", "failed", "arrival"],
     ]);
     expect(runs[2]!.error).toBe("runtime unavailable");
-    expect(records(outDir, manifest, "runnerJobs")).toEqual([
-      expect.objectContaining({
-        id: "pending-1",
-        kind: "automation.run",
-        ticketId: "ticket-live",
-        availableAt: 360,
-      }),
-    ]);
-    expect(records(outDir, manifest, "automationArmings")[0]).toMatchObject({
-      armedByUserId: "$local-user",
-      runnerId: "$local-runner",
-    });
+    expect(manifest.pendingRunnerWork).toBe(false);
+    expect(records(outDir, manifest, "runnerJobs")).toEqual([]);
+    expect(records(outDir, manifest, "automationArmings")).toEqual([]);
     expect(records(outDir, manifest, "automationColumnOrder")[0]!.rankedIds).toEqual([
       "automation-1",
     ]);
@@ -454,6 +446,8 @@ describe("a full export", () => {
       row.table.startsWith("automation_"),
     );
     expect(ledger.map((row) => row.table)).toEqual([
+      "automation_pending_armed_runs",
+      "automation_column_arming",
       "automation_command_receipts",
       "automation_commands",
       "automation_events",

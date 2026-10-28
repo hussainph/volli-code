@@ -250,7 +250,7 @@ export function writeSyntheticProfile(root: string, now = Date.now()): Synthetic
           { kind: "session.signaled", signal: 5, reason: null },
           {
             kind: "retired.surface",
-            schema: { $schema: "https://json-schema.org/draft/2020-12/schema" },
+            schema: { $schema: "https://json-schema.org/draft/2020-12/schema", 日本語: "値" },
           },
           { kind: "retired.big", text: "x".repeat(300 * 1024) },
         ],

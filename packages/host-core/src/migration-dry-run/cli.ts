@@ -27,6 +27,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     args: [...argv],
     options: {
       profile: { type: "string" },
+      project: { type: "string", multiple: true },
       blobs: { type: "string" },
       "hot-days": { type: "string" },
       "include-removed-projects": { type: "boolean" },
@@ -62,6 +63,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   const report = await runMigrationDryRun({
     profilePath: values.profile,
+    projectIds: values.project,
     ...(values.blobs === undefined ? {} : { blobsDir: values.blobs }),
     ...(values["home-dir"] === undefined ? {} : { homeDir: values["home-dir"] }),
     backend: connectConvexAdmin(url, adminKey),

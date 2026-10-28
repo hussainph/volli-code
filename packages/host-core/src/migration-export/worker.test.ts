@@ -79,6 +79,17 @@ describe("runMigrationExportInWorker", () => {
     );
   });
 
+  it("carries project selection across the worker boundary", async () => {
+    const result = await runMigrationExportInWorker(
+      ENTRY,
+      { ...request(), projectIds: ["proj-beta"], includeRemovedProjects: true },
+      { execArgv: EXEC_ARGV },
+    );
+    expect(result.manifest.projectIds).toEqual(["proj-beta"]);
+    expect(result.manifest.profileStep).toBe(false);
+    await verifyMigrationExport(result.outDir);
+  });
+
   it("cancels into a resumable staging area", async () => {
     const controller = new AbortController();
     const target = request();

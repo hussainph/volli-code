@@ -24,6 +24,7 @@ the backend's data directory when the command exits. Pass absolute paths.
 | Flag                         | Meaning                                                                    |
 | ---------------------------- | -------------------------------------------------------------------------- |
 | `--profile <volli.db>`       | The database to rehearse. Opened read-only.                                |
+| `--project <uuid>`           | Select a local project (repeatable); no personal/profile rows.             |
 | `--blobs <dir>`              | Attachment bytes. Default: `blobs/` beside the database.                   |
 | `--hot-days <n>`             | Sessions active within `n` days import live; older ones archive (30).      |
 | `--include-removed-projects` | Also import projects removed from the rail (off, as the migration offers). |
@@ -38,6 +39,12 @@ when every check passed.
 A synthetic profile for trying it (every id a UUID, one of each case the dry
 run handles): `node --experimental-transform-types packages/host-core/scripts/migration-dry-run-fixture.mjs <empty dir>`.
 `convex/test/migration.backend.test.ts` runs both against the real backend.
+Add `--move` to the fixture command for three local projects, a duplicate prefix,
+cross-project delegation/shared blob, unicode, archived/merged/removed rows,
+shadow/drained/cloud-born exclusions, paused Automations, 2,048 mixed plain/gzip
+transcripts (>50 MiB), and a multi-slice Pi log. Host-core's `move.test.ts` also
+injects missing files, orphan references and a non-UUID row and requires a named
+refusal (or explicit legacy archive), never a silent drop.
 
 ## Safety rules
 
@@ -87,18 +94,23 @@ run handles): `node --experimental-transform-types packages/host-core/scripts/mi
 
 ## Where things go
 
-| Export stream                                           | Dry run                                                                                                                                                                |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Convex-bound streams (`MIGRATION_IMPORT_STREAMS`)       | `migration:importRows`, batched (≤ 200 rows, ≤ 3 MiB), idempotent by each table's key                                                                                  |
-| `sessionEvents` of a Session active within `--hot-days` | `sessionEvents`, classified (`kindKnown`, `quarantine`); payloads over 256 KB or the backend cannot store go to `…/e/{seq}.json.zst` and are stored as `{kind, spill}` |
-| `sessionEvents` of an older Session                     | `…/ev/{first}-{last}.ndjson.zst` (`volli.session-events/1`) + `eventArchives` rows                                                                                     |
-| every Session                                           | `sessionIntake`, claimed by the migrating Mac, `acceptedThrough` = its last sequence                                                                                   |
-| `blobs`                                                 | the row, plus the bytes at its key                                                                                                                                     |
-| `legacyRows`                                            | `…/legacy/{name}.ndjson.zst` per project; host-wide rows under `v1/m/{migrationId}/`                                                                                   |
-| runner streams (`projectCheckoutPaths`, …)              | a local runner directory; never uploaded                                                                                                                               |
-| `automationScheduleCursors`                             | deferred (`MIGRATION_DEFERRED_STREAMS`): carried in the export, not imported yet                                                                                       |
+| Export stream                                             | Dry run                                                                                                                                                                |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Convex-bound streams (`MIGRATION_IMPORT_STREAMS`)         | `migration:importRows`, batched (≤ 200 rows, ≤ 3 MiB), idempotent by each table's key                                                                                  |
+| `sessionEvents` of a Session active within `--hot-days`   | `sessionEvents`, classified (`kindKnown`, `quarantine`); payloads over 256 KB or the backend cannot store go to `…/e/{seq}.json.zst` and are stored as `{kind, spill}` |
+| `sessionEvents` of an older Session                       | `…/ev/{first}-{last}.ndjson.zst` (`volli.session-events/1`) + `eventArchives` rows                                                                                     |
+| every Session                                             | `sessionIntake`, claimed by the migrating Mac, `acceptedThrough` = its last sequence                                                                                   |
+| `blobs`                                                   | the row, plus the bytes at its key                                                                                                                                     |
+| `legacyRows`                                              | `…/legacy/{name}.ndjson.zst` per project; host-wide rows under `v1/m/{migrationId}/`                                                                                   |
+| runner streams (`projectCheckoutPaths`, …)                | a local runner directory; never uploaded                                                                                                                               |
+| pending Automation arrivals, armings and schedule cursors | paused in `legacyRows` with a re-arm reason; executable streams are empty                                                                                              |
+| `transcriptArtifacts`, `piLogs`                           | verified source chunks staged and read back through the object stand-in; counts/bytes in `history`                                                                     |
 
 The object-storage stand-in is a directory laid out by the `@volli/shared/cloud`
 key functions; real uploads (presigned PUTs) replace it when R2 exists.
-Transcript packs (`tx/`) and Pi logs (`pi/`) live outside `volli.db` and are
-not part of this rehearsal yet.
+Transcript bodies and Pi logs are read from the original profile's sibling
+stores, not from the temporary SQLite copy. Missing/corrupt linked bytes refuse
+export. See [`../migration-export/README.md`](../migration-export/README.md) for
+the bulk source-stream contract. Producing/committing real `tx/` and `pi/`
+segments through the move-authorized doors is the Session-history importer's job;
+this rehearsal currently proves the source streams, not cloud viewer hydration.

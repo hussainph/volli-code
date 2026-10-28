@@ -42,7 +42,13 @@ import Database from "better-sqlite3";
 import { MIGRATION_DISK_HEADROOM_BYTES, nodeDiskProbe, type DiskProbe } from "../db/disk-preflight";
 import { SCHEMA_HEAD } from "../db/migrations";
 import { MigrationExportError, isDiskFullError } from "./errors";
-import { MIGRATION_EXPORT_FORMAT, MIGRATION_PLACEHOLDERS } from "./records";
+import {
+  MIGRATION_EXPORT_FORMAT,
+  MIGRATION_PLACEHOLDERS,
+  PENDING_RUNNER_FACTS,
+  DEFAULT_CHUNK_MAX_BYTES,
+  DEFAULT_CHUNK_MAX_RECORDS,
+} from "./records";
 import {
   EXPORT_SOURCES,
   STREAM_DESTINATIONS,
@@ -75,13 +81,22 @@ import {
 } from "./staging";
 import { MIGRATION_TABLE_DECISIONS, type MigrationTableDecision } from "./tables";
 import { verifyMigrationExport } from "./verify";
+import { exportFileStreams, type PiLogFileCoverage } from "./file-streams";
+import {
+  crossProjectReferences,
+  prefixClashes,
+  selectLocalProduct,
+  selectionKey,
+  type CrossProjectReference,
+  type PrefixClash,
+  type ExportSelection,
+} from "./scope";
 
 /** The oldest schema the sources are written against. */
 export const MIGRATION_EXPORT_MIN_SCHEMA = 64;
 
-/** Default chunk bounds: whichever is reached first closes a checkpoint. */
-export const DEFAULT_CHUNK_MAX_BYTES = 8 * 1024 * 1024;
-export const DEFAULT_CHUNK_MAX_RECORDS = 50_000;
+/** Retained entry point for callers of the original exporter. */
+export { DEFAULT_CHUNK_MAX_BYTES, DEFAULT_CHUNK_MAX_RECORDS } from "./records";
 
 /** How often the export yields to the event loop, in source rows. */
 const YIELD_EVERY_ROWS = 256;
@@ -106,7 +121,11 @@ export interface MigrationExportProgress {
   resumed: boolean;
 }
 
-export interface MigrationExportOptions {
+export interface MigrationExportOptions extends ExportSelection {
+  /** File stores default to siblings of sourcePath (dry runs pass the original profile stores). */
+  transcriptsDir?: string;
+  piLogsDir?: string;
+  blobsDir?: string;
   /** The live `volli.db`. Opened read-only, only to snapshot it. */
   sourcePath: string;
   /** Where the complete export lands. Must not exist yet. */
@@ -137,7 +156,7 @@ export interface MigrationPreflightFacts {
   undeliveredNotices: number;
   /** Automation Run messages not yet delivered. */
   undeliveredRunMessages: number;
-  /** Worktree cleanups with no receipt. */
+  /** Worktree cleanups without a terminal receipt. */
   openCleanupCommands: number;
   /** Executor attachments with no close recorded: a turn may still be running. */
   openAttachments: number;
@@ -160,6 +179,15 @@ export interface MigrationExportManifest {
   };
   placeholders: typeof MIGRATION_PLACEHOLDERS;
   preflight: MigrationPreflightFacts;
+  /** No arrival, schedule or arming is imported as executable work. */
+  pendingRunnerWork: false;
+  /** Stable resume identity, including selection and external store roots. */
+  selection: string;
+  projectIds: string[];
+  profileStep: boolean;
+  crossProjectReferences: CrossProjectReference[];
+  prefixClashes: PrefixClash[];
+  piLogFiles: PiLogFileCoverage[];
   tables: readonly MigrationTableDecision[];
   sources: Array<{ id: string; rows: number }>;
   streams: Array<{
@@ -221,6 +249,7 @@ export async function exportMigrationSnapshot(
   try {
     return await runExport(options);
   } catch (error) {
+    throwIfAborted(options.signal);
     throw classify(error);
   }
 }
@@ -249,10 +278,19 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
   const reporter = progressReporter(options.onProgress);
   if (existsSync(join(staging, MANIFEST_FILE))) {
     // A previous run wrote the manifest and stopped before the rename.
-    const { manifest } = await verifyMigrationExport(staging);
-    await publish(staging, options.outDir);
-    reporter.report({ phase: "done", resumed: true }, true);
-    return { outDir: options.outDir, manifest, resumed: true };
+    const candidate = JSON.parse(
+      await readFile(join(staging, MANIFEST_FILE), "utf8"),
+    ) as MigrationExportManifest;
+    if (
+      candidate.selection === resumeIdentity(options) &&
+      candidate.appVersion === options.appVersion
+    ) {
+      const { manifest } = await verifyMigrationExport(staging);
+      await publish(staging, options.outDir);
+      reporter.report({ phase: "done", resumed: true }, true);
+      return { outDir: options.outDir, manifest, resumed: true };
+    }
+    await rm(staging, { recursive: true, force: true });
   }
 
   let state = await readState(staging, options);
@@ -273,10 +311,17 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
     const checkpoints = await recoverJournal(staging);
     const onCheckpoint = (checkpoint: Checkpoint) => checkpoints.push(checkpoint);
     throwIfAborted(options.signal);
+    selectLocalProduct(snapshot, options);
+    const pending = preflightFacts(snapshot, state.snapshotAt);
+    for (const name of PENDING_RUNNER_FACTS) {
+      if (pending[name] > 0)
+        throw new SourceCorruptError(`pending runner work: ${name} (${pending[name]})`);
+    }
     const lookups = buildLookups(snapshot, {
       snapshotAt: state.snapshotAt,
       pathExists: options.pathExists,
       homeDir: options.homeDir,
+      profileStep: options.projectIds === undefined,
     });
     const counts = EXPORT_SOURCES.map((source) => countRows(snapshot, source));
     reporter.set({
@@ -328,7 +373,30 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
 
     reporter.report({ phase: "finalizing", source: null }, true);
     assertComplete(checkpoints, counts);
-    const manifest = buildManifest(snapshot, state, checkpoints, counts, now());
+    const { checkpoints: fileCheckpoints, piLogFiles } = await exportFileStreams(
+      snapshot,
+      staging,
+      {
+        ...fileRoots(options),
+        signal: options.signal,
+        chunkMaxBytes: options.chunkMaxBytes,
+        chunkMaxRecords: options.chunkMaxRecords,
+      },
+    );
+    const manifest = buildManifest(
+      snapshot,
+      state,
+      [...checkpoints, ...fileCheckpoints],
+      counts,
+      now(),
+      piLogFiles,
+    );
+    reporter.add({
+      bytesWritten: fileCheckpoints.reduce(
+        (n, c) => n + c.chunks.reduce((s, x) => s + x.bytes, 0),
+        0,
+      ),
+    });
     snapshot.close();
     await writeFileDurably(join(staging, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
     await verifyMigrationExport(staging);
@@ -338,6 +406,28 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
   } finally {
     if (snapshot.open) snapshot.close();
   }
+}
+
+function fileRoots(options: MigrationExportOptions) {
+  const root = dirname(resolve(options.sourcePath));
+  return {
+    transcriptsDir: resolve(options.transcriptsDir ?? join(root, "session-transcripts")),
+    piLogsDir: resolve(options.piLogsDir ?? join(root, "pi-sessions")),
+    blobsDir: resolve(options.blobsDir ?? join(root, "blobs")),
+  };
+}
+function resumeIdentity(options: MigrationExportOptions): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        resolve(options.sourcePath),
+        selectionKey(options),
+        fileRoots(options),
+        options.homeDir ?? null,
+        MAPPER_VERSION,
+      ]),
+    )
+    .digest("hex");
 }
 
 // ---- snapshot ---------------------------------------------------------------
@@ -356,6 +446,7 @@ async function readState(
     const ours =
       state.format === MIGRATION_EXPORT_FORMAT &&
       state.mapperVersion === MAPPER_VERSION &&
+      state.selection === resumeIdentity(options) &&
       state.appVersion === options.appVersion &&
       state.sourcePath === resolve(options.sourcePath) &&
       state.schemaVersion <= SCHEMA_HEAD;
@@ -409,7 +500,7 @@ async function takeSnapshot(
     throw new MigrationExportError("source_unreadable", `No database at ${options.sourcePath}.`);
   }
   await rm(staging, { recursive: true, force: true });
-  await mkdir(staging, { recursive: true });
+  await mkdir(staging, { recursive: true, mode: 0o700 });
   assertDiskSpace(options.sourcePath, staging, options.diskProbe ?? nodeDiskProbe);
   throwIfAborted(options.signal);
 
@@ -471,6 +562,8 @@ async function takeSnapshot(
     appVersion: options.appVersion,
     snapshotAt,
     schemaVersion,
+    selection: resumeIdentity(options),
+    profileStep: options.projectIds === undefined,
   };
   await writeFileDurably(join(staging, STATE_FILE), `${JSON.stringify(state)}\n`);
   await syncDirectory(staging);
@@ -639,7 +732,8 @@ function preflightFacts(db: Database.Database, snapshotAt: number): MigrationPre
     ),
     openCleanupCommands: count(
       `SELECT COUNT(*) AS n FROM worktree_cleanup_commands c
-        WHERE NOT EXISTS (SELECT 1 FROM worktree_cleanup_receipts r WHERE r.command_id = c.id)`,
+        WHERE NOT EXISTS (SELECT 1 FROM worktree_cleanup_receipts r WHERE r.command_id = c.id AND r.status IN ('completed','rejected'))
+          AND NOT EXISTS (SELECT 1 FROM worktree_cleanup_facts f WHERE f.command_id = c.id AND f.kind = 'cleanup.run.interrupted')`,
     ),
     openAttachments: count(
       "SELECT COUNT(*) AS n FROM session_attachments WHERE closed_sequence IS NULL",
@@ -658,6 +752,7 @@ function buildManifest(
   checkpoints: readonly Checkpoint[],
   counts: readonly number[],
   completedAt: number,
+  piLogFiles: PiLogFileCoverage[],
 ): MigrationExportManifest {
   const tables = (
     db
@@ -669,7 +764,7 @@ function buildManifest(
   const tableRows: Record<string, number> = {};
   for (const table of tables) {
     tableRows[table] = (
-      db.prepare(`SELECT COUNT(*) AS n FROM "${table.replaceAll('"', '""')}"`).get() as {
+      db.prepare(`SELECT COUNT(*) AS n FROM main."${table.replaceAll('"', '""')}"`).get() as {
         n: number;
       }
     ).n;
@@ -691,6 +786,15 @@ function buildManifest(
     },
     placeholders: MIGRATION_PLACEHOLDERS,
     preflight: preflightFacts(db, state.snapshotAt),
+    pendingRunnerWork: false,
+    selection: state.selection,
+    projectIds: (
+      db.prepare("SELECT id FROM projects ORDER BY id").all() as Array<{ id: string }>
+    ).map((row) => row.id),
+    profileStep: state.profileStep,
+    crossProjectReferences: crossProjectReferences(db),
+    prefixClashes: prefixClashes(db),
+    piLogFiles,
     tables: MIGRATION_TABLE_DECISIONS,
     sources: EXPORT_SOURCES.map((source, index) => ({ id: source.id, rows: counts[index]! })),
     streams: (Object.keys(STREAM_DESTINATIONS) as StreamName[]).map((name) => {
