@@ -1001,8 +1001,8 @@ async function handle(cmd, args) {
 /**
  * A Volli Cloud instance's real quit (Tray → Quit Volli), for `stop` and
  * `restart` only. The helper and the seam it reaches live in
- * `lib/cloud-acceptance.mjs`; every other instance, the remote journey's
- * native Quit included, never reaches it.
+ * `lib/cloud-acceptance.mjs`. Both cloud fixtures and explicit real targets
+ * use it; local instances and the remote journey's native Quit never do.
  */
 async function cloudTrayQuit() {
   requireCloudLaunch();

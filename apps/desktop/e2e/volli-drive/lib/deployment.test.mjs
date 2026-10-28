@@ -64,6 +64,17 @@ test("no missing/partial source falls back to another profile or ambient values"
   });
 });
 
+test("malformed profiles report JSON failure without echoing file contents", async () => {
+  await withProfile("staging", {}, async (root) => {
+    await writeFile(join(root, ".scratch", "deployments", "staging.json"), "not-json-do-not-echo");
+    await assert.rejects(readDeployment({ deployment: "staging" }, root), (error) => {
+      assert.match(error.message, /invalid JSON/);
+      assert.doesNotMatch(error.message, /not-json-do-not-echo/);
+      return true;
+    });
+  });
+});
+
 test("prod requires explicit selection AND a boolean confirmation, on both launch gates", async () => {
   for (const confirmProd of [undefined, false, "true", "false", "1"]) {
     await assert.rejects(

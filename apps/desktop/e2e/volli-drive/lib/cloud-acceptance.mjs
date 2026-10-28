@@ -91,8 +91,8 @@ function fixtureStorageOrigin(raw) {
 
 /**
  * The fixture backend, from `with-backend.ts --deploy`'s environment. Refuses
- * anything that is not a loopback backend with a test issuer key: a drive
- * never points at a real deployment.
+ * anything that is not a loopback backend with a test issuer key: `--cloud`
+ * never points at a real deployment (`--deployment` is a separate mode).
  */
 export function cloudFixtureFromEnv(env = process.env) {
   const convexUrl = loopbackHttpUrl("VOLLI_CONVEX_URL", env.VOLLI_CONVEX_URL);
@@ -175,11 +175,12 @@ export function cloudElectronEnv(fixture, subject, email) {
  * Tray → Quit Volli in a Volli Cloud launch, which stays resident on an
  * ordinary quit ("Keep this Mac available"). It goes through main's own
  * menu-bar controller, `globalThis.volliMenuBarHost`, which only an
- * unpackaged build with `VOLLI_SMOKE_MENU_BAR_HOST=1` exposes (and only
- * {@link cloudElectronEnv} sets that). `quitFromTray` is the production
- * policy: it asks first when work is live, exactly as for a person.
- * Resolves once `exited()` holds, or after `timeoutMs` with `exited: false`.
- * The supervisor calls it for cloud instances only.
+ * unpackaged build with `VOLLI_SMOKE_MENU_BAR_HOST=1` exposes. Both
+ * {@link cloudElectronEnv} and the real-deployment setup set that seam.
+ * `quitFromTray` is the production policy: it asks first when work is live,
+ * exactly as for a person. Resolves once `exited()` holds, or after
+ * `timeoutMs` with `exited: false`. The supervisor calls it only for cloud
+ * fixtures and explicitly selected real-deployment instances.
  */
 export async function quitCloudLaunchFromTray(app, exited, { timeoutMs = 30_000 } = {}) {
   const asked = await app

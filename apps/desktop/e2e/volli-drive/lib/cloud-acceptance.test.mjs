@@ -252,7 +252,7 @@ test("the Tray quit asks main's controller on its next turn, then waits for the 
 /** The supervisor's source, for the privilege pins below. */
 const supervisor = readFileSync(new URL("../supervisor.mjs", import.meta.url), "utf8");
 
-test("only a cloud instance reaches the Tray quit; native Quit stays the remote journey's own", () => {
+test("only cloud fixtures and real deployments reach Tray quit; remote native Quit stays separate", () => {
   // The menu-bar controller is named only in cloud setup modules, never
   // in the supervisor (remote-acceptance.test.mjs pins the same).
   assert.doesNotMatch(supervisor, /VOLLI_SMOKE_MENU_BAR_HOST|volliMenuBarHost/u);

@@ -34,6 +34,8 @@ function publicConfig(input) {
 }
 
 function assertSelection(name, confirmedProd) {
+  if (typeof confirmedProd !== "boolean")
+    throw new Error("production requires the bare --confirm-prod flag (no value)");
   if (!["dev", "staging", "prod"].includes(name))
     throw new Error("--deployment must be dev, staging or prod");
   if (name === "prod" && confirmedProd !== true)
@@ -64,10 +66,17 @@ export async function readDeployment(flags, repo) {
     input = Object.fromEntries(Object.keys(FIELDS).map((key) => [key, flags[key]]));
   } else {
     const path = join(repo, ".scratch", "deployments", `${name}.json`);
+    let json;
     try {
-      input = JSON.parse(await readFile(path, "utf8"));
+      json = await readFile(path, "utf8");
     } catch {
       throw new Error(`cannot read deployment profile ${path}; supply it or all four public flags`);
+    }
+    try {
+      input = JSON.parse(json);
+    } catch {
+      // Do not echo the parser's source excerpt: a mistyped file may contain a secret.
+      throw new Error(`invalid JSON in deployment profile ${path}`);
     }
     if (input?.name !== name)
       throw new Error("deployment profile name must match --deployment (prod cannot be an alias)");
