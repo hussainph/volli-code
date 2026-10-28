@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Project } from "@volli/shared";
 
 import type { CloudSession } from "@renderer/lib/cloud-client";
+import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
 
 import { fakeCloud, refusal } from "./fake-cloud.test-support";
-import { useCloudLinkInputs } from "../cloud-link";
+import { INITIAL_CLOUD_LINK_INPUT, useCloudLinkInputs } from "../cloud-link";
 import { projectRows, type CloudProjectRow } from "./projection";
 import { CLOUD_READ_ONLY } from "./source";
 import type { BoardSnapshot } from "./snapshot";
@@ -144,9 +145,40 @@ const SNAPSHOT: BoardSnapshot = {
 
 afterEach(() => {
   useCloudWorkspaceStore.setState({ workspace: null, localProjects: 0 });
+  useCloudLinkInputs.setState({ input: { ...INITIAL_CLOUD_LINK_INPUT } });
 });
 
 describe("joining and leaving a Workspace", () => {
+  it("refuses selection before the client starts, over a snapshot, or while the OS is offline", async () => {
+    await expect(selectCloudWorkspace("w2")).rejects.toThrow(NOT_CONNECTED);
+    const h = harness();
+    h.connect();
+    useCloudLinkInputs.getState().update({ snapshotAt: 42 });
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(CLOUD_READ_ONLY);
+    useCloudLinkInputs.getState().update({ snapshotAt: null, online: false });
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(CLOUD_READ_ONLY);
+    useCloudLinkInputs.getState().update({ online: true });
+    h.stop();
+  });
+  it("does not reopen a Workspace when a selection read finishes after the client closes", async () => {
+    const h = harness();
+    h.connect();
+    let answer!: (row: typeof W2) => void;
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const selecting = selectCloudWorkspace("w2", h.cloud.session);
+    h.close();
+    answer(W2);
+    await selecting;
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w2" })).toBe(0);
+    expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
+    h.stop();
+  });
   it("does not warn about the previous Workspace’s projects on Leave", () => {
     const h = harness();
     h.connect();
