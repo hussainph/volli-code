@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
-import type { SecretService } from "@volli/host-core/secrets";
+import { SecretRequestExpiredError, type SecretService } from "@volli/host-core/secrets";
 import type { VolliInvokeContract } from "../../ipc/contract";
 
 function record(raw: unknown): Record<string, unknown> {
@@ -13,7 +13,10 @@ function text(raw: unknown): string {
   return raw;
 }
 
-function failed() {
+function failed(error: unknown) {
+  if (error instanceof SecretRequestExpiredError) {
+    return { ok: false, error: "This credential request is no longer waiting.", expired: true };
+  }
   return {
     ok: false,
     error: "Could not update the secret. Retry or choose Session storage.",
@@ -36,8 +39,8 @@ export function registerSecretIpc(
       try {
         const result = run(...args);
         return result instanceof Promise ? result.catch(failed) : result;
-      } catch {
-        return failed();
+      } catch (error) {
+        return failed(error);
       }
     });
   };

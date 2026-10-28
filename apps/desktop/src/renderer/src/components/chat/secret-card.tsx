@@ -21,18 +21,18 @@ export function SecretCards({
 
   // Waiting comes from the durable Session projection, not the Settings list.
   // Show one secure field at a time, keeping parallel calls queued in fact order.
-  // The local latch only hides successful writes until their fact reaches us;
-  // a retry's fresh correlation must not inherit an earlier call's latch.
-  const next = interactions.find(
+  // The local latch hides successful writes until their fact reaches us, or
+  // correlations the host confirms have expired. Retries use fresh ids.
+  const head = interactions.find(
     ({ id, credential }) =>
       credential !== undefined && credential.sessionId === sessionId && !settled.has(id),
   );
-  if (next?.credential === undefined) return null;
+  if (head?.credential === undefined) return null;
   return (
     <SecretCard
-      key={next.id}
-      request={next.credential}
-      onSettled={() => setSettled((previous) => new Set([...previous, next.id]))}
+      key={head.id}
+      request={head.credential}
+      onSettled={() => setSettled((previous) => new Set([...previous, head.id]))}
     />
   );
 }
@@ -68,7 +68,16 @@ function SecretCard({
         kind === "submit"
           ? await window.api.secrets.submit({ requestId: request.id, value, scope })
           : await window.api.secrets.decline(request.id);
-      if (!result.ok) throw new Error("Credential action failed");
+      if (!result.ok) {
+        if (result.expired) {
+          // A failed cancellation commit can leave a durable card after its live
+          // correlation is gone. Do not let that orphan hide every later request.
+          toastError("This credential request is no longer waiting.");
+          onSettled();
+          return;
+        }
+        throw new Error("Credential action failed");
+      }
       onSettled();
     } catch {
       // Neither an exception nor agent metadata is safe error copy.

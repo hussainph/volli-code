@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { SecretRequestMetadata, RendererSessionInteraction } from "@volli/shared";
 import { COMPOSER_STACK_SHELL } from "@volli/session-presentation";
-import type { SecretsResult } from "../../../../ipc/secrets";
+import type { SecretRequestResult, SecretsResult } from "../../../../ipc/secrets";
 import type { Result } from "../../../../ipc/contract";
 
 import { toastError } from "@renderer/lib/toast";
@@ -37,8 +37,8 @@ const interaction = (credential = request): RendererSessionInteraction => ({
 const api = {
   secrets: {
     list: vi.fn<() => Promise<SecretsResult>>(),
-    submit: vi.fn<() => Promise<Result>>(),
-    decline: vi.fn<() => Promise<Result>>(),
+    submit: vi.fn<() => Promise<SecretRequestResult>>(),
+    decline: vi.fn<() => Promise<SecretRequestResult>>(),
   },
   appState: { set: vi.fn() },
   chat: { send: vi.fn(), resolveInteraction: vi.fn() },
@@ -215,6 +215,30 @@ describe("person-only credential cards", () => {
     });
     expect(host.querySelector("input[type=password]")).toBeNull();
   });
+
+  it.each(["Submit credential", "Decline"])(
+    "advances past an expired head on %s without hiding a live request or using Settings reads",
+    async (action) => {
+      const expired = { ok: false, error: "unsafe exception text", expired: true } as const;
+      api.secrets.submit.mockResolvedValueOnce(expired);
+      api.secrets.decline.mockResolvedValueOnce(expired);
+      const second = interaction({ ...request, id: "request-2", name: "SECOND_TOKEN" });
+      const queue = [interaction(), second];
+      await render("s1", queue);
+      password().value = "private-expired-value";
+      await act(async () => button(action).click());
+      expect(host.textContent).toContain("SECOND_TOKEN");
+      expect(host.textContent).not.toContain("DEPLOY_TOKEN");
+      expect(password().value).toBe("");
+      expect(toastError).toHaveBeenCalledWith("This credential request is no longer waiting.");
+      expect(host.innerHTML).not.toContain("private-expired-value");
+      expect(JSON.stringify(vi.mocked(toastError).mock.calls)).not.toContain("unsafe");
+      expect(api.secrets.list).not.toHaveBeenCalled();
+      await render("s1", queue);
+      expect(host.textContent).toContain("SECOND_TOKEN");
+      expect(host.querySelectorAll("input[type=password]")).toHaveLength(1);
+    },
+  );
 
   it("sends the selected broader scope only when explicitly chosen", async () => {
     await render();

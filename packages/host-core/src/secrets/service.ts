@@ -28,6 +28,14 @@ interface SecretOwner {
   projectId: string;
   projectLabel: string;
 }
+/** A dedicated write cannot settle a correlation the host no longer owns. */
+export class SecretRequestExpiredError extends Error {
+  constructor() {
+    super("This credential request is no longer waiting.");
+    this.name = "SecretRequestExpiredError";
+  }
+}
+
 type Outcome = "signed in" | "declined" | "still missing";
 interface Pending {
   metadata: SecretRequestMetadata;
@@ -250,7 +258,7 @@ export class SecretService {
 
   submit(requestId: string, value: string, scope: SecretScope): Promise<void> {
     const pending = this.#pending.get(requestId);
-    if (pending === undefined) throw new Error("This credential request is no longer waiting.");
+    if (pending === undefined) throw new SecretRequestExpiredError();
     if (!["session", "project", "always"].includes(scope)) throw new Error("Invalid secret scope.");
     const { metadata } = pending;
     const save = () =>
@@ -273,7 +281,7 @@ export class SecretService {
 
   decline(id: string): Promise<void> {
     const pending = this.#pending.get(id);
-    if (pending === undefined) throw new Error("This credential request is no longer waiting.");
+    if (pending === undefined) throw new SecretRequestExpiredError();
     return pending.settle("declined");
   }
 

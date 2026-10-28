@@ -3,6 +3,7 @@ import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc
 import type {
   CredentialsResult,
   SecretReplaceInput,
+  SecretRequestResult,
   SecretSubmitInput,
   SecretsResult,
 } from "../ipc/secrets";
@@ -539,8 +540,9 @@ const api = {
   /** Person-only credential door. Reads return metadata, never stored values. */
   secrets: {
     list: (projectId?: string): Promise<SecretsResult> => invoke("volli:secrets-list", projectId),
-    submit: (input: SecretSubmitInput): Promise<Result> => invoke("volli:secret-submit", input),
-    decline: (id: string): Promise<Result> => invoke("volli:secret-decline", id),
+    submit: (input: SecretSubmitInput): Promise<SecretRequestResult> =>
+      invoke("volli:secret-submit", input),
+    decline: (id: string): Promise<SecretRequestResult> => invoke("volli:secret-decline", id),
     revoke: (id: string): Promise<Result> => invoke("volli:secret-revoke", id),
     replace: (input: SecretReplaceInput): Promise<Result> => invoke("volli:secret-replace", input),
     unlock: (): Promise<CredentialsResult> => invoke("volli:secrets-unlock"),
