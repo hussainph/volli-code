@@ -22,7 +22,7 @@ import {
 
 import { internal } from "./_generated/api";
 import { action, internalQuery, query, type QueryCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel.js";
 import { authError, requireProject, requireSessionScope, requireSessionVisible } from "./lib/auth";
 import { PRESIGN_EXPIRES_SECONDS, objectStoreConfig } from "./lib/objectStore";
 
