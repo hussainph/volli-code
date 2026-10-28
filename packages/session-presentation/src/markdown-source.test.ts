@@ -35,6 +35,22 @@ describe("splitMarkdownSource", () => {
     expect(block.text).toBe("if (a) {\n  b();\n}");
   });
 
+  it("trims trailing Unicode whitespace without stripping code indentation", () => {
+    expect(splitMarkdownSource("```txt\n\tindented\u00a0\t\n\n```")).toEqual([
+      { kind: "code", text: "\tindented", language: "txt", line: 0 },
+    ]);
+  });
+
+  it("handles a pathological internal tab run within a time bound", () => {
+    // An unanchored /\\s+$/ retries every offset in this non-trailing run.
+    const text = `prefix${"\t".repeat(200_000)}suffix`;
+    const source = `\`\`\`txt\n${text}\n\`\`\``;
+    const started = performance.now();
+    const segments = splitMarkdownSource(source);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(segments).toEqual([{ kind: "code", text, language: "txt", line: 0 }]);
+  }, 2_000);
+
   it("treats a shorter run of backticks inside a block as code", () => {
     const [block] = splitMarkdownSource("````md\n```\nnested\n```\n````");
     expect(block.text).toBe("```\nnested\n```");
