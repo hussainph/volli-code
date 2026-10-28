@@ -522,7 +522,7 @@ jobs:
       # `overwrite` so "Re-run all jobs" replaces this shard's blob instead
       # of failing on the name it left last attempt.
       - name: Upload blob report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-blob-${{ matrix.shard }}
           path: ${{ runner.temp }}/desktop-blobs/desktop-${{ matrix.shard }}-of-${{ strategy.job-total }}.json
@@ -939,7 +939,7 @@ jobs:
             bash -s < apps/hostd/scripts/ci-operator-proof.sh
 
       - name: Upload the hostd artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: volli-hostd-linux-x64
           path: |
@@ -1033,7 +1033,7 @@ jobs:
 
       - name: Upload core smoke attempts and native-window evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-results-core-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/smoke-results

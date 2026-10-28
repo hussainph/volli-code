@@ -256,7 +256,7 @@ jobs:
       - name: Upload public peer bundle
         id: upload
         if: steps.capture.outputs.captured == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: canary-peer-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canary-peer.json
@@ -355,7 +355,7 @@ jobs:
           docker run --rm -i -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
             bash -s < apps/hostd/scripts/ci-boot-artifact.sh
       - name: Upload architecture assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hostd-linux-${{ matrix.arch }}
           path: |
@@ -457,7 +457,7 @@ jobs:
           node apps/hostd/scripts/package.mjs --out "$RUNNER_TEMP/hostd"
           bash apps/hostd/scripts/ci-boot-artifact.sh "$RUNNER_TEMP/hostd"
       - name: Upload architecture assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hostd-darwin-${{ matrix.arch }}
           path: |
@@ -532,7 +532,7 @@ jobs:
           BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
         run: cp "$BUNDLE_PATH" "$RUNNER_TEMP/hostd-assets/hostd-provenance.sigstore.json"
       - name: Upload complete hostd release asset set
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hostd-release-assets
           path: ${{ runner.temp }}/hostd-assets/*
@@ -578,7 +578,7 @@ jobs:
           vp run --filter @volli/desktop build
           cmp "$VOLLI_HOSTD_MANIFEST" apps/desktop/dist-electron/hostd-release-manifest.json
       - name: Upload desktop pin
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-hostd-manifest
           path: apps/desktop/dist-electron/hostd-release-manifest.json

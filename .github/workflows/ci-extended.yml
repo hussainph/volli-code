@@ -85,7 +85,7 @@ jobs:
 
       - name: Upload rest smoke attempts and native-window evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-results-rest-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/smoke-results
@@ -172,7 +172,7 @@ jobs:
 
       - name: Upload cloud acceptance evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-results-cloud-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/cloud-acceptance
@@ -241,7 +241,7 @@ jobs:
 
       - name: Upload cloud wake acceptance evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-results-cloud-wake-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/cloud-wake-acceptance
