@@ -391,7 +391,10 @@ person is still a Member. Re-arming/disarming the last paused record clears it.
 Schedule pending/gap pointers and Run job/caller/Instructions fields are
 optional expand slots for the clock/Run producer. Schedule arm and trigger
 edits compute a strictly-future cursor with the shared stored-zone rule;
-there is no cron in the records layer.
+there is no cron in the records layer. Paused schedules retain their cursor;
+the clock must paginate through the due index (continuing past paused rows),
+not repeatedly take its first page, or an overdue paused prefix can starve
+active schedules.
 
 Receiving-task wiring: the cloud Automation source must consume `list`,
 `armings`, `columnOrders`, `schedules` and the paginated `runsFor*` reads,
@@ -399,7 +402,9 @@ send UUID `commandId`s for record writes, and supply this Mac's runner for
 arming. The clock/Run layer must skip paused rows, populate the optional
 pending/gap and Run fields, and fence leased outcomes against current armings.
 The move importer must set `pausedAt`/`pausedReason: moved` on imported arms;
-adding optional fields does not itself change imported records.
+adding optional fields does not itself change imported records. The Needs-you
+reader must expose project-scoped non-Session `automation_paused` runner alerts;
+`sessions.attention` deliberately remains Session-only.
 
 ## Runner-routed agent Session commands
 

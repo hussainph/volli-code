@@ -11,7 +11,7 @@
 
 import type { Actor } from "./actor";
 import type { BoardEventDraft } from "./board-rules";
-import type { RunnerId, SessionId, TicketId, UserId } from "./ids";
+import type { ProjectId, RunnerId, SessionId, TicketId, UserId } from "./ids";
 import type { TicketStatus } from "../ticket";
 
 /** What raised an item. Stored; add only (a removed literal would fail the stored rows' validation). */
@@ -87,6 +87,14 @@ export type RunnerAlert = (typeof RUNNER_ALERTS)[keyof typeof RUNNER_ALERTS];
 /** Frozen: a runner's alert is `r:{runnerId}:{alert}`. */
 export function runnerAlertAttentionId(runnerId: RunnerId | string, alert: RunnerAlert): string {
   return `r:${runnerId}:${alert}`;
+}
+
+/** Frozen: one paused Automation alert per project and armer; ownership never transfers on re-arm. */
+export function automationPauseAttentionId(
+  projectId: ProjectId | string,
+  userId: UserId | string,
+): string {
+  return `a:${projectId}:${userId}:paused`;
 }
 
 // ── review requests ─────────────────────────────────────────────────────────────

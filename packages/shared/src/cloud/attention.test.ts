@@ -4,6 +4,7 @@ import type { Actor } from "./actor";
 import {
   ATTENTION_CLEARED_REASONS,
   ATTENTION_SOURCES,
+  automationPauseAttentionId,
   notifySourceId,
   quarantineSourceId,
   SESSION_BLOCKED_SOURCE_ID,
@@ -46,6 +47,10 @@ describe("frozen ids", () => {
     );
     expect(quarantineSourceId(7)).toBe("volli:quarantine:7");
     expect(reviewAttentionId(TICKET, BOB)).toBe(`t:${TICKET}:review:${BOB}`);
+    expect(automationPauseAttentionId("project", ALICE)).toBe(`a:project:${ALICE}:paused`);
+    expect(automationPauseAttentionId("project", BOB)).not.toBe(
+      automationPauseAttentionId("project", ALICE),
+    );
     expect(runnerAlertAttentionId(RUNNER, "credential_reuse")).toBe(`r:${RUNNER}:credential_reuse`);
   });
 

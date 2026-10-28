@@ -24,9 +24,11 @@
  * name, the old runner is revoked (reason `replaced`) and leaves the list,
  * and the old runner's work follows
  * (`moveRunnerWork`): Session claims (next generation), Session Places,
- * viewers, and open jobs that name no Working copy. Working-copy jobs stay
- * with the replaced runner until Working copies move (not part of this
- * handover).
+ * viewers, and open jobs that name no Working copy. Never-leased Automation
+ * jobs are withdrawn and armings stay paused on the old runner: a changed
+ * runner identity requires an explicit re-arm before unattended work resumes.
+ * Working-copy jobs stay with the replaced runner until Working copies move
+ * (not part of this handover).
  * Any other value registers a plain new runner, so the id reveals nothing
  * about anyone else's runners. A client-minted `registrationId` makes a lost
  * registration reply retryable while the first credential is unused: the
@@ -652,7 +654,8 @@ async function retryDesktopRegistration(
  *   generation, so a write fenced by the old claim is refused;
  * - every Session placed on it is placed on the successor, and its viewers
  *   (indexed by the claimed runner) follow;
- * - its open jobs (queued, or leased: the lease keeps its boot and attempt,
+ * - its remaining open jobs (never-leased Automation work was cancelled by
+ *   revocation; queued retries and leased jobs keep their boot and attempt,
  *   so the successor's next claim takes back one an earlier boot held, and
  *   the same process may still complete its own) follow, except jobs naming
  *   a Working copy: Working copies stay on the runner that reported them,

@@ -7,10 +7,14 @@ import {
 } from "@volli/shared";
 import {
   actorUserId,
+  automationAbandonSkipReason,
+  automationPauseAttentionId,
   parseId,
   parseJobPayload,
   type Actor,
   type AutomationRunner,
+  type AutomationRunAbandonReason,
+  type AutomationPauseReason,
   type BoardEventDraft,
   type CloudAutomationDefinition,
   type RunnerId,
@@ -122,8 +126,17 @@ export async function cancelAutomationJobs(
   matches: (job: Doc<"runnerJobs">, payload: ReturnType<typeof automationPayload>) => boolean,
   now: number,
   actor: Actor,
-  code: string,
+  withdrawal:
+    | AutomationRunAbandonReason
+    | { kind: "runner-unavailable"; code: Exclude<AutomationPauseReason, "moved"> },
 ): Promise<void> {
+  const code = typeof withdrawal === "string" ? withdrawal : withdrawal.code;
+  const skipReason =
+    typeof withdrawal === "string" ? automationAbandonSkipReason(withdrawal) : withdrawal;
+  const detail =
+    skipReason.kind === "run-refused"
+      ? skipReason.error
+      : "The runner or armer is no longer available.";
   const jobs = await ctx.db
     .query("runnerJobs")
     .withIndex("by_project_kind_status", (q) =>
@@ -134,10 +147,7 @@ export async function cancelAutomationJobs(
   for (const job of jobs) {
     const payload = automationPayload(job);
     if (job.lease !== null || !matches(job, payload)) continue;
-    await cancelJob(ctx, job, now, {
-      code,
-      detail: "The Automation is no longer armed on this runner.",
-    });
+    await cancelJob(ctx, job, now, { code, detail });
     const runId = "runId" in payload ? payload.runId : null;
     const run =
       runId === null
@@ -149,11 +159,7 @@ export async function cancelAutomationJobs(
     if (run?.status === "queued") {
       await ctx.db.patch(run._id, {
         status: "skipped",
-        skipReason: {
-          kind: "run-refused",
-          code,
-          error: "The Automation is no longer armed on this runner.",
-        },
+        skipReason,
       });
       if (run.automationId !== null)
         events.push({
@@ -168,6 +174,40 @@ export async function cancelAutomationJobs(
     }
   }
   await recordBoardEvents(ctx, projectId, actor, now, events);
+}
+
+export async function removeScheduleArming(
+  ctx: MutationCtx,
+  input: {
+    schedule: Doc<"automationSchedules">;
+    projectId: string;
+    actor: Actor;
+    now: number;
+    withdrawal: "gone" | "schedule-disarmed";
+  },
+) {
+  const { schedule, projectId, actor, now, withdrawal } = input;
+  await ctx.db.delete(schedule._id);
+  await cancelAutomationJobs(
+    ctx,
+    projectId,
+    (_job, payload) =>
+      payload.automationId === schedule.automationId && payload.trigger === "schedule",
+    now,
+    actor,
+    withdrawal,
+  );
+  await clearPauseAttention(ctx, projectId, schedule.armedByUserId, now);
+  await recordBoardEvents(ctx, projectId, actor, now, [
+    {
+      ticketId: null,
+      payload: {
+        kind: "automation_schedule_armed",
+        automationId: parseId("automation", schedule.automationId),
+        runnerId: null,
+      },
+    },
+  ]);
 }
 
 function automationPayload(job: Doc<"runnerJobs">) {
@@ -214,12 +254,6 @@ export async function reconcileColumns(
   await recordBoardEvents(ctx, automation.projectId, actor, now, events);
 }
 
-// DURABLE: one paused-arming alert per armer and project. Include the armer so
-// a teammate re-arming never transfers an existing attention row's ownership.
-function pauseAttentionId(projectId: string, userId: string) {
-  return `a:${projectId}:${userId}:paused`;
-}
-
 export async function clearPauseAttention(
   ctx: MutationCtx,
   projectId: string,
@@ -242,7 +276,7 @@ export async function clearPauseAttention(
     )
       return;
   }
-  await clearAttention(ctx, pauseAttentionId(projectId, userId), "resolved", now);
+  await clearAttention(ctx, automationPauseAttentionId(projectId, userId), "resolved", now);
 }
 
 /**
@@ -277,7 +311,7 @@ export async function pauseArmingsFor(
   const reason = byUser ? "armer_left" : "runner_removed";
   const actor: Actor = { kind: "volli", reason: "policy" };
   const affected = new Map<string, { events: BoardEventDraft[]; users: Set<string> }>();
-  async function scope(projectId: string) {
+  async function registerAffectedProject(projectId: string) {
     const project = await ctx.db
       .query("projects")
       .withIndex("by_uuid", (q) => q.eq("id", projectId))
@@ -296,7 +330,7 @@ export async function pauseArmingsFor(
     return group;
   }
   for (const row of columns) {
-    const group = await scope(row.projectId);
+    const group = await registerAffectedProject(row.projectId);
     if (group === null || row.pausedAt != null) continue;
     await ctx.db.patch(row._id, { pausedAt: now, pausedReason: reason });
     group.users.add(row.armedByUserId);
@@ -313,7 +347,7 @@ export async function pauseArmingsFor(
   for (const row of schedules) {
     const automation = await findAutomation(ctx, row.automationId);
     if (automation === null) continue;
-    const group = await scope(automation.projectId);
+    const group = await registerAffectedProject(automation.projectId);
     if (group === null || row.pausedAt != null) continue;
     await ctx.db.patch(row._id, {
       pausedAt: now,
@@ -340,13 +374,14 @@ export async function pauseArmingsFor(
         q.eq("workspaceId", target.workspaceId).eq("deletedAt", null),
       )
       .collect();
-    for (const project of projects) await scope(project.id);
+    for (const project of projects) await registerAffectedProject(project.id);
   } else {
     const jobs = await ctx.db
       .query("runnerJobs")
       .withIndex("by_runner_ready", (q) => q.eq("runnerId", target.runnerId).eq("status", "queued"))
       .collect();
-    for (const job of jobs) if (job.kind === "automation.run") await scope(job.projectId);
+    for (const job of jobs)
+      if (job.kind === "automation.run") await registerAffectedProject(job.projectId);
   }
   for (const [projectId, group] of affected) {
     await cancelAutomationJobs(
@@ -358,19 +393,19 @@ export async function pauseArmingsFor(
           : job.runnerId === target.runnerId,
       now,
       actor,
-      reason,
+      { kind: "runner-unavailable", code: reason },
     );
     await recordBoardEvents(ctx, projectId, actor, now, group.events);
     for (const userId of group.users) {
       if (!(await ownerMayWorkOn(ctx, userId, projectId))) continue;
       await raiseAttention(ctx, {
-        id: pauseAttentionId(projectId, userId),
+        id: automationPauseAttentionId(projectId, userId),
         userId,
         projectId,
         ticketId: null,
         sessionId: null,
-        source: "environment_failed",
-        sourceId: projectId,
+        source: "runner_alert",
+        sourceId: byUser ? projectId : target.runnerId,
         kind: "automation_paused",
         title: "Automations paused",
         detail: "Re-arm on an available runner.",

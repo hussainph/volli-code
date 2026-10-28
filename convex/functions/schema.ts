@@ -28,6 +28,7 @@ import { v } from "convex/values";
 import {
   ATTENTION_CLEARED_REASONS,
   ATTENTION_SOURCES,
+  AUTOMATION_PAUSE_REASONS,
   BOARD_EVENT_KINDS,
   CHECKOUT_MODES,
   CHAT_SESSION_ACTIVITIES,
@@ -1162,7 +1163,8 @@ export default defineSchema({
   // Written only by `lib/attention.ts`.
   attentionItems: defineTable({
     // Frozen, derived by each producer (`attention.ts` in `@volli/shared/cloud`):
-    // `s:{sessionId}:{sourceId}`, `t:{ticketId}:review:{userId}`, `r:{runnerId}:{alert}`.
+    // `s:{sessionId}:{sourceId}`, `t:{ticketId}:review:{userId}`, `r:{runnerId}:{alert}`,
+    // `a:{projectId}:{userId}:paused`.
     id: v.string(),
     userId: uuid,
     // Null for an item that belongs to no project (a runner alert, billing).
@@ -1459,7 +1461,7 @@ export default defineSchema({
     runnerId: uuid,
     armedAt: time,
     pausedAt: v.optional(nullable(time)),
-    pausedReason: v.optional(nullable(literals(["moved", "runner_removed", "armer_left"]))),
+    pausedReason: v.optional(nullable(literals(AUTOMATION_PAUSE_REASONS))),
   })
     .index("by_project_status", ["projectId", "status"])
     .index("by_automation", ["automationId"])
@@ -1481,7 +1483,7 @@ export default defineSchema({
     lastFiredAt: nullable(time),
     armedAt: v.optional(time),
     pausedAt: v.optional(nullable(time)),
-    pausedReason: v.optional(nullable(literals(["moved", "runner_removed", "armer_left"]))),
+    pausedReason: v.optional(nullable(literals(AUTOMATION_PAUSE_REASONS))),
     pendingJobId: v.optional(nullable(uuid)),
     pendingRunId: v.optional(nullable(uuid)),
     gapRunId: v.optional(nullable(uuid)),

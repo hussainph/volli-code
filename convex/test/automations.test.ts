@@ -8,6 +8,7 @@ import {
   AGENT_TOKEN_ISSUER,
   RUNNER_TOKEN_ISSUER,
   agentSubject,
+  automationAbandonSkipReason,
   newId,
   parseId,
   parseJobPayload,
@@ -617,6 +618,13 @@ describe("Automation records", () => {
     const arrival = await waiting(w, "arrival");
     const manual = await waiting(w, "manual");
     const leased = await waiting(w, "manual", { leased: true });
+    await w.as.mutation(api.automations.setColumnOrder, {
+      commandId: command(),
+      projectId: w.projectId,
+      status: "doing",
+      rankedIds: [w.automationId, w.scheduleId],
+    });
+    const beforeEdit = (await projectEvents(w.t, w.projectId)).length;
     await w.as.mutation(api.automations.update, {
       commandId: command(),
       automationId: w.automationId,
@@ -626,6 +634,9 @@ describe("Automation records", () => {
     expect(await w.as.query(api.automations.armings, { projectId: w.projectId })).toEqual([]);
     expect(await jobStatus(w, arrival.jobId)).toBe("cancelled");
     expect(await jobStatus(w, manual.jobId)).toBe("queued");
+    expect(
+      (await projectEvents(w.t, w.projectId)).slice(beforeEdit).map((event) => event.kind),
+    ).toEqual(["automation_changed", "automation_armed"]);
     await w.bob.as.mutation(api.automations.remove, {
       commandId: command(),
       automationId: w.automationId,
@@ -639,7 +650,11 @@ describe("Automation records", () => {
     expect(history.page).toHaveLength(2);
     expect(history.page.find((row) => row.id === manual.runId)).toMatchObject({
       status: "skipped",
+      skipReason: automationAbandonSkipReason("gone"),
     });
+    expect(
+      (await w.as.query(api.automations.columnOrders, { projectId: w.projectId }))[0]!.rankedIds,
+    ).toEqual([w.scheduleId]);
     const schedule = await waiting(w, "schedule");
     await w.as.mutation(api.automations.remove, {
       commandId: command(),
@@ -647,7 +662,46 @@ describe("Automation records", () => {
     });
     expect(await jobStatus(w, schedule.jobId)).toBe("cancelled");
     expect(await w.as.query(api.automations.schedules, { projectId: w.projectId })).toEqual([]);
+    expect(
+      (await w.as.query(api.automations.columnOrders, { projectId: w.projectId }))[0]!.rankedIds,
+    ).toEqual([]);
   });
+
+  test.each(["disarm", "rearm", "edit"] as const)(
+    "schedule %s withdraws waiting Runs with the shared disarm reason",
+    async (change) => {
+      const w = await world();
+      await armBoth(w);
+      await waiting(w, "schedule");
+      if (change === "disarm")
+        await w.bob.as.mutation(api.automations.disarmSchedule, {
+          commandId: command(),
+          automationId: w.scheduleId,
+        });
+      else if (change === "rearm")
+        await w.bob.as.mutation(api.automations.armSchedule, {
+          commandId: command(),
+          automationId: w.scheduleId,
+          runnerId: w.bobRunnerId,
+        });
+      else
+        await w.bob.as.mutation(api.automations.update, {
+          commandId: command(),
+          automationId: w.scheduleId,
+          ...draft,
+          name: "Daily",
+          trigger: { kind: "schedule", schedule: { ...spec, hour: 10 } },
+        });
+      const runs = await w.as.query(api.automations.runsForAutomation, {
+        automationId: w.scheduleId,
+        paginationOpts: pageOpts,
+      });
+      expect(runs.page[0]).toMatchObject({
+        status: "skipped",
+        skipReason: automationAbandonSkipReason("schedule-disarmed"),
+      });
+    },
+  );
 
   test("Run history is paginated, scoped and status-filtered; private Session resolution stays private", async () => {
     const w = await world();
@@ -861,6 +915,15 @@ describe("Automation access-loss lifecycle", () => {
       for (const item of [arrival, schedule, manual])
         expect(await jobStatus(w, item.jobId)).toBe("cancelled");
       expect(await jobStatus(w, leased.jobId)).toBe("leased");
+      const pausedRuns = await w.bob.as.query(api.automations.runsForProject, {
+        projectId: w.projectId,
+        status: "skipped",
+        paginationOpts: pageOpts,
+      });
+      expect(pausedRuns.page.map((run) => run.skipReason)).toEqual([
+        { kind: "runner-unavailable", code: "armer_left" },
+        { kind: "runner-unavailable", code: "armer_left" },
+      ]);
       const alerts = await w.t.run((ctx) => ctx.db.query("attentionItems").collect());
       expect(alerts.filter((row) => row.kind === "automation_paused")).toEqual([]);
       await w.t.finishAllScheduledFunctions(vi.runAllTimers);
@@ -913,7 +976,22 @@ describe("Automation access-loss lifecycle", () => {
     expect((await projectEvents(w.t, w.projectId)).length).toBe(before);
     const alerts = await w.t.run((ctx) => ctx.db.query("attentionItems").collect());
     expect(alerts.filter((row) => row.kind === "automation_paused")).toHaveLength(1);
-    expect(alerts[0]).toMatchObject({ userId: w.userId, projectId: w.projectId, clearedAt: null });
+    expect(alerts[0]).toMatchObject({
+      userId: w.userId,
+      projectId: w.projectId,
+      clearedAt: null,
+      source: "runner_alert",
+      sourceId: w.runnerId,
+    });
+    const pausedRuns = await w.as.query(api.automations.runsForProject, {
+      projectId: w.projectId,
+      status: "skipped",
+      paginationOpts: pageOpts,
+    });
+    expect(pausedRuns.page.map((run) => run.skipReason)).toEqual([
+      { kind: "runner-unavailable", code: "runner_removed" },
+      { kind: "runner-unavailable", code: "runner_removed" },
+    ]);
     // A paused column is inert even if the old runner regains a capability.
     await w.bob.as.mutation(api.board.moveTickets, {
       commandId: command(),

@@ -46,6 +46,10 @@ import type { RunnerStatus } from "./runners";
 export const AUTOMATION_NAME_MAX_CHARS = 200;
 export const AUTOMATION_INSTRUCTIONS_MAX_CHARS = 32_000;
 
+/** Stored and returned by arming reads; expand only. Absence/null means unpaused. */
+export const AUTOMATION_PAUSE_REASONS = ["moved", "runner_removed", "armer_left"] as const;
+export type AutomationPauseReason = (typeof AUTOMATION_PAUSE_REASONS)[number];
+
 export interface CloudAutomationDefinition extends Omit<AutomationDraft, "runtime"> {
   /** Preserve invalid imported pins so the executor refuses, never silently inherits. */
   runtime: AutomationRuntime;

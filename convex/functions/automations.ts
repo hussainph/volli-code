@@ -16,7 +16,6 @@ import {
   decideAutomationChange,
   decideScheduleArming,
   parseId,
-  type BoardEventDraft,
 } from "@volli/shared/cloud";
 import { mutation, query } from "./_generated/server";
 import type { DataModel, Doc } from "./_generated/dataModel";
@@ -36,6 +35,7 @@ import {
   projectAutomations,
   publicArming,
   reconcileColumns,
+  removeScheduleArming,
   writableAutomation,
 } from "./lib/automations";
 
@@ -133,6 +133,16 @@ export const update = mutation({
           updatedAt: now,
         };
         await ctx.db.patch(automation._id, patch);
+        await recordBoardEvents(ctx, project.id, actor, now, [
+          {
+            ticketId: null,
+            payload: {
+              kind: "automation_changed",
+              automationId: parseId("automation", automation.id),
+              change: "updated",
+            },
+          },
+        ]);
         await reconcileColumns(ctx, { ...automation, ...patch }, now, actor);
         const schedule = await ctx.db
           .query("automationSchedules")
@@ -143,16 +153,16 @@ export const update = mutation({
           JSON.stringify(automationFacts(automation).trigger) !==
             JSON.stringify(decision.draft.trigger)
         ) {
-          await cancelAutomationJobs(
-            ctx,
-            project.id,
-            (_job, payload) =>
-              payload.automationId === automation.id && payload.trigger === "schedule",
-            now,
-            actor,
-            "schedule_changed",
-          );
           if (decision.draft.trigger.kind === "schedule") {
+            await cancelAutomationJobs(
+              ctx,
+              project.id,
+              (_job, payload) =>
+                payload.automationId === automation.id && payload.trigger === "schedule",
+              now,
+              actor,
+              "schedule-disarmed",
+            );
             const spec = decision.draft.trigger.schedule;
             await ctx.db.patch(schedule._id, {
               spec,
@@ -167,30 +177,15 @@ export const update = mutation({
               gapRunId: null,
             });
           } else {
-            await ctx.db.delete(schedule._id);
-            await recordBoardEvents(ctx, project.id, actor, now, [
-              {
-                ticketId: null,
-                payload: {
-                  kind: "automation_schedule_armed",
-                  automationId: parseId("automation", automation.id),
-                  runnerId: null,
-                },
-              },
-            ]);
-            await clearPauseAttention(ctx, project.id, schedule.armedByUserId, now);
+            await removeScheduleArming(ctx, {
+              schedule,
+              projectId: project.id,
+              actor,
+              now,
+              withdrawal: "schedule-disarmed",
+            });
           }
         }
-        await recordBoardEvents(ctx, project.id, actor, now, [
-          {
-            ticketId: null,
-            payload: {
-              kind: "automation_changed",
-              automationId: parseId("automation", automation.id),
-              change: "updated",
-            },
-          },
-        ]);
         return { projectId: project.id, reply: { automationId: automation.id } };
       },
     ),
@@ -213,41 +208,48 @@ export const remove = mutation({
         if (decision.kind === "refused") throw automationError(decision.code);
         const now = Date.now();
         await ctx.db.patch(automation._id, { deletedAt: now, updatedAt: now });
+        await recordBoardEvents(ctx, project.id, actor, now, [
+          {
+            ticketId: null,
+            payload: {
+              kind: "automation_changed",
+              automationId: parseId("automation", automation.id),
+              change: "deleted",
+            },
+          },
+        ]);
+        const orders = await ctx.db
+          .query("automationColumnOrder")
+          .withIndex("by_project_status", (q) => q.eq("projectId", project.id))
+          .collect();
+        for (const order of orders) {
+          if (order.rankedIds.includes(automation.id))
+            await ctx.db.patch(order._id, {
+              rankedIds: order.rankedIds.filter((id) => id !== automation.id),
+              orderedAt: now,
+            });
+        }
         await reconcileColumns(ctx, { ...automation, deletedAt: now }, now, actor);
         const schedule = await ctx.db
           .query("automationSchedules")
           .withIndex("by_automation", (q) => q.eq("automationId", automation.id))
           .unique();
-        const events: BoardEventDraft[] = [];
-        if (schedule !== null) {
-          await ctx.db.delete(schedule._id);
-          events.push({
-            ticketId: null,
-            payload: {
-              kind: "automation_schedule_armed",
-              automationId: parseId("automation", automation.id),
-              runnerId: null,
-            },
+        if (schedule !== null)
+          await removeScheduleArming(ctx, {
+            schedule,
+            projectId: project.id,
+            actor,
+            now,
+            withdrawal: "gone",
           });
-          await clearPauseAttention(ctx, project.id, schedule.armedByUserId, now);
-        }
         await cancelAutomationJobs(
           ctx,
           project.id,
           (_job, payload) => payload.automationId === automation.id,
           now,
           actor,
-          "automation_deleted",
+          "gone",
         );
-        events.push({
-          ticketId: null,
-          payload: {
-            kind: "automation_changed",
-            automationId: parseId("automation", automation.id),
-            change: "deleted",
-          },
-        });
-        await recordBoardEvents(ctx, project.id, actor, now, events);
         return { projectId: project.id, reply: { automationId: automation.id } };
       },
     ),
@@ -470,7 +472,7 @@ export const armSchedule = mutation({
             payload.automationId === automation.id && payload.trigger === "schedule",
           now,
           actor,
-          "schedule_disarmed",
+          "schedule-disarmed",
         );
         if (facts.trigger.kind !== "schedule") throw automationError("wrong_trigger");
         const row = {
@@ -534,27 +536,13 @@ export const disarmSchedule = mutation({
           .unique();
         const now = Date.now();
         if (previous !== null) {
-          await ctx.db.delete(previous._id);
-          await cancelAutomationJobs(
-            ctx,
-            project.id,
-            (_job, payload) =>
-              payload.automationId === automation.id && payload.trigger === "schedule",
-            now,
+          await removeScheduleArming(ctx, {
+            schedule: previous,
+            projectId: project.id,
             actor,
-            "schedule_disarmed",
-          );
-          await clearPauseAttention(ctx, project.id, previous.armedByUserId, now);
-          await recordBoardEvents(ctx, project.id, actor, now, [
-            {
-              ticketId: null,
-              payload: {
-                kind: "automation_schedule_armed",
-                automationId: parseId("automation", automation.id),
-                runnerId: null,
-              },
-            },
-          ]);
+            now,
+            withdrawal: "schedule-disarmed",
+          });
         }
         return { projectId: project.id, reply: { automationId: automation.id } };
       },
