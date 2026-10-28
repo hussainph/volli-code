@@ -3,10 +3,12 @@
  * fixture profile extended with the rows each rule exists for.
  */
 import { mkdtempSync, rmSync } from "node:fs";
+import { attachmentHashesByName } from "@volli/shared";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
+import { listMaterializableLinks } from "../db/blobs-repo";
 import { exportMigrationSnapshot } from "./exporter";
 import { streamRecords as records } from "./test-support/export-files";
 import { mcpOperationId, mcpServerEntryId, workingCopyId } from "./transform";
@@ -101,6 +103,36 @@ function session(id: string, role: string, parent: string | null, ticketId: stri
 }
 
 describe("mapping rules", () => {
+  it("preserves local filename collision order independently of UUID export order", async () => {
+    run("DELETE FROM blob_links");
+    run("UPDATE blobs SET original_name = 'shot.png'");
+    run(
+      `INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at)
+      VALUES ('z-first', ?, 'ticket-live', NULL, 'first', 10),
+             ('a-second', ?, 'ticket-live', NULL, 'second', 10)`,
+      profile.blobHashes.ticket,
+      profile.blobHashes.session,
+    );
+    const { outDir, manifest } = await exportProfile();
+    const links = records(outDir, manifest, "blobLinks");
+    expect(links.map((link) => link.id)).toEqual(["a-second", "z-first"]);
+    const ordered = links.toSorted((a, b) => Number(a.sourceOrder) - Number(b.sourceOrder));
+    expect(ordered.map((link) => link.id)).toEqual(["z-first", "a-second"]);
+    const names = attachmentHashesByName(
+      ordered.map((link) => ({
+        linkId: link.id,
+        blobHash: link.sha256,
+        label: link.label,
+        originalName: "shot.png",
+      })),
+    );
+    expect(names).toEqual(
+      attachmentHashesByName(listMaterializableLinks(profile.db, null, "ticket-live")),
+    );
+    expect(names.get("shot.png")).toBe(profile.blobHashes.ticket);
+    expect(names.get("shot-2.png")).toBe(profile.blobHashes.session);
+  });
+
   it("covers projects, labels, tickets and board events", async () => {
     run("UPDATE projects SET theme_canvas = ? WHERE id = 'proj-beta'", '{"stops":[]}');
     run("UPDATE projects SET theme_canvas = 'not json' WHERE id = 'proj-alpha'");

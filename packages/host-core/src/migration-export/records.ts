@@ -310,6 +310,8 @@ export interface BlobLinkRecord {
   sha256: string;
   owner: { kind: "ticket" | "session"; id: string };
   label: string;
+  /** SQLite rowid: preserves equal-timestamp materialized filename collisions. */
+  sourceOrder?: number;
   createdAt: number;
 }
 

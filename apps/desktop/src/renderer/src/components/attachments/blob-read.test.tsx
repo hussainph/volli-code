@@ -6,6 +6,7 @@ import { webcrypto } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { blobUrl, LOCAL_LAUNCH } from "@volli/shared";
 import { adoptLaunch } from "@renderer/stores/launch";
+import { readTicketAttachments } from "@renderer/lib/attachment-reads";
 import { BlobReadProvider } from "./blob-read";
 import { AttachmentStrip } from "./attachment-strip";
 import { MarkdownAttachmentsProvider, MarkdownImage } from "./markdown-image";
@@ -104,6 +105,11 @@ async function painted(count: number) {
   for (const image of images) expect(image.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
 }
 
+function MaterializedNames({ projectId }: { projectId: string }) {
+  const links = useMaterializedAttachments({ projectId, ticketId: "ticket" });
+  return <span>{links.map((link) => link.originalName).join(",")}</span>;
+}
+
 describe("cloud blob rendering", () => {
   it("hydrates attachment thumbnails and both markdown pipelines through one signed GET without widening CSP", async () => {
     await render(
@@ -148,6 +154,23 @@ describe("cloud blob rendering", () => {
       projectId: PROJECT,
       sessionId: "session",
     });
+  });
+
+  it("reads the cloud ticket strip from the same authorized metadata door", async () => {
+    await expect(readTicketAttachments(PROJECT, "ticket")).resolves.toEqual([attachment]);
+    expect(query).toHaveBeenCalledExactlyOnceWith("files:attachments", {
+      projectId: PROJECT,
+      ticketId: "ticket",
+    });
+  });
+
+  it("does not reuse the previous owner's materialized names while a new scope loads", async () => {
+    await render(<MaterializedNames projectId={PROJECT} />);
+    expect(container.textContent).toBe("shot.png");
+    query.mockImplementationOnce(() => new Promise(() => {}));
+    const next = "00000000-0000-4000-8000-000000000002";
+    await render(<MaterializedNames projectId={next} />, next);
+    expect(container.textContent).toBe("");
   });
 
   it("does not fall back to local bytes on forbidden or offline reads", async () => {

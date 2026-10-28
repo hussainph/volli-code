@@ -2,6 +2,7 @@ import * as React from "react";
 import { cloudSession, followCloudSession } from "@renderer/lib/cloud-client";
 import { BlobReadProvider } from "@renderer/components/attachments/blob-read";
 import { launchStore } from "@renderer/stores/launch";
+import { readTicketAttachments } from "@renderer/lib/attachment-reads";
 import { useShallow } from "zustand/react/shallow";
 import {
   arrangeTabs,
@@ -130,11 +131,7 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 import { getEngine } from "@renderer/terminal/registry";
-import {
-  notAvailableOn,
-  remoteHostNow,
-  remoteHostOfTicketNow,
-} from "@renderer/stores/remote-project";
+import { notAvailableOn, remoteHostNow } from "@renderer/stores/remote-project";
 
 /** The always-present Ticket Body tab's id — the fallback every persisted/live
  * tab id resets to once it no longer names a renderable tab (body/file/session).
@@ -434,25 +431,10 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   React.useEffect(() => {
     let cancelled = false;
     setAttachmentsLoaded(false);
-    // A remote project's ticket keeps its attachments on its host (VC-711).
-    if (remoteHostOfTicketNow(ticket.id) !== null) {
-      resetAttachments([]);
-      setAttachmentsLoaded(true);
-      return;
-    }
-    const cloud = attachmentCloud;
-    const read =
-      launchStore() === "cloud"
-        ? cloud === null
-          ? Promise.resolve({ ok: true as const, blobs: [] })
-          : cloud.client
-              .query(cloud.api.files.attachments, { projectId, ticketId: ticket.id })
-              .then((blobs) => ({ ok: true as const, blobs }))
-        : window.api.attachments.list({ ticketId: ticket.id });
-    void read
-      .then((result) => {
+    void readTicketAttachments(projectId, ticket.id)
+      .then((blobs) => {
         if (cancelled) return;
-        if (result.ok) resetAttachments(result.blobs);
+        resetAttachments(blobs);
         // Settled either way: a failed read leaves the strip empty, which IS the
         // strip as far as this view can know, and the materialized read is then
         // the one read it costs.

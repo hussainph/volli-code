@@ -283,12 +283,24 @@ describe("project blob reads", () => {
         sourceOrder: 10,
         createdAt: 1,
       });
+      await ctx.db.insert("blobLinks", {
+        id: crypto.randomUUID(),
+        projectId: w.args.projectId,
+        sha256: HASH,
+        owner: { kind: "ticket", id: w.visible.ticketId },
+        label: "Legacy link",
+        createdAt: 1,
+      });
     });
     const links = await w.alice.as.query(api.files.attachments, {
       projectId: w.args.projectId,
       ticketId: w.visible.ticketId,
     });
-    expect(links.map((link) => link.label)).toEqual(["Earlier source link", "Screenshot"]);
+    expect(links.map((link) => link.label)).toEqual([
+      "Earlier source link",
+      "Screenshot",
+      "Legacy link",
+    ]);
   });
 
   test("comment-owned bytes require a live comment and ticket; attribution alone is not private", async () => {

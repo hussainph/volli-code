@@ -136,6 +136,12 @@ describe("migrationDocument", () => {
   it("keeps a moved blob link's source ordering without requiring it on older exports", () => {
     expect(map("blobLinks", { sourceOrder: 23 })).toMatchObject({ sourceOrder: 23 });
     expect(map("blobLinks")).not.toHaveProperty("sourceOrder");
+    for (const sourceOrder of [null, "23", 1.5, Number.NaN]) {
+      expect(refusal(() => map("blobLinks", { sourceOrder }))).toEqual({
+        code: "invalid_field",
+        field: "sourceOrder",
+      });
+    }
   });
 
   it("claims a Session's intake for the target runner", () => {

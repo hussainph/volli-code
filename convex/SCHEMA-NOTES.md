@@ -458,8 +458,11 @@ checked. A private Session's attachment is not readable just because the caller
 belongs to its Workspace or knows its hash. A separate visible ticket/comment
 link to identical bytes does grant access to those bytes, not to the private
 link. `files.attachments` lists ticket links before Session links (creation order
-within each), preserving the materialized filename collision rule. It never
-returns object-store keys. Neither read admits runner or Agent credentials.
+within each), preserving the materialized filename collision rule. Moved links
+carry optional `sourceOrder` (the local SQLite rowid), so equal-timestamp filename
+collisions keep their original order independently of import batch order. Links
+without source order form a subsequent creation-ordered group. It never returns
+object-store keys. Neither read admits runner or Agent credentials.
 
 ## Streamed text
 

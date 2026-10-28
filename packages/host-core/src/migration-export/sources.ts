@@ -930,7 +930,7 @@ interface BlobRow {
 }
 
 /** The project that owns each link: its ticket's, or its Session's. */
-const BLOB_LINK_OWNERS = `SELECT l.*, COALESCE(t.project_id, s.project_id) AS project_id
+const BLOB_LINK_OWNERS = `SELECT l.*, l.rowid AS source_order, COALESCE(t.project_id, s.project_id) AS project_id
                             FROM blob_links l
                             LEFT JOIN tickets t ON t.id = l.ticket_id
                             LEFT JOIN sessions s ON s.id = l.session_id`;
@@ -963,6 +963,7 @@ const blobsSource = source<BlobRow>({
 });
 
 interface BlobLinkRow {
+  source_order: number;
   id: string;
   blob_hash: string;
   ticket_id: string | null;
@@ -992,6 +993,7 @@ const blobLinksSource = source<BlobLinkRow>({
           ? { kind: "session", id: row.session_id! }
           : { kind: "ticket", id: row.ticket_id },
       label: row.label,
+      sourceOrder: row.source_order,
       createdAt: row.created_at,
     });
   },

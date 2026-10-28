@@ -183,11 +183,16 @@ export const attachments = query({
         .query("blobLinks")
         .withIndex("by_owner", (q) => q.eq("owner.kind", owner.kind).eq("owner.id", owner.id))
         .collect();
-      links.sort(
-        (a, b) =>
-          a.createdAt - b.createdAt ||
-          (a.sourceOrder ?? a._creationTime) - (b.sourceOrder ?? b._creationTime),
-      );
+      links.sort((a, b) => {
+        if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+        // Imported rowids and native creation times have different units.
+        // Keep the source-ordered group first, then legacy/native arrivals.
+        if (a.sourceOrder !== undefined && b.sourceOrder !== undefined)
+          return a.sourceOrder - b.sourceOrder;
+        if (a.sourceOrder !== undefined) return -1;
+        if (b.sourceOrder !== undefined) return 1;
+        return a._creationTime - b._creationTime;
+      });
       for (const link of links) {
         if (link.projectId !== project.id) continue;
         const blob = await ctx.db

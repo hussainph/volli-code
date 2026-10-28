@@ -6,7 +6,11 @@ import DOMPurify, {
 } from "dompurify";
 import { Marked } from "marked";
 import { markdownImageNotice, parseBlobUrl, resolveMarkdownImageSrc } from "@volli/shared";
-import { useBlobReader } from "@renderer/components/attachments/blob-read";
+import {
+  MARKDOWN_IMAGE_MISSING_CLASS,
+  useBlobReader,
+  useCloudMarkdownImages,
+} from "@renderer/components/attachments/blob-read";
 
 import { useMarkdownAttachments } from "@renderer/components/attachments/markdown-image";
 import { chatSanitizerKeepsClass } from "@renderer/components/ui/ai-elements/chat-markdown";
@@ -94,7 +98,7 @@ const SANITIZE_CONFIG: DOMPurifyConfig = {
  * policy: the class of the notice an unrenderable image is drawn as, and
  * `loading="lazy"` on the images it does draw.
  */
-const OWN_CLASS = { tag: "span", token: "typeset-image-missing" } as const;
+const OWN_CLASS = { tag: "span", token: MARKDOWN_IMAGE_MISSING_CLASS } as const;
 const OWN_ATTRIBUTE = { tag: "img", name: "loading" } as const;
 
 /**
@@ -236,44 +240,7 @@ export function Markdown({ source, className }: { source: string; className?: st
     return fragment.innerHTML;
   }, [source, byName, reader]);
 
-  React.useEffect(() => {
-    if (reader === null) return;
-    let cancelled = false;
-    const notices: HTMLElement[] = [];
-    const cleanups: Array<() => void> = [];
-    for (const image of container.current?.querySelectorAll<HTMLImageElement>(
-      "img[data-volli-blob]",
-    ) ?? []) {
-      const hash = image.dataset.volliBlob;
-      if (hash === undefined || !/^[a-f0-9]{64}$/.test(hash)) continue;
-      image.removeAttribute("src");
-      image.hidden = true;
-      let failed = false;
-      const fail = () => {
-        if (cancelled || failed) return;
-        failed = true;
-        image.hidden = true;
-        const notice = document.createElement("span");
-        notice.className = OWN_CLASS.token;
-        notice.textContent = `Image could not be loaded${image.alt ? ` — ${image.alt}` : ""}`;
-        image.after(notice);
-        notices.push(notice);
-      };
-      image.addEventListener("error", fail);
-      cleanups.push(() => image.removeEventListener("error", fail));
-      void reader(`volli-blob:${hash}`).then((src) => {
-        if (!cancelled) {
-          image.src = src;
-          image.hidden = false;
-        }
-      }, fail);
-    }
-    return () => {
-      cancelled = true;
-      for (const notice of notices) notice.remove();
-      for (const cleanup of cleanups) cleanup();
-    };
-  }, [html, reader]);
+  useCloudMarkdownImages(container, html);
 
   return (
     <div

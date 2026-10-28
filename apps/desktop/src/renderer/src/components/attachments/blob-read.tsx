@@ -3,9 +3,11 @@
  * launch: identical hashes do not confer access to a private Session.
  */
 import * as React from "react";
-import { blobUrl, parseBlobUrl } from "@volli/shared";
+import { blobUrl, isBlobHash, parseBlobUrl } from "@volli/shared";
 import { cloudSession, followCloudSession } from "@renderer/lib/cloud-client";
 import { launchStore } from "@renderer/stores/launch";
+
+export const MARKDOWN_IMAGE_MISSING_CLASS = "typeset-image-missing";
 
 type BlobReader = (src: string) => Promise<string>;
 const BlobReaderContext = React.createContext<BlobReader | null>(null);
@@ -107,7 +109,7 @@ export function BlobImage({ src, ...props }: React.ImgHTMLAttributes<HTMLImageEl
   const current = loaded?.reader === reader && loaded.src === src ? loaded : null;
   if (current?.value === null)
     return (
-      <span role="img" aria-label={props.alt}>
+      <span role="img" aria-label={props.alt} className={props.className} title={props.title}>
         Image could not be loaded
       </span>
     );
@@ -121,6 +123,55 @@ export function BlobImage({ src, ...props }: React.ImgHTMLAttributes<HTMLImageEl
       }}
     />
   );
+}
+
+/** Hydrates the inert image placeholders emitted by the sanitized HTML pipeline.
+ * Keep all async image state out of its HTML renderer, with scope changes and
+ * unmounts fenced the same way as BlobImage.
+ */
+export function useCloudMarkdownImages(
+  container: React.RefObject<HTMLElement | null>,
+  html: string,
+): void {
+  const reader = useBlobReader();
+  React.useEffect(() => {
+    if (reader === null) return;
+    let cancelled = false;
+    const notices: HTMLElement[] = [];
+    const cleanups: Array<() => void> = [];
+    for (const image of container.current?.querySelectorAll<HTMLImageElement>(
+      "img[data-volli-blob]",
+    ) ?? []) {
+      const hash = image.dataset.volliBlob;
+      if (hash === undefined || !isBlobHash(hash)) continue;
+      image.removeAttribute("src");
+      image.hidden = true;
+      let failed = false;
+      const fail = () => {
+        if (cancelled || failed) return;
+        failed = true;
+        image.hidden = true;
+        const notice = document.createElement("span");
+        notice.className = MARKDOWN_IMAGE_MISSING_CLASS;
+        notice.textContent = `Image could not be loaded${image.alt ? ` — ${image.alt}` : ""}`;
+        image.after(notice);
+        notices.push(notice);
+      };
+      image.addEventListener("error", fail);
+      cleanups.push(() => image.removeEventListener("error", fail));
+      void reader(blobUrl(hash)).then((src) => {
+        if (!cancelled) {
+          image.src = src;
+          image.hidden = false;
+        }
+      }, fail);
+    }
+    return () => {
+      cancelled = true;
+      for (const notice of notices) notice.remove();
+      for (const cleanup of cleanups) cleanup();
+    };
+  }, [container, html, reader]);
 }
 
 /** The local canonical source; BlobImage resolves it only in a cloud launch. */
