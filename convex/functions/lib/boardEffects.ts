@@ -269,8 +269,11 @@ async function jobsFor(
           q.eq("projectId", ticket.projectId).eq("status", effect.to),
         )
         .first();
+      const activeArming = arming?.pausedAt == null ? arming : null;
       const automationId =
-        effect.choice?.kind === "automation" ? effect.choice.automationId : arming?.automationId;
+        effect.choice?.kind === "automation"
+          ? effect.choice.automationId
+          : activeArming?.automationId;
       if (automationId === undefined) return [];
       const automation = await ctx.db
         .query("automations")
@@ -282,7 +285,7 @@ async function jobsFor(
       // due (`armedRunVerdict`), as the local board does at its deadline.
       if (automation === null || automation.deletedAt !== null) return [];
       if (automation.projectId !== ticket.projectId) return [];
-      const armed = arming !== null && arming.automationId === automationId;
+      const armed = activeArming !== null && activeArming.automationId === automationId;
       // An armed run goes to the runner its armer chose (their own). A pick of
       // another Automation runs on the ticket's Place only when that runner
       // is the picker's own: work never lands on a teammate's machine.
@@ -290,7 +293,7 @@ async function jobsFor(
       let runnerId: string;
       let runner: Doc<"runners"> | null;
       if (armed) {
-        runnerId = arming.runnerId;
+        runnerId = activeArming!.runnerId;
         runner = await ctx.db
           .query("runners")
           .withIndex("by_uuid", (q) => q.eq("id", runnerId))
@@ -348,12 +351,12 @@ async function jobsFor(
             from: effect.from,
             status: effect.to,
             origin: effect.choice?.kind === "automation" ? "chosen" : "armed",
-            armedByUserId: armed ? arming.armedByUserId : null,
+            armedByUserId: armed ? activeArming!.armedByUserId : null,
           },
           availableAt: effect.notBefore,
           createdBy: actor,
           // Armed: the armer's work, with their credentials. Picked: the picker's.
-          onBehalfOf: armed ? arming.armedByUserId : picker,
+          onBehalfOf: armed ? activeArming!.armedByUserId : picker,
         },
       ];
     }

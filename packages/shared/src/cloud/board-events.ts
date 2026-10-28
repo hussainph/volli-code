@@ -223,12 +223,14 @@ export type BoardEventPayload =
       status: TicketStatus;
       /** `null` disarms the column. */
       automationId: AutomationId | null;
+      /** null with a retained Automation pauses it; read the arming row for paused state. */
       runnerId: RunnerId | null;
     }
   | {
       kind: "automation_schedule_armed";
       automationId: AutomationId;
-      /** null disarms the project-level schedule (ticketId is null). */
+      /** null withdraws the active schedule (pause or disarm; ticketId is null).
+       * Read the schedule row to distinguish a retained paused arm from disarm. */
       runnerId: RunnerId | null;
     }
   | {

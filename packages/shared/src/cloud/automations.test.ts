@@ -5,6 +5,7 @@ import type { AutomationSchedule } from "../automation-schedule";
 import {
   AUTOMATION_INSTRUCTIONS_MAX_CHARS,
   AUTOMATION_NAME_MAX_CHARS,
+  AUTOMATION_PAUSE_REASONS,
   decideArming,
   decideAutomationChange,
   decideAutomationRunRouting,
@@ -91,6 +92,9 @@ function change(patch: Partial<Parameters<typeof decideAutomationChange>[0]> = {
 }
 
 describe("Automation writes", () => {
+  test("pause reasons are shared by stored validators and read models", () => {
+    expect(AUTOMATION_PAUSE_REASONS).toEqual(["moved", "runner_removed", "armer_left"]);
+  });
   test("normalize and reuse local validators for create/update/delete", () => {
     expect(change()).toEqual({ kind: "save", draft: { ...draft, name: "Review" } });
     expect(change({ change: "update", existing: [definition] })).toMatchObject({ kind: "save" });
