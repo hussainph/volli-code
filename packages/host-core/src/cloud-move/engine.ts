@@ -429,9 +429,12 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     if (queue.backup === null) {
       const written = await ports.backup.write(signal);
       journal.setQueue(queue.queueId, {
-        backup: { path: written.path, bytes: written.bytes, verifiedAt: now() },
+        backup: { ...written, verifiedAt: now() },
       });
     }
+    // A backup published as cancellation arrived is still a reusable safety
+    // copy. Journal it first, but do not freeze until the person resumes.
+    signal.throwIfAborted();
     await fault("freeze");
     const frozen = journal.advance(move.moveId, "queued", "frozen", { paused: null });
     // A turn could have started between the check and the freeze: never export under it.

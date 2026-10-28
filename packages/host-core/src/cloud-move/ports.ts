@@ -79,9 +79,15 @@ export interface MoveSessionHistory {
   ): Promise<MovedSessionUploadReport>;
 }
 
-/** The profile's verified backup: written once per queue, re-read before any freeze. */
+/** The profile's verified backup: written once per queue, re-read before any freeze.
+ * write rejects with AbortError on cancellation, or code ENOSPC on disk shortage
+ * (the engine pauses without freezing); verification/I/O errors also never return
+ * a usable backup. After publication, return even if cancellation arrived: the
+ * engine journals the reusable result before honoring it. The production writer
+ * always supplies sha256; it is optional only for older injected ports/journals.
+ */
 export interface MoveBackupPort {
-  write(signal: AbortSignal): Promise<{ path: string; bytes: number }>;
+  write(signal: AbortSignal): Promise<{ path: string; bytes: number; sha256?: string }>;
 }
 
 /** This Mac's live work: a project with any of these Sessions is not idle. */

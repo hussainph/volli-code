@@ -84,6 +84,8 @@ export interface MoveRow {
 export interface QueueBackup {
   path: string;
   bytes: number;
+  /** Absent only in journals written before move backups supplied a digest. */
+  sha256?: string;
   verifiedAt: number;
 }
 

@@ -81,8 +81,24 @@ Receiving wiring:
   `MoveSessionHistory`.
 - **The object store**: presigned through `projectImports.presignPut` (VC-982)
   and a read door for the move's own keys, with the post-commit steps.
-- **The backup step**: `MoveBackupPort` over the verified backup writer,
-  and `maintenance` over `withProfileMaintenance(dataDir, …)` for the whole run.
+- **The backup step**: `createMoveBackupPort` over the existing automatic-backup
+  worker entry (desktop's `automatic-backup-worker` bundle). Pass the profile and
+  store paths, the engine's `workRoot`, and a conservative `estimatedExportBytes`
+  for the **whole queue** from pre-flight, not only its first project. The optional
+  `directory` selects another backup folder. Wire its result to `backup` and
+  `maintenance` to `withProfileMaintenance(dataDir, …)` for the whole run.
+  The writer re-reads/verifies the v1 archive before publication and returns
+  `{path, bytes, sha256}`; the queue journals it once and the result screen reads
+  `queue.backup`. Only this worker request bypasses the maintenance pause, so it
+  cannot deadlock on its own move lease. Daily backups still pause.
+  Disk pre-flight reserves the writer's staging allowance plus twice the export
+  estimate and 256 MiB headroom; separate backup/export volumes are checked
+  separately. Publication checks again using the actual bundle size. Disk shortage
+  pauses the engine as `disk_full`; verification failure never freezes a project.
+  `pre-cloud-move-<date>-<pid>-<uuid>.tar.gz.kept` has no expiry: the safety copy stays
+  until the person removes it, including throughout the preview escape hatch.
+  A verified bundle is not proof of large-profile restore readiness: VC-988
+  owns the file-based restore and scale round trip.
 - **The UI**: composes the engine in main with the account's Convex
   client, this Mac's runner registration and the runtime's live work, calls
   `resume()` at launch, and drives `enqueue`/`run`/`proceed`/`rollBack`.
