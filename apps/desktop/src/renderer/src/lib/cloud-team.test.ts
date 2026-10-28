@@ -66,6 +66,7 @@ it("follows names and policy, keeps last live answers offline, clears on scope/c
   expect(useCloudTeamStore.getState().viewerUserId).toBeNull();
   expect(useCloudTeamStore.getState().readError).toBe("Couldn’t load members.");
   fake.answer("members:people", { workspaceId: "w2" }, directory);
+  expect(useCloudTeamStore.getState().readError).toBeNull();
   noteProjectTeam("p", [
     { id: "s", ownerUserId: "ana", visibility: "private", role: "project", turnActive: false },
   ]);
@@ -75,6 +76,10 @@ it("follows names and policy, keeps last live answers offline, clears on scope/c
   fake.fail("workspaces:policy", { workspaceId: "w2" }, new Error("bad policy read"));
   expect(useCloudTeamStore.getState().people).toEqual(directory.people);
   expect(useCloudTeamStore.getState().viewerUserId).toBe("ana");
+  fake.answer("members:people", { workspaceId: "w2" }, directory);
+  expect(useCloudTeamStore.getState().readError).toBe("Couldn’t load sharing policy.");
+  fake.answer("workspaces:policy", { workspaceId: "w2" }, { shareAll: false });
+  expect(useCloudTeamStore.getState().readError).toBeNull();
   follow(null);
   expect(fake.watchers("members:people", { workspaceId: "w2" })).toBe(0);
   stop();

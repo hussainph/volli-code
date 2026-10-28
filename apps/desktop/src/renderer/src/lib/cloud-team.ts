@@ -109,6 +109,7 @@ export function bindCloudTeam(follow = followCloudSession): () => void {
     } else clear();
     scope = id;
     if (current === null || id === null) return;
+    const errors = new Map<string, string>();
     const read = <T>(
       watch: Watched<T>,
       paint: (value: T) => void,
@@ -119,13 +120,19 @@ export function bindCloudTeam(follow = followCloudSession): () => void {
         if (!active) return;
         try {
           const value = watch.localQueryResult();
-          if (value !== undefined) paint(value);
+          if (value !== undefined) {
+            paint(value);
+            errors.delete(kind);
+            useCloudTeamStore.setState({ readError: errors.values().next().value ?? null });
+          }
         } catch (error) {
           // Names never survive a failed authorization. A policy failure cannot
           // revoke the known owner's controls or claim a private audience.
+          const message = `Couldn’t load ${kind}.`;
+          errors.set(kind, message);
           useCloudTeamStore.setState({
             ...(kind === "members" ? { viewerUserId: null, people: [] } : {}),
-            readError: `Couldn’t load ${kind}.`,
+            readError: message,
           });
           console.warn("[volli] member directory:", cloudFailure(error).message);
         }

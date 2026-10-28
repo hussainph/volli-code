@@ -283,17 +283,17 @@ function SessionRowMenu({
   projectId?: string | null;
 }) {
   const team = useSessionTeam(sessionId);
-  if (launchStore() === "cloud") onToggle = null;
-  if (onToggle === null && !team?.canShare) return children;
+  const toggle = launchStore() === "cloud" ? null : onToggle;
+  if (toggle === null && !team?.canShare) return children;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
         <SessionShare sessionId={sessionId} projectId={projectId} />
-        {onToggle === null ? null : (
+        {toggle === null ? null : (
           <ContextMenuItem
             icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
-            onSelect={onToggle}
+            onSelect={toggle}
           >
             {unread ? "Mark as read" : "Mark as unread"}
           </ContextMenuItem>

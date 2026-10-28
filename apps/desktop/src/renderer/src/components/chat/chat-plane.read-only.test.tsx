@@ -235,14 +235,12 @@ it("replaces a teammate's composer, answers and stop controls with the owner bou
 
 it("keeps a new cloud chat's composer before any Session exists", async () => {
   adoptLaunch({ store: "cloud", userId: "owner", backendUrl: "https://example.convex.cloud" });
-  useChatDraftsStore
-    .getState()
-    .openProvisional(SESSION, {
-      projectId: PROJECT,
-      ticketId: null,
-      title: null,
-      operationId: "new-chat",
-    });
+  useChatDraftsStore.getState().openProvisional(SESSION, {
+    projectId: PROJECT,
+    ticketId: null,
+    title: null,
+    operationId: "new-chat",
+  });
   const { container } = await mountPlane(true, false, true);
   expect(container.querySelector('textarea[aria-label="Message"]')).not.toBeNull();
   expect(container.textContent).not.toContain("Loading Session owner…");

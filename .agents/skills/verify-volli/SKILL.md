@@ -126,6 +126,7 @@ volli-drive list                    # nothing of yours should remain live
 | 04 | Reopen a long Session: bounded history, plan card, `/copy`, scroll (VC-315) | [features/04-reopen-long-session.md](features/04-reopen-long-session.md) |
 | 05 | Settings: toggle the `cloud` flag | [features/05-settings-cloud-flag.md](features/05-settings-cloud-flag.md) |
 | 06 | Browser: tab groups, open into a pane, reveal, close and Undo | [features/06-browser-groups.md](features/06-browser-groups.md) |
+| 07 | Cloud teammates: attribution, privacy, read-only viewing and Share | [features/07-cloud-teammates.md](features/07-cloud-teammates.md) |
 
 01 and 02 were driven end to end on the live build (VC-703); 03–05 are mapped from code and carry `UNVERIFIED:` marks — confirm them live and remove the marks as you go. When the app changes under a mapped feature, update its file in the same PR.
 
