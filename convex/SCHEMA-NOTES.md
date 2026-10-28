@@ -364,6 +364,21 @@ Each was a decision made while turning the design into code.
     `projectMoves` is not written: it records a move between Workspaces and
     names the Workspace a project came from, which a local project has not.
 
+Operator rescue (`projectImports:rescue`, internal only) adds an optional
+`projectImports.driver` pair (`userId`, `runnerId`). Absence means the original
+importer/runner. Reassignment changes authorization only: the original
+`projectImports.userId`/`runnerId` mapping, imported ownership/placement and
+manifest digests stay frozen, including on retries and read-back. `status`
+returns both `driver` and `importTarget` for a resumed move. A replacement must
+have active owner/admin membership of the same live Workspace, current preview
+access/agreement, and their own non-revoked runner. Product calls recheck their
+access; the old driver is fenced even after access is restored. The deployment
+operator explicitly authorizes access to the original person's hidden history.
+The audit kinds `project.import_rescue_aborted` and `project.import_reassigned`
+record `operatorAction`, the move id and old/new driver, attributed to Volli's
+migration machinery rather than falsely to the importer. Committed/purged moves
+and gone Workspaces are refused; aborting moves cannot be reassigned.
+
 ## Automation records
 
 Automation definitions are project-scoped; any active Member may edit, arm,

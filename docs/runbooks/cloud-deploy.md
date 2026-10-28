@@ -477,6 +477,33 @@ and error exposure; production log redaction and an automated variable inventory
 VC-951 supplies the checked-deploy/self-check commands above; their availability and
 actual hosted results must be verified before this preparation becomes a deployment.
 
+## Rescue a stuck project move (deployment operators only)
+
+Use this only when a move's importer can no longer drive it (lost Workspace
+role/membership, preview access or account). With deployment-admin credentials,
+select the intended deployment explicitly:
+
+```sh
+pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","action":{"kind":"abort"}}' --deployment <ref>
+pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","action":{"kind":"reassign","userId":"<replacement-user-uuid>","runnerId":"<their-runner-uuid>"}}' --deployment <ref>
+```
+
+Abort marks the hidden move `aborting` for the purge chain; until that chain is
+deployed it remains marked for purge. Reassignment requires an active owner/admin
+of the **same Workspace**, with live preview access and their own non-revoked
+runner. It explicitly grants that person access to the hidden imported history.
+They resume the existing move via `projectImports.status`, using its `driver` for
+authorization and its **unchanged `importTarget`** for row mapping and manifest
+verification. Existing rows, Session ownership, runner placement and manifest
+counts/digests are not rewritten. Do not begin a new move or recompute the promise
+with the replacement's identity. Ordinary client calls recheck the replacement's
+live access; the former driver cannot drive it even if access is restored.
+
+Every rescue records the operator action in `auditLog`; committed moves, purged
+moves and gone Workspaces are refused, and a purge already started cannot be
+reassigned. Uncommitting a committed move remains its driver's operation, not an
+operator escape hatch. Workspace owners/admins cannot call this internal function.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |

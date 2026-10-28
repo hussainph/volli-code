@@ -371,6 +371,9 @@ export default defineSchema({
     userId: uuid,
     runnerId: uuid,
     manifestSha256: v.string(),
+    // Operator reassignment changes who drives the move, never the frozen
+    // userId/runnerId mapping that its imported rows and manifest digest use.
+    driver: v.optional(v.object({ userId: uuid, runnerId: uuid })),
     status: literals(["reserved", "importing", "committed", "aborting", "purged"]),
     createdAt: time,
     updatedAt: time,

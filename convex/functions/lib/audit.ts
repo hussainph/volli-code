@@ -37,7 +37,9 @@ export type AuditKind =
   | "secret.exposure_changed"
   | "secret.removed"
   | "project.imported"
-  | "project.import_uncommitted";
+  | "project.import_uncommitted"
+  | "project.import_rescue_aborted"
+  | "project.import_reassigned";
 
 export type AuditTargetKind =
   | "workspace"

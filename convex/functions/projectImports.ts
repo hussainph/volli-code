@@ -1,7 +1,8 @@
 /**
  * A person-authorized import of one local project into a Workspace: the
  * backend half of "Move to Volli Cloud". The client (the move engine) calls
- * these with the person's own sign-in; nothing here takes the admin key.
+ * these with the person's own sign-in. Only {@link rescue}, the internal
+ * deployment-operator recovery door, takes deployment-admin authority.
  *
  * - {@link begin} reserves the move (`projectImports` row, keyed by the
  *   client's move id) with the manifest's per-stream promise: a count and a
@@ -29,7 +30,8 @@
  *   while nothing but the import has written there (before any commit), so
  *   they never show the importer what someone else wrote.
  *
- * Who may import: the person who began the move, while they are an owner or
+ * Who may import: the person who began the move (or its operator-assigned
+ * driver), while they are an owner or
  * admin of the target Workspace with live preview access (rechecked on every
  * call), onto a runner of their own. Another person's move answers
  * `not_found`. Every imported row must belong to the project being moved, may
@@ -54,7 +56,7 @@ import {
 } from "@volli/shared/cloud";
 
 import type { Doc } from "./_generated/dataModel.js";
-import { mutation, query, type QueryCtx } from "./_generated/server.js";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import { audit } from "./lib/audit";
 import { requireManage, requireViewer, type Viewer } from "./lib/auth";
 import {
@@ -69,6 +71,7 @@ import {
 } from "./lib/migrationImport";
 import { literals, nullable } from "./lib/validators";
 import { personActor } from "./lib/workspaces";
+import { hasLivePreviewAccess } from "./lib/previewAccess";
 
 export type ProjectImportErrorCode =
   | "invalid_argument"
@@ -80,7 +83,8 @@ export type ProjectImportErrorCode =
   | "import_committed"
   | "manifest_mismatch"
   | "verification_failed"
-  | "changed_since_commit";
+  | "changed_since_commit"
+  | "invalid_rescue_target";
 
 function importError(
   code: ProjectImportErrorCode,
@@ -113,9 +117,14 @@ const streamValidator = literals(MIGRATION_IMPORT_STREAMS);
 
 // ── who ──────────────────────────────────────────────────────────────────────
 
+/** The authorized driver; old moves default to the person and runner they began with. */
+function driverOf(row: ImportRow) {
+  return row.driver ?? { userId: row.userId, runnerId: row.runnerId };
+}
+
 /**
- * The importing person and their import: the caller must be the person who
- * began it (anyone else reads `not_found`, so a move id says nothing), still
+ * The importing person and their import: the caller must be its current
+ * driver (anyone else reads `not_found`, so a move id says nothing), still
  * an owner or admin of its Workspace, with live preview access.
  */
 async function requireImporter(
@@ -129,7 +138,7 @@ async function requireImporter(
         .withIndex("by_uuid", (q) => q.eq("id", moveId))
         .unique()
     : null;
-  if (row === null || row.userId !== viewer.userId) {
+  if (row === null || driverOf(row).userId !== viewer.userId) {
     throw new ConvexError({ code: "not_found", message: "That move does not exist." });
   }
   await requireManage(ctx, row.workspaceId, "settings");
@@ -175,6 +184,9 @@ async function describe(db: Reader, row: ImportRow) {
     projectId: row.projectId,
     workspaceId: row.workspaceId,
     runnerId: row.runnerId,
+    // Resume verification using the ORIGINAL mapping, not the new driver.
+    importTarget: targetOf(row),
+    driver: driverOf(row),
     manifestSha256: row.manifestSha256,
     status: row.status,
     createdAt: row.createdAt,
@@ -267,6 +279,7 @@ export const begin = mutation({
       const streams = await streamRows(ctx.db, existing.id);
       const same =
         existing.userId === viewer.userId &&
+        driverOf(existing).userId === viewer.userId &&
         existing.projectId === args.projectId &&
         existing.workspaceId === args.workspaceId &&
         existing.runnerId === args.runnerId &&
@@ -637,7 +650,8 @@ export const importRows = mutation({
     if (rows.length > IMPORT_BATCH_MAX_ROWS) {
       throw importError("invalid_argument", `A batch holds at most ${IMPORT_BATCH_MAX_ROWS} rows.`);
     }
-    await requireOwnRunner(ctx, row.userId, row.runnerId);
+    const driver = driverOf(row);
+    await requireOwnRunner(ctx, driver.userId, driver.runnerId);
     const stored = await ctx.db
       .query("projectImportStreams")
       .withIndex("by_move_stream", (q) => q.eq("moveId", row.id).eq("stream", stream))
@@ -824,6 +838,118 @@ export const abort = mutation({
     const now = Date.now();
     await ctx.db.patch(row._id, { status: "aborting", updatedAt: now, abortedAt: now });
     return { status: "aborting" as ImportStatus };
+  },
+});
+
+// ── operator rescue ──────────────────────────────────────────────────────────
+
+/**
+ * Deployment admins only (`convex run projectImports:rescue`). This is NOT a
+ * Workspace-admin API. Abort a stranded move, or authorize a replacement
+ * owner/admin and their runner to drive it. Committed moves must first be
+ * uncommitted by their driver; an aborting move cannot be reassigned.
+ *
+ * Reassignment deliberately preserves userId/runnerId, every imported row,
+ * and the manifest's digests. They describe the original export, not whoever
+ * uploads it next. The operator is explicitly granting the replacement
+ * access to the hidden import, including its original person's history.
+ */
+export const rescue = internalMutation({
+  args: {
+    moveId: v.string(),
+    action: v.union(
+      v.object({ kind: v.literal("abort") }),
+      v.object({ kind: v.literal("reassign"), userId: v.string(), runnerId: v.string() }),
+    ),
+  },
+  handler: async (ctx, { moveId, action }) => {
+    const row = isUuid(moveId)
+      ? await ctx.db
+          .query("projectImports")
+          .withIndex("by_uuid", (q) => q.eq("id", moveId))
+          .unique()
+      : null;
+    if (row === null) {
+      throw new ConvexError({ code: "not_found", message: "That move does not exist." });
+    }
+    const workspace = await ctx.db
+      .query("workspaces")
+      .withIndex("by_uuid", (q) => q.eq("id", row.workspaceId))
+      .unique();
+    if (workspace === null || workspace.deletedAt !== null) {
+      throw new ConvexError({ code: "not_found", message: "That workspace does not exist." });
+    }
+    if (row.status === "committed") {
+      throw importError("import_committed", "Only the move's driver can uncommit it first.");
+    }
+    if (row.status === "purged" || (action.kind === "reassign" && !OPEN.has(row.status))) {
+      throw importError("import_closed", "This move is closed.");
+    }
+
+    const previousDriver = driverOf(row);
+    const now = Date.now();
+    if (action.kind === "abort") {
+      await ctx.db.patch(row._id, {
+        status: "aborting",
+        updatedAt: now,
+        abortedAt: row.abortedAt ?? now,
+      });
+      // MOVE-3's purge sweep picks up `aborting`, including moves without a
+      // purge cursor. Until that chain is deployed this is marked for purge.
+    } else {
+      if (!isUuid(action.userId) || !isUuid(action.runnerId)) {
+        throw importError(
+          "invalid_argument",
+          "The replacement person and runner need canonical UUIDs.",
+        );
+      }
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_uuid", (q) => q.eq("id", action.userId))
+        .unique();
+      const member = await ctx.db
+        .query("workspaceMembers")
+        .withIndex("by_workspace_user", (q) =>
+          q.eq("workspaceId", row.workspaceId).eq("userId", action.userId),
+        )
+        .unique();
+      if (
+        user === null ||
+        user.status !== "active" ||
+        member?.status !== "active" ||
+        (member.role !== "owner" && member.role !== "admin") ||
+        !(await hasLivePreviewAccess(ctx, user))
+      ) {
+        throw importError(
+          "invalid_rescue_target",
+          "The replacement must be an active owner/admin of this Workspace with live preview access.",
+        );
+      }
+      await requireOwnRunner(ctx, action.userId, action.runnerId);
+      await ctx.db.patch(row._id, {
+        driver: { userId: action.userId, runnerId: action.runnerId },
+        updatedAt: now,
+      });
+    }
+    await audit(ctx, {
+      workspaceId: row.workspaceId,
+      // Admin-key invocations have no person identity: never attribute the
+      // operator's decision to the importer who lost access.
+      actor: { kind: "volli", reason: "migration" },
+      kind: action.kind === "abort" ? "project.import_rescue_aborted" : "project.import_reassigned",
+      targetKind: "project",
+      targetId: row.projectId,
+      at: now,
+      detail: {
+        moveId: row.id,
+        operatorAction: action.kind,
+        previousDriver,
+        ...(action.kind === "reassign"
+          ? { driver: { userId: action.userId, runnerId: action.runnerId } }
+          : {}),
+      },
+    });
+    return { status: action.kind === "abort" ? ("aborting" as const) : row.status };
   },
 });
 

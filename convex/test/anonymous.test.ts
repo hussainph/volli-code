@@ -93,7 +93,12 @@ const MUST_FIND = {
 } as const satisfies Partial<Record<PublicPath, FunctionType>>;
 
 /** Internal functions the enumeration must leave out. */
-const MUST_SKIP = ["testSeed:seedWorld", "testJobs:enqueue", "previewAccess:set"];
+const MUST_SKIP = [
+  "testSeed:seedWorld",
+  "testJobs:enqueue",
+  "previewAccess:set",
+  "projectImports:rescue",
+];
 
 // ── calls ────────────────────────────────────────────────────────────────────
 
