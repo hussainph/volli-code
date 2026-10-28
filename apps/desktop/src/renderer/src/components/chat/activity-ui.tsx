@@ -459,12 +459,16 @@ const ToolRowContent = React.memo(function ToolRowContent({
   className?: string;
 }) {
   const row = describeActivity(part);
-  // A failed/refused call owes its explanation even with the detail closed.
-  // This is the runtime's error, not a reinterpretation of successful output.
-  const deniedReason =
+  // Failures are payloads too: keep the runtime's full error behind the same
+  // disclosure and capped output frame as a successful call. An output-error
+  // part has no output, so its presenter may otherwise have no detail (Read)
+  // or only the call's input (Write). Never mistake that input for the result.
+  const failureReason =
     row.status === "failed" || row.status === "denied"
       ? (row.errorText ?? activityDescriptor(part).outcome?.summary ?? null)
       : null;
+  const errorText =
+    row.errorText ?? (row.status === "denied" || row.detail === null ? failureReason : null);
   // A browse row that touched a tab opens onto the tab card (VC-238): the live
   // tab, its owner, its picture, and the controls that show or close it.
   const card = row.browse !== null && row.browse.tabId !== null ? row.browse : null;
@@ -473,7 +477,11 @@ const ToolRowContent = React.memo(function ToolRowContent({
   // printed. Other rows only need a disclosure when their presenter has detail.
   const imageContent = codeModeImageContent(part);
   const expandable =
-    row.detail !== null || row.command !== null || card !== null || imageContent !== null;
+    row.detail !== null ||
+    errorText !== null ||
+    row.command !== null ||
+    card !== null ||
+    imageContent !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -506,27 +514,19 @@ const ToolRowContent = React.memo(function ToolRowContent({
         ) : null}
       </div>
       <RunningBashReason />
-      {deniedReason ? (
-        <p
-          data-slot="refusal-explanation"
-          className="py-1 text-ui text-foreground whitespace-pre-wrap break-words"
-        >
-          {deniedReason}
-        </p>
-      ) : null}
       {expandable ? (
         <Disclosure open={open}>
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
           {imageContent !== null ? (
             <CodeModeOutput input={part.input} content={imageContent} />
-          ) : (
-            <ToolDetail
-              kind={row.kind}
-              command={row.command}
-              detail={row.detail}
-              openPath={row.openPath}
-            />
-          )}
+          ) : null}
+          <ToolDetail
+            kind={row.kind}
+            command={imageContent === null ? row.command : null}
+            detail={imageContent === null ? row.detail : null}
+            errorText={errorText}
+            openPath={row.openPath}
+          />
         </Disclosure>
       ) : null}
     </div>
@@ -816,11 +816,13 @@ function ToolDetail({
   kind,
   command,
   detail,
+  errorText,
   openPath,
 }: {
   kind: ActivityKind;
   command: string | null;
   detail: ActivityDetail | null;
+  errorText: string | null;
   openPath: string | null;
 }) {
   return (
@@ -828,7 +830,11 @@ function ToolDetail({
       {command !== null ? (
         <DetailFrame className="whitespace-pre-wrap text-foreground">{command}</DetailFrame>
       ) : null}
-      {detail !== null ? (
+      {errorText !== null ? (
+        <DetailFrame className="whitespace-pre-wrap break-words text-muted-foreground">
+          {errorText}
+        </DetailFrame>
+      ) : detail !== null ? (
         <ActivityOutputDetail detail={detail} kind={kind} openPath={openPath} />
       ) : null}
     </>
