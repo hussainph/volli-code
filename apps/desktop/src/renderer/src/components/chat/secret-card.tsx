@@ -20,17 +20,20 @@ export function SecretCards({
   const [settled, setSettled] = React.useState<ReadonlySet<string>>(() => new Set());
 
   // Waiting comes from the durable Session projection, not the Settings list.
-  // The local latch only hides successful writes until their fact reaches us.
-  return interactions.flatMap(({ id, credential }) =>
-    credential === undefined || credential.sessionId !== sessionId || settled.has(id)
-      ? []
-      : [
-          <SecretCard
-            key={id}
-            request={credential}
-            onSettled={() => setSettled((previous) => new Set([...previous, id]))}
-          />,
-        ],
+  // Show one secure field at a time, keeping parallel calls queued in fact order.
+  // The local latch only hides successful writes until their fact reaches us;
+  // a retry's fresh correlation must not inherit an earlier call's latch.
+  const next = interactions.find(
+    ({ id, credential }) =>
+      credential !== undefined && credential.sessionId === sessionId && !settled.has(id),
+  );
+  if (next?.credential === undefined) return null;
+  return (
+    <SecretCard
+      key={next.id}
+      request={next.credential}
+      onSettled={() => setSettled((previous) => new Set([...previous, next.id]))}
+    />
   );
 }
 

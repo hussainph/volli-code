@@ -17,6 +17,15 @@ Every structured Session receives the launch's output redaction filter, includin
 subagents and older Sessions without `request_secret`; filtering grants neither
 the tool nor environment injection.
 
+Each missing credential call opens its own pending interaction. Parallel calls
+(including retries for the same name) do not return early because another call
+is waiting. The composer shows one secure field at a time in interaction order;
+submission, decline or cancellation advances the queue. A failed write keeps the
+current request visible. Reloading the renderer reconstructs pending fields from
+the Session projection. An app restart discards memory-only Session values and
+live request correlations; a new call creates a fresh prompt, not a cached
+"still missing" outcome.
+
 ## Storage and revocation
 
 The person chooses:

@@ -132,10 +132,9 @@ export class SecretService {
         }
         if (closed || signal.aborted) return "still missing";
         if (available) return "signed in";
-        // One live correlation per Session; durable waiting state lives in the Engine.
-        if ([...this.#pending.values()].some((p) => p.metadata.sessionId === owner.sessionId)) {
-          return "still missing";
-        }
+        // Every call owns its correlation, including parallel calls and retries.
+        // The Engine keeps all waits durable; the renderer presents them in order.
+        // An existing wait must never turn another request into a false missing result.
         const id = randomUUID();
         const metadata: SecretRequestMetadata = {
           id,
