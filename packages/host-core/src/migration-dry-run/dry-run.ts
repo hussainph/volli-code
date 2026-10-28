@@ -12,7 +12,7 @@
  *     activity window: a Session active within `hotDays` goes to
  *     `sessionEvents` (standing in for the drain until it exists); an older
  *     one is written as `ev/` archives with `eventArchives` index rows. Bulk
- *     objects (archives, oversize event payloads, blob bytes, legacy rows) are
+ *     objects (archives, blob bytes, legacy rows) are
  *     written in the object-storage key layout under a local directory, the
  *     stand-in for R2. Runner-local records go to a local runner directory.
  *  4. **Verify.** Each table is paged back and reconciled with what the
@@ -33,7 +33,6 @@ import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import Database from "better-sqlite3";
-import { UnknownSessionEventKindError, decodeSessionEventPayload } from "@volli/shared";
 import {
   MIGRATION_DEFERRED_STREAMS,
   MIGRATION_IMPORT_STREAMS,
@@ -41,10 +40,7 @@ import {
   MigrationDigest,
   MigrationRowError,
   SESSION_EVENT_ARCHIVE_FORMAT,
-  SESSION_EVENT_INLINE_MAX_BYTES,
-  canonicalJson,
   eventArchiveKey,
-  eventSpillKey,
   jsonBytes,
   legacyArchiveKey,
   migrationDocument,
@@ -63,6 +59,7 @@ import {
   type MigrationExportManifest,
 } from "../migration-export/exporter";
 import type { StreamName } from "../migration-export/sources";
+import { sessionEventImportRecord } from "../migration-export/session-event-record";
 import { derivedId } from "../migration-export/transform";
 import { legacyArchiveName } from "../migration-export/legacy-archives";
 import { verifyMigrationExport } from "../migration-export/verify";
@@ -173,7 +170,6 @@ export interface MigrationDryRunReport {
     archiveBytes: number;
     kindUnknown: number;
     quarantined: number;
-    spilled: Record<string, number>;
     sequenceGaps: number;
   };
   objects: {
@@ -412,7 +408,6 @@ export async function runMigrationDryRun(
       archiveBytes: 0,
       kindUnknown: 0,
       quarantined: 0,
-      spilled: {},
       sequenceGaps: 0,
     };
 
@@ -688,7 +683,7 @@ export async function runMigrationDryRun(
           continue;
         }
         if (pass === 1) sessionsReport.hotEvents += 1;
-        await events.add(await prepareHotEvent(record, info.projectId, pass));
+        await events.add(prepareHotEvent(record, pass));
       }
       await flushArchive();
       await events.flush();
@@ -710,42 +705,18 @@ export async function runMigrationDryRun(
     };
 
     /**
-     * A hot event as the backend stores it: classified the way the accept
-     * fold classifies it (an unknown kind is stored and not folded; a
-     * malformed known kind is quarantined), with an oversize or unstorable
-     * payload spilled to `…/e/{sequence}.json.zst`.
+     * A hot event as an importer sends it (`sessionEventImportRecord`, the
+     * move's own): classified the way the backend's intake classifies a
+     * drained fact, its payload and provenance as the JSON text the backend
+     * stores, so a `$schema` or non-ASCII key, or a fact larger than one
+     * accept takes, is stored inline and read back like any other. A
+     * document the backend cannot hold is a refusal of that row.
      */
-    const prepareHotEvent = async (record: Row, projectId: string, pass: 1 | 2): Promise<Row> => {
-      let kindKnown = true;
-      let quarantine: { code: string; detail: string } | null = null;
-      try {
-        decodeSessionEventPayload(record.payload, "payload");
-      } catch (error) {
-        if (error instanceof UnknownSessionEventKindError) kindKnown = false;
-        else quarantine = { code: "malformed", detail: scrub(String((error as Error).message)) };
-      }
-      if (pass === 1 && !kindKnown) sessionsReport.kindUnknown += 1;
-      if (pass === 1 && quarantine !== null) sessionsReport.quarantined += 1;
-      const bytes = jsonBytes(record.payload);
-      let payload = record.payload;
-      const problem = bytes > SESSION_EVENT_INLINE_MAX_BYTES ? "oversize" : storageProblem(payload);
-      if (problem !== null) {
-        const reason = problem === "oversize" ? "oversize" : problem.replace(/ at .*$/, "");
-        if (pass === 1) sessionsReport.spilled[reason] = (sessionsReport.spilled[reason] ?? 0) + 1;
-        const object = zstdCompressSync(Buffer.from(canonicalJson(payload)), ZSTD_LEVEL);
-        const key = eventSpillKey({
-          projectId,
-          sessionId: record.sessionId as string,
-          sequence: record.sequence as number,
-        });
-        await writeObject(r2Root, key, object);
-        const kind = (payload as { kind?: unknown } | null)?.kind;
-        payload = {
-          kind: typeof kind === "string" ? kind : "unknown",
-          spill: { key, bytes: object.length, sha256: sha256Hex(object) },
-        };
-      }
-      return { ...record, payload, kindKnown, quarantine, bytes };
+    const prepareHotEvent = (record: Row, pass: 1 | 2): Row => {
+      const row = sessionEventImportRecord(record);
+      if (pass === 1 && row.kindKnown === false) sessionsReport.kindUnknown += 1;
+      if (pass === 1 && row.quarantine !== null) sessionsReport.quarantined += 1;
+      return row;
     };
 
     const firstPass = await time("import", () => runImport(1));
@@ -875,12 +846,9 @@ export async function runMigrationDryRun(
           entry.count += 1;
           entry.max = Math.max(entry.max, row.sequence as number);
           hotEventsBySession.set(row.sessionId as string, entry);
-          const spill = (row.payload as { spill?: { key: string; sha256: string } }).spill;
-          if (spill !== undefined) {
-            const path = join(r2Root, spill.key);
-            if (!existsSync(path) || sha256Hex(await readFile(path)) !== spill.sha256) {
-              bump("spillObjectsMissingOrDamaged");
-            }
+          // Stored the intake's way: the payload is JSON text, never a spill.
+          if (typeof row.payload !== "string" || typeof row.provenance !== "string") {
+            bump("sessionEventsNotStoredAsText");
           }
           break;
         }

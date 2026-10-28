@@ -1192,6 +1192,25 @@ export function encodeSessionJson(value: unknown): string {
   });
 }
 
+/**
+ * The JSON text Volli Cloud stores a Session event's payload or provenance as
+ * (`sessionEvents.payload` / `.provenance`): {@link encodeSessionJson}, or,
+ * for a value the codec refuses (a fact the backend stores quarantined), the
+ * value as sent minus any `credential` field, so a malformed interaction
+ * cannot store a secret. The backend's intake and the project import both
+ * store through this, so a moved fact is stored exactly as a drained one.
+ */
+export function storedSessionJson(value: unknown): string {
+  try {
+    return encodeSessionJson(value);
+  } catch {
+    return (
+      JSON.stringify(value, (key, item: unknown) => (key === "credential" ? undefined : item)) ??
+      "null"
+    );
+  }
+}
+
 /* ------------------------------------------------------------ entity decoders */
 
 function decodeSessionValue(value: unknown, context: string): Session {

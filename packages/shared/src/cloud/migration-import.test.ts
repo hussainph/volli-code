@@ -129,7 +129,9 @@ describe("migrationDocument", () => {
     expect(refusal(() => map("sessionEvents", { payload: { kind: 3 } })).field).toBe(
       "payload.kind",
     );
-    expect(refusal(() => map("sessionEvents", { payload: [1] })).field).toBe("record");
+    expect(refusal(() => map("sessionEvents", { payload: [1] })).field).toBe("payload");
+    expect(refusal(() => map("sessionEvents", { payload: "{not json" })).field).toBe("payload");
+    expect(refusal(() => map("sessionEvents", { provenance: "[1]" })).field).toBe("provenance");
     expect(refusal(() => map("sessionEvents", { kindKnown: undefined })).field).toBe("kindKnown");
   });
 
@@ -142,6 +144,37 @@ describe("migrationDocument", () => {
         field: "sourceOrder",
       });
     }
+  });
+
+  it("stores a Session event's payload and provenance as JSON text, the intake's way", () => {
+    const payload = { kind: "tool.surface", schema: { $schema: "x", ключ: "ü" } };
+    const provenance = { source: "runtime" };
+    const asValue = map("sessionEvents", { payload, provenance });
+    const asText = map("sessionEvents", {
+      payload: JSON.stringify(payload),
+      provenance: JSON.stringify(provenance),
+    });
+    expect(asValue.payload).toBe(JSON.stringify(payload));
+    expect(asValue.provenance).toBe(JSON.stringify(provenance));
+    expect(asValue.kind).toBe("tool.surface");
+    // Counted from the stored text, whatever the record claimed.
+    expect(asValue.bytes).toBe(
+      new TextEncoder().encode(JSON.stringify(payload)).length +
+        new TextEncoder().encode(JSON.stringify(provenance)).length,
+    );
+    expect(asText).toEqual(asValue);
+    expect(storageProblem(asText)).toBeNull();
+    // Text is stored as sent: the client encoded it.
+    const spaced = JSON.stringify(payload, null, 2);
+    expect(map("sessionEvents", { payload: spaced }).payload).toBe(spaced);
+  });
+
+  it("refuses an event whose document the backend cannot hold, by name", () => {
+    const huge = { kind: "tool.call.completed", output: "x".repeat(1024 * 1024) };
+    expect(refusal(() => map("sessionEvents", { payload: huge }))).toEqual({
+      code: "unstorable",
+      field: "sessionEvents",
+    });
   });
 
   it("claims a Session's intake for the target runner", () => {

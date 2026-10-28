@@ -883,6 +883,8 @@ export default defineSchema({
     catchUpAt: v.optional(nullable(time)),
     // The last fact whose derived rows (turns, attention, receipts) were written; a refold keeps it.
     derivedThrough: v.optional(v.number()),
+    // The head a project import brought in: those facts never derive, even read anew.
+    importedThrough: v.optional(v.number()),
   }).index("by_session", ["sessionId"]),
   // Accepted, immutable Session facts: the shared envelope plus backend metadata.
   sessionEvents: defineTable({

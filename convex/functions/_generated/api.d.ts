@@ -71,6 +71,7 @@ import type * as members from "../members.js";
 import type * as migration from "../migration.js";
 import type * as previewAccess from "../previewAccess.js";
 import type * as projectCheckouts from "../projectCheckouts.js";
+import type * as projectImportHistory from "../projectImportHistory.js";
 import type * as projectImportPurge from "../projectImportPurge.js";
 import type * as projectImports from "../projectImports.js";
 import type * as projects from "../projects.js";
@@ -166,6 +167,7 @@ declare const fullApi: ApiFromModules<{
   migration: typeof migration;
   previewAccess: typeof previewAccess;
   projectCheckouts: typeof projectCheckouts;
+  projectImportHistory: typeof projectImportHistory;
   projectImportPurge: typeof projectImportPurge;
   projectImports: typeof projectImports;
   projects: typeof projects;

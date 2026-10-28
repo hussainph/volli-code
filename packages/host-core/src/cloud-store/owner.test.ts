@@ -8,7 +8,8 @@ import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createSessionWakeBus } from "../session-control/session-wake";
 import { createHostSessionEngine } from "../sessions/engine";
 import { createFactDrain } from "../cloud-runner/drain";
-import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
+import { seedMovedSessionCursors, sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
+import { sqliteDrainLedger } from "../session-control/sqlite-ledger";
 import { createCloudSessionOwner, createLocalSessionEngine, SessionOwnerError } from "./owner";
 import { localSessionRow } from "../db/local-product";
 
@@ -516,5 +517,43 @@ describe("Session owner views", () => {
     ).rejects.toBeInstanceOf(SessionOwnerError);
     expect(await f.local.countSessions({ projectId: "p", scope: "all" })).toBe(0);
     expect(f.a.projectIds()).toEqual(["p"]);
+  });
+});
+
+describe("a moved project's Sessions on this runner", () => {
+  it("are the owner's once their cursors are seeded, and owe the backend nothing they had", async () => {
+    const f = setup();
+    // A Session from before the move: this Mac's local product, no cursor.
+    const moved = await f.create(f.local, "moved");
+    const sessionId = moved.session.id;
+    await recordOutcome(f.local, sessionId, 0.25);
+    const head = (await f.raw.listEvents({ sessionId })).at(-1)!.sequence;
+    expect(f.a.owns(sessionId)).toBe(false);
+    const isLocal = () =>
+      f.db
+        .prepare(`SELECT 1 FROM sessions WHERE id = ? AND ${localSessionRow("sessions.id")}`)
+        .get(sessionId) !== undefined;
+    expect(isLocal()).toBe(true);
+
+    seedMovedSessionCursors(f.db, "a", [{ sessionId, acceptedThrough: head }]);
+    expect(f.a.owns(sessionId)).toBe(true);
+    expect(f.b.owns(sessionId)).toBe(false);
+    expect(isLocal()).toBe(false);
+    expect((await f.a.engine.getBaseSession({ sessionId }))?.id).toBe(sessionId);
+
+    // The drain starts from the imported head: none of the history is resent.
+    const accept = vi.fn();
+    const drain = createFactDrain({
+      ownerUserId: "a",
+      cursors: f.cursors,
+      ledger: sqliteDrainLedger(f.db),
+      accept,
+    });
+    drain.start();
+    drain.nudge(sessionId);
+    await drain.idle();
+    drain.stop();
+    expect(accept).not.toHaveBeenCalled();
+    expect(f.cursors.get(sessionId)).toMatchObject({ acceptedThrough: head, generation: 1 });
   });
 });

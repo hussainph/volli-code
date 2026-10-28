@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { openTestDb, type TestDb } from "../db/test-helpers";
-import { sqliteDrainCursorStore, sqliteJobJournalStore } from "./sqlite-stores";
+import {
+  MovedSessionCursorConflictError,
+  releaseMovedSessionCursors,
+  seedMovedSessionCursors,
+  sqliteDrainCursorStore,
+  sqliteJobJournalStore,
+} from "./sqlite-stores";
 import type { JobJournalEntry } from "./inbox";
 
 let opened: TestDb | null = null;
@@ -200,5 +206,83 @@ describe("the runner-local stores (migration 65)", () => {
     journal.remove("j2", 1);
     expect(journal.get("j2")).toBeNull();
     expect(journal.unreported()).toHaveLength(1);
+  });
+});
+
+describe("a moved project's Sessions handed to this runner", () => {
+  const moved = [
+    { sessionId: "m1", acceptedThrough: 12 },
+    { sessionId: "m2", acceptedThrough: 0 },
+  ];
+
+  it("seeds a cursor at the imported head, once, and takes it back while unchanged", () => {
+    const handle = db();
+    const store = sqliteDrainCursorStore(handle);
+    expect(seedMovedSessionCursors(handle, "u", moved, () => 5)).toEqual({
+      seeded: 2,
+      unchanged: 0,
+    });
+    expect(store.get("m1")).toEqual({
+      sessionId: "m1",
+      ownerUserId: "u",
+      generation: 1,
+      acceptedThrough: 12,
+      blocked: null,
+    });
+    // Idempotent: a resumed handover changes nothing.
+    expect(seedMovedSessionCursors(handle, "u", moved)).toEqual({ seeded: 0, unchanged: 2 });
+
+    // m1 took new facts in Volli Cloud: a roll back keeps its cursor and says so.
+    store.save({ ...store.get("m1")!, acceptedThrough: 13 });
+    expect(
+      releaseMovedSessionCursors(handle, "u", [
+        ...moved,
+        { sessionId: "gone", acceptedThrough: 1 },
+      ]),
+    ).toEqual({
+      released: 1,
+      kept: ["m1"],
+    });
+    expect(store.get("m2")).toBeNull();
+    expect(store.get("m1")?.acceptedThrough).toBe(13);
+  });
+
+  it("refuses the lot when one Session already drains under another claim", () => {
+    const handle = db();
+    const store = sqliteDrainCursorStore(handle);
+    for (const other of [
+      { ownerUserId: "someone-else", generation: 1, acceptedThrough: 0, blocked: null },
+      { ownerUserId: "u", generation: 2, acceptedThrough: 0, blocked: null },
+      { ownerUserId: "u", generation: 1, acceptedThrough: 3, blocked: null },
+      {
+        ownerUserId: "u",
+        generation: 1,
+        acceptedThrough: 0,
+        blocked: { code: "fenced", message: "moved", at: 1 },
+      },
+    ]) {
+      store.save({ sessionId: "m2", ...other });
+      const error = (() => {
+        try {
+          seedMovedSessionCursors(handle, "u", moved);
+        } catch (thrown) {
+          return thrown;
+        }
+        return null;
+      })();
+      expect(error).toBeInstanceOf(MovedSessionCursorConflictError);
+      expect((error as MovedSessionCursorConflictError).sessionId).toBe("m2");
+      // Nothing of the lot was written.
+      expect(store.get("m1")).toBeNull();
+    }
+  });
+
+  it("refuses an owner-less or headless handover", () => {
+    const handle = db();
+    expect(() => seedMovedSessionCursors(handle, "", moved)).toThrow("needs an owner");
+    expect(() =>
+      seedMovedSessionCursors(handle, "u", [{ sessionId: "m1", acceptedThrough: -1 }]),
+    ).toThrow("no valid imported head");
+    expect(sqliteDrainCursorStore(handle).list()).toEqual([]);
   });
 });

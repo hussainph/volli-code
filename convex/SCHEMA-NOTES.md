@@ -483,10 +483,23 @@ The local cloud-launch signal path does not also write a board comment.
   payloads after a storability check only, not through the per-kind codecs
   the intake will apply (it classifies `kindKnown`/`quarantine` with the
   shared Session event codec before sending).
-- Migrated Session event rows hold `payload` and `provenance` as values, where
-  the intake stores JSON text (note 32); the intake reads both. A payload with
-  a key a Convex value refuses (`$schema`, non-ASCII) cannot be imported that
-  way, so the import should send them as text.
+- Migrated Session event rows hold `payload` and `provenance` as JSON text,
+  as the intake stores them (note 32): the importer sends the Session codec's
+  text (`storedSessionJson`) and `migrationDocument` stores it as sent, so a
+  key a Convex value refuses (`$schema`, non-ASCII) crosses as text and needs
+  no spill. A value sent as itself (an older client) is stored as its JSON
+  text. Rows an earlier import wrote as values are read as they are.
+- A moved Session's first fold derives nothing from its imported history
+  (`sessionStates.derivedThrough` starts at the imported head, note 33): the
+  state and listing row are rebuilt, and turns, attention items, watches,
+  notices and todo comments are not written for facts that happened before
+  the move. `sessionStates.importedThrough` (optional, set only then) keeps
+  that true for an imported fact this build learns to read later, which
+  otherwise derives once read (`learned`). A fact the fold cannot read or
+  hold is still raised as `event_quarantined`: that is a problem with the
+  data, not a replay. The same applies to any Session whose facts were
+  accepted without a state being written (rows the internal dry-run import
+  wrote): their first fold derives nothing at or below that head.
 
 ## Project blob reads
 

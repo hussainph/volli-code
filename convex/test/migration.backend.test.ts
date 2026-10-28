@@ -50,7 +50,6 @@ type Report = {
     archived: number;
     kindUnknown: number;
     quarantined: number;
-    spilled: Record<string, number>;
   };
   objects: { blobs: { copied: number }; legacyRows: number };
   history: { transcriptArtifacts: number; piLogSlices: number; bytes: number };
@@ -100,8 +99,9 @@ describe("the migration dry run", () => {
       archived: 1,
       kindUnknown: 3,
       quarantined: 1,
-      spilled: { oversize: 1, "field name the backend refuses": 1 },
     });
+    // `$`-keyed and >256 KB payloads stored inline as JSON text, nothing spilled.
+    expect(report.invariants.sessionEventsNotStoredAsText ?? 0).toBe(0);
     expect(report.objects.blobs.copied).toBe(2);
     expect(report.objects.legacyRows).toBe(4);
     expect(report.history.transcriptArtifacts).toBe(2048);

@@ -789,7 +789,8 @@ jobs:
       # And the 0.3-C demo as two windows (VC-895): Mac B sees Mac A's Session,
       # "Waiting for <Mac A>" through a SIMULATED sleep (the smoke power seam:
       # real power events, runner transport held down), its command queued,
-      # then caught up on wake.
+      # then caught up on wake. And a moved project's Sessions (VC-990): imported,
+      # packed and folded, then every message drawn through the window's transport.
       # Required here, like the sign-in test above: it fails rather than skips.
       - name: Desktop cloud board and Sessions against the pinned backend
         env:
@@ -798,7 +799,7 @@ jobs:
         working-directory: convex
         run: >-
           node fixture/with-backend.ts --deploy --
-          sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts src/main/cloud-sessions.live.test.ts src/main/cloud-runner/waiting-for-mac.live.test.ts --maxWorkers=2'
+          sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts src/main/cloud-sessions.live.test.ts src/main/cloud-move-history.live.test.ts src/main/cloud-runner/waiting-for-mac.live.test.ts --maxWorkers=2'
 
   # N-1 compatibility (VC-633). A previous build, run from its own shipped
   # sources, against a profile THIS build migrated to its head: it must write

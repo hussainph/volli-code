@@ -94,17 +94,17 @@ refusal (or explicit legacy archive), never a silent drop.
 
 ## Where things go
 
-| Export stream                                             | Dry run                                                                                                                                                                |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Convex-bound streams (`MIGRATION_IMPORT_STREAMS`)         | `migration:importRows`, batched (≤ 200 rows, ≤ 3 MiB), idempotent by each table's key                                                                                  |
-| `sessionEvents` of a Session active within `--hot-days`   | `sessionEvents`, classified (`kindKnown`, `quarantine`); payloads over 256 KB or the backend cannot store go to `…/e/{seq}.json.zst` and are stored as `{kind, spill}` |
-| `sessionEvents` of an older Session                       | `…/ev/{first}-{last}.ndjson.zst` (`volli.session-events/1`) + `eventArchives` rows                                                                                     |
-| every Session                                             | `sessionIntake`, claimed by the migrating Mac, `acceptedThrough` = its last sequence                                                                                   |
-| `blobs`                                                   | the row, plus the bytes at its key                                                                                                                                     |
-| `legacyRows`                                              | `…/legacy/{name}.ndjson.zst` per project; host-wide rows under `v1/u/{userId}/legacy/` (kept)                                                                          |
-| runner streams (`projectCheckoutPaths`, …)                | a local runner directory; never uploaded                                                                                                                               |
-| pending Automation arrivals, armings and schedule cursors | paused in `legacyRows` with a re-arm reason; executable streams are empty                                                                                              |
-| `transcriptArtifacts`, `piLogs`                           | verified source chunks staged and read back through the object stand-in; counts/bytes in `history`                                                                     |
+| Export stream                                             | Dry run                                                                                                                                                                                    |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Convex-bound streams (`MIGRATION_IMPORT_STREAMS`)         | `migration:importRows`, batched (≤ 200 rows, ≤ 3 MiB), idempotent by each table's key                                                                                                      |
+| `sessionEvents` of a Session active within `--hot-days`   | `sessionEvents` as `sessionEventImportRecord` sends them: classified (`kindKnown`, `quarantine`), payload and provenance as JSON text, so `$`-keyed and >256 KB payloads are stored inline |
+| `sessionEvents` of an older Session                       | `…/ev/{first}-{last}.ndjson.zst` (`volli.session-events/1`) + `eventArchives` rows                                                                                                         |
+| every Session                                             | `sessionIntake`, claimed by the migrating Mac, `acceptedThrough` = its last sequence                                                                                                       |
+| `blobs`                                                   | the row, plus the bytes at its key                                                                                                                                                         |
+| `legacyRows`                                              | `…/legacy/{name}.ndjson.zst` per project; host-wide rows under `v1/u/{userId}/legacy/` (kept)                                                                                              |
+| runner streams (`projectCheckoutPaths`, …)                | a local runner directory; never uploaded                                                                                                                                                   |
+| pending Automation arrivals, armings and schedule cursors | paused in `legacyRows` with a re-arm reason; executable streams are empty                                                                                                                  |
+| `transcriptArtifacts`, `piLogs`                           | verified source chunks staged and read back through the object stand-in; counts/bytes in `history`                                                                                         |
 
 The object-storage stand-in is a directory laid out by the `@volli/shared/cloud`
 key functions; real uploads (presigned PUTs) replace it when R2 exists.

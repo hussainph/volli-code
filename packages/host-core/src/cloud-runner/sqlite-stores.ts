@@ -8,6 +8,7 @@ import type Database from "better-sqlite3";
 import type { JobOutcome } from "@volli/shared/cloud";
 
 import { prepared } from "../db/prepared";
+import { withTransaction } from "../db/transaction-gate";
 import type { DrainCursor, DrainCursorStore } from "./drain";
 import type { JobJournalEntry, JobJournalStore } from "./inbox";
 
@@ -80,6 +81,104 @@ export function sqliteDrainCursorStore(
       });
     },
   };
+}
+
+/** A Session a project move carried, and the last event its imported intake holds. */
+export interface MovedSessionHead {
+  sessionId: string;
+  acceptedThrough: number;
+}
+
+/** A moved Session whose cursor this machine already holds otherwise. */
+export class MovedSessionCursorConflictError extends Error {
+  readonly sessionId: string;
+  constructor(sessionId: string) {
+    super(`Session ${sessionId} already drains to Volli Cloud under another claim.`);
+    this.name = "MovedSessionCursorConflictError";
+    this.sessionId = sessionId;
+  }
+}
+
+/**
+ * Hands the Sessions of a moved project to this runner: one drain cursor
+ * each, for the signed-in owner, at the claim the import gave it
+ * (generation 1) and at the head its imported intake holds. That is what a
+ * cloud launch's engine sees a Session by (`createCloudSessionOwner`), so a
+ * moved Session can be resumed and steered here, and its drain owes the
+ * backend only what happens after the move: a cursor adopted at 0 would send
+ * the whole history again. A Session that has a cursor stops being one of
+ * the signed-out local listing's.
+ *
+ * All or nothing, and idempotent: a cursor already seeded the same way is
+ * left as it is; any other cursor for one of these Sessions refuses the lot
+ * ({@link MovedSessionCursorConflictError}).
+ *
+ * Receiving wiring (MOVE-5, the move engine's handover step): call it with
+ * every moved Session's `sessionIntake.acceptedThrough` once the move is
+ * committed, and {@link releaseMovedSessionCursors} when it is rolled back.
+ */
+export function seedMovedSessionCursors(
+  db: Database.Database,
+  ownerUserId: string,
+  sessions: readonly MovedSessionHead[],
+  now: () => number = Date.now,
+): { seeded: number; unchanged: number } {
+  if (ownerUserId.length === 0) throw new Error("A moved Session needs an owner");
+  const store = sqliteDrainCursorStore(db, now);
+  return withTransaction(db, () => {
+    let seeded = 0;
+    let unchanged = 0;
+    for (const { sessionId, acceptedThrough } of sessions) {
+      if (!Number.isSafeInteger(acceptedThrough) || acceptedThrough < 0) {
+        throw new Error(`Session ${sessionId} has no valid imported head`);
+      }
+      const existing = store.get(sessionId);
+      if (existing === null) {
+        store.save({ sessionId, ownerUserId, generation: 1, acceptedThrough, blocked: null });
+        seeded += 1;
+      } else if (
+        existing.ownerUserId === ownerUserId &&
+        existing.generation === 1 &&
+        existing.acceptedThrough === acceptedThrough &&
+        existing.blocked === null
+      ) {
+        unchanged += 1;
+      } else {
+        throw new MovedSessionCursorConflictError(sessionId);
+      }
+    }
+    return { seeded, unchanged };
+  });
+}
+
+/**
+ * Takes back what {@link seedMovedSessionCursors} handed over, for a move
+ * rolled back: each Session's cursor goes if it is still exactly as seeded
+ * (this owner, generation 1, the imported head). A Session whose cursor moved
+ * on (it took new facts in Volli Cloud) keeps it and is returned, so the
+ * caller can say so rather than hide that history.
+ */
+export function releaseMovedSessionCursors(
+  db: Database.Database,
+  ownerUserId: string,
+  sessions: readonly MovedSessionHead[],
+): { released: number; kept: string[] } {
+  return withTransaction(db, () => {
+    let released = 0;
+    const kept: string[] = [];
+    for (const { sessionId, acceptedThrough } of sessions) {
+      const removed = prepared(
+        db,
+        `DELETE FROM session_drain_cursors
+          WHERE session_id = @sessionId AND owner_user_id = @ownerUserId
+            AND claim_generation = 1 AND accepted_through = @acceptedThrough
+            AND blocked_code IS NULL`,
+      ).run({ sessionId, ownerUserId, acceptedThrough });
+      if (removed.changes > 0) released += 1;
+      else if (sqliteDrainCursorStore(db).get(sessionId) !== null) kept.push(sessionId);
+    }
+    return { released, kept };
+  });
 }
 
 interface JournalRow {

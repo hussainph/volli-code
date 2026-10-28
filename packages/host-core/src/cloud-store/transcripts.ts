@@ -4,10 +4,7 @@ import {
   type SessionEngine,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
-import { lstat, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { LOCAL_RUNNER, type SessionEvent } from "@volli/shared";
-import { STRUCTURED_ADAPTER_ID } from "../session-runtime/sessions";
+import type { SessionEvent } from "@volli/shared";
 import type {
   SessionUploadGrant,
   SessionUploadHead,
@@ -21,10 +18,9 @@ import { PresignedObjectStore } from "../transcript-spool/object-store";
 import {
   TranscriptSpool,
   SpoolRedactionUnavailableError,
-  piFileIdOf,
-  type PiLogFile,
   type SpoolRedaction,
 } from "../transcript-spool/transcript-spool";
+import { piLogFilesOf } from "./pi-log-files";
 
 interface ProducerConnection {
   link: BackendLink;
@@ -33,10 +29,6 @@ interface ProducerConnection {
 }
 
 type PackReport = Awaited<ReturnType<TranscriptSpool["packTurn"]>>;
-
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 /** Stop waiting on a link call when its producer closes; its eventual ack is harmless. */
 function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -268,76 +260,11 @@ export function createCloudTranscriptPublisher(options: {
       const session = await abortable(options.engine.getSession({ sessionId }), signal);
       if (session === null || session.session.ownerUserId !== options.ownerUserId)
         throw new Error("This runner does not own the Session.");
-      const files: PiLogFile[] = [];
-      const seen = new Set<string>();
-      for (const attachment of session.attachments) {
-        signal.throwIfAborted();
-        if (
-          attachment.adapterId !== STRUCTURED_ADAPTER_ID ||
-          (attachment.venue.id !== live.runnerId &&
-            !(
-              attachment.venue.id === LOCAL_RUNNER.id && attachment.venue.kind === LOCAL_RUNNER.kind
-            ))
-        )
-          continue;
-        const detail = attachment.native?.detail;
-        if (!record(detail) || detail.kind !== "volli.native-binding.v1") continue;
-        const locator = detail.locator;
-        if (
-          !record(locator) ||
-          locator.runtime !== "pi" ||
-          typeof locator.sessionId !== "string" ||
-          locator.sessionId.length === 0 ||
-          locator.sessionId !== attachment.native?.id ||
-          typeof locator.sessionFilePath !== "string"
-        )
-          continue;
-        // Read only Pi's runner-owned directory, never a path supplied by a tool.
-        // Keep the original path: the spool's descriptor open refuses symlinks.
-        const lexicalRoot = resolve(options.piDirectory());
-        const within = relative(lexicalRoot, resolve(locator.sessionFilePath));
-        const parts = within.split(sep);
-        if (
-          !isAbsolute(locator.sessionFilePath) ||
-          parts.length !== 2 ||
-          !parts[0]!.startsWith("--") ||
-          !parts[0]!.endsWith("--") ||
-          !parts[1]!.endsWith(".jsonl")
-        )
-          throw new Error("A Pi session file is outside the runner's history layout.");
-        let root: string;
-        try {
-          root = await realpath(lexicalRoot);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          root = lexicalRoot; // missing history is reported without blocking transcript packs
-        }
-        try {
-          if ((await lstat(dirname(locator.sessionFilePath))).isSymbolicLink())
-            throw new Error("A Pi history directory is a symbolic link.");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-        let path: string;
-        try {
-          path = await realpath(locator.sessionFilePath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          path = resolve(root, within); // the spool reports a missing file
-        }
-        const inside = relative(root, path);
-        if (
-          !isAbsolute(locator.sessionFilePath) ||
-          inside === ".." ||
-          inside.startsWith(`..${sep}`) ||
-          isAbsolute(inside)
-        )
-          throw new Error("A Pi session file is outside the runner's history directory.");
-        const fileId = piFileIdOf(path);
-        if (seen.has(fileId)) continue;
-        seen.add(fileId);
-        files.push({ attachmentId: attachment.id, path: locator.sessionFilePath });
-      }
+      const files = await piLogFilesOf(session.attachments, {
+        runnerId: live.runnerId,
+        piDirectory: options.piDirectory(),
+        signal,
+      });
       signal.throwIfAborted();
       return spoolFor(live, signal, sessionId, cursor.generation).packTurn(
         {

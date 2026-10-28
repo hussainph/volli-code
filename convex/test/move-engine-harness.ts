@@ -18,15 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { makeFunctionReference } from "convex/server";
-import { UnknownSessionEventKindError, decodeSessionEventPayload } from "@volli/shared";
-import {
-  MIGRATION_IMPORT_STREAMS,
-  MigrationDigest,
-  jsonBytes,
-  migrationRowDigest,
-} from "@volli/shared/cloud";
+import { MIGRATION_IMPORT_STREAMS, MigrationDigest, migrationRowDigest } from "@volli/shared/cloud";
 
 import { createMoveEngine, type MoveEngine } from "../../packages/host-core/src/cloud-move/engine";
+import { sessionEventImportRecord } from "../../packages/host-core/src/migration-export/session-event-record";
 import { openRawDb } from "../../packages/host-core/src/db/test-helpers";
 import type {
   MoveBackend,
@@ -100,23 +95,6 @@ export class ObjectStandIn implements MoveObjectStore {
   }
 }
 
-/**
- * A Session event as main's importer stores it (classified, payload as the
- * value). Until the importer stores payloads as JSON text (VC-990), the fixture keeps
- * its payloads storable inline (see {@link writeMoveFixture}).
- */
-function eventRecord(record: Record<string, unknown>): Record<string, unknown> {
-  let kindKnown = true;
-  let quarantine: { code: string; detail: string } | null = null;
-  try {
-    decodeSessionEventPayload(record.payload, "payload");
-  } catch (error) {
-    if (error instanceof UnknownSessionEventKindError) kindKnown = false;
-    else quarantine = { code: "malformed", detail: "a malformed known kind" };
-  }
-  return { ...record, kindKnown, quarantine, bytes: jsonBytes(record.payload) };
-}
-
 type Db = ReturnType<typeof openRawDb>;
 
 /** The Session-history port for a fixture with no transcripts or Pi logs. */
@@ -124,7 +102,8 @@ function testHistory(): MoveSessionHistory & { uploads: string[] } {
   const uploads: string[] = [];
   return {
     uploads,
-    eventRecord,
+    // The importer's own encoding: payload and provenance as JSON text.
+    eventRecord: sessionEventImportRecord,
     async upload(_move, session) {
       uploads.push(session.sessionId);
       return { missing: [], piFilesLeftBehind: 0, packs: 0, piSegments: 0 };
@@ -133,26 +112,12 @@ function testHistory(): MoveSessionHistory & { uploads: string[] } {
 }
 
 /**
- * The dry run's synthetic profile, with the two payloads main's importer can
- * only spill (a `$`-key schema, a 300 KiB text) made storable inline: the move
- * stores every event hot and spills nothing.
+ * The dry run's synthetic profile, its `$`-keyed schema and 300 KiB payload
+ * included: the move stores every event hot, as JSON text, and spills
+ * nothing.
  */
 export function writeMoveFixture(root: string) {
   const profile = writeSyntheticProfile(root, 1_790_000_000_000);
-  const db = openRawDb(profile.dbPath);
-  try {
-    for (const [sequence, payload] of [
-      [4, { kind: "retired.surface", schema: { title: "a schema" } }],
-      [5, { kind: "retired.big", text: "x".repeat(100 * 1024) }],
-    ] as const) {
-      db.prepare("UPDATE session_events SET payload = ? WHERE id = ?").run(
-        JSON.stringify(payload),
-        `event:${SYNTHETIC_IDS.hotSession}:${sequence}`,
-      );
-    }
-  } finally {
-    db.close();
-  }
   for (const dir of ["session-transcripts", "pi-sessions"])
     mkdirSync(join(root, dir), { recursive: true });
   return profile;
