@@ -28,6 +28,7 @@ import type { Doc } from "./_generated/dataModel.js";
 import { audit, type AuditKind, type AuditValue } from "./lib/audit";
 import { authError, membershipFacts, requireManage, requireMember } from "./lib/auth";
 import { literals } from "./lib/validators";
+import { pauseArmingsFor } from "./lib/automations";
 import {
   activeOwnerCount,
   findMemberRow,
@@ -202,6 +203,7 @@ async function applyChange(
   // Reads already hide what they can no longer see; the sweep keeps their
   // stored Needs-you items (counts, pushes) honest.
   if (change.kind === "suspend" || change.kind === "remove" || change.kind === "leave") {
+    await pauseArmingsFor(ctx, { userId: row.userId, workspaceId: workspace.id }, now);
     await ctx.scheduler.runAfter(0, internal.attention.sweepAccess, {
       userId: row.userId,
       workspaceId: workspace.id,

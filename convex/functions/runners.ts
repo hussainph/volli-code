@@ -89,6 +89,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { clearRunnerAlert, raiseRunnerAlert } from "./lib/attention";
+import { pauseArmingsFor } from "./lib/automations";
 import { authError, requireSessionVisible, requireViewer, type Viewer } from "./lib/auth";
 import { hasLivePreviewAccess } from "./lib/previewAccess";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
@@ -269,7 +270,7 @@ async function createRunner(ctx: Writer, input: NewRunner): Promise<IssuedGrant>
 
 /** Cuts a runner off: no credential, no token, every live call refused at once. */
 async function revokeRunner(
-  ctx: Writer,
+  ctx: MutationCtx,
   runner: Doc<"runners">,
   reason: string,
   detail: Record<string, unknown>,
@@ -281,6 +282,7 @@ async function revokeRunner(
     statusChangedAt: now,
     revokedAt: runner.revokedAt ?? now,
   });
+  await pauseArmingsFor(ctx, { runnerId: runner.id }, now);
   const credentials = await credentialsOf(ctx, runner.id);
   if (credentials !== null) await ctx.db.delete(credentials._id);
   // Live state of a runner that will never report again.

@@ -86,6 +86,10 @@ const MUST_FIND = {
   "accounts:viewer": "query",
   "accounts:ensureViewer": "mutation",
   "secrets:set": "action",
+  "automations:list": "query",
+  "automations:arm": "mutation",
+  "automations:armSchedule": "mutation",
+  "automations:runsForTicket": "query",
 } as const satisfies Partial<Record<PublicPath, FunctionType>>;
 
 /** Internal functions the enumeration must leave out. */

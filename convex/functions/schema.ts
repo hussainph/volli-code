@@ -1155,7 +1155,8 @@ export default defineSchema({
     .index("by_ticket", ["ticketId", "createdAt"])
     .index("by_expiry", ["expiresAt"])
     // Queued work of one kind by age (the notice expiry sweep).
-    .index("by_kind_status", ["kind", "status", "createdAt"]),
+    .index("by_kind_status", ["kind", "status", "createdAt"])
+    .index("by_project_kind_status", ["projectId", "kind", "status", "availableAt"]),
 
   // ── attention / Needs-you ──────────────────────────────────────────────────
   // Written only by `lib/attention.ts`.
@@ -1457,9 +1458,13 @@ export default defineSchema({
     // The armer's chosen runner (default their Mac).
     runnerId: uuid,
     armedAt: time,
+    pausedAt: v.optional(nullable(time)),
+    pausedReason: v.optional(nullable(literals(["moved", "runner_removed", "armer_left"]))),
   })
     .index("by_project_status", ["projectId", "status"])
-    .index("by_automation", ["automationId"]),
+    .index("by_automation", ["automationId"])
+    .index("by_armer", ["armedByUserId"])
+    .index("by_runner", ["runnerId"]),
   automationColumnOrder: defineTable({
     projectId: uuid,
     status: ticketStatus,
@@ -1474,9 +1479,17 @@ export default defineSchema({
     timezone: v.string(),
     nextFireAt: time,
     lastFiredAt: nullable(time),
+    armedAt: v.optional(time),
+    pausedAt: v.optional(nullable(time)),
+    pausedReason: v.optional(nullable(literals(["moved", "runner_removed", "armer_left"]))),
+    pendingJobId: v.optional(nullable(uuid)),
+    pendingRunId: v.optional(nullable(uuid)),
+    gapRunId: v.optional(nullable(uuid)),
   })
     .index("by_automation", ["automationId"])
-    .index("by_next_fire", ["nextFireAt"]),
+    .index("by_next_fire", ["nextFireAt"])
+    .index("by_armer", ["armedByUserId"])
+    .index("by_runner", ["runnerId"]),
   automationRuns: defineTable({
     id: uuid,
     automationId: nullable(uuid),
@@ -1497,6 +1510,9 @@ export default defineSchema({
     // A failed arrival attempt's error, and the command id its Retry replays under.
     error: v.optional(v.string()),
     retryCommandId: v.optional(v.string()),
+    jobId: v.optional(nullable(uuid)),
+    requestedBySessionId: v.optional(nullable(uuid)),
+    instructions: v.optional(nullable(v.string())),
   })
     .index("by_uuid", ["id"])
     .index("by_automation", ["automationId", "createdAt"])

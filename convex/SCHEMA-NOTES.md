@@ -364,6 +364,43 @@ Each was a decision made while turning the design into code.
     `projectMoves` is not written: it records a move between Workspaces and
     names the Workspace a project came from, which a local project has not.
 
+## Automation records
+
+Automation definitions are project-scoped; any active Member may edit, arm,
+replace or disarm them. New armings use only the caller's live runner with
+`automation.run` capability. A person token identifies no Mac, so the desktop
+must pass its current `runnerId`; an omitted runner is refused rather than
+choosing an arbitrary machine. Only `automations.list` admits Agent tokens.
+Every record mutation uses the board's seven-day command receipts.
+
+Armings and schedules gain optional pause fields; absence means unpaused.
+Armer/runner indexes support transactional pausing on Member access loss and
+runner revocation (including credential reuse and replacement). Paused rows
+stay attributed to the original armer/runner until an explicit re-arm.
+The existing arming events are frozen as follows: a pause retains
+`automationId` with `runnerId: null`; column disarm uses both null. Reads of
+the arming row distinguish pause from disarm. Schedule events always have
+`ticketId: null`. Reorders emit no event, like ticket reorders.
+
+Never-leased Automation jobs are cancelled when their arm is withdrawn or
+its access is lost. Their queued Run projection, when present, becomes
+skipped; leased work is left for the runner's fresh-context fence. One paused
+Needs-you item per project/armer uses the durable id
+`a:{projectId}:{userId}:paused`, through `lib/attention.ts`, only while that
+person is still a Member. Re-arming/disarming the last paused record clears it.
+Schedule pending/gap pointers and Run job/caller/Instructions fields are
+optional expand slots for the clock/Run producer. Schedule arm and trigger
+edits compute a strictly-future cursor with the shared stored-zone rule;
+there is no cron in the records layer.
+
+Receiving-task wiring: the cloud Automation source must consume `list`,
+`armings`, `columnOrders`, `schedules` and the paginated `runsFor*` reads,
+send UUID `commandId`s for record writes, and supply this Mac's runner for
+arming. The clock/Run layer must skip paused rows, populate the optional
+pending/gap and Run fields, and fence leased outcomes against current armings.
+The move importer must set `pausedAt`/`pausedReason: moved` on imported arms;
+adding optional fields does not itself change imported records.
+
 ## Runner-routed agent Session commands
 
 `sessions.command` accepts the existing UUID command ids and, for an authenticated
