@@ -1,16 +1,38 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { copyFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { rotateAutomaticBackups } from "../backup/automatic";
 import { readBackupBundle } from "../backup/bundle";
 import { withProfileMaintenance } from "../backup/profile-maintenance";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
 import { createMoveBackupPort, type MoveBackupOptions } from "./backup";
 
+const publication = vi.hoisted(() => ({
+  onKept: undefined as (() => void) | undefined,
+  cleanupBusy: false,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...original,
+    rm: async (...args: Parameters<typeof original.rm>) => {
+      if (publication.cleanupBusy && String(args[0]).endsWith(".work"))
+        throw Object.assign(new Error("cleanup busy"), { code: "EBUSY" });
+      return original.rm(...args);
+    },
+    writeFile: async (...args: Parameters<typeof original.writeFile>) => {
+      await original.writeFile(...args);
+      if (String(args[0]).endsWith(".kept")) publication.onKept?.();
+    },
+  };
+});
+
 let profile: FixtureProfile;
 beforeEach(() => {
+  publication.onKept = undefined;
+  publication.cleanupBusy = false;
   profile = createFixtureProfile();
   profile.db.pragma("journal_mode = WAL");
 });
@@ -83,6 +105,18 @@ describe("the move's whole-profile backup", () => {
     ).toBe(false);
   }, 30_000);
 
+  it("returns a published backup in the chosen folder even if cancellation arrives with its keep marker", async () => {
+    const abort = new AbortController();
+    publication.onKept = () => abort.abort();
+    const directory = join(profile.root, "chosen-backups");
+    const result = await createMoveBackupPort({ ...options(), directory }).write(abort.signal);
+    expect(abort.signal.aborted).toBe(true);
+    expect(dirname(result.path)).toBe(directory);
+    expect(existsSync(result.path)).toBe(true);
+    expect(existsSync(`${result.path}.kept`)).toBe(true);
+    expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
+  }, 30_000);
+
   it("never returns a backup when read-back detects corrupt record links", async () => {
     profile.db.pragma("foreign_keys = OFF");
     profile.db.prepare("UPDATE tickets SET project_id = 'missing' WHERE id = 'ticket-live'").run();
@@ -90,18 +124,49 @@ describe("the move's whole-profile backup", () => {
       createMoveBackupPort(options()).write(new AbortController().signal),
     ).rejects.toMatchObject({ code: "verification" });
     const files = await readdir(join(profile.root, "backups"));
-    expect(files.some((name) => name.endsWith(".tar.gz"))).toBe(false);
-    expect(files.some((name) => name.endsWith(".tar.gz.failed"))).toBe(true);
+    expect(files).toEqual([]);
   }, 30_000);
 
-  it("refuses disk shortage before a snapshot and maps it to the engine's disk-full pause", async () => {
-    await expect(
-      createMoveBackupPort({ ...options(), estimatedExportBytes: 1_000_000_000_000_000 }).write(
-        new AbortController().signal,
-      ),
-    ).rejects.toMatchObject({ code: "ENOSPC", message: expect.stringContaining("bytes free") });
-    const files = await readdir(join(profile.root, "backups"));
-    expect(files.every((name) => name.endsWith(".kept"))).toBe(true);
+  it.each([false, true])(
+    "preserves the disk-full pause even if cleanup fails (%s)",
+    async (cleanupBusy) => {
+      publication.cleanupBusy = cleanupBusy;
+      await expect(
+        createMoveBackupPort({ ...options(), estimatedExportBytes: 1_000_000_000_000_000 }).write(
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject({ code: "ENOSPC", message: expect.stringContaining("bytes free") });
+      const files = await readdir(join(profile.root, "backups"));
+      expect(files).toEqual([]);
+    },
+    30_000,
+  );
+
+  it("reclaims a crashed move's scratch and partial, never a final bundle or live worker's files", async () => {
+    const directory = join(profile.root, "backups");
+    const pathFor = (pid: number) =>
+      join(
+        directory,
+        `pre-cloud-move-2026-01-01T00-00-00.000Z-${pid}-00000000-0000-4000-8000-000000000000.tar.gz`,
+      );
+    const dead = pathFor(2147483647);
+    const live = pathFor(process.pid);
+    await mkdir(`${dead}.work`, { recursive: true });
+    await mkdir(`${live}.work`, { recursive: true });
+    for (const path of [
+      `${dead}.partial`,
+      `${dead}.failed`,
+      `${dead}.failed.json`,
+      `${live}.partial`,
+      dead,
+      `${dead}.kept`,
+    ])
+      await writeFile(path, "leave final/live files alone");
+    await createMoveBackupPort(options()).write(new AbortController().signal);
+    for (const path of [`${dead}.work`, `${dead}.partial`, `${dead}.failed`, `${dead}.failed.json`])
+      expect(existsSync(path)).toBe(false);
+    for (const path of [dead, `${dead}.kept`, `${live}.work`, `${live}.partial`])
+      expect(existsSync(path)).toBe(true);
   }, 30_000);
 
   it("does not start an already cancelled backup or accept invalid byte estimates", async () => {

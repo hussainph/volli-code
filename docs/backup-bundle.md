@@ -264,7 +264,12 @@ queue's estimated export bytes, and 256 MiB headroom. If backup and export roots
 are on different volumes, each must have its own allowance. Before publication,
 the check uses the actual bundle size and still reserves the export space.
 Shortage refuses the step with required/available byte counts; a failed read-back
-never returns a usable backup or permits the freeze. The move's own backup runs
+never returns a usable backup or permits the freeze. Failed move attempts remove
+their own archive and scratch files; after a crash, the next attempt reclaims only
+recognised partial/scratch files owned by a dead process, never a final bundle.
+Cleanup failures are logged without replacing the original failure. A late cancel
+after publication journals the usable backup before pausing, so resume reuses it.
+The move's own backup runs
 inside its maintenance lease without waiting on itself; daily backups still wait.
 The large-profile restore limitation above remains a stable-release gate.
 

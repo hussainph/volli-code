@@ -238,6 +238,41 @@ describe("problems with this Mac's own files", () => {
       expect(world.calls.size).toBe(0);
     },
   );
+  test("journals a backup published during cancellation without freezing or writing it twice", async () => {
+    world = await moveWorld();
+    const abort = new AbortController();
+    const backup = {
+      path: join(world.root, "pre-cloud-move.tar.gz"),
+      bytes: 123,
+      sha256: "b".repeat(64),
+    };
+    let writes = 0;
+    const { engine, queueId, moveId } = enqueue(
+      world,
+      world.engine({
+        ports: {
+          backup: {
+            async write() {
+              writes++;
+              abort.abort();
+              return backup;
+            },
+          },
+        },
+      }),
+    );
+    expect(await engine.run(queueId, abort.signal)).toEqual({
+      kind: "waiting",
+      moveId,
+      reason: "paused",
+    });
+    expect(engine.journal.queue(queueId)!.backup).toMatchObject(backup);
+    expect(engine.journal.move(moveId)!.state).toBe("queued");
+    expect(projectFreeze(world.db, world.projectId)).toBeNull();
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    expect(writes).toBe(1);
+  });
+
   test("an attachment gone from disk mid-move rolls the project back, never waits on the network", async () => {
     world = await moveWorld();
     const { queueId, moveId } = enqueue(world);

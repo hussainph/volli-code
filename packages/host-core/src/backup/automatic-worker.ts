@@ -186,9 +186,10 @@ export async function createAutomaticBackup(
       "Backup skipped: not enough free disk space for two copies of the bundle and verification. Free disk space, then Back up now.",
     );
   }
-  const workDir = await mkdtemp(
-    join(directory, `${request.move ? ".move-backup" : ".automatic"}-${process.pid}-`),
-  );
+  const workDir = request.move
+    ? `${request.outputPath}.work`
+    : await mkdtemp(join(directory, `.automatic-${process.pid}-`));
+  if (request.move) await mkdir(workDir, { mode: 0o700 });
   const partial = `${request.outputPath}.partial`;
   try {
     await checkpoint();
@@ -311,15 +312,17 @@ export function serveAutomaticBackupWorker(): void {
         const failure =
           error instanceof ProfileBackupError
             ? error
-            : isDiskFullError(error)
+            : request.move && isDiskFullError(error)
               ? new ProfileBackupError(
                   "disk-space",
-                  "Backup ran out of disk space. Free space, then retry the move or backup.",
+                  "Move backup ran out of disk space. Free space, then retry.",
                 )
               : error instanceof BackupBundleError
                 ? new ProfileBackupError(
                     "verification",
-                    "Backup verification failed. Any written bundle was kept as failed. Try Back up now.",
+                    request.move
+                      ? "Move backup verification failed. Nothing has moved; retry the backup."
+                      : "Backup verification failed. Any written bundle was kept as failed. Try Back up now.",
                   )
                 : new ProfileBackupError("io", "Backup could not be completed. Try Back up now.");
         port.postMessage({
