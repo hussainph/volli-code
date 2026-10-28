@@ -90,6 +90,11 @@ export function userPrefix(userId: string): string {
   return `${R2_LAYOUT_VERSION}/u/${uuid("userId", userId)}/`;
 }
 
+/** Everything one migration (a move's manifest, export chunks, reports) staged. */
+export function migrationPrefix(migrationId: string): string {
+  return `${R2_LAYOUT_VERSION}/m/${uuid("migrationId", migrationId)}/`;
+}
+
 // ── Session history ──────────────────────────────────────────────────────────
 
 /** A transcript pack: the artifacts referenced by events `first..last` (`volli.transcript-pack/1`). */
@@ -171,6 +176,15 @@ export function userBlobKey(userId: string, sha256: string): string {
   return `${userPrefix(userId)}b/${sha("sha256", sha256)}`;
 }
 
+/**
+ * A migrated local-only ledger that belongs to no project (host-wide rows),
+ * kept forever under the person who moved it (`name` is a fixed lowercase literal).
+ */
+export function userLegacyArchiveKey(userId: string, name: string): string {
+  if (!LEGACY_NAME.test(name)) throw new InvalidKeyPartError("legacy name", name);
+  return `${userPrefix(userId)}legacy/${name}.ndjson.zst`;
+}
+
 export function userConfigBundleKey(
   userId: string,
   entryId: string,
@@ -188,5 +202,5 @@ export function exportKey(exportId: string, part: string): string {
 
 /** One part of a migration's staging. `v1/m/` expires after 30 days. */
 export function migrationKey(migrationId: string, part: string): string {
-  return `${R2_LAYOUT_VERSION}/m/${uuid("migrationId", migrationId)}/${segment("part", part)}`;
+  return `${migrationPrefix(migrationId)}${segment("part", part)}`;
 }

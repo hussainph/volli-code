@@ -162,7 +162,7 @@ not "Admin Read & Write". To rotate, create the next token, set the two credenti
 then revoke the old one.
 
 Keys are written and stored verbatim (`packages/shared/src/cloud/r2-keys.ts`);
-readers never re-derive them. Delete only the two staging prefixes:
+readers never re-derive them. Lifecycle rules delete only the two staging prefixes:
 
 | Prefix | Holds | Delete after |
 | --- | --- | --- |
@@ -170,6 +170,13 @@ readers never re-derive them. Delete only the two staging prefixes:
 | `v1/w/<workspaceId>/`, `v1/u/<userId>/` | Workspace and person blobs and config bundles | never |
 | `v1/x/<exportId>/` | Parts of an export bundle | 7 days |
 | `v1/m/<migrationId>/` | A migration's staging | 30 days |
+
+The backend deletes objects itself in one case only: the purge of a cancelled move
+to Volli Cloud (`convex/functions/projectImportPurge.ts`) lists and deletes that
+move's `v1/m/<moveId>/` and, once no project row holds the id, the moved project's
+`v1/p/<projectId>/` (one DELETE per key). The token's Object Read & Write covers those
+List and Delete calls; they run from the backend, so they need no CORS rule. A move's uploads are
+write-once (`If-None-Match: *`): a key that holds an object answers 412.
 
 An expired pack is not a cache miss: its index row still names the key and the
 Session's history stops being readable. Leave R2's built-in abort of incomplete
@@ -488,8 +495,10 @@ pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","a
 pnpm -C convex exec convex run projectImports:rescue '{"moveId":"<move-uuid>","action":{"kind":"reassign","userId":"<replacement-user-uuid>","runnerId":"<their-runner-uuid>"}}' --deployment <ref>
 ```
 
-Abort marks the hidden move `aborting` for the purge chain; until that chain is
-deployed it remains marked for purge. Reassignment requires an active owner/admin
+Abort marks the hidden move `aborting` and starts its purge, as the driver's own
+`abort` does: `projectImports:status` shows it (`purge`, then `purged`). A purge
+that stopped (`purge.error` starting `stopped:`) names a row or key that is not
+the move's and waits for someone to look; abort again restarts it. Reassignment requires an active owner/admin
 of the **same Workspace**, with live preview access and their own non-revoked
 runner. It explicitly grants that person access to the hidden imported history.
 They resume the existing move via `projectImports.status`, using its `driver` for

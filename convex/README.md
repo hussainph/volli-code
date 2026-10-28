@@ -60,12 +60,13 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/lib/boardEffects.ts`                                     | A board write's machine side effects (Done/archive trim, interrupts, armed arrivals, worktree materialization) as `runnerJobs` rows for the runner that holds the work.                                                                                                                           |
 | `functions/activity.ts`                                             | The activity feed: `project` and `workspace`, newest first, with our own page cursor (see **The activity feed**).                                                                                                                                                                                 |
 | `functions/lib/activity.ts`                                         | The feed reader: the k-way merge, the cursor, visibility, folding and the tickets and people a page names.                                                                                                                                                                                        |
-| `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry and refilled rate-limit cleanup hourly).                                                                                                           |
+| `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry and refilled rate-limit cleanup hourly, stalled move purges every 15 min).                                                                         |
 | `functions/transcripts.ts`                                          | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                                                                    |
 | `functions/sessionTranscript.ts`                                    | Viewer-authorized transcript segment manifests, staged artifact bodies and signed GETs for committed packs/spills. The renderer hydrates settled history with these reads.                                                                                                                        |
 | `functions/projectImports.ts`, `functions/lib/migrationImport.ts`   | The person-authorized project import ("Move to Volli Cloud"), hidden until commit, and the batch writer it shares with `migration.ts` (see **The person-authorized project import**).                                                                                                             |
 | `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256; `attachments`: visible ticket/Session links; `presignGet`: a project blob reachable through a visible owner (signed by `presignS3Request` in `@volli/shared/cloud`).                                                              |
-| `functions/lib/objectStore.ts`                                      | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`).                                                                                                                                                                                |
+| `functions/projectImportPurge.ts`, `functions/lib/projectPurge.ts`  | The purge of a cancelled move: its rows by index in bounded batches, then its objects, ending `purged` (see **The person-authorized project import**).                                                                                                                                            |
+| `functions/lib/objectStore.ts`                                      | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`), and the list and delete a purge sends itself.                                                                                                                                  |
 | `functions/lib/visibility.ts`                                       | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
 | `functions/runners.ts`                                              | Runners: linking (desktop, install token, device code), a Mac's successor taking over its work, the rotated credential with reuse detection, heartbeat, sleep and capabilities, the offline sweep, the Settings list, and `places`: the runner a visible Session lives on ("Waiting for <Mac>").  |
 | `functions/runnerHttp.ts`, `functions/http.ts`                      | `/runner/link`, `/runner/link/start`, `/runner/link/poll`, `/runner/token` (HTTP actions; secrets are minted here, mutations see hashes) and the deployment's HTTP router.                                                                                                                        |
@@ -224,9 +225,19 @@ project move** section.
   content) unless every accumulator equals the manifest, then shows the
   project. `uncommit` hides it again for a roll back, refusing
   (`changed_since_commit`) when its board or Sessions moved since, unless
-  confirmed. `abort` marks the move `aborting`; **purging its rows and objects
-  is a scheduled chain that is not built yet**, so an aborted move's rows stay,
-  hidden, and the project cannot be moved again until then.
+  confirmed. `abort` marks the move `aborting` and starts its purge (below);
+  the project stays hidden, and cannot be moved again, until it is `purged`.
+- `presignPut` (an action) signs one PUT of an object the move carries, bound
+  to its exact length and SHA-256 and write-once (`If-None-Match: *`, so the
+  store answers 412 for a key that holds an object), at most 1 GiB (64 MiB
+  for a Session's objects). The key must parse as one of a move's layouts and
+  equal its own derivation (`lib/moveObjectKeys.ts`): under the project
+  (`v1/p/<projectId>/`: a blob at its own SHA-256, a Session's packs,
+  archives, spills and Pi segments, a legacy archive) or the move's staging
+  (`v1/m/<moveId>/<part>`), the two prefixes the purge deletes. Host-wide
+  legacy rows belong under the person (`userLegacyArchiveKey`,
+  `v1/u/<userId>/legacy/`, kept forever); the profile step that uploads them
+  is not part of a project's move and has no door yet.
 - `status` answers the accumulators; `readRows` reads one stream back by the
   project's own indexes (or one ticket's or the importer's Session's), for the
   client's verification, and only while the project has never been shown
@@ -244,6 +255,40 @@ whose arguments name a project, ticket, Session, comment or label must answer
 for the importing one as for one that does not exist. Arguments a sample
 cannot make valid (a Session's facts, a staged artifact) have targeted tests
 in `projectImports.test.ts`.
+
+The purge (`functions/projectImportPurge.ts`, plan in `lib/projectPurge.ts`) is
+a scheduled chain of bounded transactions (at most 256 rows or about 4 MiB
+each): the project's rows by index, children before their owner (each Session's
+events, intake, fold, turns, transcripts, stream chunks, viewers, follow-ups,
+delegations, grants, watches, read markers and attention; each ticket's body,
+comments, signals, links, Working copies and attention; then the rows that name
+the project), then the MCP audit rows the import wrote, then the project row;
+then an action lists and deletes `v1/p/<projectId>/` and `v1/m/<moveId>/`
+(signed ListObjectsV2, then one DELETE per key, eight at a time) and marks the
+move `purged`. The objects phase starts 30 minutes after the abort, once every
+upload URL the move was given has expired and its upload has had time to land.
+Each start of a purge mints a run id every link carries, and every batch of
+deletes is claimed under the current run, so a run a restart left behind
+deletes nothing. A move rolled
+back after its commit loses what was written there while it was shown, which is
+why `uncommit` asks first. `PURGE_TABLES` names every table in the schema with
+what a purge does with it (project-scoped secrets and model connections go
+with the project; a person's own credentials, billing, receipts and the move's
+own record are kept; rows of other projects that point into it are left), so a new table cannot be forgotten
+(`test/projectImportPurge.test.ts`, against an S3 stand-in, `test/s3-standin.ts`).
+
+What a purge never touches: a project that is not the move's hidden one (the rows
+phase runs only while `moveState` is `importing` in the move's Workspace, and the
+project prefix is deleted only once no project row holds the id), a key outside
+those two prefixes, or `v1/u/`. A row reached through the project that names
+another project, or a listed key outside its prefix, stops the purge with
+`stopped:…` on the move (`status` shows it) for a person to look at. Any other
+failure (the store unreachable), or ten minutes without progress, is restarted
+by a cron every 15 minutes, five times in a row at most without progress
+(then `stopped:stalled`); `abort` called again restarts any of them at once.
+The move id is the client's: `begin` takes only an unused one, so the
+staging a purge empties is that move's own. A deployment with no object store
+deletes the rows and records that it left the objects (`storage_unconfigured`).
 
 Replacing the move's runner (`registerThisMac` naming it) moves its hidden
 Sessions and claims to the successor like any others, and the move then stops

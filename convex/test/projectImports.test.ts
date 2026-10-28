@@ -6,7 +6,7 @@
  * public function is `projectImports.hidden.test.ts`.
  */
 
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 // The shared mapping's own fixture: one export record per stream.
 import { MIGRATION_FIXTURE_RECORDS } from "../../packages/shared/src/cloud/migration-import.fixture";
@@ -391,17 +391,25 @@ describe("already migrated", () => {
     await expect(commit(world)).rejects.toThrow(code("verification_failed"));
   });
 
-  test("a project another move holds is in progress", async () => {
+  test("a project another move holds is in progress, until its purge frees it", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const world = await importWorld();
     await begin(world);
     await expect(begin(world, { moveId: newId("project") })).rejects.toThrow(
       code("import_in_progress"),
     );
     await world.alice.as.mutation(api.projectImports.abort, { moveId: world.moveId });
-    // Until the purge (MOVE-3) takes the aborted move to `purged`.
+    // Until the purge takes the aborted move to `purged`.
     await expect(begin(world, { moveId: newId("project") })).rejects.toThrow(
       code("import_in_progress"),
     );
+    await world.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await begin(world, { moveId: newId("project") })).toMatchObject({
+      status: "reserved",
+    });
   });
 });
 
@@ -692,6 +700,11 @@ describe("row rules", () => {
 
 describe("uncommit and abort", () => {
   test("uncommit hides a committed project; abort then closes the move", async () => {
+    // The purge abort starts waits for the timers (projectImportPurge.test.ts runs it).
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const world = await importedWorld();
     await commit(world);
     expect(
@@ -715,7 +728,7 @@ describe("uncommit and abort", () => {
     await expect(
       world.alice.as.mutation(api.projectImports.uncommit, { moveId: world.moveId }),
     ).rejects.toThrow(code("import_closed"));
-    // Still hidden: the purge (MOVE-3) removes it.
+    // Still hidden until the purge removes it.
     await expect(getProject(world)).rejects.toThrow(code("not_found"));
   });
 
