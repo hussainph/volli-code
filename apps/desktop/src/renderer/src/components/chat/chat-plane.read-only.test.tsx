@@ -242,7 +242,11 @@ it("shows a cloud Session's local secure card, preserves pending requests, and s
   const { client, submit, decline, send, resolveInteraction } = cloudSecrets("r1");
   const pending = Promise.withResolvers<{ ok: true }>();
   submit.mockReturnValueOnce(pending.promise);
-  const { container, store } = await mountPlane(true, true, [credentialRequest("first")]);
+  const { container, store } = await mountPlane(true, true, [
+    credentialRequest("first"),
+    credentialRequest("next"),
+  ]);
+  expect(container.querySelectorAll("input[type=password]")).toHaveLength(1);
   const cloudCallsBefore = {
     mutation: client.mutation.mock.calls.length,
     action: client.action.mock.calls.length,
@@ -265,7 +269,7 @@ it("shows a cloud Session's local secure card, preserves pending requests, and s
   });
   expect(submit.mock.calls).toEqual([[{ requestId: "first", value: sentinel, scope: "session" }]]);
   await act(async () => pending.resolve({ ok: true }));
-  expect(container.querySelector('[data-slot="secret-card"]')).toBeNull();
+  expect(container.querySelectorAll('[data-slot="secret-card"]')).toHaveLength(1);
   expect(store.getState()).toBe(chatBefore);
   expect(useChatDraftsStore.getState()).toBe(draftsBefore);
   expect(container.innerHTML).not.toContain(sentinel);
@@ -282,23 +286,8 @@ it("shows a cloud Session's local secure card, preserves pending requests, and s
   expect(send).not.toHaveBeenCalled();
   expect(resolveInteraction).not.toHaveBeenCalled();
 
-  // The next broker-queued request has its own correlation and must not be
-  // hidden by the successful write's projection-lag latch.
-  const projection = store.getState().sessions[SESSION]!.projection!;
-  act(() =>
-    store.setState({
-      sessions: {
-        ...store.getState().sessions,
-        [SESSION]: {
-          ...store.getState().sessions[SESSION]!,
-          projection: {
-            ...projection,
-            interactions: { active: [credentialRequest("next")], resolved: [] },
-          },
-        },
-      },
-    }),
-  );
+  // The already-pending request advances without waiting for a new cloud
+  // projection; only the successful head is hidden by the local latch.
   expect(container.querySelector<HTMLInputElement>("input[type=password]")?.value).toBe("");
   const declineButton = [...container.querySelectorAll("button")].find(
     (button) => button.textContent === "Decline",
