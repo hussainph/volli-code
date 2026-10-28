@@ -113,7 +113,12 @@ describe("a full export", () => {
   it("publishes a verified directory with a manifest naming every chunk", async () => {
     const progress: MigrationExportProgress[] = [];
     const result = await exportMigrationSnapshot(
-      options({ onProgress: (report) => progress.push(report) }),
+      options({
+        onProgress: (report) => {
+          expect(readdirSync(join(profile.root, "backups", ".maintenance"))).toHaveLength(1);
+          progress.push(report);
+        },
+      }),
     );
     expect(result.resumed).toBe(false);
     expect(existsSync(stagingDirOf(result.outDir))).toBe(false);
