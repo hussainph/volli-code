@@ -450,6 +450,20 @@ The local cloud-launch signal path does not also write a board comment.
   a key a Convex value refuses (`$schema`, non-ASCII) cannot be imported that
   way, so the import should send them as text.
 
+## Project blob reads
+
+`files.presignGet` signs only the canonical `projectBlobKey(projectId, sha256)`
+named by a blob row, after project access and a live, visible link owner are
+checked. A private Session's attachment is not readable just because the caller
+belongs to its Workspace or knows its hash. A separate visible ticket/comment
+link to identical bytes does grant access to those bytes, not to the private
+link. `files.attachments` lists ticket links before Session links (creation order
+within each), preserving the materialized filename collision rule. Moved links
+carry optional `sourceOrder` (the local SQLite rowid), so equal-timestamp filename
+collisions keep their original order independently of import batch order. Links
+without source order form a subsequent creation-ordered group. It never returns
+object-store keys. Neither read admits runner or Agent credentials.
+
 ## Streamed text
 
 Where `streamChunks` and `sessionViewers` depart from the data-model design:

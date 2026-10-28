@@ -5,7 +5,12 @@ import DOMPurify, {
   type UponSanitizeElementHookEvent,
 } from "dompurify";
 import { Marked } from "marked";
-import { markdownImageNotice, resolveMarkdownImageSrc } from "@volli/shared";
+import { markdownImageNotice, parseBlobUrl, resolveMarkdownImageSrc } from "@volli/shared";
+import {
+  MARKDOWN_IMAGE_MISSING_CLASS,
+  useBlobReader,
+  useCloudMarkdownImages,
+} from "@renderer/components/attachments/blob-read";
 
 import { useMarkdownAttachments } from "@renderer/components/attachments/markdown-image";
 import { chatSanitizerKeepsClass } from "@renderer/components/ui/ai-elements/chat-markdown";
@@ -93,7 +98,7 @@ const SANITIZE_CONFIG: DOMPurifyConfig = {
  * policy: the class of the notice an unrenderable image is drawn as, and
  * `loading="lazy"` on the images it does draw.
  */
-const OWN_CLASS = { tag: "span", token: "typeset-image-missing" } as const;
+const OWN_CLASS = { tag: "span", token: MARKDOWN_IMAGE_MISSING_CLASS } as const;
 const OWN_ATTRIBUTE = { tag: "img", name: "loading" } as const;
 
 /**
@@ -130,7 +135,8 @@ function hastPropertyName(attribute: string): string {
 function keepAllowedAttribute(node: Element, event: UponSanitizeAttributeHookEvent): void {
   const tag = node.localName;
   const name = event.attrName;
-  if (tag === OWN_ATTRIBUTE.tag && name === OWN_ATTRIBUTE.name) return;
+  if (tag === OWN_ATTRIBUTE.tag && (name === OWN_ATTRIBUTE.name || name === "data-volli-blob"))
+    return;
   if (name === "id" || !allowsPreviewAttribute(tag, hastPropertyName(name))) {
     event.keepAttr = false;
     return;
@@ -188,6 +194,8 @@ export function Markdown({ source, className }: { source: string; className?: st
   // row. The provider memoizes the map on its content, so an unchanged set of
   // attachments keeps this memo's cached HTML.
   const byName = useMarkdownAttachments();
+  const reader = useBlobReader();
+  const container = React.useRef<HTMLDivElement>(null);
 
   const html = React.useMemo(() => {
     // A per-render instance rather than the module-level `marked`: the image
@@ -200,7 +208,12 @@ export function Markdown({ source, className }: { source: string; className?: st
           const resolution = resolveMarkdownImageSrc(href, byName);
           const alt = escapeHtml(text);
           if (resolution.kind === "render") {
-            return `<img src="${escapeHtml(resolution.src)}" alt="${alt}" ${OWN_ATTRIBUTE.name}="lazy" />`;
+            const hash = parseBlobUrl(resolution.src);
+            const imageSource =
+              reader !== null && hash !== null
+                ? `data-volli-blob="${hash}"`
+                : `src="${escapeHtml(resolution.src)}"`;
+            return `<img ${imageSource} alt="${alt}" ${OWN_ATTRIBUTE.name}="lazy" />`;
           }
           // Drawn, not dropped: an image that silently vanishes is
           // indistinguishable from one nobody wrote. The alt text rides along
@@ -212,8 +225,28 @@ export function Markdown({ source, className }: { source: string; className?: st
       },
     });
     const raw = renderer.parse(source, { async: false, gfm: true });
-    return purifier.sanitize(raw, SANITIZE_CONFIG);
-  }, [source, byName]);
+    const sanitized = purifier.sanitize(raw, SANITIZE_CONFIG);
+    if (reader === null) return sanitized;
+    // Raw HTML images bypass marked's image renderer. Rewrite them while
+    // still inert, before they could reach this Mac's local blob protocol.
+    const fragment = document.createElement("template");
+    fragment.innerHTML = sanitized;
+    for (const image of fragment.content.querySelectorAll("img[src]")) {
+      const hash = parseBlobUrl(image.getAttribute("src") ?? "");
+      if (hash === null) continue;
+      image.removeAttribute("src");
+      image.setAttribute("data-volli-blob", hash);
+    }
+    return fragment.innerHTML;
+  }, [source, byName, reader]);
 
-  return <div className={cn("typeset", className)} dangerouslySetInnerHTML={{ __html: html }} />;
+  useCloudMarkdownImages(container, html);
+
+  return (
+    <div
+      ref={container}
+      className={cn("typeset", className)}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }

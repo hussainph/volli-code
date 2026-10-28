@@ -14,6 +14,9 @@ import {
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { canWriteNow, readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { Markdown } from "@renderer/components/ticket/markdown";
+import { BlobReadProvider } from "@renderer/components/attachments/blob-read";
+import { MarkdownAttachmentsProvider } from "@renderer/components/attachments/markdown-image";
+import { useMaterializedAttachments } from "@renderer/hooks/use-materialized-attachments";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -261,10 +264,23 @@ function ArchiveInspect({
         {ticket.body.trim() === "" ? (
           <p className="text-sm text-muted-foreground">No description.</p>
         ) : (
-          <Markdown source={ticket.body} />
+          <ArchiveBody projectId={project.id} ticket={ticket} />
         )}
       </div>
     </>
+  );
+}
+
+function ArchiveBody({ projectId, ticket }: { projectId: string; ticket: ArchivedTicket }) {
+  const attachments = useMaterializedAttachments(
+    launchStore() === "cloud" ? { projectId, ticketId: ticket.id } : {},
+  );
+  return (
+    <BlobReadProvider projectId={projectId}>
+      <MarkdownAttachmentsProvider attachments={attachments}>
+        <Markdown source={ticket.body} />
+      </MarkdownAttachmentsProvider>
+    </BlobReadProvider>
   );
 }
 

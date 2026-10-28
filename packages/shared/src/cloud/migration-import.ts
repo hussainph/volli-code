@@ -556,7 +556,14 @@ const MAPPERS: Readonly<Record<MigrationImportStream, Mapper>> = {
     requireId(record, "id");
     requireId(record, "projectId");
     requireId(asRecord(record.owner), "id");
-    return pick(record, ["id", "projectId", "sha256", "owner", "label", "createdAt"]);
+    const row = pick(record, ["id", "projectId", "sha256", "owner", "label", "createdAt"]);
+    if (record.sourceOrder !== undefined) {
+      if (typeof record.sourceOrder !== "number" || !Number.isSafeInteger(record.sourceOrder)) {
+        throw new MigrationRowError("invalid_field", "sourceOrder", "must be a safe integer");
+      }
+      row.sourceOrder = record.sourceOrder;
+    }
+    return row;
   },
   automations(record) {
     requireId(record, "id");

@@ -1,4 +1,8 @@
 import * as React from "react";
+import { cloudSession, followCloudSession } from "@renderer/lib/cloud-client";
+import { BlobReadProvider } from "@renderer/components/attachments/blob-read";
+import { launchStore } from "@renderer/stores/launch";
+import { readTicketAttachments } from "@renderer/lib/attachment-reads";
 import { useShallow } from "zustand/react/shallow";
 import {
   arrangeTabs,
@@ -127,11 +131,7 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 import { getEngine } from "@renderer/terminal/registry";
-import {
-  notAvailableOn,
-  remoteHostNow,
-  remoteHostOfTicketNow,
-} from "@renderer/stores/remote-project";
+import { notAvailableOn, remoteHostNow } from "@renderer/stores/remote-project";
 
 /** The always-present Ticket Body tab's id — the fallback every persisted/live
  * tab id resets to once it no longer names a renderable tab (body/file/session).
@@ -207,17 +207,23 @@ function documentFileSource(identity: DocumentIdentity): FileSource {
  * why the file/diff editors bind their dirty and view-state reports to their
  * own path instead of to "the active tab's".
  */
-export function TicketDetail({
-  projectId,
-  ticketPrefix,
-  ticket,
-}: {
+interface TicketDetailProps {
   projectId: string;
   /** Kept in the props contract for Home; the PTY cwd now resolves in main. */
   projectPath: string;
   ticketPrefix: string;
   ticket: Ticket;
-}) {
+}
+
+export function TicketDetail(props: TicketDetailProps) {
+  return (
+    <BlobReadProvider projectId={props.projectId}>
+      <TicketDetailContent {...props} />
+    </BlobReadProvider>
+  );
+}
+
+function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailProps) {
   // This workspace is built and on the DOM for THIS ticket (VC-385).
   //
   // A layout effect, not the render body. Rendering must stay free of side
@@ -421,27 +427,29 @@ export function TicketDetail({
   // second time the moment the real strip arrives — two reads for a ticket
   // with attachments, which is exactly the duplicate VC-373 removes.
   const [attachmentsLoaded, setAttachmentsLoaded] = React.useState(false);
+  const attachmentCloud = React.useSyncExternalStore(followCloudSession, cloudSession, () => null);
   React.useEffect(() => {
     let cancelled = false;
     setAttachmentsLoaded(false);
-    // A remote project's ticket keeps its attachments on its host (VC-711).
-    if (remoteHostOfTicketNow(ticket.id) !== null) {
-      resetAttachments([]);
-      setAttachmentsLoaded(true);
-      return;
-    }
-    void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
-      if (cancelled) return;
-      if (result.ok) resetAttachments(result.blobs);
-      // Settled either way: a failed read leaves the strip empty, which IS the
-      // strip as far as this view can know, and the materialized read is then
-      // the one read it costs.
-      setAttachmentsLoaded(true);
-    });
+    void readTicketAttachments(projectId, ticket.id)
+      .then((blobs) => {
+        if (cancelled) return;
+        resetAttachments(blobs);
+        // Settled either way: a failed read leaves the strip empty, which IS the
+        // strip as far as this view can know, and the materialized read is then
+        // the one read it costs.
+        setAttachmentsLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          resetAttachments([]);
+          setAttachmentsLoaded(true);
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [resetAttachments, ticket.id]);
+  }, [projectId, resetAttachments, ticket.id, attachmentCloud]);
   /**
    * What inline markdown images on this Ticket resolve against (VC-273).
    *
@@ -452,7 +460,7 @@ export function TicketDetail({
    * the strip has landed (VC-373) — see {@link useMaterializedAttachments}.
    */
   const materializedAttachments = useMaterializedAttachments(
-    { ticketId: ticket.id },
+    { projectId, ticketId: ticket.id },
     attachmentsLoaded ? attachmentsRevision(ticketAttachments.attachments) : null,
   );
   const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
@@ -1507,7 +1515,11 @@ export function TicketDetail({
               // Scoped to this tab rather than the whole detail view on purpose
               // — a capture handler on the root would fire before the embedded
               // chat composer's own and steal drops meant for the conversation.
-              {...fileAttachHandlers((picked) => void ticketAttachments.attachFiles(picked))}
+              {...fileAttachHandlers(
+                launchStore() === "cloud"
+                  ? undefined
+                  : (picked) => void ticketAttachments.attachFiles(picked),
+              )}
               className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
             >
               <TicketBodyPanel
@@ -1714,7 +1726,9 @@ export function TicketDetail({
                 filesContent={
                   <TicketFilesPanel
                     ticket={ticket}
-                    handle={ticketAttachments}
+                    {...(launchStore() === "cloud"
+                      ? { attachments: materializedAttachments }
+                      : { handle: ticketAttachments })}
                     onPreviewFile={previewFileFromRail}
                     onPinFile={pinFileFromRail}
                     onOpenCreatedFile={openCreatedFileFromRail}

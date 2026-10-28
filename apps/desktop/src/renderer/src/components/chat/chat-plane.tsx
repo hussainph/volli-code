@@ -60,6 +60,7 @@ import {
 } from "@renderer/components/ui/ai-elements/conversation";
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
 import { MarkdownAttachmentsProvider } from "@renderer/components/attachments/markdown-image";
+import { BlobReadProvider } from "@renderer/components/attachments/blob-read";
 import {
   attachmentsRevision,
   useMaterializedAttachments,
@@ -298,7 +299,15 @@ export interface ChatPlaneProps {
   store?: ChatSessionsStore;
 }
 
-export function ChatPlane({
+export function ChatPlane(props: ChatPlaneProps) {
+  return (
+    <BlobReadProvider projectId={props.projectId}>
+      <ChatPlaneContent {...props} />
+    </BlobReadProvider>
+  );
+}
+
+function ChatPlaneContent({
   sessionId,
   projectId,
   ticketId,
@@ -822,7 +831,9 @@ export function ChatPlane({
   // Re-fetched whenever the strip changes, so a screenshot attached mid-session
   // is resolvable by the very next turn that mentions its path.
   const materializedAttachments = useMaterializedAttachments(
-    provisional === undefined ? { sessionId, ...(ticketId === null ? {} : { ticketId }) } : {},
+    provisional === undefined
+      ? { projectId, sessionId, ...(ticketId === null ? {} : { ticketId }) }
+      : {},
     attachmentsRevision(attachments),
   );
   const attachDraftFilesNow = React.useCallback(

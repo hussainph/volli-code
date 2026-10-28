@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useBlobReader } from "@renderer/components/attachments/blob-read";
 import type { editor } from "monaco-editor";
 import type { NamedBlobLink } from "@volli/shared";
 
@@ -235,6 +236,9 @@ export const MonacoDocumentEditor = React.forwardRef<
   fileRefsRef.current = fileRefs;
   const attachmentsRef = React.useRef(attachments);
   attachmentsRef.current = attachments;
+  const blobReader = useBlobReader();
+  const blobReaderRef = React.useRef(blobReader);
+  blobReaderRef.current = blobReader;
 
   // The value the model is seeded from at mount, and the baseline for "has the
   // user typed since we deferred an external change?".
@@ -370,6 +374,7 @@ export const MonacoDocumentEditor = React.forwardRef<
             // outlives any one render, and a captured array would pin the
             // document to whatever was attached when it mounted.
             getAttachments: () => attachmentsRef.current,
+            getImageReader: () => blobReaderRef.current,
           },
         );
         attachmentRef.current = attachment;
@@ -491,7 +496,7 @@ export const MonacoDocumentEditor = React.forwardRef<
   // `fileRefs` object would refire on any callback identity churn.
   React.useEffect(() => {
     attachmentRef.current?.refresh();
-  }, [fileRefs?.indexVersion]);
+  }, [fileRefs?.indexVersion, attachments, blobReader]);
 
   React.useEffect(() => {
     editorRef.current?.updateOptions({ ariaLabel });

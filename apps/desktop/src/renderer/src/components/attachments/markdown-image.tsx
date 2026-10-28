@@ -25,6 +25,7 @@ import {
 } from "@volli/shared";
 
 import { cn } from "@renderer/lib/utils";
+import { BlobImage } from "./blob-read";
 
 const EMPTY: ReadonlyMap<string, string> = new Map();
 
@@ -98,7 +99,7 @@ export function MarkdownImage({ src, alt, className }: MarkdownImageProps) {
     return <MissingImage notice={notice ?? "Image unavailable"} alt={alt ?? ""} />;
   }
   return (
-    <img
+    <BlobImage
       className={cn("my-2 max-h-80 max-w-full rounded-md border border-border", className)}
       src={resolution.src}
       alt={alt ?? ""}
