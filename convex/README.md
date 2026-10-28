@@ -62,6 +62,7 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry and refilled rate-limit cleanup hourly).                                                                                                           |
 | `functions/transcripts.ts`                                          | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                                                                    |
 | `functions/sessionTranscript.ts`                                    | Viewer-authorized transcript segment manifests, staged artifact bodies and signed GETs for committed packs/spills. The renderer hydrates settled history with these reads.                                                                                                                        |
+| `functions/projectImports.ts`, `functions/lib/migrationImport.ts`   | The person-authorized project import ("Move to Volli Cloud"), hidden until commit, and the batch writer it shares with `migration.ts` (see **The person-authorized project import**).                                                                                                             |
 | `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                                                                                                                           |
 | `functions/lib/objectStore.ts`                                      | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`).                                                                                                                                                                                |
 | `functions/lib/visibility.ts`                                       | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
@@ -143,7 +144,60 @@ one only on a test deployment); `importRows` writes a batch of one stream,
 idempotent by each table's key, reporting conflicts and rows already migrated
 into another Workspace and never overwriting them; `readPage` and
 `readSessionEvents` read back for the verifier. Each record is mapped by
-`migrationDocument` from `@volli/shared/cloud`.
+`migrationDocument` from `@volli/shared/cloud`. The batch writer itself
+(keys, conflicts, `unchanged`) is `functions/lib/migrationImport.ts`, which
+the person-authorized import below shares.
+
+## The person-authorized project import
+
+`functions/projectImports.ts` is "Move to Volli Cloud" for one project, called
+with the person's own sign-in. The person who begins a move must stay an owner
+or admin of the target Workspace with live preview access, on a runner of their
+own; anyone else reads `not_found` for the move.
+
+- `begin` reserves the move (`projectImports`, keyed by the client's move id)
+  with the manifest's promise: a count and a `MigrationDigest` value for every
+  importer stream. A project id already in Volli Cloud is `already_migrated`;
+  one another move holds is `import_in_progress`.
+- `importRows` writes one batch through the shared batch writer. The project
+  row comes first and is stored with `moveState: "importing"`. Every row must
+  belong to that project, may name no person but the importer, no runner but
+  theirs and no Workspace but the target, and may not point into another
+  project (a delegation's parent may be one of the importer's own Sessions in
+  the same Workspace). Object keys must be the project's own (`r2-keys.ts`);
+  repositories carry no GitHub link; pending runner work (`runnerJobs`) and
+  audit rows other than MCP operations do not move. Only inserted rows feed
+  the stream's accumulator
+  (`projectImportStreams`), in the same transaction, so a re-sent or reordered
+  batch leaves it exact.
+- `commit` refuses (`verification_failed`, naming the streams by count, never
+  content) unless every accumulator equals the manifest, then shows the
+  project. `uncommit` hides it again for a roll back, refusing
+  (`changed_since_commit`) when its board or Sessions moved since, unless
+  confirmed. `abort` marks the move `aborting`; **purging its rows and objects
+  is a scheduled chain that is not built yet**, so an aborted move's rows stay,
+  hidden, and the project cannot be moved again until then.
+- `status` answers the accumulators; `readRows` reads one stream back by the
+  project's own indexes (or one ticket's or the importer's Session's), for the
+  client's verification, and only while the project has never been shown
+  (once shown, others may have written there).
+
+While a project is `importing`, `projectAccess` (and every read that lists a
+Workspace's projects, through `isShownProject`) treats it as not found for
+everyone, its importer included; runners take no facts, stream chunks or
+transcript writes for its Sessions, and its queued jobs wait, neither handed
+out nor cancelled. `test/projectImports.hidden.test.ts` calls every public
+function as the importer, a Member, the importer's runner and an agent. Every
+answer must be the one the same world gives with no move in it, nothing it
+answers may name the moved project, and nothing may write there; a function
+whose arguments name a project, ticket, Session, comment or label must answer
+for the importing one as for one that does not exist. Arguments a sample
+cannot make valid (a Session's facts, a staged artifact) have targeted tests
+in `projectImports.test.ts`.
+
+Replacing the move's runner (`registerThisMac` naming it) moves its hidden
+Sessions and claims to the successor like any others, and the move then stops
+with `runner_unavailable`; the client cancels it and moves again.
 
 ## Running it locally
 

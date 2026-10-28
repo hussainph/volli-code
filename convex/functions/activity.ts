@@ -23,7 +23,7 @@ import { v } from "convex/values";
 import type { WorkspaceId } from "@volli/shared/cloud";
 
 import { query } from "./_generated/server.js";
-import { findPolicy, requireMember, requireProject } from "./lib/auth";
+import { findPolicy, isShownProject, requireMember, requireProject } from "./lib/auth";
 import { readFeed, sessionVisibility, type FeedFilter } from "./lib/activity";
 import { nullable } from "./lib/validators";
 
@@ -78,7 +78,7 @@ export const workspace = query({
       {
         viewer,
         workspaceId: args.workspaceId as WorkspaceId,
-        projects,
+        projects: projects.filter(isShownProject),
         canSee: sessionVisibility(ctx, viewer, membership, policy),
       },
       filterOf(args),

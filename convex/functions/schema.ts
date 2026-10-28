@@ -314,6 +314,10 @@ export default defineSchema({
     updatedAt: time,
     archivedAt: nullable(time),
     ...deletion,
+    // `importing` while a person-authorized import (`projectImports`) writes
+    // it: hidden from everyone until that import commits (`null`). Absent on
+    // every project that was never imported.
+    moveState: v.optional(nullable(literals(["importing"]))),
   })
     .index("by_uuid", ["id"])
     .index("by_workspace", ["workspaceId", "deletedAt", "name"])
@@ -356,6 +360,39 @@ export default defineSchema({
   })
     .index("by_uuid", ["id"])
     .index("by_project", ["projectId", "movedAt"]),
+  // A person-authorized import of one local project (a "move to Volli Cloud"):
+  // `reserved → importing → committed`, or `aborting → purged`. `id` is the
+  // client's move id. See `projectImports.ts`.
+  projectImports: defineTable({
+    id: uuid,
+    projectId: uuid,
+    workspaceId: uuid,
+    userId: uuid,
+    runnerId: uuid,
+    manifestSha256: v.string(),
+    status: literals(["reserved", "importing", "committed", "aborting", "purged"]),
+    createdAt: time,
+    updatedAt: time,
+    committedAt: nullable(time),
+    // The project's board `seq` at commit: `uncommit` checks nothing changed since.
+    committedBoardSeq: nullable(v.number()),
+    // Set by an uncommit: the project was shown, so others may have written there.
+    uncommittedAt: nullable(time),
+    abortedAt: nullable(time),
+  })
+    .index("by_uuid", ["id"])
+    .index("by_project", ["projectId", "createdAt"]),
+  // One import's accumulator for one stream: what the manifest promised and
+  // what was inserted (count + `MigrationDigest` value). Its own document, so
+  // batches of different streams do not contend.
+  projectImportStreams: defineTable({
+    moveId: uuid,
+    stream: v.string(),
+    expectedCount: v.number(),
+    expectedDigest: v.string(),
+    count: v.number(),
+    digest: v.string(),
+  }).index("by_move_stream", ["moveId", "stream"]),
   projectEnvironment: defineTable({
     projectId: uuid,
     storedSetup: nullable(v.string()),

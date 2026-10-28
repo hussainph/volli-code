@@ -52,7 +52,7 @@ import {
 export { SESSION_BLOCKED_SOURCE_ID } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
-import { findMembership } from "./auth";
+import { findMembership, isShownProject } from "./auth";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
 type Writer = { db: GenericDatabaseWriter<DataModel> };
@@ -385,9 +385,7 @@ function itemScopes(ctx: Reader): (item: Doc<"attentionItems">) => Promise<ItemS
         .withIndex("by_uuid", (q) => q.eq("id", projectId))
         .unique();
       scope =
-        project === null ||
-        project.deletedAt !== null ||
-        !(await liveWorkspace(project.workspaceId))
+        project === null || !isShownProject(project) || !(await liveWorkspace(project.workspaceId))
           ? "gone"
           : { workspaceId: project.workspaceId as WorkspaceId };
       projects.set(projectId, scope);

@@ -67,11 +67,14 @@ import {
   terminal,
   type LeaseRef,
 } from "./lib/jobs";
+import { projectImporting } from "./lib/auth";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
 import { noticeForClaim } from "./lib/watches";
 
 /** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
 const LEASED_SCAN = 256;
+/** How many queued jobs of projects still being imported one claim passes over. */
+const IMPORTING_SKIP_MAX = 512;
 /** How many terminal jobs one sweep pass deletes before it schedules the next. */
 const SWEEP_BATCH = 256;
 /** Bounds on what a runner reports. */
@@ -96,10 +99,12 @@ function bounded(value: number | undefined, fallback: number, min: number, max: 
 /** A job by id: a UUID, or a `session.command`'s frozen derived command id (`lib/jobs.ts`). */
 async function jobOf(ctx: MutationCtx, jobId: string): Promise<Doc<"runnerJobs"> | null> {
   if (!isDerivedId(jobId)) return null;
-  return ctx.db
+  const job = await ctx.db
     .query("runnerJobs")
     .withIndex("by_uuid", (q) => q.eq("id", jobId))
     .unique();
+  // A job of a project still being imported is nobody's yet.
+  return job === null || (await projectImporting(ctx, job.projectId)) ? null : job;
 }
 
 /** Leases `job` to `ref` until `expiresAt`, with the scheduled check that expires it. */
@@ -136,31 +141,47 @@ export const claim = mutation({
       .query("runnerJobs")
       .withIndex("by_runner_ready", (q) => q.eq("runnerId", runnerId).eq("status", "leased"))
       .take(LEASED_SCAN);
+    // A project still being imported holds its jobs back, untouched, until its
+    // commit; they are passed over (a bounded number) rather than block the queue.
+    const importing = new Map<string, boolean>();
+    const waitsForImport = async (job: Doc<"runnerJobs">): Promise<boolean> => {
+      if (!importing.has(job.projectId)) {
+        importing.set(job.projectId, await projectImporting(ctx, job.projectId));
+      }
+      return importing.get(job.projectId)!;
+    };
     for (const job of leased) {
       const held = job.lease!;
-      if (held.bootId === bootId) continue;
+      if (held.bootId === bootId || (await waitsForImport(job))) continue;
       if (held.attempt >= JOB_MAX_ATTEMPTS) await deadLetterExpired(ctx, job, now);
       else candidates.push(job);
     }
+    let passedOver = 0;
     for (const priority of JOB_PRIORITIES.toSorted((a, b) => jobRank(a) - jobRank(b))) {
-      if (candidates.length >= limit) break;
-      candidates.push(
-        ...(await ctx.db
-          .query("runnerJobs")
-          .withIndex("by_runner_ready", (q) =>
-            q
-              .eq("runnerId", runnerId)
-              .eq("status", "queued")
-              .eq("rank", jobRank(priority))
-              .lte("availableAt", now),
-          )
-          .take(limit - candidates.length)),
-      );
+      if (candidates.length >= limit || passedOver >= IMPORTING_SKIP_MAX) break;
+      for await (const job of ctx.db
+        .query("runnerJobs")
+        .withIndex("by_runner_ready", (q) =>
+          q
+            .eq("runnerId", runnerId)
+            .eq("status", "queued")
+            .eq("rank", jobRank(priority))
+            .lte("availableAt", now),
+        )) {
+        if (candidates.length >= limit) break;
+        if (await waitsForImport(job)) {
+          passedOver += 1;
+          if (passedOver >= IMPORTING_SKIP_MAX) break;
+          continue;
+        }
+        candidates.push(job);
+      }
     }
 
     const allowed = new Map<string, boolean>();
     const claimed: ClaimedJob[] = [];
     for (const job of candidates.slice(0, limit)) {
+      if (await waitsForImport(job)) continue;
       // The owner may have left the Workspace (or the project gone) while the job waited.
       let mayWork = allowed.get(job.projectId);
       if (mayWork === undefined) {
@@ -392,9 +413,12 @@ export const wake = query({
     const now = Date.now();
     let ready = 0;
     let nextAvailableAt: number | null = null;
+    // Jobs of a project still being imported are not ready: `claim` passes them over.
+    const importing = new Map<string, boolean>();
+    let passedOver = 0;
     for (const priority of JOB_PRIORITIES) {
       const rank = jobRank(priority);
-      const due = await ctx.db
+      for await (const job of ctx.db
         .query("runnerJobs")
         .withIndex("by_runner_ready", (q) =>
           q
@@ -402,9 +426,14 @@ export const wake = query({
             .eq("status", "queued")
             .eq("rank", rank)
             .lte("availableAt", now),
-        )
-        .take(JOB_CLAIM_MAX - ready);
-      ready += due.length;
+        )) {
+        if (ready >= JOB_CLAIM_MAX || passedOver >= IMPORTING_SKIP_MAX) break;
+        if (!importing.has(job.projectId)) {
+          importing.set(job.projectId, await projectImporting(ctx, job.projectId));
+        }
+        if (importing.get(job.projectId)!) passedOver += 1;
+        else ready += 1;
+      }
       const next = await ctx.db
         .query("runnerJobs")
         .withIndex("by_runner_ready", (q) =>

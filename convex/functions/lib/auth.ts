@@ -326,6 +326,33 @@ export async function requireManage(
   return access;
 }
 
+/**
+ * Whether a project is shown at all: not deleted, and not still being
+ * imported. A project a person-authorized import is writing
+ * (`moveState: "importing"`, `projectImports.ts`) is hidden from everyone,
+ * its importer included, until the import commits: every read that finds a
+ * project by id goes through {@link projectAccess}, and every read that
+ * lists a Workspace's projects filters with this.
+ */
+export function isShownProject(project: Pick<Doc<"projects">, "deletedAt" | "moveState">): boolean {
+  return project.deletedAt === null && project.moveState !== "importing";
+}
+
+/**
+ * Whether a project is still being imported (`projectImports.ts`): its jobs
+ * are neither handed out nor cancelled; they wait, untouched, for the commit.
+ */
+export async function projectImporting(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  projectId: string,
+): Promise<boolean> {
+  const project = await ctx.db
+    .query("projects")
+    .withIndex("by_uuid", (q) => q.eq("id", projectId))
+    .unique();
+  return project?.moveState === "importing";
+}
+
 type ProjectAccess =
   | { kind: "ok"; project: Doc<"projects">; membership: MembershipFacts }
   | { kind: "not_found" }
@@ -340,7 +367,8 @@ async function projectAccess(
     .query("projects")
     .withIndex("by_uuid", (q) => q.eq("id", projectId))
     .unique();
-  if (project === null || project.deletedAt !== null) return { kind: "not_found" };
+  // Deleted, or still being imported: not found, for everyone.
+  if (project === null || !isShownProject(project)) return { kind: "not_found" };
   // A deleted Workspace hides everything in it at once.
   const workspace = await ctx.db
     .query("workspaces")

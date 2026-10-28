@@ -37,7 +37,7 @@ import {
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import { audit } from "./audit";
-import { authError, sessionFacts, type SessionScope, type Viewer } from "./auth";
+import { authError, projectImporting, sessionFacts, type SessionScope, type Viewer } from "./auth";
 import { personActor } from "./workspaces";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
@@ -128,6 +128,16 @@ export async function shareSession(
   const seen = new Set([session.id]);
   let descendants = 0;
   let frontier = [session.id];
+  // A subagent in another project still being imported is left alone (and
+  // not counted): that project takes no writes until its import commits.
+  const hidden = new Map<string, boolean>();
+  const inHiddenProject = async (child: Doc<"sessions">): Promise<boolean> => {
+    if (child.projectId === session.projectId) return false;
+    if (!hidden.has(child.projectId)) {
+      hidden.set(child.projectId, await projectImporting(ctx, child.projectId));
+    }
+    return hidden.get(child.projectId)!;
+  };
   while (frontier.length > 0) {
     const next: string[] = [];
     for (const parentId of frontier) {
@@ -137,6 +147,7 @@ export async function shareSession(
         .collect();
       for (const child of children) {
         if (child.role !== "subagent" || seen.has(child.id)) continue;
+        if (await inHiddenProject(child)) continue;
         seen.add(child.id);
         if (seen.size > MAX_SHARED_DESCENDANTS + 1) {
           throw visibilityError(

@@ -347,6 +347,23 @@ Each was a decision made while turning the design into code.
     original watch after a local pre-intent kickoff failure, before the next
     child fact is classified.
 
+44. A person-authorized project import adds `projectImports` (one row per
+    move, keyed by the client's move id; `reserved → importing → committed`,
+    or `aborting → purged`) and `projectImportStreams` (one accumulator per
+    move and stream: the manifest's count and digest, and what was inserted;
+    its own document so streams do not contend), and an optional
+    `projects.moveState` (expand only: absent on every project never
+    imported, `importing` while an import writes it, `null` once committed).
+    `moveState` is a stamped field (`MIGRATION_STAMPED_FIELDS`), never
+    digested, so a project's digest is the same hidden or shown. An
+    `importing` project is not found for everyone (`isShownProject` in
+    `lib/auth.ts`). The read-back adds no index: rows without a project
+    index (`runnerJobs`, `workingCopies`, `auditLog`) are read through the
+    importer's runner or the Workspace and filtered. `project.imported` and
+    `project.import_uncommitted` are new audit kinds, target kind `project`.
+    `projectMoves` is not written: it records a move between Workspaces and
+    names the Workspace a project came from, which a local project has not.
+
 ## Runner-routed agent Session commands
 
 `sessions.command` accepts the existing UUID command ids and, for an authenticated

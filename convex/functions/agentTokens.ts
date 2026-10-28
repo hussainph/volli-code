@@ -38,7 +38,7 @@ import {
 
 import { internal } from "./_generated/api";
 import { action, internalQuery } from "./_generated/server";
-import { findMembership } from "./lib/auth";
+import { findMembership, isShownProject, projectImporting } from "./lib/auth";
 import { requireRunner } from "./lib/runnerAuth";
 import { runnerSigningKey, signAgentToken } from "./lib/runnerSecrets";
 
@@ -55,7 +55,12 @@ export const authorizeMint = internalQuery({
       .query("sessions")
       .withIndex("by_uuid", (q) => q.eq("id", sessionId))
       .unique();
-    if (session === null || session.deletedAt !== null) {
+    if (
+      session === null ||
+      session.deletedAt !== null ||
+      // A Session of a project still being imported does not exist yet for anyone.
+      (await projectImporting(ctx, session.projectId))
+    ) {
       throw refuse("unknown_session", "The backend has not accepted this session yet.");
     }
     const intake = await ctx.db
@@ -77,7 +82,7 @@ export const authorizeMint = internalQuery({
       .withIndex("by_uuid", (q) => q.eq("id", session.projectId))
       .unique();
     const workspace =
-      project === null || project.deletedAt !== null
+      project === null || !isShownProject(project)
         ? null
         : await ctx.db
             .query("workspaces")

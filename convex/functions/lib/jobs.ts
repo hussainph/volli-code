@@ -49,7 +49,7 @@ import {
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server.js";
-import { findMembership } from "./auth";
+import { findMembership, isShownProject } from "./auth";
 
 /** A malformed job (a producer bug), or another job under a used id. Always thrown. */
 type JobDefectCode = "invalid_job" | "id_taken";
@@ -450,7 +450,7 @@ export async function ownerMayWorkOn(
     .query("projects")
     .withIndex("by_uuid", (q) => q.eq("id", projectId))
     .unique();
-  if (project === null || project.deletedAt !== null) return false;
+  if (project === null || !isShownProject(project)) return false;
   const workspace = await ctx.db
     .query("workspaces")
     .withIndex("by_uuid", (q) => q.eq("id", project.workspaceId))

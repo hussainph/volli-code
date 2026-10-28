@@ -105,10 +105,15 @@ export const MIGRATION_DEFERRED_STREAMS: Readonly<Record<string, string>> = Obje
     "a schedule's next fire time needs the Automations port's scheduler; carried in the export",
 });
 
-/** Fields each side stamps for itself: set from `importedAt`, never digested. */
+/**
+ * Fields each side stamps for itself, never digested: the import times (set
+ * from `importedAt`) and a project's `moveState`, which only the backend's
+ * person-authorized import writes (`importing` until its commit).
+ */
 export const MIGRATION_STAMPED_FIELDS: Readonly<
   Partial<Record<MigrationImportStream, readonly string[]>>
 > = Object.freeze({
+  projects: ["moveState"],
   sessionEvents: ["acceptedAt"],
   sessionIntake: ["lastAcceptedAt"],
 });
@@ -241,6 +246,9 @@ export function migrationRowDigest(stream: MigrationImportStream, doc: Doc): str
 
 const DIGEST_MODULUS = 1n << 128n;
 
+/** What a {@link MigrationDigest}'s `value` looks like: 128 bits as 32 lowercase hex digits. */
+export const MIGRATION_DIGEST_VALUE = /^[0-9a-f]{32}$/;
+
 /**
  * An order-independent digest of a multiset of rows: the count, and the sum
  * modulo 2^128 of each row digest's first 128 bits. Unlike XOR, a row present
@@ -249,6 +257,24 @@ const DIGEST_MODULUS = 1n << 128n;
 export class MigrationDigest {
   count = 0;
   private sum = 0n;
+
+  /**
+   * A digest that continues from a stored `count` and `value`, so a table's
+   * digest can be accumulated batch by batch (the backend's per-stream
+   * accumulators). Refuses a value that is not 32 lowercase hex digits.
+   */
+  static resume(count: number, value: string): MigrationDigest {
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new RangeError("a digest count is a non-negative integer");
+    }
+    if (!MIGRATION_DIGEST_VALUE.test(value)) {
+      throw new RangeError("a digest value is 32 lowercase hex digits");
+    }
+    const digest = new MigrationDigest();
+    digest.count = count;
+    digest.sum = BigInt(`0x${value}`);
+    return digest;
+  }
 
   add(rowDigest: string): void {
     this.count += 1;

@@ -266,4 +266,29 @@ describe("digests", () => {
     full.add("0".repeat(31) + "1");
     expect(full.value).toBe("0".repeat(32));
   });
+
+  it("a resumed digest continues batch by batch to the same value", () => {
+    const rows = ["a", "b", "c", "d"].map((id) => migrationRowDigest("tickets", { id }));
+    const whole = new MigrationDigest();
+    for (const row of rows) whole.add(row);
+    const first = new MigrationDigest();
+    first.add(rows[2]!);
+    first.add(rows[0]!);
+    const second = MigrationDigest.resume(first.count, first.value);
+    second.add(rows[3]!);
+    second.add(rows[1]!);
+    expect(second.count).toBe(4);
+    expect(second.value).toBe(whole.value);
+    expect(MigrationDigest.resume(0, "0".repeat(32)).value).toBe(new MigrationDigest().value);
+    expect(() => MigrationDigest.resume(-1, "0".repeat(32))).toThrow(RangeError);
+    expect(() => MigrationDigest.resume(1.5, "0".repeat(32))).toThrow(RangeError);
+    expect(() => MigrationDigest.resume(0, "F".repeat(32))).toThrow(RangeError);
+    expect(() => MigrationDigest.resume(0, "0".repeat(31))).toThrow(RangeError);
+  });
+
+  it("a project's move state is stamped, never digested", () => {
+    expect(migrationRowDigest("projects", { id: "p", moveState: "importing" })).toBe(
+      migrationRowDigest("projects", { id: "p" }),
+    );
+  });
 });
