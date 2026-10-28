@@ -144,6 +144,46 @@ describeContract("the board", [link], ({ connect }) => {
     expect(board.effects).toEqual([]);
   });
 
+  it("preserves optional person attribution through the board's real wire", async () => {
+    const board = fakeBoard();
+    const client = await connect({
+      board: {
+        ...board,
+        handlers: {
+          ...board.handlers,
+          "board.comments": () => [
+            {
+              id: "comment-a",
+              ticketId: "ticket-a",
+              sessionId: null,
+              actor: "user",
+              authorUserId: "person-a",
+              body: "Attributed comment",
+              createdAt: 250,
+              updatedAt: 250,
+            },
+          ],
+          "board.ticketEvents": () => [
+            {
+              id: "event-a",
+              ticketId: "ticket-a",
+              actor: "user",
+              actorUserId: "person-a",
+              createdAt: 250,
+              payload: { kind: "body_edited" },
+            },
+          ],
+        },
+      },
+    });
+    expect(await client.board.comments.query({ ticketId: "ticket-a" })).toMatchObject([
+      { id: "comment-a", authorUserId: "person-a", body: "Attributed comment" },
+    ]);
+    expect(await client.board.ticketEvents.query({ ticketId: "ticket-a" })).toMatchObject([
+      { id: "event-a", actorUserId: "person-a", payload: { kind: "body_edited" } },
+    ]);
+  });
+
   it("records a write once under its commandId, and answers its retry from the receipt", async () => {
     const board = fakeBoard();
     const client = await connect({ board });

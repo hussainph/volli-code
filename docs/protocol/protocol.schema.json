@@ -7553,6 +7553,9 @@
                           "actor": {
                             "type": "string"
                           },
+                          "authorUserId": {
+                            "type": "string"
+                          },
                           "body": {
                             "type": "string"
                           },
@@ -7703,6 +7706,9 @@
               "actor": {
                 "type": "string"
               },
+              "authorUserId": {
+                "type": "string"
+              },
               "body": {
                 "type": "string"
               },
@@ -7797,6 +7803,9 @@
               "additionalProperties": false,
               "properties": {
                 "actor": {
+                  "type": "string"
+                },
+                "authorUserId": {
                   "type": "string"
                 },
                 "body": {
@@ -10382,6 +10391,9 @@
                   }
                 ]
               },
+              "actorUserId": {
+                "type": "string"
+              },
               "createdAt": {
                 "maximum": 9007199254740991,
                 "minimum": -9007199254740991,
@@ -10645,6 +10657,9 @@
               "additionalProperties": false,
               "properties": {
                 "actor": {
+                  "type": "string"
+                },
+                "authorUserId": {
                   "type": "string"
                 },
                 "body": {
