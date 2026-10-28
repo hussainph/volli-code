@@ -510,10 +510,9 @@ function InviteDialog({
   const [email, setEmail] = React.useState(draft.email ?? "");
   const [role, setRole] = React.useState(draft.role);
   const created = draft.created;
-  // TODO(VC-971 PR 1 / PR 3): add code-redemption instructions when sign-in / switcher can receive it.
   const message =
     draft.email === null
-      ? `Volli Workspace invite: ${name}. Single-use code: ${created?.token ?? ""}`
+      ? `Join ${name} on Volli: open the Workspace menu → Join a workspace… and enter this single-use code: ${created?.token ?? ""}`
       : `Join ${name} on Volli: install Volli from volli.app, open Settings → Account, and sign in with ${draft.email}. Open Settings → Workspace → Invitations to you and choose Join.`;
   return (
     <Dialog

@@ -76,7 +76,7 @@ export interface CloudBoardView {
    */
   readOnly(projectId: string | undefined): string | null;
   /** The project is gone for this person: leave it, saying why. */
-  dropped(projectId: string, message: string): void;
+  dropped(projectId: string, message: string, code?: "not_a_member"): void;
 }
 
 /** What a write a cloud ticket does not offer says. */
@@ -220,8 +220,10 @@ export class ConvexBoardSource implements BoardSource {
   }
 
   #read(projectId: string, watch: Watched<CloudRoster>): void {
-    // A closed board's watch is stopped with it, so a board is always here.
-    const board = this.#boards.get(projectId)!;
+    // A queued callback may outlive its subscription or belong to a previous
+    // visit to this project. Neither may paint into the new Workspace.
+    const board = this.#boards.get(projectId);
+    if (board === undefined || board.watch !== watch) return;
     let roster: CloudRoster | undefined;
     try {
       roster = watch.localQueryResult();
@@ -229,7 +231,9 @@ export class ConvexBoardSource implements BoardSource {
       const failure = cloudFailure(error);
       if (gone(failure.code)) {
         this.close(projectId);
-        this.#view.dropped(projectId, failure.message);
+        if (failure.code === "not_a_member")
+          this.#view.dropped(projectId, failure.message, "not_a_member");
+        else this.#view.dropped(projectId, failure.message);
         return;
       }
       if (!board.failing) this.#view.failed(`Couldn’t read the board: ${failure.message}`);
@@ -358,7 +362,7 @@ export class ConvexBoardSource implements BoardSource {
       const dropped = projectId !== undefined && failure.code === "not_a_member";
       if (dropped) {
         this.close(projectId);
-        this.#view.dropped(projectId, failure.message);
+        this.#view.dropped(projectId, failure.message, "not_a_member");
       }
       return { ok: false, error: failure.message, refused: false, dropped };
     } finally {

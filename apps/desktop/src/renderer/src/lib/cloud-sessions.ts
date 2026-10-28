@@ -60,8 +60,14 @@ export function cloudSessionReader(projectId: string | null): SessionListingRead
   const read = async (ticketId?: string) => {
     if (source === null || projectId === null)
       return { ok: false as const, error: "Cloud sessions are not connected yet" };
+    const inWorkspace = () => useProjectsStore.getState().projects.some((p) => p.id === projectId);
+    if (!inWorkspace())
+      return { ok: false as const, error: "The project is not in this Workspace." };
+    const reading = source;
     try {
-      const rows = await source.open(projectId);
+      const rows = await reading.open(projectId);
+      if (source !== reading || !inWorkspace())
+        return { ok: false as const, error: "The Workspace changed." };
       return {
         ok: true as const,
         sessions:

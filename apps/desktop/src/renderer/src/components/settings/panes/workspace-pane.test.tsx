@@ -354,7 +354,8 @@ describe("Invitations", () => {
     await resolve(h, { inviteId: "i1", token: "code-only-once" });
     expect(text()).not.toContain("They need preview access from Volli first");
     expect(text()).not.toContain("They can join now");
-    expect(text()).toContain("Single-use code: code-only-once");
+    expect(text()).toContain("Workspace menu → Join a workspace…");
+    expect(text()).toContain("single-use code: code-only-once");
     expect(text()).not.toContain("and sign in");
     expect(document.querySelector<HTMLInputElement>('[aria-label="Invite code"]')?.value).toBe(
       "code-only-once",

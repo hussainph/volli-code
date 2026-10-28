@@ -229,7 +229,7 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * owner strips and clears matching transient origin records in the same
    * synchronous teardown.
    */
-  dropChatTabs(ownerIds: readonly string[]): void;
+  dropChatTabs(ownerIds: readonly string[], options?: { preserveDrafts: boolean }): void;
 }
 
 /** Every ownerless Blob a provisional Draft has to hand to its Session, once per hash. */
@@ -1010,7 +1010,7 @@ export function createChatSessionsStore(
         }
       },
 
-      dropChatTabs(ownerIds) {
+      dropChatTabs(ownerIds, options) {
         const openTabs = get().openTabs;
         const hasOwner = ownerIds.some((ownerId) => ownerId in openTabs);
         if (!hasOwner) return;
@@ -1019,24 +1019,26 @@ export function createChatSessionsStore(
           for (const sessionId of openTabs[ownerId] ?? []) removedSessionIds.add(sessionId);
         }
 
-        // A project is leaving the renderer entirely, so its remaining tab
-        // owners cannot outlive their clients. Dispose before removing the
+        // Retire clients even on a reversible Workspace switch. Its tab
+        // metadata and typed Drafts stay keyed by their original owner. Dispose before removing the
         // slices; both loops are synchronous, with no await between them.
         for (const sessionId of removedSessionIds) disposeChatClient(sessionId);
         set((state) => {
           const nextOpenTabs = { ...state.openTabs };
-          for (const ownerId of ownerIds) {
-            delete nextOpenTabs[ownerId];
-          }
+          if (!options?.preserveDrafts)
+            for (const ownerId of ownerIds) {
+              delete nextOpenTabs[ownerId];
+            }
           const sessions = { ...state.sessions };
           const idleSends = { ...state.idleSends };
           const rehomedTicketBySession = { ...state.rehomedTicketBySession };
           const provisionalActive = { ...state.provisionalActive };
-          for (const ownerId of ownerIds) delete provisionalActive[ownerId];
+          if (!options?.preserveDrafts)
+            for (const ownerId of ownerIds) delete provisionalActive[ownerId];
           for (const sessionId of removedSessionIds) {
             delete sessions[sessionId];
             delete idleSends[sessionId];
-            delete rehomedTicketBySession[sessionId];
+            if (!options?.preserveDrafts) delete rehomedTicketBySession[sessionId];
           }
           return {
             openTabs: nextOpenTabs,
@@ -1049,9 +1051,10 @@ export function createChatSessionsStore(
         // This path means the owning project is gone, not merely that a tab was
         // closed or a Ticket left the live board. No surface remains from which
         // a provisional Draft could be recovered or promoted.
-        for (const sessionId of removedSessionIds) {
-          useChatDraftsStore.getState().discardProvisional(sessionId);
-        }
+        if (!options?.preserveDrafts)
+          for (const sessionId of removedSessionIds) {
+            useChatDraftsStore.getState().discardProvisional(sessionId);
+          }
       },
     };
   });

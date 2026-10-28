@@ -146,7 +146,7 @@ describe("the cloud board's writes (VC-889)", () => {
     cloud.mutations[2]!.reject(refusal("not_a_member", "Not a Member."));
     await group;
     // Said once: the drop says why, with no second "Couldn't" line.
-    expect(screen.dropped).toHaveBeenCalledWith(P, "Not a Member.");
+    expect(screen.dropped).toHaveBeenCalledWith(P, "Not a Member.", "not_a_member");
     expect(screen.failed).toHaveBeenCalledTimes(2);
     expect(source.follows(P)).toBe(false);
     // A board it no longer follows has no place to drop into: refused, never issued.

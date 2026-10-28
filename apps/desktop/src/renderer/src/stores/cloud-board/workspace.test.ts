@@ -144,11 +144,83 @@ const SNAPSHOT: BoardSnapshot = {
 };
 
 afterEach(() => {
-  useCloudWorkspaceStore.setState({ workspace: null, localProjects: 0 });
+  useCloudWorkspaceStore.setState({ workspace: null, localProjects: 0, projectsReady: false });
   useCloudLinkInputs.setState({ input: { ...INITIAL_CLOUD_LINK_INPUT } });
 });
 
 describe("joining and leaving a Workspace", () => {
+  it("holds an accepted Workspace through a stale listMine answer, confirming actual removal", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    h.cloud.answer("workspaces:listMine", {}, [{ ...W1, name: "Renamed" }]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.cloud.queries.set("workspaces:get", () => {
+      throw refusal("not_a_member", "Gone.");
+    });
+    h.cloud.fail("projects:list", { workspaceId: "w2" }, refusal("not_a_member", "Gone."));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w1");
+    expect(h.deps.notice).toHaveBeenCalledExactlyOnceWith("You're no longer a member of Team");
+    h.stop();
+  });
+  it("clears and persists the new scope before its projects answer, ignoring old answers", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    expect(h.state.hydrateCloud).toHaveBeenLastCalledWith("w2", [], null);
+    expect(useCloudWorkspaceStore.getState().projectsReady).toBe(false);
+    expect(h.deps.board.forget).toHaveBeenCalledWith("a", { preserveDrafts: true });
+    expect(h.state.projects).toEqual([]);
+    expect(h.state.selectedProjectId).toBeNull();
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("old")]);
+    expect(h.state.projects).toEqual([]);
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, []);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    expect(useCloudWorkspaceStore.getState().projectsReady).toBe(true);
+    h.stop();
+  });
+  it("only applies the newest explicit selection even if an earlier request finishes last", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    let answer!: (row: typeof W2) => void;
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const first = selectCloudWorkspace("w2", h.cloud.session);
+    h.cloud.queries.set("workspaces:get", () => W1);
+    await selectCloudWorkspace("w1", h.cloud.session);
+    answer(W2);
+    await first;
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w1");
+    h.stop();
+  });
+  it("refuses a selection when the socket drops during its membership read", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.queries.set("workspaces:get", () => {
+      h.cloud.connected = false;
+      return W2;
+    });
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(CLOUD_READ_ONLY);
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w2" })).toBe(0);
+    h.stop();
+  });
   it("refuses selection before the client starts, over a snapshot, or while the OS is offline", async () => {
     await expect(selectCloudWorkspace("w2")).rejects.toThrow(NOT_CONNECTED);
     const h = harness();
@@ -179,14 +251,21 @@ describe("joining and leaving a Workspace", () => {
     expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
     h.stop();
   });
-  it("does not warn about the previous Workspace’s projects on Leave", () => {
+  it("announces membership loss once, not once per previous project", () => {
     const h = harness();
     h.connect();
     h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
-    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a"), projectRow("b")]);
+    h.cloud.fail("projects:list", { workspaceId: "w1" }, refusal("not_a_member", "Gone."));
+    expect(h.deps.failed).not.toHaveBeenCalled();
     h.cloud.answer("workspaces:listMine", {}, [W2]);
-    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("b")]);
-    expect(h.deps.notice).not.toHaveBeenCalled();
+    expect(h.state.projects).toEqual([]);
+    expect(h.state.selectedProjectId).toBeNull();
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("c")]);
+    h.cloud.answer("workspaces:listMine", {}, [W2]);
+    expect(h.deps.notice).toHaveBeenCalledExactlyOnceWith(
+      "You're no longer a member of Dana's Workspace",
+    );
     h.stop();
   });
   it("opens the accepted Workspace before listMine catches up and persists through hydration", async () => {
@@ -380,6 +459,26 @@ describe("a new project in the Workspace (VC-889)", () => {
 });
 
 describe("the offline snapshot at launch (VC-889, D3)", () => {
+  it("does not paint another Workspace’s delayed disk snapshot over an explicit choice", async () => {
+    let answer!: (kept: BoardSnapshot) => void;
+    const h = harness(null, {
+      snapshot: () =>
+        new Promise<BoardSnapshot>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    h.connect();
+    await h.timeout();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    answer(SNAPSHOT);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.shown).not.toHaveBeenCalled();
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    h.stop();
+  });
   it("shows the last-seen board, read-only, when no live list answers in time", async () => {
     const h = harness({ workspaceId: "w1", projectId: "b" }, { snapshot: SNAPSHOT });
     h.connect();
@@ -418,13 +517,16 @@ describe("the offline snapshot at launch (VC-889, D3)", () => {
     expect(h.state.selectedProjectId).toBe("b");
   });
 
-  it("replaces a snapshot of another Workspace once the live one's list answers", async () => {
+  it("clears a removed Workspace’s snapshot before the fallback list answers", async () => {
     const h = harness(null, { snapshot: SNAPSHOT });
     h.connect();
     await h.timeout();
     h.cloud.answer("workspaces:listMine", {}, [W2]);
-    expect(h.deps.board.forget).not.toHaveBeenCalled();
-    expect(h.state.projects.map(({ id }) => id)).toEqual(["a", "b"]);
+    expect(h.deps.board.forget).toHaveBeenCalledWith("a");
+    expect(h.state.projects).toEqual([]);
+    expect(h.deps.notice).toHaveBeenCalledExactlyOnceWith(
+      "You're no longer a member of Dana's Workspace",
+    );
     h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("t")]);
     expect(h.state.projects.map(({ id }) => id)).toEqual(["t"]);
   });

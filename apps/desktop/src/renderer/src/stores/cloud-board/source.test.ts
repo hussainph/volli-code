@@ -51,6 +51,35 @@ function setup() {
 }
 
 describe("the cloud board source (VC-889)", () => {
+  it("ignores a queued callback from a closed board, including after reopening it", async () => {
+    const { cloud, screen, source } = setup();
+    const callbacks: (() => void)[] = [];
+    const watchQuery = cloud.session.client.watchQuery.bind(cloud.session.client);
+    vi.spyOn(cloud.session.client, "watchQuery").mockImplementation((...args: Parameters<typeof watchQuery>) => {
+      const [reference, queryArgs, options] = args;
+      const watch = watchQuery(reference, queryArgs, options);
+      return {
+        ...watch,
+        onUpdate: (callback: () => void) => {
+          callbacks.push(callback);
+          return watch.onUpdate(callback);
+        },
+      };
+    });
+    source.attach(cloud.session);
+    await source.open(P);
+    cloud.answer("board:roster", { projectId: P }, { tickets: [row(1)], labels: [] });
+    const old = callbacks[0]!;
+    source.close(P);
+    screen.paint.mockClear();
+    old();
+    expect(screen.paint).not.toHaveBeenCalled();
+    await source.open(P);
+    screen.paint.mockClear();
+    old();
+    expect(screen.paint).not.toHaveBeenCalled();
+    source.closeAll();
+  });
   it("watches a board opened before the client arrives, and paints each answer", async () => {
     const { cloud, screen, source } = setup();
     await source.open(P);
@@ -130,7 +159,7 @@ describe("the cloud board source (VC-889)", () => {
     await source.open(P);
     cloud.answer("board:roster", { projectId: P }, { tickets: [row(1)], labels: [] });
     cloud.fail("board:roster", { projectId: P }, refusal("not_a_member", "Not a Member."));
-    expect(screen.dropped).toHaveBeenCalledWith(P, "Not a Member.");
+    expect(screen.dropped).toHaveBeenCalledWith(P, "Not a Member.", "not_a_member");
     expect(source.follows(P)).toBe(false);
     expect(source.projectOf("t1")).toBeUndefined();
     expect(cloud.watchers("board:roster", { projectId: P })).toBe(0);
