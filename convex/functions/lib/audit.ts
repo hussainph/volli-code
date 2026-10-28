@@ -1,7 +1,8 @@
 /**
  * The audit trail: one `auditLog` row per change worth answering "who did
  * this, and when" about (membership, invites, policy, Workspace settings, account deletion,
- * sharing a Session, team secrets, a moved project shown, hidden or rescued).
+ * sharing a Session, team secrets, a moved project shown, hidden, rescued,
+ * cancelled or purged).
  *
  * Each row names its Actor and what changed. `detail` is written only through
  * {@link audit}, from the typed entries below, and never holds a secret or an
@@ -39,7 +40,9 @@ export type AuditKind =
   | "project.imported"
   | "project.import_uncommitted"
   | "project.import_rescue_aborted"
-  | "project.import_reassigned";
+  | "project.import_reassigned"
+  | "project.import_aborted"
+  | "project.import_purged";
 
 export type AuditTargetKind =
   | "workspace"

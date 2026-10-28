@@ -56,4 +56,7 @@ crons.interval(
 // Stream chunks older than 15 minutes (streamChunks.ts), whatever their message did.
 crons.interval("streamChunks: ttl sweep", { minutes: 5 }, internal.streamChunks.sweep, {});
 
+// An aborted move's purge that failed or stalled (projectImportPurge.ts) starts again.
+crons.interval("move purges: resume", { minutes: 15 }, internal.projectImportPurge.resume, {});
+
 export default crons;

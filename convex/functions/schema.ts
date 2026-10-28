@@ -383,9 +383,26 @@ export default defineSchema({
     // Set by an uncommit: the project was shown, so others may have written there.
     uncommittedAt: nullable(time),
     abortedAt: nullable(time),
+    // The purge of an aborted move (`projectImportPurge.ts`): where it is,
+    // what it deleted (counts only) and its last failure.
+    purge: v.optional(
+      v.object({
+        phase: literals(["rows", "audit", "objects"]),
+        auditCursor: nullable(v.string()),
+        rows: v.number(),
+        objects: v.number(),
+        // Why the project's objects were left: the store is not configured,
+        // or another project holds the id.
+        objectsSkipped: nullable(literals(["storage_unconfigured", "project_id_taken"])),
+        error: nullable(v.object({ code: v.string(), at: time })),
+        updatedAt: time,
+      }),
+    ),
+    purgedAt: v.optional(nullable(time)),
   })
     .index("by_uuid", ["id"])
-    .index("by_project", ["projectId", "createdAt"]),
+    .index("by_project", ["projectId", "createdAt"])
+    .index("by_status", ["status", "updatedAt"]),
   // One import's accumulator for one stream: what the manifest promised and
   // what was inserted (count + `MigrationDigest` value). Its own document, so
   // batches of different streams do not contend.
@@ -1103,7 +1120,9 @@ export default defineSchema({
     readThroughSequence: nullable(v.number()),
   })
     .index("by_user_session", ["userId", "sessionId"])
-    .index("by_user_unread", ["userId", "unreadSince"]),
+    .index("by_user_unread", ["userId", "unreadSince"])
+    // Every reader's marker on one Session (a moved project's purge).
+    .index("by_session", ["sessionId"]),
 
   // ── the runner inbox ───────────────────────────────────────────────────────
   runnerJobs: defineTable({

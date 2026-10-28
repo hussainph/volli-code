@@ -19,10 +19,14 @@
  *   manifest's promise, then shows the project (`moveState: null`).
  *   {@link uncommit} hides it again (a roll back after commit), refusing
  *   when the project changed since the commit unless told to go ahead.
- * - {@link abort} marks the import `aborting`. Purging its rows and objects
- *   (taking it to `purged`) is a scheduled purge chain that is not built
- *   yet; until it is, an aborted import's rows stay, hidden, and the project
- *   cannot be moved again (`import_in_progress`).
+ * - {@link abort} marks the import `aborting` and starts the purge
+ *   (`projectImportPurge.ts`): a scheduled chain that deletes its rows, then
+ *   its objects (`v1/p/<projectId>/`, `v1/m/<moveId>/`), and ends `purged`.
+ *   Until then the project stays hidden and cannot be moved again
+ *   (`import_in_progress`); once purged it can.
+ * - {@link presignPut} signs one write-once PUT of an object the move
+ *   carries, to its final key under the project's prefix (or the move's own
+ *   staging prefix), bound to its exact length and SHA-256.
  * - {@link status} and {@link readRows} are the importer's own reads: the
  *   accumulators, and a project-scoped read-back (by project, ticket or
  *   Session index) for the client's verification. They read through the
@@ -50,14 +54,25 @@ import {
   eventArchiveKey,
   isUuid,
   parseId,
+  presignS3Request,
   projectBlobKey,
   sessionVisibilityAtCreation,
+  sha256ChecksumHeader,
   type MigrationImportStream,
   type MigrationTarget,
+  type PresignedS3Request,
 } from "@volli/shared/cloud";
 
+import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
+import {
+  action,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+  type QueryCtx,
+} from "./_generated/server.js";
 import { audit } from "./lib/audit";
 import { requireManage, requireViewer, requireWorkspace, type Viewer } from "./lib/auth";
 import {
@@ -70,9 +85,12 @@ import {
   type Row,
   type RowFailure,
 } from "./lib/migrationImport";
+import { moveObjectKeyProblem, moveObjectMaxBytes } from "./lib/moveObjectKeys";
+import { PRESIGN_EXPIRES_SECONDS, objectStoreConfig } from "./lib/objectStore";
 import { literals, nullable } from "./lib/validators";
 import { personActor } from "./lib/workspaces";
 import { hasLivePreviewAccess } from "./lib/previewAccess";
+import { purgeStalled, schedulePurge } from "./projectImportPurge";
 
 export type ProjectImportErrorCode =
   | "invalid_argument"
@@ -85,7 +103,9 @@ export type ProjectImportErrorCode =
   | "manifest_mismatch"
   | "verification_failed"
   | "changed_since_commit"
-  | "invalid_rescue_target";
+  | "invalid_rescue_target"
+  | "invalid_key"
+  | "storage_unconfigured";
 
 function importError(
   code: ProjectImportErrorCode,
@@ -194,6 +214,18 @@ async function describe(db: Reader, row: ImportRow) {
     updatedAt: row.updatedAt,
     committedAt: row.committedAt,
     abortedAt: row.abortedAt,
+    purgedAt: row.purgedAt ?? null,
+    // How far an aborted move's purge got: counts and a code, never content.
+    purge:
+      row.purge === undefined
+        ? null
+        : {
+            phase: row.purge.phase,
+            rows: row.purge.rows,
+            objects: row.purge.objects,
+            objectsSkipped: row.purge.objectsSkipped,
+            error: row.purge.error?.code ?? null,
+          },
     streams: (await streamRows(db, row.id)).map((stream) => ({
       stream: stream.stream,
       expectedCount: stream.expectedCount,
@@ -821,22 +853,39 @@ export const uncommit = mutation({
 
 /**
  * Cancels a move that is not committed (uncommit a committed one first): the
- * import becomes `aborting` and takes no more rows; its project stays hidden.
+ * import becomes `aborting`, takes no more rows, and its purge starts
+ * (`projectImportPurge.ts`): every row it wrote (and anything the backend
+ * derived there while it was shown), then its objects, ending `purged`. The
+ * project stays hidden until it is gone.
  *
- * The purge itself (every row the import wrote, by index, in bounded
- * batches, then the `v1/p/<projectId>/` and `v1/m/<moveId>/` objects, ending
- * `purged`) is a scheduled chain that is NOT built yet. Idempotent.
+ * Idempotent. Called again while `aborting`, it restarts a purge that failed
+ * or stalled; `status` shows how far it got.
  */
 export const abort = mutation({
   args: { moveId: v.string() },
   handler: async (ctx, { moveId }) => {
-    const { row } = await requireImporter(ctx, moveId);
-    if (row.status === "aborting" || row.status === "purged") return { status: row.status };
+    const { viewer, row } = await requireImporter(ctx, moveId);
+    if (row.status === "purged") return { status: row.status };
+    if (row.status === "aborting") {
+      const now = Date.now();
+      if (row.purge?.error != null || purgeStalled(row, now)) await schedulePurge(ctx, row);
+      return { status: row.status };
+    }
     if (row.status === "committed") {
       throw importError("import_committed", "Roll the committed move back (uncommit) first.");
     }
     const now = Date.now();
     await ctx.db.patch(row._id, { status: "aborting", updatedAt: now, abortedAt: now });
+    await audit(ctx, {
+      workspaceId: row.workspaceId,
+      actor: personActor(viewer),
+      kind: "project.import_aborted",
+      targetKind: "project",
+      targetId: row.projectId,
+      at: now,
+      detail: { moveId: row.id },
+    });
+    await schedulePurge(ctx, { ...row, status: "aborting" });
     return { status: "aborting" as ImportStatus };
   },
 });
@@ -937,6 +986,77 @@ export const rescue = internalMutation({
       },
     });
     return { status: action.kind === "abort" ? ("aborting" as const) : row.status };
+
+// ── objects ──────────────────────────────────────────────────────────────────
+
+/**
+ * Checks one object PUT of an open move: its importer, the key (the move's
+ * own, `moveObjectKeyProblem`), the length and the SHA-256.
+ */
+export const authorizeObjectPut = internalQuery({
+  args: { moveId: v.string(), key: v.string(), bytes: v.number(), sha256: v.string() },
+  handler: async (ctx, args): Promise<{ key: string }> => {
+    const { row } = await requireImporter(ctx, args.moveId);
+    if (!OPEN.has(row.status)) {
+      throw importError("import_closed", "This move no longer takes objects.", {
+        status: row.status,
+      });
+    }
+    await requireOwnRunner(ctx, row.userId, row.runnerId);
+    if (!SHA256_HEX.test(args.sha256)) {
+      throw importError("invalid_argument", "sha256 must be 64 lowercase hex digits.");
+    }
+    const problem = moveObjectKeyProblem(args.key, {
+      moveId: row.id,
+      projectId: row.projectId,
+      userId: row.userId,
+      sha256: args.sha256,
+    });
+    if (problem !== null) throw importError("invalid_key", problem);
+    const max = moveObjectMaxBytes(args.key);
+    if (!Number.isSafeInteger(args.bytes) || args.bytes < 1 || args.bytes > max) {
+      throw importError("invalid_argument", `An object is 1 to ${max} bytes.`);
+    }
+    return { key: args.key };
+  },
+});
+
+/**
+ * A URL for one PUT of exactly `bytes` bytes hashing to `sha256`, to `key`,
+ * valid for five minutes. The key must be one the move carries: under the
+ * project's prefix (`v1/p/<projectId>/`: a blob at its own SHA-256, a
+ * Session's history objects, a legacy archive), the move's staging
+ * (`v1/m/<moveId>/<part>`), or the importer's kept legacy archive
+ * (`v1/u/<userId>/legacy/…`, host-wide rows).
+ *
+ * Write-once: the request carries `If-None-Match: *`, so the store refuses
+ * (412) a key that already holds an object. A client resuming a move HEADs a
+ * refused key and compares its checksum rather than writing it again.
+ */
+export const presignPut = action({
+  args: { moveId: v.string(), key: v.string(), bytes: v.number(), sha256: v.string() },
+  handler: async (ctx, args): Promise<{ request: PresignedS3Request }> => {
+    const { key } = await ctx.runQuery(internal.projectImports.authorizeObjectPut, args);
+    const config = objectStoreConfig(process.env);
+    if (config === null) {
+      throw importError(
+        "storage_unconfigured",
+        "Object storage is not configured on this deployment.",
+      );
+    }
+    const request = presignS3Request({
+      ...config,
+      method: "PUT",
+      key,
+      now: Date.now(),
+      expiresSeconds: PRESIGN_EXPIRES_SECONDS,
+      headers: {
+        "content-length": String(args.bytes),
+        "if-none-match": "*",
+        "x-amz-checksum-sha256": sha256ChecksumHeader(args.sha256),
+      },
+    });
+    return { request };
   },
 });
 

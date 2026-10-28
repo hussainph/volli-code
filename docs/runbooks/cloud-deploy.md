@@ -162,7 +162,7 @@ not "Admin Read & Write". To rotate, create the next token, set the two credenti
 then revoke the old one.
 
 Keys are written and stored verbatim (`packages/shared/src/cloud/r2-keys.ts`);
-readers never re-derive them. Delete only the two staging prefixes:
+readers never re-derive them. Lifecycle rules delete only the two staging prefixes:
 
 | Prefix | Holds | Delete after |
 | --- | --- | --- |
@@ -170,6 +170,13 @@ readers never re-derive them. Delete only the two staging prefixes:
 | `v1/w/<workspaceId>/`, `v1/u/<userId>/` | Workspace and person blobs and config bundles | never |
 | `v1/x/<exportId>/` | Parts of an export bundle | 7 days |
 | `v1/m/<migrationId>/` | A migration's staging | 30 days |
+
+The backend deletes objects itself in one case only: the purge of a cancelled move
+to Volli Cloud (`convex/functions/projectImportPurge.ts`) lists and deletes that
+move's `v1/m/<moveId>/` and, once no project row holds the id, the moved project's
+`v1/p/<projectId>/`. The token's Object Read & Write covers those List and Delete
+calls; they run from the backend, so they need no CORS rule. A move's uploads are
+write-once (`If-None-Match: *`): a key that holds an object answers 412.
 
 An expired pack is not a cache miss: its index row still names the key and the
 Session's history stops being readable. Leave R2's built-in abort of incomplete

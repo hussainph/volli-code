@@ -53,6 +53,7 @@ import {
   projectBlobKey,
   reportableProblem,
   storageProblem,
+  userLegacyArchiveKey,
   type MigrationImportStream,
   type MigrationTarget,
 } from "@volli/shared/cloud";
@@ -376,7 +377,6 @@ export async function runMigrationDryRun(
       workspaceId: randomUUID(),
       runnerId: randomUUID(),
     };
-    const migrationId = randomUUID();
     await options.backend.mutation("migration:begin", {
       target,
       createMissing: true,
@@ -758,9 +758,10 @@ export async function runMigrationDryRun(
         if (projectId !== null && removedProjects.has(projectId)) continue;
         const table = String(record.table);
         const name = legacyArchiveName(table);
+        // Host-wide rows belong to no project: kept under the person who moved them.
         const key =
           projectId === null
-            ? migrationKey(migrationId, `legacy-host-${name}.ndjson.zst`)
+            ? userLegacyArchiveKey(target.userId, name)
             : legacyArchiveKey(projectId, name);
         const lines = groups.get(key) ?? [];
         lines.push(JSON.stringify(record));

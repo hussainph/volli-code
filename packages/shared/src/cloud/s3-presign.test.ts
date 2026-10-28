@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vite-plus/test";
 
 import {
+  S3_LIST_MAX_KEYS,
   S3_PRESIGN_MAX_EXPIRES_SECONDS,
+  presignS3ListObjects,
   presignS3Request,
   sha256ChecksumHeader,
 } from "./s3-presign";
@@ -120,6 +122,108 @@ describe("presignS3Request", () => {
     expect(() =>
       presignS3Request({ ...base, expiresSeconds: 1, headers: { Host: "evil.example" } }),
     ).toThrow(RangeError);
+  });
+});
+
+// Generated independently with botocore (`generate_presigned_url`, signature
+// version s3v4, path addressing) for these exact inputs, dated 2026-10-28T18:59:21Z.
+const BOTOCORE = {
+  accessKeyId: "AKIDEXAMPLE",
+  secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+  region: "auto",
+  endpoint: "https://acct.r2.cloudflarestorage.com",
+  bucket: "volli-history",
+  now: Date.UTC(2026, 9, 28, 18, 59, 21),
+  expiresSeconds: 300,
+};
+
+describe("presignS3ListObjects", () => {
+  test("matches botocore's presigned list_objects_v2", () => {
+    const signed = presignS3ListObjects({
+      ...BOTOCORE,
+      prefix: "v1/p/11111111-1111-4111-8111-111111111111/",
+      continuationToken: "1/abc+def=",
+      maxKeys: 1000,
+    });
+    const url = new URL(signed.url);
+    expect(`${url.origin}${url.pathname}`).toBe(
+      "https://acct.r2.cloudflarestorage.com/volli-history",
+    );
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      "continuation-token": "1/abc+def=",
+      "encoding-type": "url",
+      "list-type": "2",
+      "max-keys": "1000",
+      prefix: "v1/p/11111111-1111-4111-8111-111111111111/",
+      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+      "X-Amz-Credential": "AKIDEXAMPLE/20261028/auto/s3/aws4_request",
+      "X-Amz-Date": "20261028T185921Z",
+      "X-Amz-Expires": "300",
+      "X-Amz-SignedHeaders": "host",
+      "X-Amz-Signature": "83433656d980f3029fc6c7b652ce17bb4d4c94a3bf23b4acc6d2a8d21ca02061",
+    });
+    expect(signed).toMatchObject({ method: "GET", headers: {} });
+  });
+
+  test("a first page carries no continuation token; virtual addressing lists at the root", () => {
+    const first = new URL(
+      presignS3ListObjects({ ...BOTOCORE, prefix: "v1/m/", continuationToken: null, maxKeys: 1 })
+        .url,
+    );
+    expect(first.searchParams.has("continuation-token")).toBe(false);
+    const virtual = new URL(
+      presignS3ListObjects({
+        ...BOTOCORE,
+        addressing: "virtual",
+        prefix: "v1/m/",
+        continuationToken: null,
+        maxKeys: S3_LIST_MAX_KEYS,
+      }).url,
+    );
+    expect(`${virtual.host}${virtual.pathname}`).toBe(
+      "volli-history.acct.r2.cloudflarestorage.com/",
+    );
+  });
+
+  test("refuses an empty prefix and a page size S3 would refuse", () => {
+    const base = { ...BOTOCORE, continuationToken: null };
+    expect(() => presignS3ListObjects({ ...base, prefix: "", maxKeys: 10 })).toThrow(RangeError);
+    for (const maxKeys of [0, 1.5, S3_LIST_MAX_KEYS + 1]) {
+      expect(() => presignS3ListObjects({ ...base, prefix: "v1/", maxKeys })).toThrow(RangeError);
+    }
+  });
+});
+
+describe("write-once PUT and DELETE", () => {
+  test("matches botocore's presigned delete_object", () => {
+    const signed = presignS3Request({
+      ...BOTOCORE,
+      method: "DELETE",
+      key: "v1/m/55555555-5555-4555-8555-555555555555/manifest.json",
+    });
+    expect(new URL(signed.url).searchParams.get("X-Amz-Signature")).toBe(
+      "238d5a38d44bae106fc7596fb1844f00e914a9353d0e135ee04bcc661bb76991",
+    );
+  });
+
+  test("matches botocore's presigned put_object with If-None-Match", () => {
+    const signed = presignS3Request({
+      ...BOTOCORE,
+      method: "PUT",
+      key: `v1/p/11111111-1111-4111-8111-111111111111/b/${"a".repeat(64)}`,
+      headers: {
+        "content-length": "42",
+        "if-none-match": "*",
+        "x-amz-checksum-sha256": "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+      },
+    });
+    const url = new URL(signed.url);
+    expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe(
+      "content-length;host;if-none-match;x-amz-checksum-sha256",
+    );
+    expect(url.searchParams.get("X-Amz-Signature")).toBe(
+      "26b57f266afbd78b3cdd8ec437b07e8d7374aee5c7eb0289583a40f6792e4def",
+    );
   });
 });
 

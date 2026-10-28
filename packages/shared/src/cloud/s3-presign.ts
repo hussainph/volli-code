@@ -79,6 +79,51 @@ function hmacOf(key: Uint8Array, message: string): Uint8Array {
 
 /** A presigned URL for one request. Throws `RangeError` on an expiry S3 would refuse. */
 export function presignS3Request(input: S3PresignInput): PresignedS3Request {
+  if (input.key.length === 0) throw new RangeError("A presigned URL needs a bucket and a key");
+  return sign(input, input.key, []);
+}
+
+/** The most keys one ListObjectsV2 page returns (S3's own ceiling). */
+export const S3_LIST_MAX_KEYS = 1000;
+
+export interface S3ListInput extends Omit<S3PresignInput, "method" | "key" | "headers"> {
+  /** Only keys starting with this; never empty (a list of a whole bucket is never signed). */
+  prefix: string;
+  /** The previous page's `NextContinuationToken`, or `null` for the first page. */
+  continuationToken: string | null;
+  /** 1 to {@link S3_LIST_MAX_KEYS}. */
+  maxKeys: number;
+}
+
+/**
+ * A presigned ListObjectsV2 (`GET /<bucket>?list-type=2&prefix=…`): one page
+ * of the keys under `prefix`, percent-encoded (`encoding-type=url`). Throws `RangeError` on an empty prefix or a page
+ * size S3 would refuse.
+ */
+export function presignS3ListObjects(input: S3ListInput): PresignedS3Request {
+  if (input.prefix.length === 0) throw new RangeError("A list is signed for a prefix");
+  if (!Number.isInteger(input.maxKeys) || input.maxKeys < 1 || input.maxKeys > S3_LIST_MAX_KEYS) {
+    throw new RangeError(`A list page holds 1 to ${S3_LIST_MAX_KEYS} keys`);
+  }
+  const query: Array<[string, string]> = [
+    // Keys come back percent-encoded, so any key survives the XML.
+    ["encoding-type", "url"],
+    ["list-type", "2"],
+    ["max-keys", String(input.maxKeys)],
+    ["prefix", input.prefix],
+  ];
+  if (input.continuationToken !== null) {
+    query.push(["continuation-token", input.continuationToken]);
+  }
+  return sign({ ...input, method: "GET" }, null, query);
+}
+
+/** Signs one request for `key` (`null`: the bucket itself), with extra query parameters. */
+function sign(
+  input: Omit<S3PresignInput, "key">,
+  key: string | null,
+  extraQuery: ReadonlyArray<[string, string]>,
+): PresignedS3Request {
   if (
     !Number.isInteger(input.expiresSeconds) ||
     input.expiresSeconds < 1 ||
@@ -86,7 +131,7 @@ export function presignS3Request(input: S3PresignInput): PresignedS3Request {
   ) {
     throw new RangeError("A presigned URL expires after 1 second to 7 days");
   }
-  if (input.key.length === 0 || input.bucket.length === 0) {
+  if (input.bucket.length === 0) {
     throw new RangeError("A presigned URL needs a bucket and a key");
   }
   const endpoint = new URL(input.endpoint);
@@ -95,9 +140,10 @@ export function presignS3Request(input: S3PresignInput): PresignedS3Request {
   }
   const virtual = input.addressing === "virtual";
   const host = virtual ? `${input.bucket}.${endpoint.host}` : endpoint.host;
+  const objectPath = key === null ? "" : uriEncode(key, true);
   const path = virtual
-    ? `/${uriEncode(input.key, true)}`
-    : `/${uriEncode(input.bucket, false)}/${uriEncode(input.key, true)}`;
+    ? `/${objectPath}`
+    : `/${uriEncode(input.bucket, false)}${key === null ? "" : `/${objectPath}`}`;
 
   const { stamp, day } = amzDate(input.now);
   const scope = `${day}/${input.region}/s3/aws4_request`;
@@ -113,6 +159,7 @@ export function presignS3Request(input: S3PresignInput): PresignedS3Request {
   const signedHeaders = signedNames.join(";");
 
   const query: Array<[string, string]> = [
+    ...extraQuery,
     ["X-Amz-Algorithm", ALGORITHM],
     ["X-Amz-Credential", `${input.accessKeyId}/${scope}`],
     ["X-Amz-Date", stamp],

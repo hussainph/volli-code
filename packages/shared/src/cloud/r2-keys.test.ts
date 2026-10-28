@@ -9,6 +9,7 @@ import {
   exportKey,
   legacyArchiveKey,
   migrationKey,
+  migrationPrefix,
   piLogSegmentKey,
   projectBlobKey,
   projectConfigBundleKey,
@@ -17,6 +18,7 @@ import {
   transcriptPackKey,
   userBlobKey,
   userConfigBundleKey,
+  userLegacyArchiveKey,
   userPrefix,
   workspaceBlobKey,
   workspaceConfigBundleKey,
@@ -66,6 +68,7 @@ describe("the v1 key grammar", () => {
     expect(workspaceConfigBundleKey(W, E, 0)).toBe(`v1/w/${W}/cfg/${E}/0.tar.zst`);
     expect(userBlobKey(U, SHA)).toBe(`v1/u/${U}/b/${SHA}`);
     expect(userConfigBundleKey(U, E, 12)).toBe(`v1/u/${U}/cfg/${E}/12.tar.zst`);
+    expect(userLegacyArchiveKey(U, "app-state")).toBe(`v1/u/${U}/legacy/app-state.ndjson.zst`);
     expect(exportKey(E, "part-0001.ndjson.zst")).toBe(`v1/x/${E}/part-0001.ndjson.zst`);
     expect(migrationKey(E, "blobs.tar")).toBe(`v1/m/${E}/blobs.tar`);
   });
@@ -77,6 +80,9 @@ describe("the v1 key grammar", () => {
     expect(projectBlobKey(P, SHA).startsWith(projectPrefix(P))).toBe(true);
     expect(workspaceBlobKey(W, SHA).startsWith(workspacePrefix(W))).toBe(true);
     expect(userBlobKey(U, SHA).startsWith(userPrefix(U))).toBe(true);
+    expect(userLegacyArchiveKey(U, "x").startsWith(userPrefix(U))).toBe(true);
+    expect(migrationPrefix(E)).toBe(`v1/m/${E}/`);
+    expect(migrationKey(E, "manifest.json").startsWith(migrationPrefix(E))).toBe(true);
   });
 
   test("zero padding keeps lexical order equal to sequence order", () => {
@@ -116,6 +122,9 @@ describe("key parts are validated", () => {
     ["a non-uuid run id", () => environmentRunLogKey(P, "run-1")],
     ["a legacy name with a slash", () => legacyArchiveKey(P, "../escape")],
     ["a non-uuid migration id", () => migrationKey("m1", "part")],
+    ["a non-uuid migration prefix", () => migrationPrefix("m1")],
+    ["a person's legacy name with a dot", () => userLegacyArchiveKey(U, "a.b")],
+    ["a person's legacy archive for a non-uuid", () => userLegacyArchiveKey("alice", "a")],
   ];
   test.each(bad)("%s", (_label, build) => {
     expect(build).toThrow(InvalidKeyPartError);
