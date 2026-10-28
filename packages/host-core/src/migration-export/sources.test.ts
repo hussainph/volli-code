@@ -441,7 +441,7 @@ describe("corrupt sources stop the export", () => {
   // source consumers must never map an orphan into an apparently valid row.
   function mapRaw(id: string) {
     const source = EXPORT_SOURCES.find((s) => s.id === id)!;
-    const lookups = buildLookups(profile.db, { snapshotAt: 1 });
+    const lookups = buildLookups(profile.db, { snapshotAt: 1, profileStep: true });
     const prepared = source.prepare(profile.db, lookups);
     for (const row of profile.db.prepare(source.sql).all())
       source.map(row, prepared, lookups, () => {});
@@ -491,6 +491,28 @@ describe("corrupt sources stop the export", () => {
     expect(() => mapRaw("automationRuns")).toThrow(/names a missing Session/);
     await expectCorrupt(/orphan automation_runs run-ghost: missing sessions/);
   });
+
+  it.each([null, "ticket-live"])(
+    "refuses missing Session ancestry while the raw mapper keeps its legacy fallback (%s)",
+    async (ticketId) => {
+      profile.db.pragma("foreign_keys = OFF");
+      session("orphan-session", "subagent", "missing-parent", ticketId);
+      const source = EXPORT_SOURCES.find((s) => s.id === "sessions")!;
+      const lookups = buildLookups(profile.db, { snapshotAt: 1, profileStep: true });
+      const mapped: unknown[] = [];
+      const row = profile.db
+        .prepare(`SELECT * FROM (${source.sql}) WHERE id='orphan-session'`)
+        .get();
+      source.map(row, source.prepare(profile.db, lookups), lookups, (_stream, record) =>
+        mapped.push(record),
+      );
+      expect(mapped[0]).toMatchObject({
+        visibility: ticketId === null ? "private" : "shared",
+        visibilityReason: "inherited",
+      });
+      await expectCorrupt(/orphan sessions orphan-session/);
+    },
+  );
 
   it("a Session event whose provenance is missing", async () => {
     profile.db.pragma("foreign_keys = OFF");

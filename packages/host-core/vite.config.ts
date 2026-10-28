@@ -213,6 +213,8 @@ export default defineConfig({
         // coverage provider does not instrument; `worker.test.ts` drives it.
         "src/migration-export/errors.ts",
         "src/migration-export/exporter.ts",
+        "src/migration-export/file-streams.ts",
+        "src/migration-export/scope.ts",
         "src/migration-export/records.ts",
         "src/migration-export/sources.ts",
         "src/migration-export/staging.ts",

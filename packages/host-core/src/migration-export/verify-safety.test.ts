@@ -19,6 +19,7 @@ const artifact = { sessionId: "s", sequence: 1, digest, canonicalJson: "{}" };
 const pi = (start = 0, fileBytes = 4) => ({
   sessionId: "s",
   piFileId: "pi",
+  attachmentId: "a",
   startOffset: start,
   endOffset: start + 2,
   fileBytes,
@@ -101,9 +102,106 @@ it("refuses forged work promises, malformed history and incomplete source covera
         error: /coverage is incomplete/,
       },
       { rows: { piLogs: [pi(0), pi(2)] } },
+      {
+        edit: (m) => {
+          delete (m as Partial<MigrationExportManifest>).piLogFiles;
+        },
+        error: /Missing Pi log/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles.push(m.piLogFiles[0]!);
+        },
+        error: /Duplicate Pi log/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles[0]!.sessionId = 5 as unknown as string;
+        },
+        error: /Invalid Pi log/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles[0]!.attachmentId = 5 as unknown as string;
+        },
+        error: /Invalid Pi log/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles[0]!.piFileId = 5 as unknown as string;
+        },
+        error: /Invalid Pi log/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles[0]!.fileBytes = -1;
+        },
+        error: /Invalid Pi log/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles[0]!.fileBytes = 1.5;
+        },
+        error: /Invalid Pi log/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles = [];
+        },
+        error: /checksum mismatch/,
+      },
+      {
+        rows: { piLogs: [pi(0, 2)] },
+        edit: (m) => {
+          m.piLogFiles[0]!.attachmentId = "other";
+        },
+        error: /checksum mismatch/,
+      },
+      {
+        rows: {
+          piLogs: [
+            {
+              ...pi(),
+              base64: "",
+              endOffset: 0,
+              fileBytes: 0,
+              sourceBytes: 0,
+              sourceSha256: sha(""),
+            },
+            {
+              ...pi(),
+              base64: "",
+              endOffset: 0,
+              fileBytes: 0,
+              sourceBytes: 0,
+              sourceSha256: sha(""),
+            },
+          ],
+        },
+        error: /checksum mismatch/,
+      },
       { rows: { piLogs: [{ ...pi(), base64: 5 }] }, error: /Invalid Pi/ },
-      { rows: { piLogs: [{ ...pi(), fileBytes: 1.5 }] }, error: /Invalid Pi/ },
-      { rows: { piLogs: [{ ...pi(), fileBytes: -1 }] }, error: /Invalid Pi/ },
+      {
+        rows: { piLogs: [{ ...pi(), fileBytes: 1.5 }] },
+        edit: (m) => {
+          m.piLogFiles[0]!.fileBytes = 4;
+        },
+        error: /Invalid Pi/,
+      },
+      {
+        rows: { piLogs: [{ ...pi(), fileBytes: -1 }] },
+        edit: (m) => {
+          m.piLogFiles[0]!.fileBytes = 4;
+        },
+        error: /Invalid Pi/,
+      },
       { rows: { piLogs: [{ ...pi(), base64: "!" }] }, error: /checksum mismatch/ },
       { rows: { piLogs: [{ ...pi(), startOffset: 1 }] }, error: /checksum mismatch/ },
       { rows: { piLogs: [{ ...pi(), endOffset: 3 }] }, error: /checksum mismatch/ },
@@ -152,6 +250,19 @@ it("refuses forged work promises, malformed history and incomplete source covera
         stream.bytes = Buffer.byteLength(text);
         stream.chunks = [{ file, records: rows.length, bytes: stream.bytes, sha256: sha(text) }];
       }
+      manifest.piLogFiles = [
+        ...new Map(
+          (test.rows?.piLogs ?? []).map((row) => [
+            JSON.stringify([row.sessionId, row.piFileId]),
+            {
+              sessionId: row.sessionId as string,
+              attachmentId: row.attachmentId as string,
+              piFileId: row.piFileId as string,
+              fileBytes: row.fileBytes as number,
+            },
+          ]),
+        ).values(),
+      ];
       test.edit?.(manifest);
       writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest));
       if (test.error) await expect(verifyMigrationExport(outDir)).rejects.toThrow(test.error);

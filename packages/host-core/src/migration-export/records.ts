@@ -35,6 +35,23 @@ import { MIGRATION_PLACEHOLDERS } from "@volli/shared/cloud";
 /** The manifest's format marker; a reader checks it before anything else. */
 export const MIGRATION_EXPORT_FORMAT = "volli.migration-export/1";
 
+/** A single record may exceed the byte bound; otherwise all streams share these limits. */
+export const DEFAULT_CHUNK_MAX_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_CHUNK_MAX_RECORDS = 50_000;
+
+/** The exporter and verifier share the promise that a move carries no queued work. */
+export const PENDING_RUNNER_FACTS = [
+  "pendingFollowUps",
+  "undeliveredNotices",
+  "undeliveredRunMessages",
+  "openCleanupCommands",
+] as const;
+export const EXECUTABLE_MIGRATION_STREAMS = [
+  "runnerJobs",
+  "automationArmings",
+  "automationScheduleCursors",
+] as const;
+
 /**
  * Stand-ins the importer replaces with the identities the migration lands
  * under. Defined beside the importer's mapping in `@volli/shared/cloud`, so

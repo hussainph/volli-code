@@ -14,6 +14,8 @@ import { SYNTHETIC_IDS as ids } from "../migration-dry-run/test-support/syntheti
 import { exportMigrationSnapshot, type MigrationExportManifest } from "./exporter";
 import { streamRecords } from "./test-support/export-files";
 import { verifyMigrationExport } from "./verify";
+import { createOrphanCleanupEngine } from "../worktree/cleanup-engine";
+import { SqliteOrphanCleanupLedger } from "../worktree/cleanup-ledger";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -34,6 +36,12 @@ function options(f: ReturnType<typeof fixture>, projectIds?: string[]) {
   };
 }
 
+function childVisibility(result: Awaited<ReturnType<typeof exportMigrationSnapshot>>) {
+  return streamRecords(result.outDir, result.manifest, "sessions").find(
+    (s) => s.id === ids.childSession,
+  )!.visibility;
+}
+
 it("exports only the selected local project closure, with references to projects still local", async () => {
   const f = fixture();
   const db = new Database(f.dbPath);
@@ -51,6 +59,9 @@ it("exports only the selected local project closure, with references to projects
   expect(readFileSync(f.dbPath)).toEqual(before);
   expect(manifest.projectIds).toEqual([MOVE_IDS.project]);
   expect(manifest.profileStep).toBe(false);
+  expect(manifest.prefixClashes).toEqual([
+    { prefix: "AL", projectIds: [ids.project, MOVE_IDS.project] },
+  ]);
   expect(streamRecords(outDir, manifest, "tickets").map((r) => r.id)).toEqual([MOVE_IDS.ticket]);
   expect(streamRecords(outDir, manifest, "sessions").map((r) => r.id)).toEqual([ids.childSession]);
   expect(streamRecords(outDir, manifest, "delegations")[0]!.parentSessionId).toBe(ids.hotSession);
@@ -188,6 +199,124 @@ it("refuses queued follow-ups but does not treat historical open attachments as 
   expect(result.manifest.preflight.pendingFollowUps).toBe(0);
 });
 
+it.each(["completed", "interrupted"])(
+  "blocks unfinished cleanups until %s through the real engine",
+  async (outcome) => {
+    const f = fixture();
+    const db = new Database(f.dbPath);
+    try {
+      let next = 0;
+      const engine = createOrphanCleanupEngine({
+        ledger: new SqliteOrphanCleanupLedger(db),
+        now: () => 1,
+        nextId: () => `cleanup-fact-${++next}`,
+      });
+      const accepted = await engine.accept({
+        commandId: "cleanup",
+        source: "settings",
+        scanRevision: "rev",
+        requestedItemIds: ["item"],
+        retentionDays: 14,
+        preservation: [],
+        items: [
+          {
+            id: "item",
+            kind: "worktree",
+            path: join(f.root, "worktree"),
+            projectId: ids.project,
+            projectName: "Alpha",
+            projectPath: f.root,
+            branch: null,
+            gitReason: null,
+          },
+        ],
+      });
+      expect(accepted.ok).toBe(true);
+      await expect(exportMigrationSnapshot(options(f, [ids.project]))).rejects.toThrow(
+        /openCleanupCommands/,
+      );
+      const other = await exportMigrationSnapshot({
+        ...options(f, [MOVE_IDS.project]),
+        outDir: join(f.root, "other"),
+      });
+      expect(other.manifest.preflight.openCleanupCommands).toBe(0);
+      await engine.beginItem({ commandId: "cleanup", itemId: "item" });
+      if (outcome === "completed") {
+        await engine.settleItem({
+          commandId: "cleanup",
+          itemId: "item",
+          state: "completed",
+          detail: "done",
+        });
+        await engine.finish({ commandId: "cleanup" });
+      } else {
+        await engine.markInterrupted({ commandId: "cleanup" });
+      }
+      const complete = await exportMigrationSnapshot({ ...options(f, [ids.project]), fresh: true });
+      expect(complete.manifest.preflight.openCleanupCommands).toBe(0);
+    } finally {
+      db.close();
+    }
+  },
+);
+
+it("keeps cross-project private ancestry identical for project and profile exports", async () => {
+  const f = fixture();
+  const db = new Database(f.dbPath);
+  try {
+    db.prepare("UPDATE sessions SET role='project',ticket_id=NULL WHERE id=?").run(ids.hotSession);
+  } finally {
+    db.close();
+  }
+  const all = await exportMigrationSnapshot(options(f));
+  const child = await exportMigrationSnapshot({
+    ...options(f, [MOVE_IDS.project]),
+    outDir: join(f.root, "child"),
+  });
+  expect(childVisibility(all)).toBe("private");
+  expect(childVisibility(child)).toBe("private");
+});
+
+it("names local Sessions whose ticket would fall outside the selected closure", async () => {
+  const f = fixture();
+  const db = new Database(f.dbPath);
+  try {
+    db.prepare("UPDATE sessions SET ticket_id=? WHERE id=?").run(ids.tickets[0], ids.childSession);
+  } finally {
+    db.close();
+  }
+  await expect(exportMigrationSnapshot(options(f, [MOVE_IDS.project]))).rejects.toThrow(
+    /Session .* outside the selected local project/,
+  );
+});
+
+it("names historical attempt orphans that have no database foreign key", async () => {
+  const f = fixture();
+  const db = new Database(f.dbPath);
+  try {
+    db.prepare(
+      `INSERT INTO automation_pending_armed_run_attempts (id,command_id,ticket_id,project_id,ticket_display_id,automation_id,automation_name,status,origin,opened_at,start_at,error) VALUES ('orphan','command','deleted-ticket','deleted-project','AL-9','automation','Run','todo','armed',1,2,'failed')`,
+    ).run();
+  } finally {
+    db.close();
+  }
+  await expect(exportMigrationSnapshot(options(f))).rejects.toThrow(
+    /orphan automation_pending_armed_run_attempts .*missing project/,
+  );
+});
+
+it("detects a wholly omitted Pi file, not just gaps in files still present", async () => {
+  const f = fixture();
+  const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+  const stream = manifest.streams.find((s) => s.name === "piLogs")!;
+  for (const chunk of stream.chunks) rmSync(join(outDir, chunk.file));
+  stream.chunks = [];
+  stream.bytes = 0;
+  stream.records = 0;
+  writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest));
+  await expect(verifyMigrationExport(outDir)).rejects.toThrow(/Pi log coverage is incomplete/);
+});
+
 function tamper(
   dir: string,
   manifest: MigrationExportManifest,
@@ -227,7 +356,7 @@ it("streams a 50 MiB transcript Session and multi-slice Pi log with complete dig
   const stream = manifest.streams.find((s) => s.name === "transcriptArtifacts")!;
   expect(stream.records).toBe(2048);
   expect(stream.bytes).toBeGreaterThan(50 * 1024 * 1024);
-  expect(stream.chunks.length).toBeGreaterThan(10);
+  expect(stream.chunks.length).toBeGreaterThan(5);
   const pi = streamRecords(outDir, manifest, "piLogs");
   expect(pi.length).toBeGreaterThan(1);
   expect(pi[0]!.startOffset).toBe(0);

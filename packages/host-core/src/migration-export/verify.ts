@@ -14,7 +14,11 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { MigrationExportError } from "./errors";
 import type { MigrationExportManifest } from "./exporter";
-import { MIGRATION_EXPORT_FORMAT } from "./records";
+import {
+  MIGRATION_EXPORT_FORMAT,
+  PENDING_RUNNER_FACTS,
+  EXECUTABLE_MIGRATION_STREAMS,
+} from "./records";
 import { STREAM_DESTINATIONS, type StreamName } from "./sources";
 import { MANIFEST_FILE, listStreamFiles } from "./staging";
 
@@ -50,21 +54,31 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
 
   if (manifest.pendingRunnerWork !== false)
     fail("The manifest must promise no pending runner work.");
-  for (const name of [
-    "pendingFollowUps",
-    "undeliveredNotices",
-    "undeliveredRunMessages",
-    "openCleanupCommands",
-  ] as const) {
+  for (const name of PENDING_RUNNER_FACTS) {
     if (manifest.preflight[name] !== 0) fail(`Pending runner work: ${name}.`);
   }
-  for (const name of ["runnerJobs", "automationArmings", "automationScheduleCursors"]) {
+  for (const name of EXECUTABLE_MIGRATION_STREAMS) {
     if (manifest.streams.find((s) => s.name === name)?.records !== 0)
       fail(`${name} contains pending runner work.`);
   }
   const references = new Map<string, string>();
   const artifacts = new Map<string, string>();
   const piFiles = new Map<string, { through: number; bytes: number }>();
+  const expectedPiFiles = new Map<string, (typeof manifest.piLogFiles)[number]>();
+  if (!Array.isArray(manifest.piLogFiles)) fail("Missing Pi log file coverage.");
+  for (const file of manifest.piLogFiles) {
+    const key = JSON.stringify([file.sessionId, file.piFileId]);
+    if (expectedPiFiles.has(key)) fail("Duplicate Pi log file coverage.");
+    if (
+      typeof file.sessionId !== "string" ||
+      typeof file.attachmentId !== "string" ||
+      typeof file.piFileId !== "string" ||
+      !Number.isSafeInteger(file.fileBytes) ||
+      file.fileBytes < 0
+    )
+      fail("Invalid Pi log file coverage.");
+    expectedPiFiles.set(key, file);
+  }
   const named = new Set<string>();
   let records = 0;
   let bytes = 0;
@@ -141,6 +155,14 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
             (row.fileBytes as number) < 0
           )
             fail("Invalid Pi log record.");
+          const expectedFile = expectedPiFiles.get(identity);
+          if (
+            expectedFile === undefined ||
+            expectedFile.fileBytes !== row.fileBytes ||
+            expectedFile.attachmentId !== row.attachmentId ||
+            (piFiles.has(identity) && state.through === state.bytes)
+          )
+            fail("Pi log coverage or checksum mismatch.");
           const body = Buffer.from(row.base64, "base64");
           if (
             body.toString("base64") !== row.base64 ||
@@ -171,6 +193,7 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
     [...references].some(([key, digest]) => artifacts.get(key) !== digest)
   )
     fail("Transcript digest coverage is incomplete.");
+  if (expectedPiFiles.size !== piFiles.size) fail("Pi log coverage is incomplete.");
   for (const state of piFiles.values())
     if (state.through !== state.bytes) fail("Pi log coverage is incomplete.");
   for (const file of await listStreamFiles(dir)) {

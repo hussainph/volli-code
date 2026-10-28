@@ -13,6 +13,7 @@ import { FileTranscriptArtifactStore } from "../session-runtime/transcript-artif
 import { piFileIdOf } from "../transcript-spool/transcript-spool";
 import { STRUCTURED_ADAPTER_ID } from "../session-runtime/sessions";
 import { SourceCorruptError } from "./sources";
+import { DEFAULT_CHUNK_MAX_BYTES, DEFAULT_CHUNK_MAX_RECORDS } from "./records";
 import {
   chunkFileName,
   hashFile,
@@ -42,7 +43,13 @@ export interface PiLogRecord {
   /** Exact source bytes; the uploader redacts and compresses, retaining offsets. */
   base64: string;
 }
+export type PiLogFileCoverage = Pick<
+  PiLogRecord,
+  "sessionId" | "attachmentId" | "piFileId" | "fileBytes"
+>;
 export interface FileStreamOptions {
+  chunkMaxBytes?: number;
+  chunkMaxRecords?: number;
   transcriptsDir: string;
   piLogsDir: string;
   blobsDir: string;
@@ -74,6 +81,8 @@ async function* artifacts(
       if (payload.digest !== undefined && payload.digest !== payload.reference.id)
         throw new Error("event digest differs from reference");
       bytes = await store.readCanonicalBytes(payload.reference);
+      if (!Buffer.from(bytes.toString("utf8")).equals(bytes))
+        throw new Error("artifact is not UTF-8 JSON");
     } catch (error) {
       throw new SourceCorruptError(
         `transcript ${row.session_id}:${row.sequence} missing or corrupt: ${error instanceof Error ? error.message : String(error)}`,
@@ -198,7 +207,7 @@ export async function exportFileStreams(
   db: Database.Database,
   staging: string,
   options: FileStreamOptions,
-): Promise<Checkpoint[]> {
+): Promise<{ checkpoints: Checkpoint[]; piLogFiles: PiLogFileCoverage[] }> {
   for (const row of db
     .prepare(
       `SELECT DISTINCT b.hash,b.size_bytes FROM blobs b JOIN blob_links l ON l.blob_hash=b.hash ORDER BY b.hash`,
@@ -214,6 +223,7 @@ export async function exportFileStreams(
     }
   }
   const checkpoints: Checkpoint[] = [];
+  const piLogFiles: PiLogFileCoverage[] = [];
   for (const [name, records] of [
     ["transcriptArtifacts", artifacts(db, options)],
     ["piLogs", piLogs(db, options)],
@@ -238,14 +248,26 @@ export async function exportFileStreams(
       bytes = 0;
     };
     for await (const record of records) {
+      if ("piFileId" in record && record.startOffset === 0) {
+        piLogFiles.push({
+          sessionId: record.sessionId,
+          attachmentId: record.attachmentId,
+          piFileId: record.piFileId,
+          fileBytes: record.fileBytes,
+        });
+      }
       const line = `${JSON.stringify(record)}\n`;
       lines.push(line);
       bytes += Buffer.byteLength(line);
       count++;
-      if (bytes >= 4 * 1024 * 1024) await flush();
+      if (
+        bytes >= (options.chunkMaxBytes ?? DEFAULT_CHUNK_MAX_BYTES) ||
+        lines.length >= (options.chunkMaxRecords ?? DEFAULT_CHUNK_MAX_RECORDS)
+      )
+        await flush();
     }
     await flush();
     checkpoints.push({ source: name, rowsThrough: count, done: true, chunks });
   }
-  return checkpoints;
+  return { checkpoints, piLogFiles };
 }

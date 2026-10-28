@@ -231,7 +231,7 @@ export function buildLookups(
     snapshotAt: number;
     pathExists?: (path: string) => boolean;
     homeDir?: string;
-    profileStep?: boolean;
+    profileStep: boolean;
   },
 ): ExportLookups {
   const projects = new Map(
@@ -256,7 +256,9 @@ export function buildLookups(
   );
   const sessions = new Map(
     (
-      db.prepare("SELECT id, role, parent_session_id, ticket_id FROM sessions").all() as Array<{
+      db
+        .prepare("SELECT id, role, parent_session_id, ticket_id FROM main.sessions")
+        .all() as Array<{
         id: string;
         role: string;
         parent_session_id: string | null;
@@ -276,7 +278,7 @@ export function buildLookups(
   );
   return {
     snapshotAt: options.snapshotAt,
-    profileStep: options.profileStep ?? true,
+    profileStep: options.profileStep,
     allProjectIds: new Set(
       (db.prepare("SELECT id FROM main.projects").all() as Array<{ id: string }>).map((r) => r.id),
     ),
@@ -1771,14 +1773,15 @@ const scheduleCursorsSource = source<{ value: string }, Map<string, string | nul
     );
   },
   map(row, prepared, lookups, emit) {
-    const projects = prepared;
+    const projectIdOfAutomation = prepared;
     const parsed = parseJsonColumn(row.value);
     const entries =
       parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
         ? Object.entries(parsed)
         : ([[null, row.value]] as const);
     for (const [automationId, at] of entries) {
-      const projectId = automationId === null ? null : (projects.get(automationId) ?? null);
+      const projectId =
+        automationId === null ? null : (projectIdOfAutomation.get(automationId) ?? null);
       if (projectId !== null ? !lookups.projects.has(projectId) : !lookups.profileStep) continue;
       emit("legacyRows", {
         table: "automation_schedule_cursors",

@@ -42,7 +42,13 @@ import Database from "better-sqlite3";
 import { MIGRATION_DISK_HEADROOM_BYTES, nodeDiskProbe, type DiskProbe } from "../db/disk-preflight";
 import { SCHEMA_HEAD } from "../db/migrations";
 import { MigrationExportError, isDiskFullError } from "./errors";
-import { MIGRATION_EXPORT_FORMAT, MIGRATION_PLACEHOLDERS } from "./records";
+import {
+  MIGRATION_EXPORT_FORMAT,
+  MIGRATION_PLACEHOLDERS,
+  PENDING_RUNNER_FACTS,
+  DEFAULT_CHUNK_MAX_BYTES,
+  DEFAULT_CHUNK_MAX_RECORDS,
+} from "./records";
 import {
   EXPORT_SOURCES,
   STREAM_DESTINATIONS,
@@ -75,21 +81,22 @@ import {
 } from "./staging";
 import { MIGRATION_TABLE_DECISIONS, type MigrationTableDecision } from "./tables";
 import { verifyMigrationExport } from "./verify";
-import { exportFileStreams } from "./file-streams";
+import { exportFileStreams, type PiLogFileCoverage } from "./file-streams";
 import {
   crossProjectReferences,
+  prefixClashes,
   selectLocalProduct,
   selectionKey,
   type CrossProjectReference,
+  type PrefixClash,
   type ExportSelection,
 } from "./scope";
 
 /** The oldest schema the sources are written against. */
 export const MIGRATION_EXPORT_MIN_SCHEMA = 64;
 
-/** Default chunk bounds: whichever is reached first closes a checkpoint. */
-export const DEFAULT_CHUNK_MAX_BYTES = 8 * 1024 * 1024;
-export const DEFAULT_CHUNK_MAX_RECORDS = 50_000;
+/** Retained entry point for callers of the original exporter. */
+export { DEFAULT_CHUNK_MAX_BYTES, DEFAULT_CHUNK_MAX_RECORDS } from "./records";
 
 /** How often the export yields to the event loop, in source rows. */
 const YIELD_EVERY_ROWS = 256;
@@ -149,7 +156,7 @@ export interface MigrationPreflightFacts {
   undeliveredNotices: number;
   /** Automation Run messages not yet delivered. */
   undeliveredRunMessages: number;
-  /** Worktree cleanups with no receipt. */
+  /** Worktree cleanups without a terminal receipt. */
   openCleanupCommands: number;
   /** Executor attachments with no close recorded: a turn may still be running. */
   openAttachments: number;
@@ -179,6 +186,8 @@ export interface MigrationExportManifest {
   projectIds: string[];
   profileStep: boolean;
   crossProjectReferences: CrossProjectReference[];
+  prefixClashes: PrefixClash[];
+  piLogFiles: PiLogFileCoverage[];
   tables: readonly MigrationTableDecision[];
   sources: Array<{ id: string; rows: number }>;
   streams: Array<{
@@ -304,12 +313,7 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
     throwIfAborted(options.signal);
     selectLocalProduct(snapshot, options);
     const pending = preflightFacts(snapshot, state.snapshotAt);
-    for (const name of [
-      "pendingFollowUps",
-      "undeliveredNotices",
-      "undeliveredRunMessages",
-      "openCleanupCommands",
-    ] as const) {
+    for (const name of PENDING_RUNNER_FACTS) {
       if (pending[name] > 0)
         throw new SourceCorruptError(`pending runner work: ${name} (${pending[name]})`);
     }
@@ -369,16 +373,23 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
 
     reporter.report({ phase: "finalizing", source: null }, true);
     assertComplete(checkpoints, counts);
-    const fileCheckpoints = await exportFileStreams(snapshot, staging, {
-      ...fileRoots(options),
-      signal: options.signal,
-    });
+    const { checkpoints: fileCheckpoints, piLogFiles } = await exportFileStreams(
+      snapshot,
+      staging,
+      {
+        ...fileRoots(options),
+        signal: options.signal,
+        chunkMaxBytes: options.chunkMaxBytes,
+        chunkMaxRecords: options.chunkMaxRecords,
+      },
+    );
     const manifest = buildManifest(
       snapshot,
       state,
       [...checkpoints, ...fileCheckpoints],
       counts,
       now(),
+      piLogFiles,
     );
     reporter.add({
       bytesWritten: fileCheckpoints.reduce(
@@ -721,7 +732,8 @@ function preflightFacts(db: Database.Database, snapshotAt: number): MigrationPre
     ),
     openCleanupCommands: count(
       `SELECT COUNT(*) AS n FROM worktree_cleanup_commands c
-        WHERE NOT EXISTS (SELECT 1 FROM worktree_cleanup_receipts r WHERE r.command_id = c.id)`,
+        WHERE NOT EXISTS (SELECT 1 FROM worktree_cleanup_receipts r WHERE r.command_id = c.id AND r.status IN ('completed','rejected'))
+          AND NOT EXISTS (SELECT 1 FROM worktree_cleanup_facts f WHERE f.command_id = c.id AND f.kind = 'cleanup.run.interrupted')`,
     ),
     openAttachments: count(
       "SELECT COUNT(*) AS n FROM session_attachments WHERE closed_sequence IS NULL",
@@ -740,6 +752,7 @@ function buildManifest(
   checkpoints: readonly Checkpoint[],
   counts: readonly number[],
   completedAt: number,
+  piLogFiles: PiLogFileCoverage[],
 ): MigrationExportManifest {
   const tables = (
     db
@@ -780,6 +793,8 @@ function buildManifest(
     ).map((row) => row.id),
     profileStep: state.profileStep,
     crossProjectReferences: crossProjectReferences(db),
+    prefixClashes: prefixClashes(db),
+    piLogFiles,
     tables: MIGRATION_TABLE_DECISIONS,
     sources: EXPORT_SOURCES.map((source, index) => ({ id: source.id, rows: counts[index]! })),
     streams: (Object.keys(STREAM_DESTINATIONS) as StreamName[]).map((name) => {

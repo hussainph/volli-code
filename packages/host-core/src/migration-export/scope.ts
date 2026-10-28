@@ -1,6 +1,6 @@
-/** A read-only projection of the snapshot. Every source (including its lookups
- * and window ranks) sees the same selected local product, never cloud mirrors.
- * TEMP views write no byte of the snapshot, let alone the live database.
+/** Read-only ownership projections for source queries and window ranks.
+ * Profile/ledger mappers also enforce selection; ancestry reads the raw snapshot
+ * to preserve visibility across projects. TEMP views never modify the snapshot.
  */
 import type Database from "better-sqlite3";
 import { localProductRow } from "../db/local-product";
@@ -24,17 +24,43 @@ export function selectLocalProduct(db: Database.Database, options: ExportSelecti
   // A broken FK must not disappear in the ownership joins below. Name it before
   // filtering, including when its missing owner makes project attribution impossible.
   const violation = db.prepare("PRAGMA main.foreign_key_check").get() as
-    | { table: string; rowid: number; parent: string }
+    | { table: string; rowid: number | null; parent: string }
     | undefined;
   if (violation !== undefined) {
     const table = `"${violation.table.replaceAll('"', '""')}"`;
-    const row = db.prepare(`SELECT * FROM main.${table} WHERE rowid = ?`).get(violation.rowid) as
-      | Record<string, unknown>
-      | undefined;
+    const row =
+      violation.rowid === null
+        ? undefined
+        : (db.prepare(`SELECT * FROM main.${table} WHERE rowid = ?`).get(violation.rowid) as
+            | Record<string, unknown>
+            | undefined);
     const id = row?.id ?? row?.session_id ?? violation.rowid;
     throw new SourceCorruptError(
       `orphan ${violation.table} ${String(id)}: missing ${violation.parent}`,
     );
+  }
+  // Some historical snapshots deliberately have no project FK (for example
+  // failed Automation attempts). Ownership joins must not erase those orphans.
+  for (const table of [
+    "tickets",
+    "sessions",
+    "labels",
+    "automations",
+    "mcp_servers",
+    "mcp_operations",
+    "automation_skipped_occurrences",
+    "automation_pending_armed_runs",
+    "automation_pending_armed_run_attempts",
+    "automation_column_arming",
+    "automation_column_order",
+  ]) {
+    const orphan = db
+      .prepare(
+        `SELECT r.rowid FROM main.${table} r LEFT JOIN main.projects p ON p.id=r.project_id WHERE r.project_id IS NOT NULL AND p.id IS NULL LIMIT 1`,
+      )
+      .get() as { rowid: number } | undefined;
+    if (orphan !== undefined)
+      throw new SourceCorruptError(`orphan ${table} row ${orphan.rowid}: missing project`);
   }
   db.exec("CREATE TEMP TABLE selected_projects (id TEXT PRIMARY KEY)");
   const local = localProductRow("p", "project");
@@ -64,10 +90,17 @@ export function selectLocalProduct(db: Database.Database, options: ExportSelecti
   // discriminator reads raw history and must not recurse through this view.
   db.exec(`CREATE TEMP TABLE local_sessions (id TEXT PRIMARY KEY);
     INSERT INTO local_sessions SELECT r.id FROM main.sessions r WHERE ${localProductRow("r", "session")}`);
+  const foreignTicket = db
+    .prepare(`SELECT r.id FROM main.sessions r WHERE r.project_id IN (SELECT id FROM projects)
+    AND r.id IN (SELECT id FROM local_sessions) AND r.ticket_id IS NOT NULL AND r.ticket_id NOT IN (SELECT id FROM tickets) LIMIT 1`)
+    .get() as { id: string } | undefined;
+  if (foreignTicket !== undefined)
+    throw new SourceCorruptError(
+      `Session ${foreignTicket.id} names a ticket outside the selected local project`,
+    );
   view(
     "sessions",
-    `r.project_id IN (SELECT id FROM projects) AND r.id IN (SELECT id FROM local_sessions)
-    AND (r.ticket_id IS NULL OR r.ticket_id IN (SELECT id FROM tickets))`,
+    `r.project_id IN (SELECT id FROM projects) AND r.id IN (SELECT id FROM local_sessions)`,
   );
   for (const table of [
     "labels",
@@ -99,7 +132,7 @@ export function selectLocalProduct(db: Database.Database, options: ExportSelecti
   }
   view(
     "worktree_cleanup_commands",
-    "json_extract(r.intent,'$.ticketId') IN (SELECT id FROM tickets)",
+    "EXISTS (SELECT 1 FROM json_each(r.intent,'$.items') item WHERE json_extract(item.value,'$.projectId') IN (SELECT id FROM projects))",
   );
   view(
     "session_delegation_claims",
@@ -117,6 +150,31 @@ export function selectLocalProduct(db: Database.Database, options: ExportSelecti
     "automations",
     `r.project_id IN (SELECT id FROM projects)${options.projectIds === undefined ? " OR r.project_id IS NULL" : ""}`,
   );
+}
+
+export interface PrefixClash {
+  prefix: string;
+  projectIds: string[];
+}
+
+/** Prefixes are not unique in the target Workspace; surface ambiguous keys. */
+export function prefixClashes(db: Database.Database): PrefixClash[] {
+  const selected = new Set(
+    (db.prepare("SELECT id FROM projects").all() as Array<{ id: string }>).map((row) => row.id),
+  );
+  const groups = new Map<string, string[]>();
+  for (const row of db
+    .prepare(
+      `SELECT p.id,p.ticket_prefix FROM main.projects p WHERE ${localProductRow("p", "project")} AND (p.removed_at IS NULL OR p.id IN (SELECT id FROM projects)) ORDER BY p.id`,
+    )
+    .iterate() as Iterable<{ id: string; ticket_prefix: string }>) {
+    const ids = groups.get(row.ticket_prefix) ?? [];
+    ids.push(row.id);
+    groups.set(row.ticket_prefix, ids);
+  }
+  return [...groups]
+    .filter(([, ids]) => ids.length > 1 && ids.some((id) => selected.has(id)))
+    .map(([prefix, projectIds]) => ({ prefix, projectIds }));
 }
 
 export interface CrossProjectReference {
