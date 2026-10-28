@@ -491,7 +491,12 @@ describe("a provisional chat plane", () => {
       submit.click();
     });
 
-    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    await vi.waitFor(() =>
+      expect(promoteChatSession).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ id: expect.any(String), text: expect.any(String) }),
+      ),
+    );
     expect(enqueue).toHaveBeenCalledWith(
       SESSION,
       expect.objectContaining({ text: "first durable words" }),
@@ -568,7 +573,12 @@ describe("a provisional chat plane", () => {
     expect(promoteChatSession).not.toHaveBeenCalled();
     await act(async () => finishAttach());
 
-    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    await vi.waitFor(() =>
+      expect(promoteChatSession).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ id: expect.any(String), text: expect.any(String) }),
+      ),
+    );
     expect(enqueue).toHaveBeenCalledWith(
       SESSION,
       expect.objectContaining({
@@ -670,7 +680,12 @@ describe("a provisional chat plane", () => {
     await act(async () => finishDefaults());
     await vi.waitFor(() => expect(submit.disabled).toBe(false));
     await act(async () => submit.click());
-    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    await vi.waitFor(() =>
+      expect(promoteChatSession).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ id: expect.any(String), text: expect.any(String) }),
+      ),
+    );
     expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.model).toEqual(selection);
     await act(async () => finishPromotion());
   });
@@ -692,7 +707,12 @@ describe("a provisional chat plane", () => {
     if (submit === null || submit === undefined) throw new Error("expected Send");
     await vi.waitFor(() => expect(submit.disabled).toBe(false));
     await act(async () => submit.click());
-    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    await vi.waitFor(() =>
+      expect(promoteChatSession).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ id: expect.any(String), text: expect.any(String) }),
+      ),
+    );
     expect(enqueue).toHaveBeenCalledWith(
       SESSION,
       expect.objectContaining({ text: "remote first Send" }),
@@ -748,7 +768,12 @@ describe("a provisional chat plane", () => {
       container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
     });
 
-    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    await vi.waitFor(() =>
+      expect(promoteChatSession).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ id: expect.any(String), text: expect.any(String) }),
+      ),
+    );
     expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.model).toEqual(selection);
     await act(async () => finishPromotion());
   });
@@ -812,7 +837,12 @@ describe("a provisional chat plane", () => {
       type(box, "cancel before mint settles");
       container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
     });
-    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    await vi.waitFor(() =>
+      expect(promoteChatSession).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ id: expect.any(String), text: expect.any(String) }),
+      ),
+    );
     const picker = attachmentPicker();
     if (!(picker instanceof HTMLInputElement)) throw new Error("expected attachment picker");
     Object.defineProperty(picker, "files", {

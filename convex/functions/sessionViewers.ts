@@ -80,9 +80,25 @@ async function remove(ctx: MutationCtx, viewer: Doc<"sessionViewers">): Promise<
  * `viewerId`; opening it again (a retry, a reconnect) renews it.
  */
 export const open = mutation({
-  args: { viewerId: v.string(), sessionId: v.string(), clientSessionId: v.string() },
-  handler: async (ctx, args): Promise<ViewerLease> => {
-    const { viewer, session } = await requireSessionVisible(ctx, args.sessionId);
+  args: {
+    viewerId: v.string(),
+    sessionId: v.string(),
+    clientSessionId: v.string(),
+    // New windows can probe a runner-originated birth without a server-error
+    // log. Missing and hidden Sessions stay indistinguishable; older clients
+    // retain their not_found contract.
+    allowMissing: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<ViewerLease | { open: false }> => {
+    let scope: Awaited<ReturnType<typeof requireSessionVisible>>;
+    try {
+      scope = await requireSessionVisible(ctx, args.sessionId);
+    } catch (error) {
+      if (args.allowMissing && error instanceof ConvexError && error.data?.code === "not_found")
+        return { open: false };
+      throw error;
+    }
+    const { viewer, session } = scope;
     if (!isUuid(args.viewerId)) throw viewerError("invalid_viewer", "A viewer id is a UUID.");
     if (args.clientSessionId.length === 0 || args.clientSessionId.length > 200) {
       throw viewerError("invalid_viewer", "A client session id is 1 to 200 characters.");

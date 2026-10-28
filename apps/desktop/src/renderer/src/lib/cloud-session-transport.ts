@@ -63,6 +63,7 @@ import { hostError } from "@volli/host-protocol";
 import { replyText } from "@volli/session-engine";
 import {
   racingFlushScheduler,
+  queuedWireMessage,
   type ChatSessionRpc,
   type ChatSessionTransport,
   type ChatStreamCursor,
@@ -81,6 +82,7 @@ import { decompress } from "fzstd";
 import type { UIMessage } from "ai";
 
 import type { CloudSession } from "./cloud-client";
+import { toastError } from "./toast";
 import {
   CLOUD_SESSION_ARRIVING,
   CLOUD_SESSION_UNAVAILABLE,
@@ -152,6 +154,7 @@ export interface CloudSessionPort {
     viewerId: string;
     sessionId: string;
     clientSessionId: string;
+    allowMissing?: boolean;
   }): Promise<unknown>;
   heartbeatViewer(viewerId: string): Promise<unknown>;
   closeViewer(viewerId: string): Promise<unknown>;
@@ -783,6 +786,13 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
     streamRecovery: "host-link",
     scheduler: deps.scheduler,
     newCommandId: deps.newCommandId,
+    validateMessage: (sessionId, message) => {
+      cloudMessageSubmit({
+        sessionId,
+        commandId: message.id,
+        message: cloudMessage(queuedWireMessage(message)),
+      });
+    },
     createSession: deps.local?.createSession ?? refuse(CLOUD_SESSION_UNAVAILABLE),
     attachSession: deps.local?.attachSession ?? refuse(CLOUD_SESSION_UNAVAILABLE),
   };
@@ -818,8 +828,10 @@ export interface CloudViewerDeps {
   /** This window, as `sessionViewers.open` records it. */
   clientSessionId: string;
   clock: CloudClock;
-  /** Presence is background work: its failures are logged. */
+  /** Presence transport failures are background work. */
   warn(message: string, error?: unknown): void;
+  /** A missing or inaccessible Session ends presence until the surface is reopened. */
+  unavailable(): void;
 }
 
 function heartbeatMs(lease: unknown): number {
@@ -841,10 +853,13 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
   let timer: unknown = null;
   let stopped = false;
   let sent = false;
-  // Runner-originated Drafts become visible before their first accept. Give
-  // that birth a short, bounded arrival window rather than missing the first
-  // turn's live chunks until the normal 20-second heartbeat.
-  let arrivalRetries = FOLD_WAIT_MS / ARRIVAL_RETRY_MS;
+  // A runner-originated birth may not have arrived yet. Five backed-off
+  // retries give it 15 seconds, without throwing a server error on each probe.
+  // Once opened, not_found means access was lost, not another birth window.
+  const arrivalBackoff = [500, 1_000, 2_000, 4_000, 7_500];
+  let arrivalRetries = 0;
+  let opened = false;
+  let unavailable = false;
   let last: Promise<unknown> = Promise.resolve();
 
   const clear = () => {
@@ -853,26 +868,37 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
     timer = null;
   };
   const schedule = (ms: number) => {
-    if (stopped) return;
+    if (stopped || unavailable) return;
     clear();
     timer = deps.clock.setTimeout(() => {
       timer = null;
-      beat();
+      if (opened) beat();
+      else open();
     }, ms);
   };
   const run = (step: () => Promise<void>) => {
     last = last
-      .then(() => (stopped ? undefined : step()))
+      .then(() => (stopped || unavailable ? undefined : step()))
       .catch((error: unknown) => {
-        if (stopped) return;
-        if (isNotFound(error) && arrivalRetries > 0) {
-          arrivalRetries -= 1;
-          schedule(ARRIVAL_RETRY_MS);
+        if (stopped || unavailable) return;
+        if (isNotFound(error)) {
+          missing();
           return;
         }
         deps.warn("[cloud-session] couldn't keep a viewer open", error);
         schedule(SESSION_VIEWER_HEARTBEAT_MS);
       });
+  };
+  const missing = () => {
+    if (stopped || unavailable) return;
+    const delay = opened ? undefined : arrivalBackoff[arrivalRetries++];
+    if (delay !== undefined) {
+      schedule(delay);
+      return;
+    }
+    unavailable = true;
+    clear();
+    deps.unavailable();
   };
   const open = () =>
     run(async () => {
@@ -881,8 +907,13 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
         viewerId,
         sessionId,
         clientSessionId: deps.clientSessionId,
+        allowMissing: true,
       });
-      arrivalRetries = 0;
+      if (isRecord(lease) && lease.open === false) {
+        missing();
+        return;
+      }
+      opened = true;
       schedule(heartbeatMs(lease));
     });
   const beat = () =>
@@ -972,6 +1003,8 @@ export function showCloudSession(session: CloudSession, sessionId: string): () =
       clientSessionId: clientSessionId(),
       clock: SYSTEM_CLOCK,
       warn,
+      unavailable: () =>
+        toastError("This Session is unavailable. Close and reopen it to try again."),
     },
     sessionId,
   );

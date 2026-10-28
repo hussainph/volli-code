@@ -105,7 +105,7 @@ export interface ChatSessionsState extends ChatSessionWrites {
    */
   createChatSession(input: CreateChatSessionInput): Promise<string | null>;
   /** Promotes one provisional Draft in place, serialized across concurrent sends. */
-  promoteChatSession(sessionId: string): Promise<boolean>;
+  promoteChatSession(sessionId: string, message?: QueuedMessage): Promise<boolean>;
   /** Attaches a client to a Session that is already durable — the hydration path. */
   /**
    * `projectId`, when the caller knows it, routes the Session to its host's
@@ -465,7 +465,7 @@ export function createChatSessionsStore(
         return mint(edge, input, true);
       },
 
-      promoteChatSession(sessionId) {
+      promoteChatSession(sessionId, firstMessage) {
         return useChatDraftsStore.getState().promote(sessionId, async (provisional) => {
           const edge = transport(provisional.projectId);
           // The chat image budget is a per-Session rule, so a Draft's imports
@@ -489,6 +489,19 @@ export function createChatSessionsStore(
           );
           if (overBudget !== null) {
             toastError(overBudget);
+            return false;
+          }
+          // Use the transport's actual wire validation before create/attach.
+          // A refused first message must leave this identity a retryable Draft,
+          // not a locally attached Session that promotion will try to attach again.
+          try {
+            const first =
+              firstMessage === undefined
+                ? staged.held[0]
+                : (staged.held.find(({ id }) => id === firstMessage.id) ?? firstMessage);
+            if (first !== undefined) edge.validateMessage?.(sessionId, first);
+          } catch (failure) {
+            toastError(errorMessage(failure));
             return false;
           }
           const createdId = await mint(
