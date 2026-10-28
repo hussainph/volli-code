@@ -408,7 +408,8 @@ Automation definitions are project-scoped; any active Member may edit, arm,
 replace or disarm them. New armings use only the caller's live runner with
 `automation.run` capability. A person token identifies no Mac, so the desktop
 must pass its current `runnerId`; an omitted runner is refused rather than
-choosing an arbitrary machine. Only `automations.list` admits Agent tokens.
+choosing an arbitrary machine. Only `automations.list` and `automations.run`
+admit Agent tokens.
 Every record mutation uses the board's seven-day command receipts.
 
 Armings and schedules gain optional pause fields; absence means unpaused.
@@ -445,6 +446,42 @@ The move importer must set `pausedAt`/`pausedReason: moved` on imported arms;
 adding optional fields does not itself change imported records. The Needs-you
 reader must expose project-scoped non-Session `automation_paused` runner alerts;
 `sessions.attention` deliberately remains Session-only.
+
+## Automation clock and Runs
+
+A one-minute cron (`automationSchedules.fireDue`) pages `by_next_fire` up to
+now, 50 schedules per transaction, chaining itself with the same `now`, and
+applies the shared `decideScheduleFire`. The fire advances `nextFireAt` in the
+transaction that writes its Run row and job, so overlapping passes conflict
+and the retried one finds nothing due. A schedule job's `availableAt` is its
+`dueAt`: never early, at most a cron period late. Paused rows, deleted
+Automations and projects that are importing, deleted or archived are passed
+over without a skip. The runtime's `Intl` zone data matches Node's
+(`automationClock.intl.backend.test.ts`), so no Node action computes times.
+
+- Schedule pointers: `pendingJobId`/`pendingRunId` name the one waiting Run,
+  `gapRunId` the skip row its supersedes fold into. A terminal job clears them
+  only while they still name it.
+- Run rows: `queued` at enqueue for schedule, by-hand and agent Runs (with
+  `jobId`, `requestedBySessionId` and an Unbound Run's `instructions`);
+  arrivals have no row until their outcome. `missedCount` is set on skip
+  rows only. Run rows gain `by_project_status` for the Retry list.
+- Arrival jobs now carry the executable payload (`runId`, `sessionId`,
+  `dueAt`, attendance); the legacy arrival shape stays parseable, never
+  produced.
+- Completion is settled in the inbox transaction that made the job terminal
+  (`lib/automationRuns.ts`): started, abandoned (an arrival leaves no row),
+  refused, permanent failure and dead letter; a withdrawn never-leased job
+  skips its queued row. A failed arrival gets a fresh `retryCommandId`;
+  `retryArrival` enqueues under it, keeping the Run id (and, while the
+  original job is kept, its Session id and routing).
+- Frozen ids: the failed-Run Needs-you item `a:{runId}:failed`, and the agent
+  caller's watch command `automation-run:{runId}:watch`, armed by whichever
+  of the completion and the Run Session's first accept comes second.
+- `runContext` is fenced by the job's current lease. Its single-flight check
+  reads the latest 25 Runs of the ticket (or, project-level, the
+  Automation); a started Run whose Session row is missing counts as live for
+  ten minutes after its job completed.
 
 ## Runner-routed agent Session commands
 

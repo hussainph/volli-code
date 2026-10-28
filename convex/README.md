@@ -179,6 +179,26 @@ OCC retries) occur outside the JS handler and cannot be caught by this
 boundary. Their platform request/error logs remain necessary; no error code
 here claims to identify a platform limit or contention without evidence.
 
+## The Automation clock and Runs
+
+The records live in `automations.ts` (with its Run commands: `run` for a
+ticket, which also accepts an Agent token for `automation_run`,
+`runForProject`, `pendingArrivals`, `cancelPendingArrival`, `retryArrival`).
+Time and outcomes live beside it:
+
+- `automationSchedules.ts` and `lib/automationClock.ts`: the clock. A cron
+  every minute fires due schedules a page per transaction: never early, at
+  most one pending Run per schedule, superseded occurrences folded into one
+  skip row with a count.
+- `automationRunner.ts`: `runContext`, the facts a runner reads, fenced by its
+  current lease, before it starts a Run.
+- `lib/automationRuns.ts`: what each terminal `automation.run` job settles: its
+  Run row, board event, attention and the agent caller's watch.
+- `testAutomations.ts`: test-only clock hooks for `test:backend`, guarded like
+  `testJobs.ts`.
+
+Conventions and frozen ids: `SCHEMA-NOTES.md`, "Automation clock and Runs".
+
 ## The migration import
 
 `functions/migration.ts` is the SQLite → Volli Cloud import: internal

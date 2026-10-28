@@ -1557,7 +1557,9 @@ export default defineSchema({
     .index("by_uuid", ["id"])
     .index("by_automation", ["automationId", "createdAt"])
     .index("by_ticket", ["ticketId", "createdAt"])
-    .index("by_project", ["projectId", "createdAt"]),
+    .index("by_project", ["projectId", "createdAt"])
+    // Failed arrivals a person may Retry (`automations.pendingArrivals`).
+    .index("by_project_status", ["projectId", "status", "createdAt"]),
 
   // ── retention, deletion, audit ─────────────────────────────────────────────
   deletionRequests: defineTable({
