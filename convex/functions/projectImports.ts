@@ -49,6 +49,7 @@ import {
   MigrationDigest,
   eventArchiveKey,
   isUuid,
+  parseId,
   projectBlobKey,
   sessionVisibilityAtCreation,
   type MigrationImportStream,
@@ -58,7 +59,7 @@ import {
 import type { Doc } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import { audit } from "./lib/audit";
-import { requireManage, requireViewer, type Viewer } from "./lib/auth";
+import { requireManage, requireViewer, requireWorkspace, type Viewer } from "./lib/auth";
 import {
   ProjectScope,
   importBatch,
@@ -278,11 +279,10 @@ export const begin = mutation({
     if (existing !== null) {
       const streams = await streamRows(ctx.db, existing.id);
       const same =
-        existing.userId === viewer.userId &&
         driverOf(existing).userId === viewer.userId &&
         existing.projectId === args.projectId &&
         existing.workspaceId === args.workspaceId &&
-        existing.runnerId === args.runnerId &&
+        driverOf(existing).runnerId === args.runnerId &&
         existing.manifestSha256 === args.manifestSha256 &&
         streams.length === expected.size &&
         streams.every((stream) => {
@@ -872,13 +872,7 @@ export const rescue = internalMutation({
     if (row === null) {
       throw new ConvexError({ code: "not_found", message: "That move does not exist." });
     }
-    const workspace = await ctx.db
-      .query("workspaces")
-      .withIndex("by_uuid", (q) => q.eq("id", row.workspaceId))
-      .unique();
-    if (workspace === null || workspace.deletedAt !== null) {
-      throw new ConvexError({ code: "not_found", message: "That workspace does not exist." });
-    }
+    await requireWorkspace(ctx, row.workspaceId);
     if (row.status === "committed") {
       throw importError("import_committed", "Only the move's driver can uncommit it first.");
     }
@@ -894,7 +888,7 @@ export const rescue = internalMutation({
         updatedAt: now,
         abortedAt: row.abortedAt ?? now,
       });
-      // MOVE-3's purge sweep picks up `aborting`, including moves without a
+      // The move purge sweep picks up `aborting`, including moves without a
       // purge cursor. Until that chain is deployed this is marked for purge.
     } else {
       if (!isUuid(action.userId) || !isUuid(action.runnerId)) {
@@ -907,24 +901,16 @@ export const rescue = internalMutation({
         .query("users")
         .withIndex("by_uuid", (q) => q.eq("id", action.userId))
         .unique();
-      const member = await ctx.db
-        .query("workspaceMembers")
-        .withIndex("by_workspace_user", (q) =>
-          q.eq("workspaceId", row.workspaceId).eq("userId", action.userId),
-        )
-        .unique();
-      if (
-        user === null ||
-        user.status !== "active" ||
-        member?.status !== "active" ||
-        (member.role !== "owner" && member.role !== "admin") ||
-        !(await hasLivePreviewAccess(ctx, user))
-      ) {
+      if (user === null || user.status !== "active" || !(await hasLivePreviewAccess(ctx, user))) {
         throw importError(
           "invalid_rescue_target",
           "The replacement must be an active owner/admin of this Workspace with live preview access.",
         );
       }
+      await requireManage(ctx, row.workspaceId, "settings", {
+        userId: parseId("user", user.id),
+        user,
+      });
       await requireOwnRunner(ctx, action.userId, action.runnerId);
       await ctx.db.patch(row._id, {
         driver: { userId: action.userId, runnerId: action.runnerId },
@@ -943,6 +929,7 @@ export const rescue = internalMutation({
       detail: {
         moveId: row.id,
         operatorAction: action.kind,
+        previousStatus: row.status,
         previousDriver,
         ...(action.kind === "reassign"
           ? { driver: { userId: action.userId, runnerId: action.runnerId } }

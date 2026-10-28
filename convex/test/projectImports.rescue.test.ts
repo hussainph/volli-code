@@ -186,6 +186,16 @@ describe("operator rescue", () => {
       expect(after.streams).toEqual(before.streams);
       expect(after.importTarget).toEqual(w.target);
       expect(after.driver).toEqual({ userId: action.userId, runnerId: action.runnerId });
+      // A resumed engine may replay begin with its own driver runner; this
+      // must not replace the original mapping or manifest promise.
+      await expect(
+        w.bob.as.mutation(
+          api.projectImports.begin,
+          beginArgs(w, {
+            runnerId: action.runnerId,
+          }),
+        ),
+      ).resolves.toEqual({ moveId: w.moveId, status: "importing" });
       await expect(
         w.alice.as.query(api.projectImports.status, { moveId: w.moveId }),
       ).rejects.toThrow();
@@ -360,12 +370,15 @@ describe("operator rescue", () => {
     switch (problem) {
       case "member":
         await patchMember(w, w.bob.userId, { role: "member" });
+        refusal = "forbidden";
         break;
       case "suspended":
         await patchMember(w, w.bob.userId, { status: "suspended" });
+        refusal = "not_a_member";
         break;
       case "left":
         await patchMember(w, w.bob.userId, { status: "left" });
+        refusal = "not_a_member";
         break;
       case "not a member": {
         const elsewhere = await seedWorkspace(w.t, [{ userId: w.bob.userId }]);
@@ -378,6 +391,7 @@ describe("operator rescue", () => {
             .unique();
           await ctx.db.patch(member!._id, { workspaceId: elsewhere });
         });
+        refusal = "not_a_member";
         break;
       }
       case "deleted":

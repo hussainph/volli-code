@@ -1,7 +1,7 @@
 /**
  * The audit trail: one `auditLog` row per change worth answering "who did
  * this, and when" about (membership, invites, policy, Workspace settings, account deletion,
- * sharing a Session, team secrets, a moved project shown or hidden again).
+ * sharing a Session, team secrets, a moved project shown, hidden or rescued).
  *
  * Each row names its Actor and what changed. `detail` is written only through
  * {@link audit}, from the typed entries below, and never holds a secret or an

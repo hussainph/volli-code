@@ -364,6 +364,8 @@ Each was a decision made while turning the design into code.
     `projectMoves` is not written: it records a move between Workspaces and
     names the Workspace a project came from, which a local project has not.
 
+## Operator rescue of project imports
+
 Operator rescue (`projectImports:rescue`, internal only) adds an optional
 `projectImports.driver` pair (`userId`, `runnerId`). Absence means the original
 importer/runner. Reassignment changes authorization only: the original
@@ -375,9 +377,17 @@ access/agreement, and their own non-revoked runner. Product calls recheck their
 access; the old driver is fenced even after access is restored. The deployment
 operator explicitly authorizes access to the original person's hidden history.
 The audit kinds `project.import_rescue_aborted` and `project.import_reassigned`
-record `operatorAction`, the move id and old/new driver, attributed to Volli's
+record `operatorAction`, `previousStatus`, the move id and old/new driver, attributed to Volli's
 migration machinery rather than falsely to the importer. Committed/purged moves
 and gone Workspaces are refused; aborting moves cannot be reassigned.
+
+Receiving-task wiring (the host-core move engine): resume the existing move id
+with the replacement's sign-in and `status.driver.runnerId` for a `begin` replay,
+but preserve `status.importTarget` for row mapping and verification against the
+original expected stream digests. Do not remap existing rows to the new driver.
+The move-object authorization door must check the current driver's own runner,
+not the frozen target runner. This is import control only: committed Sessions
+keep their original owner, private visibility and placement.
 
 ## Automation records
 

@@ -286,7 +286,11 @@ export async function findPolicy(
     : { shareAll: policy.shareAll, whoCanInvite: policy.whoCanInvite };
 }
 
-async function liveWorkspace(ctx: ReadCtx, workspaceId: string): Promise<Doc<"workspaces">> {
+/** A live Workspace, including for deployment-operator work with no person identity. */
+export async function requireWorkspace(
+  ctx: Pick<ReadCtx, "db">,
+  workspaceId: string,
+): Promise<Doc<"workspaces">> {
   const workspace = await ctx.db
     .query("workspaces")
     .withIndex("by_uuid", (q) => q.eq("id", workspaceId))
@@ -304,7 +308,7 @@ export async function requireMember(
   resolved?: Viewer,
 ): Promise<{ viewer: Viewer; workspace: Doc<"workspaces">; membership: MembershipFacts }> {
   const viewer = resolved ?? (await requireViewer(ctx));
-  const workspace = await liveWorkspace(ctx, workspaceId);
+  const workspace = await requireWorkspace(ctx, workspaceId);
   const membership = await findMembership(ctx, workspaceId, viewer.userId);
   if (!isActiveMember(viewer, workspaceId as WorkspaceId, membership)) {
     throw authError("not_a_member", "You are not a member of this workspace.");
@@ -312,13 +316,17 @@ export async function requireMember(
   return { viewer, workspace, membership };
 }
 
-/** The viewer may perform a role-gated action in the Workspace, or `forbidden`. */
+/**
+ * The viewer may perform a role-gated action in the Workspace, or `forbidden`.
+ * As with requireMember, a resolved viewer must already have live account/preview access.
+ */
 export async function requireManage(
   ctx: ReadCtx,
   workspaceId: string,
   gate: ManageGate,
+  resolved?: Viewer,
 ): Promise<{ viewer: Viewer; workspace: Doc<"workspaces">; membership: MembershipFacts }> {
-  const access = await requireMember(ctx, workspaceId);
+  const access = await requireMember(ctx, workspaceId, resolved);
   const policy = await findPolicy(ctx, workspaceId);
   if (!canManage(access.viewer, workspaceId as WorkspaceId, access.membership, gate, policy)) {
     throw authError("forbidden", "Your role does not allow this.");

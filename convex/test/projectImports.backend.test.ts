@@ -159,4 +159,10 @@ test("anonymous clients and Workspace people cannot call the internal operator r
   await expect(owner.query(api.projectImports.status, { moveId })).resolves.toMatchObject({
     status: "reserved",
   });
+  await expect(
+    backend.admin(internal.projectImports.rescue, {
+      moveId,
+      action: { kind: "abort" },
+    }),
+  ).resolves.toEqual({ status: "aborting" });
 });
