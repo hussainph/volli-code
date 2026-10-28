@@ -95,7 +95,7 @@ Receiving wiring:
   estimate and 256 MiB headroom; separate backup/export volumes are checked
   separately. Publication checks again using the actual bundle size. Disk shortage
   pauses the engine as `disk_full`; verification failure never freezes a project.
-  `pre-cloud-move-<date>-<uuid>.tar.gz.kept` has no expiry: the safety copy stays
+  `pre-cloud-move-<date>-<pid>-<uuid>.tar.gz.kept` has no expiry: the safety copy stays
   until the person removes it, including throughout the preview escape hatch.
   A verified bundle is not proof of large-profile restore readiness: VC-988
   owns the file-based restore and scale round trip.

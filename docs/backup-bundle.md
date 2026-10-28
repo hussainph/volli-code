@@ -255,7 +255,7 @@ The move engine uses `createMoveBackupPort` from `@volli/host-core/cloud-move`.
 It runs the same snapshot, streaming v1 writer and read-back verifier as the
 daily service, once per move queue, before any project freezes. The result holds
 the local path, compressed byte count and SHA-256 of the compressed archive.
-Bundles are named `pre-cloud-move-<date>-<uuid>.tar.gz` in the same backups folder
+Bundles are named `pre-cloud-move-<date>-<pid>-<uuid>.tar.gz` in the same backups folder
 (or a chosen directory) and have a `.kept` sidecar with no expiry. Daily and failed
 rotation never remove them; the preview's escape hatch has no automatic expiry.
 
