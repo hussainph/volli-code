@@ -430,6 +430,13 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
 
   type Step = (move: MoveRow, queue: QueueRow, signal: AbortSignal) => Promise<MoveRow>;
 
+  /** The queue's verified backup, written once before anything else touches the profile. */
+  const ensureBackup = async (queue: QueueRow, signal: AbortSignal): Promise<void> => {
+    if (journal.queue(queue.queueId)!.backup !== null) return;
+    const written = await ports.backup.write(signal);
+    journal.setQueue(queue.queueId, { backup: { ...written, verifiedAt: now() } });
+  };
+
   /** Pre-flight, the queue's backup, and the freeze. */
   const prepareAndFreeze: Step = async (move, queue, signal) => {
     const project = prepared<[string], { removed_at: number | null }>(
@@ -442,12 +449,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       throw new MoveProblemError("project_removed", "The project was removed from the rail.");
     }
     if (busy(move.projectId)) throw new MovePausedError("not_idle");
-    if (queue.backup === null) {
-      const written = await ports.backup.write(signal);
-      journal.setQueue(queue.queueId, {
-        backup: { ...written, verifiedAt: now() },
-      });
-    }
+    await ensureBackup(queue, signal);
     // A backup published as cancellation arrived is still a reusable safety
     // copy. Journal it first, but do not freeze until the person resumes.
     signal.throwIfAborted();
@@ -1115,6 +1117,24 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         if (queue === null) throw new Error(`Move queue ${queueId} does not exist.`);
         const moves = journal.moves(queueId);
         if (queue.profileStep === "pending" && queue.state === "running") {
+          // The backup comes first, before the profile step reads anything.
+          const first = moves.find((move) => !SETTLED_STATES.has(move.state));
+          if (first !== undefined) {
+            try {
+              await ensureBackup(queue, signal);
+            } catch (error) {
+              const outcome = pauseFor(first, error);
+              return {
+                kind: "waiting",
+                moveId: first.moveId,
+                reason: typeof outcome === "object" ? outcome.paused : "paused",
+              };
+            }
+          }
+          // A backup published as cancellation arrived is kept; nothing else runs.
+          if (signal.aborted) {
+            return { kind: "waiting", moveId: first?.moveId ?? queueId, reason: "paused" };
+          }
           const outcome = await profileStep(queue, signal);
           if (outcome !== null) return { ...outcome, moveId: moves[0]?.moveId ?? queueId };
           continue;

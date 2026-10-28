@@ -469,6 +469,56 @@ describe("the person's decisions", () => {
     expect((await finalDigests(world, moveId)).status).toBe("committed");
   });
 
+  test("Go back to local keeps every local fact of a Session drained past the move", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const hot = "7a1f0c2e-0000-4000-8000-000000000031";
+    const head = (
+      world.db
+        .prepare("SELECT MAX(sequence) AS last FROM session_events WHERE session_id = ?")
+        .get(hot) as {
+        last: number;
+      }
+    ).last;
+    // In Volli Cloud the Session went on here: a new local fact, drained past the move.
+    world.db
+      .prepare(
+        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at,
+           provenance_id, attachment_id, command_id, payload)
+         VALUES (?, ?, ?, 2, 2, 1, NULL, NULL, ?)`,
+      )
+      .run(
+        `event:${hot}:after`,
+        hot,
+        head + 1,
+        JSON.stringify({ kind: "session.signaled", signal: "done", reason: null }),
+      );
+    world.db
+      .prepare("UPDATE session_drain_cursors SET accepted_through = ? WHERE session_id = ?")
+      .run(head + 1, hot);
+    const before = world.db
+      .prepare("SELECT * FROM session_events WHERE session_id = ? ORDER BY sequence")
+      .all(hot);
+
+    await engine.confirm(moveId);
+    expect((await engine.goBackToLocal(moveId)).state).toBe("returned");
+
+    // The local ledger is the Session's whole history again: every fact kept,
+    // the one past the move included, and no cursor left to drain it anywhere.
+    expect(
+      world.db
+        .prepare("SELECT * FROM session_events WHERE session_id = ? ORDER BY sequence")
+        .all(hot),
+    ).toEqual(before);
+    expect(before).toHaveLength(head + 1);
+    expect(
+      world.db
+        .prepare("SELECT COUNT(*) AS n FROM session_drain_cursors WHERE session_id = ?")
+        .get(hot),
+    ).toEqual({ n: 0 });
+  });
+
   test("a runner replaced mid-move starts the project over under a new move", async () => {
     world = await moveWorld();
     const { queueId, moveId } = enqueue(world);
