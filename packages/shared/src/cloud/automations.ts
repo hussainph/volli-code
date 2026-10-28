@@ -18,12 +18,14 @@ import {
   parseAutomationRuntime,
   parseAutomationTrigger,
   parseAutomationSkipReason,
-  type ArmedRunAbandonReason,
-  type AutomationDraft,
-  type AutomationRuntime,
-  type AutomationRunAttendance,
-  type AutomationSkipReason,
-  type ResolvedAutomationModel,
+} from "../automation-policy";
+import type {
+  ArmedRunAbandonReason,
+  AutomationDraft,
+  AutomationRuntime,
+  AutomationRunAttendance,
+  AutomationSkipReason,
+  ResolvedAutomationModel,
 } from "../automation";
 import { nextScheduleOccurrence, type AutomationSchedule } from "../automation-schedule";
 import type { TicketStatus } from "../ticket";

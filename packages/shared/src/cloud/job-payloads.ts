@@ -21,8 +21,9 @@
  * The kinds no ticket has typed yet stay opaque JSON objects.
  */
 
-import { REASONING_LEVELS, type ModelSelection } from "../agent-runtime";
-import { AUTOMATION_RUN_ATTENDANCE, type AutomationRunAttendance } from "../automation";
+import { REASONING_LEVELS, type ModelSelection } from "../model-selection";
+import { AUTOMATION_RUN_ATTENDANCE } from "../automation-policy";
+import type { AutomationRunAttendance } from "../automation";
 import { AUTOMATION_INSTRUCTIONS_MAX_CHARS } from "./automations";
 import type { SessionStopActor } from "../session-ledger";
 import {
