@@ -73,7 +73,7 @@ PTY, native-library and macOS-specific behavior still require their own checks.
 
 The image in `.devcontainer/host/Dockerfile` is a **development toolchain**, not
 a production hostd deployment. Its multi-architecture base is pinned by digest;
-its Node version must equal `.nvmrc` (currently 24.21.0), and Corepack installs
+its Node version must equal `.nvmrc` (currently 24.22.1), and Corepack installs
 the root manifest's exact pnpm version. It includes git/SSH, Python/make/g++ for
 native compilation, fonts and Chromium runtime libraries. It contains neither
 Electron, Chromium itself, source code, installed workspace dependencies nor
@@ -102,8 +102,9 @@ for your own checkout if needed. No production secrets are baked or mounted.
 Standalone Chromium provisioning is separate from the development toolchain;
 these libraries support it without installing a browser in every dev image.
 
-The host lane/image use Node 24.21.0, and the root `engines.node` floor is
-^24.16.0. Node 24.16.0 added libuv 1.52.1, including the Linux PTY premature-EOF
+The host lane/image use Node 24.22.1, and the root `engines.node` floor is
+^24.22.1 for the October 2026 Node security fixes. This retains libuv 1.52.1
+(added in Node 24.16.0), including the Linux PTY premature-EOF
 fix (libuv#4992/#4997); the older 24.15.0 pin could lose a shell's final output
 before node-pty delivered exit (VC-639). Electron 44 already includes this fix.
 The host lane's exact-version install checks the full graph rather than inferring

@@ -391,7 +391,7 @@ they are listed so the index accounts for every module in the bundle.
   dompurify@3.4.16  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
   dompurify@3.4.17  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
   ecdsa-sig-formatter@1.0.11  Apache-2.0  [bundled into a chunk]
-  electron@44.8.0  MIT  [build-time source]
+  electron@44.9.3  MIT  [build-time source]
   electron-updater@6.8.9  MIT  [node_modules tree]
   entities@6.0.1  BSD-2-Clause  [node_modules tree]
   entities@8.0.0  BSD-2-Clause  [node_modules tree]
@@ -13090,7 +13090,7 @@ Development dependencies are not part of the bundle, with these exceptions: thei
 own code or generated output is part of what the build emits into the application.
 
 =========================================================================================================
-Package: electron@44.8.0
+Package: electron@44.9.3
 SPDX: MIT
 Note: The application bundle IS an Electron app: its runtime, helpers and framework are
       the shipped executable, so Electron's own licence belongs here even though the
