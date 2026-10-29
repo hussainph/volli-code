@@ -3,7 +3,8 @@
  * No app is launched on import; tests exercise the environment/target plan.
  */
 import { spawn } from "node:child_process";
-import { readFile, mkdir, writeFile, realpath, mkdtemp, lstat } from "node:fs/promises";
+import { mkdir, writeFile, realpath, mkdtemp, lstat } from "node:fs/promises";
+import { readMoveState } from "../../../../packages/host-core/src/migration-dry-run/move-state.ts";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
@@ -30,7 +31,7 @@ export async function rehearsalUiPlan(profile, deployment) {
     home = userInfo().homedir;
   if (root === "/" || root === home || root.startsWith(`${home}/`) || home.startsWith(`${root}/`))
     throw new Error("contained UI copy must be under a private /tmp root, outside the owner home");
-  const state = JSON.parse(await readFile(`${copy}.rehearsal.json`, "utf8"));
+  const state = readMoveState(`${copy}.rehearsal.json`);
   if (
     state.uiReady !== true ||
     (await realpath(state.profile)) !== copy ||

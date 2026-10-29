@@ -1,14 +1,15 @@
 /** The staging rehearsal: clone once, disposable engine processes, verify, clean up. */
 import { fork, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, writeFileSync } from "node:fs";
 import { lstat, readdir, rm, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createInterface } from "node:readline/promises";
 import Database from "better-sqlite3";
-import { MIGRATION_IMPORT_STREAMS } from "@volli/shared/cloud";
+import { MIGRATION_IMPORT_STREAMS, isUuid } from "@volli/shared/cloud";
+import { createMoveState, readMoveState, patchMoveState } from "./move-state";
 import {
   assertCopyPaths,
   assertProfileIdle,
@@ -109,7 +110,7 @@ export async function cleanupRehearsalState(
   file: string,
   waitPurged = waitForPurge,
 ): Promise<void> {
-  const job = JSON.parse(readFileSync(file, "utf8")) as MoveJob & { cleanupMoves?: string[] };
+  const job = readMoveState(file);
   const target = rehearsalTarget(job.target, job.allowProduction);
   if (
     (!process.env.VOLLI_MOVE_TOKEN && !process.env.VOLLI_MOVE_TOKEN_FILE) ||
@@ -120,7 +121,7 @@ export async function cleanupRehearsalState(
   const admin = rehearsalBackend(target, `Convex ${process.env.VOLLI_MOVE_ADMIN_KEY}`);
   const moves = [...new Set([...(job.cleanupMoves ?? []), ...rehearsalImports(job)])];
   // Persist reservations BEFORE any I/O that can fail (including expired auth).
-  writeFileSync(file, JSON.stringify({ ...job, cleanupMoves: moves }), { mode: 0o600 });
+  patchMoveState(file, { cleanupMoves: moves });
   await admin.mutation("migration:cleanupRehearsal", {
     workspaceId: job.workspaceId,
     userId: job.userId,
@@ -185,6 +186,7 @@ export interface RehearsalOptions {
   profile: string;
   report: string;
   runnerId: string;
+  userId: string;
   allowProduction: boolean;
   includeRemoved: boolean;
   killUpload: boolean;
@@ -275,27 +277,32 @@ export async function runMoveRehearsal(
   const backend = rehearsalBackend(target, moveAuthorization);
   const admin = rehearsalBackend(target, `Convex ${adminKey}`);
   const viewer = (await backend.query("accounts:viewer", {})) as { userId: string } | null;
-  if (!viewer) throw new Error("sign_in_to_the_target_first");
+  if (
+    !viewer ||
+    !isUuid(options.userId) ||
+    viewer.userId !== options.userId ||
+    !isUuid(options.runnerId)
+  )
+    throw new Error("staging_identity_mismatch");
   const workspaceId = randomUUID();
-  const cleanupArgs = { workspaceId, userId: viewer.userId };
+  const cleanupArgs = { workspaceId, userId: options.userId };
   // Check the deployment's opt-in BEFORE creating anything or uploading data.
   await admin.mutation("migration:cleanupRehearsal", { ...cleanupArgs, checkOnly: true });
   const source = resolve(options.source);
   const profile = resolve(options.profile);
   const stateFile = `${profile}.rehearsal.json`;
-  if (existsSync(stateFile)) throw new Error("rehearsal_state_already_exists");
   const job: MoveJob = {
     source,
     profile,
     target,
     allowProduction: options.allowProduction,
-    userId: viewer.userId,
+    userId: options.userId,
     runnerId: options.runnerId,
     workspaceId,
     includeRemoved: options.includeRemoved,
     operation: "run",
   };
-  writeFileSync(stateFile, JSON.stringify(job), { mode: 0o600, flag: "wx" });
+  createMoveState(stateFile, job);
   const report: {
     ok: boolean;
     elapsedMs: number;
@@ -318,10 +325,7 @@ export async function runMoveRehearsal(
   const reportFd = openSync(options.report, "wx", 0o600);
   const save = () => writeFileSync(reportFd, `${JSON.stringify(report, null, 2)}\n`);
   const run = async (operation: MoveJob["operation"], kill?: MoveJob["kill"], moveId?: string) => {
-    const current = JSON.parse(readFileSync(stateFile, "utf8")) as MoveJob;
-    writeFileSync(stateFile, JSON.stringify({ ...current, operation, kill, moveId }), {
-      mode: 0o600,
-    });
+    patchMoveState(stateFile, { operation, kill, moveId });
     const start = Date.now();
     let peakRssBytes = 0;
     let result: RehearsalResult | undefined;
@@ -390,11 +394,7 @@ export async function runMoveRehearsal(
     const again = (await run("run")).result!;
     if (JSON.stringify(again) !== JSON.stringify(moved)) throw new Error("resume_changed_result");
     if (options.hold) {
-      writeFileSync(
-        stateFile,
-        JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), uiReady: true }),
-        { mode: 0o600 },
-      );
+      patchMoveState(stateFile, { uiReady: true });
       const terminal = createInterface({ input: process.stdin, output: process.stderr });
       try {
         await terminal.question(
@@ -402,11 +402,7 @@ export async function runMoveRehearsal(
         );
       } finally {
         terminal.close();
-        writeFileSync(
-          stateFile,
-          JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), uiReady: false }),
-          { mode: 0o600 },
-        );
+        patchMoveState(stateFile, { uiReady: false });
       }
       assertProfileIdle(profile);
     }

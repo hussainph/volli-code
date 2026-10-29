@@ -196,6 +196,7 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
         profile,
         report: reportPath,
         runnerId,
+        userId,
         allowProduction: false,
         includeRemoved: false,
         killUpload: true,

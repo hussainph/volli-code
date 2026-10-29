@@ -1,5 +1,6 @@
 /** One disposable process over the scratch profile. The parent may SIGKILL it. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { readMoveState, patchMoveState } from "./move-state";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -107,7 +108,7 @@ export async function runMoveJob(
   file: string,
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>,
 ): Promise<RehearsalResult | undefined> {
-  const job = JSON.parse(readFileSync(file, "utf8")) as MoveJob;
+  const job = readMoveState(file);
   const target = rehearsalTarget(job.target, job.allowProduction);
   const backend = rehearsalBackend(target, moveAuthorization);
   const redaction = rehearsalRedaction(target);
@@ -237,7 +238,7 @@ export async function runMoveJob(
           stopAtFirstProblem: true,
         });
         job.queueId = queued.queue.queueId;
-        writeFileSync(file, JSON.stringify(job), { mode: 0o600 });
+        patchMoveState(file, { queueId: job.queueId });
       }
       const outcome = await engine.run(job.queueId!);
       const moves = engine.journal.moves(job.queueId!);

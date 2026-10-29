@@ -29,7 +29,9 @@ Follow [`cloud-deploy.md` §1–8](../../../../docs/runbooks/cloud-deploy.md) wi
    functions and pass `health:deploymentChecks`.
 4. Invite the rehearsal account with `previewAccess:set`, accept the current
    Preview Agreement, and register a staging Mac runner owned by that account.
-   Use a **disposable staging account**: Move all also imports its personal
+   Keep its Volli user UUID and runner UUID from that staging setup; the
+   harness requires both and compares the explicit user id with the token's
+   viewer before creating anything. Use a **disposable staging account**: Move all also imports its personal
    settings; those account-level settings are not Workspace data and remain.
 5. Explicitly enable the narrow operator-only cleanup helper **on staging**:
 
@@ -73,7 +75,7 @@ REPORT="$PWD/.scratch/rehearsal/report.json"
 pnpm --filter @volli/host-core migration:dry-run \
   --move --target 'https://<staging-deployment>.convex.cloud' \
   --source-profile "$SOURCE" --profile "$COPY" \
-  --runner-id '<staging-runner-uuid>' --report "$REPORT" \
+  --runner-id '<staging-runner-uuid>' --user-id '<staging-user-uuid>' --report "$REPORT" \
   --kill-upload --kill-import --rollback-one --go-back-one --hold
 ```
 

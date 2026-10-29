@@ -34,6 +34,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       target: { type: "string" },
       "source-profile": { type: "string" },
       "runner-id": { type: "string" },
+      "user-id": { type: "string" },
       "allow-production": { type: "boolean" },
       "kill-upload": { type: "boolean" },
       "kill-import": { type: "boolean" },
@@ -66,10 +67,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       !values.profile ||
       !values["source-profile"] ||
       !values["runner-id"] ||
+      !values["user-id"] ||
       !values.report
     ) {
       say(
-        "usage: migration-dry-run --move --target <deployment-url> --source-profile <dir> --profile <new-scratch-dir> --runner-id <staging-runner> --report <file> [--kill-upload] [--kill-import] [--rollback-one] [--go-back-one]",
+        "usage: migration-dry-run --move --target <deployment-url> --source-profile <dir> --profile <new-scratch-dir> --runner-id <staging-runner> --user-id <staging-user> --report <file> [--kill-upload] [--kill-import] [--rollback-one] [--go-back-one]",
       );
       return 2;
     }
@@ -79,6 +81,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         source: values["source-profile"],
         profile: values.profile,
         runnerId: values["runner-id"],
+        userId: values["user-id"],
         report: values.report,
         allowProduction: values["allow-production"] === true,
         includeRemoved: values["include-removed-projects"] === true,
