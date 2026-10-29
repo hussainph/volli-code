@@ -23,6 +23,13 @@ afterEach(() => {
 
 const alice = { subject: "user:alice", issuer: "https://issuer.test" };
 
+/** The mover's drain cursors (the profile holds others: a drained cloud Session's). */
+function movedCursors(w: MoveWorld) {
+  return w.db
+    .prepare("SELECT COUNT(*) AS n FROM session_drain_cursors WHERE owner_user_id = ?")
+    .get(w.userId);
+}
+
 function enqueue(w: MoveWorld, engine = w.engine(), stopAtFirstProblem = false) {
   const { queue, moves } = engine.enqueue({
     projectIds: [w.projectId],
@@ -63,14 +70,11 @@ describe("a move, start to finish", () => {
     expect(move.state).toBe("checked");
     expect(move.failure).toBeNull();
     expect(move.report).toMatchObject({ verify: { ok: true } });
-    // Every window read matches the export. Until moved Sessions are folded
-    // after the commit (VC-990), the fold wait is the one check that cannot pass.
-    const realPath = move.report!.realPath as { checks: Record<string, { failed: number }> };
-    for (const [name, { failed }] of Object.entries(realPath.checks)) {
-      expect({ name, failed }).toEqual({ name, failed: name === "sessionFolded" ? failed : 0 });
-    }
-    expect(realPath.checks.boardTicket!.failed).toBe(0);
-    expect(realPath.checks.sessionHistory!.failed).toBe(0);
+    // Every window read matches the export, every moved Session folded.
+    expect(move.report).toMatchObject({ ok: true, realPath: { ok: true } });
+    const realPath = move.report!.realPath as { checks: Record<string, { checked: number }> };
+    expect(realPath.checks.allSessionsFolded!.checked).toBe(1);
+    expect(realPath.checks.sessionHistory!.checked).toBeGreaterThan(0);
     // Still read-only here until the person finishes the move.
     expect(projectFreeze(world.db, world.projectId)).toBe("checked");
 
@@ -137,6 +141,42 @@ describe("a move, start to finish", () => {
     expect(projectFreeze(world.db, world.projectId)).toBe("confirmed");
     expect(existsSync(join(world.root, "cloud-moves", moveId, "export"))).toBe(false);
     expect(existsSync(join(world.root, "cloud-moves", moveId, "plan.json"))).toBe(true);
+  });
+});
+
+describe("Session history", () => {
+  test("uploads transcripts and Pi logs, then checks them once the last upload URL expired", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const waits: number[] = [];
+    const engine = world.engine({ ports: { sleep: async (ms) => void waits.push(ms) } });
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    const history = [...world.objects.objects.keys()].filter((key) => key.includes("/s/"));
+    expect(history.some((key) => key.includes("/tx/"))).toBe(true);
+    expect(history.some((key) => key.includes("/pi/"))).toBe(true);
+    // Verification waited out every upload URL before reading the objects back.
+    expect(Math.max(...waits)).toBeGreaterThan(5 * 60_000);
+    const verify = engine.journal.move(moveId)!.report!.verify as { objects: { checked: number } };
+    expect(verify.objects.checked).toBeGreaterThanOrEqual(history.length);
+  });
+
+  test("a history object changed after its upload fails the check and rolls the move back", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const engine = world.engine({
+      ports: {
+        faults: async (point) => {
+          if (point !== "history.session") return;
+          const key = [...world!.objects.objects.keys()].find((k) => k.includes("/tx/"));
+          if (key !== undefined) world!.objects.objects.set(key, new TextEncoder().encode("late"));
+        },
+      },
+    });
+    await engine.run(queueId);
+    expect(engine.journal.move(moveId)).toMatchObject({
+      state: "rolled_back",
+      failure: { code: "verification_failed" },
+    });
   });
 });
 
@@ -374,7 +414,7 @@ describe("the person's decisions", () => {
     const rolled = await engine.rollBack(moveId);
     expect(rolled.state).toBe("rolled_back");
     expect(projectFreeze(world.db, world.projectId)).toBeNull();
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+    expect(movedCursors(world)).toEqual({
       n: 0,
     });
     expect(world.db.prepare("SELECT COUNT(*) AS n FROM project_checkout_paths").get()).toEqual({
@@ -414,11 +454,11 @@ describe("the person's decisions", () => {
       .engine({ kill: { point: "handed_over", hit: 1, onKilled: () => killed() } })
       .run(queueId);
     await stopped;
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).not.toEqual({
+    expect(movedCursors(world)).not.toEqual({
       n: 0,
     });
     expect((await world.engine().rollBack(moveId)).state).toBe("rolled_back");
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+    expect(movedCursors(world)).toEqual({
       n: 0,
     });
     expect(world.db.prepare("SELECT COUNT(*) AS n FROM project_checkout_paths").get()).toEqual({
@@ -455,7 +495,7 @@ describe("the person's decisions", () => {
     const returned = await engine.goBackToLocal(moveId);
     expect(returned.state).toBe("returned");
     expect(projectFreeze(world.db, world.projectId)).toBeNull();
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+    expect(movedCursors(world)).toEqual({
       n: 0,
     });
     const saved = JSON.parse(

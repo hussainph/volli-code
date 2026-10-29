@@ -9,7 +9,9 @@
  * - A sample of tickets (the largest open ones and a spread of the rest):
  *   body (`board.getTicket`), comments (`board.comments`) and activity
  *   (`board.ticketEvents`).
- * - A sample of Sessions (newest, oldest, largest and one of each role):
+ * - Every moved Session folded to its head (`projectImportHistory.foldProgress`,
+ *   waited for: the commit starts the folds), then a sample of Sessions
+ *   (newest, oldest, largest and one of each role):
  *   folded to their last event (`sessions.snapshot`, waited for, since the
  *   commit starts the first fold), then every event through
  *   `sessions.history`, in order, by id, each one readable.
@@ -178,6 +180,29 @@ export function windowReadCheck(options: WindowReadCheckOptions): MoveRealPathCh
         expected.get(event.sessionId as string)?.push(event.id as string);
       }
       const deadline = now() + foldTimeoutMs;
+      // Every moved Session folded to its head (the commit starts the folds),
+      // a full pass of the move's own progress finding nothing behind.
+      let allFolded = false;
+      for (let wait = 500; ; wait = Math.min(wait * 2, 15_000)) {
+        let behind = 0;
+        for (let cursor: string | null = null; ;) {
+          const page: { behind: unknown[]; isDone: boolean; continueCursor: string } = await call(
+            "query",
+            "projectImportHistory:foldProgress",
+            { moveId: input.moveId, cursor },
+          );
+          behind += page.behind.length;
+          if (page.isDone) break;
+          cursor = page.continueCursor;
+        }
+        if (behind === 0) {
+          allFolded = true;
+          break;
+        }
+        if (now() + wait > deadline) break;
+        await options.sleep(wait, signal);
+      }
+      tally("allSessionsFolded", allFolded);
       for (const sessionId of pick) {
         signal.throwIfAborted();
         const ids = expected.get(sessionId)!;

@@ -71,11 +71,16 @@ export interface MovedSessionUploadReport {
 export interface MoveSessionHistory {
   /** One exported Session event as the import sends it. Pure. */
   eventRecord(record: Record<string, unknown>): Record<string, unknown>;
-  /** Packs and commits one Session's transcript bodies and Pi logs, resuming from the backend's head. */
+  /**
+   * Packs and commits one Session's transcript bodies and Pi logs, resuming
+   * from the backend's head. `move.runnerId` is the runner the import named.
+   * `onSigned` hears of every upload URL as it is issued, before it is used.
+   */
   upload(
     move: { moveId: string; runnerId: string },
     session: MovedSession,
     signal: AbortSignal,
+    onSigned?: (object: MoveObject) => void,
   ): Promise<MovedSessionUploadReport>;
   /** Hands the moved Sessions to this runner at their imported heads. Idempotent. */
   seedCursors(

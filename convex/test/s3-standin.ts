@@ -18,6 +18,7 @@ import {
   verifyS3ListRequest,
   verifyS3MoveRequest,
   verifyS3ReadRequest,
+  verifyS3Request,
 } from "../fixture/s3-boundary.ts";
 
 export const S3_CONFIG = {
@@ -119,7 +120,12 @@ export class S3StandIn {
         },
       });
     }
-    const key = verifyS3MoveRequest(request, url, config);
+    // A Session's history objects are signed as a runner's are: replaceable
+    // until committed, so without `If-None-Match: *`.
+    const key =
+      request.method === "PUT" && headers["if-none-match"] === undefined
+        ? verifyS3Request(request, url, config)
+        : verifyS3MoveRequest(request, url, config);
     if (request.method === "DELETE") {
       if (this.failDeletesWith !== null)
         return answer(this.failDeletesWith, { method: "DELETE", key });

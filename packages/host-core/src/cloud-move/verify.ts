@@ -27,7 +27,7 @@ import {
 
 import { MoveBackendError, type ImportCalls } from "./backend";
 import { sessionKeyOf, ticketKeyOf, type MovePlan, type Tally } from "./plan";
-import type { MoveObjectStore } from "./ports";
+import type { MoveObject, MoveObjectStore } from "./ports";
 
 type Row = Record<string, unknown>;
 type Level = "project" | "ticket" | "session";
@@ -141,6 +141,8 @@ export async function verifyHiddenImport(input: {
   moveId: string;
   runnerId: string;
   plan: MovePlan;
+  /** Session-history objects, each as it was last signed: the store must hold exactly that. */
+  historyObjects?: readonly MoveObject[];
   signal: AbortSignal;
 }): Promise<VerifyReport> {
   const { calls, plan, moveId, signal } = input;
@@ -376,6 +378,23 @@ export async function verifyHiddenImport(input: {
     if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== object.sha256) {
       report.objects.damaged += 1;
     }
+  });
+  // The history objects, each against what was last signed for its key.
+  await pool(input.historyObjects ?? [], READ_CONCURRENCY, async (object) => {
+    signal.throwIfAborted();
+    const stored = await input.objects.head(moveId, object.key);
+    report.objects.checked += 1;
+    if (stored === null) {
+      report.objects.missing += 1;
+      return;
+    }
+    let same =
+      stored.bytes === object.bytes && (stored.sha256 === null || stored.sha256 === object.sha256);
+    if (same && stored.sha256 === null) {
+      const bytes = await input.objects.get(moveId, object.key);
+      same = bytes !== null && createHash("sha256").update(bytes).digest("hex") === object.sha256;
+    }
+    if (!same) report.objects.damaged += 1;
   });
   if (report.objects.missing > 0) failures.push(`${report.objects.missing} objects are missing`);
   if (report.objects.damaged > 0) failures.push(`${report.objects.damaged} objects are damaged`);

@@ -35,7 +35,7 @@
  * archived read-only), Roll back, or later Go back to local.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { appendFileSync, createReadStream, existsSync, mkdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
@@ -96,6 +96,12 @@ const BATCH_MAX_BYTES = 3 * 1024 * 1024;
 const OBJECT_CONCURRENCY = 4;
 const ZSTD_LEVEL = { params: { [zlibConstants.ZSTD_c_compressionLevel]: 3 } };
 const RETRY = MOVE_RETRY;
+/**
+ * How long an upload URL the backend signs stays usable (its
+ * `PRESIGN_EXPIRES_SECONDS`, five minutes), with a minute's margin for
+ * clocks: after this, a URL issued before the commit can write nothing.
+ */
+const UPLOAD_URL_LIFETIME_MS = 6 * 60_000;
 
 /**
  * Where a move waits for the person, not for the engine: the checks ran
@@ -391,6 +397,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       signal,
       passThrough: (error) =>
         error instanceof MoveProblemError || isDiskFullError(error) || isLocalFileError(error),
+      onRetry: (attempt, error) => log.warn("a move upload will be retried", { attempt, error }),
     });
 
   /** The object store as the verification reads it: HEADs and GETs retried like every call. */
@@ -424,6 +431,37 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       }
     }
     return staged;
+  };
+
+  // ── the history objects' upload URLs ──────────────────────────────────────
+
+  const signedFile = (move: MoveRow) => join(workDir(move), "history-signed.ndjson");
+
+  /** Journals one upload URL as it is issued: the key, what it was signed for, and when. */
+  const recordSigned = (move: MoveRow, object: MoveObject): void => {
+    mkdirSync(workDir(move), { recursive: true });
+    appendFileSync(signedFile(move), `${JSON.stringify({ ...object, at: now() })}\n`);
+  };
+
+  /** What was last signed for each history key, and when the last URL was issued. */
+  const signedHistory = async (
+    move: MoveRow,
+  ): Promise<{ objects: MoveObject[]; lastAt: number }> => {
+    let text = "";
+    try {
+      text = await readFile(signedFile(move), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const latest = new Map<string, MoveObject>();
+    let lastAt = 0;
+    for (const line of text.split("\n")) {
+      if (line === "") continue;
+      const { at, ...object } = JSON.parse(line) as MoveObject & { at: number };
+      latest.set(object.key, object);
+      lastAt = Math.max(lastAt, at);
+    }
+    return { objects: [...latest.values()], lastAt };
   };
 
   // ── steps ──────────────────────────────────────────────────────────────────
@@ -640,7 +678,12 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     for (const session of plan.sessionList.slice(done)) {
       const report = await withNetworkRetry(
         () =>
-          ports.history.upload({ moveId: move.moveId, runnerId: move.runnerId }, session, signal),
+          ports.history.upload(
+            { moveId: move.moveId, runnerId: move.runnerId },
+            session,
+            signal,
+            (object) => recordSigned(move, object),
+          ),
         signal,
       );
       if (report.missing.length > 0 || report.piFilesLeftBehind > 0) {
@@ -663,12 +706,21 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
 
   const verify: Step = async (move, _queue, signal) => {
     const plan = await planOf(move, signal);
+    // A Session's history objects are not write-once (an upload resumed
+    // before its commit replaces its object), so a URL issued before the
+    // commit could still write after it. Wait out the last one, then check
+    // that the store holds what was last signed for every key: past this
+    // point the move asks for no upload URL, so nothing can change them.
+    const signed = await signedHistory(move);
+    const quietAt = signed.lastAt + UPLOAD_URL_LIFETIME_MS;
+    if (signed.objects.length > 0 && quietAt > now()) await sleep(quietAt - now(), signal);
     const report: VerifyReport = await verifyHiddenImport({
       calls,
       objects: retriedObjects,
       moveId: move.moveId,
       runnerId: move.runnerId,
       plan,
+      historyObjects: signed.objects,
       signal,
     });
     if (!report.ok) {
