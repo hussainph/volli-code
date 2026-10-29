@@ -34,7 +34,7 @@
  * **The clock is simulated**: no scheduled minute passes. The fixture
  * backend's guarded hooks (`convex/functions/testAutomations.ts`: internal, so
  * admin-key only, and each refuses a deployment that does not trust the test
- * issuer) backdate one cursor and run the cron's `fireDuePage` at two DISTINCT
+ * issuer) backdate one cursor and run the cron's per-row `fireSchedule` at two DISTINCT
  * past occurrences. Both passes share a transaction only to fence the live
  * cron between assertions. The hook returns actual per-pass snapshots; jobs
  * are genuinely due at wake. No Run, job, outcome or notice is injected.
@@ -161,7 +161,8 @@ const AGENT_KICKOFF = "Kick off the Doing sweep through automation_run";
 const followUpMarker = (marker) => `SCRIPTED ${marker}`;
 const AGENT_FOLLOW_UP = followUpMarker("caller follow-up after the queued Run");
 /** Plain replies for turns whose order the journey does not control. */
-const RUN_TURN_MARKER = followUpMarker("a Run's own turn");
+const ARRIVAL_TURN_MARKER = followUpMarker("the arrival Run's finished turn");
+const SCHEDULE_TURN_MARKER = followUpMarker("the schedule Run's finished turn");
 const NOTICE_TURN_MARKER = followUpMarker("caller turn after the notice");
 
 const results = [];
@@ -214,8 +215,8 @@ async function journey(fixture, store, evidenceDir) {
   // SETUP: Mac A's ordered agent turns. Two Runs come first (the arrival, then
   // the schedule), then the caller's own kickoff carries the tool call.
   const fakeScriptPath = await writeFakeScript(evidenceDir, [
-    { text: RUN_TURN_MARKER },
-    { text: RUN_TURN_MARKER },
+    { text: ARRIVAL_TURN_MARKER },
+    { text: SCHEDULE_TURN_MARKER },
     automationRunToolCall({ automationName: DOING_AUTOMATION.name, ticketId }),
     // These two requests may race: the caller continuation and the new Run.
     { text: AGENT_FOLLOW_UP },
@@ -444,7 +445,7 @@ async function journey(fixture, store, evidenceDir) {
     // consume the next reply in this instance's ordered fake-provider queue.
     await openProjectHome(macA.drive, AUTOMATION_PROJECT.name);
     await macA.drive.click("button", session.title ?? "Chat", { contains: true, first: true });
-    await macA.drive.wait(RUN_TURN_MARKER, 120_000);
+    await macA.drive.wait(ARRIVAL_TURN_MARKER, 120_000);
     await macA.drive.gone("Stop turn", 60_000);
     return {
       detail: `Run ${arrivalRun.id.slice(0, 8)} started on ${nameA}; shared Session ${arrivalRun.sessionId.slice(
@@ -592,7 +593,7 @@ async function journey(fixture, store, evidenceDir) {
     // before creating the caller whose next reply must be the tool call.
     await openProjectHome(macA.drive, AUTOMATION_PROJECT.name);
     await macA.drive.click("button", session.title ?? "Chat", { contains: true, first: true });
-    await macA.drive.wait(RUN_TURN_MARKER, 120_000);
+    await macA.drive.wait(SCHEDULE_TURN_MARKER, 120_000);
     await macA.drive.gone("Stop turn", 60_000);
     evidence.started = {
       runId: started.id,
@@ -754,7 +755,7 @@ try {
       {
         commit: (await exec("git", ["rev-parse", "HEAD"], { cwd: REPO })).stdout.trim(),
         simulation:
-          "Sleep is SIMULATED (real power events through main's dual-locked smoke seam, runner transport held down; no OS sleep). The clock is SIMULATED (testAutomations.coalescePastOccurrences runs two distinct past occurrences through the cron's fireDuePage atomically, returning each genuine state; no minute passed).",
+          "Sleep is SIMULATED (real power events through main's dual-locked smoke seam, runner transport held down; no OS sleep). The clock is SIMULATED (testAutomations.coalescePastOccurrences runs two distinct past occurrences through the cron's per-row fireSchedule atomically, returning each genuine state; no minute passed).",
         agentTurnScript:
           "Mac A launches with an ordered fake-provider reply queue (fake-script.json, kept here). It feeds the next turn that carries tools, so it scripts this instance's agent turns in order: the arrival Run's turn, the schedule Run's turn, the caller's scripted automation_run kickoff, then plain replies (the Run's own turn and the caller's continuation may race). No token, watch or notice is injected: the Run goes through automations:run under the caller Session's Agent token, and the notice is the backend's session.notice composed by the runner's outbox.",
         complete,

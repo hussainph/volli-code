@@ -203,8 +203,10 @@ async function readFire(ctx: MutationCtx, row: Doc<"automationSchedules">, now: 
   }
 }
 
-/** Fires one due schedule row at `now`. Returns whether its cursor moved. */
-async function fireSchedule(
+/** Fires one due schedule row at `now`. Returns whether its cursor moved.
+ * Production caller: fireDuePage above. The guarded acceptance clock uses the
+ * same per-row path without issuing multiple paginated queries in one mutation. */
+export async function fireSchedule(
   ctx: MutationCtx,
   row: Doc<"automationSchedules">,
   now: number,

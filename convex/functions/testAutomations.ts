@@ -19,7 +19,7 @@ import {
 } from "@volli/shared";
 
 import { internalMutation, type MutationCtx } from "./_generated/server";
-import { fireDuePage } from "./lib/automationClock";
+import { fireDuePage, fireSchedule } from "./lib/automationClock";
 
 function requireTestDeployment(): void {
   let trusted: string | undefined;
@@ -172,12 +172,17 @@ export const coalescePastOccurrences = internalMutation({
       throw new Error("Choose the last two distinct past occurrences.");
     }
     await ctx.db.patch(row._id, { nextFireAt: firstDueAt });
-    const firstPass = await fireDuePage(ctx, { now: firstDueAt, cursor: null });
+    // Convex permits only one paginated query per function. Use the clock's
+    // SAME per-row executor twice, rereading its cursor/pointers after the
+    // first write; do not invoke the paginated fireDuePage twice here.
+    const firstRow = (await ctx.db.get(row._id))!;
+    if (!(await fireSchedule(ctx, firstRow, firstDueAt)))
+      throw new Error("The first occurrence did not fire.");
     const first = await scheduleState(ctx, automationId);
-    const secondPass = await fireDuePage(ctx, { now: secondDueAt, cursor: null });
+    const secondRow = (await ctx.db.get(row._id))!;
+    if (secondRow.nextFireAt !== secondDueAt || !(await fireSchedule(ctx, secondRow, secondDueAt)))
+      throw new Error("The second occurrence did not fire.");
     const second = await scheduleState(ctx, automationId);
-    if (firstPass.fired !== 1 || secondPass.fired !== 1)
-      throw new Error("Use a fixture with exactly one due schedule.");
     return { first, second, firstDueAt, secondDueAt };
   },
 });
