@@ -336,7 +336,7 @@ describe("switching stores over running turns", () => {
   it("can switch now or cancel, without arming an eventual unrelated relaunch", () => {
     const lifecycle = app();
     const cancelled = createRelaunchController(lifecycle, turnFeed("cancel").ports);
-    cancelled.request();
+    expect(cancelled.request()).toBe(false);
     expect(cancelled.pending()).toBe(false);
     expect(lifecycle.quit).not.toHaveBeenCalled();
     const now = createRelaunchController(lifecycle, turnFeed("now").ports);

@@ -131,7 +131,7 @@ export function BackupRestore() {
         </ItemRow>
       ))}
       {status?.previousProfile && phase !== "ready" && phase !== "restarting" ? (
-        <ItemRow name="Previous profile" meta={status.previousProfile}>
+        <ItemRow name="Previous profile">
           <Button
             size="xs"
             variant="outline"
@@ -225,7 +225,7 @@ export function BackupRestore() {
             <div role="status" className="space-y-2 text-ui">
               <p>Ready to restore on restart.</p>
               <p>{status?.credentialsMessage}</p>
-              <p className="break-all">Previous profile backup: {status?.previousProfile}</p>
+              <p>Previous profile backup will be kept.</p>
             </div>
           ) : null}
           <DialogFooter>
@@ -265,6 +265,7 @@ export function BackupRestore() {
                 disabled={pending}
                 onClick={() => {
                   if (status) {
+                    ++epoch.current;
                     setStatus({ ...status, phase: "restarting" });
                     void sessionRpcClient()
                       .backups.restoreRestart.mutate({ expectedRevision: status.revision })

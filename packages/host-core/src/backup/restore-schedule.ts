@@ -54,6 +54,8 @@ export async function scheduleBackupRestore(root: string, report: RestoreReport)
 async function readIntent(root: string, name = INTENT): Promise<RestoreIntent | null> {
   let value: unknown;
   try {
+    if (!(await lstat(join(root, name))).isFile())
+      throw new Error("The pending restore record is not a regular local file.");
     value = JSON.parse(await readFile(join(root, name), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -98,18 +100,37 @@ export async function discardPreparedBackupRestore(root: string): Promise<boolea
   await rm(join(root, prepared.staging), { recursive: true, force: true });
   return true;
 }
+export function hasInterruptedBackupRestore(root: string): boolean {
+  return hasPendingDatabaseRecovery(join(root, "volli.db"));
+}
 export async function canCancelScheduledBackupRestore(root: string): Promise<boolean> {
-  return !hasPendingDatabaseRecovery(join(root, "volli.db")) && (await readIntent(root)) !== null;
+  if (hasInterruptedBackupRestore(root)) return false;
+  try {
+    await lstat(join(root, INTENT));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 export async function cancelScheduledBackupRestore(root: string): Promise<void> {
-  const intent = await readIntent(root);
+  if (hasInterruptedBackupRestore(root))
+    throw new Error("The interrupted profile switch must be recovered before it can be cancelled.");
+  let intent: RestoreIntent | null;
+  try {
+    intent = await readIntent(root);
+  } catch {
+    // A malformed outer intent cannot authorize guessing/deleting any profile path.
+    // With no DB fence, withdrawing only the known record leaves the current profile safe.
+    await rm(join(root, INTENT), { force: true });
+    await rm(join(root, PREPARED), { force: true });
+    await syncDirectory(root);
+    return;
+  }
   if (!intent) {
     await discardPreparedBackupRestore(root);
     return;
   }
-  if (hasPendingDatabaseRecovery(join(root, "volli.db")))
-    throw new Error("The interrupted profile switch must be recovered before it can be cancelled.");
-  // Withdraw intent durably before deleting the prepared profile.
   await rm(join(root, INTENT));
   await rm(join(root, PREPARED), { force: true });
   await syncDirectory(root);
@@ -157,6 +178,7 @@ export async function handoffInterruptedBackupRestore(root: string): Promise<boo
   if (!hasPendingDatabaseRecovery(join(root, "volli.db"))) return false;
   await rm(join(root, INTENT), { force: true });
   await rm(join(root, PREPARED), { force: true });
+  await rm(join(root, ".volli-restore-attempt.json"), { force: true });
   await syncDirectory(root);
   return true;
 }

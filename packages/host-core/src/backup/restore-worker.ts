@@ -1,7 +1,7 @@
 import { errorMessage } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { Worker, parentPort, workerData } from "node:worker_threads";
-import { mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { platform, totalmem } from "node:os";
 import { parseFreePercentage } from "../process/memory-pressure";
@@ -13,7 +13,7 @@ import { openVerifiedBackupBundleFile } from "./streaming";
 import { activateScheduledBackupRestore } from "./restore-schedule";
 
 export type RestoreWorkerRequest =
-  | { kind: "inspect"; root: string; bundlePath: string; workDir?: string }
+  | { kind: "inspect"; root: string; bundlePath: string }
   | {
       kind: "stage";
       root: string;
@@ -109,7 +109,7 @@ export function runRestoreWorker(
 export function serveRestoreWorker(): void {
   const port = parentPort;
   if (!port) throw new Error("Restore must run in a worker.");
-  const request = workerData as RestoreWorkerRequest;
+  const request = workerData as RestoreWorkerRequest & { workDir?: string };
   let cancelled = false;
   let checkpoints = 0;
   port.on("message", () => {
@@ -152,8 +152,8 @@ export function serveRestoreWorker(): void {
         checkpoint,
         expectedDataSha256: request.expectedDataSha256,
       });
-    const work =
-      request.workDir ?? (await mkdtemp(join(request.root, `.volli-inspect-${process.pid}-`)));
+    const work = request.workDir;
+    if (!work) throw new Error("Restore inspection requires supervisor-owned scratch space.");
     try {
       const result = await openVerifiedBackupBundleFile(request.bundlePath, work, checkpoint);
       if (!result.ok) return result;

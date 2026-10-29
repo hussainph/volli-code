@@ -21,6 +21,8 @@ import {
   activateScheduledBackupRestore,
   cancelScheduledBackupRestore,
   hasScheduledBackupRestore,
+  canCancelScheduledBackupRestore,
+  hasInterruptedBackupRestore,
   handoffInterruptedBackupRestore,
   scheduleBackupRestore,
 } from "./restore-schedule";
@@ -78,7 +80,7 @@ function liveTitle() {
     }
   ).title;
 }
-function service() {
+function service(restart: () => boolean = () => true) {
   return new ProfileRestoreService({
     root: profile.root,
     workerEntry: ENTRY,
@@ -86,7 +88,7 @@ function service() {
     available: () => true,
     pickBundle: async () => bundlePath,
     pickDirectory: async () => paths["proj-alpha"]!,
-    restart: vi.fn(),
+    restart: vi.fn(restart),
     revealPrevious: vi.fn(),
     localProjects: () =>
       profile.db.prepare("SELECT id, name, path FROM projects").all() as {
@@ -340,6 +342,30 @@ describe("Storage restore staging and restart", () => {
         }),
       ],
     });
+    expect(liveTitle()).toBe("change after backup");
+  });
+  it("a cancelled live-work restart returns to ready without arming a later quit", async () => {
+    const restore = service(() => false);
+    await restore.choose("test.tar.gz");
+    await restore.settled();
+    const mapped = await restore.status();
+    await restore.start(mapped.revision, paths);
+    await restore.settled();
+    const ready = await restore.status();
+    await restore.restart(ready.revision);
+    expect((await restore.status()).phase).toBe("ready");
+    restore.acceptRestart();
+    expect(await hasScheduledBackupRestore(profile.root)).toBe(false);
+    await restore.cancel(ready.revision);
+    expect(liveTitle()).toBe("change after backup");
+  });
+  it("can withdraw an unreadable outer restart intent when no database switch fence exists", async () => {
+    writeFileSync(join(profile.root, ".volli-restore-on-restart.json"), "unreadable");
+    expect(hasInterruptedBackupRestore(profile.root)).toBe(false);
+    await expect(hasScheduledBackupRestore(profile.root)).rejects.toThrow();
+    expect(await canCancelScheduledBackupRestore(profile.root)).toBe(true);
+    await cancelScheduledBackupRestore(profile.root);
+    expect(await hasScheduledBackupRestore(profile.root)).toBe(false);
     expect(liveTitle()).toBe("change after backup");
   });
 });

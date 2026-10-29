@@ -47,6 +47,7 @@ export { ProfileRestoreService } from "../backup/restore-service";
 export { runRestoreWorker, serveRestoreWorker } from "../backup/restore-worker";
 export {
   hasScheduledBackupRestore,
+  hasInterruptedBackupRestore,
   canCancelScheduledBackupRestore,
   handoffInterruptedBackupRestore,
   cancelScheduledBackupRestore,

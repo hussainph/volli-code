@@ -111,7 +111,7 @@ const REVIEWED_DYNAMIC_SEGMENTS: Record<string, { sample: string; why: string }>
     why: "readIntent validates this single-segment previous-profile name before activation",
   },
   "packages/host-core/src/backup/restore-service.ts::name": {
-    sample: ".volli-inspect-123-Ab12Cd",
+    sample: ".volli-inspect-123-00000000-0000-4000-8000-000000000000",
     why: "the dead-worker sweep validates the inspection scratch namespace and owner pid before deletion",
   },
   "packages/host-core/src/database-recovery.ts::`${name}.restore-`": {

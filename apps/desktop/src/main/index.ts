@@ -95,6 +95,7 @@ import {
   createDatabaseRecovery,
   ProfileRestoreService,
   hasScheduledBackupRestore,
+  hasInterruptedBackupRestore,
   canCancelScheduledBackupRestore,
   handoffInterruptedBackupRestore,
   cancelScheduledBackupRestore,
@@ -834,6 +835,7 @@ const appStartup = app.whenReady().then(async () => {
     const mayCancel = await canCancelScheduledBackupRestore(app.getPath("userData")).catch(
       () => false,
     );
+    const mayRecover = hasInterruptedBackupRestore(app.getPath("userData"));
     const answer = dialog.showMessageBoxSync({
       type: "error",
       title: "Restore could not be completed",
@@ -841,7 +843,9 @@ const appStartup = app.whenReady().then(async () => {
       detail: `${errorMessage(error)}\nThe profile has not been opened. Previous profile files are kept beside the database.`,
       buttons: mayCancel
         ? ["Keep Closed", "Cancel Restore and Open Current Profile"]
-        : ["Keep Closed", "Open Recovery"],
+        : mayRecover
+          ? ["Keep Closed", "Open Recovery"]
+          : ["Keep Closed"],
       defaultId: 0,
       cancelId: 0,
     });

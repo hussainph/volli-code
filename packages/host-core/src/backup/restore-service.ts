@@ -33,7 +33,7 @@ interface RestoreOptions {
   pickBundle(): Promise<string | null>;
   pickDirectory(): Promise<string | null>;
   localProjects(): { id: string; name: string; path: string }[];
-  restart(): void;
+  restart(): boolean;
   revealPrevious(path: string): void;
   /** Restore is local-only, with database and artifacts under one profile root. */
   available(): boolean;
@@ -69,7 +69,7 @@ export class ProfileRestoreService implements ProfileRestorePort {
     if (hasPendingDatabaseRecovery(join(this.options.root, "volli.db"))) return;
     const attempt = join(this.options.root, ".volli-restore-attempt.json");
     for (const name of await readdir(this.options.root)) {
-      const match = /^\.volli-inspect-(\d+)-(?:[A-Za-z0-9]{6}|[a-f0-9-]{36})$/.exec(name);
+      const match = /^\.volli-inspect-(\d+)-[a-f0-9-]{36}$/.exec(name);
       if (match && !profileOwnerAlive(Number(match[1])))
         await rm(join(this.options.root, name), { recursive: true, force: true });
     }
@@ -284,6 +284,7 @@ export class ProfileRestoreService implements ProfileRestorePort {
   }
   async restart(expectedRevision: string): Promise<void> {
     this.#assertAvailable();
+    if (expectedRevision === this.#state.revision && this.#state.phase === "restarting") return;
     if (
       this.#cancelling ||
       expectedRevision !== this.#state.revision ||
@@ -292,7 +293,7 @@ export class ProfileRestoreService implements ProfileRestorePort {
       throw new Error("No verified restore is ready. Refresh and try again.");
     this.#restartRequested = true;
     this.#state.phase = "restarting";
-    this.options.restart();
+    if (!this.options.restart()) this.restartRefused();
   }
   async revealPrevious(): Promise<void> {
     const state = await this.status();
