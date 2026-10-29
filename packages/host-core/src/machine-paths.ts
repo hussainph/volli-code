@@ -4,6 +4,7 @@ import { displayTicketId } from "@volli/shared";
 import { getProjectById } from "./db/projects-repo";
 import { getTicketRow } from "./db/tickets-repo";
 import { prepared } from "./db/prepared";
+import { hasCloudShadowRows } from "./db/cloud-shadow-paths";
 
 export interface MachineTicketPath {
   projectId: string;
@@ -22,9 +23,11 @@ export interface MachinePathReader {
 
 /** Signed-out readers must not treat even an old canary's shadow as a folder. */
 export function localMachinePaths(db: Database.Database): MachinePathReader {
+  const hasShadows = hasCloudShadowRows(db);
   const shadow = (kind: "project" | "ticket", id: string) =>
+    hasShadows &&
     prepared(db, "SELECT 1 FROM cloud_shadow_rows WHERE kind=? AND id=?").get(kind, id) !==
-    undefined;
+      undefined;
   const projectPath = (projectId: string) =>
     shadow("project", projectId) ? null : (getProjectById(db, projectId)?.path ?? null);
   return {

@@ -2,7 +2,8 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it } from "vite-plus/test";
 import { openVolliDb } from "./index";
-import { cloudShadowPath } from "./cloud-shadow-paths";
+import { cloudShadowPath, normalizeCloudShadowPaths } from "./cloud-shadow-paths";
+import { localMachinePaths } from "../machine-paths";
 import { findProjectByPath, insertProject } from "./projects-repo";
 import { createProject } from "../project-create";
 import { createRunnerPathRegistry } from "../cloud-store/paths";
@@ -10,6 +11,19 @@ import { openTestDb, testProject, type TestDb } from "./test-helpers";
 
 let fixture: TestDb;
 afterEach(() => fixture?.cleanup());
+
+it("does not invent runner tables for a pre-registry compatibility reader", () => {
+  fixture = openTestDb();
+  const { db } = fixture;
+  db.exec("DROP TABLE cloud_shadow_rows");
+  insertProject(db, testProject({ id: "legacy", path: "/legacy/folder" }));
+  const schema = db.prepare("SELECT sql FROM sqlite_master ORDER BY name").all();
+  const rows = db.prepare("SELECT * FROM projects").all();
+  normalizeCloudShadowPaths(db);
+  expect(localMachinePaths(db).projectPath("legacy")).toBe("/legacy/folder");
+  expect(db.prepare("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schema);
+  expect(db.prepare("SELECT * FROM projects").all()).toEqual(rows);
+});
 
 it("repairs every account's canary shadows on a local-first open, before Add Project can return a hidden identity", async () => {
   fixture = openTestDb();

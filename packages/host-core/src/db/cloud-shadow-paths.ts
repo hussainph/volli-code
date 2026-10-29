@@ -17,6 +17,16 @@ export function cloudShadowPath(
   );
 }
 
+/** A migration-ceiling compatibility reader may predate runner path tables. */
+export function hasCloudShadowRows(db: Database.Database): boolean {
+  return (
+    prepared(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_shadow_rows'",
+    ).get() !== undefined
+  );
+}
+
 /**
  * Heal canary shadows on EVERY open, including a local-first upgrade with no
  * account restored. Otherwise findProjectByPath can reattach a hidden Cloud
@@ -29,6 +39,7 @@ export function normalizeCloudShadowPaths(
   root?: string,
   ownerUserId?: string,
 ): void {
+  if (!hasCloudShadowRows(db)) return;
   withTransaction(db, () => {
     const shadows = prepared<[], { id: string; path: string; owner_user_id: string }>(
       db,
