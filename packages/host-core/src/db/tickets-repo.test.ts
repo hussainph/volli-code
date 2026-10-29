@@ -421,6 +421,27 @@ describe("the VC-387 steady-state roster reads", () => {
   });
 });
 
+it("never polls or trims legacy Cloud shadows even before registry adoption", () => {
+  const { projectId } = setup();
+  for (const id of ["local-ticket", "shadow-ticket", "under-shadow-project"]) {
+    insertTicket(
+      ctx.db,
+      testTicket(projectId, { id, status: "done", worktreePath: `/copy/${id}`, branch: "topic" }),
+    );
+  }
+  ctx.db.prepare("INSERT INTO cloud_shadow_rows VALUES ('ticket', 'shadow-ticket', 'owner')").run();
+  const other = testProject({ id: "cloud-project", path: "/old-canary-shadow" });
+  insertProject(ctx.db, other);
+  ctx.db
+    .prepare("INSERT INTO cloud_shadow_rows VALUES ('project', 'cloud-project', 'owner')")
+    .run();
+  ctx.db
+    .prepare("UPDATE tickets SET project_id='cloud-project' WHERE id='under-shadow-project'")
+    .run();
+  expect(listRetentionCandidates(ctx.db).map((row) => row.id)).toEqual(["local-ticket"]);
+  expect(listTrimCandidates(ctx.db).map((row) => row.id)).toEqual(["local-ticket"]);
+});
+
 it("treats registry paths as claimed machine folders, never frozen retention candidates", () => {
   const { projectId } = setup();
   insertTicket(

@@ -62,8 +62,12 @@ import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import { trashCapabilities, type TrashPort } from "./ports/trash";
 
 import { getProjectById } from "./db/projects-repo";
-import { getTicketRow } from "./db/tickets-repo";
-import type { TicketRow } from "./db/tickets-repo";
+import {
+  FOLDER_REQUIRED,
+  TICKET_FOLDER_REQUIRED,
+  localMachinePaths,
+  type MachinePathReader,
+} from "./machine-paths";
 import { isPathWithinRoots } from "./project-roots";
 import { worktreesHome } from "./worktree-runtime";
 import { isInside } from "./worktree/paths";
@@ -170,8 +174,7 @@ export async function ensureProjectArtifactsDir(projectPath: string): Promise<vo
  * (a manual `git worktree remove`, a wiped worktree home), and a stale row must
  * degrade to the main checkout rather than resolve every read to a hole.
  */
-async function worktreeRootFromRow(row: TicketRow): Promise<string | null> {
-  const worktreePath = row.worktree_path;
+async function liveWorktreeRoot(worktreePath: string | null): Promise<string | null> {
   if (worktreePath === null) return null;
   try {
     return (await fsp.stat(worktreePath)).isDirectory() ? worktreePath : null;
@@ -1496,10 +1499,18 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
 export function resolveProjectPath(
   db: Database.Database,
   projectId: string,
+  paths: MachinePathReader = localMachinePaths(db),
 ): { ok: true; projectPath: string } | { ok: false; error: string } {
-  const project = getProjectById(db, projectId);
-  if (!project) return { ok: false, error: "Unknown project" };
-  return { ok: true, projectPath: project.path };
+  const projectPath = paths.projectPath(projectId);
+  if (projectPath === null)
+    return {
+      ok: false,
+      error:
+        paths.kind === "cloud" || getProjectById(db, projectId) !== undefined
+          ? FOLDER_REQUIRED
+          : "Unknown project",
+    };
+  return { ok: true, projectPath };
 }
 
 export interface FileScope {
@@ -1532,8 +1543,9 @@ export async function resolveFileScope(
   db: Database.Database,
   projectId: string,
   ticketId: string | undefined,
+  paths: MachinePathReader = localMachinePaths(db),
 ): Promise<{ ok: true; value: FileScope } | { ok: false; error: string }> {
-  const project = resolveProjectPath(db, projectId);
+  const project = resolveProjectPath(db, projectId, paths);
   if (!project.ok) return project;
   if (ticketId === undefined) {
     return {
@@ -1541,16 +1553,20 @@ export async function resolveFileScope(
       value: { projectPath: project.projectPath, worktreeRoot: null, usesWorktree: false },
     };
   }
-  const row = getTicketRow(db, ticketId);
-  if (!row) return { ok: false, error: "Unknown ticket" };
-  if (row.project_id !== projectId)
+  const ticket = paths.ticket(ticketId);
+  if (ticket === null)
+    return { ok: false, error: paths.kind === "cloud" ? TICKET_FOLDER_REQUIRED : "Unknown ticket" };
+  if (ticket.projectId !== projectId)
     return { ok: false, error: "Ticket does not belong to project" };
+  const worktreeRoot = await liveWorktreeRoot(ticket.worktreePath);
+  if (paths.kind === "cloud" && ticket.usesWorktree && worktreeRoot === null)
+    return { ok: false, error: TICKET_FOLDER_REQUIRED };
   return {
     ok: true,
     value: {
       projectPath: project.projectPath,
-      worktreeRoot: await worktreeRootFromRow(row),
-      usesWorktree: row.uses_worktree !== 0,
+      worktreeRoot,
+      usesWorktree: ticket.usesWorktree,
     },
   };
 }
@@ -1614,8 +1630,9 @@ export async function resolveLiveWorktree(
   db: Database.Database,
   projectId: string,
   ticketId: string,
+  paths?: MachinePathReader,
 ): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
-  const scope = await resolveFileScope(db, projectId, ticketId);
+  const scope = await resolveFileScope(db, projectId, ticketId, paths);
   if (!scope.ok) return scope;
   return await resolveTrustedLiveWorktree(scope.value);
 }

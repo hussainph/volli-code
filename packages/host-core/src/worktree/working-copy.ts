@@ -28,8 +28,12 @@ import type {
   WorkingCopyMeasurement,
 } from "@volli/shared";
 
-import { getProjectById } from "../db/projects-repo";
-import { getTicketRow } from "../db/tickets-repo";
+import {
+  FOLDER_REQUIRED,
+  TICKET_FOLDER_REQUIRED,
+  localMachinePaths,
+  type MachinePathReader,
+} from "../machine-paths";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { runGitCapturingAsync, stderrOf } from "./git";
 import { readOnlyGitAsync } from "./scan";
@@ -78,6 +82,7 @@ async function resolveBase(
 /** The narrow deps {@link readWorkingCopy} needs — a structural subset of `WorktreePorts`. */
 export interface WorkingCopyReadPorts {
   db: Database.Database;
+  machinePaths?: MachinePathReader;
   /** The non-blocking runner; defaults to the real one, never to a sync wrapper. */
   gitAsync?: RunGitAsync;
 }
@@ -118,24 +123,27 @@ export async function readWorkingCopy(
   deps: WorkingCopyReadPorts,
   target: WorkingCopyTarget,
 ): Promise<WorktreeResult<WorkingCopyReading>> {
-  const project = getProjectById(deps.db, target.projectId);
-  if (project === undefined) return err("Unknown project");
-  const ticket = target.ticketId === null ? undefined : getTicketRow(deps.db, target.ticketId);
-  if (target.ticketId !== null && ticket === undefined) return err("Unknown ticket");
-  if (ticket !== undefined && ticket.project_id !== project.id) {
+  const paths = deps.machinePaths ?? localMachinePaths(deps.db);
+  const projectPath = paths.projectPath(target.projectId);
+  if (projectPath === null)
+    return err(paths.kind === "cloud" ? FOLDER_REQUIRED : "Unknown project");
+  const ticket = target.ticketId === null ? null : paths.ticket(target.ticketId);
+  if (target.ticketId !== null && ticket === null)
+    return err(paths.kind === "cloud" ? TICKET_FOLDER_REQUIRED : "Unknown ticket");
+  if (ticket !== null && ticket.projectId !== target.projectId) {
     return err("Ticket belongs to another project");
   }
-  const worktreePath = ticket?.worktree_path ?? null;
+  const worktreePath = ticket?.worktreePath ?? null;
   // Asked BEFORE any git runs: an unresolved destination is not a slow read,
   // it is the absence of anything to read.
-  if (worktreePath === null && ticket !== undefined && ticket.uses_worktree !== 0) {
+  if (worktreePath === null && ticket !== null && ticket.usesWorktree) {
     return ok({ state: "pending" });
   }
   const measured = await measureWorkingCopy(
     deps.gitAsync ?? runGitCapturingAsync,
     worktreePath === null
-      ? { path: project.path, kind: "main-checkout", baseBranch: null }
-      : { path: worktreePath, kind: "worktree", baseBranch: ticket?.base_branch ?? null },
+      ? { path: projectPath, kind: "main-checkout", baseBranch: null }
+      : { path: worktreePath, kind: "worktree", baseBranch: ticket?.baseBranch ?? null },
   );
   return measured.ok ? ok({ state: "measured", workingCopy: measured.value }) : measured;
 }

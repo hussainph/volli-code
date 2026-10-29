@@ -10,6 +10,7 @@ import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 
 import type { LiveHostCore } from "@volli/host-core";
+import { createMachinePaths } from "../../packages/host-core/src/machine-paths";
 import {
   convexBackendConnection,
   createBackendLink,
@@ -253,6 +254,7 @@ export async function historyWorld() {
     return createCloudProductStore({
       host: {
         dataDir: root,
+        machinePaths: createMachinePaths(db),
         database: { ok: true, db },
         sessionEngine: wake.engine,
         sessionWakeBus: wake,

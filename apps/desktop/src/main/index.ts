@@ -2020,6 +2020,7 @@ const appStartup = app.whenReady().then(async () => {
           // The window's worktree reads and change watches ride the host's one
           // service, the same one the agent socket reads (VC-788).
           worktreeReads: liveHost.worktreeReads,
+          machinePaths: liveHost.machinePaths,
         }),
     busyWorktreeSites,
     releaseAgentSites,

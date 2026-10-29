@@ -679,8 +679,11 @@ describe("createHostCore composition", () => {
     expect(db).toBe(core.database.db);
     expect(engine).toBe(core.sessionEngine);
     expect(ports).toEqual({ client: core.client });
-    // No key at all: the runtime module's own defaults apply.
-    expect(options).toStrictEqual({ dbPath: core.dbPath });
+    // Model/credential defaults remain the runtime module's; machine readers
+    // share the host's launch-selected path seam.
+    expect(options).toStrictEqual({ dbPath: core.dbPath, machinePaths: core.machinePaths });
+    expect(core.fileServices.machinePaths).toBe(core.machinePaths);
+    expect(core.worktreeDeps.machinePaths).toBe(core.machinePaths);
   });
 
   it("asks the host for model access and venue only when the runtime services are first read", () => {
@@ -705,6 +708,7 @@ describe("createHostCore composition", () => {
     expect(venue).toHaveBeenCalledWith(core.database.db);
     expect(vi.mocked(createHostRuntimeServices).mock.calls[0]![3]).toStrictEqual({
       dbPath: core.dbPath,
+      machinePaths: core.machinePaths,
       modelAccess,
       webKeySealing,
       venue: { id: "cloud-host", kind: "remote" },

@@ -36,11 +36,10 @@
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
-import { displayTicketId, type ChangeSetSnapshot, type DiffStat } from "@volli/shared";
+import { type ChangeSetSnapshot, type DiffStat } from "@volli/shared";
 import type { WorktreeDiffMode } from "@volli/shared";
 
-import { getProjectById } from "../db/projects-repo";
-import { getTicketRow } from "../db/tickets-repo";
+import { localMachinePaths, type MachinePathReader } from "../machine-paths";
 import {
   changeSetPaths,
   changeSetSnapshot,
@@ -62,6 +61,7 @@ import type { RunGitAsync } from "./types";
  */
 export interface WorktreeReadPorts {
   db: Database.Database;
+  machinePaths?: MachinePathReader;
   /**
    * The non-blocking runner EVERY read verb here uses. Defaults to the real
    * {@link runGitCapturingAsync} — never to a wrapper around `git`, which
@@ -139,28 +139,24 @@ export function resolveWorktreeTarget(
   deps: WorktreeReadPorts,
   ticketId: string,
 ): WorktreeReadFailure | { kind: "ok"; target: ReadTarget } {
-  const ticket = getTicketRow(deps.db, ticketId);
-  if (!ticket) return { kind: "missing-ticket" };
-  const project = getProjectById(deps.db, ticket.project_id);
-  // A row with no project is as unresolvable as a missing ticket — the display
-  // id can't be derived, so callers get the same "no such thing" failure.
-  if (!project) return { kind: "missing-ticket" };
-  const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
+  const ticket = (deps.machinePaths ?? localMachinePaths(deps.db)).ticket(ticketId);
+  if (ticket === null) return { kind: "missing-ticket" };
+  const { displayId } = ticket;
 
-  if (ticket.worktree_path === null) {
-    return { kind: "no-worktree", displayId, usesWorktree: ticket.uses_worktree !== 0 };
+  if (ticket.worktreePath === null) {
+    return { kind: "no-worktree", displayId, usesWorktree: ticket.usesWorktree };
   }
   const exists = deps.worktreeExists ?? existsSync;
-  if (!exists(ticket.worktree_path)) {
-    return { kind: "missing-on-disk", displayId, worktreePath: ticket.worktree_path };
+  if (!exists(ticket.worktreePath)) {
+    return { kind: "missing-on-disk", displayId, worktreePath: ticket.worktreePath };
   }
   return {
     kind: "ok",
     target: {
       displayId,
-      worktreePath: ticket.worktree_path,
+      worktreePath: ticket.worktreePath,
       branch: ticket.branch,
-      baseBranch: ticket.base_branch,
+      baseBranch: ticket.baseBranch,
     },
   };
 }

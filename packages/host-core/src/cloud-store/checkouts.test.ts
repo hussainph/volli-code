@@ -19,6 +19,7 @@ import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createSessionWakeBus } from "../session-control/session-wake";
 import { createTestSessionEngine } from "../testing/session-engine";
 import { createCloudProductStore } from "./index";
+import { createMachinePaths } from "../machine-paths";
 
 const PROJECT = "00000000-0000-4000-8000-0000000000a1";
 const REPO = "00000000-0000-4000-8000-0000000000a2";
@@ -41,7 +42,9 @@ function fixture(runnerId: string | null = RUNNER) {
   const { db } = opened;
   root = mkdtempSync(join(tmpdir(), "volli-cloud-checkout-"));
   const wake = createSessionWakeBus(createTestSessionEngine(db), { db });
+  const machinePaths = createMachinePaths(db);
   const host = {
+    machinePaths,
     database: { ok: true, db },
     sessionEngine: wake.engine,
     sessionWakeBus: wake,
@@ -55,7 +58,7 @@ function fixture(runnerId: string | null = RUNNER) {
     busySites: async () => [],
   });
   cleanups.push(() => store.dispose());
-  return { db, home: root, store };
+  return { db, home: root, store, machinePaths };
 }
 
 function connect(
@@ -132,7 +135,9 @@ describe("a cloud project's checkout on this Mac", () => {
   });
 
   it("projects registered paths to machine readers without exposing shadow placeholders", async () => {
-    const { db, home, store } = fixture();
+    const { db, home, store, machinePaths } = fixture();
+    expect(machinePaths.kind).toBe("cloud");
+    expect(() => machinePaths.bindCloud(machinePaths)).toThrow("already bound");
     await store.sessionBirth.beforeCreate({ projectId: PROJECT, ticketId: null });
     await store.engine.createSession({
       commandId: "birth",
@@ -146,7 +151,9 @@ describe("a cloud project's checkout on this Mac", () => {
     expect(store.projectPath(PROJECT)).toBeNull();
     expect(store.agentCommands.projects()).toEqual([]);
     const absPath = join(home, "checkout");
+    mkdirSync(absPath);
     store.registry().checkouts.register({ projectId: PROJECT, projectRepoId: REPO, absPath });
+    expect(machinePaths.projectPath(PROJECT)).toBe(absPath);
     expect(store.projectPath(PROJECT)).toBe(absPath);
     expect(store.agentCommands.projects()).toMatchObject([{ id: PROJECT, path: absPath }]);
     expect(db.prepare("SELECT path FROM projects WHERE id=?").get(PROJECT)).not.toEqual({

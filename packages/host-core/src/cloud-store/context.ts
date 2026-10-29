@@ -1,6 +1,4 @@
 /** Cloud brief reads and runner-local location hints. Board prose is recorded only in the Session ledger. */
-import { createHash } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import type { Session, Ticket } from "@volli/shared";
 import { displayTicketId, shortSessionId } from "@volli/shared";
@@ -13,6 +11,7 @@ import {
 import { getAppState, setAppState } from "../db/app-state-repo";
 import { prepared } from "../db/prepared";
 import { withTransaction } from "../db/transaction-gate";
+import { cloudShadowPath, normalizeCloudShadowPaths } from "../db/cloud-shadow-paths";
 import type { CloudLocationFacts, CloudLocationRequest } from "./location";
 import type { RunnerPathRegistry } from "./paths";
 
@@ -71,25 +70,10 @@ export function createCloudContext(options: {
   const preparedContexts = new Map<string, CloudRunnerContext>();
   const contexts = new Map<string, Promise<CloudRunnerContext>>();
   const displayIds = new Map<string, string>();
-  const identityRoot = resolve(options.identityRoot ?? join(dirname(db.name), "cloud-identities"));
   const siteKey = (sessionId: string) => `volli:runner-site:${ownerUserId}:${sessionId}` as const;
   const shadowPath = (projectId: string) =>
-    join(identityRoot, createHash("sha256").update(`${ownerUserId}\0${projectId}`).digest("hex"));
-  // Canary builds used checkout paths for shadows. Release those UNIQUE slots
-  // as soon as this account opens Cloud, even if it starts no new Session.
-  // Their real checkouts are already in project_checkout_paths.
-  withTransaction(db, () => {
-    const shadows = prepared<[string], { id: string; path: string }>(
-      db,
-      `SELECT projects.id, projects.path FROM projects JOIN cloud_shadow_rows s
-       ON s.kind='project' AND s.id=projects.id WHERE s.owner_user_id=?`,
-    ).all(ownerUserId);
-    for (const shadow of shadows) {
-      const path = shadowPath(shadow.id);
-      if (shadow.path !== path)
-        prepared(db, "UPDATE projects SET path=? WHERE id=?").run(path, shadow.id);
-    }
-  });
+    cloudShadowPath(db, ownerUserId, projectId, options.identityRoot);
+  normalizeCloudShadowPaths(db, options.identityRoot, ownerUserId);
 
   function check(facts: CloudRunnerContext, input: CloudLocationRequest): CloudRunnerContext {
     if (

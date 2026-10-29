@@ -34,6 +34,7 @@ import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import { createRuntimeContextResolver } from "../session-runtime/context";
 import { createTestSessionEngine } from "../testing/session-engine";
 import { createCloudProductStore, type CloudProductStore } from "./index";
+import { createMachinePaths } from "../machine-paths";
 import type { CloudRunnerContext } from "./context";
 import { createLocalSessionEngine } from "./owner";
 import { createCloudEnvironmentPreparation } from "./environment";
@@ -100,7 +101,7 @@ function fixture(busySites: BusyWorktreeSites = async () => []) {
     sessionJobs?: Parameters<typeof createCloudProductStore>[0]["sessionJobs"],
   ) => {
     const cloud = createCloudProductStore({
-      host,
+      host: { ...host, machinePaths: createMachinePaths(db) },
       ownerUserId,
       backendUrl: "http://127.0.0.1:1",
       runnerId: () => runnerId,

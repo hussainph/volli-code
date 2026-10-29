@@ -69,6 +69,7 @@ import type { SchemaCompatibility } from "./schema-compatibility";
 import { guardTransactionOwnership, logTransactionViolation } from "./transaction-gate";
 import type { TransactionViolationHandler } from "./transaction-gate";
 import { hostLogger } from "../log/root";
+import { normalizeCloudShadowPaths } from "./cloud-shadow-paths";
 
 // Read-only questions about the fence, for recovery's listing.
 export { hasPendingDatabaseRecovery, recoveryPendingPath };
@@ -354,6 +355,8 @@ export function openVolliDb(
   options: {
     /** The caller already holds the fence: a swap verifying what it installed. */
     allowPendingRecovery?: boolean;
+    /** Recovery staging/verification must preserve the candidate's machine identity fields. */
+    normalizeCloudShadows?: boolean;
     /** Tests/dev opt into failure; packaged startup explicitly uses logging. */
     onTransactionViolation?: TransactionViolationHandler;
   } = {},
@@ -442,6 +445,7 @@ export function openVolliDb(
         db.pragma("analysis_limit = 1000");
         db.exec("ANALYZE");
       }
+      if (options.normalizeCloudShadows !== false) normalizeCloudShadowPaths(db);
       guardTransactionOwnership(db, options.onTransactionViolation ?? logTransactionViolation);
       return db;
     } catch (error) {
@@ -1180,7 +1184,10 @@ class Swap {
       checkExactRestore(this.request.dbPath, this.request.restoreSchema);
       return;
     }
-    const restored = openVolliDb(this.request.dbPath, { allowPendingRecovery: true });
+    const restored = openVolliDb(this.request.dbPath, {
+      allowPendingRecovery: true,
+      normalizeCloudShadows: false,
+    });
     try {
       if (!checksClean(restored))
         throw new Error("The restored database failed its integrity check.");

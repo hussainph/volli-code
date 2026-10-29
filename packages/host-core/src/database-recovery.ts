@@ -158,7 +158,7 @@ export class DatabaseRecovery {
       copyFileSync(join(userData, selected.name), stagedPath, constants.COPYFILE_EXCL);
       if (integrity(stagedPath) !== "clean")
         throw new Error("The selected backup no longer checks clean. Nothing was restored.");
-      const staged = openVolliDb(stagedPath);
+      const staged = openVolliDb(stagedPath, { normalizeCloudShadows: false });
       try {
         if (!checksClean(staged))
           throw new Error("The backup failed its integrity check after migration.");

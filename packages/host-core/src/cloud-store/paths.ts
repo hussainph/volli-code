@@ -359,6 +359,16 @@ export function createRunnerPathRegistry(db: Database.Database, options: { runne
     workingCopies: {
       pathOf: copyPathOf,
       get: getCopy,
+      /** Resolve a machine stamp with its checkout owner, never a shadow ticket row. */
+      ofTicket(ticketId: string): { projectId: string; copy: WorkingCopyPath } | null {
+        const row = prepared<[string, string], WorkingCopyRow & { project_id: string }>(
+          db,
+          `SELECT w.*, p.project_id FROM working_copy_paths w JOIN project_checkout_paths p
+           ON p.runner_id=w.runner_id AND p.project_repo_id=w.project_repo_id
+           WHERE w.runner_id=? AND w.ticket_id=? ORDER BY w.project_repo_id LIMIT 1`,
+        ).get(runnerId, ticketId);
+        return row === undefined ? null : { projectId: row.project_id, copy: copyFromRow(row) };
+      },
       register: registerCopy,
       list: (): WorkingCopyPath[] =>
         prepared<[string], WorkingCopyRow>(

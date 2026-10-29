@@ -9,6 +9,7 @@ import { createHostDecisions } from "./decision/host-decisions";
 import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
 import { McpOAuthBroker } from "./mcp/oauth";
 import { McpSettingsService } from "./mcp/settings";
+import type { MachinePathReader } from "./machine-paths";
 import type { ClientCapabilityPort } from "./ports";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -44,6 +45,7 @@ export function createHostRuntimeServices(
   ports: { client: ClientCapabilityPort },
   options: {
     dbPath: string;
+    machinePaths?: MachinePathReader;
     modelAccess?: PiModelAccess;
     venue?: RunnerIdentity;
     webKeySealing?: WebKeySealingOptions;
@@ -76,6 +78,7 @@ export function createHostRuntimeServices(
   );
   const mcp = new McpSettingsService({
     db,
+    ...(options.machinePaths === undefined ? {} : { machinePaths: options.machinePaths }),
     credentials,
     oauth: new McpOAuthBroker({
       store: credentials,

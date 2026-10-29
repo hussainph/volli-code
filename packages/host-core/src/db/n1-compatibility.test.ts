@@ -82,6 +82,7 @@ import { hasSecret, writeSecret } from "./secrets-repo";
 import { testProject, testTicket } from "./test-helpers";
 import { createCloudSessionOwner, createLocalSessionEngine } from "../cloud-store/owner";
 import { createRunnerPathRegistry } from "../cloud-store/paths";
+import { cloudShadowPath } from "./cloud-shadow-paths";
 import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
 import { movedPiBash, MOVED_BASH_TOOLS } from "./fixtures/moved-pi-bash";
 import { recoveredPiQuestion } from "./fixtures/recovered-pi-question";
@@ -754,6 +755,24 @@ describe.skipIf(manifest === null)(
       await headCloudProfile();
       const { head, guarded } = await probe();
       if (guarded && headFloor() > head) return;
+      // The previous reader sees the repaired inert identity, not the legacy
+      // canary's real-folder UNIQUE claim. Its Cloud history must still read or
+      // safely hide, while the machine checkout remains in the registry.
+      const repaired = openVolliDb(dbPath);
+      try {
+        expect(
+          repaired.prepare("SELECT path FROM projects WHERE id=?").get(CLOUD_PROJECT_ID),
+        ).toEqual({
+          path: cloudShadowPath(repaired, CLOUD_OWNER_ID, CLOUD_PROJECT_ID),
+        });
+        expect(
+          createRunnerPathRegistry(repaired, {
+            runnerId: "cloud-compat-runner",
+          }).checkouts.ofProject(CLOUD_PROJECT_ID)?.absPath,
+        ).toBe(join(root, "cloud-repo"));
+      } finally {
+        repaired.close();
+      }
       const before = new Database(dbPath, { readonly: true });
       let history: unknown[];
       try {

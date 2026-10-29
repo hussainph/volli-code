@@ -23,6 +23,7 @@ import { SecretStore } from "../secrets/store";
 import type { LiveHostCore } from "../index";
 import { createCloudTranscriptPublisher } from "./transcripts";
 import { createCloudProductStore, type CloudProductStore } from "./index";
+import { createMachinePaths } from "../machine-paths";
 
 const PROJECT = "a0000000-0000-4000-8000-000000000001";
 const SESSION = "c0000000-0000-4000-8000-000000000001";
@@ -64,6 +65,7 @@ async function fixture(text = "Reply from the actual local artifact store") {
   });
   cloud = createCloudProductStore({
     host: {
+      machinePaths: createMachinePaths(db.db),
       database: { ok: true, db: db.db },
       sessionEngine: wake.engine,
       sessionWakeBus: wake,

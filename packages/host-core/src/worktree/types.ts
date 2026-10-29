@@ -6,6 +6,7 @@
  */
 import type Database from "better-sqlite3";
 import type { WorktreePhase } from "@volli/shared";
+import type { MachinePathReader } from "../machine-paths";
 
 export type { RunGit } from "../project-base-branch";
 
@@ -39,6 +40,7 @@ export type { WorktreePhase } from "@volli/shared";
  */
 export interface WorktreePorts {
   db: Database.Database;
+  machinePaths?: MachinePathReader;
   /**
    * The git runner every worktree path uses — the non-blocking one. There is
    * deliberately no blocking runner on this bundle (VC-786): the one consumer

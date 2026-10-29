@@ -13,6 +13,7 @@ import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
 import type { TrashPort } from "./ports/trash";
 import { createHostFileServices, type HostFileServices } from "./file-services";
+import { createMachinePaths, type MachinePaths } from "./machine-paths";
 import {
   createHostRuntimeServices,
   type HostRuntimeServices,
@@ -141,6 +142,8 @@ export interface LiveHostCore
    * Change Set and base reads, and every client's change watch, go through it.
    */
   readonly worktreeReads: WorktreeReadService;
+  /** Launch-selected local/Cloud machine pointers shared by every file/git consumer. */
+  readonly machinePaths: MachinePaths;
   readonly runtimeServices: HostRuntimeServices;
   readonly maintenance: HostMaintenance;
   readonly client: ClientCapabilityPort;
@@ -190,7 +193,8 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     ...sessionServices
   } = createHostSessionServices(db, ports);
   const worktrees = createWorktreeRuntime(ports, options);
-  const worktreeDeps = worktrees.deps(db);
+  const machinePaths = createMachinePaths(db);
+  const worktreeDeps = { ...worktrees.deps(db), machinePaths };
   const worktreeReads = createWorktreeReadService({ deps: () => worktreeDeps });
   const client = clientCapabilities(ports.client);
   const detachedWork = createDetachedWorkTracker({
@@ -267,6 +271,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     worktrees,
     worktreeDeps,
     worktreeReads,
+    machinePaths,
     client,
     maintenance,
     detachedWork,
@@ -285,7 +290,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
         })),
       };
     },
-    fileServices: createHostFileServices(ports),
+    fileServices: createHostFileServices(ports, machinePaths),
     get runtimeServices() {
       return (runtimeServices ??= createHostRuntimeServices(
         db,
@@ -293,6 +298,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
         { client },
         {
           dbPath,
+          machinePaths,
           ...(options.modelAccess === undefined ? {} : { modelAccess: options.modelAccess() }),
           ...(options.webKeySealing === undefined ? {} : { webKeySealing: options.webKeySealing }),
           ...(options.venue === undefined ? {} : { venue: options.venue(db) }),

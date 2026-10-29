@@ -50,7 +50,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import { registerFileIpcHandlers } from "./volli-fs-ipc";
-import { createHostFileServices } from "@volli/host-core/files";
+import { createHostFileServices, type MachinePathReader } from "@volli/host-core/files";
 import { createElectronClientCapabilities } from "./client-capabilities";
 import { insertProject, insertTicket } from "@volli/host-core/db";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/testing";
@@ -1622,9 +1622,187 @@ describe("registerFileIpcHandlers", () => {
   });
 });
 
-function createTestFileServices() {
-  return createHostFileServices({
-    client: createElectronClientCapabilities(),
-    trash: { trashItem: trashItemMock },
-  });
+function createTestFileServices(machinePaths?: MachinePathReader) {
+  return createHostFileServices(
+    {
+      client: createElectronClientCapabilities(),
+      trash: { trashItem: trashItemMock },
+    },
+    machinePaths,
+  );
 }
+
+it("sweeps Cloud file IPC readers without ever treating a hashed shadow as a folder", async () => {
+  const shadow = join(makeTempProjectDir(), "cloud-identities", "a".repeat(64));
+  mkdirSync(shadow, { recursive: true });
+  writeFileSync(join(shadow, "identity.txt"), "SHADOW");
+  const checkout = makeGitRepoDir();
+  writeFileSync(join(checkout, "identity.txt"), "checkout");
+  const setup = setupDbAndHandlers(shadow, undefined, true);
+  const machinePaths: MachinePathReader = {
+    kind: "cloud",
+    projectPath: (id) => (id === setup.projectId ? checkout : null),
+    ticket: () => null,
+  };
+  const services = createTestFileServices(machinePaths);
+  const sender = makeWebContents();
+  try {
+    registerFileIpcHandlers(
+      { ok: true, db: setup.ctx.db },
+      {
+        globalCommandsDir: setup.globalCommandsDir,
+        globalSkillsDir: setup.globalSkillsDir,
+        cloudEnabled: () => true,
+      },
+      services,
+    );
+    const scope = { projectId: setup.projectId };
+    expect(
+      await invoke("volli:file-read", sender, { ...scope, relPath: "identity.txt" }),
+    ).toMatchObject({ ok: true, content: { text: "checkout" } });
+    expect(await invoke("volli:file-index", sender, scope)).toMatchObject({
+      ok: true,
+      files: [expect.objectContaining({ relPath: "identity.txt" })],
+    });
+    expect(await invoke("volli:search", sender, { ...scope, query: "checkout" })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await invoke("volli:artifact-create", sender, { ...scope, name: "registry" }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await invoke("volli:prompt-template-create", sender, {
+        ...scope,
+        scope: "project",
+        name: "registry",
+        description: "",
+        body: "registry template",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(await invoke("volli:prompt-templates", sender, scope)).toMatchObject({ ok: true });
+    expect(await invoke("volli:dir-watch", sender, { ...scope, relPath: "" })).toEqual({
+      ok: true,
+    });
+    expect(await invoke("volli:file-watch", sender, { ...scope, relPath: "identity.txt" })).toEqual(
+      { ok: true },
+    );
+    expect(watchCalls.every((call) => !call.dir.startsWith(shadow))).toBe(true);
+    expect(existsSync(join(checkout, ".volli", "artifacts", "registry.md"))).toBe(true);
+    expect(existsSync(join(checkout, ".volli", "commands", "registry.md"))).toBe(true);
+    expect(await readFile(join(shadow, "identity.txt"), "utf8")).toBe("SHADOW");
+    expect(existsSync(join(shadow, ".volli"))).toBe(false);
+  } finally {
+    sender.emit("destroyed");
+    setup.ctx.cleanup();
+  }
+});
+
+it("sweeps ticket-scoped Cloud file mutations and native targets through the machine copy", async () => {
+  const shadow = join(makeTempProjectDir(), "cloud-identities", "b".repeat(64));
+  mkdirSync(shadow, { recursive: true });
+  writeFileSync(join(shadow, "identity.txt"), "SHADOW");
+  const checkout = realpathSync(makeGitRepoDir());
+  const worktree = realpathSync(makeGitRepoDir());
+  writeFileSync(join(worktree, "identity.txt"), "worktree");
+  const setup = setupDbAndHandlers(shadow, undefined, true);
+  syncProjectRoots([checkout, worktree]);
+  const opened: string[] = [];
+  const externalApps: ExternalAppGateway = {
+    list: async () => [],
+    open: async (_appId, path) => {
+      opened.push(path);
+      return { ok: true };
+    },
+  };
+  const services = createTestFileServices({
+    kind: "cloud",
+    projectPath: () => checkout,
+    ticket: () => ({
+      projectId: setup.projectId,
+      displayId: "VC-42",
+      usesWorktree: true,
+      worktreePath: worktree,
+      branch: "topic",
+      baseBranch: "main",
+    }),
+  });
+  const sender = makeWebContents();
+  const scope = { projectId: setup.projectId, ticketId: setup.ticketId };
+  try {
+    registerFileIpcHandlers(
+      { ok: true, db: setup.ctx.db },
+      {
+        globalCommandsDir: setup.globalCommandsDir,
+        globalSkillsDir: setup.globalSkillsDir,
+        cloudEnabled: () => true,
+        externalApps,
+      },
+      services,
+    );
+    expect(
+      await invoke("volli:file-read", sender, { ...scope, relPath: "identity.txt" }),
+    ).toMatchObject({ ok: true, content: { text: "worktree" } });
+    expect(await invoke("volli:file-index", sender, scope)).toMatchObject({
+      ok: true,
+      files: [expect.objectContaining({ relPath: "identity.txt" })],
+    });
+    expect(await invoke("volli:search", sender, { ...scope, query: "worktree" })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await invoke("volli:file-write", sender, {
+        ...scope,
+        relPath: "identity.txt",
+        content: "registry copy",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(await invoke("volli:dir-create", sender, { ...scope, relPath: "src" })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await invoke("volli:file-create", sender, { ...scope, relPath: "src/a.ts" }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await invoke("volli:file-duplicate", sender, { ...scope, relPath: "src/a.ts" }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await invoke("volli:file-rename", sender, {
+        ...scope,
+        relPath: "src/a.ts",
+        toRelPath: "src/b.ts",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(await invoke("volli:file-delete", sender, { ...scope, relPath: "src/b.ts" })).toEqual({
+      ok: true,
+    });
+    expect(trashItemMock).toHaveBeenLastCalledWith(join(worktree, "src", "b.ts"));
+    expect(
+      await invoke("volli:file-reveal", sender, { ...scope, relPath: "identity.txt" }),
+    ).toEqual({ ok: true });
+    expect(showItemInFolderMock).toHaveBeenLastCalledWith(join(worktree, "identity.txt"));
+    expect(await invoke("volli:worktree-reveal", sender, scope)).toEqual({ ok: true });
+    expect(showItemInFolderMock).toHaveBeenLastCalledWith(worktree);
+    expect(
+      await invoke("volli:external-app-open-file", sender, {
+        ...scope,
+        relPath: "identity.txt",
+        appId: "vscode",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      await invoke("volli:external-app-open-worktree", sender, { ...scope, appId: "terminal" }),
+    ).toEqual({ ok: true });
+    expect(opened).toEqual([join(worktree, "identity.txt"), worktree]);
+    expect(await invoke("volli:file-watch", sender, { ...scope, relPath: "identity.txt" })).toEqual(
+      { ok: true },
+    );
+    expect(watchCalls.at(-1)?.dir).toBe(worktree);
+    expect(await readFile(join(worktree, "identity.txt"), "utf8")).toBe("registry copy");
+    expect(await readFile(join(shadow, "identity.txt"), "utf8")).toBe("SHADOW");
+    expect(existsSync(join(shadow, "src"))).toBe(false);
+    expect(existsSync(join(checkout, "src"))).toBe(false);
+  } finally {
+    sender.emit("destroyed");
+    setup.ctx.cleanup();
+  }
+});
