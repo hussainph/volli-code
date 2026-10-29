@@ -254,6 +254,8 @@ test("extended lanes run after merge, nightly and on demand — never as a PR ga
       ".github/workflows/ci-extended.yml",
       "apps/desktop/scripts/run-smokes.mjs",
       "apps/desktop/scripts/smoke-quiet-check.mjs",
+      // The older-app live lane's harness (VC-1019).
+      "scripts/convex-compat/**",
     ],
   });
   // A main run is never cancelled by the next merge; a PR's newer push may.
@@ -504,4 +506,55 @@ test("N-1 compatibility runs rolling and fixed downgrade promises from full hist
   const run = job.steps.at(-1).run;
   assert.ok(run.includes("src/db/n1-compatibility.test.ts"));
   assert.equal(job.steps.at(-1).env.VOLLI_N1_MANIFEST, "${{ steps.prepare.outputs.manifest }}");
+});
+
+test("the older-app live lane runs the newest shipped build against THIS commit's backend", () => {
+  const job = extended.jobs["older-app-live"];
+  // Linux and a short leash: these suites are plain Node, and a lane that
+  // cannot finish inside fifteen minutes is a broken lane, not a slow one.
+  assert.equal(job["runs-on"], "ubuntu-24.04");
+  assert.equal(job["timeout-minutes"], 15);
+  assert.equal(job.if, "${{ !cancelled() }}");
+  assert.equal(job.needs, undefined, "runs beside the smoke chain, not behind it");
+
+  // The checkout is the commit under test, with the tags the build is chosen
+  // from — never the tag itself: an older tree checked out over this one would
+  // make the backend older too, and prove nothing.
+  const checkout = job.steps.find((step) => step.name === "Checkout").with;
+  assert.equal(checkout["fetch-depth"], 0);
+  assert.equal(checkout.ref, undefined);
+  assert.equal(checkout["persist-credentials"], false);
+
+  // The build comes out of the tag; the backend and the deployed functions out
+  // of this checkout.
+  const prepare = job.steps.find((step) => step.id === "prepare");
+  assert.equal(prepare.name, "Materialize the newest shipped build");
+  assert.ok(prepare.run.includes("scripts/convex-compat/prepare-older-app.mjs --latest"));
+  assert.match(prepare.run, /tail -n 1 .*older-app-prepare\.log/);
+  const live = job.steps.find((step) => step.name.startsWith("Run that build's"));
+  assert.equal(live["working-directory"], "convex");
+  assert.ok(live.run.includes("fixture/with-backend.ts --deploy"));
+  assert.ok(live.run.includes("scripts/convex-compat/older-app-live.mjs"));
+  assert.ok(live.run.includes('--manifest "${{ steps.prepare.outputs.manifest }}"'));
+  // Required, so a missing fixture fails these suites instead of skipping them.
+  assert.equal(live.env.VOLLI_CLOUD_BOARD_LIVE_REQUIRED, "1");
+  assert.equal(live.env.VOLLI_CLOUD_SESSION_LIVE_REQUIRED, "1");
+
+  // The harness's own unit tests run before it, and its evidence is kept even
+  // when the run is red.
+  assert.equal(
+    job.steps.find((step) => step.name === "Harness unit tests").run,
+    "node --test scripts/convex-compat/*.test.mjs",
+  );
+  const upload = job.steps.at(-1);
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with["retention-days"], 30);
+  assert.ok(upload.with.path.includes("live-report.json"));
+
+  // And the one check that sums the lanes gates on it like every other.
+  assert.ok(extended.jobs.summary.needs.includes("older-app-live"));
+  assert.equal(
+    extended.jobs.summary.steps.find((step) => step.id === "report").env.OLDER_APP_LIVE,
+    "${{ needs.older-app-live.result }}",
+  );
 });

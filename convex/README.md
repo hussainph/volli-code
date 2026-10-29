@@ -3,7 +3,7 @@
 The Volli Cloud backend: the Convex schema and server functions, plus a pinned
 local backend that tests and codegen run against. The schema holds the whole
 cloud data model (validators and indexes); product functions arrive area by
-area, each in its own module. No cloud deployment exists yet.
+area, each in its own module.
 
 Owner setup and deployment gates: [`docs/runbooks/cloud-deploy.md`](../docs/runbooks/cloud-deploy.md).
 
@@ -511,11 +511,56 @@ board test uses, and shows that every write the raw HTTP API refused under
 it was contention and left nothing behind (`VOLLI_TEST_BOARD_BURST` raises
 the burst to reproduce it harder).
 
+### App compatibility
+
 **Public function arguments are a cross-version contract.** A shipped
 desktop calls these functions directly from its window (VC-889), through the
 generated references this package exports as `@volli/convex/api` (the only
 import a client takes from here). Change a public function's arguments
 additively only: a new optional argument, never a removed or retyped one.
+
+[`scripts/convex-api/`](../scripts/convex-api/) enforces this in the PR's
+`Check + Build` job (required by `CI gate`). It snapshots **every public query,
+mutation and action**, including shared/nested validators, into
+[`api-contract.json`](api-contract.json). Internal functions and HTTP routes
+are not this generated client API. Regenerate after an intentional change:
+
+```sh
+node scripts/convex-api/generate.mjs
+node --test scripts/convex-api/*.test.mjs
+node scripts/convex-api/generate.mjs --check --base origin/main
+```
+
+`--check` rejects stale snapshots and compares against both the base revision
+and the newest semver `v*` app tag, including canaries (stable wins over the
+same version's canary). Fetch full history and tags first. For a revision from before this
+check existed, it archives that revision and evaluates its own validators
+with its own frozen dependencies; a missing snapshot never skips compatibility.
+The pinned `convex function-spec` CLI needs a deployed backend, so this check
+reads Convex's registered `exportArgs` / `exportReturns` offline instead.
+No function handler runs and no deployment credentials are used.
+
+Input unions may widen, new arguments must be optional, existing arguments
+must remain accepted (including nested objects). Function removals, public to
+internal changes and kind changes fail. Declared return validators preserve
+all existing fields, their requiredness and the values older clients can read;
+new fields and widened unions are allowed. Clients must tolerate new union
+cases; existing arms cannot silently lose or retype fields. **Undeclared returns are recorded as `null`, not inferred**:
+this guard cannot prove their handler's return shape. The older-app live lane
+below covers real client behavior, not every possible return value.
+
+An intentional break needs an exact entry in
+[`api-contract-allowlist.json`](api-contract-allowlist.json), reviewed as code:
+`{"function":"module:name","path":"args.field","code":"argument_removed",
+"reason":"Why retiring this caller is safe","retiresIn":"v0.4.0"}`.
+The check prints the exact function/path/code to use. Exceptions expire when
+the newest released app reaches `retiresIn`; no wildcard exemptions.
+
+`ci-extended.yml` also runs the newest released app's own cloud board and
+Session live suites against **this** backend, deployed to one pinned local
+backend. It runs on main pushes, nightly and dispatch; the summary requires
+it. Suites absent at the tag are listed explicitly, and an empty selection
+fails rather than claiming compatibility.
 
 **No cloud deployment may ever set `VOLLI_TEST_JWKS`.** Without it, the
 deployment trusts no test issuer.
@@ -711,14 +756,16 @@ then delete the old one on GitHub.
 beside the desktop lanes and never inside them. It restores the binary cache
 (keyed on `backend.json`), regenerates the code and requires that nothing
 changed, and runs both test suites. `CI gate` requires it. `Check + Build`
-typechecks this package along with the rest of the workspace.
+typechecks this package along with the rest of the workspace and runs the
+[public API contract check](#app-compatibility) against both the base and newest app
+tag. CI extended's `Older app (live)` runs the released tag's own live clients
+against this backend on main pushes, nightly and dispatch (details above).
 
-## Deployments (not yet)
+## Deployments
 
-There are no cloud deployments yet. Dev, staging and prod deployments, deploy
-CI, the object-storage bucket (R2), backups and export are added once the
-Convex and Cloudflare accounts exist. Signing uploads already works against
-any S3-compatible store: a deployment points at its bucket with the
+Environment status and operator setup are maintained in the
+[deployment runbook](../docs/runbooks/cloud-deploy.md). Signing uploads works
+against any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
 
 ### Deploying with the self-check

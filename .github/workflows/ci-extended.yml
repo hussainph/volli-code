@@ -2,8 +2,9 @@ name: CI extended
 
 # The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
 # smoke tier (every non-core, non-quarantined journey) and flag-on cloud
-# acceptance, plus the move engine's kill/resume matrix and the large-profile
-# backup restore rehearsal (both Linux). The smoke
+# acceptance, plus the move engine's kill/resume matrix, the large-profile
+# backup restore rehearsal (both Linux) and the older-app live check (the
+# newest shipped build against this commit's backend, Linux). The smoke
 # lanes are macOS-only and long, and gating every PR on them held
 # all five of the account's concurrent macOS slots per PR run, so PRs queued
 # behind each other. Here they run:
@@ -12,8 +13,9 @@ name: CI extended
 #   - on demand for ANY branch: `gh workflow run ci-extended.yml --ref <branch>`.
 #     A PR that changes a journey's area or the cloud path should dispatch it
 #     before merge; its result shows on that commit;
-#   - on a PR only when it changes this file or the smoke runner, so the lane
-#     definition is proven by the PR that edits it (as ci.yml is).
+#   - on a PR only when it changes this file, the smoke runner, or the
+#     older-app live harness, so the lane definition is proven by the PR that
+#     edits it (as ci.yml is).
 #
 # Results are visible, not gating: a red here is a red X on the commit and a
 # failed `Extended result`, never a required PR check. The release workflow
@@ -40,6 +42,7 @@ on:
       - .github/workflows/ci-extended.yml
       - apps/desktop/scripts/run-smokes.mjs
       - apps/desktop/scripts/smoke-quiet-check.mjs
+      - scripts/convex-compat/**
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -391,6 +394,104 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The behavioural half of the app↔backend contract (VC-1019): the newest
+  # shipped build — the latest `v*` tag by semver, prereleases included, so
+  # today `v0.3.0-canary.1` — runs its OWN live cloud suites. Its tree comes
+  # out of the tag with `git archive` and its own lockfile is installed, so the
+  # suites, every module they import, the `convex` client and the committed
+  # `convex/functions/_generated` API are that build's. Only the backend is
+  # this commit's: `with-backend.ts --deploy` pushes `convex/functions` to the
+  # pinned local backend and hands the run its URL and a test issuer key.
+  #
+  # The static API guard owns the surface (a function removed, an argument made
+  # required, a validator narrowed — each shows up there as a diff); this lane
+  # owns what that surface is for — the build people are actually running still
+  # signs in, still paints its board, still streams a Session, still reads
+  # "Waiting for <Mac>". Neither substitutes for the other: a rename is caught
+  # by both, a changed behaviour behind an unchanged signature only here.
+  #
+  # Linux: these suites are plain Node under `vp test`, and `Convex (codegen +
+  # backend)` already runs the same files on ubuntu, so this holds no macOS
+  # slot. `fetch-depth: 0` brings the tags the build is chosen from, and the
+  # older tree is installed from its own lockfile with `--ignore-scripts` (no
+  # Electron download, no node-pty build) into the pnpm store this checkout
+  # already filled.
+  #
+  # `scripts/convex-compat/` is the lane's own harness: one script picks and
+  # materializes the build, the other runs its suites under the fixture and
+  # refuses any result without evidence — not one test, or a skipped one, is a
+  # failure rather than a green. Both report the selected tag, its commit and
+  # the suite list to the run's summary, and the JSON report is kept.
+  older-app-live:
+    name: Older app (live)
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Tags: which build shipped is chosen from them.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      - name: Place the backend cache outside the checkout
+        run: echo "VOLLI_CONVEX_BACKEND_CACHE=$RUNNER_TEMP/convex-local-backend" >> "$GITHUB_ENV"
+
+      - name: Restore the pinned Convex local backend
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/convex-local-backend
+          key: convex-local-backend-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('convex/fixture/backend.json') }}
+
+      - name: Fetch and verify the pinned backend
+        run: vp run --filter @volli/convex backend:fetch
+
+      - name: Harness unit tests
+        run: node --test scripts/convex-compat/*.test.mjs
+
+      - name: Materialize the newest shipped build
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/convex-compat/prepare-older-app.mjs --latest --out "$RUNNER_TEMP/older-app" \
+            | tee "$RUNNER_TEMP/older-app-prepare.log"
+          # The manifest path is the log's last line; the lines above it name the
+          # build chosen (and went to this step's summary already).
+          manifest="$(tail -n 1 "$RUNNER_TEMP/older-app-prepare.log")"
+          test -f "$manifest"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
+      - name: Run that build's own live suites against this commit's backend
+        working-directory: convex
+        env:
+          VOLLI_CLOUD_BOARD_LIVE_REQUIRED: "1"
+          VOLLI_CLOUD_SESSION_LIVE_REQUIRED: "1"
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          node "$GITHUB_WORKSPACE/scripts/convex-compat/older-app-live.mjs"
+          --manifest "${{ steps.prepare.outputs.manifest }}"
+          --report "$RUNNER_TEMP/older-app/live-report.json"
+
+      - name: Upload the older-app live evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: older-app-live-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/older-app/live-report.json
+            ${{ runner.temp }}/older-app-prepare.log
+          if-no-files-found: warn
+          retention-days: 30
+
   # One place to read the outcome, on the run page and in its summary. It
   # waits on every lane (`always()`, so a cancelled or failed lane is still
   # reported) and fails unless every lane succeeded — nothing here may skip.
@@ -399,7 +500,15 @@ jobs:
     name: Extended result
     if: always()
     needs:
-      [smoke-rest, smoke-cloud, smoke-cloud-wake, move-matrix, move-app, backup-restore-rehearsal]
+      [
+        smoke-rest,
+        smoke-cloud,
+        smoke-cloud-wake,
+        move-matrix,
+        move-app,
+        backup-restore-rehearsal,
+        older-app-live,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -413,6 +522,7 @@ jobs:
           MOVE_MATRIX: ${{ needs.move-matrix.result }}
           MOVE_APP: ${{ needs.move-app.result }}
           BACKUP_RESTORE: ${{ needs.backup-restore-rehearsal.result }}
+          OLDER_APP_LIVE: ${{ needs.older-app-live.result }}
         run: |
           set -euo pipefail
           status=0
@@ -437,4 +547,5 @@ jobs:
           report "Move to Volli Cloud" "$MOVE_MATRIX"
           report "Move to Volli Cloud (app path)" "$MOVE_APP"
           report "Backup restore rehearsal" "$BACKUP_RESTORE"
+          report "Older app (live)" "$OLDER_APP_LIVE"
           exit "$status"
