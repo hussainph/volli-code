@@ -88,11 +88,6 @@ export interface MoveSessionHistory {
     ownerUserId: string,
     sessions: ReadonlyArray<{ sessionId: string; acceptedThrough: number }>,
   ): void;
-  /** Takes back the cursors a seed wrote and nothing moved since; answers the Sessions that kept theirs. */
-  releaseCursors(
-    ownerUserId: string,
-    sessions: ReadonlyArray<{ sessionId: string; acceptedThrough: number }>,
-  ): string[];
 }
 
 /** The profile's verified backup: written once per queue, re-read before any freeze.

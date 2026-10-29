@@ -19,7 +19,11 @@
  * The check runs before the write's own transaction, not inside it. That is
  * sound while one process writes the profile: a move freezes only after a
  * project is idle, so nothing can start between the two. A write that awaits
- * between its check and its write asks again at the write (MCP `save`).
+ * between its check and its write asks again at the write: MCP `save`, and
+ * `signIn` before every credential write it makes, the tokens included;
+ * project remove, after its Sessions' bindings are released; relink, after
+ * its looks at the disk; the pull-request poll, after each `gh` answer; and
+ * the worktree reclaim, after its look for work in flight.
  * TODO: a second process writing the profile would need the check inside
  * the transaction.
  *

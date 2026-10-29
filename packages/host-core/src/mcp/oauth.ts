@@ -121,6 +121,7 @@ function oauthStateStore(
   store: McpCredentialStore,
   serverId: string,
   ephemeral: { serverUrl?: string; codeVerifier?: string; oauthState?: string },
+  mayWrite: () => void = () => undefined,
 ): McpOAuthStateStore {
   return {
     load(): McpOAuthState | undefined {
@@ -141,6 +142,7 @@ function oauthStateStore(
       else ephemeral.codeVerifier = codeVerifier;
       if (oauthState === undefined) delete ephemeral.oauthState;
       else ephemeral.oauthState = oauthState;
+      mayWrite();
       store.update(serverId, (current) => ({
         ...current,
         oauth: durable as McpStoredOAuthState,
@@ -213,6 +215,24 @@ function signInFailure(serverName: string, error: unknown): string {
 
 /** A failure on the way to a pending browser callback, said plainly. */
 class SignInWaitError extends McpConnectionProblem {}
+
+/** A write the sign-in's caller no longer allows ({@link McpSignInOptions.mayWrite}), said as it said it. */
+class SignInHeldError extends McpConnectionProblem {}
+
+/** What one sign-in is given by the caller that starts it. */
+export interface McpSignInOptions {
+  sources: McpCredentialSources;
+  signal: AbortSignal;
+  probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
+  /**
+   * Asked before every write the sign-in makes to the credential store, the
+   * tokens included: a sentence stops the sign-in there, with nothing more
+   * written, and is its outcome. A sign-in can wait minutes on the browser,
+   * and the server's project can stop taking writes meanwhile (a move froze
+   * it). Callers that join a sign-in already running share its starter's.
+   */
+  mayWrite?: () => string | null;
+}
 
 export interface McpOAuthBrokerOptions {
   store: McpCredentialStore;
@@ -380,14 +400,7 @@ export class McpOAuthBroker {
    * afterwards; it is injected because the client that can connect is built
    * on top of this broker.
    */
-  signIn(
-    server: McpServerDraft,
-    options: {
-      sources: McpCredentialSources;
-      signal: AbortSignal;
-      probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
-    },
-  ): Promise<McpSignInOutcome> {
+  signIn(server: McpServerDraft, options: McpSignInOptions): Promise<McpSignInOutcome> {
     // One sign-in per server, whoever asked for it. Each caller waits on it
     // with its own signal: a caller that stops waiting (an agent's turn
     // interrupted, say) leaves it running for the others, and only when every
@@ -458,14 +471,11 @@ export class McpOAuthBroker {
     this.#signingIn.delete(serverId);
   }
 
-  async #signIn(
-    server: McpServerDraft,
-    options: {
-      sources: McpCredentialSources;
-      signal: AbortSignal;
-      probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
-    },
-  ): Promise<McpSignInOutcome> {
+  async #signIn(server: McpServerDraft, options: McpSignInOptions): Promise<McpSignInOutcome> {
+    const mayWrite = (): void => {
+      const held = options.mayWrite?.() ?? null;
+      if (held !== null) throw new SignInHeldError(held);
+    };
     if (
       server.transport.type === "streamable-http" &&
       !mcpEndpointMayCarryCredentials(server.transport.url)
@@ -508,7 +518,7 @@ export class McpOAuthBroker {
         },
         ...(target.oauth?.clientId === undefined ? {} : { clientId: target.oauth.clientId }),
         ...(clientSecret === undefined ? {} : { clientSecret }),
-        store: oauthStateStore(this.#store, server.id, {}),
+        store: oauthStateStore(this.#store, server.id, {}, mayWrite),
         onRedirect: (url) => {
           authorizationUrl = url;
         },
@@ -645,6 +655,7 @@ export class McpOAuthBroker {
               | undefined
           )?.client_id;
       const port = Number(new URL(callback.redirectUrl).port);
+      mayWrite();
       this.#store.update(server.id, (current) => ({
         ...current,
         signInRequired: undefined,

@@ -895,31 +895,34 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     // `uncommitted` too: a roll back resumed after its uncommit no longer asks
     // the backend, so `shown` can read false there.
     const purged = shown || move.journal.uncommitted === true;
+    // Its paths only. A handover is journaled in the `committed` step, so a
+    // roll back that has one rolls back from a committed state: `shown`, and
+    // the moved Sessions' cursors go with every other one just below.
     if (move.journal.handover !== undefined) {
-      releaseHandover({
-        db: ports.db,
-        history: ports.history,
-        userId: move.userId,
-        runnerId: move.runnerId,
-        record: move.journal.handover,
-        ...(purged ? { pathsOnly: true as const } : {}),
-      });
+      releaseHandover({ db: ports.db, runnerId: move.runnerId, record: move.journal.handover });
     }
     if (purged) {
       // The cloud copy is purged: no Session of the project is served from
       // here any more, the ones that moved on since and those born in Volli
       // Cloud included (whether or not the handover ran). Taken back and named
-      // in one transaction, so a crash between cannot lose the names.
+      // in one transaction, so a crash between cannot lose the names. A roll
+      // back resumed after that adds to the names an earlier run kept.
       const failure = move.failure;
       let takenBack: string[] = [];
       move = ports.db.transaction(() => {
         takenBack = releaseProjectCursors(ports.db, move.userId, move.projectId);
         if (takenBack.length === 0 || failure === null) return move;
+        const earlier = failure.detail?.["cursorsTakenBack"];
+        const named = new Set([...(Array.isArray(earlier) ? earlier : []), ...takenBack]);
         return journal.patch(move.moveId, {
-          failure: { ...failure, detail: { ...failure.detail, cursorsTakenBack: takenBack } },
+          failure: {
+            ...failure,
+            detail: { ...failure.detail, cursorsTakenBack: [...named].toSorted() },
+          },
         });
       })();
       cursorsReleased(takenBack);
+      await fault("rollback.cursors");
     }
     await rm(workDir(move), { recursive: true, force: true, maxRetries: 3 });
     const again = move.journal.againOnRunner;
@@ -1427,14 +1430,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         await fault("returning.saved");
       }
       if (move.journal.handover !== undefined) {
-        releaseHandover({
-          db: ports.db,
-          history: ports.history,
-          userId: move.userId,
-          runnerId: move.runnerId,
-          record: move.journal.handover,
-          pathsOnly: true,
-        });
+        releaseHandover({ db: ports.db, runnerId: move.runnerId, record: move.journal.handover });
       }
       // Every cursor on the project, whether or not the handover ran: the
       // moved Sessions and those born in Volli Cloud since the commit.

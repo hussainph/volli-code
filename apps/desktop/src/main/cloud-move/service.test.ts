@@ -80,7 +80,6 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
       eventRecord: (row) => row,
       upload: nope,
       seedCursors: () => {},
-      releaseCursors: () => [],
     },
     backup: { write: nope },
     identity: { current: identity },

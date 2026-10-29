@@ -123,32 +123,35 @@ describe("kill at any point, resume, same end", () => {
 });
 
 describe("kill while rolling back or going back, resume, same end", () => {
-  test.each([["rollback.uncommitted"], ["rollback.aborted"]])("%s", async (point) => {
-    world = await moveWorld();
-    const engine = world.engine();
-    const { queue, moves } = engine.enqueue({
-      projectIds: [world.projectId],
-      target: { userId: world.userId, workspaceId: world.workspaceId, runnerId: world.runnerId },
-      stopAtFirstProblem: false,
-    });
-    await engine.run(queue.queueId);
-    const born = await cloudBorn(world);
-    let killed!: () => void;
-    const stopped = new Promise<void>((resolve) => (killed = resolve));
-    void world
-      .engine({ kill: { point, hit: 1, onKilled: () => killed() } })
-      .rollBack(moves[0]!.moveId);
-    await stopped;
-    expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolling_back");
-    // A relaunch finishes the roll back where it stopped, even in a queue that
-    // stopped at a problem.
-    world.engine().journal.setQueue(queue.queueId, { state: "stopped" });
-    await world.engine().resume();
-    expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolled_back");
-    expect((await finalDigests(world, moves[0]!.moveId)).status).toBe("aborting");
-    // The cloud copy is purged: a Session born there keeps no cursor here.
-    expect(cursorOf(world, born)).toEqual({ n: 0 });
-  });
+  test.each([["rollback.uncommitted"], ["rollback.aborted"], ["rollback.cursors"]])(
+    "%s",
+    async (point) => {
+      world = await moveWorld();
+      const engine = world.engine();
+      const { queue, moves } = engine.enqueue({
+        projectIds: [world.projectId],
+        target: { userId: world.userId, workspaceId: world.workspaceId, runnerId: world.runnerId },
+        stopAtFirstProblem: false,
+      });
+      await engine.run(queue.queueId);
+      const born = await cloudBorn(world);
+      let killed!: () => void;
+      const stopped = new Promise<void>((resolve) => (killed = resolve));
+      void world
+        .engine({ kill: { point, hit: 1, onKilled: () => killed() } })
+        .rollBack(moves[0]!.moveId);
+      await stopped;
+      expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolling_back");
+      // A relaunch finishes the roll back where it stopped, even in a queue that
+      // stopped at a problem.
+      world.engine().journal.setQueue(queue.queueId, { state: "stopped" });
+      await world.engine().resume();
+      expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolled_back");
+      expect((await finalDigests(world, moves[0]!.moveId)).status).toBe("aborting");
+      // The cloud copy is purged: a Session born there keeps no cursor here.
+      expect(cursorOf(world, born)).toEqual({ n: 0 });
+    },
+  );
 
   test("rollback.uncommitted, from a commit this Mac never recorded", async () => {
     world = await moveWorld();

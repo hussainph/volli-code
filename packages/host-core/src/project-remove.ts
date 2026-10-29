@@ -25,7 +25,9 @@
  * 5. tell every window, so a second one drops the project too.
  *
  * A binding that will not close refuses the removal before anything else is
- * stopped or detached: the person can stop that Session and try again.
+ * stopped or detached: the person can stop that Session and try again. So
+ * does a project a move froze (VC-993), asked before the release and again
+ * after it, since the release awaits.
  */
 import type Database from "better-sqlite3";
 
@@ -107,6 +109,9 @@ export async function removeProject(ports: ProjectRemovalPorts, projectId: strin
   // detach nothing awaits, so this is the last such gap.
   const started = listProjectSessionIds(ports.db, projectId).filter((id) => !sessionIds.has(id));
   if (started.length > 0) throw new ProjectRemovalRefused(started);
+  // The freeze again, for the same gap: a project whose Sessions were just
+  // released is idle, and an idle project is exactly what a move freezes.
+  assertProjectWritable(ports.db, projectId);
   ports.live.disposeShells(sessionIds);
   ports.live.killTerminals(sessionIds);
   ports.live.closeBrowserTabs(projectId);

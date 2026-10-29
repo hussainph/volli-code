@@ -286,10 +286,15 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
     const next = { ...stream.cursor, ...patch };
     // A write that throws leaves the stream at what the row still says.
     const written = options.cursors.update(next, expected);
-    stream.cursor = next;
-    if (written) return true;
-    release(stream);
+    if (written) {
+      stream.cursor = next;
+      return true;
+    }
+    // Read BEFORE the release, for the same reason: a read that throws (a
+    // busy database) leaves the stream live for its caller's retry, not
+    // released with a retry timer `stop` could not clear.
     const row = options.cursors.get(stream.cursor.sessionId);
+    release(stream);
     if (row !== null && row.ownerUserId === options.ownerUserId) {
       streamOf(row);
       scheduled(row.sessionId);
@@ -535,14 +540,20 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
       }
       // Another owner's row is left alone.
       if (stored.ownerUserId !== options.ownerUserId) return;
-      const stream = streamOf(stored);
-      if (generation > stream.cursor.generation) {
+      // A raise whose compare-and-set meets a row changed under it (a later
+      // move seeded it again) rebuilds the stream from that row; the raise is
+      // then made on the rebuilt stream, so the generation asked for holds.
+      let stream = streamOf(stored);
+      while (generation > stream.cursor.generation) {
         stream.epoch += 1;
         stream.next = stream.cursor.acceptedThrough + 1;
-        persist(stream, {
+        const raised = persist(stream, {
           generation,
           blocked: stream.cursor.blocked?.code === "fenced" ? null : stream.cursor.blocked,
         });
+        const rebuilt = streams.get(sessionId);
+        if (raised || rebuilt === undefined) break;
+        stream = rebuilt;
       }
       scheduled(sessionId);
     },

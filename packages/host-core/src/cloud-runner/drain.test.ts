@@ -875,6 +875,107 @@ describe("the fact drain", () => {
       expect(drain.status().sessions).toBe(0);
     });
 
+    it("a newer claim on a row seeded again under it keeps the generation it asked for", async () => {
+      const backend = fakeBackend();
+      backend.generations.set("s1", 2);
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const drain = drainOver(backend, ledger, cursors.store);
+      drain.start();
+      append("s1", 1);
+      drain.adopt("s1");
+      await drain.idle();
+      // Taken back and seeded again by a later move while the stream stood.
+      cursors.rows.set("s1", {
+        sessionId: "s1",
+        ownerUserId: OWNER,
+        generation: 1,
+        acceptedThrough: 10,
+        blocked: null,
+      });
+      drain.adopt("s1", 2);
+      await drain.idle();
+      expect(cursors.rows.get("s1")).toEqual({
+        sessionId: "s1",
+        ownerUserId: OWNER,
+        generation: 2,
+        acceptedThrough: 10,
+        blocked: null,
+      });
+      expect(drain.status().sessions).toBe(1);
+    });
+
+    it("a newer claim whose row is taken back as it is written drops the stream", async () => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const drain = drainOver(backend, ledger, {
+        ...cursors.store,
+        update: (cursor, expected) => {
+          if (cursor.generation === 2) {
+            cursors.rows.delete(cursor.sessionId);
+            return false;
+          }
+          return cursors.store.update(cursor, expected);
+        },
+      });
+      drain.start();
+      append("s1", 1);
+      drain.adopt("s1");
+      await drain.idle();
+      drain.adopt("s1", 2);
+      await drain.idle();
+      expect(cursors.rows.has("s1")).toBe(false);
+      expect(drain.status().sessions).toBe(0);
+    });
+
+    it("a busy read after a refused write leaves the stream live, its retry one stop clears", async () => {
+      const timers: (() => void)[] = [];
+      const cleared: unknown[] = [];
+      const retries: string[] = [];
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      let busy = false;
+      const drain = drainOver(
+        backend,
+        ledger,
+        {
+          ...cursors.store,
+          get: (sessionId) => {
+            if (busy) {
+              busy = false;
+              throw new Error("database is locked");
+            }
+            return cursors.store.get(sessionId);
+          },
+        },
+        {
+          setTimer: (run) => {
+            timers.push(run);
+            return timers.length;
+          },
+          clearTimer: (handle) => void cleared.push(handle),
+          onRetry: (sessionId) => void retries.push(sessionId),
+        },
+      );
+      drain.start();
+      append("s1", 1);
+      const answerNow = backend.holdAll();
+      drain.adopt("s1");
+      await vi.waitFor(() => expect(backend.stats().calls).toBe(1));
+      // Seeded again further on, so the reply's write is refused; the read after it is busy.
+      cursors.rows.set("s1", { ...cursors.rows.get("s1")!, acceptedThrough: 10 });
+      busy = true;
+      answerNow();
+      await vi.waitFor(() => expect(retries).toEqual(["s1"]));
+      expect(timers).toHaveLength(1);
+      expect(drain.status().sessions).toBe(1);
+      drain.stop();
+      expect(cleared).toEqual([1]);
+      expect(cursors.rows.get("s1")?.acceptedThrough).toBe(10);
+    });
+
     it("a row now another owner's is left alone", async () => {
       const backend = fakeBackend();
       const { ledger, append } = memoryLedger();
