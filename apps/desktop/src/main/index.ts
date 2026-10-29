@@ -1703,6 +1703,7 @@ const appStartup = app.whenReady().then(async () => {
         launch.store === "cloud" && launch.userId === userId
           ? (macRunner?.snapshot() ?? null)
           : null,
+      cursorsReleased: (sessionIds) => cloudStore?.forgetDrainCursors(sessionIds),
       openCloud: (projectId, workspaceId, userId) => {
         launchMarker.write(userId, workspaceId, projectId);
         relaunch.request();
