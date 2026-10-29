@@ -458,8 +458,12 @@ presence and `sessionAccess`: `starting` before intake, `ready` when visible,
 These are read-time projections, not additional stored facts. Deploy these
 additive read fields before the desktop that displays them. The clock/Run layer must skip paused rows, populate the optional
 pending/gap and Run fields, and fence leased outcomes against current armings.
-The move importer must set `pausedAt`/`pausedReason: moved` on imported arms;
-adding optional fields does not itself change imported records. The Needs-you
+The shared move mapping forces `pausedAt`/`pausedReason: moved` on imported
+arms and schedules. `automationSchedules` is an importer stream found by its
+Automation; read-back pages the original armer index and keeps only schedules
+of the moved project. A moved schedule has inert `nextFireAt: 0`, no pending
+Run/job/gap pointers and no last fire time. Only explicit re-arm computes a fresh
+future cursor. Pending arrivals and original schedule cursors stay archived. The Needs-you
 reader must expose project-scoped non-Session `automation_paused` runner alerts;
 `sessions.attention` deliberately remains Session-only.
 

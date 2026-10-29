@@ -208,6 +208,14 @@ export const MIGRATION_FIXTURE_RECORDS: Readonly<
     runnerId: RUNNER,
     armedAt: 1,
   },
+  automationSchedules: {
+    automationId: U(10),
+    armedByUserId: USER,
+    runnerId: RUNNER,
+    spec: { preset: "hourly", minute: 15, timeZone: "UTC" },
+    timezone: "UTC",
+    armedAt: 1,
+  },
   automationColumnOrder: { projectId: U(1), status: "todo", rankedIds: [U(10)], orderedAt: 1 },
   runnerJobs: {
     id: U(12),

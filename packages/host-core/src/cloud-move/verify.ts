@@ -51,6 +51,7 @@ const LEVEL: Readonly<Record<MigrationImportStream, Level>> = {
   automations: "project",
   automationRuns: "project",
   automationArmings: "project",
+  automationSchedules: "project",
   automationColumnOrder: "project",
   runnerJobs: "project",
   sessions: "project",

@@ -30,6 +30,7 @@
  * absent: the importer or the backend fold supplies them.
  */
 
+import type { AutomationSchedule } from "@volli/shared";
 import { MIGRATION_PLACEHOLDERS } from "@volli/shared/cloud";
 
 /** The manifest's format marker; a reader checks it before anything else. */
@@ -46,11 +47,7 @@ export const PENDING_RUNNER_FACTS = [
   "undeliveredRunMessages",
   "openCleanupCommands",
 ] as const;
-export const EXECUTABLE_MIGRATION_STREAMS = [
-  "runnerJobs",
-  "automationArmings",
-  "automationScheduleCursors",
-] as const;
+export const EXECUTABLE_MIGRATION_STREAMS = ["runnerJobs", "automationScheduleCursors"] as const;
 
 /**
  * Stand-ins the importer replaces with the identities the migration lands
@@ -456,6 +453,15 @@ export interface AutomationArmingRecord {
   armedAt: number;
 }
 
+export interface AutomationScheduleRecord {
+  automationId: string;
+  armedByUserId: UserRef;
+  runnerId: RunnerRef;
+  spec: AutomationSchedule;
+  timezone: string;
+  armedAt: number;
+}
+
 export interface AutomationColumnOrderRecord {
   projectId: string;
   status: string;
@@ -463,7 +469,7 @@ export interface AutomationColumnOrderRecord {
   orderedAt: number;
 }
 
-/** An arrival counting down at cutover, as the `automation.run` job that still fires it. */
+/** Legacy export compatibility only; current pending arrivals stay archived, never executable. */
 export interface AutomationRunJobRecord {
   id: string;
   runnerId: RunnerRef;
@@ -498,8 +504,8 @@ export interface AuditLogRecord {
 
 /**
  * How far this Mac's scheduler has evaluated one schedule: the occurrence
- * (epoch ms) it has evaluated through. The importer derives the schedule's
- * next fire time from it and the Automation's trigger spec.
+ * (epoch ms) it has evaluated through. Legacy export compatibility only: current
+ * exports archive it and explicit re-arm computes a new strictly-future cursor.
  */
 export interface AutomationScheduleCursorRecord {
   automationId: string;

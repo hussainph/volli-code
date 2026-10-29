@@ -110,7 +110,7 @@ it("excludes removed/shadow projects, shadow tickets, drained and cloud-born Ses
     true,
   );
   expect(streamRecords(outDir, manifest, "runnerJobs")).toEqual([]);
-  expect(streamRecords(outDir, manifest, "automationArmings")).toEqual([]);
+  expect(streamRecords(outDir, manifest, "automationArmings")).toHaveLength(1);
   expect(streamRecords(outDir, manifest, "automationScheduleCursors")).toEqual([]);
   expect(streamRecords(outDir, manifest, "legacyRows").map((r) => r.table)).toEqual(
     expect.arrayContaining([

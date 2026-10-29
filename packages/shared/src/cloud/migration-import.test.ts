@@ -48,7 +48,29 @@ describe("migrationDocument", () => {
       expect(JSON.stringify(doc)).not.toContain("$local");
       expect(JSON.stringify(doc)).not.toContain("$target");
     }
-    expect(MIGRATION_DEFERRED_STREAMS.automationScheduleCursors).toContain("scheduler");
+    expect(MIGRATION_DEFERRED_STREAMS.automationScheduleCursors).toContain("archived");
+  });
+
+  it("always pauses moved armings and schedules, never carries pending state", () => {
+    for (const stream of ["automationArmings", "automationSchedules"] as const) {
+      const doc = map(stream, {
+        pausedAt: null,
+        pausedReason: null,
+        nextFireAt: 123,
+        pendingJobId: U(99),
+      });
+      expect(doc).toMatchObject({ pausedAt: AT, pausedReason: "moved" });
+      const later = migrationDocument(stream, MIGRATION_FIXTURE_RECORDS[stream], target, 5678);
+      expect(migrationRowDigest(stream, doc)).toBe(migrationRowDigest(stream, later));
+    }
+    expect(map("automationSchedules")).toMatchObject({
+      nextFireAt: 0,
+      lastFiredAt: null,
+      pendingJobId: null,
+      pendingRunId: null,
+      gapRunId: null,
+    });
+    expect(() => map("automationRuns", { status: "queued" })).toThrow(/pending Runs/);
   });
 
   it("supplies the backend defaults and drops export-only fields", () => {

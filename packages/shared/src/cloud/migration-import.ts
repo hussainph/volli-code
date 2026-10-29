@@ -81,6 +81,7 @@ export const MIGRATION_IMPORT_STREAMS = [
   "automations",
   "automationRuns",
   "automationArmings",
+  "automationSchedules",
   "automationColumnOrder",
   "runnerJobs",
   "sessions",
@@ -99,7 +100,7 @@ export type MigrationImportStream = (typeof MIGRATION_IMPORT_STREAMS)[number];
 /** Export streams the importer does not write yet, with the reason the report shows. */
 export const MIGRATION_DEFERRED_STREAMS: Readonly<Record<string, string>> = Object.freeze({
   automationScheduleCursors:
-    "a schedule's next fire time needs the Automations port's scheduler; carried in the export",
+    "old schedule cursors stay archived; re-arming computes a fresh future occurrence",
 });
 
 /**
@@ -113,6 +114,8 @@ export const MIGRATION_STAMPED_FIELDS: Readonly<
   projects: ["moveState"],
   sessionEvents: ["acceptedAt"],
   sessionIntake: ["lastAcceptedAt"],
+  automationArmings: ["pausedAt"],
+  automationSchedules: ["pausedAt"],
 });
 
 /** Why a record could not become a document. */
@@ -606,6 +609,8 @@ const MAPPERS: Readonly<Record<MigrationImportStream, Mapper>> = {
     ]);
   },
   automationRuns(record) {
+    if (record.status === "queued")
+      fail("invalid_field", "status", "pending Runs must be archived");
     requireId(record, "id");
     requireId(record, "projectId");
     for (const field of ["automationId", "ticketId", "sessionId", "armedByUserId", "runnerId"]) {
@@ -637,18 +642,36 @@ const MAPPERS: Readonly<Record<MigrationImportStream, Mapper>> = {
         : {}),
     };
   },
-  automationArmings(record) {
+  automationArmings(record, _target, importedAt) {
     for (const field of ["projectId", "automationId", "armedByUserId", "runnerId"]) {
       requireId(record, field);
     }
-    return pick(record, [
-      "projectId",
-      "status",
-      "automationId",
-      "armedByUserId",
-      "runnerId",
-      "armedAt",
-    ]);
+    return {
+      ...pick(record, [
+        "projectId",
+        "status",
+        "automationId",
+        "armedByUserId",
+        "runnerId",
+        "armedAt",
+      ]),
+      pausedAt: importedAt,
+      pausedReason: "moved",
+    };
+  },
+  automationSchedules(record, _target, importedAt) {
+    for (const field of ["automationId", "armedByUserId", "runnerId"]) requireId(record, field);
+    return {
+      ...pick(record, ["automationId", "armedByUserId", "runnerId", "spec", "timezone", "armedAt"]),
+      // Inert sentinel, NOT an imported cursor. Only explicit re-arm computes an occurrence.
+      nextFireAt: 0,
+      lastFiredAt: null,
+      pausedAt: importedAt,
+      pausedReason: "moved",
+      pendingJobId: null,
+      pendingRunId: null,
+      gapRunId: null,
+    };
   },
   automationColumnOrder(record) {
     requireId(record, "projectId");

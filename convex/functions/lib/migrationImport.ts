@@ -66,6 +66,7 @@ const KEYS: Readonly<Record<MigrationImportStream, Key>> = {
     fields: ["automationId"],
     alsoMatch: ["projectId", "status"],
   },
+  automationSchedules: { index: "by_automation", fields: ["automationId"] },
   automationColumnOrder: { index: "by_project_status", fields: ["projectId", "status"] },
   runnerJobs: { index: "by_uuid", fields: ["id"] },
   sessions: { index: "by_uuid", fields: ["id"] },
@@ -180,6 +181,16 @@ export class ProjectScope {
     return this.tickets.get(ticketId) ?? null;
   }
 
+  /** The project of a schedule, which hangs off its Automation, not a project field. */
+  async automationProject(automationId: unknown): Promise<string | null> {
+    if (typeof automationId !== "string") return null;
+    const row = await this.db
+      .query("automations")
+      .withIndex("by_uuid", (q) => q.eq("id", automationId))
+      .unique();
+    return row?.projectId ?? null;
+  }
+
   /**
    * The owning project of a row (a project's own id for `projects`). An
    * audit row names none; the person-authorized import reads the project its
@@ -189,6 +200,8 @@ export class ProjectScope {
     switch (stream) {
       case "projects":
         return doc.id as string;
+      case "automationSchedules":
+        return this.automationProject(doc.automationId);
       case "ticketBodies":
         return this.ticketProject(doc.ticketId);
       case "sessionEvents":
