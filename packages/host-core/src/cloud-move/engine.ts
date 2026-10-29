@@ -35,7 +35,7 @@
  * archived read-only), Roll back, or later Go back to local.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { appendFileSync, createReadStream, existsSync, mkdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
@@ -53,6 +53,7 @@ import type { MigrationExportManifest } from "../migration-export/exporter";
 import { MAPPER_VERSION, MANIFEST_FILE } from "../migration-export/staging";
 import { derivedId } from "../migration-export/transform";
 import { verifyMigrationExport } from "../migration-export/verify";
+import { OBJECT_UPLOAD_TIMEOUT_MS } from "../transcript-spool/object-store";
 import { saveCloudChanges } from "./cloud-changes";
 import { handOver, plannedHandover, releaseHandover } from "./handover";
 import {
@@ -96,6 +97,13 @@ const BATCH_MAX_BYTES = 3 * 1024 * 1024;
 const OBJECT_CONCURRENCY = 4;
 const ZSTD_LEVEL = { params: { [zlibConstants.ZSTD_c_compressionLevel]: 3 } };
 const RETRY = MOVE_RETRY;
+/**
+ * How long after an upload URL is issued it can still write: the store
+ * checks a URL's expiry (the backend's `PRESIGN_EXPIRES_SECONDS`, five
+ * minutes) when a request starts, and a request this Mac started is
+ * abandoned after the spool's upload timeout. Both, plus a minute's margin.
+ */
+const UPLOAD_URL_LIFETIME_MS = 5 * 60_000 + OBJECT_UPLOAD_TIMEOUT_MS + 60_000;
 
 /**
  * Where a move waits for the person, not for the engine: the checks ran
@@ -366,11 +374,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       (stored.sha256 === null || stored.sha256 === object.sha256);
     // A store that reports no checksum, on a key that does not name its content: read it.
     if (same && stored!.sha256 === null && !object.key.includes(object.sha256)) {
-      const bytes = await withNetworkRetry(
-        () => ports.objects.get(move.moveId, object.key),
+      const read = await withNetworkRetry(
+        () => ports.objects.digest(move.moveId, object.key),
         signal,
       );
-      same = bytes !== null && createHash("sha256").update(bytes).digest("hex") === object.sha256;
+      same = read !== null && read.sha256 === object.sha256;
     }
     if (!same) {
       throw new MoveProblemError(
@@ -389,8 +397,13 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       ...RETRY,
       sleep,
       signal,
+      // A call already retried on its own (`MoveNetworkError`) is not retried again around it.
       passThrough: (error) =>
-        error instanceof MoveProblemError || isDiskFullError(error) || isLocalFileError(error),
+        error instanceof MoveProblemError ||
+        error instanceof MoveNetworkError ||
+        isDiskFullError(error) ||
+        isLocalFileError(error),
+      onRetry: (attempt, error) => log.warn("a move upload will be retried", { attempt, error }),
     });
 
   /** The object store as the verification reads it: HEADs and GETs retried like every call. */
@@ -398,8 +411,8 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     put: (moveId, object, body) => ports.objects.put(moveId, object, body),
     head: (moveId, key) =>
       withNetworkRetry(() => ports.objects.head(moveId, key), new AbortController().signal),
-    get: (moveId, key) =>
-      withNetworkRetry(() => ports.objects.get(moveId, key), new AbortController().signal),
+    digest: (moveId, key) =>
+      withNetworkRetry(() => ports.objects.digest(moveId, key), new AbortController().signal),
   };
 
   /** The staged copy of what the move sends: its convex streams' chunks, compressed, by hash. */
@@ -424,6 +437,46 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       }
     }
     return staged;
+  };
+
+  // ── the history objects' upload URLs ──────────────────────────────────────
+
+  const signedFile = (move: MoveRow) => join(workDir(move), "history-signed.ndjson");
+
+  /** Journals one upload URL as it is issued: the key, what it was signed for, and when. */
+  const lastSignedHere = new Map<string, number>();
+  const recordSigned = (move: MoveRow, object: MoveObject): void => {
+    lastSignedHere.set(move.moveId, performance.now());
+    mkdirSync(workDir(move), { recursive: true });
+    appendFileSync(signedFile(move), `${JSON.stringify({ ...object, at: now() })}\n`);
+  };
+
+  /** What was last signed for each history key, and when the last URL was issued. */
+  const signedHistory = async (
+    move: MoveRow,
+  ): Promise<{ objects: MoveObject[]; lastAt: number }> => {
+    let text = "";
+    try {
+      text = await readFile(signedFile(move), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const latest = new Map<string, MoveObject>();
+    let lastAt = 0;
+    for (const line of text.split("\n")) {
+      if (line === "") continue;
+      let entry: MoveObject & { at: number };
+      try {
+        entry = JSON.parse(line) as MoveObject & { at: number };
+      } catch {
+        // A line torn by a crash: that process is gone, and so is its URL.
+        continue;
+      }
+      const { at, ...object } = entry;
+      latest.set(object.key, object);
+      lastAt = Math.max(lastAt, at);
+    }
+    return { objects: [...latest.values()], lastAt };
   };
 
   // ── steps ──────────────────────────────────────────────────────────────────
@@ -640,7 +693,12 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     for (const session of plan.sessionList.slice(done)) {
       const report = await withNetworkRetry(
         () =>
-          ports.history.upload({ moveId: move.moveId, runnerId: move.runnerId }, session, signal),
+          ports.history.upload(
+            { moveId: move.moveId, runnerId: move.runnerId },
+            session,
+            signal,
+            (object) => recordSigned(move, object),
+          ),
         signal,
       );
       if (report.missing.length > 0 || report.piFilesLeftBehind > 0) {
@@ -663,12 +721,27 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
 
   const verify: Step = async (move, _queue, signal) => {
     const plan = await planOf(move, signal);
+    // A Session's history objects are not write-once (an upload resumed
+    // before its commit replaces its object), so a URL issued before the
+    // commit could still write after it. Wait out the last one, then check
+    // that the store holds what was last signed for every key: past this
+    // point the move asks for no upload URL, so nothing can change them.
+    const signed = await signedHistory(move);
+    const wait = Math.max(
+      // A URL this process holds: by its own monotonic clock.
+      UPLOAD_URL_LIFETIME_MS - (performance.now() - (lastSignedHere.get(move.moveId) ?? -Infinity)),
+      // One an earlier run issued, by the journal's wall clock, never longer
+      // than a URL's whole life (a clock set back cannot hold the move).
+      Math.min(signed.lastAt + UPLOAD_URL_LIFETIME_MS - now(), UPLOAD_URL_LIFETIME_MS),
+    );
+    if (signed.objects.length > 0 && wait > 0) await sleep(wait, signal);
     const report: VerifyReport = await verifyHiddenImport({
       calls,
       objects: retriedObjects,
       moveId: move.moveId,
       runnerId: move.runnerId,
       plan,
+      historyObjects: signed.objects,
       signal,
     });
     if (!report.ok) {

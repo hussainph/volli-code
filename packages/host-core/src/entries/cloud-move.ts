@@ -17,6 +17,7 @@ export {
 export { createMoveBackupPort, type MoveBackupOptions } from "../cloud-move/backup";
 export { ProjectFrozenError, projectFreeze } from "../cloud-move/freeze";
 export type { MoveFailure, MovePause, MoveRow, QueueRow } from "../cloud-move/journal";
+export { presignedMoveObjects } from "../cloud-move/objects";
 export type {
   MoveBackend,
   MoveBackupPort,
@@ -31,4 +32,8 @@ export type {
   RealPathReport,
 } from "../cloud-move/ports";
 export { windowReadCheck } from "../cloud-move/real-paths";
+export {
+  createMoveSessionHistory,
+  type MoveSessionHistoryOptions,
+} from "../cloud-move/session-history";
 export { MOVE_STATES, movePhase, type MovePhase, type MoveState } from "../cloud-move/states";

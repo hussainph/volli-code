@@ -4,7 +4,7 @@
  * move is interrupted, refused, rolled back or taken back. The kill/resume
  * matrix itself is `moveEngine.matrix.test.ts` (ci-extended).
  */
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -13,6 +13,7 @@ import { projectFreeze } from "../../packages/host-core/src/cloud-move/freeze";
 import { MigrationExportError } from "../../packages/host-core/src/migration-export/errors";
 import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-export/exporter";
 import { api } from "../functions/_generated/api";
+import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
 import { finalDigests, moveWorld, type MoveWorld } from "./move-engine-harness";
 
 let world: MoveWorld | undefined;
@@ -22,6 +23,13 @@ afterEach(() => {
 });
 
 const alice = { subject: "user:alice", issuer: "https://issuer.test" };
+
+/** The mover's drain cursors (the profile holds others: a drained cloud Session's). */
+function movedCursors(w: MoveWorld) {
+  return w.db
+    .prepare("SELECT COUNT(*) AS n FROM session_drain_cursors WHERE owner_user_id = ?")
+    .get(w.userId);
+}
 
 function enqueue(w: MoveWorld, engine = w.engine(), stopAtFirstProblem = false) {
   const { queue, moves } = engine.enqueue({
@@ -63,14 +71,11 @@ describe("a move, start to finish", () => {
     expect(move.state).toBe("checked");
     expect(move.failure).toBeNull();
     expect(move.report).toMatchObject({ verify: { ok: true } });
-    // Every window read matches the export. Until moved Sessions are folded
-    // after the commit (VC-990), the fold wait is the one check that cannot pass.
-    const realPath = move.report!.realPath as { checks: Record<string, { failed: number }> };
-    for (const [name, { failed }] of Object.entries(realPath.checks)) {
-      expect({ name, failed }).toEqual({ name, failed: name === "sessionFolded" ? failed : 0 });
-    }
-    expect(realPath.checks.boardTicket!.failed).toBe(0);
-    expect(realPath.checks.sessionHistory!.failed).toBe(0);
+    // Every window read matches the export, every moved Session folded.
+    expect(move.report).toMatchObject({ ok: true, realPath: { ok: true } });
+    const realPath = move.report!.realPath as { checks: Record<string, { checked: number }> };
+    expect(realPath.checks.allSessionsFolded!.checked).toBe(1);
+    expect(realPath.checks.sessionHistory!.checked).toBeGreaterThan(0);
     // Still read-only here until the person finishes the move.
     expect(projectFreeze(world.db, world.projectId)).toBe("checked");
 
@@ -137,6 +142,133 @@ describe("a move, start to finish", () => {
     expect(projectFreeze(world.db, world.projectId)).toBe("confirmed");
     expect(existsSync(join(world.root, "cloud-moves", moveId, "export"))).toBe(false);
     expect(existsSync(join(world.root, "cloud-moves", moveId, "plan.json"))).toBe(true);
+  });
+});
+
+describe("Session history", () => {
+  test("uploads transcripts and Pi logs, then checks them once the last upload URL expired", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const waits: number[] = [];
+    const engine = world.engine({ ports: { sleep: async (ms) => void waits.push(ms) } });
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    const history = [...world.objects.objects.keys()].filter((key) => key.includes("/s/"));
+    expect(history.some((key) => key.includes("/tx/"))).toBe(true);
+    expect(history.some((key) => key.includes("/pi/"))).toBe(true);
+    // Verification waited out every upload URL before reading the objects back.
+    expect(Math.max(...waits)).toBeGreaterThan(5 * 60_000);
+    const verify = engine.journal.move(moveId)!.report!.verify as { objects: { checked: number } };
+    expect(verify.objects.checked).toBeGreaterThanOrEqual(history.length);
+  });
+
+  test("a write landing while the check waits out the last URL is caught", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const engine = world.engine({
+      ports: {
+        // The wait before the check: a stale URL's upload lands during it.
+        sleep: async (ms) => {
+          if (ms < 5 * 60_000) return;
+          const key = [...world!.objects.objects.keys()].find((k) => k.includes("/pi/"));
+          world!.objects.objects.set(key!, new TextEncoder().encode("late"));
+        },
+      },
+    });
+    await engine.run(queueId);
+    expect(engine.journal.move(moveId)).toMatchObject({
+      state: "rolled_back",
+      failure: { code: "verification_failed" },
+    });
+  });
+
+  test("a URL signed and never used, and a journal line a crash tore, do not fail the move", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const engine = world.engine({
+      ports: {
+        faults: async (point) => {
+          if (point !== "history.session") return;
+          const file = join(world!.root, "cloud-moves", moveId, "history-signed.ndjson");
+          appendFileSync(
+            file,
+            `${JSON.stringify({
+              key: `v1/p/${world!.projectId}/s/${"7a1f0c2e-0000-4000-8000-000000000031"}/tx/000000000001-000000000002.pack.zst`,
+              bytes: 1,
+              sha256: "a".repeat(64),
+              at: Date.now(),
+            })}\n{"key":"v1/p/torn`,
+          );
+        },
+      },
+    });
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    const move = engine.journal.move(moveId)!;
+    expect(move.state).toBe("checked");
+    expect(move.report).toMatchObject({ verify: { objects: { signedNotStored: 1 } } });
+  });
+
+  test("folds that never finish end the check in a clear failure, and a recheck resumes it", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    // A clock the check's own waits move, and a backend whose folds stay behind.
+    let clock = 0;
+    let stuck = true;
+    const backend = world.backend();
+    const stalled = {
+      ...backend,
+      query: async (path: string, args: Record<string, unknown>) => {
+        const answer = await backend.query(path, args);
+        if (path !== "projectImportHistory:foldProgress" || !stuck) return answer;
+        return { ...(answer as object), behind: [{ sessionId: "s", foldedThrough: 0 }] };
+      },
+    };
+    const sleeps: number[] = [];
+    const realPath = windowReadCheck({
+      backend: stalled,
+      now: () => clock,
+      foldTimeoutMs: 60_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    });
+    const engine = world.engine({ ports: { realPath } });
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    const failed = engine.journal.move(moveId)!;
+    // Not a hang, not a pass: the move waits for the person, the folds named.
+    expect(failed.state).toBe("checked");
+    expect(failed.report).toMatchObject({
+      ok: false,
+      realPath: { ok: false, checks: { allSessionsFolded: { checked: 1, failed: 1 } } },
+    });
+    expect(clock).toBeLessThanOrEqual(60_000);
+    expect(sleeps.length).toBeGreaterThan(0);
+
+    // The folds catch up; checking again passes.
+    stuck = false;
+    const again = world.engine({ ports: { realPath } });
+    again.recheck(moveId);
+    expect(await again.run(queueId)).toEqual({ kind: "done" });
+    expect(again.journal.move(moveId)!.report).toMatchObject({ ok: true, realPath: { ok: true } });
+  });
+
+  test("a history object changed after its upload fails the check and rolls the move back", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const engine = world.engine({
+      ports: {
+        faults: async (point) => {
+          if (point !== "history.session") return;
+          const key = [...world!.objects.objects.keys()].find((k) => k.includes("/tx/"));
+          if (key !== undefined) world!.objects.objects.set(key, new TextEncoder().encode("late"));
+        },
+      },
+    });
+    await engine.run(queueId);
+    expect(engine.journal.move(moveId)).toMatchObject({
+      state: "rolled_back",
+      failure: { code: "verification_failed" },
+    });
   });
 });
 
@@ -374,7 +506,7 @@ describe("the person's decisions", () => {
     const rolled = await engine.rollBack(moveId);
     expect(rolled.state).toBe("rolled_back");
     expect(projectFreeze(world.db, world.projectId)).toBeNull();
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+    expect(movedCursors(world)).toEqual({
       n: 0,
     });
     expect(world.db.prepare("SELECT COUNT(*) AS n FROM project_checkout_paths").get()).toEqual({
@@ -414,11 +546,11 @@ describe("the person's decisions", () => {
       .engine({ kill: { point: "handed_over", hit: 1, onKilled: () => killed() } })
       .run(queueId);
     await stopped;
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).not.toEqual({
+    expect(movedCursors(world)).not.toEqual({
       n: 0,
     });
     expect((await world.engine().rollBack(moveId)).state).toBe("rolled_back");
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+    expect(movedCursors(world)).toEqual({
       n: 0,
     });
     expect(world.db.prepare("SELECT COUNT(*) AS n FROM project_checkout_paths").get()).toEqual({
@@ -455,7 +587,7 @@ describe("the person's decisions", () => {
     const returned = await engine.goBackToLocal(moveId);
     expect(returned.state).toBe("returned");
     expect(projectFreeze(world.db, world.projectId)).toBeNull();
-    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+    expect(movedCursors(world)).toEqual({
       n: 0,
     });
     const saved = JSON.parse(

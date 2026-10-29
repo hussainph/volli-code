@@ -239,6 +239,11 @@ project move** section.
   legacy rows belong under the person (`userLegacyArchiveKey`,
   `v1/u/<userId>/legacy/`, kept forever); the profile step that uploads them
   is not part of a project's move and has no door yet.
+- `presignRead` signs one HEAD (asking for the stored SHA-256 checksum) or GET
+  of an object the move itself wrote (the same key rule as `presignPut`),
+  only while the move is open: how the client's verification reads back what
+  it uploaded. Once shown, a project's objects are read through the window's
+  own paths.
 - `status` answers the accumulators; `readRows` reads one stream back by the
   project's own indexes (or one ticket's or the importer's Session's), for the
   client's verification, and only while the project has never been shown

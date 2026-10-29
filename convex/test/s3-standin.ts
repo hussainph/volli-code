@@ -14,7 +14,12 @@ import { createHash } from "node:crypto";
 
 import { vi } from "vite-plus/test";
 
-import { verifyS3ListRequest, verifyS3MoveRequest } from "../fixture/s3-boundary.ts";
+import {
+  verifyS3ListRequest,
+  verifyS3MoveRequest,
+  verifyS3ReadRequest,
+  verifyS3Request,
+} from "../fixture/s3-boundary.ts";
 
 export const S3_CONFIG = {
   endpoint: "http://s3.standin.test",
@@ -102,15 +107,38 @@ export class S3StandIn {
         `</ListBucketResult>`;
       return answer(200, { method: "LIST", prefix }, xml);
     }
-    const key = verifyS3MoveRequest(request, url, config);
+    if (request.method === "HEAD" || request.method === "GET") {
+      const key = verifyS3ReadRequest(request, url, config);
+      const stored = this.objects.get(key);
+      this.log.push({ method: request.method, key, status: stored === undefined ? 404 : 200 });
+      if (stored === undefined) return new Response(null, { status: 404 });
+      return new Response(request.method === "HEAD" ? null : stored.slice(), {
+        status: 200,
+        headers: {
+          "content-length": String(stored.length),
+          "x-amz-checksum-sha256": createHash("sha256").update(stored).digest("base64"),
+        },
+      });
+    }
+    // A Session's history objects are signed as a runner's are: replaceable
+    // until committed, so without `If-None-Match: *`.
+    const key =
+      request.method === "PUT" && headers["if-none-match"] === undefined
+        ? verifyS3Request(request, url, config)
+        : verifyS3MoveRequest(request, url, config);
     if (request.method === "DELETE") {
       if (this.failDeletesWith !== null)
         return answer(this.failDeletesWith, { method: "DELETE", key });
       this.objects.delete(key);
       return answer(204, { method: "DELETE", key });
     }
+    // A streamed body (a blob read from disk) is collected as the store would receive it.
     const body =
-      init.body instanceof Uint8Array ? init.body : new TextEncoder().encode(String(init.body));
+      init.body instanceof Uint8Array
+        ? init.body
+        : init.body instanceof ReadableStream
+          ? new Uint8Array(await new Response(init.body).arrayBuffer())
+          : new TextEncoder().encode(String(init.body));
     const checksum = createHash("sha256").update(body).digest("base64");
     if (
       String(body.length) !== headers["content-length"] ||

@@ -40,6 +40,8 @@ const CALLS: Array<Omit<Kill, "onKilled">> = [
   { point: "call:projectImports:begin", hit: 1 },
   { point: "call:projectImports:begin", hit: 1, after: true },
   { point: "call:projectImports:presignPut", hit: 1, after: true },
+  { point: "call:projectImports:presignPut", hit: 3 },
+  { point: "call:projectImports:presignRead", hit: 2, after: true },
   { point: "call:projectImports:importRows", hit: 1, after: true },
   { point: "call:projectImports:importRows", hit: 3, after: true },
   { point: "call:projectImports:importRows", hit: 3 },
@@ -52,8 +54,7 @@ const CALLS: Array<Omit<Kill, "onKilled">> = [
 const CASES: Array<Omit<Kill, "onKilled">> = [
   ...STEP_BOUNDARIES.map((point) => ({ point, hit: 1 })),
   ...MID_STEP.map((point) => ({ point, hit: 1 })),
-  // presignPut is the production object store's; the stand-in does not call it.
-  ...CALLS.filter((kill) => kill.point !== "call:projectImports:presignPut"),
+  ...CALLS,
 ];
 
 /** Runs until the engine stops at `kill`, then abandons it, as a crash would. */

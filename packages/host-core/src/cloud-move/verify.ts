@@ -17,7 +17,6 @@
  * (the real-path check). The report holds counts, digests and ids, never
  * content.
  */
-import { createHash } from "node:crypto";
 import {
   MIGRATION_IMPORT_STREAMS,
   MigrationDigest,
@@ -27,7 +26,7 @@ import {
 
 import { MoveBackendError, type ImportCalls } from "./backend";
 import { sessionKeyOf, ticketKeyOf, type MovePlan, type Tally } from "./plan";
-import type { MoveObjectStore } from "./ports";
+import type { MoveObject, MoveObjectStore } from "./ports";
 
 type Row = Record<string, unknown>;
 type Level = "project" | "ticket" | "session";
@@ -83,7 +82,14 @@ export interface VerifyReport {
   /** Streams whose rows hang off a parent outside the move: counted by the backend only. */
   notReadBack: Record<string, number>;
   invariants: Record<string, number>;
-  objects: { checked: number; missing: number; damaged: number; sampled: number };
+  objects: {
+    checked: number;
+    missing: number;
+    damaged: number;
+    sampled: number;
+    /** History keys signed whose upload never wrote them. */
+    signedNotStored: number;
+  };
 }
 
 /** Runs `work` over `items`, `limit` at a time. */
@@ -141,6 +147,8 @@ export async function verifyHiddenImport(input: {
   moveId: string;
   runnerId: string;
   plan: MovePlan;
+  /** Session-history objects, each as it was last signed: the store must hold exactly that. */
+  historyObjects?: readonly MoveObject[];
   signal: AbortSignal;
 }): Promise<VerifyReport> {
   const { calls, plan, moveId, signal } = input;
@@ -155,7 +163,7 @@ export async function verifyHiddenImport(input: {
     mismatchedSessions: [],
     notReadBack: {},
     invariants,
-    objects: { checked: 0, missing: 0, damaged: 0, sampled: 0 },
+    objects: { checked: 0, missing: 0, damaged: 0, sampled: 0, signedNotStored: 0 },
   };
 
   // ---- (a) the accumulators -------------------------------------------------
@@ -371,11 +379,31 @@ export async function verifyHiddenImport(input: {
     ) {
       return;
     }
-    const bytes = await input.objects.get(moveId, object.key);
+    const read = await input.objects.digest(moveId, object.key);
     report.objects.sampled += 1;
-    if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== object.sha256) {
+    if (read === null || read.bytes !== object.bytes || read.sha256 !== object.sha256) {
       report.objects.damaged += 1;
     }
+  });
+  // The history objects, each against what was last signed for its key. A
+  // key signed and never written (an upload cut differently after a crash)
+  // is no object at all: counted, not a failure. One that holds anything but
+  // what was last signed for it is a write the commit did not record.
+  await pool(input.historyObjects ?? [], READ_CONCURRENCY, async (object) => {
+    signal.throwIfAborted();
+    const stored = await input.objects.head(moveId, object.key);
+    if (stored === null) {
+      report.objects.signedNotStored += 1;
+      return;
+    }
+    report.objects.checked += 1;
+    let same =
+      stored.bytes === object.bytes && (stored.sha256 === null || stored.sha256 === object.sha256);
+    if (same && stored.sha256 === null) {
+      const read = await input.objects.digest(moveId, object.key);
+      same = read !== null && read.sha256 === object.sha256;
+    }
+    if (!same) report.objects.damaged += 1;
   });
   if (report.objects.missing > 0) failures.push(`${report.objects.missing} objects are missing`);
   if (report.objects.damaged > 0) failures.push(`${report.objects.damaged} objects are damaged`);

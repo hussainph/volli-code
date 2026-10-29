@@ -64,6 +64,20 @@ export function verifyS3MoveRequest(
   return verifyObjectRequest(request, url, config, now, request.method === "PUT");
 }
 
+/** Verify a signed HEAD (asking for the stored checksum) or GET of one object; return its key. */
+export function verifyS3ReadRequest(
+  request: S3Request,
+  url: URL,
+  config: S3BoundaryConfig,
+  now = Date.now(),
+): string {
+  assert.ok(request.method === "HEAD" || request.method === "GET", "Unexpected S3 method");
+  if (request.method === "HEAD") {
+    assert.ok(header(request, "x-amz-checksum-mode") === "ENABLED", "A HEAD asks for the checksum");
+  }
+  return verifyObjectRequest(request, url, config, now, false);
+}
+
 /** Verify a signed ListObjectsV2 of the bucket; return what it asks for. */
 export function verifyS3ListRequest(
   request: S3Request,
@@ -119,7 +133,9 @@ function verifyObjectRequest(
       ? writeOnce
         ? "content-length;host;if-none-match;x-amz-checksum-sha256"
         : "content-length;host;x-amz-checksum-sha256"
-      : "host";
+      : request.method === "HEAD"
+        ? "host;x-amz-checksum-mode"
+        : "host";
   assert.ok(
     url.searchParams.get("X-Amz-SignedHeaders") === signedNames,
     "Wrong signed headers (PUT must sign length and checksum; GET must sign host)",

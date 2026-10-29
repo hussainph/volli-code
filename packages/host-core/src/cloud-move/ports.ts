@@ -45,7 +45,8 @@ export interface MoveObjectStore {
     body: () => Promise<Uint8Array | NodeJS.ReadableStream>,
   ): Promise<"stored" | "exists">;
   head(moveId: string, key: string): Promise<StoredObject | null>;
-  get(moveId: string, key: string): Promise<Uint8Array | null>;
+  /** Reads an object whole, hashing it as it streams (never held in memory). */
+  digest(moveId: string, key: string): Promise<{ bytes: number; sha256: string } | null>;
 }
 
 /** One moved Session, as its history upload needs it. */
@@ -71,11 +72,16 @@ export interface MovedSessionUploadReport {
 export interface MoveSessionHistory {
   /** One exported Session event as the import sends it. Pure. */
   eventRecord(record: Record<string, unknown>): Record<string, unknown>;
-  /** Packs and commits one Session's transcript bodies and Pi logs, resuming from the backend's head. */
+  /**
+   * Packs and commits one Session's transcript bodies and Pi logs, resuming
+   * from the backend's head. `move.runnerId` is the runner the import named.
+   * `onSigned` hears of every upload URL as it is issued, before it is used.
+   */
   upload(
     move: { moveId: string; runnerId: string },
     session: MovedSession,
     signal: AbortSignal,
+    onSigned?: (object: MoveObject) => void,
   ): Promise<MovedSessionUploadReport>;
   /** Hands the moved Sessions to this runner at their imported heads. Idempotent. */
   seedCursors(
