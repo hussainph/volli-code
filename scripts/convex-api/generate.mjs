@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -69,7 +69,10 @@ async function loadBaseline(commit, ref) {
     console.log(`Deriving pre-snapshot contract from ${ref} (${commit})`);
     const snapshot = await generateSnapshot(tree);
     mkdirSync(cache, { recursive: true });
-    writeFileSync(cached, serialize(snapshot));
+    // Publish only complete JSON; cancellation cannot poison a saved cache.
+    const pending = resolve(tree, ".api-contract-cache.json");
+    writeFileSync(pending, serialize(snapshot));
+    renameSync(pending, cached);
     return snapshot;
   } finally {
     rmSync(tree, { recursive: true, force: true });
