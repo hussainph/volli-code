@@ -3,7 +3,7 @@
 The Volli Cloud backend: the Convex schema and server functions, plus a pinned
 local backend that tests and codegen run against. The schema holds the whole
 cloud data model (validators and indexes); product functions arrive area by
-area, each in its own module. No cloud deployment exists yet.
+area, each in its own module.
 
 Owner setup and deployment gates: [`docs/runbooks/cloud-deploy.md`](../docs/runbooks/cloud-deploy.md).
 
@@ -756,12 +756,11 @@ beside the desktop lanes and never inside them. It restores the binary cache
 changed, and runs both test suites. `CI gate` requires it. `Check + Build`
 typechecks this package along with the rest of the workspace.
 
-## Deployments (not yet)
+## Deployments
 
-There are no cloud deployments yet. Dev, staging and prod deployments, deploy
-CI, the object-storage bucket (R2), backups and export are added once the
-Convex and Cloudflare accounts exist. Signing uploads already works against
-any S3-compatible store: a deployment points at its bucket with the
+Environment status and operator setup are maintained in the
+[deployment runbook](../docs/runbooks/cloud-deploy.md). Signing uploads works
+against any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
 
 ### Deploying with the self-check
