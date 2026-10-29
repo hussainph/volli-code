@@ -14,11 +14,12 @@ import { createCloudSessionOwner } from "../cloud-store/owner";
 import {
   ProjectFrozenError,
   assertProjectWritable,
+  bindCloudSessionOwner,
   cloudClaimsSessionWrite,
   projectFreeze,
 } from "./freeze";
 import { sqliteMoveJournal } from "./journal";
-import { FROZEN_STATES, MOVE_STATES } from "./states";
+import { COMMITTED_STATES, FROZEN_STATES, MOVE_STATES } from "./states";
 
 let ctx: TestDb;
 let services: HostSessionServices | undefined;
@@ -183,93 +184,150 @@ describe("the move freeze", () => {
     ).resolves.toBeDefined();
   });
 
-  it("never holds a Session Volli Cloud claims: moved ones resume, a cloud launch starts new ones", async () => {
-    const { project, journal } = world();
-    services = createHostSessionServices(ctx.db, {
-      log: { error: vi.fn(), warn: vi.fn() },
-      events: { publish: vi.fn() },
-      attention: {
-        deliver: vi.fn(() => ({ delivered: true as const })),
-        focusedSessionIds: () => new Set<string>(),
-      },
-    });
-    const local = services.sessionEngine;
-    const birth = (commandId: string) => ({
-      commandId,
-      projectId: project.id,
-      ticketId: null,
-      role: "project" as const,
-      parentSessionId: null,
-      title: null,
-      provenance: PROVENANCE,
-    });
-    // A local Session of the project, moved: after the handover the runner drains it.
-    const moved = (await local.createSession(birth("moved"))).session.id;
-    const localOnly = (await local.createSession(birth("local"))).session.id;
-    let from: (typeof MOVE_STATES)[number] = "queued";
-    for (const state of [
-      "frozen",
-      "exported",
-      "reserved",
-      "staged",
-      "objects",
-      "rows",
-      "history",
-      "verified",
-      "committed",
-      "handed_over",
-      "checked",
-      "confirmed",
-    ] as const) {
-      journal.advance("m", from, state);
-      from = state;
+  describe("Volli Cloud's writes on a moved project", () => {
+    const A = "33333333-3333-4333-8333-333333333333";
+    const B = "44444444-4444-4444-8444-444444444444";
+
+    async function claims() {
+      const { project } = world();
+      services = createHostSessionServices(ctx.db, {
+        log: { error: vi.fn(), warn: vi.fn() },
+        events: { publish: vi.fn() },
+        attention: {
+          deliver: vi.fn(() => ({ delivered: true as const })),
+          focusedSessionIds: () => new Set<string>(),
+        },
+      });
+      const engine = services.sessionEngine;
+      let n = 0;
+      const birth = (ownerUserId?: string) => ({
+        commandId: `create-${++n}`,
+        projectId: project.id,
+        ticketId: null,
+        role: "project" as const,
+        parentSessionId: null,
+        title: null,
+        provenance: PROVENANCE,
+        ...(ownerUserId === undefined ? {} : { ownerUserId }),
+      });
+      const command = (sessionId: string, stop = false) => ({
+        commandId: `command-${++n}`,
+        sessionId,
+        intent: stop
+          ? ({ kind: "session.stop", reason: null, by: { kind: "user" } } as const)
+          : ({ kind: "session.retitle", title: "x" } as const),
+        provenance: PROVENANCE,
+      });
+      // Before the move: a Session that moves (this runner drains it for A
+      // after the handover), one that stays local, one born for A that no
+      // cursor holds.
+      const moved = (await engine.createSession(birth())).session.id;
+      const local = (await engine.createSession(birth())).session.id;
+      const uncursored = (await engine.createSession(birth(A))).session.id;
+      ctx.db
+        .prepare(
+          `INSERT INTO session_drain_cursors (session_id, owner_user_id, claim_generation,
+             accepted_through, updated_at) VALUES (?, ?, 1, 1, 1)`,
+        )
+        .run(moved, A);
+      const setState = (state: string) =>
+        ctx.db.prepare("UPDATE cloud_moves SET state = ? WHERE move_id = 'm'").run(state);
+      const passes = (write: Promise<unknown>) =>
+        write.then(
+          () => true,
+          (error: unknown) => {
+            if (!(error instanceof ProjectFrozenError)) throw error;
+            return false;
+          },
+        );
+      return { project, engine, birth, command, moved, local, uncursored, setState, passes };
     }
-    const owner = "33333333-3333-4333-8333-333333333333";
-    ctx.db
-      .prepare(
-        `INSERT INTO session_drain_cursors (session_id, owner_user_id, claim_generation,
-           accepted_through, updated_at) VALUES (?, ?, 1, 1, 1)`,
-      )
-      .run(moved, owner);
-    expect(cloudClaimsSessionWrite(ctx.db, { kind: "session", sessionId: moved })).toBe(true);
-    expect(cloudClaimsSessionWrite(ctx.db, { kind: "session", sessionId: localOnly })).toBe(false);
 
-    // The cloud launch's view, as `createCloudSessionOwner` composes it over the one writer.
-    const cloud = createCloudSessionOwner({
-      db: ctx.db,
-      engine: services.sessionEngine,
-      ownerUserId: owner,
-      adopt: (sessionId) =>
-        ctx.db
-          .prepare(
-            `INSERT INTO session_drain_cursors (session_id, owner_user_id, claim_generation,
-               accepted_through, updated_at) VALUES (?, ?, 1, 0, 1)`,
-          )
-          .run(sessionId, owner),
-    }).engine;
-    await expect(
-      cloud.submit({
-        commandId: "resume",
-        sessionId: moved,
-        intent: { kind: "session.retitle", title: "Resumed in Volli Cloud" },
-        provenance: PROVENANCE,
-      }),
-    ).resolves.toBeDefined();
-    const started = await cloud.createSession(birth("cloud-new"));
-    expect(
-      cloudClaimsSessionWrite(ctx.db, { kind: "session", sessionId: started.session.id }),
-    ).toBe(true);
+    afterEach(() => {
+      if (ctx !== undefined) bindCloudSessionOwner(ctx.db, null);
+    });
 
-    // The archived local copy still takes nothing.
-    await expect(local.createSession(birth("local-new"))).rejects.toThrow(ProjectFrozenError);
-    await expect(
-      local.submit({
-        commandId: "local-retitle",
-        sessionId: localOnly,
-        intent: { kind: "session.retitle", title: "x" },
-        provenance: PROVENANCE,
-      }),
-    ).rejects.toThrow("moved to Volli Cloud");
+    it("passes only once the move committed, only for the launch's own person, and never a local write", async () => {
+      const { engine, birth, command, moved, local, setState, passes } = await claims();
+      bindCloudSessionOwner(ctx.db, A);
+      for (const state of FROZEN_STATES) {
+        setState(state);
+        const shown = COMMITTED_STATES.has(state);
+        expect({ state, cloudBirth: await passes(engine.createSession(birth(A))) }).toEqual({
+          state,
+          cloudBirth: shown,
+        });
+        expect({ state, moved: await passes(engine.submit(command(moved))) }).toEqual({
+          state,
+          moved: shown,
+        });
+        expect({ state, localBirth: await passes(engine.createSession(birth())) }).toEqual({
+          state,
+          localBirth: false,
+        });
+        expect({ state, local: await passes(engine.submit(command(local))) }).toEqual({
+          state,
+          local: false,
+        });
+        expect({ state, stop: await passes(engine.submit(command(local, true))) }).toEqual({
+          state,
+          stop: true,
+        });
+      }
+    });
+
+    it("gives a local launch, or another person's, no claim at all", async () => {
+      const { engine, birth, command, moved, setState, passes } = await claims();
+      setState("confirmed");
+      // A local launch (no cloud owner here): the archived copy is the only view.
+      expect(await passes(engine.submit(command(moved)))).toBe(false);
+      expect(await passes(engine.createSession(birth(A)))).toBe(false);
+      // A cloud launch for someone else: A's cursor and A's births are not theirs.
+      bindCloudSessionOwner(ctx.db, B);
+      expect(await passes(engine.submit(command(moved)))).toBe(false);
+      expect(await passes(engine.createSession(birth(A)))).toBe(false);
+      bindCloudSessionOwner(ctx.db, A);
+      expect(await passes(engine.submit(command(moved)))).toBe(true);
+    });
+
+    it("claims no Session whose birth names the person but no cursor of theirs holds", async () => {
+      const { uncursored, setState } = await claims();
+      setState("confirmed");
+      bindCloudSessionOwner(ctx.db, A);
+      expect(cloudClaimsSessionWrite(ctx.db, { kind: "session", sessionId: uncursored })).toBe(
+        false,
+      );
+    });
+
+    it("lets the cloud launch's own Session owner resume a moved Session and start one", async () => {
+      const { project, birth, moved, setState } = await claims();
+      setState("checked");
+      bindCloudSessionOwner(ctx.db, A);
+      const cloud = createCloudSessionOwner({
+        db: ctx.db,
+        engine: services!.sessionEngine,
+        ownerUserId: A,
+        adopt: (sessionId) =>
+          ctx.db
+            .prepare(
+              `INSERT INTO session_drain_cursors (session_id, owner_user_id, claim_generation,
+                 accepted_through, updated_at) VALUES (?, ?, 1, 0, 1)`,
+            )
+            .run(sessionId, A),
+      }).engine;
+      await expect(
+        cloud.submit({
+          commandId: "resume",
+          sessionId: moved,
+          intent: { kind: "session.retitle", title: "Resumed in Volli Cloud" },
+          provenance: PROVENANCE,
+        }),
+      ).resolves.toBeDefined();
+      const started = await cloud.createSession({ ...birth(), projectId: project.id });
+      expect(
+        cloudClaimsSessionWrite(ctx.db, { kind: "session", sessionId: started.session.id }),
+      ).toBe(true);
+    });
   });
 
   it("keeps the worktree reclaim off a frozen project's tickets", async () => {

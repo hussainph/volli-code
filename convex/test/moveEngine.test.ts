@@ -10,7 +10,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
 import { sqliteDrainCursorStore } from "../../packages/host-core/src/cloud-runner/sqlite-stores";
-import { projectFreeze } from "../../packages/host-core/src/cloud-move/freeze";
+import {
+  bindCloudSessionOwner,
+  projectFreeze,
+} from "../../packages/host-core/src/cloud-move/freeze";
 import { createCloudSessionOwner } from "../../packages/host-core/src/cloud-store/owner";
 import { createHostSessionServices } from "../../packages/host-core/src/session-services";
 import { MigrationExportError } from "../../packages/host-core/src/migration-export/errors";
@@ -578,6 +581,25 @@ describe("the person's decisions", () => {
     });
     try {
       const owner = world.userId;
+      const moved = "7a1f0c2e-0000-4000-8000-000000000032";
+      const message = () => ({
+        commandId: crypto.randomUUID(),
+        sessionId: moved,
+        intent: {
+          kind: "message.submit" as const,
+          reference: { id: crypto.randomUUID(), mediaType: null, digest: null },
+        },
+        provenance: {
+          source: { kind: "system" as const, id: "local-launch", detail: null },
+          venue: { id: "local", kind: "local" as const },
+        },
+      });
+      // A local launch: the archived copy takes no message, not even to a moved Session.
+      await expect(services.sessionEngine.submit(message())).rejects.toMatchObject({
+        code: "project_moving",
+      });
+      // A cloud launch for the mover, as the cloud product store binds it.
+      bindCloudSessionOwner(world.db, owner);
       const cloud = createCloudSessionOwner({
         db: world.db,
         engine: services.sessionEngine,
@@ -597,7 +619,6 @@ describe("the person's decisions", () => {
       };
       // A moved Session (the fixture's quieter one: the busy one carries a
       // deliberately malformed fact this build cannot fold either way).
-      const moved = "7a1f0c2e-0000-4000-8000-000000000032";
       expect(cloud.owns(moved)).toBe(true);
       await expect(
         cloud.engine.submit({
@@ -633,6 +654,7 @@ describe("the person's decisions", () => {
         }),
       ).rejects.toMatchObject({ code: "project_moving" });
     } finally {
+      bindCloudSessionOwner(world.db, null);
       services.sessionActivityWatch.stop();
     }
   });

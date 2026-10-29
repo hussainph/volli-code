@@ -5,19 +5,28 @@
  * moving the row out of the frozen states (roll back, go back to local) is
  * the whole of unfreezing it.
  *
- * The write paths that ask: the board's commands (`board/commands.ts`), the
- * ticket commands every other door shares (`ticket-commands.ts`), the Session
- * engine's create and submit (`session-services.ts`; stopping work is always
- * allowed, and so is every write of a Session Volli Cloud claims), the Automation and MCP settings services, and the worktree
- * reclaim. Reads are never refused: the frozen project stays fully readable.
+ * The write paths that ask, and nothing else: the board's commands
+ * (`board/commands.ts`) and the ticket commands every other door shares
+ * (`ticket-commands.ts`); the Session engine's create and submit
+ * (`session-services.ts`: stopping work always passes, and so does a write
+ * Volli Cloud claims once the project is shown there,
+ * {@link cloudClaimsSessionWrite}); the Automation service's edits and the
+ * MCP settings writes; project remove and relink; and the pull-request poll
+ * and worktree reclaim. Reads are never refused: the frozen project stays
+ * fully readable.
+ *
+ * The check runs before the write's own transaction, not inside it: one
+ * process writes the profile, and a move freezes only after a project is
+ * idle, so nothing can start between the two (a cross-process writer would
+ * need it inside; tracked with the MCP settings gate, VC-1008).
  *
  * An N−1 build does not know the table and ignores the freeze.
  */
 import type Database from "better-sqlite3";
 
-import { localSessionRow } from "../db/local-product";
+import { sessionBirthOwnerCompatible } from "../db/local-product";
 import { prepared } from "../db/prepared";
-import { FROZEN_STATES, type MoveState } from "./states";
+import { COMMITTED_STATES, FROZEN_STATES, type MoveState } from "./states";
 
 const FROZEN_LIST = [...FROZEN_STATES].map((state) => `'${state}'`).join(", ");
 
@@ -65,29 +74,61 @@ export function assertProjectWritable(db: Database.Database, projectId: string):
   if (state !== null) throw new ProjectFrozenError(projectId, state);
 }
 
+/** The signed-in owner a cloud launch serves on this profile, by database handle. */
+const cloudOwners = new WeakMap<Database.Database, string>();
+
 /**
- * Whether a Session write is Volli Cloud's, not the local product's: a
- * birth for a cloud owner (a cloud launch starting a Session, the request
- * naming its owner), or a Session the cloud claims (this runner drains it
- * for an owner, or its birth names one; the inverse of `localSessionRow`).
- *
- * The freeze holds the frozen or archived LOCAL copy of a project. A moved
- * project keeps its ids, so after the handover its Sessions sit in the same
- * project id but belong to the cloud project: their resume, messages and
- * new Sessions in a cloud launch are never the frozen copy's writes.
+ * Names the person a cloud launch serves on this profile (`null`: none, a
+ * local launch). Only their Sessions can be Volli Cloud's writes here
+ * ({@link cloudClaimsSessionWrite}); a local launch has no claims at all, so
+ * a moved Session never resumes from the archived local copy. Called by the
+ * cloud product store as it composes its Session owner.
  */
-export function cloudClaimsSessionWrite(
-  db: Database.Database,
-  write:
-    | { kind: "birth"; ownerUserId: string | undefined }
-    | { kind: "session"; sessionId: string },
-): boolean {
-  if (write.kind === "birth") return write.ownerUserId !== undefined;
+export function bindCloudSessionOwner(db: Database.Database, ownerUserId: string | null): void {
+  if (ownerUserId === null) cloudOwners.delete(db);
+  else cloudOwners.set(db, ownerUserId);
+}
+
+/** A Session write the freeze is asked about: a birth in a project, or a write to a Session. */
+export type SessionWrite =
+  | { kind: "birth"; projectId: string; ownerUserId: string | undefined }
+  | { kind: "session"; sessionId: string };
+
+/**
+ * Whether a Session write is Volli Cloud's, not the local product's, so the
+ * freeze does not hold it. A moved project keeps its ids: once Volli Cloud
+ * shows it, its Sessions sit in the same project id here but belong to the
+ * cloud project, which this Mac's runner serves for the signed-in person.
+ *
+ * All three must hold:
+ * - the project's move has committed (`COMMITTED_STATES`: shown in Volli
+ *   Cloud, handed over, checked, finished). While it moves, rolls back or
+ *   goes back to local, every write but a stop is held;
+ * - a cloud launch serves someone here ({@link bindCloudSessionOwner});
+ * - the write is theirs: a birth whose request names them, or a Session
+ *   whose drain cursor is theirs and whose birth names no one else.
+ */
+export function cloudClaimsSessionWrite(db: Database.Database, write: SessionWrite): boolean {
+  const owner = cloudOwners.get(db);
+  if (owner === undefined) return false;
+  const projectId =
+    write.kind === "birth"
+      ? write.projectId
+      : prepared<[string], { project_id: string }>(
+          db,
+          "SELECT project_id FROM sessions WHERE id = ?",
+        ).get(write.sessionId)?.project_id;
+  if (projectId === undefined) return false;
+  const state = projectFreeze(db, projectId);
+  if (state === null || !COMMITTED_STATES.has(state)) return false;
+  if (write.kind === "birth") return write.ownerUserId === owner;
   return (
-    prepared<[string], { id: string }>(
+    prepared<[{ sessionId: string; owner: string }], { id: string }>(
       db,
-      `SELECT id FROM sessions WHERE id = ? AND NOT (${localSessionRow("sessions.id")})`,
-    ).get(write.sessionId) !== undefined
+      `SELECT session_id AS id FROM session_drain_cursors
+        WHERE session_id = @sessionId AND owner_user_id = @owner
+          AND ${sessionBirthOwnerCompatible("session_drain_cursors.session_id", "@owner")}`,
+    ).get({ sessionId: write.sessionId, owner }) !== undefined
   );
 }
 
