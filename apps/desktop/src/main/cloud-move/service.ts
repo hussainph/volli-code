@@ -34,8 +34,6 @@ export interface MoveDesktopOptions {
   setExportBudget(bytes: number): Promise<void>;
   openCloud(move: MoveRow): void | Promise<void>;
   rearm?: MoveRearmPort;
-  /** An engine-owned cleanup only. Absent until it can preserve the runner's live ledger and paths. */
-  removeLocalCopy?(move: MoveRow, confirmation: string): Promise<void>;
   assertIdle(projectId: string): void;
   track?(work: Promise<unknown>): void;
   releaseIdentity?(): Promise<void>;
@@ -253,16 +251,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         ? []
         : ["retry", ...(queue?.state === "stopped" ? ["skip" as const] : [])];
     if (row.state === "confirmed")
-      return [
-        "open-cloud",
-        ...rearmActions,
-        ...(status.localReadOnly
-          ? [
-              "go-back" as const,
-              ...(options.removeLocalCopy === undefined ? [] : ["remove-local" as const]),
-            ]
-          : []),
-      ];
+      return ["open-cloud", ...rearmActions, ...(status.localReadOnly ? ["go-back" as const] : [])];
     if (AFTER_COMMIT.has(row.state))
       return [
         "open-cloud",
@@ -865,17 +854,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
               }
               break;
             case "remove-local":
-              if (
-                options.removeLocalCopy === undefined ||
-                row.state !== "confirmed" ||
-                input.confirmation !== view.projectName
-              )
-                throw new OperationUnavailableError(
-                  "Type the project name to remove its local copy.",
-                );
-              options.assertIdle(row.projectId);
-              await options.removeLocalCopy(row, input.confirmation);
-              break;
+              throw new OperationUnavailableError("Local copy removal is not available.");
           }
           notify();
         }),

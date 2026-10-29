@@ -24,7 +24,8 @@ import { useCloudMovesStore } from "@renderer/stores/cloud-moves";
 import { MOVE_STEP_LABELS, MOVE_STATE_LABELS, moveTime } from "./presentation";
 import { MoveAutomationRearm, MovedAutomationNames } from "./automation-rearm";
 
-const ACTION_LABELS: Record<CloudMoveAction, string> = {
+type AvailableMoveAction = Exclude<CloudMoveAction, "remove-local">;
+const ACTION_LABELS: Record<AvailableMoveAction, string> = {
   pause: "Pause",
   resume: "Resume",
   cancel: "Cancel move",
@@ -34,7 +35,6 @@ const ACTION_LABELS: Record<CloudMoveAction, string> = {
   finish: "Finish move",
   "open-cloud": "Open in Volli Cloud",
   "go-back": "Go back to local",
-  "remove-local": "Remove local copy…",
   "re-arm": "Re-arm on this Mac",
 };
 
@@ -59,20 +59,23 @@ export function MoveProgress({
   const [copiedMoveId, setCopiedMoveId] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState<{
     move: CloudMoveStatus;
-    action: "go-back" | "remove-local" | "cancel" | "roll-back";
+    action: "go-back" | "cancel" | "roll-back";
   } | null>(() => {
     const move = moves.find((item) => item.moveId === initialCancelMoveId);
     return move === undefined ? null : { move, action: "cancel" };
   });
   const [confirmation, setConfirmation] = React.useState("");
-  async function perform(moveId: string, action: CloudMoveAction, rearm?: CloudMoveRearmTarget) {
+  async function perform(
+    moveId: string,
+    action: AvailableMoveAction,
+    rearm?: CloudMoveRearmTarget,
+  ) {
     if (busy) return;
     setBusy(true);
     try {
       const typed =
-        action === "remove-local" ||
-        (action === "roll-back" &&
-          moves.find((item) => item.moveId === moveId)?.rollback?.requiresConfirmation === true);
+        action === "roll-back" &&
+        moves.find((item) => item.moveId === moveId)?.rollback?.requiresConfirmation === true;
       await api.command({
         moveId,
         action,
@@ -105,8 +108,7 @@ export function MoveProgress({
     confirming === null ? null : moves.find((move) => move.moveId === confirming.move.moveId);
   const allowed = confirming !== null && current?.actions.includes(confirming.action) === true;
   const typedConfirmation =
-    confirming?.action === "remove-local" ||
-    (confirming?.action === "roll-back" && current?.rollback?.requiresConfirmation === true);
+    confirming?.action === "roll-back" && current?.rollback?.requiresConfirmation === true;
   return (
     <>
       <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto text-ui">
@@ -221,18 +223,12 @@ export function MoveProgress({
             ) : null}
             <div className="flex flex-wrap gap-2">
               {move.actions
-                .filter((action) => action !== "re-arm")
+                .filter((action) => action !== "re-arm" && action !== "remove-local")
                 .map((action) => (
                   <Button
                     key={action}
                     size="sm"
-                    variant={
-                      action === "finish"
-                        ? "default"
-                        : action === "remove-local"
-                          ? "destructive"
-                          : "outline"
-                    }
+                    variant={action === "finish" ? "default" : "outline"}
                     disabled={
                       busy ||
                       (action === "go-back" && move.returnExportPath === null) ||
@@ -241,12 +237,7 @@ export function MoveProgress({
                         (move.checks.length === 0 || move.checks.some((check) => !check.passed)))
                     }
                     onClick={() => {
-                      if (
-                        action === "go-back" ||
-                        action === "remove-local" ||
-                        action === "cancel" ||
-                        action === "roll-back"
-                      ) {
+                      if (action === "go-back" || action === "cancel" || action === "roll-back") {
                         setConfirmation("");
                         setConfirming({ move, action });
                       } else void perform(move.moveId, action);
@@ -289,20 +280,16 @@ export function MoveProgress({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirming?.action === "remove-local"
-                ? "Remove the local copy?"
-                : confirming?.action === "go-back"
-                  ? "Go back to local?"
-                  : confirming?.action === "roll-back"
-                    ? "Roll back this move?"
-                    : "Cancel this move?"}
+              {confirming?.action === "go-back"
+                ? "Go back to local?"
+                : confirming?.action === "roll-back"
+                  ? "Roll back this move?"
+                  : "Cancel this move?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {confirming?.action === "remove-local"
-                ? "Removes this Mac’s archived tickets and Session history. Your folder, worktrees, cloud project and backup are kept. Going back to local will no longer be available."
-                : confirming?.action === "go-back"
-                  ? "Unlocks the local copy as it was before the move. Changes made in Volli Cloud since the move are saved to a readable export, not applied to the local copy. Volli Cloud keeps its copy."
-                  : "The cloud copy is cleared and this project becomes writable on this Mac again. The backup is kept."}
+              {confirming?.action === "go-back"
+                ? "Unlocks the local copy as it was before the move. Changes made in Volli Cloud since the move are saved to a readable export, not applied to the local copy. Volli Cloud keeps its copy."
+                : "The cloud copy is cleared and this project becomes writable on this Mac again. The backup is kept."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {confirming?.action === "go-back" ? (
@@ -326,18 +313,11 @@ export function MoveProgress({
               )}
             </div>
           ) : null}
-          {confirming?.action === "remove-local" && current?.backupPath ? (
-            <p className="break-all text-ui">Backup kept: {current.backupPath}</p>
-          ) : null}
           {typedConfirmation && confirming !== null ? (
             <label className="flex flex-col gap-2 text-ui">
               Type {confirming.move.projectName} to confirm
               <Input
-                aria-label={
-                  confirming.action === "roll-back"
-                    ? "Project name to confirm rollback"
-                    : "Project name to confirm removal"
-                }
+                aria-label="Project name to confirm rollback"
                 value={confirmation}
                 onChange={(event) => setConfirmation(event.target.value)}
                 disabled={busy}
@@ -353,11 +333,7 @@ export function MoveProgress({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Keep as is</AlertDialogCancel>
             <Button
-              variant={
-                confirming?.action === "remove-local" || confirming?.action === "roll-back"
-                  ? "destructive"
-                  : "default"
-              }
+              variant={confirming?.action === "roll-back" ? "destructive" : "default"}
               disabled={
                 busy ||
                 !allowed ||

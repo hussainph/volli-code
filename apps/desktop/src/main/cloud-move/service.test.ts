@@ -488,6 +488,10 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     await f.service.command({ moveId: row.moveId, action: "finish" });
     expect(f.engine.journal.move(row.moveId)!.state).toBe("confirmed");
     expect((await f.service.snapshot()).moves[0]!.actions).not.toContain("remove-local");
+    await expect(
+      f.service.command({ moveId: row.moveId, action: "remove-local", confirmation: "Project" }),
+    ).rejects.toThrow("no longer available");
+    expect(f.engine.journal.move(row.moveId)!.state).toBe("confirmed");
   });
   it("retries the same durable post-commit move, never enqueues a second import", async () => {
     const f = setup();

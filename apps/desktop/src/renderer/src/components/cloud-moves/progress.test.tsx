@@ -359,32 +359,23 @@ describe("Move progress and outcomes", () => {
       "Cloud changes saved to: /profile/cloud-moves/move/cloud-changes",
     );
   });
-  it("requires an exact typed confirmation for manual removal and honors revoked availability", async () => {
-    await mount({ state: "finished", actions: ["remove-local"] });
-    await click("Remove local copy…");
-    expect(button("Remove local copy").disabled).toBe(true);
-    const input = document.querySelector("input")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-        input,
-        "Atlas",
-      );
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(button("Remove local copy").disabled).toBe(false);
+  it("revokes Go back while its confirmation is open if availability changes", async () => {
+    await mount({ state: "finished", actions: ["go-back"] });
+    await click("Go back to local");
     await mount({ state: "finished", actions: [] });
-    expect(button("Remove local copy").disabled).toBe(true);
+    expect(button("Go back to local").disabled).toBe(true);
     expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(
       "no longer available",
     );
     expect(api.command).not.toHaveBeenCalled();
-    await mount({ state: "finished", actions: ["remove-local"] });
-    await click("Remove local copy");
-    expect(api.command).toHaveBeenCalledWith({
-      moveId: "move",
-      action: "remove-local",
-      confirmation: "Atlas",
-    });
+  });
+  it("never exposes deferred local-copy removal, even if an older projection offers it", async () => {
+    await mount({ state: "finished", actions: ["remove-local", "open-cloud", "go-back"] });
+    expect(container.textContent).not.toContain("Remove local copy");
+    expect(container.textContent).not.toContain("Remove the local copy");
+    expect(button("Open in Volli Cloud")).toBeDefined();
+    expect(button("Go back to local")).toBeDefined();
+    expect(api.command).not.toHaveBeenCalled();
   });
   it("reports failed actions and clipboard failures, with no silent success", async () => {
     api.command.mockRejectedValueOnce(

@@ -67,6 +67,7 @@ export const CLOUD_MOVE_ACTIONS = [
   "finish",
   "open-cloud",
   "go-back",
+  // Reserved wire value; removal stays unavailable until archived-copy cleanup preserves runner state.
   "remove-local",
   "re-arm",
 ] as const;
@@ -89,7 +90,7 @@ export interface CloudMoveAutomationRearm {
 export interface CloudMoveCommand {
   moveId: string;
   action: CloudMoveAction;
-  /** Required for manual removal or discarding changed cloud data; main checks the exact project name again. */
+  /** Required to discard changed cloud data during Roll back; main checks the exact project name again. */
   confirmation?: string;
   /** One currently paused moved record; main re-reads it before calling the ordinary arming door. */
   rearm?: CloudMoveRearmTarget;
