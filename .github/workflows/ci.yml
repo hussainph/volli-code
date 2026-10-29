@@ -281,9 +281,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .scratch/convex-api-cache
-          key: convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', '.nvmrc') }}-${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          key: convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', 'package.json', '.nvmrc') }}-${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
           restore-keys: |
-            convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', '.nvmrc') }}-
+            convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', 'package.json', '.nvmrc') }}-
 
       - name: Check committed Convex API and additive compatibility
         env:

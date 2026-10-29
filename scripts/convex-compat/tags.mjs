@@ -68,8 +68,8 @@ export function compareVersions(left, right) {
 
 /**
  * The newest `v*` tag by semver, prereleases included — or `null` when the
- * list holds no version tag at all. Ties (two tags on the same version) keep
- * the first one seen, so the answer never depends on `git tag`'s order.
+ * list holds no version tag at all. Equal-precedence tags (for example,
+ * differing only in build metadata) keep the first one seen.
  */
 export function latestTag(tags) {
   let newest = null;
