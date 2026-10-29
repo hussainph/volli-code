@@ -85,48 +85,61 @@ export async function seedFixture(page, name, layout, modelPin) {
       if (!updated.ok) throw new Error(updated.error);
       return attached.blob;
     }, seeded.tickets[0].ticketId);
-    // SETUP only: saved local definitions, one carried column arming, and a
-    // schedule safely ahead of this journey. None is enabled on this machine.
-    seeded.automations = await page.evaluate(async (projectId) => {
-      const ahead = new Date(Date.now() + 12 * 60 * 60_000);
-      const definitions = [
-        { projectId, name: "Move column proof", trigger: { kind: "columns", columns: ["done"] } },
-        {
+    // SETUP only: a historical Done arrival before its column is armed, plus
+    // saved definitions and a future schedule. Machine enablement stays off.
+    seeded.automations = await page.evaluate(
+      async ({ projectId, ticketId }) => {
+        const arrived = await window.api.tickets.move({
           projectId,
-          name: "Move schedule proof",
-          trigger: {
-            kind: "schedule",
-            schedule: {
-              preset: "daily",
-              hour: ahead.getUTCHours(),
-              minute: ahead.getUTCMinutes(),
-              timeZone: "UTC",
+          ticketId,
+          toStatus: "done",
+          toIndex: 0,
+        });
+        if (!arrived.ok) throw new Error(arrived.error);
+        if (arrived.tickets.find((ticket) => ticket.id === ticketId)?.status !== "done")
+          throw new Error("Move fixture historical arrival did not reach Done");
+        const ahead = new Date(Date.now() + 12 * 60 * 60_000);
+        const definitions = [
+          { projectId, name: "Move column proof", trigger: { kind: "columns", columns: ["done"] } },
+          {
+            projectId,
+            name: "Move schedule proof",
+            trigger: {
+              kind: "schedule",
+              schedule: {
+                preset: "daily",
+                hour: ahead.getUTCHours(),
+                minute: ahead.getUTCMinutes(),
+                timeZone: "UTC",
+              },
             },
           },
-        },
-        { projectId: null, name: "Move personal proof", trigger: { kind: "none" } },
-      ];
-      const saved = [];
-      for (const input of definitions) {
-        const result = await window.api.automations.create({
+          { projectId: null, name: "Move personal proof", trigger: { kind: "none" } },
+        ];
+        const saved = [];
+        for (const input of definitions) {
+          const result = await window.api.automations.create({
+            commandId: crypto.randomUUID(),
+            runtime: null,
+            instructions: "Report one finding.",
+            ...input,
+          });
+          if (!result.ok) throw new Error(result.error);
+          saved.push(result.automation);
+        }
+        const [column, schedule, personal] = saved;
+        const armed = await window.api.automations.arm({
           commandId: crypto.randomUUID(),
-          runtime: null,
-          instructions: "Report one finding.",
-          ...input,
+          projectId,
+          status: "done",
+          automationId: column.id,
         });
-        if (!result.ok) throw new Error(result.error);
-        saved.push(result.automation);
-      }
-      const [column, schedule, personal] = saved;
-      const armed = await window.api.automations.arm({
-        commandId: crypto.randomUUID(),
-        projectId,
-        status: "done",
-        automationId: column.id,
-      });
-      if (!armed.ok) throw new Error(armed.error);
-      return { columnId: column.id, scheduleId: schedule.id, personalId: personal.id };
-    }, project.id);
+        if (!armed.ok) throw new Error(armed.error);
+        return { columnId: column.id, scheduleId: schedule.id, personalId: personal.id };
+      },
+      { projectId: project.id, ticketId: seeded.tickets[3].ticketId },
+    );
+    seeded.tickets[3].status = "done";
   }
   // The bridge writes are live, but a reload makes the board read them the way
   // a person's next launch would, with no optimistic state left over.

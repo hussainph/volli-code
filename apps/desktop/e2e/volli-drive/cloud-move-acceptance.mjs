@@ -43,6 +43,9 @@ await fs.mkdir(reportDir, { recursive: true });
 const proof = {
   startedAt: new Date().toISOString(),
   steps: [],
+  limitations: [
+    "No pending local Automation arrival is seeded; this journey checks explicit result re-arm, not pending-arrival archive conversion.",
+  ],
   doubles: [
     "fake model HTTP",
     "dev sign-in browser",
@@ -165,6 +168,22 @@ async function waitForEngine(label, predicate, deadline) {
   proof.terminal = terminal;
   assert.equal(terminal, undefined, `Engine stopped: ${JSON.stringify(terminal)}`);
   return latest;
+}
+async function assertNoAutomationWork(read) {
+  const runs = await read("automations:runsForProject", {
+    projectId: MOVE_PROJECT.id,
+    paginationOpts: { numItems: 10, cursor: null },
+  });
+  const arrivals = await read("automations:pendingArrivals", { projectId: MOVE_PROJECT.id });
+  const schedules = await read("automations:schedules", { projectId: MOVE_PROJECT.id });
+  assert.deepEqual(runs.page, [], "no Automation Run was started");
+  assert.deepEqual(arrivals.pending, [], "no pending arrival is visible");
+  assert.deepEqual(arrivals.failures, []);
+  for (const item of schedules) {
+    assert.equal(item.pendingJobId, null, "no early schedule job was queued");
+    assert.equal(item.pendingRunId, null);
+  }
+  return { at: new Date().toISOString(), runs: runs.page, arrivals, schedules };
 }
 const send = async (text) => {
   await action("type", "textbox", "Message", { text });
@@ -361,6 +380,14 @@ try {
     proof.confirmed = true;
     proof.moveId = moved.move_id;
     const names = launched.seeded.automations;
+    const historical = await read("board:getTicket", {
+      ticketId: launched.seeded.tickets[3].ticketId,
+    });
+    assert.equal(
+      historical.ticket.status,
+      "done",
+      "the historical unarmed arrival moved with the board",
+    );
     const list = await read("projectImports:rearmList", { moveId: proof.moveId });
     assert.deepEqual(list.columns, [
       { automationId: names.columnId, name: "Move column proof", status: "done" },
@@ -371,18 +398,18 @@ try {
     assert.deepEqual(list.inertGlobals, [{ id: names.personalId, name: "Move personal proof" }]);
     const columns = await read("automations:armings", { projectId: MOVE_PROJECT.id });
     const schedules = await read("automations:schedules", { projectId: MOVE_PROJECT.id });
-    assert.equal(columns[0]?.pausedReason, "moved");
-    assert.equal(schedules[0]?.pausedReason, "moved");
-    assert.deepEqual(
-      (
-        await read("automations:runsForProject", {
-          projectId: MOVE_PROJECT.id,
-          paginationOpts: { numItems: 10, cursor: null },
-        })
-      ).page,
-      [],
-      "moving starts no Automation work",
+    const pausedColumn = columns.find((item) => item.automationId === names.columnId);
+    const pausedSchedule = schedules.find((item) => item.automationId === names.scheduleId);
+    for (const item of [pausedColumn, pausedSchedule]) {
+      assert.equal(item?.pausedReason, "moved");
+      assert.ok(item.pausedAt > 0);
+    }
+    assert.equal(
+      pausedSchedule.nextFireAt,
+      Number.MAX_SAFE_INTEGER,
+      "import carries no executable schedule cursor",
     );
+    const quiet = await assertNoAutomationWork(read);
     await click("button", "Paused Automations", { contains: true });
     await wait("Open in Volli Cloud to re-arm on this Mac.");
     const local = await drive("snapshot");
@@ -393,7 +420,14 @@ try {
       "a registration-only runner must not re-arm",
     );
     assert.equal(local.text.match(/Move personal proof · Not armed/gu)?.length, 1);
-    return { list, pausedWithoutStarting: true, localRearmDisabled: true };
+    return {
+      list,
+      columns,
+      schedules,
+      quiet,
+      pausedWithoutStarting: true,
+      localRearmDisabled: true,
+    };
   });
   await step("Re-arm moved Automations explicitly on this Mac", async () => {
     await drive("restart", { reason: "Open the moved project in Volli Cloud (supervised)" });
@@ -429,6 +463,7 @@ try {
     const runners = await read("runners:list", {});
     const runner = runners.find((item) => item.id === current.runnerId);
     assert.equal(runner?.kind, "mac");
+    assert.ok(["online", "degraded"].includes(runner.status));
     assert.ok(runner.capabilities.tools.includes("automation.run"));
     await drive("screenshot", { name: "paused-automations-ready-on-this-mac" });
     const names = launched.seeded.automations;
@@ -447,12 +482,16 @@ try {
       },
       { timeout: 30_000, interval: 250 },
     );
+    const armedColumn = columns.find((item) => item.automationId === names.columnId);
+    assert.equal(armedColumn.pausedAt, null);
+    assert.equal(armedColumn.pausedReason, null);
     const afterColumn = await read("projectImports:rearmList", { moveId: proof.moveId });
     assert.deepEqual(afterColumn.columns, []);
     assert.deepEqual(
       afterColumn.schedules.map((item) => item.automationId),
       [names.scheduleId],
     );
+    const scheduleClickAt = Date.now();
     await click("button", "Re-arm Move schedule proof schedule on this Mac");
     let schedules;
     await waitUntil(
@@ -471,16 +510,13 @@ try {
     const after = await read("projectImports:rearmList", { moveId: proof.moveId });
     assert.deepEqual(after.columns, []);
     assert.deepEqual(after.schedules, []);
-    assert.deepEqual(
-      (
-        await read("automations:runsForProject", {
-          projectId: MOVE_PROJECT.id,
-          paginationOpts: { numItems: 10, cursor: null },
-        })
-      ).page,
-      [],
-      "arming neither replays old arrivals nor runs a future schedule early",
-    );
+    const scheduled = schedules.find((item) => item.automationId === names.scheduleId);
+    assert.equal(scheduled.pausedAt, null);
+    assert.equal(scheduled.pausedReason, null);
+    assert.ok(scheduled.armedAt >= scheduleClickAt, "the ordinary re-arm computed a fresh cursor");
+    assert.ok(scheduled.nextFireAt > Date.now() + 11 * 60 * 60_000);
+    assert.ok(scheduled.nextFireAt < Date.now() + 13 * 60 * 60_000);
+    const quiet = await assertNoAutomationWork(read);
     assert.deepEqual(after.inertGlobals, [{ id: names.personalId, name: "Move personal proof" }]);
     await drive("wait", { text: "Paused Automations", gone: true, timeout: 30_000 });
     const result = await drive("snapshot");
@@ -488,7 +524,14 @@ try {
     assert.equal(visibleControls(result.text, "button", "Re-arm", { contains: true }).length, 0);
     await drive("screenshot", { name: "explicit-rearm-result-and-inert-personal-definition" });
     await click("button", "Close");
-    return { runnerId: current.runnerId, columns, schedules, inertGlobals: after.inertGlobals };
+    return {
+      runnerId: current.runnerId,
+      columns,
+      schedules,
+      scheduleClickAt,
+      quiet,
+      inertGlobals: after.inertGlobals,
+    };
   });
   await step("Read moved history and attachments through the real cloud board", async () => {
     await click("button", "Home", { first: true });
@@ -537,7 +580,8 @@ try {
       proof.beforePaths,
       "handover reused the existing folder and Working copy",
     );
-    return { transcriptRead: true, attachmentRendered: true, foldersReused: true };
+    const quiet = await assertNoAutomationWork(read);
+    return { transcriptRead: true, attachmentRendered: true, foldersReused: true, quiet };
   });
   let sessionWriteError;
   try {
@@ -597,6 +641,7 @@ try {
       movedCursorReleased: true,
     };
   });
+  proof.finalAutomationQuiet = await assertNoAutomationWork(read);
   if (sessionWriteError !== undefined) throw sessionWriteError;
   const doctor = await drive("doctor");
   assert.ok(doctor.ok, JSON.stringify(doctor.problems));
