@@ -53,7 +53,7 @@ import { basename } from "node:path";
 import { promisify } from "node:util";
 import { zstdCompress } from "node:zlib";
 
-import { canonicalJson } from "@volli/session-engine";
+import { canonicalJson, transcriptReferenceFor } from "@volli/session-engine";
 import {
   CredentialRedactionStream,
   redactJsonValue,
@@ -235,10 +235,6 @@ function turnIdOf(payload: SpoolEvent["payload"]): string | null {
   return typeof turnId === "string" && turnId.length > 0 ? turnId : null;
 }
 
-function referenceOf(payload: SpoolEvent["payload"]): TranscriptReference | null {
-  return payload.kind === "transcript.referenced" ? payload.reference : null;
-}
-
 interface PreparedBody {
   digest: string;
   mediaType: string;
@@ -298,7 +294,7 @@ export class TranscriptSpool {
         });
       };
       for (const event of events) {
-        const reference = referenceOf(event.payload);
+        const reference = transcriptReferenceFor(event);
         if (reference === null || seen.has(reference.id)) continue;
         seen.add(reference.id);
         const prepared = await this.#prepare(reference);
@@ -409,7 +405,7 @@ export class TranscriptSpool {
         if (event.sequence > through) return plan;
         const turnId = turnIdOf(event.payload);
         const newTurn = turnId !== null && !plan.turnIds.includes(turnId);
-        const reference = referenceOf(event.payload);
+        const reference = transcriptReferenceFor(event);
         let entry: TranscriptPackEntry | null = null;
         let entryBytes = 0;
         let lost: string | null = null;

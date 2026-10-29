@@ -189,11 +189,13 @@ export async function readSessionTranscriptTail(
 
 /**
  * The events that carry a transcript message: an observed one the adapter
- * referenced, and the two commands that record what a person said — a submitted
- * message and a resolved interaction both ARE transcript, and a tail that
- * skipped them would show an agent answering questions nobody asked.
+ * referenced, and the two commands that record a submitted message (including
+ * runtime-authored notices) or a resolved interaction. Both ARE transcript;
+ * skipping them would show an agent answering questions nobody asked.
  */
-export function transcriptReferenceFor(event: SessionEvent): TranscriptReference | null {
+export function transcriptReferenceFor(
+  event: Pick<SessionEvent, "payload">,
+): TranscriptReference | null {
   if (event.payload.kind === "transcript.referenced") return event.payload.reference;
   if (
     event.payload.kind === "command.recorded" &&

@@ -31,8 +31,7 @@
  * profile's transcript store, and refuse to commit while any report names a
  * missing body or a Pi file left behind.
  */
-import { transcriptReferenceFor } from "@volli/session-engine";
-import type { SessionEvent, TranscriptReference } from "@volli/shared";
+import type { TranscriptReference } from "@volli/shared";
 import type {
   SessionUploadGrant,
   SessionUploadHead,
@@ -111,25 +110,6 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
 }
 
-/**
- * An event as the spool packs it: every body a fact names goes into the pack
- * covering that fact, the one the window reads it from. A live Session's
- * runner packs what its runtime referenced (`transcript.referenced`); the
- * message a person submitted or answered with stays staged by the client
- * that sent it. A moved Session has no staging, so those bodies (a
- * `message.submit` or `interaction.resolve` command's) are packed too.
- */
-function packedView(event: SpoolEvent): SpoolEvent {
-  if (event.payload.kind === "transcript.referenced") return event;
-  const reference = transcriptReferenceFor(event as SessionEvent);
-  return reference === null
-    ? event
-    : {
-        ...event,
-        payload: { kind: "transcript.referenced", attachmentId: null, turnId: null, reference },
-      };
-}
-
 /** The uploader for one move. Sessions may upload one after another or side by side. */
 export function createMoveHistoryUploader(
   options: MoveHistoryUploaderOptions,
@@ -193,8 +173,8 @@ export function createMoveHistoryUploader(
     },
     events: {
       acceptedThrough: (sessionId) => known(sessionId).lastSequence,
-      eventsAfter: async (sessionId, afterSequence, limit) =>
-        (await known(sessionId).eventsAfter(afterSequence, limit)).map(packedView),
+      eventsAfter: (sessionId, afterSequence, limit) =>
+        known(sessionId).eventsAfter(afterSequence, limit),
     },
     redaction: options.redaction,
     ...(options.limits === undefined ? {} : { limits: options.limits }),

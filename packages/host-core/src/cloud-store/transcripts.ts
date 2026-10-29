@@ -1,6 +1,7 @@
 /** Runner-produced bodies reach staging before the facts that make them visible. */
 import {
   canonicalJson,
+  transcriptReferenceFor,
   type SessionEngine,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
@@ -194,7 +195,9 @@ export function createCloudTranscriptPublisher(options: {
   const accept: AcceptCall = async (args, callOptions) => {
     const live = current();
     const events = args.events.map((event) => JSON.parse(event) as SessionEvent);
-    const firstBody = events.findIndex((event) => event.payload.kind === "transcript.referenced");
+    // Runtime-authored notices are message.submit commands, not adapter
+    // observations. They have no client to stage their bodies for them.
+    const firstBody = events.findIndex((event) => transcriptReferenceFor(event) !== null);
     if (firstBody < 0) return acceptOverLink(live.link)(args, callOptions);
     const session = await options.engine.getBaseSession({ sessionId: args.sessionId });
     const cursor = options.cursors.get(args.sessionId);

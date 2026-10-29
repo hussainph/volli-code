@@ -12,10 +12,12 @@
  * session log is committed the same way as byte ranges (`commitPiLogSegment`),
  * contiguous per Pi file from offset 0, and kept forever.
  *
- * One body is staged by a client instead: a `message.submit` queued through
- * `sessions.command` with its body inline (`uploadedBy: "client"`), so the
- * Session's runner, which never wrote it, can read it back
- * (`commandArtifact`, runner-only and claim-fenced) before delivery.
+ * A `message.submit` queued through `sessions.command` with its body inline
+ * is staged by the client first (`uploadedBy: "client"`), so the Session's
+ * runner, which never wrote it, can read it back (`commandArtifact`,
+ * runner-only and claim-fenced) before delivery. The runner stages and packs
+ * all referenced bodies, including runtime-authored notice commands that
+ * have no client to upload them.
  *
  * Every write is the Session's producer's, presenting the current claim, so a
  * runner that lost the claim cannot commit. The producer is either the runner
