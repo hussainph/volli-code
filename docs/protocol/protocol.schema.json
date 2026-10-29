@@ -6927,7 +6927,8 @@
                 "finish",
                 "open-cloud",
                 "go-back",
-                "remove-local"
+                "remove-local",
+                "re-arm"
               ],
               "type": "string"
             },
@@ -6939,6 +6940,59 @@
               "maxLength": 200,
               "minLength": 1,
               "type": "string"
+            },
+            "rearm": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "automationId": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "column",
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "backlog",
+                        "todo",
+                        "doing",
+                        "needs_review",
+                        "done"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "automationId",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "automationId": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "schedule",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "automationId"
+                  ],
+                  "type": "object"
+                }
+              ]
             }
           },
           "required": [
@@ -7311,11 +7365,123 @@
                         "finish",
                         "open-cloud",
                         "go-back",
-                        "remove-local"
+                        "remove-local",
+                        "re-arm"
                       ],
                       "type": "string"
                     },
                     "type": "array"
+                  },
+                  "automationRearm": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "canRearmOnThisMac": {
+                        "type": "boolean"
+                      },
+                      "columns": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "automationId": {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "backlog",
+                                "todo",
+                                "doing",
+                                "needs_review",
+                                "done"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "automationId",
+                            "name",
+                            "status"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 1000,
+                        "type": "array"
+                      },
+                      "inertGlobals": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 1000,
+                        "type": "array"
+                      },
+                      "retryable": {
+                        "type": "boolean"
+                      },
+                      "schedules": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "automationId": {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "automationId",
+                            "name"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 1000,
+                        "type": "array"
+                      },
+                      "unavailable": {
+                        "anyOf": [
+                          {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "columns",
+                      "schedules",
+                      "inertGlobals",
+                      "canRearmOnThisMac",
+                      "unavailable",
+                      "retryable"
+                    ],
+                    "type": "object"
                   },
                   "backupPath": {
                     "anyOf": [

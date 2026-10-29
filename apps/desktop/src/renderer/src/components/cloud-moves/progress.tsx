@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   CLOUD_MOVE_STEPS,
   errorMessage,
+  type CloudMoveRearmTarget,
   type CloudMoveAction,
   type CloudMoveStatus,
 } from "@volli/shared";
@@ -19,7 +20,9 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { toastError } from "@renderer/lib/toast";
+import { useCloudMovesStore } from "@renderer/stores/cloud-moves";
 import { MOVE_STEP_LABELS, MOVE_STATE_LABELS, moveTime } from "./presentation";
+import { MoveAutomationRearm } from "./automation-rearm";
 
 const ACTION_LABELS: Record<CloudMoveAction, string> = {
   pause: "Pause",
@@ -32,6 +35,7 @@ const ACTION_LABELS: Record<CloudMoveAction, string> = {
   "open-cloud": "Open in Volli Cloud",
   "go-back": "Go back to local",
   "remove-local": "Remove local copy…",
+  "re-arm": "Re-arm on this Mac",
 };
 
 export function MoveProgress({
@@ -44,6 +48,14 @@ export function MoveProgress({
   initialCancelMoveId?: string;
 }) {
   const [busy, setBusy] = React.useState(false);
+  const refresh = useCloudMovesStore((state) => state.refresh);
+  const inertGlobals = [
+    ...new Map(
+      moves
+        .flatMap((move) => move.automationRearm?.inertGlobals ?? [])
+        .map((item) => [item.id, item]),
+    ).values(),
+  ];
   const [copiedMoveId, setCopiedMoveId] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState<{
     move: CloudMoveStatus;
@@ -53,7 +65,7 @@ export function MoveProgress({
     return move === undefined ? null : { move, action: "cancel" };
   });
   const [confirmation, setConfirmation] = React.useState("");
-  async function perform(moveId: string, action: CloudMoveAction) {
+  async function perform(moveId: string, action: CloudMoveAction, rearm?: CloudMoveRearmTarget) {
     if (busy) return;
     setBusy(true);
     try {
@@ -61,7 +73,12 @@ export function MoveProgress({
         action === "remove-local" ||
         (action === "roll-back" &&
           moves.find((item) => item.moveId === moveId)?.rollback?.requiresConfirmation === true);
-      await api.command({ moveId, action, ...(typed ? { confirmation } : {}) });
+      await api.command({
+        moveId,
+        action,
+        ...(typed ? { confirmation } : {}),
+        ...(rearm === undefined ? {} : { rearm }),
+      });
       setConfirming(null);
       setConfirmation("");
     } catch (error) {
@@ -178,7 +195,13 @@ export function MoveProgress({
             {move.returnExportPath !== null && move.state === "returned" ? (
               <p className="break-all">Cloud changes saved to: {move.returnExportPath}</p>
             ) : null}
-            {move.pausedAutomations.length > 0 ? (
+            <MoveAutomationRearm
+              move={move}
+              busy={busy}
+              onRearm={(target) => void perform(move.moveId, "re-arm", target)}
+              onRefresh={refresh}
+            />
+            {move.automationRearm === undefined && move.pausedAutomations.length > 0 ? (
               <details>
                 <summary>Paused Automations ({move.pausedAutomations.length})</summary>
                 <p>Re-arm these when Automations are available in Volli Cloud.</p>
@@ -201,39 +224,41 @@ export function MoveProgress({
               </details>
             ) : null}
             <div className="flex flex-wrap gap-2">
-              {move.actions.map((action) => (
-                <Button
-                  key={action}
-                  size="sm"
-                  variant={
-                    action === "finish"
-                      ? "default"
-                      : action === "remove-local"
-                        ? "destructive"
-                        : "outline"
-                  }
-                  disabled={
-                    busy ||
-                    (action === "go-back" && move.returnExportPath === null) ||
-                    (action === "roll-back" && move.rollback === null) ||
-                    (action === "finish" &&
-                      (move.checks.length === 0 || move.checks.some((check) => !check.passed)))
-                  }
-                  onClick={() => {
-                    if (
-                      action === "go-back" ||
-                      action === "remove-local" ||
-                      action === "cancel" ||
-                      action === "roll-back"
-                    ) {
-                      setConfirmation("");
-                      setConfirming({ move, action });
-                    } else void perform(move.moveId, action);
-                  }}
-                >
-                  {ACTION_LABELS[action]}
-                </Button>
-              ))}
+              {move.actions
+                .filter((action) => action !== "re-arm")
+                .map((action) => (
+                  <Button
+                    key={action}
+                    size="sm"
+                    variant={
+                      action === "finish"
+                        ? "default"
+                        : action === "remove-local"
+                          ? "destructive"
+                          : "outline"
+                    }
+                    disabled={
+                      busy ||
+                      (action === "go-back" && move.returnExportPath === null) ||
+                      (action === "roll-back" && move.rollback === null) ||
+                      (action === "finish" &&
+                        (move.checks.length === 0 || move.checks.some((check) => !check.passed)))
+                    }
+                    onClick={() => {
+                      if (
+                        action === "go-back" ||
+                        action === "remove-local" ||
+                        action === "cancel" ||
+                        action === "roll-back"
+                      ) {
+                        setConfirmation("");
+                        setConfirming({ move, action });
+                      } else void perform(move.moveId, action);
+                    }}
+                  >
+                    {ACTION_LABELS[action]}
+                  </Button>
+                ))}
               <Button
                 size="sm"
                 variant="ghost"
@@ -245,6 +270,16 @@ export function MoveProgress({
             </div>
           </section>
         ))}
+        {inertGlobals.length > 0 ? (
+          <section aria-label="Personal Automations" className="flex flex-col gap-2">
+            <h3 className="font-medium">Personal Automations</h3>
+            <ul>
+              {inertGlobals.map((item) => (
+                <li key={item.id}>{item.name} · Not armed</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
       </div>
       <AlertDialog
         open={confirming !== null}

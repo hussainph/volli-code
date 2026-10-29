@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { CloudMoveStatus } from "@volli/shared";
 import { MoveProgress } from "./progress";
 import { fakeApi, move } from "./test-support";
+import { useCloudMovesStore } from "@renderer/stores/cloud-moves";
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("@renderer/lib/toast", () => ({ toastError: toast }));
@@ -52,6 +53,99 @@ async function click(label: string) {
 }
 
 describe("Move progress and outcomes", () => {
+  const automationRearm = {
+    columns: [{ automationId: "column", name: "Review", status: "doing" as const }],
+    schedules: [{ automationId: "schedule", name: "Nightly" }],
+    inertGlobals: [{ id: "global", name: "Personal helper" }],
+    canRearmOnThisMac: true,
+    unavailable: null,
+    retryable: false,
+  };
+  it("re-arms only an explicitly chosen project record and never personal definitions", async () => {
+    await mount({ state: "finished", actions: ["open-cloud", "re-arm"], automationRearm });
+    expect(api.command).not.toHaveBeenCalled();
+    const globals = container.querySelector('[aria-label="Personal Automations"]')!;
+    expect(globals.textContent).toContain("Personal helper · Not armed");
+    expect(globals.querySelector("button")).toBeNull();
+    const column = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Re-arm Review on this Mac (Doing)"]',
+    )!;
+    await act(async () => column.click());
+    expect(api.command).toHaveBeenLastCalledWith({
+      moveId: "move",
+      action: "re-arm",
+      rearm: { kind: "column", automationId: "column", status: "doing" },
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Re-arm Nightly schedule on this Mac"]')!
+        .click(),
+    );
+    expect(api.command).toHaveBeenLastCalledWith({
+      moveId: "move",
+      action: "re-arm",
+      rearm: { kind: "schedule", automationId: "schedule" },
+    });
+    expect(container.querySelectorAll('button[aria-label^="Re-arm"]')).toHaveLength(2);
+  });
+  it("keeps project re-arm disabled until the host admits this Mac and retains the cloud restart action", async () => {
+    await mount({
+      state: "finished",
+      actions: ["open-cloud"],
+      automationRearm: {
+        ...automationRearm,
+        canRearmOnThisMac: false,
+        unavailable: "Open in Volli Cloud to re-arm on this Mac.",
+      },
+    });
+    for (const control of container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label^="Re-arm"]',
+    ))
+      expect(control.disabled).toBe(true);
+    expect(container.textContent).toContain("Open in Volli Cloud to re-arm on this Mac.");
+    await click("Open in Volli Cloud");
+    expect(api.command).toHaveBeenCalledWith({ moveId: "move", action: "open-cloud" });
+    await mount({ state: "finished", actions: [], automationRearm });
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label^="Re-arm"]')!.disabled,
+    ).toBe(true);
+  });
+  it("deduplicates personal definitions across the result and offers a real refresh after a failed list read", async () => {
+    const refresh = vi.fn();
+    useCloudMovesStore.setState({ refresh });
+    await act(async () =>
+      root.render(
+        <MoveProgress
+          api={api}
+          moves={[
+            { ...move, automationRearm },
+            { ...move, moveId: "another", automationRearm },
+          ]}
+        />,
+      ),
+    );
+    expect(
+      container
+        .querySelector('[aria-label="Personal Automations"]')
+        ?.textContent?.match(/Personal helper/gu),
+    ).toHaveLength(1);
+    await mount({
+      state: "finished",
+      actions: ["open-cloud"],
+      automationRearm: {
+        columns: [],
+        schedules: [],
+        inertGlobals: [],
+        canRearmOnThisMac: false,
+        unavailable: "Couldn’t read paused Automations.",
+        retryable: true,
+      },
+    });
+    expect(container.textContent).toContain("Couldn’t read paused Automations.");
+    await click("Try again");
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(api.command).not.toHaveBeenCalled();
+  });
   it.each(["backup", "export"] as const)(
     "explains the uninterruptible snapshot during %s",
     async (step) => {

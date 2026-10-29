@@ -217,6 +217,8 @@ export type {
   CloudMoveStartInput,
   CloudMoveAction,
   CloudMoveCommand,
+  CloudMoveRearmTarget,
+  CloudMoveAutomationRearm,
   CloudMoveStep,
   CloudMoveCheck,
   CloudMoveStatus,

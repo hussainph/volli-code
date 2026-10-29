@@ -18,6 +18,7 @@ import {
 } from "@volli/host-core/cloud-move";
 import type { CloudMovesPort } from "@volli/host-core/handlers";
 import type { PreparedLocalMoves, PreviewSummary } from "./preflight";
+import type { MoveRearmPort } from "./rearm";
 
 export interface MoveDesktopOptions {
   enabled(): boolean;
@@ -31,6 +32,7 @@ export interface MoveDesktopOptions {
   remember(move: MoveRow, summary: PreviewSummary | undefined): Promise<void>;
   setExportBudget(bytes: number): Promise<void>;
   openCloud(move: MoveRow): void | Promise<void>;
+  rearm?: MoveRearmPort;
   /** An engine-owned cleanup only. Absent until it can preserve the runner's live ledger and paths. */
   removeLocalCopy?(move: MoveRow, confirmation: string): Promise<void>;
   assertIdle(projectId: string): void;
@@ -230,6 +232,12 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
   ): CloudMoveAction[] => {
     if (!currentOwnedMove(row)) return [];
     const queue = engine.journal.queue(row.queueId);
+    const rearmActions: CloudMoveAction[] =
+      active === null &&
+      status.automationRearm?.canRearmOnThisMac === true &&
+      status.automationRearm.columns.length + status.automationRearm.schedules.length > 0
+        ? ["re-arm"]
+        : [];
     if (row.state === "returned") return ["open-cloud"];
     if (row.state === "superseded" || REPORT_ONLY_FAILURES.has(row.failure?.code ?? "")) return [];
     if (row.state === "rolling_back") return ["resume"];
@@ -241,6 +249,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     if (row.state === "confirmed")
       return [
         "open-cloud",
+        ...rearmActions,
         ...(status.localReadOnly
           ? [
               "go-back" as const,
@@ -255,6 +264,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
           ? ["finish" as const]
           : ["retry" as const]),
         "roll-back",
+        ...rearmActions,
         ...(status.localReadOnly ? ["go-back" as const] : []),
       ];
     if (row.paused === "disk_full") return ["retry", "cancel"];
@@ -263,6 +273,31 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       "cancel",
       ...(row.paused === "not_idle" || row.paused === "waiting_for_purge" ? ["skip" as const] : []),
     ];
+  };
+
+  const describe = async (row: MoveRow, queue: QueueRow) => {
+    const view = await options.describe(row, queue);
+    if (
+      options.rearm !== undefined &&
+      currentOwnedMove(row) &&
+      row.report?.ok === true &&
+      (row.state === "checked" || row.state === "confirmed")
+    ) {
+      const rearm = await options.rearm.read(row);
+      // A different sign-in or move may win while the optional person read is pending.
+      if (currentOwnedMove(row)) {
+        view.automationRearm =
+          active === null || !rearm.canRearmOnThisMac
+            ? rearm
+            : {
+                ...rearm,
+                canRearmOnThisMac: false,
+                unavailable: "Wait for the running move to finish.",
+                retryable: false,
+              };
+      }
+    }
+    return view;
   };
 
   const runnable = (queue: QueueRow) =>
@@ -370,7 +405,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     for (const row of engine.journal.movesIn(MOVE_STATES)) {
       const queue = engine.journal.queue(row.queueId);
       if (queue === null) continue;
-      const view = await options.describe(row, queue);
+      const view = await describe(row, queue);
       view.workspaceName =
         workspaces.find((item) => item.id === row.workspaceId)?.name ?? view.workspaceName;
       if (row.state === "queued" && active?.queueId === row.queueId) {
@@ -550,6 +585,8 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     async command(input: CloudMoveCommand) {
       requireEnabled();
       const first = readMove(input.moveId);
+      if (input.action === "re-arm" && active !== null)
+        throw new OperationUnavailableError("Wait for the running move to finish, then try again.");
       if (
         (input.action === "retry" || input.action === "skip") &&
         first.state === "rolled_back" &&
@@ -567,7 +604,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         controlled(async (signal) => {
           const row = readMove(input.moveId);
           const queue = engine.journal.queue(row.queueId)!;
-          const view = await options.describe(row, queue);
+          const view = await describe(row, queue);
           const allowed = actionsFor(row, view);
           // Pause was made durable before interrupting the worker, so it now reads as Resume.
           if (input.action !== "pause" && !allowed.includes(input.action))
@@ -657,6 +694,12 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
               schedule(result.queue.queueId);
               break;
             }
+            case "re-arm":
+              if (input.rearm === undefined || options.rearm === undefined)
+                throw new OperationUnavailableError("Choose a paused Automation to re-arm.");
+              options.assertIdle(row.projectId);
+              await options.rearm.perform(row, input.rearm);
+              break;
             case "finish":
               if (row.state !== "checked" || row.report?.ok !== true)
                 throw new OperationUnavailableError(

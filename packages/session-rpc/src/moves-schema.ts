@@ -1,6 +1,11 @@
 /** Desktop-only move vocabulary: closed enums ship with the same app as their caller. */
 import { z } from "zod";
-import { CLOUD_MOVE_ACTIONS, CLOUD_MOVE_STEPS, CLOUD_MOVE_VIEW_STATES } from "@volli/shared";
+import {
+  CLOUD_MOVE_ACTIONS,
+  CLOUD_MOVE_STEPS,
+  CLOUD_MOVE_VIEW_STATES,
+  TICKET_STATUSES,
+} from "@volli/shared";
 import type {
   CloudMoveSnapshot,
   CloudMovePreflight,
@@ -24,6 +29,20 @@ const counts = z.object({
 const action = z.enum(CLOUD_MOVE_ACTIONS);
 const step = z.enum(CLOUD_MOVE_STEPS);
 const exclusion = z.object({ label: text, reason: text, count: count.optional() });
+const rearmTarget = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("column"), automationId: id, status: z.enum(TICKET_STATUSES) }),
+  z.strictObject({ kind: z.literal("schedule"), automationId: id }),
+]);
+const automationRearm = z.object({
+  columns: z
+    .array(z.object({ automationId: id, name: text, status: z.enum(TICKET_STATUSES) }))
+    .max(1000),
+  schedules: z.array(z.object({ automationId: id, name: text })).max(1000),
+  inertGlobals: z.array(z.object({ id, name: text })).max(1000),
+  canRearmOnThisMac: z.boolean(),
+  unavailable: text.nullable(),
+  retryable: z.boolean(),
+});
 
 export const movePreflightInputSchema = z.strictObject({
   projectIds: z.array(id).max(1000).optional(),
@@ -40,6 +59,7 @@ export const moveCommandSchema = z.strictObject({
   moveId: id,
   action,
   confirmation: text.optional(),
+  rearm: rearmTarget.optional(),
 }) satisfies z.ZodType<CloudMoveCommand>;
 export const moveIdInputSchema = z.strictObject({ moveId: id });
 export const moveReportSchema = z.string().max(4 * 1024 * 1024);
@@ -102,6 +122,7 @@ export const moveSnapshotSchema = z.object({
       ),
       counts: counts.nullable(),
       pausedAutomations: z.array(text),
+      automationRearm: automationRearm.optional(),
       localCredentials: z.array(text),
     }),
   ),

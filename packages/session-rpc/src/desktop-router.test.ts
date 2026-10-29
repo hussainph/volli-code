@@ -37,7 +37,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 
 import { accountGithubSnapshotSchema } from "./account-schema";
-import { MOVE_SNAPSHOT, MOVE_PREFLIGHT } from "./moves.test-support";
+import { MOVE_SNAPSHOT, MOVE_PREFLIGHT, MOVE_REARM_SNAPSHOT } from "./moves.test-support";
 import { LOCAL_DESKTOP_CALLER, type RouterCaller } from "./catalog";
 import {
   createDesktopRouter,
@@ -1542,6 +1542,25 @@ describeContract<Host, DesktopRouter>(
         }),
       ).toBeNull();
       expect(await client.moves.command.mutate({ moveId: "move", action: "go-back" })).toBeNull();
+      for (const rearm of [
+        { kind: "column", automationId: "column", status: "doing" } as const,
+        { kind: "schedule", automationId: "schedule" } as const,
+      ])
+        expect(
+          await client.moves.command.mutate({ moveId: "move", action: "re-arm", rearm }),
+        ).toBeNull();
+      const result = await connect(
+        host(LOCAL_DESKTOP_CALLER, { "moves.snapshot": () => MOVE_REARM_SNAPSHOT }),
+      );
+      expect(await result.moves.snapshot.query()).toEqual(MOVE_REARM_SNAPSHOT);
+      for (const rearm of [
+        { kind: "global", automationId: "global" },
+        { kind: "column", automationId: "column", status: "invented" },
+        { kind: "schedule", automationId: "schedule", runnerId: "another-persons-runner" },
+      ])
+        await expect(
+          client.moves.command.mutate({ moveId: "move", action: "re-arm", rearm } as never),
+        ).rejects.toBeDefined();
       expect(await client.moves.report.query({ moveId: "move" })).toBe('{"ok":true}');
       await expect(
         client.moves.command.mutate({ moveId: "move", action: "erase" } as never),

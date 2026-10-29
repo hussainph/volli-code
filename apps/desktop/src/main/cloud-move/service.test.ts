@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createMoveEngine, type MoveEnginePorts, type MoveRow } from "@volli/host-core/cloud-move";
 import { insertProject, openVolliDb } from "@volli/host-core/db";
 import type { AccountSnapshot, CloudMovePreflightInput, CloudMoveStatus } from "@volli/shared";
-import { createDesktopMovesService, type DesktopMovesService } from "./service";
+import {
+  createDesktopMovesService,
+  type DesktopMovesService,
+  type MoveDesktopOptions,
+} from "./service";
 import { describeMove } from "./presentation";
 import type { PreparedLocalMoves } from "./preflight";
 
@@ -43,7 +47,7 @@ afterEach(async () => {
 const nope = async (): Promise<never> => {
   throw new Error("Unexpected boundary");
 };
-function setup() {
+function setup(rearm?: MoveDesktopOptions["rearm"]) {
   const root = mkdtempSync(join(tmpdir(), "move-service-"));
   const db = openVolliDb(join(root, "volli.db"));
   insertProject(db, {
@@ -157,6 +161,7 @@ function setup() {
     setExportBudget: async () => {},
     assertIdle,
     openCloud: async () => {},
+    ...(rearm === undefined ? {} : { rearm }),
     releaseIdentity,
   });
   cleanup.push(async () => {
@@ -203,6 +208,113 @@ const start = (service: DesktopMovesService) =>
   });
 
 describe("desktop move coordinator over the real SQLite journal", () => {
+  it("exposes re-arm only for a verified result and dispatches an explicit target without registering a runner", async () => {
+    const details = {
+      columns: [{ automationId: "auto", name: "Review", status: "doing" as const }],
+      schedules: [],
+      inertGlobals: [],
+      canRearmOnThisMac: true,
+      unavailable: null,
+      retryable: false,
+    };
+    const rearm = { read: vi.fn(async () => details), perform: vi.fn(async () => {}) };
+    const f = setup(rearm);
+    const row = f.enqueue();
+    await f.service.snapshot();
+    expect(rearm.read).not.toHaveBeenCalled();
+    f.toState(row, "checked", { ok: false });
+    expect((await f.service.snapshot()).moves[0]?.automationRearm).toBeUndefined();
+    const checked = f.engine.journal.move(row.moveId)!;
+    f.toState(checked, "confirmed", { ok: true });
+    expect((await f.service.snapshot()).moves[0]?.actions).toContain("re-arm");
+    const target = { kind: "column", automationId: "auto", status: "doing" } as const;
+    await f.service.command({ moveId: row.moveId, action: "re-arm", rearm: target });
+    expect(rearm.perform).toHaveBeenCalledWith(
+      expect.objectContaining({ moveId: row.moveId }),
+      target,
+    );
+    expect(f.assertIdle).toHaveBeenCalledWith(PROJECT);
+    expect(f.identity).not.toHaveBeenCalled();
+    await expect(f.service.command({ moveId: row.moveId, action: "re-arm" })).rejects.toThrow(
+      "Choose a paused Automation",
+    );
+  });
+  it("keeps re-arm unavailable without interrupting another active move", async () => {
+    const rearm = {
+      read: vi.fn(async () => ({
+        columns: [],
+        schedules: [{ automationId: "auto", name: "Nightly" }],
+        inertGlobals: [],
+        canRearmOnThisMac: true,
+        unavailable: null,
+        retryable: false,
+      })),
+      perform: vi.fn(async () => {}),
+    };
+    const f = setup(rearm);
+    const moved = f.toState(f.enqueue(), "confirmed", { ok: true });
+    f.engine.journal.setQueue(moved.queueId, { state: "done" });
+    const other = f.engine.enqueue({
+      projectIds: ["other-project"],
+      target: { userId: USER, workspaceId: WORKSPACE, runnerId: RUNNER },
+    }).moves[0]!;
+    let interrupted = false;
+    f.run.mockImplementation(async (_id, signal) => {
+      await new Promise<void>((resolve) =>
+        signal!.addEventListener(
+          "abort",
+          () => {
+            interrupted = true;
+            resolve();
+          },
+          { once: true },
+        ),
+      );
+      return { kind: "waiting", moveId: other.moveId, reason: "paused" };
+    });
+    await f.service.resume();
+    await vi.waitFor(() => expect(f.run).toHaveBeenCalled());
+    const status = (await f.service.snapshot()).moves.find((item) => item.moveId === moved.moveId)!;
+    expect(status.actions).not.toContain("re-arm");
+    expect(status.automationRearm?.unavailable).toContain("Wait for the running move");
+    await expect(
+      f.service.command({
+        moveId: moved.moveId,
+        action: "re-arm",
+        rearm: { kind: "schedule", automationId: "auto" },
+      }),
+    ).rejects.toThrow("Wait for the running move");
+    expect(interrupted).toBe(false);
+    expect(rearm.perform).not.toHaveBeenCalled();
+    await f.service.dispose();
+  });
+  it("never leaks late personal Automation names after the sign-in changes", async () => {
+    let finish!: (value: import("@volli/shared").CloudMoveAutomationRearm) => void;
+    const rearm = {
+      read: vi.fn(
+        () =>
+          new Promise<import("@volli/shared").CloudMoveAutomationRearm>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+      perform: vi.fn(async () => {}),
+    };
+    const f = setup(rearm);
+    f.toState(f.enqueue(), "confirmed", { ok: true });
+    const reading = f.service.snapshot();
+    await vi.waitFor(() => expect(rearm.read).toHaveBeenCalledOnce());
+    f.publish({ ...signedIn, account: { ...signedIn.account!, userId: "other" } });
+    finish({
+      columns: [],
+      schedules: [],
+      inertGlobals: [{ id: "private", name: "Private personal Automation" }],
+      canRearmOnThisMac: false,
+      unavailable: null,
+      retryable: false,
+    });
+    expect((await reading).moves[0]?.automationRearm).toBeUndefined();
+    expect(rearm.perform).not.toHaveBeenCalled();
+  });
   it("does nothing behind the flag and rejects commands before any outside call", async () => {
     const f = setup();
     f.flagOff();

@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
-import { OperationUnavailableError } from "@volli/shared";
+import { OperationUnavailableError, type ThisMacRunnerSnapshot } from "@volli/shared";
 import type { LiveHostCore } from "@volli/host-core";
 import {
   createMoveBackupPort,
@@ -19,6 +19,7 @@ import { personMoveBackend } from "./backend";
 import { prepareLocalMoves } from "./preflight";
 import { createDesktopMovesService, type DesktopMovesService } from "./service";
 import { createMoveView, saveMovePreview } from "./view";
+import { createMoveRearm } from "./rearm";
 
 async function savedBudget(root: string): Promise<number> {
   let raw: unknown;
@@ -48,6 +49,7 @@ export function createDesktopMoves(options: {
   artifacts: import("@volli/host-core/cloud-move").MoveSessionHistoryOptions["artifacts"];
   busySessionIds(): ReadonlySet<string>;
   credentials(projectId: string): Promise<string[]>;
+  fullRunner(userId: string): Pick<ThisMacRunnerSnapshot, "state" | "runnerId"> | null;
   openCloud(projectId: string, workspaceId: string, userId: string): void | Promise<void>;
 }): DesktopMovesService {
   const { host } = options;
@@ -192,6 +194,14 @@ export function createDesktopMoves(options: {
         );
     },
     openCloud: (row) => options.openCloud(row.projectId, row.workspaceId, row.userId),
+    rearm: createMoveRearm({
+      backend,
+      personId: () => {
+        const snapshot = options.account.snapshot();
+        return snapshot.state === "signed-in" ? (snapshot.account?.userId ?? null) : null;
+      },
+      fullRunner: options.fullRunner,
+    }),
     track: (work) => host.detachedWork.track(work),
     releaseIdentity: options.identity.release,
     withSignal: (signal, work) => signals.run(signal, work),

@@ -1,4 +1,5 @@
 /** Person-facing projections of the durable move journal. No credentials or row contents. */
+import type { TicketStatus } from "./ticket";
 export interface CloudMoveCounts {
   tickets: number;
   sessions: number;
@@ -67,14 +68,31 @@ export const CLOUD_MOVE_ACTIONS = [
   "open-cloud",
   "go-back",
   "remove-local",
+  "re-arm",
 ] as const;
 export type CloudMoveAction = (typeof CLOUD_MOVE_ACTIONS)[number];
+
+export type CloudMoveRearmTarget =
+  | { kind: "column"; automationId: string; status: TicketStatus }
+  | { kind: "schedule"; automationId: string };
+
+export interface CloudMoveAutomationRearm {
+  columns: { automationId: string; name: string; status: TicketStatus }[];
+  schedules: { automationId: string; name: string }[];
+  /** Personal definitions are inert, never re-arm targets. May include earlier profile moves. */
+  inertGlobals: { id: string; name: string }[];
+  canRearmOnThisMac: boolean;
+  unavailable: string | null;
+  retryable: boolean;
+}
 
 export interface CloudMoveCommand {
   moveId: string;
   action: CloudMoveAction;
   /** Required for manual removal or discarding changed cloud data; main checks the exact project name again. */
   confirmation?: string;
+  /** One currently paused moved record; main re-reads it before calling the ordinary arming door. */
+  rearm?: CloudMoveRearmTarget;
 }
 
 export const CLOUD_MOVE_STEPS = [
@@ -133,6 +151,7 @@ export interface CloudMoveStatus {
   checks: CloudMoveCheck[];
   counts: CloudMoveCounts | null;
   pausedAutomations: string[];
+  automationRearm?: CloudMoveAutomationRearm;
   localCredentials: string[];
 }
 

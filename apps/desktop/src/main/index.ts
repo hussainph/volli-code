@@ -1699,6 +1699,10 @@ const appStartup = app.whenReady().then(async () => {
           throw new OperationUnavailableError("Could not read this Mac’s credential names.");
         return result.secrets.map((secret) => secret.name);
       },
+      fullRunner: (userId) =>
+        launch.store === "cloud" && launch.userId === userId
+          ? (macRunner?.snapshot() ?? null)
+          : null,
       openCloud: (projectId, workspaceId, userId) => {
         launchMarker.write(userId, workspaceId, projectId);
         relaunch.request();
