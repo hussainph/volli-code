@@ -10,7 +10,7 @@ import { checkDeployment, describeProblems } from "./lib/deploymentChecks";
  * reach the deployment, and a local backend reflects any CORS origin.
  */
 export const whoami = query({
-  args: { compatibilityProbe: v.string() },
+  args: {},
   handler: async (ctx) => {
     const identity = await requireIdentity(ctx);
     return { subject: identity.subject, issuer: identity.issuer };

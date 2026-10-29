@@ -2609,14 +2609,7 @@
     "health:whoami": {
       "args": {
         "type": "object",
-        "value": {
-          "compatibilityProbe": {
-            "fieldType": {
-              "type": "string"
-            },
-            "optional": false
-          }
-        }
+        "value": {}
       },
       "kind": "query",
       "returns": null
