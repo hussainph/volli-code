@@ -3,12 +3,7 @@
  * Receipt envelopes differ between the two stores; the UI consumes their
  * accepted rows, not a fabricated local receipt.
  */
-import {
-  getFunctionName,
-  type FunctionReference,
-  type FunctionArgs,
-  type FunctionReturnType,
-} from "convex/server";
+import type { FunctionReference, FunctionArgs, FunctionReturnType } from "convex/server";
 import {
   parseAutomationSkipReason,
   type Automation,
@@ -106,13 +101,14 @@ export class ConvexAutomationSource implements AutomationSource {
     if (this.#closed) throw new Error("The Workspace changed.");
   }
   async #read<Q extends Query>(
+    name: string,
     reference: Q,
     args: FunctionArgs<Q>,
     paint: (rows: FunctionReturnType<Q>) => void,
     projectId?: string,
   ): Promise<FunctionReturnType<Q>> {
     this.#assertOpen();
-    const key = JSON.stringify([getFunctionName(reference), args]);
+    const key = JSON.stringify([name, args]);
     if (!this.#watches.has(key)) {
       const watch = this.#session.client.watchQuery(reference, args) as Watched<
         FunctionReturnType<Q>
@@ -216,6 +212,7 @@ export class ConvexAutomationSource implements AutomationSource {
     projectId: string;
   }): Promise<{ ok: true; automations: Automation[] }> {
     const answer = await this.#read(
+      "automations:list",
       this.#session.api.automations.list,
       { projectId },
       (rows) => {
@@ -296,6 +293,7 @@ export class ConvexAutomationSource implements AutomationSource {
   }
   async armings({ projectId }: { projectId: string }): Promise<SourceReply<"armings">> {
     const answer = await this.#read(
+      "automations:armings",
       this.#session.api.automations.armings,
       { projectId },
       (rows) => {
@@ -342,6 +340,7 @@ export class ConvexAutomationSource implements AutomationSource {
   }
   async columnOrders({ projectId }: { projectId: string }): Promise<SourceReply<"columnOrders">> {
     const answer = await this.#read(
+      "automations:columnOrders",
       this.#session.api.automations.columnOrders,
       { projectId },
       (rows) => {
@@ -383,6 +382,7 @@ export class ConvexAutomationSource implements AutomationSource {
   }
   async schedules(projectId: string): Promise<void> {
     await this.#read(
+      "automations:schedules",
       this.#session.api.automations.schedules,
       { projectId },
       (rows) => {
@@ -432,12 +432,13 @@ export class ConvexAutomationSource implements AutomationSource {
     return this.enablement();
   }
   async runners(): Promise<void> {
-    await this.#read(this.#session.api.runners.list, {}, (rows) =>
+    await this.#read("runners:list", this.#session.api.runners.list, {}, (rows) =>
       useCloudAutomationsStore.setState({ runners: rows }),
     );
   }
   async pending(projectId: string): Promise<void> {
     await this.#read(
+      "automations:pendingArrivals",
       this.#session.api.automations.pendingArrivals,
       { projectId },
       (rows) =>
@@ -571,6 +572,7 @@ export class ConvexAutomationSource implements AutomationSource {
       history.rows.length > 1 ? { ...pageArgs, endCursor: history.cursors[0] } : pageArgs;
     if (automationId === undefined)
       await this.#read(
+        "automations:runsForProject",
         this.#session.api.automations.runsForProject,
         { projectId, paginationOpts },
         paint,
@@ -578,6 +580,7 @@ export class ConvexAutomationSource implements AutomationSource {
       );
     else
       await this.#read(
+        "automations:runsForAutomation",
         this.#session.api.automations.runsForAutomation,
         { automationId, paginationOpts },
         paint,
@@ -604,10 +607,10 @@ export class ConvexAutomationSource implements AutomationSource {
       const cursor = history.cursor;
       // Freeze the preceding page at its old boundary before opening the next.
       // Otherwise an insertion at the head pushes its last row into a gap.
-      const reference =
+      const name =
         history.automationId === undefined
-          ? this.#session.api.automations.runsForProject
-          : this.#session.api.automations.runsForAutomation;
+          ? "automations:runsForProject"
+          : "automations:runsForAutomation";
       const scope =
         history.automationId === undefined
           ? { projectId: history.projectId }
@@ -616,10 +619,7 @@ export class ConvexAutomationSource implements AutomationSource {
         numItems: 50,
         cursor: index === 1 ? null : history.cursors[index - 2]!,
       };
-      const previousKey = JSON.stringify([
-        getFunctionName(reference),
-        { ...scope, paginationOpts: previousOpts },
-      ]);
+      const previousKey = JSON.stringify([name, { ...scope, paginationOpts: previousOpts }]);
       this.#watches.get(previousKey)?.stop?.();
       this.#watches.delete(previousKey);
       const pinned = (page: { page: CloudRun[]; continueCursor: string }) => {
@@ -630,6 +630,7 @@ export class ConvexAutomationSource implements AutomationSource {
       const boundedOpts = { ...previousOpts, endCursor: cursor };
       if (history.automationId === undefined)
         await this.#read(
+          "automations:runsForProject",
           this.#session.api.automations.runsForProject,
           { projectId: history.projectId, paginationOpts: boundedOpts },
           pinned,
@@ -637,6 +638,7 @@ export class ConvexAutomationSource implements AutomationSource {
         );
       else
         await this.#read(
+          "automations:runsForAutomation",
           this.#session.api.automations.runsForAutomation,
           { automationId: history.automationId, paginationOpts: boundedOpts },
           pinned,
@@ -645,6 +647,7 @@ export class ConvexAutomationSource implements AutomationSource {
       const paginationOpts = { numItems: 50, cursor };
       if (history.automationId === undefined)
         await this.#read(
+          "automations:runsForProject",
           this.#session.api.automations.runsForProject,
           { projectId: history.projectId, paginationOpts },
           paint,
@@ -652,6 +655,7 @@ export class ConvexAutomationSource implements AutomationSource {
         );
       else
         await this.#read(
+          "automations:runsForAutomation",
           this.#session.api.automations.runsForAutomation,
           { automationId: history.automationId, paginationOpts },
           paint,
