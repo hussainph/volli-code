@@ -8,7 +8,7 @@ packages:
 # Node (a machine's /usr/local/bin/node beside Homebrew's current, say)
 # succeeds and quietly builds native modules against the wrong ABI — the
 # desktop app then boots into a dead database with sign-in greyed out (VC-76).
-# CI installs under the pinned Node (node-version-file: package.json), so this
+# CI installs under the pinned Node (node-version-file: .nvmrc), so this
 # only ever bites the machine it is protecting.
 engineStrict: true
 
