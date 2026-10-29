@@ -367,3 +367,29 @@ it("streams a 50 MiB transcript Session and multi-slice Pi log with complete dig
   expect(pi.at(-1)!.endOffset).toBe(pi[0]!.fileBytes);
   await verifyMigrationExport(outDir);
 }, 60000);
+
+it("exports the profile step alone: personal settings and unbound Automations, no project", async () => {
+  const f = fixture();
+  const db = new Database(f.dbPath);
+  try {
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, runtime, created_at, updated_at)
+       VALUES ('7a1f0c2e-0000-4000-8000-000000000049', NULL, 'Everywhere', '/sweep', NULL, 1, 1)`,
+    ).run();
+  } finally {
+    db.close();
+  }
+  const { outDir, manifest } = await exportMigrationSnapshot({
+    ...options(f, []),
+    profileStep: true,
+  });
+  expect(manifest.projectIds).toEqual([]);
+  expect(manifest.profileStep).toBe(true);
+  for (const stream of ["projects", "tickets", "sessions", "sessionEvents"] as const) {
+    expect(streamRecords(outDir, manifest, stream)).toEqual([]);
+  }
+  const entries = streamRecords(outDir, manifest, "configEntries");
+  expect(entries.length).toBeGreaterThan(0);
+  expect(new Set(entries.map((entry) => entry.level))).toEqual(new Set(["personal"]));
+  expect(entries.map((entry) => entry.name)).toContain("Everywhere");
+});

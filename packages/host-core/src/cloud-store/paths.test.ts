@@ -134,6 +134,30 @@ describe("runner-local paths", () => {
     expect(() => a.checkouts.get("wrong-project", "repo")).toThrow("another project");
   });
 
+  it("never adopts a project the person went back to, until it moves again (VC-993)", () => {
+    const project = testProject({ id: "project", path: join(root, "checkout") });
+    insertProject(ctx.db, project);
+    insertTicket(
+      ctx.db,
+      testTicket(project.id, { id: "ticket", worktreePath: join(root, "copy") }),
+    );
+    const move = (id: string, state: string, at: number) =>
+      ctx.db
+        .prepare(
+          `INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+             runner_id, state, app_version, mapper_version, created_at, updated_at)
+           VALUES (?, 'q', 'project', 0, 'u', 'w', 'r', ?, 'test', 3, ?, ?)`,
+        )
+        .run(id, state, at, at);
+    move("m1", "returned", 1);
+    const registry = createRunnerPathRegistry(ctx.db, { runnerId: "runner-a" });
+    expect(registry.checkouts.pathOf("project", "repo")).toBeNull();
+    expect(registry.checkouts.ofProject("project")).toBeNull();
+    expect(registry.workingCopies.pathOf("ticket", "repo")).toBeNull();
+    move("m2", "committed", 2);
+    expect(registry.checkouts.pathOf("project", "repo")).toBe(project.path);
+  });
+
   it("never adopts cloud shadow pointers or nonabsolute legacy data", () => {
     insertProject(ctx.db, testProject({ id: "shadow", path: join(root, "shadow") }));
     insertTicket(

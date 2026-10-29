@@ -34,6 +34,7 @@ const MID_STEP = [
   "rows.sessionIntake",
   "rows.readMarkers",
   "history.session",
+  "handing_over",
 ];
 const CALLS: Array<Omit<Kill, "onKilled">> = [
   { point: "call:projectImports:begin", hit: 1 },
@@ -84,7 +85,7 @@ describe("kill at any point, resume, same end", () => {
 
     expect(await world.engine().run(queue.queueId)).toEqual({ kind: "done" });
     const move = world.engine().journal.move(moveId)!;
-    expect(move.state).toBe("committed");
+    expect(move.state).toBe("checked");
     expect(move.failure).toBeNull();
     expect(move.report).toMatchObject({ verify: { ok: true } });
 
@@ -109,7 +110,7 @@ describe("kill at any point, resume, same end", () => {
   });
 });
 
-describe("kill while rolling back, resume, same end", () => {
+describe("kill while rolling back or going back, resume, same end", () => {
   test.each([["rollback.uncommitted"], ["rollback.aborted"]])("%s", async (point) => {
     world = await moveWorld();
     const engine = world.engine();
@@ -132,5 +133,24 @@ describe("kill while rolling back, resume, same end", () => {
     await world.engine().resume();
     expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolled_back");
     expect((await finalDigests(world, moves[0]!.moveId)).status).toBe("aborting");
+  });
+
+  test("returning.saved", async () => {
+    world = await moveWorld();
+    const engine = world.engine();
+    const { queue, moves } = engine.enqueue({
+      projectIds: [world.projectId],
+      target: { userId: world.userId, workspaceId: world.workspaceId, runnerId: world.runnerId },
+      stopAtFirstProblem: false,
+    });
+    await engine.run(queue.queueId);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "returning.saved", hit: 1, onKilled: () => killed() } })
+      .goBackToLocal(moves[0]!.moveId);
+    await stopped;
+    const returned = await world.engine().goBackToLocal(moves[0]!.moveId);
+    expect(returned.state).toBe("returned");
   });
 });

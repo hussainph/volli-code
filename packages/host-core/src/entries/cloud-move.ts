@@ -24,8 +24,11 @@ export type {
   MoveIdentity,
   MoveLiveWork,
   MoveObjectStore,
+  MoveRealPathCheck,
   MoveSessionHistory,
   MovedSession,
   MovedSessionUploadReport,
+  RealPathReport,
 } from "../cloud-move/ports";
+export { windowReadCheck } from "../cloud-move/real-paths";
 export { MOVE_STATES, movePhase, type MovePhase, type MoveState } from "../cloud-move/states";

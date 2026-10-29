@@ -9,6 +9,17 @@ import { SourceCorruptError } from "./sources";
 export interface ExportSelection {
   projectIds?: readonly string[];
   includeRemovedProjects?: boolean;
+  /**
+   * Whether the profile-level rows come along (personal settings, unbound
+   * Automations, host-wide legacy rows). Default: only for the whole profile.
+   * A move's profile step exports them alone: `projectIds: []`, `profileStep: true`.
+   */
+  profileStep?: boolean;
+}
+
+/** Whether `options` selects the profile-level rows. */
+export function selectsProfile(options: ExportSelection): boolean {
+  return options.profileStep ?? options.projectIds === undefined;
 }
 
 export function selectionKey(options: ExportSelection): string {
@@ -16,6 +27,7 @@ export function selectionKey(options: ExportSelection): string {
     projectIds:
       options.projectIds === undefined ? null : [...new Set(options.projectIds)].toSorted(),
     includeRemovedProjects: options.includeRemovedProjects ?? false,
+    ...(options.profileStep === undefined ? {} : { profileStep: options.profileStep }),
   });
 }
 
@@ -149,7 +161,7 @@ export function selectLocalProduct(db: Database.Database, options: ExportSelecti
   // not to each project move. The whole-profile rehearsal still carries them.
   view(
     "automations",
-    `r.project_id IN (SELECT id FROM projects)${options.projectIds === undefined ? " OR r.project_id IS NULL" : ""}`,
+    `r.project_id IN (SELECT id FROM projects)${selectsProfile(options) ? " OR r.project_id IS NULL" : ""}`,
   );
 }
 

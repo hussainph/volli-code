@@ -71,6 +71,7 @@ import type * as lib_workspaces from "../lib/workspaces.js";
 import type * as members from "../members.js";
 import type * as migration from "../migration.js";
 import type * as previewAccess from "../previewAccess.js";
+import type * as profileImports from "../profileImports.js";
 import type * as projectCheckouts from "../projectCheckouts.js";
 import type * as projectImportHistory from "../projectImportHistory.js";
 import type * as projectImportPurge from "../projectImportPurge.js";
@@ -168,6 +169,7 @@ declare const fullApi: ApiFromModules<{
   members: typeof members;
   migration: typeof migration;
   previewAccess: typeof previewAccess;
+  profileImports: typeof profileImports;
   projectCheckouts: typeof projectCheckouts;
   projectImportHistory: typeof projectImportHistory;
   projectImportPurge: typeof projectImportPurge;

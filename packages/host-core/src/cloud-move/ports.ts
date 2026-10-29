@@ -66,7 +66,7 @@ export interface MovedSessionUploadReport {
 
 /**
  * A moved Session's history beyond its rows: the backend's event encoding,
- * its transcript packs and Pi logs (VC-990).
+ * its transcript packs and Pi logs, and this runner's drain cursors (VC-990).
  */
 export interface MoveSessionHistory {
   /** One exported Session event as the import sends it. Pure. */
@@ -77,6 +77,16 @@ export interface MoveSessionHistory {
     session: MovedSession,
     signal: AbortSignal,
   ): Promise<MovedSessionUploadReport>;
+  /** Hands the moved Sessions to this runner at their imported heads. Idempotent. */
+  seedCursors(
+    ownerUserId: string,
+    sessions: ReadonlyArray<{ sessionId: string; acceptedThrough: number }>,
+  ): void;
+  /** Takes back the cursors a seed wrote and nothing moved since; answers the Sessions that kept theirs. */
+  releaseCursors(
+    ownerUserId: string,
+    sessions: ReadonlyArray<{ sessionId: string; acceptedThrough: number }>,
+  ): string[];
 }
 
 /** The profile's verified backup: written once per queue, re-read before any freeze.
@@ -100,6 +110,26 @@ export interface MoveIdentity {
   current(): Promise<{ userId: string; runnerId: string } | null>;
 }
 
+/** The real-path check after the commit: the window's own reads, as the person. */
+export interface MoveRealPathCheck {
+  check(input: RealPathInput, signal: AbortSignal): Promise<RealPathReport>;
+}
+
+export interface RealPathInput {
+  moveId: string;
+  projectId: string;
+  workspaceId: string;
+  exportDir: string;
+  sessions: readonly MovedSession[];
+}
+
+export interface RealPathReport {
+  ok: boolean;
+  /** Check name → counts (checked, matched, failed). Never content. */
+  checks: Record<string, { checked: number; failed: number }>;
+  failures: string[];
+}
+
 export interface MoveEnginePorts {
   /** The live profile: the journal, the freeze, the handover writes and the liveness reads. */
   db: import("better-sqlite3").Database;
@@ -116,6 +146,7 @@ export interface MoveEnginePorts {
   backup: MoveBackupPort;
   liveWork: MoveLiveWork;
   identity: MoveIdentity;
+  realPath: MoveRealPathCheck;
   /** The exporter, normally in its worker (`runMigrationExportInWorker`). */
   exportProject(options: MigrationExportOptions): Promise<MigrationExportResult>;
   /** Holds the profile-maintenance lease (backups pause) around a whole run. */
