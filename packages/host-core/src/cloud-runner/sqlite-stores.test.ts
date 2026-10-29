@@ -71,6 +71,47 @@ describe("the runner-local stores (migration 65)", () => {
     expect(store.get("s0")?.blocked).toEqual({ code: "fenced", message: "moved", at: 9 });
   });
 
+  it("updates a cursor only as it was last read: never creates, never revives, never goes back", () => {
+    const store = sqliteDrainCursorStore(db(), () => 42);
+    const cursor = {
+      sessionId: "s",
+      ownerUserId: "u",
+      generation: 1,
+      acceptedThrough: 5,
+      blocked: null,
+    };
+    // Gone (taken back): nothing is written, and no row appears.
+    expect(store.update(cursor, { generation: 1, acceptedThrough: 5 })).toBe(false);
+    expect(store.get("s")).toBeNull();
+    store.save(cursor);
+    expect(
+      store.update({ ...cursor, acceptedThrough: 7 }, { generation: 1, acceptedThrough: 5 }),
+    ).toBe(true);
+    // A writer that last read 5 (a reply from a copy since re-seeded at 7) moves nothing.
+    expect(
+      store.update({ ...cursor, acceptedThrough: 6 }, { generation: 1, acceptedThrough: 5 }),
+    ).toBe(false);
+    // Another generation's writer, or another owner's.
+    expect(
+      store.update({ ...cursor, acceptedThrough: 9 }, { generation: 2, acceptedThrough: 7 }),
+    ).toBe(false);
+    expect(
+      store.update(
+        { ...cursor, ownerUserId: "v", acceptedThrough: 9 },
+        { generation: 1, acceptedThrough: 7 },
+      ),
+    ).toBe(false);
+    expect(store.get("s")).toMatchObject({ ownerUserId: "u", generation: 1, acceptedThrough: 7 });
+    // A claim's generation bump, from what it read.
+    expect(
+      store.update(
+        { ...cursor, generation: 2, acceptedThrough: 7 },
+        { generation: 1, acceptedThrough: 7 },
+      ),
+    ).toBe(true);
+    expect(store.get("s")).toMatchObject({ generation: 2, acceptedThrough: 7 });
+  });
+
   it("refuses a negative cursor", () => {
     const store = sqliteDrainCursorStore(db());
     expect(() =>

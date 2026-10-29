@@ -157,6 +157,13 @@ export interface MoveEnginePorts {
   exportProject(options: MigrationExportOptions): Promise<MigrationExportResult>;
   /** Holds the profile-maintenance lease (backups pause) around a whole run. */
   maintenance?<T>(work: () => Promise<T>): Promise<T>;
+  /**
+   * The project's drain cursors were taken back (Go back to local, a roll
+   * back after the commit), for these Sessions: a running cloud launch's
+   * drain forgets their streams. Without it, the drain drops them the next
+   * time it looks at them.
+   */
+  cursorsReleased?(sessionIds: readonly string[]): void;
   now?: () => number;
   newId?: () => string;
   /** Backoff between retries. Resolves early (or rejects) when `signal` aborts. */

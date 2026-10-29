@@ -70,11 +70,13 @@ export interface DrainCursorStore {
   /** Durable before it returns. Writes the row whether or not it exists: a claim's birth. */
   save(cursor: DrainCursor): void;
   /**
-   * Durable before it returns. Writes the row only while it still exists for
-   * this owner; false when it is gone (taken back, as a move's Go back or roll
-   * back does) or another owner's. Never creates one.
+   * Durable before it returns. A compare-and-set: writes the row only while
+   * it is still this owner's at `expected` (the generation and accepted head
+   * the writer last held). False when it is gone (taken back, as a move's Go
+   * back or roll back does), another owner's, or changed since (re-seeded by
+   * a later move). Never creates one.
    */
-  update(cursor: DrainCursor): boolean;
+  update(cursor: DrainCursor, expected: { generation: number; acceptedThrough: number }): boolean;
 }
 
 /** The two ledger reads the drain needs: events after a sequence, in order, and the head. */
@@ -189,6 +191,13 @@ export interface FactDrain {
   retry(sessionId: string): void;
   /** Resend everything now (the link came back). */
   resumeAll(): void;
+  /**
+   * These Sessions' cursor rows were taken back (a move's Go back to local or
+   * roll back): their streams go, blocked ones included, and nothing they
+   * still hear writes a row back. A row seeded for one of them later starts a
+   * fresh stream (`adopt`, `start`).
+   */
+  forget(sessionIds: readonly string[]): void;
   /** Resolves when nothing this drain can send is still unsent or in flight. */
   idle(): Promise<void>;
   status(): FactDrainStatus;
@@ -262,11 +271,27 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
     if (streams.get(stream.cursor.sessionId) === stream) streams.delete(stream.cursor.sessionId);
   }
 
-  /** Answers false, having dropped the stream, when its row was taken back. */
+  /**
+   * Answers false, having dropped the stream, when its row was taken back or
+   * changed under it. A row still this owner's but changed (a later move
+   * seeded it again) gets a fresh stream from what it now says.
+   */
   function persist(stream: Stream, patch: Partial<DrainCursor>): boolean {
-    stream.cursor = { ...stream.cursor, ...patch };
-    if (options.cursors.update(stream.cursor)) return true;
+    const expected = {
+      generation: stream.cursor.generation,
+      acceptedThrough: stream.cursor.acceptedThrough,
+    };
+    const next = { ...stream.cursor, ...patch };
+    // A write that throws leaves the stream at what the row still says.
+    const written = options.cursors.update(next, expected);
+    stream.cursor = next;
+    if (written) return true;
     release(stream);
+    const row = options.cursors.get(stream.cursor.sessionId);
+    if (row !== null && row.ownerUserId === options.ownerUserId) {
+      streamOf(row);
+      scheduled(row.sessionId);
+    }
     return false;
   }
 
@@ -442,6 +467,8 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
   function waiting(): number {
     let total = 0;
     for (const stream of streams.values()) {
+      // A row taken back with no fact since to say so: not this drain's to count.
+      if (!held(stream)) continue;
       total += Math.max(
         0,
         options.ledger.latestEventSequence(stream.cursor.sessionId) - stream.cursor.acceptedThrough,
@@ -453,6 +480,7 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
   function settleIdle() {
     if (idleWaiters.length === 0) return;
     for (const stream of streams.values()) {
+      if (!held(stream)) continue;
       if (stream.inFlight > 0) return;
       if (stream.cursor.blocked === null && running) {
         const head = options.ledger.latestEventSequence(stream.cursor.sessionId);
@@ -537,6 +565,13 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
         pump(stream);
       }
     },
+    forget(sessionIds) {
+      for (const sessionId of sessionIds) {
+        const stream = streams.get(sessionId);
+        if (stream !== undefined) release(stream);
+      }
+      settleIdle();
+    },
     idle() {
       return new Promise((done) => {
         idleWaiters.push(done);
@@ -544,9 +579,11 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
       });
     },
     status() {
+      // First: it drops any stream whose row was taken back.
+      const unsent = waiting();
       let blocked = 0;
       for (const stream of streams.values()) if (stream.cursor.blocked !== null) blocked += 1;
-      return { sessions: streams.size, waiting: waiting(), blocked };
+      return { sessions: streams.size, waiting: unsent, blocked };
     },
   };
 }

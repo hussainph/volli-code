@@ -278,6 +278,15 @@ function targetOf(move: MoveRow): MigrationTarget {
 }
 
 export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
+  /** Tells a running drain; its failure never fails the move (the drain drops them itself later). */
+  const cursorsReleased = (sessionIds: readonly string[]) => {
+    if (sessionIds.length === 0) return;
+    try {
+      ports.cursorsReleased?.(sessionIds);
+    } catch {
+      // The drain's own check (`held`) drops the streams when it next looks.
+    }
+  };
   const now = ports.now ?? Date.now;
   const newId = ports.newId ?? randomUUID;
   const sleep =
@@ -902,13 +911,15 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       // Cloud included (whether or not the handover ran). Taken back and named
       // in one transaction, so a crash between cannot lose the names.
       const failure = move.failure;
+      let takenBack: string[] = [];
       move = ports.db.transaction(() => {
-        const takenBack = releaseProjectCursors(ports.db, move.userId, move.projectId);
+        takenBack = releaseProjectCursors(ports.db, move.userId, move.projectId);
         if (takenBack.length === 0 || failure === null) return move;
         return journal.patch(move.moveId, {
           failure: { ...failure, detail: { ...failure.detail, cursorsTakenBack: takenBack } },
         });
       })();
+      cursorsReleased(takenBack);
     }
     await rm(workDir(move), { recursive: true, force: true, maxRetries: 3 });
     const again = move.journal.againOnRunner;
@@ -1427,7 +1438,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       }
       // Every cursor on the project, whether or not the handover ran: the
       // moved Sessions and those born in Volli Cloud since the commit.
-      releaseProjectCursors(ports.db, move.userId, move.projectId);
+      cursorsReleased(releaseProjectCursors(ports.db, move.userId, move.projectId));
       await rm(exportDir(move), { recursive: true, force: true, maxRetries: 3 });
       return journal.advance(moveId, "returning", "returned", { returnedAt: now() });
     },

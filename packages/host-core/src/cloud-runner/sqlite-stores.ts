@@ -80,7 +80,7 @@ export function sqliteDrainCursorStore(
         updatedAt: now(),
       });
     },
-    update(cursor) {
+    update(cursor, expected) {
       return (
         prepared(
           db,
@@ -88,10 +88,14 @@ export function sqliteDrainCursorStore(
              claim_generation = @generation, accepted_through = @acceptedThrough,
              blocked_code = @code, blocked_message = @message, blocked_at = @at,
              updated_at = @updatedAt
-           WHERE session_id = @sessionId AND owner_user_id = @ownerUserId`,
+           WHERE session_id = @sessionId AND owner_user_id = @ownerUserId
+             AND claim_generation = @expectedGeneration
+             AND accepted_through = @expectedAcceptedThrough`,
         ).run({
           sessionId: cursor.sessionId,
           ownerUserId: cursor.ownerUserId,
+          expectedGeneration: expected.generation,
+          expectedAcceptedThrough: expected.acceptedThrough,
           generation: cursor.generation,
           acceptedThrough: cursor.acceptedThrough,
           code: cursor.blocked?.code ?? null,

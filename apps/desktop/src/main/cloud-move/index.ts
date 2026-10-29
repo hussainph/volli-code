@@ -51,6 +51,8 @@ export function createDesktopMoves(options: {
   credentials(projectId: string): Promise<string[]>;
   fullRunner(userId: string): Pick<ThisMacRunnerSnapshot, "state" | "runnerId"> | null;
   openCloud(projectId: string, workspaceId: string, userId: string): void | Promise<void>;
+  /** A move took these Sessions' drain cursors back: the cloud launch's drain forgets them. */
+  cursorsReleased?(sessionIds: readonly string[]): void;
 }): DesktopMovesService {
   const { host } = options;
   const db = host.database.db;
@@ -140,6 +142,7 @@ export function createDesktopMoves(options: {
       },
     },
     maintenance: (work) => withProfileMaintenance(dirname(host.dbPath), work),
+    ...(options.cursorsReleased === undefined ? {} : { cursorsReleased: options.cursorsReleased }),
     exportProject: (input) =>
       runMigrationExportInWorker(options.workerEntry, input, { signal: input.signal }),
   });

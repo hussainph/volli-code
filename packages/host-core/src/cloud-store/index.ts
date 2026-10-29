@@ -475,6 +475,14 @@ export function createCloudProductStore(options: {
       active?.packing.refresh();
     },
     /**
+     * A move took these Sessions' drain cursors back (Go back to local, a roll
+     * back after the commit): the drain forgets their streams, so nothing
+     * still in flight writes a cursor back and hides them from the local copy.
+     */
+    forgetDrainCursors(sessionIds: readonly string[]): void {
+      drain.forget(sessionIds);
+    },
+    /**
      * The job kinds beyond Sessions and Working copies this store executes,
      * for the runner's capability report (`runners.capabilities.tools`): the
      * backend queues `automation.run` only for a runner that names it.

@@ -303,9 +303,15 @@ describe("a cloud drain mid-send while the project goes back (VC-1013)", () => {
     await engine.confirm(moveId);
     const { sessionId, drain, answer } = await drainMidSend(world);
     expect(listedLocally(world, sessionId)).toBe(false);
-    await engine.goBackToLocal(moveId);
+    const released: string[] = [];
+    await world
+      .engine({ ports: { cursorsReleased: (ids) => (released.push(...ids), drain.forget(ids)) } })
+      .goBackToLocal(moveId);
+    expect(released).toContain(sessionId);
     answer(null);
     await drain.idle();
+    // Forgotten: the drain holds, counts and waits on nothing of the Session.
+    expect(drain.status()).toEqual({ sessions: 0, waiting: 0, blocked: 0 });
     drain.stop();
     expect(cursorOf(world, sessionId)).toEqual({ n: 0 });
     expect(listedLocally(world, sessionId)).toBe(true);
@@ -316,7 +322,15 @@ describe("a cloud drain mid-send while the project goes back (VC-1013)", () => {
     const { engine, queueId, moveId } = enqueue(world);
     await engine.run(queueId);
     const { sessionId, drain, answer } = await drainMidSend(world);
-    expect((await engine.rollBack(moveId, { confirmChanged: true })).state).toBe("rolled_back");
+    const released: string[] = [];
+    const rolled = await world
+      .engine({ ports: { cursorsReleased: (ids) => (released.push(...ids), drain.forget(ids)) } })
+      .rollBack(moveId, { confirmChanged: true });
+    expect(rolled.state).toBe("rolled_back");
+    expect(released).toEqual(
+      (rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack,
+    );
+    expect(released).toContain(sessionId);
     answer(
       Object.assign(new Error("not_your_runner"), {
         data: { code: "not_your_runner", message: "gone", acceptedThrough: null },

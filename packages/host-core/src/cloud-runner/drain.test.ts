@@ -55,14 +55,29 @@ function memoryCursors(initial: DrainCursor[] = []) {
       saves.push(cursor);
       rows.set(cursor.sessionId, cursor);
     },
-    update: (cursor) => {
-      if (rows.get(cursor.sessionId)?.ownerUserId !== cursor.ownerUserId) return false;
+    update: (cursor, expected) => {
+      const row = rows.get(cursor.sessionId);
+      if (
+        row?.ownerUserId !== cursor.ownerUserId ||
+        row.generation !== expected.generation ||
+        row.acceptedThrough !== expected.acceptedThrough
+      ) {
+        return false;
+      }
       saves.push(cursor);
       rows.set(cursor.sessionId, cursor);
       return true;
     },
   };
   return { store, rows, saves };
+}
+
+/** "settled" when `promise` resolves within a few turns of the timer queue; "hung" otherwise. */
+function settlesSoon(promise: Promise<void>): Promise<"settled" | "hung"> {
+  return Promise.race([
+    promise.then(() => "settled" as const),
+    new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 200)),
+  ]);
 }
 
 const refusal = (code: string, acceptedThrough: number) =>
@@ -717,6 +732,78 @@ describe("the fact drain", () => {
       expect(drain.status().sessions).toBe(0);
     });
 
+    it("with nothing sent since, its later local facts are not counted, and idle settles", async () => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const drain = drainOver(backend, ledger, cursors.store);
+      drain.start();
+      append("s1", 2);
+      drain.adopt("s1");
+      await drain.idle();
+      expect(cursors.rows.get("s1")?.acceptedThrough).toBe(2);
+      // Go back to local takes the row back; the local copy writes three
+      // more facts, and nothing nudges the drain.
+      cursors.rows.delete("s1");
+      append("s1", 3);
+      expect(drain.status()).toEqual({ sessions: 0, waiting: 0, blocked: 0 });
+      await expect(settlesSoon(drain.idle())).resolves.toBe("settled");
+      expect(cursors.rows.has("s1")).toBe(false);
+    });
+
+    it("forget drops the streams a move took back, a blocked one included; a later seed starts afresh", async () => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const drain = drainOver(backend, ledger, cursors.store);
+      drain.start();
+      append("s1", 2);
+      backend.faults.push(() => refusal("fenced", 0));
+      drain.adopt("s1");
+      await drain.idle();
+      expect(drain.status()).toMatchObject({ sessions: 1, blocked: 1 });
+      cursors.rows.delete("s1");
+      drain.forget(["s1"]);
+      // A second move seeds the Session again in the same launch, before
+      // anything reads the drain's state.
+      cursors.store.save({
+        sessionId: "s1",
+        ownerUserId: OWNER,
+        generation: 1,
+        acceptedThrough: 0,
+        blocked: null,
+      });
+      drain.adopt("s1");
+      await drain.idle();
+      expect(backend.heads.get("s1")).toBe(2);
+      expect(cursors.rows.get("s1")).toMatchObject({ acceptedThrough: 2, blocked: null });
+    });
+
+    it("a reply from before a re-seed moves the re-seeded cursor nowhere", async () => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const drain = drainOver(backend, ledger, cursors.store);
+      drain.start();
+      append("s1", 1);
+      const answerNow = backend.holdAll();
+      drain.adopt("s1");
+      await vi.waitFor(() => expect(backend.stats().calls).toBe(1));
+      // Taken back and seeded again by a later move, further on.
+      const reseeded = {
+        sessionId: "s1",
+        ownerUserId: OWNER,
+        generation: 1,
+        acceptedThrough: 10,
+        blocked: null,
+      };
+      cursors.rows.set("s1", reseeded);
+      answerNow();
+      await drain.idle();
+      expect(cursors.rows.get("s1")).toEqual(reseeded);
+      expect(drain.status()).toMatchObject({ sessions: 1, blocked: 0 });
+    });
+
     it("a row now another owner's is left alone", async () => {
       const backend = fakeBackend();
       const { ledger, append } = memoryLedger();
@@ -755,9 +842,9 @@ describe("the fact drain", () => {
     };
     const store: DrainCursorStore = {
       ...cursors.store,
-      update: (cursor) => {
+      update: (cursor, expected) => {
         if (failSaves-- > 0) throw new Error("disk full");
-        return cursors.store.update(cursor);
+        return cursors.store.update(cursor, expected);
       },
     };
     const retries: unknown[] = [];
