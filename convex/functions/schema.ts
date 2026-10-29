@@ -412,6 +412,7 @@ export default defineSchema({
   })
     .index("by_uuid", ["id"])
     .index("by_project", ["projectId", "createdAt"])
+    .index("by_workspace", ["workspaceId"])
     .index("by_status", ["status", "updatedAt"]),
   // One import's accumulator for one stream: what the manifest promised and
   // what was inserted (count + `MigrationDigest` value). Its own document, so

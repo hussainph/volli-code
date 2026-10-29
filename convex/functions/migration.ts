@@ -315,3 +315,111 @@ export const readSessionEvents = internalQuery({
     return { rows: docs.map((doc) => withoutSystemFields(doc as Row)) };
   },
 });
+
+/** Operator-only cleanup of the harness's disposable Workspace, AFTER the
+ * normal project-import purge has removed every row and object. Never a
+ * generic Workspace deletion door; staging must explicitly opt in.
+ * One bounded page per call. The harness retries until done.
+ */
+export const cleanupRehearsal = internalMutation({
+  args: { workspaceId: v.string(), userId: v.string(), checkOnly: v.optional(v.boolean()) },
+  handler: async (ctx, { workspaceId, userId, checkOnly }): Promise<{ done: boolean }> => {
+    if (process.env.VOLLI_MIGRATION_REHEARSAL !== "enabled")
+      throw migrationError("rehearsal_disabled", "Enable rehearsal cleanup on staging first.");
+    const workspace = await ctx.db
+      .query("workspaces")
+      .withIndex("by_uuid", (q) => q.eq("id", workspaceId))
+      .unique();
+    if (workspace === null || workspace.deletedAt !== null) return { done: true };
+    if (
+      workspace.name !== `migration-rehearsal-${workspaceId}` ||
+      workspace.createdByUserId !== userId
+    )
+      throw migrationError("not_rehearsal", "Only a fresh rehearsal Workspace can be removed.");
+    const members = await ctx.db
+      .query("workspaceMembers")
+      .withIndex("by_workspace_user", (q) => q.eq("workspaceId", workspaceId))
+      .take(2);
+    if (members.length > 1 || members.some((member) => member.userId !== userId))
+      throw migrationError("shared_workspace", "A shared Workspace is not disposable.");
+    if (
+      await ctx.db
+        .query("workspaceInvites")
+        .withIndex("by_workspace_email", (q) => q.eq("workspaceId", workspaceId))
+        .first()
+    )
+      throw migrationError("invites_remain", "A rehearsal Workspace must not be shared.");
+    // A rehearsal creates no Workspace-level resources. Refuse rather than
+    // orphan anything an operator added during the manual hold.
+    const extras = await Promise.all([
+      ctx.db
+        .query("legalHolds")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+        .first(),
+      ctx.db
+        .query("billingAccounts")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+        .first(),
+      ctx.db
+        .query("workspaceBlobs")
+        .withIndex("by_workspace_sha", (q) => q.eq("workspaceId", workspaceId))
+        .first(),
+      ctx.db
+        .query("secretKeys")
+        .withIndex("by_owner", (q) => q.eq("owner", `w:${workspaceId}`))
+        .first(),
+      ctx.db
+        .query("secrets")
+        .withIndex("by_scope_name", (q) => q.eq("scopeKey", `w:${workspaceId}`))
+        .first(),
+      ctx.db
+        .query("configEntries")
+        .withIndex("by_scope_kind_name", (q) => q.eq("scopeKey", `w:${workspaceId}`))
+        .first(),
+    ]);
+    if (extras.some(Boolean))
+      throw migrationError(
+        "workspace_extended",
+        "Remove added Workspace resources through their own lifecycle first.",
+      );
+    // This is a shape/opt-in check before uncommit, not permission to delete
+    // projects. The deletion call below still requires the imports purged.
+    if (checkOnly) return { done: false };
+    if (
+      await ctx.db
+        .query("projects")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+        .first()
+    )
+      throw migrationError("projects_remain", "Purge the rehearsal imports first.");
+    const unfinished = await ctx.db
+      .query("projectImports")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .filter((q) => q.neq(q.field("status"), "purged"))
+      .first();
+    if (unfinished) throw migrationError("purge_incomplete", "Wait for the normal import purge.");
+    // Keep the normal purge's count/digest tombstones: a move id is never
+    // reusable. No project content or objects remain at this point.
+    const audits = await ctx.db
+      .query("auditLog")
+      .withIndex("by_workspace_at", (q) => q.eq("workspaceId", workspaceId))
+      .take(100);
+    for (const row of audits) await ctx.db.delete(row._id);
+    if (audits.length === 100) return { done: false };
+    const policy = await ctx.db
+      .query("workspacePolicies")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .unique();
+    if (policy) await ctx.db.delete(policy._id);
+    for (const member of members) await ctx.db.delete(member._id);
+    // The Workspace tombstone also keeps any retention/accounting references
+    // valid. Product reads already hide deleted Workspaces; this is not a
+    // general hard-delete lifecycle for arbitrary Workspace resources.
+    await ctx.db.patch(workspace._id, {
+      deletedAt: Date.now(),
+      purgeAfter: null,
+      activeMemberCount: 0,
+    });
+    return { done: true };
+  },
+});
