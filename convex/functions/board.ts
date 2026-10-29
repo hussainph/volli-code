@@ -294,7 +294,13 @@ export const createTicket = mutation({
             projectId: project.id as ProjectId,
             number: write.allocateTicketNumber(),
             columnEnd: await columnEnd(ctx, project.id, intent.status),
-            labels: (await projectLabels(ctx, project.id)).map(labelFacts),
+            // Read only when the command names labels: every create already
+            // serializes on the project's counter, and the label range would
+            // add conflicts with label writes that a plain create never needs.
+            labels:
+              (intent.labels?.length ?? 0) > 0
+                ? (await projectLabels(ctx, project.id)).map(labelFacts)
+                : [],
             mintLabelId: () => newId("label"),
           },
           { ...intent, ticketId },

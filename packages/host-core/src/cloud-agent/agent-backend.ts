@@ -22,6 +22,18 @@
  *   so the same `commandId`, which the backend's receipts make idempotent),
  *   and if that one gets no answer either, its outcome is `unknown`.
  *
+ * **Contention.** A board's writes serialize on its project's counter, so a
+ * burst of them (many agents, or a person and their agents) can exhaust the
+ * backend's own optimistic-concurrency retries: {@link CloudContentionError},
+ * which applied nothing. A mutation that meets it is sent again with the same
+ * arguments after a jittered, doubling wait, at most
+ * {@link CONTENTION_RETRIES} times and never past the deadline; after that the
+ * contention error is the answer (`BUSY` at the socket: this change applied
+ * nothing), unless an earlier attempt timed out, which may still have landed
+ * (`TIMEOUT`, outcome unknown).
+ * Only contention is retried this way: a function's own refusal is an answer
+ * and is never sent twice.
+ *
  * **Deadline.** A caller may give an absolute deadline; no call, retry or
  * wait runs past it, so a verb answers inside its door's own bound.
  *
@@ -32,6 +44,7 @@ import { parseAgentTokenGrant, type AgentTokenGrant } from "@volli/shared/cloud"
 
 import {
   CLOUD_FUNCTION_TIMEOUT_MS,
+  CloudContentionError,
   CloudFunctionError,
   CloudOfflineError,
   type CloudFunctionKind,
@@ -53,6 +66,11 @@ export const AGENT_TOKEN_REFRESH_AT = 2 / 3;
 export const NOT_YET_SYNCED_RETRY_MS = 1_500;
 /** A resend or a retry is only worth starting with at least this long left. */
 const RETRY_MIN_MS = 1_000;
+/** How many more times a mutation that met {@link CloudContentionError} is sent. */
+export const CONTENTION_RETRIES = 6;
+/** The first contention wait's bound; each next one doubles, up to {@link CONTENTION_BACKOFF_MAX_MS}. */
+export const CONTENTION_BACKOFF_MS = 100;
+export const CONTENTION_BACKOFF_MAX_MS = 1_000;
 
 export interface AgentBackendOptions {
   functions: CloudFunctionsClient;
@@ -64,6 +82,8 @@ export interface AgentBackendOptions {
   nudgeDrain?(sessionId: string): void;
   now?(): number;
   sleep?(ms: number): Promise<void>;
+  /** In [0, 1): spreads contention retries so the writers that collided do not collide again. */
+  random?(): number;
 }
 
 /** One call's bound: an absolute time (on {@link AgentBackendOptions.now}) it must finish by. */
@@ -145,6 +165,7 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
         const handle = setTimeout(resolve, ms);
         handle.unref?.();
       }));
+  const random = options.random ?? Math.random;
   const tokens = new Map<string, { token: string; refreshAt: number }>();
   const minting = new Map<string, Promise<string>>();
 
@@ -213,40 +234,64 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
     return pending;
   }
 
+  /**
+   * One command's sends. `sent.resent` outlives a `send`: once an attempt
+   * timed out, whatever any later attempt (under this token or a fresh one)
+   * meets leaves the outcome unknown, and no second timeout is resent.
+   */
   async function send(
     kind: CloudFunctionKind,
     path: string,
     args: Record<string, unknown>,
     token: string,
     deadline: number | undefined,
+    sent: { resent: boolean },
   ): Promise<unknown> {
-    try {
-      return await options.functions.call(kind, path, args, token, {
-        timeoutMs: budget(deadline),
-      });
-    } catch (error) {
-      if (
-        kind !== "mutation" ||
-        !(error instanceof CloudOfflineError) ||
-        error.reason !== "timeout" ||
-        timeLeft(deadline) < RETRY_MIN_MS
-      ) {
-        throw error;
+    let contended = 0;
+    for (;;) {
+      try {
+        return await options.functions.call(kind, path, args, token, {
+          timeoutMs: budget(deadline),
+        });
+      } catch (error) {
+        if (kind !== "mutation") throw error;
+        if (error instanceof CloudContentionError) {
+          const wait = contentionWait(contended);
+          if (contended < CONTENTION_RETRIES && timeLeft(deadline) >= wait + RETRY_MIN_MS) {
+            // Nothing was applied: the same arguments are the same command.
+            contended += 1;
+            await sleep(wait);
+            continue;
+          }
+          // An earlier attempt that timed out may still have landed.
+          if (sent.resent) throw new CloudOfflineError("timeout", error.message, "unknown");
+          throw error;
+        }
+        if (sent.resent) {
+          // The first attempt may have landed whatever this one met.
+          if (error instanceof CloudOfflineError && error.delivery === "not_sent") {
+            throw new CloudOfflineError(error.reason, error.message, "unknown");
+          }
+          throw error;
+        }
+        if (
+          !(error instanceof CloudOfflineError) ||
+          error.reason !== "timeout" ||
+          timeLeft(deadline) < RETRY_MIN_MS
+        ) {
+          throw error;
+        }
+        // Once more with the same arguments: the backend's receipt for this
+        // `commandId` answers a duplicate with the first one's reply.
+        sent.resent = true;
       }
     }
-    // Once more with the same arguments: the backend's receipt for this
-    // `commandId` answers a duplicate with the first one's reply.
-    try {
-      return await options.functions.call(kind, path, args, token, {
-        timeoutMs: budget(deadline),
-      });
-    } catch (error) {
-      // The first attempt may have landed whatever this one met.
-      if (error instanceof CloudOfflineError && error.delivery === "not_sent") {
-        throw new CloudOfflineError(error.reason, error.message, "unknown");
-      }
-      throw error;
-    }
+  }
+
+  /** The wait before contention retry `n` (0-based): full jitter under a doubling bound. */
+  function contentionWait(n: number): number {
+    const bound = Math.min(CONTENTION_BACKOFF_MAX_MS, CONTENTION_BACKOFF_MS * 2 ** n);
+    return Math.floor(random() * bound);
   }
 
   async function call(
@@ -264,8 +309,9 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
       );
     }
     const token = await tokenFor(sessionId, deadline);
+    const sent = { resent: false };
     try {
-      return await send(kind, path, args, token, deadline);
+      return await send(kind, path, args, token, deadline, sent);
     } catch (error) {
       if (!(error instanceof CloudFunctionError) || !DROPS_TOKEN.has(error.code)) throw error;
       // A refusal is an answer: nothing was applied, so the same call under a
@@ -274,7 +320,7 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
       if (timeLeft(deadline) < RETRY_MIN_MS) throw error;
       const fresh = await tokenFor(sessionId, deadline);
       try {
-        return await send(kind, path, args, fresh, deadline);
+        return await send(kind, path, args, fresh, deadline, sent);
       } catch (retry) {
         if (retry instanceof CloudFunctionError && DROPS_TOKEN.has(retry.code)) {
           tokens.delete(sessionId);

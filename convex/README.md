@@ -484,6 +484,33 @@ same gap conflict and retry instead of colliding (`board.backend.test.ts`).
 The local SQLite board (signed-out mode) keeps its own commands; it was not
 rewritten onto these decisions, because its dense integer positions differ.
 
+**A project's board writes take turns.** Every one reads and writes the
+project's counter document, which is what keeps ticket numbers contiguous
+and `seq` gapless (a project import counts changes by it, the activity feed
+pages by it), so a project accepts one board write at a time. Each write's
+read set is otherwise kept to the documents it needs (point reads by id, the
+one row next to a column end or gap; a create reads the project's labels only
+when it names some), and the counter stays a tiny document of its own. A
+burst bigger than the backend's own optimistic-concurrency retries absorb (a
+few attempts in about a second) is the client transport's to answer, and
+nothing a lost attempt ran was committed:
+
+- a window (WebSocket): the Convex client closes the socket (1013),
+  reconnects and resends the same mutation, and never drops it; while the
+  socket is down the window reads as offline;
+- a runner, for its agents' verbs (HTTP): the 503 with the platform's
+  `OptimisticConcurrencyControlFailure` body is contention, not offline; the
+  runner sends the same arguments again after jittered, doubling waits, a
+  bounded number of times inside the verb's deadline, and past that answers
+  `BUSY` (exit 75: that change applied nothing), or `TIMEOUT` if an earlier
+  attempt timed out and so may have landed. A function's own refusal is never
+  resent.
+
+`board.contention.backend.test.ts` holds both at four times the burst the
+board test uses, and shows that every write the raw HTTP API refused under
+it was contention and left nothing behind (`VOLLI_TEST_BOARD_BURST` raises
+the burst to reproduce it harder).
+
 **Public function arguments are a cross-version contract.** A shipped
 desktop calls these functions directly from its window (VC-889), through the
 generated references this package exports as `@volli/convex/api` (the only

@@ -3,7 +3,7 @@
  * uses: the deployed fixture backend, signed in as anyone.
  */
 
-import { ConvexHttpClient } from "convex/browser";
+import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import type { FunctionReference, FunctionReturnType, OptionalRestArgs } from "convex/server";
 
 import { mintTestToken, type MintOptions } from "./jwt.ts";
@@ -31,6 +31,24 @@ export function connectBackend() {
       if (subject !== undefined) client.setAuth(mintTestToken(privateKeyPem, subject, options));
       return client;
     },
+    /** A token signed in as `subject` through the test issuer, for a caller that sends its own requests. */
+    token(subject: string, options?: MintOptions): string {
+      return mintTestToken(privateKeyPem, subject, options);
+    },
+    /**
+     * A WebSocket client signed in as `subject`: the transport a desktop
+     * window writes the board through. Unlike the HTTP client, it answers a
+     * mutation that exhausted the backend's concurrency retries by closing
+     * the socket (1013) and resending the mutation once it reconnects. Each
+     * socket runs its mutations in order, so concurrent writers need one
+     * each. Close it when done.
+     */
+    socket(subject: string, options?: MintOptions): ConvexClient {
+      const client = new ConvexClient(url);
+      const token = mintTestToken(privateKeyPem, subject, options);
+      client.setAuth(async () => token);
+      return client;
+    },
     /**
      * Calls an internal mutation with this backend's admin key: seeding, and
      * the internal steps no client may call. Only the throwaway fixture
@@ -50,4 +68,16 @@ export function connectBackend() {
       );
     },
   };
+}
+
+/**
+ * Runs every write at once and settles them all before answering: a refusal
+ * rejects with the first one's reason, but only after the rest have landed or
+ * failed, so no straggler lands in the next test's history.
+ */
+export async function concurrently<T>(writes: readonly (() => Promise<T>)[]): Promise<T[]> {
+  const results = await Promise.allSettled(writes.map((write) => write()));
+  const refused = results.find((result) => result.status === "rejected");
+  if (refused !== undefined) throw refused.reason;
+  return results.map((result) => (result as PromiseFulfilledResult<T>).value);
 }
