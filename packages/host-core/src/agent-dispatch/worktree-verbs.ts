@@ -1,5 +1,7 @@
 /**
- * The worktree verbs, and the ticket resolution all three share.
+ * The worktree verbs and their launch-specific ticket resolution: signed-out
+ * uses the local context ladder; Cloud uses Agent-authorized ticket reads and
+ * this runner's registry through cloudWorktreeTickets.
  *
  * Context resolution (which ticket the agent means) is this door's concern;
  * the git compose and the no-worktree / stamped-but-deleted discrimination
@@ -28,7 +30,7 @@ import { dryRunResponse } from "./preview";
 import { ticketForDisplayId } from "./resolution";
 
 /**
- * Resolves the ticket a worktree command targets. An explicit display-id arg is
+ * Resolves a signed-out worktree command's ticket. An explicit display-id arg is
  * the override (and — unlike every other command — resolves an archived ticket
  * too: retention deliberately retains worktrees past archive). Otherwise the
  * shared context ladder (`resolveAgentContext`) gets first crack, so an agent

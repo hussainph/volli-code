@@ -163,7 +163,7 @@ it("composes owner cursor routing, Agent overlays, runner notify and fenced arti
       sessionId: SESSION,
       request: { ...read, cmd: "conflicts" },
     }),
-  ).toMatchObject({ ok: false, response: { ok: false, error: { code: "TICKET_NOT_FOUND" } } });
+  ).toMatchObject({ ok: false, response: { ok: false, error: { code: "PROJECT_NOT_FOUND" } } });
   expect(
     calls.some((c) => c.path === "projects:listForActor" && c.auth === "Bearer agent-token"),
   ).toBe(true);

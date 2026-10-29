@@ -34,9 +34,7 @@ export function createCloudWorktreeTickets(options: {
   backend: AgentBackend;
   registry(): RunnerPathRegistry | null;
   ticketDisplayIdOf(ticketId: string): string | null;
-  now?(): number;
 }) {
-  const now = options.now ?? Date.now;
   const displayIds = new Map<string, string>();
   const machinePaths = cloudMachinePaths({
     registry: options.registry,
@@ -60,10 +58,22 @@ export function createCloudWorktreeTickets(options: {
       };
     }
     const sessionId = call.sessionId;
-    const deadline = now() + CLOUD_VERB_BUDGET_MS;
+    const deadline = Date.now() + CLOUD_VERB_BUDGET_MS;
     try {
-      const query = <R>(path: string, args: Record<string, unknown>) =>
-        options.backend.query(sessionId, path, args, { deadline }) as Promise<R>;
+      const query = async <R>(path: string, args: Record<string, unknown>): Promise<R> => {
+        try {
+          return (await options.backend.query(sessionId, path, args, { deadline })) as R;
+        } catch (error) {
+          if (
+            error instanceof CloudFunctionError &&
+            error.code === "not_found" &&
+            (path === "projects:get" || path === "projects:listForActor" || path === "board:roster")
+          ) {
+            throw new WorktreeRefusal(failure("PROJECT_NOT_FOUND", error.message));
+          }
+          throw error;
+        }
+      };
       return { ok: true, ...(await body(query, deadline)) };
     } catch (error) {
       if (error instanceof WorktreeRefusal) return { ok: false, response: error.response };
@@ -183,9 +193,14 @@ export function createCloudWorktreeTickets(options: {
           const roster = await query<{ tickets: TicketIdentity[] }>("board:roster", {
             projectId: project.id,
           });
+          // The link/runner can disappear while the roster is in flight.
+          if (options.registry() === null)
+            throw new WorktreeRefusal(failure("INVALID_REQUEST", TICKET_FOLDER_REQUIRED));
           for (const ticket of roster.tickets) {
             displayIds.set(ticket.id, displayTicketId(project.ticketPrefix, ticket.number));
             const path = machinePaths.ticket(ticket.id);
+            // A readable Cloud roster with no copies here is genuinely empty,
+            // like the local scan; other runners' work is not this scan's scope.
             if (path === null || path.projectId !== project.id) continue;
             tickets.push({
               id: ticket.id,

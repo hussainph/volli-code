@@ -73,9 +73,11 @@ function world() {
   const cloudProject = { id: PROJECT, name: "Cloud project", ticketPrefix: "AV" };
   let fault: Error | undefined;
   let faultPath: string | undefined;
+  let onQuery: ((path: string) => void) | undefined;
   let hasRegistry = true;
   const query = vi.fn(async (_session: string, path: string, args: Record<string, unknown>) => {
     if (fault && (faultPath === undefined || path === faultPath)) throw fault;
+    onQuery?.(path);
     if (path === "board:resolveTicketKey") {
       const ticket = tickets.find((t) => `AV-${t.number}` === args["key"]);
       if (!ticket) throw new CloudFunctionError("not_found", "No such key");
@@ -151,6 +153,9 @@ function world() {
     },
     noRegistry: () => {
       hasRegistry = false;
+    },
+    onQuery: (callback: (path: string) => void) => {
+      onQuery = callback;
     },
   };
 }
@@ -288,6 +293,38 @@ describe("Cloud worktree verbs through the admitted dispatch", () => {
       expect(w.gitCalls).toEqual([]);
     },
   );
+
+  it("distinguishes missing projects from missing tickets, without scanning", async () => {
+    const w = world();
+    w.fault(new CloudFunctionError("not_found", "Project absent"), "board:roster");
+    expect(await w.service.execute(w.request("conflicts"))).toMatchObject({
+      ok: false,
+      error: { code: "PROJECT_NOT_FOUND" },
+    });
+    w.fault(new CloudFunctionError("not_found", "Project absent"), "projects:get");
+    expect(await w.service.execute(w.request("worktree.status"))).toMatchObject({
+      ok: false,
+      error: { code: "PROJECT_NOT_FOUND" },
+    });
+    w.fault(new CloudFunctionError("not_found", "Ticket absent"), "board:getTicket");
+    expect(await w.service.execute(w.request("worktree.status"))).toMatchObject({
+      ok: false,
+      error: { code: "TICKET_NOT_FOUND" },
+    });
+    expect(w.gitCalls).toEqual([]);
+  });
+
+  it("refuses explicitly when the registry disappears while reading the roster", async () => {
+    const w = world();
+    w.onQuery((path) => {
+      if (path === "board:roster") w.noRegistry();
+    });
+    expect(await w.service.execute(w.request("conflicts"))).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+    expect(w.gitCalls).toEqual([]);
+  });
 
   it("names copies lost after the roster read and copies beyond the shared command deadline", async () => {
     const w = world();
