@@ -8,6 +8,13 @@ import type {
 import type { BrowserAppShortcutEvent, BrowserTabState } from "@volli/shared";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+// The host uses injected native fakes, but main's shared afterEach imports
+// broadcast.ts to drain its coalescer. Keep that cleanup off Electron's npm
+// entrypoint: loading it in plain Node can download a binary at runtime.
+vi.mock("electron", () => ({
+  BrowserWindow: { getAllWindows: () => [] },
+}));
+
 import {
   BROWSER_DEFAULT_BOUNDS,
   BROWSER_MAX_TABS_PER_PROJECT,
