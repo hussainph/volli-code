@@ -26,7 +26,9 @@ export function personMoveBackend(
   const signedOut = () => {
     options.onSignInLost?.();
     // No data.code: the engine treats this as waiting, not a data problem to roll back.
-    return new Error("Sign in as the person who started this move.");
+    return Object.assign(new Error("Sign in as the person who started this move."), {
+      code: "move_signed_out",
+    });
   };
   const call = async (
     kind: "query" | "mutation" | "action",
@@ -58,6 +60,16 @@ export function personMoveBackend(
     }
     if (body?.status === "success" && response.ok) return body.value;
     if (body?.status === "error") {
+      // Older deployments have no re-arm query. Keep its local result list useful
+      // without exposing Convex's raw error or classifying other move calls differently.
+      if (
+        path === "projectImports:rearmList" &&
+        typeof body.errorMessage === "string" &&
+        body.errorMessage.includes("Could not find public function")
+      )
+        throw Object.assign(new Error("Paused Automation details are not available yet."), {
+          data: { code: "feature_unavailable" },
+        });
       const raw = body.errorData;
       const data =
         raw !== null && typeof raw === "object" && !Array.isArray(raw)

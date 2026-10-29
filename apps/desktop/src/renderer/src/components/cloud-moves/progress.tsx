@@ -273,6 +273,9 @@ export function MoveProgress({
         {inertGlobals.length > 0 ? (
           <section aria-label="Personal Automations" className="flex flex-col gap-2">
             <h3 className="font-medium">Personal Automations</h3>
+            <p className="text-muted-foreground">
+              Personal definitions stay inactive until shared config is available.
+            </p>
             <ul>
               {inertGlobals.map((item) => (
                 <li key={item.id}>{item.name} · Not armed</li>

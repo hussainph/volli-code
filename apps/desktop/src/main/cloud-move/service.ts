@@ -2,6 +2,7 @@
 import type {
   AccountSnapshot,
   CloudMoveAction,
+  CloudMoveAutomationRearm,
   CloudMoveCommand,
   CloudMovePreflightInput,
   CloudMoveSnapshot,
@@ -125,6 +126,10 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     { owner: string | null; value: PreparedLocalMoves; started?: string; intent?: string }
   >();
   const rollback = new Map<string, CloudMoveStatus["rollback"]>();
+  const rearmDetails = new Map<
+    string,
+    { at: number; pending: boolean; value?: CloudMoveAutomationRearm }
+  >();
   const pending = new Set<string>();
   const preflightReads = new Set<AbortController>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -233,6 +238,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     if (!currentOwnedMove(row)) return [];
     const queue = engine.journal.queue(row.queueId);
     const rearmActions: CloudMoveAction[] =
+      row.state === "confirmed" &&
       active === null &&
       status.automationRearm?.canRearmOnThisMac === true &&
       status.automationRearm.columns.length + status.automationRearm.schedules.length > 0
@@ -277,25 +283,68 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
 
   const describe = async (row: MoveRow, queue: QueueRow) => {
     const view = await options.describe(row, queue);
+    const port = options.rearm;
     if (
-      options.rearm !== undefined &&
-      currentOwnedMove(row) &&
-      row.report?.ok === true &&
-      (row.state === "checked" || row.state === "confirmed")
-    ) {
-      const rearm = await options.rearm.read(row);
-      // A different sign-in or move may win while the optional person read is pending.
-      if (currentOwnedMove(row)) {
-        view.automationRearm =
-          active === null || !rearm.canRearmOnThisMac
-            ? rearm
-            : {
-                ...rearm,
-                canRearmOnThisMac: false,
-                unavailable: "Wait for the running move to finish.",
-                retryable: false,
-              };
-      }
+      port === undefined ||
+      !currentOwnedMove(row) ||
+      row.report?.ok !== true ||
+      (row.state !== "checked" && row.state !== "confirmed")
+    )
+      return view;
+    const key = row.userId + ":" + row.moveId;
+    let cached = rearmDetails.get(key);
+    if (cached === undefined) {
+      cached = { at: 0, pending: false };
+      rearmDetails.set(key, cached);
+      while (rearmDetails.size > 128) rearmDetails.delete(rearmDetails.keys().next().value!);
+    }
+    if (!cached.pending && Date.now() - cached.at >= 5_000) {
+      const reading = cached;
+      reading.pending = true;
+      reading.at = Date.now();
+      // Optional network details never hold up the journal or its recovery controls.
+      const work = Promise.resolve()
+        .then(() => port.read(row))
+        .then((value) => {
+          if (!disposed && currentOwnedMove(row)) {
+            reading.value = value;
+            reading.at = Date.now();
+            notify();
+          }
+        })
+        .catch(() => {
+          if (!disposed && currentOwnedMove(row)) {
+            reading.value = {
+              columns: [],
+              schedules: [],
+              inertGlobals: [],
+              canRearmOnThisMac: false,
+              unavailable: "Couldn’t read paused Automations.",
+              retryable: true,
+            };
+            reading.at = Date.now();
+            notify();
+          }
+        })
+        .finally(() => {
+          reading.pending = false;
+        });
+      options.track?.(work);
+    }
+    const value = cached.value;
+    if (value !== undefined) {
+      const blocked =
+        value.columns.length + value.schedules.length > 0
+          ? row.state !== "confirmed"
+            ? "Finish the move before re-arming Automations."
+            : active !== null
+              ? "Wait for the running move to finish."
+              : null
+          : null;
+      view.automationRearm =
+        blocked === null
+          ? value
+          : { ...value, canRearmOnThisMac: false, unavailable: blocked, retryable: false };
     }
     return view;
   };
@@ -604,8 +653,14 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         controlled(async (signal) => {
           const row = readMove(input.moveId);
           const queue = engine.journal.queue(row.queueId)!;
-          const view = await describe(row, queue);
-          const allowed = actionsFor(row, view);
+          const view = await options.describe(row, queue);
+          const allowed =
+            input.action === "re-arm" &&
+            row.state === "confirmed" &&
+            options.rearm !== undefined &&
+            currentOwnedMove(row)
+              ? ["re-arm"]
+              : actionsFor(row, view);
           // Pause was made durable before interrupting the worker, so it now reads as Resume.
           if (input.action !== "pause" && !allowed.includes(input.action))
             throw new OperationUnavailableError("This action is no longer available.");
@@ -697,8 +752,11 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
             case "re-arm":
               if (input.rearm === undefined || options.rearm === undefined)
                 throw new OperationUnavailableError("Choose a paused Automation to re-arm.");
-              options.assertIdle(row.projectId);
-              await options.rearm.perform(row, input.rearm);
+              try {
+                await options.rearm.perform(row, input.rearm);
+              } finally {
+                rearmDetails.delete(row.userId + ":" + row.moveId);
+              }
               break;
             case "finish":
               if (row.state !== "checked" || row.report?.ok !== true)
@@ -868,6 +926,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       await identityStopped;
       listeners.clear();
       prepared.clear();
+      rearmDetails.clear();
     },
   };
   return service;

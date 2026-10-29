@@ -34,9 +34,13 @@ export function MoveAutomationRearm({
     })),
   ];
   if (items.length === 0 && rearm.unavailable === null) return null;
+  const fallbackNames =
+    items.length === 0 && rearm.unavailable !== null ? move.pausedAutomations : [];
   return (
     <details>
-      <summary>Paused Automations{rearm.retryable ? "" : ` (${items.length})`}</summary>
+      <summary>
+        Paused Automations{rearm.retryable || fallbackNames.length > 0 ? "" : ` (${items.length})`}
+      </summary>
       {rearm.unavailable !== null ? <p role="status">{rearm.unavailable}</p> : null}
       {rearm.retryable ? (
         <Button size="sm" variant="ghost" disabled={busy} onClick={onRefresh}>
@@ -44,6 +48,9 @@ export function MoveAutomationRearm({
         </Button>
       ) : null}
       <ul className="flex flex-col gap-2">
+        {fallbackNames.map((name) => (
+          <li key={name}>{name}</li>
+        ))}
         {items.map((item) => (
           <li key={item.key} className="flex flex-wrap items-center justify-between gap-2">
             <span>{item.label}</span>

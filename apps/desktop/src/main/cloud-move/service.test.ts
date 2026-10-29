@@ -224,16 +224,26 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     expect(rearm.read).not.toHaveBeenCalled();
     f.toState(row, "checked", { ok: false });
     expect((await f.service.snapshot()).moves[0]?.automationRearm).toBeUndefined();
+    f.engine.journal.patch(row.moveId, { report: { ok: true } });
+    await vi.waitFor(async () =>
+      expect((await f.service.snapshot()).moves[0]?.automationRearm?.unavailable).toContain(
+        "Finish the move",
+      ),
+    );
+    const target = { kind: "column", automationId: "auto", status: "doing" } as const;
+    await expect(
+      f.service.command({ moveId: row.moveId, action: "re-arm", rearm: target }),
+    ).rejects.toThrow("no longer available");
+    expect(rearm.perform).not.toHaveBeenCalled();
     const checked = f.engine.journal.move(row.moveId)!;
     f.toState(checked, "confirmed", { ok: true });
     expect((await f.service.snapshot()).moves[0]?.actions).toContain("re-arm");
-    const target = { kind: "column", automationId: "auto", status: "doing" } as const;
     await f.service.command({ moveId: row.moveId, action: "re-arm", rearm: target });
     expect(rearm.perform).toHaveBeenCalledWith(
       expect.objectContaining({ moveId: row.moveId }),
       target,
     );
-    expect(f.assertIdle).toHaveBeenCalledWith(PROJECT);
+    expect(f.assertIdle).not.toHaveBeenCalled();
     expect(f.identity).not.toHaveBeenCalled();
     await expect(f.service.command({ moveId: row.moveId, action: "re-arm" })).rejects.toThrow(
       "Choose a paused Automation",
@@ -274,9 +284,14 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     });
     await f.service.resume();
     await vi.waitFor(() => expect(f.run).toHaveBeenCalled());
+    await vi.waitFor(async () =>
+      expect(
+        (await f.service.snapshot()).moves.find((item) => item.moveId === moved.moveId)
+          ?.automationRearm?.unavailable,
+      ).toContain("Wait for the running move"),
+    );
     const status = (await f.service.snapshot()).moves.find((item) => item.moveId === moved.moveId)!;
     expect(status.actions).not.toContain("re-arm");
-    expect(status.automationRearm?.unavailable).toContain("Wait for the running move");
     await expect(
       f.service.command({
         moveId: moved.moveId,
@@ -313,7 +328,29 @@ describe("desktop move coordinator over the real SQLite journal", () => {
       retryable: false,
     });
     expect((await reading).moves[0]?.automationRearm).toBeUndefined();
+    expect((await f.service.snapshot()).moves[0]?.automationRearm).toBeUndefined();
     expect(rearm.perform).not.toHaveBeenCalled();
+  });
+  it("never blocks the journal, Finish or Open cloud on optional Automation reads", async () => {
+    const rearm = {
+      read: vi.fn(() => new Promise<import("@volli/shared").CloudMoveAutomationRearm>(() => {})),
+      perform: vi.fn(async () => {}),
+    };
+    const f = setup(rearm);
+    const row = f.toState(f.enqueue(), "checked", { ok: true });
+    expect((await f.service.snapshot()).moves[0]?.actions).toContain("finish");
+    await vi.waitFor(() => expect(rearm.read).toHaveBeenCalledOnce());
+    await f.service.command({ moveId: row.moveId, action: "open-cloud" });
+    const confirm = vi.spyOn(f.engine, "confirm").mockResolvedValue(row);
+    await f.service.command({ moveId: row.moveId, action: "finish" });
+    expect(confirm).toHaveBeenCalledOnce();
+    const back = vi
+      .spyOn(f.engine, "goBackToLocal")
+      .mockResolvedValue({ ...row, state: "returned" });
+    await f.service.command({ moveId: row.moveId, action: "go-back" });
+    expect(back).toHaveBeenCalledOnce();
+    expect(rearm.perform).not.toHaveBeenCalled();
+    expect(rearm.read).toHaveBeenCalledOnce();
   });
   it("does nothing behind the flag and rejects commands before any outside call", async () => {
     const f = setup();

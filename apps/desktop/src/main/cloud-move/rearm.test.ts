@@ -229,20 +229,49 @@ describe("moved Automation result bridge", () => {
     ).rejects.toThrow("connect");
     expect(f.mutation).not.toHaveBeenCalled();
   });
-  it("bounds and validates the project response, sanitizes refusals, and retries failed reads", async () => {
+  it("keeps invalid responses non-retryable and sanitizes mutation refusals", async () => {
     const f = setup();
     f.list({ ...list, projectId: "another" });
     expect(await f.port.read(row)).toMatchObject({
       inertGlobals: [],
-      retryable: true,
-      unavailable: "Couldn’t read paused Automations.",
+      retryable: false,
+      unavailable: "These Automation details need a newer Volli build.",
     });
+    await f.port.read(row);
+    expect(f.query).toHaveBeenCalledOnce();
     f.list(list);
-    expect((await f.port.read(row)).canRearmOnThisMac).toBe(true);
     f.mutation.mockRejectedValue(new Error("private definition and instructions"));
     await expect(
       f.port.perform(row, { kind: "schedule", automationId: "schedule" }),
     ).rejects.toThrow("Couldn’t re-arm this Automation. Try again.");
+    expect((await f.port.read(row)).canRearmOnThisMac).toBe(true);
+  });
+  it("retries transient list failures but does not loop on an unavailable backend feature", async () => {
+    const f = setup();
+    f.query.mockRejectedValueOnce(new Error("private backend details"));
+    expect((await f.port.read(row)).retryable).toBe(true);
+    expect((await f.port.read(row)).canRearmOnThisMac).toBe(true);
+    const old = setup();
+    old.query.mockRejectedValue({ data: { code: "feature_unavailable" } });
+    expect(await old.port.read(row)).toMatchObject({
+      retryable: false,
+      unavailable: "Re-arm when Automations are available in Volli Cloud.",
+    });
+    await old.port.read(row);
+    expect(old.query).toHaveBeenCalledOnce();
+  });
+  it("preserves the sign-in recovery after the person backend loses its token", async () => {
+    const f = setup();
+    f.query.mockRejectedValue(
+      Object.assign(new Error("sanitized sign-in failure"), { code: "move_signed_out" }),
+    );
+    expect(await f.port.read(row)).toMatchObject({
+      retryable: false,
+      unavailable: "Sign in as the person who started this move.",
+    });
+    await expect(
+      f.port.perform(row, { kind: "schedule", automationId: "schedule" }),
+    ).rejects.toThrow("Sign in as the person");
   });
   it("keeps repeated window reads inexpensive and leaves empty project lists inert", async () => {
     const f = setup();

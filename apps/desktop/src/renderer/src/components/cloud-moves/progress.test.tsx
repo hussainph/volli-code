@@ -66,6 +66,7 @@ describe("Move progress and outcomes", () => {
     expect(api.command).not.toHaveBeenCalled();
     const globals = container.querySelector('[aria-label="Personal Automations"]')!;
     expect(globals.textContent).toContain("Personal helper · Not armed");
+    expect(globals.textContent).toContain("stay inactive until shared config is available");
     expect(globals.querySelector("button")).toBeNull();
     const column = container.querySelector<HTMLButtonElement>(
       '[aria-label="Re-arm Review on this Mac (Doing)"]',
@@ -109,6 +110,33 @@ describe("Move progress and outcomes", () => {
     expect(
       container.querySelector<HTMLButtonElement>('button[aria-label^="Re-arm"]')!.disabled,
     ).toBe(true);
+  });
+  it("preserves the earlier named list on a deployment without the re-arm feature", async () => {
+    await mount({
+      state: "finished",
+      actions: ["open-cloud"],
+      pausedAutomations: ["Earlier Review"],
+      automationRearm: {
+        columns: [],
+        schedules: [],
+        inertGlobals: [],
+        canRearmOnThisMac: false,
+        unavailable: "Re-arm when Automations are available in Volli Cloud.",
+        retryable: false,
+      },
+    });
+    expect(container.textContent).toContain("Earlier Review");
+    expect(container.textContent).toContain(
+      "Re-arm when Automations are available in Volli Cloud.",
+    );
+    expect(container.textContent).not.toContain("Paused Automations (0)");
+    expect(container.querySelector('button[aria-label^="Re-arm"]')).toBeNull();
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (control) => control.textContent === "Try again",
+      ),
+    ).toBe(false);
+    expect(api.command).not.toHaveBeenCalled();
   });
   it("deduplicates personal definitions across the result and offers a real refresh after a failed list read", async () => {
     const refresh = vi.fn();

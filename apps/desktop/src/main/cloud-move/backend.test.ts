@@ -55,9 +55,29 @@ describe("person-authorized move HTTP boundary", () => {
     expect(JSON.stringify(error)).not.toContain("private");
     expect(f.lost).not.toHaveBeenCalled();
   });
+  it("classifies only the missing optional re-arm query without exposing backend prose", async () => {
+    const body = {
+      status: "error",
+      errorMessage:
+        "Could not find public function for projectImports:rearmList private deployment details",
+    };
+    const old = setup(Response.json(body));
+    await expect(
+      old.backend.query("projectImports:rearmList", { moveId: "move" }),
+    ).rejects.toMatchObject({ data: { code: "feature_unavailable" } });
+    const other = setup(Response.json(body));
+    await expect(other.backend.query("projectImports:begin", {})).rejects.not.toHaveProperty(
+      "data",
+    );
+    expect(old.lost).not.toHaveBeenCalled();
+  });
   it("pauses an expired sign-in rather than triggering data rollback", async () => {
     const f = setup(new Response("unauthorized", { status: 401 }));
-    await expect(f.backend.query("workspaces:listMine", {})).rejects.not.toHaveProperty("data");
+    const failure = await f.backend
+      .query("workspaces:listMine", {})
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "move_signed_out" });
+    expect(failure).not.toHaveProperty("data");
     expect(f.lost).toHaveBeenCalledOnce();
   });
   it.each([
