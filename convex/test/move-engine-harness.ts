@@ -102,13 +102,13 @@ export interface MoveWorld {
   cleanup(): void;
 }
 
-export async function moveWorld(options: { artifacts?: number } = {}): Promise<MoveWorld> {
+export async function moveWorld(fixture: { artifacts?: number } = {}): Promise<MoveWorld> {
   const t = setup();
   const alice = await signIn(t, "alice");
   const world = await t.run((ctx) => seedTestWorld(ctx, { ownerUserId: alice.userId, runners: 2 }));
   const runnerId = world.runnerIds[0]!;
   const root = mkdtempSync(join(tmpdir(), "volli-move-engine-"));
-  const profile = writeMoveFixture(join(root, "profile"), options.artifacts);
+  const profile = writeMoveFixture(join(root, "profile"), fixture.artifacts);
   const db = openRawDb(profile.dbPath);
   db.pragma("foreign_keys = ON");
   const objects = new S3StandIn().install();
