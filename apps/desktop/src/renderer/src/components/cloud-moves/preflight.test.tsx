@@ -174,11 +174,11 @@ describe("Move pre-flight", () => {
   });
   it("shows read failures and mutation failures, retaining a retry", async () => {
     api.preflight.mockRejectedValueOnce(
-      new Error("Pause the running move before preparing another one."),
+      new Error("Wait for the running move to finish, then run the dry run again."),
     );
     await mount();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Pause the running move before preparing another one.",
+      "Wait for the running move to finish, then run the dry run again.",
     );
     expect(container.textContent).not.toContain("private raw details");
     await click("Run a dry run only");

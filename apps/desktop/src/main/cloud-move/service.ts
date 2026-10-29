@@ -65,6 +65,11 @@ const AFTER_COMMIT = new Set<MoveRow["state"]>([
   "returning",
 ]);
 const SETTLED = new Set<MoveRow["state"]>(["rolled_back", "returned", "superseded"]);
+const REPORT_ONLY_FAILURES = new Set([
+  "already_migrated",
+  "preview_waitlisted",
+  "preview_agreement_required",
+]);
 
 function personOf(snapshot: AccountSnapshot) {
   const account = snapshot.state === "signed-in" ? snapshot.account : null;
@@ -226,17 +231,11 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       return [];
     const queue = engine.journal.queue(row.queueId);
     if (row.state === "returned") return ["open-cloud"];
-    if (
-      row.state === "superseded" ||
-      row.failure?.code === "already_migrated" ||
-      row.failure?.code === "preview_waitlisted" ||
-      row.failure?.code === "preview_agreement_required"
-    )
-      return [];
+    if (row.state === "superseded" || REPORT_ONLY_FAILURES.has(row.failure?.code ?? "")) return [];
     if (row.state === "rolling_back") return ["resume"];
     if (row.state === "returning") return ["go-back"];
     if (row.state === "rolled_back")
-      return row.failure?.code === "cancelled"
+      return row.failure?.code === "cancelled" || active !== null
         ? []
         : ["retry", ...(queue?.state === "stopped" ? ["skip" as const] : [])];
     if (row.state === "confirmed")
@@ -392,6 +391,13 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
           ? { changes: [], requiresConfirmation: false }
           : null);
       if (row.state === "rolled_back" && queue.state === "done") view.state = "rolled-back";
+      if (
+        row.state === "rolled_back" &&
+        row.failure?.code !== "cancelled" &&
+        !REPORT_ONLY_FAILURES.has(row.failure?.code ?? "") &&
+        active !== null
+      )
+        view.message += " Retry after the running move finishes.";
       moves.push({ ...view, actions: actionsFor(row, view) });
     }
     return {
@@ -429,7 +435,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         // A read-only dry run must never pause a different project's active move.
         if (active !== null)
           throw new OperationUnavailableError(
-            "Pause the running move before preparing another one.",
+            "Wait for the running move to finish, then run the dry run again.",
           );
         return await controlled(async (signal) => {
           const lifetime = AbortSignal.any([signal, read.signal]);
@@ -444,11 +450,9 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
           return value.preflight;
         });
       } catch (error) {
-        if (
-          error instanceof OperationUnavailableError ||
-          (error as { name?: unknown } | null)?.name === "AbortError"
-        )
-          throw error;
+        if (error instanceof OperationUnavailableError) throw error;
+        if ((error as { name?: unknown } | null)?.name === "AbortError")
+          throw new OperationUnavailableError("The dry run was cancelled. Run it again.");
         throw new OperationUnavailableError(
           "Couldn’t check these projects. Run the dry run again.",
         );
@@ -545,8 +549,12 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     async command(input: CloudMoveCommand) {
       requireEnabled();
       const first = readMove(input.moveId);
-      if (input.action === "retry" && first.state === "rolled_back" && active !== null)
-        throw new OperationUnavailableError("Pause the running move before retrying this project.");
+      if (
+        (input.action === "retry" || input.action === "skip") &&
+        first.state === "rolled_back" &&
+        active !== null
+      )
+        throw new OperationUnavailableError("Wait for the running move to finish, then try again.");
       // Commands keep their priority over a read-only export, including a queued one.
       for (const read of preflightReads) read.abort();
       if (input.action === "pause" && BEFORE_COMMIT.has(first.state)) {

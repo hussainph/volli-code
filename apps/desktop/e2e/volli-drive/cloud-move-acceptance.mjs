@@ -105,6 +105,9 @@ async function openTicket(key) {
   const fresh = await drive("snapshot");
   await drive("act", { gen: fresh.generation, kind: "press", key: "Enter" });
   await wait("Ticket tabs");
+  // A reopened ticket remembers its last Session tab. The card's Enter opens
+  // the ticket surface, not necessarily its body, so select the actual ticket.
+  await click("tab", key);
 }
 const press = (role, name, key, options) => action("press", role, name, { key }, options);
 async function assertPreflightCounts() {
@@ -124,6 +127,39 @@ async function assertPreflightCounts() {
     prepared.text.includes("1 attachment ("),
     `Dry run refused the real fixture\n${prepared.text}`,
   );
+}
+async function waitForEngine(label, predicate, deadline) {
+  let latest;
+  let terminal;
+  await waitUntil(
+    label,
+    async () => {
+      // Fresh UI read, then read-only journal evidence. No patched facts or clock.
+      await drive("snapshot");
+      const rows = await sql(
+        "SELECT m.state,m.paused,m.failure_json,m.report_json,q.state AS queue_state FROM cloud_moves m JOIN cloud_move_queues q USING(queue_id) ORDER BY m.created_at DESC LIMIT 1",
+      );
+      if (rows.length === 0) return false;
+      latest = rows[0];
+      const failure = latest.failure_json === null ? null : JSON.parse(latest.failure_json);
+      if (
+        failure !== null ||
+        (latest.paused !== null && latest.paused !== "network") ||
+        latest.queue_state === "stopped" ||
+        latest.state === "rolled_back" ||
+        (latest.state === "checked" && JSON.parse(latest.report_json)?.ok !== true)
+      ) {
+        terminal = latest;
+        return true;
+      }
+      return latest.paused === null && predicate(latest);
+    },
+    { timeout: Math.max(1, deadline - performance.now()), interval: 5_000 },
+  );
+  // waitUntil retries thrown predicates; assert irreversible failures outside it.
+  proof.terminal = terminal;
+  assert.equal(terminal, undefined, `Engine stopped: ${JSON.stringify(terminal)}`);
+  return latest;
 }
 const send = async (text) => {
   await action("type", "textbox", "Message", { text });
@@ -230,35 +266,72 @@ try {
       { timeout: 60_000, interval: 500 },
     );
     await click("button", "Move");
+    const deadline = performance.now() + 35 * 60_000;
     await wait("Moves to Volli Cloud");
-    let terminal;
-    await waitUntil(
-      "the engine reaches its real result",
-      async () => {
-        // Fresh UI read, then read-only journal evidence. No patched facts or clock.
-        await drive("snapshot");
-        const rows = await sql(
-          "SELECT m.state,m.paused,m.failure_json,m.report_json,q.state AS queue_state,q.profile_step FROM cloud_moves m JOIN cloud_move_queues q USING(queue_id) ORDER BY m.created_at DESC LIMIT 1",
-        );
-        if (rows.length === 0) return false;
-        const row = rows[0];
-        const failure = row.failure_json === null ? null : JSON.parse(row.failure_json);
-        if (
-          failure !== null ||
-          row.paused !== null ||
-          row.queue_state === "stopped" ||
-          row.state === "rolled_back"
-        ) {
-          terminal = row;
-          return true;
-        }
-        return row.state === "checked";
-      },
-      { timeout: 35 * 60_000, interval: 15_000 },
+    await waitForEngine(
+      "the engine reaches its history settling wait",
+      (row) => row.state === "history",
+      deadline,
     );
-    // waitUntil retries thrown predicates; assert irreversible failures outside it.
-    proof.terminal = terminal;
-    assert.equal(terminal, undefined, `Engine stopped: ${JSON.stringify(terminal)}`);
+    await wait("Waiting for file uploads to settle before checking.");
+    await click("button", "Pause");
+    await wait("Resume");
+    await waitUntil(
+      "Pause is durable after its worker stops",
+      async () => {
+        const paused = (
+          await sql(
+            "SELECT m.paused,q.state FROM cloud_moves m JOIN cloud_move_queues q USING(queue_id) ORDER BY m.created_at DESC LIMIT 1",
+          )
+        )[0];
+        return paused?.paused === "paused" && paused.state === "stopped";
+      },
+      { timeout: 60_000, interval: 500 },
+    );
+    await drive("screenshot", { name: "durable-pause" });
+    await click("button", "Resume");
+    await waitUntil(
+      "Resume restarts the durable queue",
+      async () => {
+        const resumed = (
+          await sql(
+            "SELECT m.paused,m.failure_json,q.state FROM cloud_moves m JOIN cloud_move_queues q USING(queue_id) ORDER BY m.created_at DESC LIMIT 1",
+          )
+        )[0];
+        return (
+          resumed?.state === "running" ||
+          (resumed?.failure_json != null && JSON.parse(resumed.failure_json) !== null)
+        );
+      },
+      { timeout: 60_000, interval: 500 },
+    );
+    await waitForEngine(
+      "the engine resumes",
+      (row) => row.state === "history" || row.state === "checked",
+      deadline,
+    );
+    await click("button", "Close");
+    await wait("Move Project is read-only while it moves to Volli Cloud.");
+    await click("button", "Home", { first: true });
+    const navigation = await drive("snapshot");
+    assert.ok(
+      visibleControls(navigation.text, "button", "Move to Volli Cloud progress").length === 1,
+    );
+    assert.ok(navigation.text.includes("Move Project is read-only while it moves to Volli Cloud."));
+    await drive("screenshot", { name: "read-only-banner-and-durable-row" });
+    await click("button", "Move to Volli Cloud progress");
+    await wait("Moves to Volli Cloud");
+    proof.recovery = {
+      pauseDurable: true,
+      resumed: true,
+      banner: true,
+      rowSurvivedNavigation: true,
+    };
+    await waitForEngine(
+      "the engine reaches its real result",
+      (row) => row.state === "checked",
+      deadline,
+    );
     await wait("Finish move");
     const result = (
       await sql(
@@ -277,12 +350,37 @@ try {
       (await sql("SELECT state FROM cloud_moves ORDER BY created_at DESC LIMIT 1"))[0].state,
       "confirmed",
     );
+    proof.confirmed = true;
     await drive("restart", { reason: "Open the moved project in Volli Cloud (supervised)" });
     await wait(MOVE_PROJECT.name);
     await click("button", "Home", { first: true });
     await openTicket("MOV-1");
-    await wait("move-proof.png");
-    await click("button", "Move proof before the move", { contains: true, first: true });
+    await wait("Moved attachment");
+    const imageHash = launched.seeded.attachment.blobHash;
+    await waitUntil(
+      "the moved attachment renders through the cloud reader",
+      async () => {
+        const image = await drive("snapshot");
+        return (
+          image.text.includes('img "Moved attachment"') &&
+          !image.text.includes("Image could not be loaded") &&
+          store.requests.some(
+            (item) =>
+              item.method === "GET" &&
+              item.sha256 === imageHash &&
+              item.origin === "volli-app://bundle",
+          )
+        );
+      },
+      { timeout: 60_000, interval: 500 },
+    );
+    await drive("screenshot", { name: "moved-attachment-rendered" });
+    const image = await drive("snapshot");
+    assert.ok(image.text.includes('img "Moved attachment"'));
+    assert.ok(!image.text.includes("Image could not be loaded"));
+    // This fixture has exactly one Session. Its auto-title comes from the
+    // ticket, not the first message; choose the actual Session list entry.
+    await click("button", "azure-openai-responses · Idle", { contains: true, first: true });
     await wait("fake-agent: Move proof before the move");
     const after = await sql(
       "SELECT projects.id, projects.path, tickets.worktree_path FROM projects LEFT JOIN tickets ON tickets.project_id=projects.id WHERE projects.id='" +
@@ -294,18 +392,66 @@ try {
       proof.beforePaths,
       "handover reused the existing folder and Working copy",
     );
-    return { transcriptRead: true, attachmentListed: true, foldersReused: true };
+    return { transcriptRead: true, attachmentRendered: true, foldersReused: true };
   });
-  await step("Resume the moved Session and create another Session", async () => {
-    await send("Move proof after the move");
-    await click("button", "New chat", { first: true });
-    await send("New cloud Session after move");
-    return { resumed: true, newSession: true };
+  let sessionWriteError;
+  try {
+    await step("Resume the moved Session and create another Session", async () => {
+      await send("Move proof after the move");
+      await click("button", "New chat", { first: true });
+      await send("New cloud Session after move");
+      return { resumed: true, newSession: true };
+    });
+  } catch (error) {
+    // Keep the actual failure, but still prove the escape hatch on this same
+    // moved project. The whole journey remains failed if either path fails.
+    sessionWriteError = error;
+    proof.sessionWriteError = error.stack;
+    await drive("screenshot", { name: "cloud-session-write-failed" });
+  }
+  await step("Go back to local keeps the cloud copy and saves a readable export", async () => {
+    await click("button", "Settings", { first: true });
+    await wait("Settings categories");
+    await click("button", "Volli Cloud", { first: true });
+    await click("button", "Progress and local copies");
+    await click("button", "Go back to local");
+    await wait("Volli Cloud keeps its copy.");
+    await drive("screenshot", { name: "go-back-confirmation-and-export-location" });
+    await click("button", "Go back to local");
+    await wait("Cloud changes saved to:");
+    const returned = (
+      await sql("SELECT state,journal_json FROM cloud_moves ORDER BY created_at DESC LIMIT 1")
+    )[0];
+    assert.equal(returned.state, "returned");
+    const directory = await fs.realpath(JSON.parse(returned.journal_json).returnedExport);
+    assert.ok(directory.startsWith((await fs.realpath(entry.scratch)) + "/"));
+    const saved = JSON.parse(await fs.readFile(join(directory, "cloud-changes.json"), "utf8"));
+    assert.equal(saved.format, "volli.cloud-changes/1");
+    assert.match(
+      await fs.readFile(join(directory, "cloud-changes.md"), "utf8"),
+      /Changes made in Volli Cloud/u,
+    );
+    const client = new ConvexHttpClient(fixture.convexUrl);
+    client.setAuth(token);
+    const retained = await client.query(makeFunctionReference("projects:get"), {
+      projectId: MOVE_PROJECT.id,
+    });
+    assert.equal(retained.id, MOVE_PROJECT.id);
+    const cursors = await sql(
+      "SELECT session_id FROM session_drain_cursors WHERE session_id='" + proof.sessionId + "'",
+    );
+    assert.deepEqual(cursors, []);
+    return {
+      localUnlocked: true,
+      cloudCopyRetained: true,
+      readableExport: true,
+      movedCursorReleased: true,
+    };
   });
+  if (sessionWriteError !== undefined) throw sessionWriteError;
   const doctor = await drive("doctor");
   assert.ok(doctor.ok, JSON.stringify(doctor.problems));
   assert.deepEqual(store.problems, []);
-  proof.requests = store.requests;
 } catch (error) {
   failed = true;
   proof.error = error.stack;
@@ -342,6 +488,7 @@ try {
       failed = true;
   }
   if (store) {
+    proof.requests = store.requests;
     proof.storeCleanup = await store.close();
     if (proof.storeCleanup.problems.length > 0) failed = true;
   }

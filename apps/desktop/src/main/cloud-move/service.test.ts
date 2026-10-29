@@ -355,7 +355,7 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     });
     await f.service.resume();
     await vi.waitFor(() => expect(f.run).toHaveBeenCalled());
-    await expect(f.service.preflight(f.input)).rejects.toThrow("Pause the running move");
+    await expect(f.service.preflight(f.input)).rejects.toThrow("Wait for the running move");
     expect(interrupted).toBe(false);
     expect(f.prepare).not.toHaveBeenCalled();
     await f.service.dispose();
@@ -378,7 +378,7 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
     const rollback = vi.spyOn(f.engine, "rollBack").mockResolvedValue(row);
     await f.service.command({ moveId: row.moveId, action: "cancel" });
-    expect(await reading).toMatchObject({ name: "AbortError" });
+    expect(await reading).toMatchObject({ message: "The dry run was cancelled. Run it again." });
     expect(rollback).toHaveBeenCalledOnce();
   });
   it("does not interrupt another project's move to dry-run a retry", async () => {
@@ -405,9 +405,13 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     });
     await f.service.resume();
     await vi.waitFor(() => expect(f.run).toHaveBeenCalled());
-    await expect(f.service.command({ moveId: old.moveId, action: "retry" })).rejects.toThrow(
-      "Pause the running move",
-    );
+    const waiting = (await f.service.snapshot()).moves.find((move) => move.moveId === old.moveId);
+    expect(waiting?.actions).toEqual([]);
+    expect(waiting?.message).toContain("Retry after the running move finishes.");
+    for (const action of ["retry", "skip"] as const)
+      await expect(f.service.command({ moveId: old.moveId, action })).rejects.toThrow(
+        "Wait for the running move",
+      );
     expect(interrupted).toBe(false);
     expect(f.prepare).not.toHaveBeenCalled();
     await f.service.dispose();
