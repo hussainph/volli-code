@@ -19,13 +19,29 @@ async function flush() {
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe("durable move view binding", () => {
+  it("keeps sheet navigation and refresh harmless before a binding exists", () => {
+    useCloudMovesStore.getState().refresh();
+    prepareCloudMove();
+    expect(useCloudMovesStore.getState().sheet).toMatchObject({ kind: "prepare" });
+    expect(useCloudMovesStore.getState().sheet).not.toHaveProperty("projectIds");
+    showCloudMoves();
+    expect(useCloudMovesStore.getState().sheet).toMatchObject({ kind: "progress" });
+    showCloudMoves("queue", "move");
+    expect(useCloudMovesStore.getState().sheet).toMatchObject({
+      queueId: "queue",
+      cancelMoveId: "move",
+    });
+    closeCloudMoves();
+  });
   it("keeps a failed feed visible until retry re-subscribes, ignoring the old stream afterwards", async () => {
     const api = fakeApi();
     stops.push(bindCloudMoves(api));
@@ -39,6 +55,10 @@ describe("durable move view binding", () => {
     await flush();
     expect(api.onChanged).toHaveBeenCalledTimes(2);
     api.onChanged.mock.calls[0]![1]!();
+    const reads = api.snapshot.mock.calls.length;
+    api.onChanged.mock.calls[0]![0]();
+    await flush();
+    expect(api.snapshot).toHaveBeenCalledTimes(reads);
     expect(useCloudMovesStore.getState().error).toBeNull();
   });
   it("reads persisted moves on startup, follows changes and keeps them when the sheet closes", async () => {
@@ -85,10 +105,33 @@ describe("durable move view binding", () => {
     api.snapshot.mockReturnValue(old.promise);
     const stop = bindCloudMoves(api);
     stop();
+    api.onChanged.mock.calls[0]![0]();
+    api.onChanged.mock.calls[0]![1]!();
+    useCloudMovesStore.getState().refresh();
+    expect(api.snapshot).toHaveBeenCalledOnce();
     old.resolve({ ...snapshot, moves: [move] });
     await flush();
     expect(useCloudMovesStore.getState().snapshot).toBeNull();
     expect(useCloudMovesStore.getState().api).toBeNull();
+  });
+  it("ignores superseded and disposed read failures", async () => {
+    const api = fakeApi();
+    const superseded = deferred<CloudMoveSnapshot>();
+    api.snapshot.mockReturnValueOnce(superseded.promise);
+    const stop = bindCloudMoves(api);
+    api.onChanged.mock.calls[0]![0]();
+    await flush();
+    superseded.reject(new Error("late old read"));
+    await flush();
+    expect(useCloudMovesStore.getState().error).toBeNull();
+    const disposed = deferred<CloudMoveSnapshot>();
+    api.snapshot.mockReturnValueOnce(disposed.promise);
+    api.onChanged.mock.calls[0]![0]();
+    stop();
+    disposed.reject(new Error("late disposed read"));
+    await flush();
+    expect(useCloudMovesStore.getState().error).toBeNull();
+    expect(useCloudMovesStore.getState().snapshot).toBeNull();
   });
   it("keeps the last journal visible on read failure, with a retry", async () => {
     const api = fakeApi();

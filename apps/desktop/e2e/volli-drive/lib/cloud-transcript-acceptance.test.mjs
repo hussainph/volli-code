@@ -41,9 +41,10 @@ test("the fixture accepts real history and write-once move signatures, HEAD, lis
     { convexUrl: `http://127.0.0.1:${configServer.address().port}`, adminKey: "fixture-only" },
     report,
   );
+  let expectedRejections = 0;
   t.after(async () => {
     const closed = await store.close();
-    assert.deepEqual(closed.problems, []);
+    assert.equal(closed.problems.length, expectedRejections);
   });
   // These are the throwaway store's generated keys, never a deployment credential.
   const config = {
@@ -66,6 +67,7 @@ test("the fixture accepts real history and write-once move signatures, HEAD, lis
     headers: { ...headers, "if-none-match": "*" },
   });
   assert.equal((await issueSignedRequest(once, body)).response.status, 200);
+  assert.equal(store.requests.at(-1).verification, "move");
   assert.equal((await issueSignedRequest(once, body)).response.status, 412);
   const head = await issueSignedRequest(
     presignS3Request({
@@ -92,6 +94,7 @@ test("the fixture accepts real history and write-once move signatures, HEAD, lis
     ).response.status,
     200,
   );
+  assert.equal(store.requests.at(-1).verification, "history");
   const page = await issueSignedRequest(
     presignS3ListObjects({
       ...config,
@@ -132,4 +135,33 @@ test("the fixture accepts real history and write-once move signatures, HEAD, lis
     404,
   );
   assert.deepEqual(store.problems, []);
+  const before = new Map(store.objects);
+  const accepted = store.requests.length;
+  const downgraded = { ...once, headers: { ...once.headers } };
+  delete downgraded.headers["if-none-match"];
+  const readSignature = presignS3Request({ ...config, key: historyKey, method: "GET" });
+  const changedRoute = new URL(readSignature.url);
+  changedRoute.searchParams.set("list-type", "2");
+  const plain = presignS3Request({ ...config, key: historyKey, method: "PUT", headers });
+  const invalid = [
+    {
+      signed: { url: `${store.endpoint}/${config.bucket}?list-type=2`, method: "GET", headers: {} },
+    },
+    { signed: { ...readSignature, method: "DELETE" } },
+    { signed: downgraded, payload: body },
+    { signed: { ...plain, headers: { ...plain.headers, "if-none-match": "*" } }, payload: body },
+    { signed: { ...readSignature, url: changedRoute.toString() } },
+  ];
+  expectedRejections = invalid.length;
+  for (const item of invalid)
+    assert.equal((await issueSignedRequest(item.signed, item.payload)).response.status, 400);
+  assert.deepEqual(
+    store.objects,
+    before,
+    "unauthenticated routing cannot read, replace or purge objects",
+  );
+  assert.equal(store.requests.length, accepted, "no unauthenticated operation was accepted");
+  assert.equal(store.problems.length, expectedRejections);
+  assert.ok(store.problems[1].error.includes("Invalid S3 signature"));
+  assert.ok(store.problems.every((item) => item.path?.startsWith(`/${config.bucket}`)));
 });

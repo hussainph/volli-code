@@ -56,6 +56,44 @@ async function tableRows(fixture, table, sessionId) {
   throw new Error(`Unexpectedly large throwaway backend table: ${table}`);
 }
 
+/** Authenticate before dispatch: every supported operation must pass a full SigV4 verifier. */
+function verifyStoreRequest(request, url, config) {
+  const verifiers = [
+    () => ({ kind: "list", verification: "list", list: verifyS3ListRequest(request, url, config) }),
+    () => ({
+      kind: "object",
+      verification: "read",
+      key: verifyS3ReadRequest(request, url, config),
+    }),
+    () => ({
+      kind: "object",
+      verification: "move",
+      key: verifyS3MoveRequest(request, url, config),
+    }),
+    () => {
+      const key = verifyS3Request(request, url, config);
+      assert.equal(
+        request.headers["if-none-match"],
+        undefined,
+        "Conditional PUT must sign If-None-Match",
+      );
+      return { kind: "object", verification: "history", key };
+    },
+  ];
+  const refusals = [];
+  for (const verify of verifiers) {
+    try {
+      return verify();
+    } catch (error) {
+      refusals.push(error);
+    }
+  }
+  throw new AggregateError(
+    refusals,
+    `S3 request rejected: ${refusals.map((error) => error.message).join("; ")}`,
+  );
+}
+
 /** A same-process, bounded, path-style S3 bucket with renderer CORS support. */
 export async function startTranscriptStore(fixture, reportDir) {
   const credentials = {
@@ -73,6 +111,7 @@ export async function startTranscriptStore(fixture, reportDir) {
     (request, response) => {
       void (async () => {
         let key = null;
+        let path = null;
         // Production's renderer fetches from the store, not from Convex. Handle
         // real Chromium CORS/preflight as an S3-compatible deployment would.
         response.setHeader("access-control-allow-origin", "*");
@@ -84,9 +123,17 @@ export async function startTranscriptStore(fixture, reportDir) {
         );
         try {
           const url = new URL(request.url, endpoint);
+          path = url.pathname;
           const config = { ...credentials, bucket, region: "auto" };
-          if (request.method === "GET" && url.searchParams.get("list-type") === "2") {
-            const list = verifyS3ListRequest(request, url, config);
+          // CORS preflight grants no access to the bucket or its objects.
+          if (request.method === "OPTIONS") {
+            assert.ok(url.pathname.startsWith(`/${bucket}/v1/`));
+            response.writeHead(204).end();
+            return;
+          }
+          const verified = verifyStoreRequest(request, url, config);
+          if (verified.kind === "list") {
+            const list = verified.list;
             const offset = Number(list.continuationToken ?? 0);
             assert.ok(Number.isSafeInteger(offset) && offset >= 0, "Invalid list continuation");
             const all = [...objects.keys()]
@@ -110,6 +157,7 @@ export async function startTranscriptStore(fixture, reportDir) {
               );
             requests.push({
               method: "LIST",
+              verification: verified.verification,
               key: list.prefix,
               bytes: 0,
               sha256: null,
@@ -118,28 +166,19 @@ export async function startTranscriptStore(fixture, reportDir) {
             return;
           }
           assert.ok(url.pathname.startsWith(`/${bucket}/v1/`));
-          key = decodeURIComponent(url.pathname.slice(bucket.length + 2));
+          key = verified.key;
           assert.ok(
             key
               .split("/")
               .every((part) => /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(part) && !part.includes("..")),
           );
-          if (request.method === "OPTIONS") {
-            response.writeHead(204).end();
-            return;
-          }
-          key =
-            request.method === "HEAD" || request.method === "GET"
-              ? verifyS3ReadRequest(request, url, config)
-              : request.method === "DELETE" || request.headers["if-none-match"] === "*"
-                ? verifyS3MoveRequest(request, url, config)
-                : verifyS3Request(request, url, config);
           if (request.method === "DELETE") {
             const previous = objects.get(key);
             objects.delete(key);
             totalBytes -= previous?.length ?? 0;
             requests.push({
               method: "DELETE",
+              verification: verified.verification,
               key,
               bytes: previous?.length ?? 0,
               sha256: null,
@@ -187,6 +226,7 @@ export async function startTranscriptStore(fixture, reportDir) {
           }
           requests.push({
             method: request.method,
+            verification: verified.verification,
             key,
             bytes: body.length,
             sha256: sha256(body),
@@ -202,7 +242,7 @@ export async function startTranscriptStore(fixture, reportDir) {
               })
               .end(request.method === "HEAD" ? undefined : body);
         } catch (error) {
-          problems.push({ method: request.method, key, error: error.message });
+          problems.push({ method: request.method, key, path, error: error.message });
           if (!response.headersSent) response.writeHead(400);
           response.end("Object-store boundary rejected the request");
         }
