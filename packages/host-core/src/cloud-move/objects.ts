@@ -11,6 +11,7 @@
  * reaches the step as `object_refused`, and a 5xx, 408, 429 or a lost
  * connection is the network, retried by the engine.
  */
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 
 import type { MoveBackend, MoveObjectStore, StoredObject } from "./ports";
@@ -24,6 +25,12 @@ interface SignedRequest {
 /** Long enough for a large blob on a slow uplink; the URL itself is checked when the request starts. */
 const MIN_TIMEOUT_MS = 2 * 60_000;
 const BYTES_PER_MS = 64; // 64 KB/s, the slowest uplink a move waits for.
+/**
+ * No request outlives this: a cancelled move's purge deletes its objects 30
+ * minutes after the abort, so an upload still streaming past that would land
+ * after the purge. A larger object on a slower link fails and is retried.
+ */
+const MAX_TIMEOUT_MS = 20 * 60_000;
 
 function refused(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 429;
@@ -73,7 +80,9 @@ export function presignedMoveObjects(options: {
         method: "PUT",
         headers: request.headers,
         body: payload,
-        signal: AbortSignal.timeout(Math.max(MIN_TIMEOUT_MS, object.bytes / BYTES_PER_MS)),
+        signal: AbortSignal.timeout(
+          Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, object.bytes / BYTES_PER_MS)),
+        ),
         ...(source instanceof Uint8Array ? {} : { duplex: "half" }),
       } as RequestInit);
       await response.arrayBuffer().catch(() => undefined);
@@ -99,12 +108,12 @@ export function presignedMoveObjects(options: {
       };
     },
 
-    async get(moveId, key) {
+    async digest(moveId, key) {
       const request = await signedRead(moveId, key, "GET");
       const response = await fetchImpl(request.url, {
         method: "GET",
         headers: request.headers,
-        signal: AbortSignal.timeout(MIN_TIMEOUT_MS * 5),
+        signal: AbortSignal.timeout(MAX_TIMEOUT_MS),
       });
       if (response.status === 404) {
         await response.arrayBuffer().catch(() => undefined);
@@ -112,7 +121,14 @@ export function presignedMoveObjects(options: {
       }
       if (refused(response.status)) throw refusal(response.status);
       if (!response.ok) throw new Error(`The object store answered ${response.status}.`);
-      return new Uint8Array(await response.arrayBuffer());
+      // Hashed as it streams: an object is never held whole in memory.
+      const hash = createHash("sha256");
+      let bytes = 0;
+      for await (const chunk of response.body ?? new ReadableStream<Uint8Array>()) {
+        hash.update(chunk);
+        bytes += chunk.length;
+      }
+      return { bytes, sha256: hash.digest("hex") };
     },
   };
 }

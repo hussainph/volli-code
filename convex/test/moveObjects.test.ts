@@ -65,9 +65,10 @@ describe("presignedMoveObjects", () => {
       bytes: bytes.length,
       sha256: object.sha256,
     });
-    expect(Buffer.from((await objects.get(world.moveId, object.key))!).toString()).toBe(
-      "an attachment",
-    );
+    expect(await objects.digest(world.moveId, object.key)).toEqual({
+      bytes: bytes.length,
+      sha256: object.sha256,
+    });
     expect(store.keys()).toEqual([object.key]);
   });
 
@@ -91,7 +92,7 @@ describe("presignedMoveObjects", () => {
     const { world, objects } = await open();
     const key = migrationKey(world.moveId, "absent.json");
     expect(await objects.head(world.moveId, key)).toBeNull();
-    expect(await objects.get(world.moveId, key)).toBeNull();
+    expect(await objects.digest(world.moveId, key)).toBeNull();
   });
 
   test("bytes that are not what was signed are refused by the store", async () => {

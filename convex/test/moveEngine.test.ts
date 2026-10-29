@@ -4,7 +4,7 @@
  * move is interrupted, refused, rolled back or taken back. The kill/resume
  * matrix itself is `moveEngine.matrix.test.ts` (ci-extended).
  */
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -158,6 +158,52 @@ describe("Session history", () => {
     expect(Math.max(...waits)).toBeGreaterThan(5 * 60_000);
     const verify = engine.journal.move(moveId)!.report!.verify as { objects: { checked: number } };
     expect(verify.objects.checked).toBeGreaterThanOrEqual(history.length);
+  });
+
+  test("a write landing while the check waits out the last URL is caught", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const engine = world.engine({
+      ports: {
+        // The wait before the check: a stale URL's upload lands during it.
+        sleep: async (ms) => {
+          if (ms < 5 * 60_000) return;
+          const key = [...world!.objects.objects.keys()].find((k) => k.includes("/pi/"));
+          world!.objects.objects.set(key!, new TextEncoder().encode("late"));
+        },
+      },
+    });
+    await engine.run(queueId);
+    expect(engine.journal.move(moveId)).toMatchObject({
+      state: "rolled_back",
+      failure: { code: "verification_failed" },
+    });
+  });
+
+  test("a URL signed and never used, and a journal line a crash tore, do not fail the move", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const engine = world.engine({
+      ports: {
+        faults: async (point) => {
+          if (point !== "history.session") return;
+          const file = join(world!.root, "cloud-moves", moveId, "history-signed.ndjson");
+          appendFileSync(
+            file,
+            `${JSON.stringify({
+              key: `v1/p/${world!.projectId}/s/${"7a1f0c2e-0000-4000-8000-000000000031"}/tx/000000000001-000000000002.pack.zst`,
+              bytes: 1,
+              sha256: "a".repeat(64),
+              at: Date.now(),
+            })}\n{"key":"v1/p/torn`,
+          );
+        },
+      },
+    });
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    const move = engine.journal.move(moveId)!;
+    expect(move.state).toBe("checked");
+    expect(move.report).toMatchObject({ verify: { objects: { signedNotStored: 1 } } });
   });
 
   test("a history object changed after its upload fails the check and rolls the move back", async () => {

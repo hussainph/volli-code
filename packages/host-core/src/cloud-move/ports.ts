@@ -45,7 +45,8 @@ export interface MoveObjectStore {
     body: () => Promise<Uint8Array | NodeJS.ReadableStream>,
   ): Promise<"stored" | "exists">;
   head(moveId: string, key: string): Promise<StoredObject | null>;
-  get(moveId: string, key: string): Promise<Uint8Array | null>;
+  /** Reads an object whole, hashing it as it streams (never held in memory). */
+  digest(moveId: string, key: string): Promise<{ bytes: number; sha256: string } | null>;
 }
 
 /** One moved Session, as its history upload needs it. */
