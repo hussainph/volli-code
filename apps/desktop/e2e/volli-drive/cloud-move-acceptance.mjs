@@ -107,6 +107,24 @@ async function openTicket(key) {
   await wait("Ticket tabs");
 }
 const press = (role, name, key, options) => action("press", role, name, { key }, options);
+async function assertPreflightCounts() {
+  let prepared;
+  await waitUntil(
+    "the real dry run returns counts or a named refusal",
+    async () => {
+      prepared = await drive("snapshot");
+      return (
+        prepared.text.includes("1 attachment (") ||
+        prepared.text.includes("Counts unavailable until this problem is resolved.")
+      );
+    },
+    { timeout: 60_000, interval: 500 },
+  );
+  assert.ok(
+    prepared.text.includes("1 attachment ("),
+    `Dry run refused the real fixture\n${prepared.text}`,
+  );
+}
 const send = async (text) => {
   await action("type", "textbox", "Message", { text });
   await press("textbox", "Message", "Enter");
@@ -164,6 +182,19 @@ try {
     proof.beforePaths = paths;
     return { sessionId: sessions[0].id, hasWorktree: true };
   });
+  await step("Quiet project-menu entry and single-project dry run", async () => {
+    await press("button", "MP", "Shift+F10", { first: true });
+    await click("menuitem", "Move to Volli Cloud…");
+    await assertPreflightCounts();
+    await drive("screenshot", { name: "project-menu-preflight" });
+    await click("button", "Cancel");
+    assert.deepEqual(
+      await sql("SELECT move_id FROM cloud_moves"),
+      [],
+      "the dry run starts no move",
+    );
+    return { entry: "project menu", dryRunOnly: true };
+  });
   await step("Sign in, without leaving the local launch", async () => {
     await click("button", "Settings", { first: true });
     await wait("Settings categories");
@@ -189,22 +220,7 @@ try {
     await click("button", "Volli Cloud", { first: true });
     await click("button", "Move all projects…");
     await wait("Stop at the first problem");
-    let prepared;
-    await waitUntil(
-      "the real dry run returns counts or a named refusal",
-      async () => {
-        prepared = await drive("snapshot");
-        return (
-          prepared.text.includes("1 attachment (") ||
-          prepared.text.includes("Counts unavailable until this problem is resolved.")
-        );
-      },
-      { timeout: 60_000, interval: 500 },
-    );
-    assert.ok(
-      prepared.text.includes("1 attachment ("),
-      `Dry run refused the real fixture\n${prepared.text}`,
-    );
+    await assertPreflightCounts();
     await waitUntil(
       "Move is ready after the Workspace-bound dry run",
       async () =>
@@ -215,26 +231,34 @@ try {
     );
     await click("button", "Move");
     await wait("Moves to Volli Cloud");
+    let terminal;
     await waitUntil(
       "the engine reaches its real result",
       async () => {
         // Fresh UI read, then read-only journal evidence. No patched facts or clock.
         await drive("snapshot");
         const rows = await sql(
-          "SELECT state, paused, failure_json, report_json FROM cloud_moves ORDER BY created_at DESC LIMIT 1",
+          "SELECT m.state,m.paused,m.failure_json,m.report_json,q.state AS queue_state,q.profile_step FROM cloud_moves m JOIN cloud_move_queues q USING(queue_id) ORDER BY m.created_at DESC LIMIT 1",
         );
         if (rows.length === 0) return false;
         const row = rows[0];
-        assert.equal(
-          row.failure_json === null ? null : JSON.parse(row.failure_json),
-          null,
-          `Move failed: ${row.failure_json}`,
-        );
-        assert.equal(row.paused, null, `Move paused: ${row.paused}`);
+        const failure = row.failure_json === null ? null : JSON.parse(row.failure_json);
+        if (
+          failure !== null ||
+          row.paused !== null ||
+          row.queue_state === "stopped" ||
+          row.state === "rolled_back"
+        ) {
+          terminal = row;
+          return true;
+        }
         return row.state === "checked";
       },
       { timeout: 35 * 60_000, interval: 15_000 },
     );
+    // waitUntil retries thrown predicates; assert irreversible failures outside it.
+    proof.terminal = terminal;
+    assert.equal(terminal, undefined, `Engine stopped: ${JSON.stringify(terminal)}`);
     await wait("Finish move");
     const result = (
       await sql(

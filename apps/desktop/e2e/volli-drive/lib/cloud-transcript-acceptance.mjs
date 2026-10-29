@@ -13,7 +13,12 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
-import { verifyS3Request } from "../../../../../convex/fixture/s3-boundary.ts";
+import {
+  verifyS3Request,
+  verifyS3MoveRequest,
+  verifyS3ReadRequest,
+  verifyS3ListRequest,
+} from "../../../../../convex/fixture/s3-boundary.ts";
 import { waitUntil } from "../../lib/smoke-kit.mjs";
 
 const exec = promisify(execFile);
@@ -71,7 +76,7 @@ export async function startTranscriptStore(fixture, reportDir) {
         // Production's renderer fetches from the store, not from Convex. Handle
         // real Chromium CORS/preflight as an S3-compatible deployment would.
         response.setHeader("access-control-allow-origin", "*");
-        response.setHeader("access-control-allow-methods", "GET, HEAD, PUT, OPTIONS");
+        response.setHeader("access-control-allow-methods", "GET, HEAD, PUT, DELETE, OPTIONS");
         response.setHeader("access-control-allow-headers", "*");
         response.setHeader(
           "access-control-expose-headers",
@@ -79,6 +84,39 @@ export async function startTranscriptStore(fixture, reportDir) {
         );
         try {
           const url = new URL(request.url, endpoint);
+          const config = { ...credentials, bucket, region: "auto" };
+          if (request.method === "GET" && url.searchParams.get("list-type") === "2") {
+            const list = verifyS3ListRequest(request, url, config);
+            const offset = Number(list.continuationToken ?? 0);
+            assert.ok(Number.isSafeInteger(offset) && offset >= 0, "Invalid list continuation");
+            const all = [...objects.keys()]
+              .filter((name) => name.startsWith(list.prefix))
+              .toSorted();
+            const page = all.slice(offset, offset + list.maxKeys);
+            const truncated = offset + page.length < all.length;
+            const contents = page
+              .map(
+                (name) =>
+                  `<Contents><Key>${encodeURIComponent(name)}</Key><Size>${objects.get(name).length}</Size></Contents>`,
+              )
+              .join("");
+            const next = truncated
+              ? `<NextContinuationToken>${offset + page.length}</NextContinuationToken>`
+              : "";
+            response
+              .writeHead(200, { "content-type": "application/xml" })
+              .end(
+                `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>${truncated}</IsTruncated>${contents}${next}</ListBucketResult>`,
+              );
+            requests.push({
+              method: "LIST",
+              key: list.prefix,
+              bytes: 0,
+              sha256: null,
+              origin: null,
+            });
+            return;
+          }
           assert.ok(url.pathname.startsWith(`/${bucket}/v1/`));
           key = decodeURIComponent(url.pathname.slice(bucket.length + 2));
           assert.ok(
@@ -90,7 +128,26 @@ export async function startTranscriptStore(fixture, reportDir) {
             response.writeHead(204).end();
             return;
           }
-          key = verifyS3Request(request, url, { ...credentials, bucket, region: "auto" });
+          key =
+            request.method === "HEAD" || request.method === "GET"
+              ? verifyS3ReadRequest(request, url, config)
+              : request.method === "DELETE" || request.headers["if-none-match"] === "*"
+                ? verifyS3MoveRequest(request, url, config)
+                : verifyS3Request(request, url, config);
+          if (request.method === "DELETE") {
+            const previous = objects.get(key);
+            objects.delete(key);
+            totalBytes -= previous?.length ?? 0;
+            requests.push({
+              method: "DELETE",
+              key,
+              bytes: previous?.length ?? 0,
+              sha256: null,
+              origin: null,
+            });
+            response.writeHead(204).end();
+            return;
+          }
           let body;
           if (request.method === "PUT") {
             if (request.headers["if-none-match"] === "*" && objects.has(key)) {

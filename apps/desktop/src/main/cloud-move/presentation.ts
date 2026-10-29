@@ -111,6 +111,7 @@ const FAILURE_COPY: Readonly<Record<string, string>> = {
   legacy_outside_project: "An older record in the prepared copy belongs to another project.",
   // The move itself.
   object_conflict: "A file did not match the one Volli Cloud already had.",
+  object_refused: "Volli Cloud refused a file upload.",
   rows_refused: "Volli Cloud refused some records.",
   history_incomplete: "A Session's history could not be copied whole.",
   verification_failed: "A check did not match.",

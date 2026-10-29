@@ -82,6 +82,7 @@ const FAILURE_CODES = [
   "object_key",
   "legacy_outside_project",
   "object_conflict",
+  "object_refused",
   "rows_refused",
   "history_incomplete",
   "verification_failed",
