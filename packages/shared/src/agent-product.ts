@@ -462,6 +462,10 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
     why: "Volli Cloud has not received this Session's start yet, so it cannot act for it.",
     next: "Wait a few seconds and retry the same command once.",
   },
+  BUSY: {
+    why: "Volli Cloud was busy with concurrent changes to the same board or Session and applied nothing, even after the runner retried.",
+    next: "Retry the same command once; nothing was written.",
+  },
   SIGN_IN_REQUIRED: {
     why: "Board and Session verbs in Volli Cloud act for a Session's owner, and this caller is not a Volli Session; the CLI holds no sign-in of its own.",
     next: "Run the command from inside a Volli Session, or use the app.",

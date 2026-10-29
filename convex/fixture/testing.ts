@@ -3,7 +3,7 @@
  * uses: the deployed fixture backend, signed in as anyone.
  */
 
-import { ConvexHttpClient } from "convex/browser";
+import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import type { FunctionReference, FunctionReturnType, OptionalRestArgs } from "convex/server";
 
 import { mintTestToken, type MintOptions } from "./jwt.ts";
@@ -29,6 +29,20 @@ export function connectBackend() {
     client(subject?: string, options?: MintOptions): ConvexHttpClient {
       const client = new ConvexHttpClient(url);
       if (subject !== undefined) client.setAuth(mintTestToken(privateKeyPem, subject, options));
+      return client;
+    },
+    /**
+     * A WebSocket client signed in as `subject`: the transport a desktop
+     * window writes the board through. Unlike the HTTP client, it answers a
+     * mutation that exhausted the backend's concurrency retries by closing
+     * the socket (1013) and resending the mutation once it reconnects. Each
+     * socket runs its mutations in order, so concurrent writers need one
+     * each. Close it when done.
+     */
+    socket(subject: string, options?: MintOptions): ConvexClient {
+      const client = new ConvexClient(url);
+      const token = mintTestToken(privateKeyPem, subject, options);
+      client.setAuth(async () => token);
       return client;
     },
     /**

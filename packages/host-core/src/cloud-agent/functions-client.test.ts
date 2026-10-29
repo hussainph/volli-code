@@ -4,8 +4,10 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  CloudContentionError,
   CloudFunctionError,
   CloudOfflineError,
+  CONVEX_OCC_CODE,
   createCloudFunctionsClient,
 } from "./functions-client";
 
@@ -106,6 +108,26 @@ describe("the HTTP functions client", () => {
     await expect(
       createCloudFunctionsClient({ url: bare }).call("query", "x:y", {}, "tok"),
     ).rejects.toMatchObject({ code: "server_error", message: "x:y failed." });
+  });
+
+  it("a mutation that exhausted the backend's concurrency retries is contention: answered, nothing applied", async () => {
+    // The body Convex's HTTP API sends with its 503 (as the pinned backend does).
+    const url = await serve((_request, response) =>
+      json(response, 503, {
+        code: CONVEX_OCC_CODE,
+        message:
+          'Documents read from or written to the "projectCounters" table changed while this mutation was being run and on every subsequent retry. See https://docs.convex.dev/error#1',
+      }),
+    );
+    const error = await createCloudFunctionsClient({ url })
+      .call("mutation", "board:createTicket", {}, "tok")
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CloudContentionError);
+    // A refusal, so no caller reads it as a write that may have landed.
+    expect(error).toBeInstanceOf(CloudFunctionError);
+    expect(error).not.toBeInstanceOf(CloudOfflineError);
+    expect(error).toMatchObject({ name: "CloudContentionError", code: "contention" });
+    expect((error as Error).message).toContain("board:createTicket");
   });
 
   it("a token the deployment does not accept is unauthenticated, not offline", async () => {

@@ -7,11 +7,15 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   AGENT_TOKEN_REFRESH_AT,
+  CONTENTION_BACKOFF_MAX_MS,
+  CONTENTION_BACKOFF_MS,
+  CONTENTION_RETRIES,
   createAgentBackend,
   NotYetSyncedError,
   runnerTokenBefore,
 } from "./agent-backend";
 import {
+  CloudContentionError,
   CloudFunctionError,
   CloudOfflineError,
   type CloudFunctionKind,
@@ -179,6 +183,135 @@ describe("the agent backend", () => {
     await expect(backend.mutation(SESSION, "board:createComment", {})).rejects.toMatchObject({
       delivery: "unknown",
     });
+  });
+
+  it("sends a mutation that lost to concurrent writes again, same arguments, after jittered doubling waits", async () => {
+    let contended = 3;
+    const { client, calls } = scripted((call) => {
+      if (call.path === "agentTokens:mint") return grant();
+      return contended-- > 0 ? new CloudContentionError("busy") : { applied: true };
+    });
+    const slept: number[] = [];
+    const backend = createAgentBackend({
+      functions: client,
+      runnerToken: async () => "runner",
+      connected: () => true,
+      random: () => 0.5,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    const args = { commandId: "c-busy" };
+    await expect(backend.mutation(SESSION, "board:createTicket", args)).resolves.toEqual({
+      applied: true,
+    });
+    const writes = calls.filter((call) => call.path === "board:createTicket");
+    expect(writes).toHaveLength(4);
+    for (const write of writes) expect(write.args).toBe(args);
+    expect(slept).toEqual([
+      CONTENTION_BACKOFF_MS / 2,
+      CONTENTION_BACKOFF_MS,
+      CONTENTION_BACKOFF_MS * 2,
+    ]);
+  });
+
+  it("is bounded: past its retries contention is the answer, and the waits stay under their cap", async () => {
+    const { client, calls } = scripted((call) =>
+      call.path === "agentTokens:mint" ? grant() : new CloudContentionError("busy"),
+    );
+    const slept: number[] = [];
+    const backend = createAgentBackend({
+      functions: client,
+      runnerToken: async () => "runner",
+      connected: () => true,
+      random: () => 0.999,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    const error = await backend
+      .mutation(SESSION, "board:moveTickets", { commandId: "c" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CloudContentionError);
+    expect(error).toMatchObject({ code: "contention" });
+    expect(calls.filter((call) => call.path === "board:moveTickets")).toHaveLength(
+      CONTENTION_RETRIES + 1,
+    );
+    expect(slept).toHaveLength(CONTENTION_RETRIES);
+    expect(Math.max(...slept)).toBeLessThan(CONTENTION_BACKOFF_MAX_MS);
+  });
+
+  it("never waits past the deadline for contention, and never resends a read or another refusal", async () => {
+    let now = 0;
+    const { client, calls } = scripted((call) => {
+      if (call.path === "agentTokens:mint") return grant();
+      if (call.path === "board:createComment") return new CloudFunctionError("not_found", "gone");
+      return new CloudContentionError("busy");
+    });
+    const backend = createAgentBackend({
+      functions: client,
+      runnerToken: async () => "runner",
+      connected: () => true,
+      now: () => now,
+      random: () => 0.5,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    });
+    // Too little time left for a wait and a useful attempt: answered at once.
+    await expect(
+      backend.mutation(SESSION, "board:moveTickets", {}, { deadline: 1_000 }),
+    ).rejects.toBeInstanceOf(CloudContentionError);
+    expect(calls.filter((call) => call.path === "board:moveTickets")).toHaveLength(1);
+    // A query that met contention (it cannot, but a read is never resent).
+    await expect(backend.query(SESSION, "board:roster", {})).rejects.toBeInstanceOf(
+      CloudContentionError,
+    );
+    expect(calls.filter((call) => call.path === "board:roster")).toHaveLength(1);
+    // A function's own refusal is an answer, sent once.
+    await expect(backend.mutation(SESSION, "board:createComment", {})).rejects.toMatchObject({
+      code: "not_found",
+    });
+    expect(calls.filter((call) => call.path === "board:createComment")).toHaveLength(1);
+  });
+
+  it("contention after a timed-out attempt leaves the outcome unknown: the first one may have landed", async () => {
+    const answers: unknown[] = [new CloudOfflineError("timeout", "slow")];
+    const { client } = scripted((call) =>
+      call.path === "agentTokens:mint"
+        ? grant()
+        : (answers.shift() ?? new CloudContentionError("busy")),
+    );
+    const backend = createAgentBackend({
+      functions: client,
+      runnerToken: async () => "runner",
+      connected: () => true,
+      sleep: async () => {},
+    });
+    const error = await backend
+      .mutation(SESSION, "board:createComment", { commandId: "c" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CloudOfflineError);
+    expect(error).toMatchObject({ reason: "timeout", delivery: "unknown" });
+  });
+
+  it("a timeout after contention is still resent once", async () => {
+    const answers: unknown[] = [
+      new CloudContentionError("busy"),
+      new CloudOfflineError("timeout", "slow"),
+      "ok",
+    ];
+    const { client, calls } = scripted((call) =>
+      call.path === "agentTokens:mint" ? grant() : answers.shift(),
+    );
+    const backend = createAgentBackend({
+      functions: client,
+      runnerToken: async () => "runner",
+      connected: () => true,
+      sleep: async () => {},
+    });
+    await expect(backend.mutation(SESSION, "board:createComment", {})).resolves.toBe("ok");
+    expect(calls.filter((call) => call.path === "board:createComment")).toHaveLength(3);
   });
 
   it("a brand-new Session with too little time left is not yet synced at once", async () => {

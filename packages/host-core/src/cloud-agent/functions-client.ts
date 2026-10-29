@@ -18,7 +18,11 @@
  *   the connection or did not resolve) means nothing happened; `unknown`
  *   means a mutation may have been applied and only its answer was lost.
  * - {@link CloudFunctionError}: the backend answered and refused, with its
- *   typed `code` (`not_found`, `fenced`, …) and its sentence.
+ *   typed `code` (`not_found`, `fenced`, …) and its sentence. One refusal
+ *   is the platform's, not a function's: {@link CloudContentionError}, a
+ *   mutation that lost every one of the backend's own optimistic-concurrency
+ *   retries to concurrent writes of the same documents. It answers 503 with
+ *   a typed body, and nothing it ran was committed.
  */
 
 /** The three function kinds the HTTP API serves. */
@@ -71,6 +75,21 @@ export class CloudFunctionError extends Error {
   ) {
     super(message);
     this.name = "CloudFunctionError";
+  }
+}
+
+/** Convex's code for a mutation that exhausted its optimistic-concurrency retries. */
+export const CONVEX_OCC_CODE = "OptimisticConcurrencyControlFailure";
+
+/**
+ * A mutation lost to concurrent writes on every one of the backend's own
+ * retries (a board's writes serialize on its project's counter). Nothing was
+ * committed, so sending the same arguments again is the same command.
+ */
+export class CloudContentionError extends CloudFunctionError {
+  constructor(message: string) {
+    super("contention", message);
+    this.name = "CloudContentionError";
   }
 }
 
@@ -150,6 +169,12 @@ export function createCloudFunctionsClient(
               : `${path} failed.`;
         const code = typeof data["code"] === "string" ? data["code"] : "server_error";
         throw new CloudFunctionError(code, message.slice(0, MAX_MESSAGE), data);
+      }
+      // The platform's own typed body (`{ code, message }`), not a function's.
+      if (isRecord(body) && body["code"] === CONVEX_OCC_CODE) {
+        throw new CloudContentionError(
+          `${path}: Volli Cloud was busy with concurrent changes and applied nothing.`,
+        );
       }
       if (response.status === 401 || response.status === 403) {
         throw new CloudFunctionError("unauthenticated", "Volli Cloud did not accept this token.");

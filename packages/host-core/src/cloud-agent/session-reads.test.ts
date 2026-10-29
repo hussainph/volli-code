@@ -16,8 +16,9 @@ import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { AgentCommand, AgentRequest, AgentResponse } from "@volli/shared";
 
 import { createAgentBackend } from "./agent-backend";
-import { createCloudFunctionsClient } from "./functions-client";
-import { createCloudSessionReads } from "./session-reads";
+import { BUSY_MESSAGE } from "./board-verbs";
+import { CloudContentionError, createCloudFunctionsClient } from "./functions-client";
+import { cloudSessionRefusal, createCloudSessionReads } from "./session-reads";
 
 const CALLER = "5e550000-0000-4000-8000-000000000001";
 const TARGET = "7a26e700-0000-4000-8000-000000000002";
@@ -432,6 +433,15 @@ function code(response: AgentResponse): string {
   if (response.ok) throw new Error("expected a refusal");
   return response.error.code;
 }
+
+describe("cloudSessionRefusal", () => {
+  it("a command that kept losing to concurrent writes is BUSY: nothing applied, safe to send again", () => {
+    expect(cloudSessionRefusal(new CloudContentionError("sessions:command: busy"))).toMatchObject({
+      ok: false,
+      error: { code: "BUSY", message: BUSY_MESSAGE },
+    });
+  });
+});
 
 describe("cloud session list", () => {
   it("lists the caller's project in the local wire shape, short handles only", async () => {

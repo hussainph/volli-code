@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { beforeAll, describe, expect, test } from "vite-plus/test";
+import type { ConvexClient } from "convex/browser";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 
 import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
 
@@ -19,9 +20,32 @@ let projectId: string;
 /** A fresh client per call, so calls really run concurrently (one client queues its mutations). */
 const client = () => backend.client(subject);
 
-async function createTicket(title: string, status: "todo" | "doing" = "todo") {
+/**
+ * Concurrent writers, each on its own socket as a desktop window writes: one
+ * socket runs its mutations in order. A board's writes serialize on its
+ * project's counter, so a burst can exhaust the backend's own concurrency
+ * retries; a socket then reconnects and resends the same command (same
+ * `commandId`), which is the product's policy for that, and every assertion
+ * below still holds of what lands.
+ */
+const WRITERS = 8;
+const windows: ConvexClient[] = [];
+
+/**
+ * Every write, run at once, settled before the test goes on: a refusal fails
+ * the test without a straggler landing in the next one's project history.
+ */
+async function concurrently<T>(writes: readonly (() => Promise<T>)[]): Promise<T[]> {
+  const results = await Promise.allSettled(writes.map((write) => write()));
+  const refused = results.find((result) => result.status === "rejected");
+  if (refused !== undefined) throw refused.reason;
+  return results.map((result) => (result as PromiseFulfilledResult<T>).value);
+}
+
+/** Creates a ticket through writer `writer`'s socket. */
+async function createTicket(title: string, status: "todo" | "doing" = "todo", writer = 0) {
   const ticketId = uuid();
-  await client().mutation(api.board.createTicket, {
+  await windows[writer % WRITERS]!.mutation(api.board.createTicket, {
     commandId: uuid(),
     projectId,
     ticketId,
@@ -55,19 +79,25 @@ beforeAll(async () => {
     name: "Board backend",
     origin: "github",
   });
+  for (let index = 0; index < WRITERS; index++) windows.push(backend.socket(subject));
 }, 120_000);
+
+afterAll(async () => {
+  await Promise.all(windows.map((window) => window.close()));
+});
 
 describe("the board on the pinned local backend", () => {
   test("concurrent creates get distinct, contiguous ticket numbers", async () => {
-    const replies = await Promise.all(
-      Array.from({ length: 8 }, (_, index) =>
-        client().mutation(api.board.createTicket, {
-          commandId: uuid(),
-          projectId,
-          ticketId: uuid(),
-          status: "backlog",
-          title: `Concurrent ${index}`,
-        }),
+    const replies = await concurrently(
+      windows.map(
+        (window, index) => () =>
+          window.mutation(api.board.createTicket, {
+            commandId: uuid(),
+            projectId,
+            ticketId: uuid(),
+            status: "backlog",
+            title: `Concurrent ${index}`,
+          }),
       ),
     );
     const numbers = replies.map((reply) => reply.number).toSorted((a, b) => a - b);
@@ -78,19 +108,20 @@ describe("the board on the pinned local backend", () => {
   test("concurrent moves into the same gap all land in it, each with its own key", async () => {
     const after = await createTicket("After", "doing");
     const before = await createTicket("Before", "doing");
-    const movers = await Promise.all(
-      Array.from({ length: 8 }, (_, i) => createTicket(`Mover ${i}`)),
+    const movers = await concurrently(
+      Array.from({ length: 8 }, (_, i) => () => createTicket(`Mover ${i}`, "todo", i)),
     );
-    await Promise.all(
-      movers.map((ticketId) =>
-        client().mutation(api.board.moveTickets, {
-          commandId: uuid(),
-          projectId,
-          ticketIds: [ticketId],
-          toStatus: "doing",
-          afterTicketId: after,
-          beforeTicketId: before,
-        }),
+    await concurrently(
+      movers.map(
+        (ticketId, index) => () =>
+          windows[index]!.mutation(api.board.moveTickets, {
+            commandId: uuid(),
+            projectId,
+            ticketIds: [ticketId],
+            toStatus: "doing",
+            afterTicketId: after,
+            beforeTicketId: before,
+          }),
       ),
     );
     const doing = await column("doing");
@@ -102,17 +133,18 @@ describe("the board on the pinned local backend", () => {
   });
 
   test("concurrent column-only moves append without colliding, and the event order has no gaps", async () => {
-    const movers = await Promise.all(
-      Array.from({ length: 6 }, (_, i) => createTicket(`Done ${i}`)),
+    const movers = await concurrently(
+      Array.from({ length: 6 }, (_, i) => () => createTicket(`Done ${i}`, "todo", i)),
     );
-    await Promise.all(
-      movers.map((ticketId) =>
-        client().mutation(api.board.moveTickets, {
-          commandId: uuid(),
-          projectId,
-          ticketIds: [ticketId],
-          toStatus: "done",
-        }),
+    await concurrently(
+      movers.map(
+        (ticketId, index) => () =>
+          windows[index]!.mutation(api.board.moveTickets, {
+            commandId: uuid(),
+            projectId,
+            ticketIds: [ticketId],
+            toStatus: "done",
+          }),
       ),
     );
     const done = await column("done");
@@ -134,8 +166,8 @@ describe("the board on the pinned local backend", () => {
   test("the same commandId sent concurrently is applied once and replayed for the rest", async () => {
     const ticketId = uuid();
     const args = { commandId: uuid(), projectId, ticketId, status: "todo" as const, title: "Once" };
-    const replies = await Promise.all(
-      Array.from({ length: 5 }, () => client().mutation(api.board.createTicket, args)),
+    const replies = await concurrently(
+      windows.slice(0, 5).map((window) => () => window.mutation(api.board.createTicket, args)),
     );
     expect(replies.filter((reply) => !reply.receipt.replayed)).toHaveLength(1);
     expect(new Set(replies.map((reply) => reply.number)).size).toBe(1);
@@ -148,8 +180,8 @@ describe("the board on the pinned local backend", () => {
       ticketIds: [ticketId],
       toStatus: "doing" as const,
     };
-    const moves = await Promise.all(
-      Array.from({ length: 5 }, () => client().mutation(api.board.moveTickets, move)),
+    const moves = await concurrently(
+      windows.slice(0, 5).map((window) => () => window.mutation(api.board.moveTickets, move)),
     );
     expect(moves.filter((reply) => !reply.receipt.replayed)).toHaveLength(1);
     const after = await client().query(api.board.ticketEvents, { ticketId });
