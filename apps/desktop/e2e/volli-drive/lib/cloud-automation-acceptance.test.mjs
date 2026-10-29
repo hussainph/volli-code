@@ -18,10 +18,13 @@ import { fileURLToPath } from "node:url";
 
 import { describe, it } from "node:test";
 
+import { serve } from "./protocol.mjs";
 import {
   AUTOMATION_RUN_TOOL,
   ticketCardButtonRef,
   driveRequestBudget,
+  driveInstance,
+  finishRunTurn,
   MINUTES,
   automationRunToolCall,
   coalescingProblems,
@@ -103,6 +106,64 @@ describe("the unnamed board card's semantic ancestor ref", () => {
       () => ticketCardButtonRef(tree.replace(" [ref=e99]", ""), "Move me into Doing"),
       /found 0/u,
     );
+  });
+});
+
+async function withDrive(t, sessionRows) {
+  const dir = mkdtempSync(join(tmpdir(), "run-row-"));
+  const socket = join(dir, "drive.sock");
+  let generation = 0;
+  const actions = [];
+  const waits = [];
+  const text = `- button "Home" [ref=home]
+- button "Doing runs Doing sweep on Mac A · Armed by Dev User" [ref=chip]
+- button "Doing sweep Automatic triggers Ticket enters Doing" [ref=definition]
+${sessionRows}`;
+  const server = await serve(socket, (cmd, args) => {
+    if (cmd === "act") {
+      assert.equal(args.gen, generation, "act must use the freshest snapshot");
+      actions.push(args.ref);
+    } else if (cmd === "wait") {
+      waits.push(args);
+    } else assert.equal(cmd, "snapshot");
+    const snapshot = { text, generation: ++generation };
+    return cmd === "snapshot" ? snapshot : { snapshot };
+  });
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return { drive: driveInstance("Mac A", socket), actions, waits };
+}
+
+describe("opening the Run Session without a title race", () => {
+  for (const title of ["Doing sweep", "fake-agent: Volli Cloud ticket"]) {
+    it(`opens the Session with title ${JSON.stringify(title)}, never the column chip`, async (t) => {
+      const { drive, actions, waits } = await withDrive(
+        t,
+        `- 'button "Idle ${title} Shared with workspace Started by the Automation Doing sweep AUTO-1 · just now" [ref=session]':
+  - generic "Started by the Automation Doing sweep" [ref=mark]`,
+      );
+      await finishRunTurn(drive, "Doing sweep", "SCRIPTED arrival finished");
+      assert.deepEqual(actions, ["home", "session"]);
+      assert.deepEqual(waits.slice(1), [
+        { text: "SCRIPTED arrival finished", timeout: 120_000 },
+        { text: "Stop turn", timeout: 60_000, gone: true },
+      ]);
+    });
+  }
+
+  it("refuses two Sessions with the same provenance instead of picking the first", async (t) => {
+    const { drive, actions } = await withDrive(
+      t,
+      `- button "Idle First Started by the Automation Doing sweep AUTO-1" [ref=one]
+- button "Idle Second Started by the Automation Doing sweep AUTO-1" [ref=two]`,
+    );
+    await assert.rejects(
+      finishRunTurn(drive, "Doing sweep", "SCRIPTED arrival finished"),
+      /expected button .* once; found 2/u,
+    );
+    assert.deepEqual(actions, ["home"]);
   });
 });
 
