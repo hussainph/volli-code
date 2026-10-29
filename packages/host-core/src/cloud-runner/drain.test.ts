@@ -804,6 +804,77 @@ describe("the fact drain", () => {
       expect(drain.status()).toMatchObject({ sessions: 1, blocked: 0 });
     });
 
+    it("a write that finds the row gone drops the stream, before anything else looks", async () => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const blocked: string[] = [];
+      const drain = drainOver(backend, ledger, cursors.store, {
+        onBlocked: (sessionId) => blocked.push(sessionId),
+      });
+      drain.start();
+      // s1: an accepted reply; s2: a refusal that would block.
+      append("s1", 1);
+      append("s2", 1);
+      const answerNow = backend.holdAll();
+      backend.faults.push(
+        () => null,
+        () => refusal("fenced", 0),
+      );
+      drain.adopt("s1");
+      drain.adopt("s2");
+      await vi.waitFor(() => expect(backend.stats().calls).toBe(2));
+      cursors.rows.delete("s1");
+      cursors.rows.delete("s2");
+      answerNow();
+      await vi.waitFor(() => expect(backend.heads.get("s1")).toBe(1));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect([...cursors.rows.keys()]).toEqual([]);
+      expect(blocked).toEqual([]);
+      expect(drain.status()).toEqual({ sessions: 0, waiting: 0, blocked: 0 });
+    });
+
+    it("an explicit retry of a blocked Session whose row is gone sends nothing", async () => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const drain = drainOver(backend, ledger, cursors.store);
+      drain.start();
+      append("s1", 1);
+      backend.faults.push(() => refusal("fenced", 0));
+      drain.adopt("s1");
+      await drain.idle();
+      const calls = backend.stats().calls;
+      cursors.rows.delete("s1");
+      drain.retry("s1");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(backend.stats().calls).toBe(calls);
+      expect(cursors.rows.has("s1")).toBe(false);
+    });
+
+    it("forget clears a pending retry, and ignores a Session it never drained", async () => {
+      const timers: (() => void)[] = [];
+      const cleared: unknown[] = [];
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      const drain = drainOver(backend, ledger, cursors.store, {
+        setTimer: (run) => {
+          timers.push(run);
+          return timers.length;
+        },
+        clearTimer: (handle) => void cleared.push(handle),
+      });
+      drain.start();
+      append("s1", 1);
+      backend.faults.push(() => new Error("network"));
+      drain.adopt("s1");
+      await vi.waitFor(() => expect(timers).toHaveLength(1));
+      drain.forget(["s1", "never-drained"]);
+      expect(cleared).toEqual([1]);
+      expect(drain.status().sessions).toBe(0);
+    });
+
     it("a row now another owner's is left alone", async () => {
       const backend = fakeBackend();
       const { ledger, append } = memoryLedger();

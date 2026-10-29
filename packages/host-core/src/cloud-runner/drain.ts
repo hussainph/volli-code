@@ -268,7 +268,9 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
     stream.epoch += 1;
     if (stream.timer !== null) clearTimer(stream.timer);
     stream.timer = null;
-    if (streams.get(stream.cursor.sessionId) === stream) streams.delete(stream.cursor.sessionId);
+    // Always the current stream: a released one is never released again (its
+    // replies, retries and pumps all stop at `released`).
+    streams.delete(stream.cursor.sessionId);
   }
 
   /**
@@ -310,7 +312,6 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
   }
 
   function retryLater(stream: Stream, error: unknown) {
-    if (stream.released) return;
     stream.epoch += 1;
     stream.next = stream.cursor.acceptedThrough + 1;
     // Stopped: `start` resends from the cursor; no timer outlives `stop`.
