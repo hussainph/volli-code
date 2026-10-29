@@ -346,23 +346,20 @@ async function journey(fixture, store, evidenceDir) {
     await macA.drive.wait(choose, 60_000);
     await macA.drive.click("button", choose);
     await macA.drive.gone(choose, 30_000);
-    await openBoard(macA.drive);
-    // Empty columns start collapsed. Expand Doing through its real control
-    // before looking for the column's bolt (no card has arrived there yet).
-    if (!(await macA.drive.has("button", "Arm Doing"))) {
-      await macA.drive.click("button", "Doing 0");
-      await macA.drive.wait("Arm Doing", 30_000);
-    }
-    // The column's own bolt: the person arms Doing, on this Mac (the picker's
-    // default), with the one Automation offered there.
+    // Use the same canonical column bolt on the Automation's detail page.
+    // An empty board column is a pill; expanding it focuses its new-ticket
+    // composer and blur collapses it again, so it is not a stable arming door.
+    await macA.drive.click("button", "Automations", { first: true });
+    await macA.drive.click("button", DOING_AUTOMATION.name, { contains: true, first: true });
+    await macA.drive.wait("Arm Doing", 30_000);
+    // The person arms Doing on this Mac (the picker's default).
     await macA.drive.click("button", "Arm Doing");
     await macA.drive.wait("Arrives in Doing", 30_000);
     await macA.drive.click("button", DOING_AUTOMATION.name);
     await macA.drive.pressKey("Escape");
     await macA.drive.wait(`Doing runs ${DOING_AUTOMATION.name} on ${nameA}`, 30_000);
-    // The schedule's own Armed switch, on the Automations page.
-    await macA.drive.click("button", "Automations");
-    await macA.drive.click("button", SCHEDULE_AUTOMATION.name, { contains: true });
+    // Select the schedule in the same page's rail, then its own Armed switch.
+    await macA.drive.click("button", SCHEDULE_AUTOMATION.name, { contains: true, first: true });
     await macA.drive.wait(`Armed: ${SCHEDULE_AUTOMATION.name}`, 30_000);
     await macA.drive.click("switch", `Armed: ${SCHEDULE_AUTOMATION.name}`);
     // Armed and not paused: the editor's own next-occurrence line, from the
