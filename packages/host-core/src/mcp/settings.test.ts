@@ -89,6 +89,11 @@ describe("a project moved to Volli Cloud, in a cloud launch (VC-1008)", () => {
     expect(service().setEnabled({ projectId: "p1", serverId: "server-1", enabled: false })).toEqual(
       refused,
     );
+    // A cloud launch for someone else: not theirs to edit.
+    bindCloudSessionOwner(ctx.db, "someone-else");
+    expect(service().setEnabled({ projectId: "p1", serverId: "server-1", enabled: false })).toEqual(
+      refused,
+    );
     // A cloud launch serving the moved project: its servers are the cloud project's here.
     bindCloudSessionOwner(ctx.db, "u");
     expect(
