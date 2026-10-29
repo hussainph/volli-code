@@ -102,13 +102,22 @@ export function ticketCardButtonRef(tree, title) {
   return matches[0];
 }
 
+/** A wait must end inside the supervisor before its transport deadline, so
+ * failure retains the actual needle rather than an anonymous socket timeout. */
+export function driveRequestBudget(command, timeout) {
+  return command === "wait" && Number.isFinite(timeout)
+    ? Math.max(150_000, timeout + 10_000)
+    : 150_000;
+}
+
 /**
  * One instance's drive: every action from a fresh tree; ambiguity is a failure.
  * The same contract `cloud-wake-acceptance-smoke.mjs` uses, so a scenario
  * reads as the person's steps rather than as Playwright.
  */
 export function driveInstance(label, socket) {
-  const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
+  const call = (cmd, args = {}) =>
+    request(socket, cmd, args, { timeoutMs: driveRequestBudget(cmd, args.timeout) });
   const snap = () => call("snapshot");
   const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;
   const gone = async (text, timeout = 45_000) =>

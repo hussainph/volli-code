@@ -21,6 +21,7 @@ import { describe, it } from "node:test";
 import {
   AUTOMATION_RUN_TOOL,
   ticketCardButtonRef,
+  driveRequestBudget,
   MINUTES,
   automationRunToolCall,
   coalescingProblems,
@@ -45,6 +46,18 @@ function nextHourlyOccurrence(after, minute) {
   while (slot.getTime() <= after) slot.setUTCHours(slot.getUTCHours() + 1);
   return slot.getTime();
 }
+
+describe("the driver's explicit wait budget", () => {
+  it("lets the supervisor's declared wait expire before the transport", () => {
+    assert.equal(driveRequestBudget("wait", 180_000), 190_000);
+    assert.equal(driveRequestBudget("wait", 240_000), 250_000);
+  });
+  it("keeps ordinary requests and short/default waits bounded", () => {
+    assert.equal(driveRequestBudget("snapshot", 240_000), 150_000);
+    assert.equal(driveRequestBudget("wait", 30_000), 150_000);
+    assert.equal(driveRequestBudget("wait", undefined), 150_000);
+  });
+});
 
 describe("the unnamed board card's semantic ancestor ref", () => {
   const tree = `- main [ref=e44]:
