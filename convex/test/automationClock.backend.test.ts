@@ -58,7 +58,7 @@ async function linkRunner(person: ConvexHttpClient, name: string) {
   return { runnerId, client };
 }
 
-async function world() {
+async function world(minute = 17, timeZone = "Europe/London") {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
   await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
@@ -79,7 +79,7 @@ async function world() {
   const automationId = randomUUID();
   const trigger = {
     kind: "schedule",
-    schedule: { preset: "hourly", minute: 17, timeZone: "Europe/London" },
+    schedule: { preset: "hourly", minute, timeZone },
   };
   await person.mutation(api.automations.create, {
     commandId: randomUUID(),
@@ -102,6 +102,39 @@ const inspect = (automationId: string) =>
   backend.admin(internal.testAutomations.inspectSchedule, { automationId });
 
 describe("the Automation clock on the pinned local backend", () => {
+  test("the acceptance hook coalesces two distinct past occurrences in one real mutation", async () => {
+    const minute = (new Date().getUTCMinutes() + 59) % 60 || 59;
+    const w = await world(minute, "UTC");
+    await w.armer.client.mutation(api.runners.reportState, { state: "asleep", reason: null });
+    const latest = new Date();
+    latest.setUTCMinutes(minute, 0, 0);
+    if (latest.getTime() > Date.now()) latest.setUTCHours(latest.getUTCHours() - 1);
+    const firstDueAt = latest.getTime() - 3_600_000;
+    const { first, second, secondDueAt } = await backend.admin(
+      internal.testAutomations.coalescePastOccurrences,
+      { automationId: w.automationId, firstDueAt },
+    );
+    expect(secondDueAt).toBe(latest.getTime());
+    expect(first.runs).toHaveLength(1);
+    expect(first.runs[0]).toMatchObject({ status: "queued", dueAt: firstDueAt });
+    expect(second.runs).toHaveLength(2);
+    expect(second.runs.find((run) => run.status === "skipped")).toMatchObject({
+      dueAt: firstDueAt,
+      missedCount: 1,
+    });
+    expect(second.runs.find((run) => run.status === "queued")).toMatchObject({
+      id: first.runs[0]!.id,
+      dueAt: secondDueAt,
+    });
+    expect(second.jobs).toHaveLength(1);
+    expect(second.jobs[0]).toMatchObject({
+      id: first.jobs[0]!.id,
+      lease: null,
+      availableAt: secondDueAt,
+    });
+    expect(second.schedule!.nextFireAt).toBeGreaterThan(Date.now());
+    expect(secondDueAt).toBeLessThanOrEqual(Date.now());
+  });
   test("overlapping passes and a racing edit advance a due schedule exactly once", async () => {
     const w = await world();
     const now = Date.now();

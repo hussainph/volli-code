@@ -17,6 +17,7 @@
  * Order follows the importer's, so a person reading the
  * manifest sees the projects before their tickets.
  */
+import { parseAutomationTrigger, automationTriggerSchedule } from "@volli/shared";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import type Database from "better-sqlite3";
@@ -31,6 +32,7 @@ import {
   type AutomationRunJobRecord,
   type AutomationRunRecord,
   type AutomationScheduleCursorRecord,
+  type AutomationScheduleRecord,
   type BlobLinkRecord,
   type BlobRecord,
   type BoardEventRecord,
@@ -109,6 +111,7 @@ export interface StreamRecords {
   automations: AutomationRecord;
   automationRuns: AutomationRunRecord;
   automationArmings: AutomationArmingRecord;
+  automationSchedules: AutomationScheduleRecord;
   automationColumnOrder: AutomationColumnOrderRecord;
   automationScheduleCursors: AutomationScheduleCursorRecord;
   runnerJobs: AutomationRunJobRecord;
@@ -148,6 +151,7 @@ export const STREAM_DESTINATIONS: Readonly<Record<StreamName, StreamDestination>
   automations: "convex",
   automationRuns: "convex",
   automationArmings: "convex",
+  automationSchedules: "convex",
   automationColumnOrder: "convex",
   automationScheduleCursors: "convex",
   runnerJobs: "convex",
@@ -1267,7 +1271,7 @@ interface AutomationRow {
 const automationsSource = source<AutomationRow>({
   id: "automations",
   tables: ["automations"],
-  streams: ["automations", "configEntries"],
+  streams: ["automations", "automationSchedules", "configEntries"],
   sql: "SELECT * FROM automations ORDER BY id",
   map(row, _prepared, _lookups, emit) {
     const runtime = lenientJson(row.runtime);
@@ -1302,6 +1306,18 @@ const automationsSource = source<AutomationRow>({
       updatedAt: row.updated_at,
       deletedAt: null,
     });
+    const schedule = automationTriggerSchedule(parseAutomationTrigger(triggerSpec));
+    if (schedule !== null) {
+      emit("automationSchedules", {
+        automationId: row.id,
+        armedByUserId: USER,
+        runnerId: RUNNER,
+        spec: schedule,
+        timezone: schedule.timeZone,
+        // Local schedules have no arm timestamp; re-arm replaces this carried definition time.
+        armedAt: row.updated_at,
+      });
+    }
   },
 });
 
@@ -1475,7 +1491,7 @@ const armingsSource = source<{
 }>({
   id: "automationColumnArming",
   tables: ["automation_column_arming"],
-  streams: ["legacyRows"],
+  streams: ["automationArmings", "legacyRows"],
   sql: "SELECT * FROM automation_column_arming ORDER BY project_id, status",
   map(row, _prepared, _lookups, emit) {
     emit("legacyRows", {
@@ -1483,6 +1499,14 @@ const armingsSource = source<{
       projectId: row.project_id,
       reason: "arming paused; re-arm explicitly after the move",
       row: { ...row },
+    });
+    emit("automationArmings", {
+      projectId: row.project_id,
+      status: row.status,
+      automationId: row.automation_id,
+      armedByUserId: USER,
+      runnerId: RUNNER,
+      armedAt: row.armed_at,
     });
   },
 });

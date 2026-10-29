@@ -51,6 +51,7 @@ const LEVEL: Readonly<Record<MigrationImportStream, Level>> = {
   automations: "project",
   automationRuns: "project",
   automationArmings: "project",
+  automationSchedules: "project",
   automationColumnOrder: "project",
   runnerJobs: "project",
   sessions: "project",
@@ -202,6 +203,16 @@ export async function verifyHiddenImport(input: {
     const sessionKey = sessionKeyOf(stream);
     if (sessionKey !== undefined) tallyInto(readSessions, row[sessionKey], stream, digest);
     switch (stream) {
+      case "automationArmings":
+      case "automationSchedules":
+        // pausedAt is server-stamped, so its digest cannot prove that the arm is inert.
+        if (
+          typeof row.pausedAt !== "number" ||
+          !Number.isFinite(row.pausedAt) ||
+          row.pausedReason !== "moved"
+        )
+          bump("automationNotPaused");
+        break;
       case "tickets":
         if (numbers.has(row.number as number)) bump("duplicateTicketKeys");
         numbers.add(row.number as number);

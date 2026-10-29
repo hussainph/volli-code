@@ -78,7 +78,13 @@ import {
   type QueryCtx,
 } from "./_generated/server.js";
 import { audit } from "./lib/audit";
-import { requireManage, requireViewer, requireWorkspace, type Viewer } from "./lib/auth";
+import {
+  requireManage,
+  requireProject,
+  requireViewer,
+  requireWorkspace,
+  type Viewer,
+} from "./lib/auth";
 import {
   ProjectScope,
   importBatch,
@@ -272,6 +278,14 @@ function checkExpected(expected: readonly Expected[]): Map<MigrationImportStream
     }
     byStream.set(stream, entry);
   }
+  // Older move clients archived all schedules and therefore promised no schedule stream.
+  if (!byStream.has("automationSchedules")) {
+    byStream.set("automationSchedules", {
+      stream: "automationSchedules",
+      count: 0,
+      digest: new MigrationDigest().value,
+    });
+  }
   if (byStream.size !== MIGRATION_IMPORT_STREAMS.length) {
     throw importError("invalid_argument", "The manifest must name every importer stream.");
   }
@@ -322,7 +336,10 @@ export const begin = mutation({
         existing.workspaceId === args.workspaceId &&
         driverOf(existing).runnerId === args.runnerId &&
         existing.manifestSha256 === args.manifestSha256 &&
-        streams.length === expected.size &&
+        (streams.length === expected.size ||
+          (streams.length === expected.size - 1 &&
+            !streams.some((stream) => stream.stream === "automationSchedules") &&
+            expected.get("automationSchedules")!.count === 0)) &&
         streams.every((stream) => {
           const promised = expected.get(stream.stream as MigrationImportStream);
           return (
@@ -712,6 +729,80 @@ export const importRows = mutation({
   },
 });
 
+/** Still-paused moved records for the result screen; re-arm uses the ordinary
+ * receipt-backed automations.arm / armSchedule doors with this Mac's runner.
+ * Receiving-task contract (VC-998, not yet wired here): its move-result bridge
+ * must query api.projectImports.rearmList({moveId}) under the current account
+ * after commit. Display columns/schedules with per-item Re-arm on this Mac:
+ * api.automations.arm({commandId: UUID, projectId, status, automationId, runnerId})
+ * or api.automations.armSchedule({commandId: UUID, automationId, runnerId}).
+ * runnerId must be the live account-bound full MacRunner advertising automation.run,
+ * never the registration-only import runner. Inert globals have no action. */
+export const rearmList = query({
+  args: { moveId: v.string() },
+  handler: async (ctx, { moveId }) => {
+    const { viewer, row } = await requireImporter(ctx, moveId);
+    if (row.status !== "committed")
+      throw importError("import_closed", "Finish importing before re-arming Automations.");
+    await requireProject(ctx, row.projectId, viewer);
+    const columns: Array<{
+      automationId: string;
+      name: string;
+      status: Doc<"automationArmings">["status"];
+    }> = [];
+    const schedules: Array<{ automationId: string; name: string }> = [];
+    const arms = await ctx.db
+      .query("automationArmings")
+      .withIndex("by_project_status", (q) => q.eq("projectId", row.projectId))
+      .collect();
+    const automations = await ctx.db
+      .query("automations")
+      .withIndex("by_project_name", (q) => q.eq("projectId", row.projectId))
+      .collect();
+    const byId = new Map(automations.map((automation) => [automation.id, automation]));
+    for (const arm of arms) {
+      const automation = byId.get(arm.automationId);
+      if (
+        automation !== undefined &&
+        automation.deletedAt === null &&
+        arm.pausedAt != null &&
+        arm.pausedReason === "moved"
+      ) {
+        columns.push({ automationId: automation.id, name: automation.name, status: arm.status });
+      }
+    }
+    for (const automation of automations) {
+      if (automation.deletedAt !== null) continue;
+      const schedule = await ctx.db
+        .query("automationSchedules")
+        .withIndex("by_automation", (q) => q.eq("automationId", automation.id))
+        .unique();
+      if (schedule?.pausedAt != null && schedule.pausedReason === "moved") {
+        schedules.push({ automationId: automation.id, name: automation.name });
+      }
+    }
+    // Global definitions are carried by the profile step, not project records.
+    // They remain inert personal configuration, including entries from earlier
+    // profile moves. Never return their Instructions or offer them a re-arm.
+    const personal = await ctx.db
+      .query("configEntries")
+      .withIndex("by_scope_kind_name", (q) =>
+        q.eq("scopeKey", `u:${viewer.userId}`).eq("kind", "automation"),
+      )
+      .collect();
+    const inertGlobals = personal
+      .filter(
+        (entry) =>
+          entry.level === "personal" &&
+          entry.userId === viewer.userId &&
+          entry.projectId === null &&
+          entry.workspaceId === null,
+      )
+      .map(({ id, name }) => ({ id, name }));
+    return { projectId: row.projectId, columns, schedules, inertGlobals };
+  },
+});
+
 // ── commit, uncommit, abort ──────────────────────────────────────────────────
 
 /**
@@ -752,7 +843,14 @@ export const commit = mutation({
         count: stream.count,
         digestMatches: stream.digest === stream.expectedDigest,
       }));
-    if (streams.length !== MIGRATION_IMPORT_STREAMS.length || mismatched.length > 0) {
+    const present = new Set(streams.map((stream) => stream.stream));
+    // An in-flight move begun by the previous backend has no schedule accumulator.
+    const missing = MIGRATION_IMPORT_STREAMS.filter(
+      (stream) => stream !== "automationSchedules" && !present.has(stream),
+    );
+    const expectedLength =
+      MIGRATION_IMPORT_STREAMS.length - (present.has("automationSchedules") ? 0 : 1);
+    if (streams.length !== expectedLength || missing.length > 0 || mismatched.length > 0) {
       throw importError(
         "verification_failed",
         "What arrived does not match the manifest; nothing was shown.",
@@ -1172,6 +1270,7 @@ const LEVEL: Readonly<Record<MigrationImportStream, Level>> = {
   automations: "project",
   automationRuns: "project",
   automationArmings: "project",
+  automationSchedules: "project",
   automationColumnOrder: "project",
   runnerJobs: "project",
   sessions: "project",
@@ -1188,10 +1287,15 @@ const LEVEL: Readonly<Record<MigrationImportStream, Level>> = {
 
 /** The index range that holds a stream's rows for one project, ticket or Session. */
 function readRange(
+  db: Reader,
   row: ImportRow,
   stream: MigrationImportStream,
   parentId: string,
-): { index: string; eq: Array<[string, unknown]>; keep?: (doc: Row) => boolean } {
+): {
+  index: string;
+  eq: Array<[string, unknown]>;
+  keep?: (doc: Row) => boolean | Promise<boolean>;
+} {
   const projectId = row.projectId;
   switch (stream) {
     case "projects":
@@ -1210,6 +1314,14 @@ function readRange(
       return { index: "by_blob", eq: [["projectId", projectId]] };
     case "automations":
       return { index: "by_project_name", eq: [["projectId", projectId]] };
+    case "automationSchedules": {
+      const scope = new ProjectScope(db);
+      return {
+        index: "by_armer",
+        eq: [["armedByUserId", row.userId]],
+        keep: async (doc) => (await scope.automationProject(doc.automationId)) === projectId,
+      };
+    }
     case "automationArmings":
     case "automationColumnOrder":
       return { index: "by_project_status", eq: [["projectId", projectId]] };
@@ -1318,7 +1430,7 @@ export const readRows = query({
       }
       parent = parentId!;
     }
-    const range = readRange(row, stream, parent);
+    const range = readRange(ctx.db, row, stream, parent);
     const items = Math.min(Math.max(Math.floor(numItems), 1), READ_BACK_MAX_ITEMS);
     const page = await (ctx.db.query(stream) as any)
       .withIndex(range.index, (q: any) =>
@@ -1329,9 +1441,10 @@ export const readRows = query({
         numItems: items,
         ...(maximumBytesRead === undefined ? {} : { maximumBytesRead }),
       });
-    const rows = (page.page as Row[])
-      .map(withoutSystemFields)
-      .filter((doc) => range.keep?.(doc) ?? true);
+    const rows: Row[] = [];
+    for (const doc of (page.page as Row[]).map(withoutSystemFields)) {
+      if (range.keep === undefined || (await range.keep(doc))) rows.push(doc);
+    }
     return { rows, continueCursor: page.continueCursor as string, isDone: page.isDone as boolean };
   },
 });

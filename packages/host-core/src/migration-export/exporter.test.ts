@@ -467,7 +467,14 @@ describe("a full export", () => {
     expect(runs[2]!.error).toBe("runtime unavailable");
     expect(manifest.pendingRunnerWork).toBe(false);
     expect(records(outDir, manifest, "runnerJobs")).toEqual([]);
-    expect(records(outDir, manifest, "automationArmings")).toEqual([]);
+    expect(records(outDir, manifest, "automationArmings")).toEqual([
+      expect.objectContaining({
+        projectId: "proj-alpha",
+        automationId: "automation-1",
+        armedByUserId: "$local-user",
+        runnerId: "$local-runner",
+      }),
+    ]);
     expect(records(outDir, manifest, "automationColumnOrder")[0]!.rankedIds).toEqual([
       "automation-1",
     ]);
@@ -481,6 +488,38 @@ describe("a full export", () => {
       "automation_commands",
       "automation_events",
     ]);
+  });
+
+  it("carries scheduled definitions paused without reviving their archived cursor", async () => {
+    const schedule = { preset: "hourly", minute: 15, timeZone: "UTC" };
+    profile.db
+      .prepare("UPDATE automations SET trigger_spec = ? WHERE id = 'automation-1'")
+      .run(JSON.stringify({ kind: "schedule", schedule }));
+    profile.db
+      .prepare(
+        "INSERT INTO app_state (key,value,updated_at) VALUES ('volli:automation-schedule-cursors', ?, 1)",
+      )
+      .run(JSON.stringify({ "automation-1": 1234 }));
+    const { outDir, manifest } = await exportMigrationSnapshot(options());
+    expect(records(outDir, manifest, "automationSchedules")).toEqual([
+      expect.objectContaining({
+        automationId: "automation-1",
+        spec: schedule,
+        timezone: "UTC",
+        armedByUserId: "$local-user",
+        runnerId: "$local-runner",
+      }),
+    ]);
+    expect(records(outDir, manifest, "automationSchedules")[0]).not.toHaveProperty("nextFireAt");
+    expect(records(outDir, manifest, "automationScheduleCursors")).toEqual([]);
+    expect(records(outDir, manifest, "runnerJobs")).toEqual([]);
+    expect(records(outDir, manifest, "legacyRows")).toContainEqual(
+      expect.objectContaining({
+        table: "automation_schedule_cursors",
+        row: { automationId: "automation-1", evaluatedThrough: 1234 },
+      }),
+    );
+    await verifyMigrationExport(outDir);
   });
 
   it("exports settings, unbound Automations and MCP servers as config entries", async () => {

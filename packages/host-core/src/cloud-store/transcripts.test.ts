@@ -6,6 +6,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   canonicalJson,
+  transcriptReferenceFor,
   type HostedSessionRuntime,
   type SessionTranscriptArtifact,
 } from "@volli/session-engine";
@@ -49,7 +50,13 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function fixture(text = "Reply from the actual local artifact store") {
+async function fixture(
+  text = "Reply from the actual local artifact store",
+  kind:
+    | "transcript.referenced"
+    | "message.submit"
+    | "interaction.resolve" = "transcript.referenced",
+) {
   db = openTestDb();
   insertProject(db.db, testProject({ id: PROJECT }));
   const wake = createSessionWakeBus(createTestSessionEngine(db.db), { db: db.db });
@@ -92,19 +99,41 @@ async function fixture(text = "Reply from the actual local artifact store") {
     branchId: SESSION,
     attemptId: SESSION,
     turnId: null,
-    message: { id: "reply", role: "assistant", parts: [{ type: "text", text }] },
+    message: {
+      id: "reply",
+      role: kind === "transcript.referenced" ? "assistant" : "user",
+      parts: [{ type: "text", text }],
+    },
   };
   const reference = await artifacts.write(artifact);
-  await cloud.engine.observe({
-    id: "reply-observation",
-    kind: "transcript.referenced",
-    sessionId: SESSION,
-    occurredAt: 1,
-    attachmentId: null,
-    turnId: null,
-    reference,
-    provenance,
-  });
+  if (kind === "transcript.referenced") {
+    await cloud.engine.observe({
+      id: "reply-observation",
+      kind,
+      sessionId: SESSION,
+      occurredAt: 1,
+      attachmentId: null,
+      turnId: null,
+      reference,
+      provenance,
+    });
+  } else {
+    await cloud.engine.submit({
+      commandId: "runtime-message",
+      sessionId: SESSION,
+      intent:
+        kind === "message.submit"
+          ? { kind, reference }
+          : {
+              kind,
+              attachmentId: "attachment",
+              interactionId: "interaction",
+              resolution: { optionIds: [], response: "Resolved" },
+              reference,
+            },
+      provenance,
+    });
+  }
   const events = await cloud.engine.listEvents({ sessionId: SESSION });
   const calls: { name: string; args: Record<string, unknown> }[] = [];
   const bodies = new Map<string, string>();
@@ -134,9 +163,8 @@ async function fixture(text = "Reply from the actual local artifact store") {
       if (name === "sessions:accept") {
         const batch = (args.events as string[]).map((raw) => JSON.parse(raw) as SessionEvent);
         for (const event of batch) {
-          if (event.payload.kind === "transcript.referenced") {
-            expect(bodies.has(event.payload.reference.id)).toBe(true);
-          }
+          const eventReference = transcriptReferenceFor(event);
+          if (eventReference !== null) expect(bodies.has(eventReference.id)).toBe(true);
           accepted = Math.max(accepted, event.sequence);
         }
         return { acceptedThrough: accepted, duplicates: 0, quarantined: 0 };
@@ -197,54 +225,62 @@ async function fixture(text = "Reply from the actual local artifact store") {
 }
 
 describe("the runner's transcript producer composition", () => {
-  it("stages an offline birth batch's body after registration and before its reference", async () => {
-    const f = await fixture();
-    const publish = f.publish();
-    await expect(publish(f.request, f.callOptions)).resolves.toMatchObject({
-      acceptedThrough: f.events.length,
-    });
-    expect(f.calls.map((call) => call.name)).toEqual([
-      "sessions:accept",
-      "transcripts:stageArtifacts",
-      "sessions:accept",
-    ]);
-    expect(f.bodies.get(f.reference.id)).toBe(canonicalJson(f.artifact));
-    expect(await f.artifacts.read(f.reference)).toEqual(f.artifact);
-  });
+  it.each(["transcript.referenced", "message.submit", "interaction.resolve"] as const)(
+    "stages an offline birth batch's %s body after registration and before its reference",
+    async (kind) => {
+      const f = await fixture(undefined, kind);
+      const publish = f.publish();
+      await expect(publish(f.request, f.callOptions)).resolves.toMatchObject({
+        acceptedThrough: f.events.length,
+      });
+      expect(f.calls.map((call) => call.name)).toEqual([
+        "sessions:accept",
+        "transcripts:stageArtifacts",
+        "sessions:accept",
+      ]);
+      expect(f.bodies.get(f.reference.id)).toBe(canonicalJson(f.artifact));
+      expect(await f.artifacts.read(f.reference)).toEqual(f.artifact);
+    },
+  );
 
-  it("holds references on incomplete redaction or a failed staging call, then safely replays the prefix", async () => {
-    const f = await fixture("Reply includes canary-secret");
-    f.secretStore.put({
-      name: "CANARY",
-      value: "canary-secret",
-      scope: "session",
-      sessionId: SESSION,
-      projectId: PROJECT,
-    });
-    const publish = f.publish();
-    f.incomplete();
-    await expect(publish(f.request, f.callOptions)).rejects.toThrow(
-      "Secret storage is unavailable",
-    );
-    expect(f.calls.map((call) => call.name)).toEqual(["sessions:accept"]);
-    f.complete();
-    const original = f.link.mutate;
-    const error = Object.assign(new Error("claim transferred"), { data: { code: "stale_claim" } });
-    vi.spyOn(f.link, "mutate").mockImplementation(async (name, args, opts) => {
-      if (name === "transcripts:stageArtifacts") throw error;
-      return original(name, args, opts);
-    });
-    await expect(publish(f.request, f.callOptions)).rejects.toMatchObject({
-      data: { code: "fenced" },
-    });
-    expect(f.calls.filter((call) => call.name === "sessions:accept")).toHaveLength(2);
-    vi.mocked(f.link.mutate).mockRestore();
-    await publish(f.request, f.callOptions);
-    expect(f.bodies.get(f.reference.id)).not.toContain("canary-secret");
-    expect(await f.artifacts.read(f.reference)).toEqual(f.artifact); // remote redaction never rewrites local bytes
-    f.disconnect();
-    await expect(publish(f.request, f.callOptions)).rejects.toThrow("offline");
-  });
+  it.each(["transcript.referenced", "message.submit", "interaction.resolve"] as const)(
+    "holds %s on incomplete redaction or a failed staging call, then safely replays the prefix",
+    async (kind) => {
+      const f = await fixture("Reply includes canary-secret", kind);
+      f.secretStore.put({
+        name: "CANARY",
+        value: "canary-secret",
+        scope: "session",
+        sessionId: SESSION,
+        projectId: PROJECT,
+      });
+      const publish = f.publish();
+      f.incomplete();
+      await expect(publish(f.request, f.callOptions)).rejects.toThrow(
+        "Secret storage is unavailable",
+      );
+      expect(f.calls.map((call) => call.name)).toEqual(["sessions:accept"]);
+      f.complete();
+      const original = f.link.mutate;
+      const error = Object.assign(new Error("claim transferred"), {
+        data: { code: "stale_claim" },
+      });
+      vi.spyOn(f.link, "mutate").mockImplementation(async (name, args, opts) => {
+        if (name === "transcripts:stageArtifacts") throw error;
+        return original(name, args, opts);
+      });
+      await expect(publish(f.request, f.callOptions)).rejects.toMatchObject({
+        data: { code: "fenced" },
+      });
+      expect(f.calls.filter((call) => call.name === "sessions:accept")).toHaveLength(2);
+      vi.mocked(f.link.mutate).mockRestore();
+      await publish(f.request, f.callOptions);
+      expect(f.bodies.get(f.reference.id)).not.toContain("canary-secret");
+      expect(await f.artifacts.read(f.reference)).toEqual(f.artifact); // remote redaction never rewrites local bytes
+      f.disconnect();
+      await expect(publish(f.request, f.callOptions)).rejects.toThrow("offline");
+    },
+  );
 
   it("wires the real cloud store drain and live-viewer subscription, even when runtime binds after connect", async () => {
     const f = await fixture();

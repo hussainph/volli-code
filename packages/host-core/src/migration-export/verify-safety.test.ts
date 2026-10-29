@@ -66,14 +66,12 @@ it("refuses forged work promises, malformed history and incomplete source covera
         },
         error: /Pending runner work/,
       })),
-      ...(["runnerJobs", "automationArmings", "automationScheduleCursors"] as const).map(
-        (name) => ({
-          edit: (m: MigrationExportManifest) => {
-            m.streams.find((s) => s.name === name)!.records = 1;
-          },
-          error: /pending runner work/,
-        }),
-      ),
+      ...(["runnerJobs", "automationScheduleCursors"] as const).map((name) => ({
+        edit: (m: MigrationExportManifest) => {
+          m.streams.find((s) => s.name === name)!.records = 1;
+        },
+        error: /pending runner work/,
+      })),
       {
         rows: { tickets: [{}] },
         edit: (m) => {

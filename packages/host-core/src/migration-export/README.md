@@ -39,10 +39,12 @@ blob files stay local; every selected linked blob's bytes and size must verify.
 
 ## No executable work
 
-`pendingRunnerWork: false` is checked against zero `runnerJobs`,
-`automationArmings` and `automationScheduleCursors` streams. Armings, countdowns
-and schedule cursors are kept as legacy rows with explicit paused/re-arm reasons,
-not executable records. Queued follow-ups, undelivered notices/Run messages and
+`pendingRunnerWork: false` is checked against zero `runnerJobs` and
+`automationScheduleCursors` streams. Column armings and scheduled definitions
+move into pause-only records: the shared importer forces `pausedReason: moved`
+and stamps `pausedAt`. Schedules have an inert far-future cursor until explicit re-arm
+computes a fresh strictly-future occurrence. Original armings, pending arrivals
+and old schedule cursors are also kept in the legacy archive; no queued work moves. Queued follow-ups, undelivered notices/Run messages and
 unfinished cleanup commands (including accepted-but-not-completed commands) refuse export. A durable interruption fact is terminal too, so old interrupted cleanups do not permanently block a move. Historical unclosed attachments are
 counted, not treated as live turns. The move engine must freeze the project and
 check actual runtime liveness before invoking this exporter.

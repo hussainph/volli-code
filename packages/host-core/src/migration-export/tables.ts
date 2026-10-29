@@ -175,7 +175,7 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
   {
     table: "automation_column_arming",
     disposition: "export",
-    reason: "Archived paused with a re-arm reason; never executable after the move.",
+    reason: "Paused armings plus original archived rows; only explicit re-arm enables them.",
   },
   { table: "automation_column_order", disposition: "export", reason: "Verbatim." },
   {

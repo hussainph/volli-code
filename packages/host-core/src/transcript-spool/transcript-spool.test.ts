@@ -472,6 +472,48 @@ describe("stage", () => {
     expect(largeRow.bytes).toBe(Buffer.byteLength(spilled));
   });
 
+  test.each(["message.submit", "interaction.resolve"] as const)(
+    "stages and packs runtime-authored %s bodies, redacted and deduplicated",
+    async (kind) => {
+      const reference = await artifacts.write(artifact(`Runtime notice ${SECRET}`));
+      const intent =
+        kind === "message.submit"
+          ? { kind, reference }
+          : {
+              kind,
+              attachmentId: "attachment",
+              interactionId: "interaction",
+              resolution: { optionIds: [], response: "Resolved" },
+              reference,
+            };
+      ledger.push({
+        kind: "command.recorded",
+        command: { id: "notice", sessionId: SESSION, createdAt: 1, route: null, intent },
+      });
+      // The same body may be named by multiple facts in the accepted range.
+      ledger.push({
+        kind: "command.recorded",
+        command: { id: "notice-again", sessionId: SESSION, createdAt: 2, route: null, intent },
+      });
+      const s = spool();
+      await expect(s.stage(session, ledger.events)).resolves.toEqual({ staged: 1, missing: [] });
+      expect(backend.staged[0]!.artifacts[0]).toMatchObject({
+        digest: reference.id,
+        sequence: 1,
+      });
+      expect(backend.staged[0]!.artifacts[0]!.body).toContain("Runtime notice ‹secret:API_KEY›");
+      ledger.accepted = ledger.events.length;
+      await expect(s.packTranscript(session)).resolves.toMatchObject([
+        { artifactCount: 1, missing: [] },
+      ]);
+      const pack = await readPack(1, ledger.accepted);
+      expect(pack.header).toMatchObject({ artifactCount: 1 });
+      expect(pack.entries).toMatchObject([
+        { digest: reference.id, body: JSON.parse(backend.staged[0]!.artifacts[0]!.body!) },
+      ]);
+    },
+  );
+
   test("reports bodies it cannot read and stages the rest", async () => {
     const [lost, kept] = await turn("turn-1", ["lost", "kept"]);
     await rm(join(root, "spool", `${lost!.id.slice(7)}.spool`));

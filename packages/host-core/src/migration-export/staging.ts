@@ -41,7 +41,7 @@ export function stagingDirOf(outDir: string): string {
  * `transform.ts` changes what a row becomes, so a staging area written by the
  * old mapping is snapshotted again instead of resumed into a mixed export.
  */
-export const MAPPER_VERSION = 4;
+export const MAPPER_VERSION = 5;
 
 /** What `state.json` records about the snapshot. */
 export interface StagingState {
