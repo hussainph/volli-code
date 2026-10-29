@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { canonical, generateSnapshot, serialize } from "./snapshot.mjs";
+import { generateSnapshot, serialize } from "./snapshot.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 test("snapshot uses evaluated Convex registrations: aliases, re-exports, nested modules, all kinds, declared returns only", async () => {
@@ -53,7 +53,7 @@ test("snapshot uses evaluated Convex registrations: aliases, re-exports, nested 
 });
 test("canonical union and object ordering is deterministic", () => {
   assert.deepEqual(
-    canonical({ z: 1, a: { type: "union", value: [{ type: "string" }, { type: "null" }] } }),
-    canonical({ a: { value: [{ type: "null" }, { type: "string" }], type: "union" }, z: 1 }),
+    serialize({ z: 1, a: { type: "union", value: [{ type: "string" }, { type: "null" }] } }),
+    serialize({ a: { value: [{ type: "null" }, { type: "string" }], type: "union" }, z: 1 }),
   );
 });

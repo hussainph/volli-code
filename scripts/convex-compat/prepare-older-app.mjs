@@ -33,14 +33,15 @@
  * Prints the manifest path on the last line. Re-running for an
  * already-prepared commit reuses it.
  */
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { appendStepSummary, chooseSuites, olderDependencies, renderPrepared } from "./harness.mjs";
 import { latestTag } from "./tags.mjs";
+import { extractTree, installTree } from "./materialize.mjs";
 
 /** Written last: its presence is what marks the tree complete. */
 const MANIFEST = "older-app.json";
@@ -48,36 +49,6 @@ const DESKTOP = "@volli/desktop";
 
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
-}
-
-/** The tag's tree, extracted without touching this checkout. */
-function extract(commit, tree) {
-  rmSync(tree, { recursive: true, force: true });
-  mkdirSync(tree, { recursive: true });
-  const archive = spawnSync("git", ["archive", "--format=tar", commit], { maxBuffer: 1 << 30 });
-  if (archive.status !== 0) throw new Error(`git archive ${commit} failed`);
-  execFileSync("tar", ["-x", "-C", tree], { input: archive.stdout });
-}
-
-/**
- * Install the older tree's OWN dependencies, from its own lockfile.
- *
- * `--ignore-scripts` because the lane runs `vp test` against sources: Electron
- * is never downloaded, node-pty is never built against Electron and the
- * desktop's `electron-rebuild` postinstall never runs. better-sqlite3 13 is
- * N-API and ships its prebuild inside the package. The filter keeps the
- * install to the desktop and what it needs; `vp` is the toolchain CI provides,
- * `pnpm` the one a dev machine has.
- */
-function install(tree, pkg) {
-  const args = ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", `${pkg}...`];
-  for (const bin of ["vp", "pnpm"]) {
-    const run = spawnSync(bin, args, { cwd: tree, stdio: "inherit" });
-    if (run.error?.code === "ENOENT") continue;
-    if (run.status !== 0) throw new Error(`${bin} install failed in ${tree}`);
-    return;
-  }
-  throw new Error("Neither vp nor pnpm is on PATH");
 }
 
 /** The tag's desktop version, which must be the tag's own version — that is what shipped. */
@@ -122,18 +93,20 @@ function main() {
   } catch {
     throw new Error(`${tag} is not a tag in this checkout; fetch tags first (git fetch --tags)`);
   }
-  const tree = resolve(values.out, commit);
+  mkdirSync(resolve(values.out), { recursive: true });
+  // Vitest reports realpaths (not macOS /tmp and /var symlink aliases).
+  const tree = resolve(realpathSync(resolve(values.out)), commit);
   const manifestPath = join(tree, MANIFEST);
 
   let manifest = readManifest(manifestPath);
   if (manifest === null || manifest.commit !== commit) {
-    extract(commit, tree);
+    extractTree(commit, tree);
     const version = appVersion(tree, tag);
     const { suites, absent } = chooseSuites(tree);
     if (suites.length === 0) {
       throw new Error(`${tag} ships none of the lane's live suites: ${absent.join(", ")}`);
     }
-    install(tree, DESKTOP);
+    installTree(tree, DESKTOP);
     const { convexApi, generatedApi } = olderDependencies(tree);
     manifest = { tag, commit, appVersion: version, tree, suites, absent, convexApi, generatedApi };
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

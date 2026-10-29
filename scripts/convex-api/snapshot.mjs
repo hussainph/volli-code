@@ -8,7 +8,7 @@ import { readdir } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { createServer } from "vite-plus";
 
-export function canonical(value) {
+function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value === null || typeof value !== "object") return value;
   const result = Object.fromEntries(

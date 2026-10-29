@@ -10,14 +10,15 @@ const equal = (a, b) => serialize(a) === serialize(b);
 export function accepts(previous, next) {
   if (equal(previous, next) || next.type === "any") return true;
   if (previous.type === "any") return false;
+  if (previous.type === "id" && next.type === "string") return true;
   if (previous.type === "union") return previous.value.every((arm) => accepts(arm, next));
   if (next.type === "union") return next.value.some((arm) => accepts(previous, arm));
   if (previous.type === "literal") {
     const type = typeof previous.value;
     if (next.type === "string" && type === "string") return true;
     if (next.type === "boolean" && type === "boolean") return true;
-    if (next.type === "float64" && type === "number") return true;
-    if (next.type === "int64" && previous.value?.$integer) return true;
+    if (next.type === "number" && (type === "number" || previous.value?.$float)) return true;
+    if (next.type === "bigint" && previous.value?.$integer) return true;
     return false;
   }
   if (previous.type !== next.type) return false;
@@ -44,14 +45,17 @@ export function accepts(previous, next) {
   }
 }
 
-/** Outputs preserve every declared field an older client may read. Extra
- * fields are harmless. Required -> optional and new union arms are not: unlike
- * input widening they can hand an older client a value it cannot understand.
+/** Preserve declared fields and their guarantees in existing output shapes.
+ * New fields and widened unions are additive under the public API policy;
+ * callers must tolerate new union cases. Required fields may not disappear.
  */
 function preservesReturn(previous, next) {
   if (equal(previous, next) || previous.type === "any") return true;
   if (next.type === "any") return false;
-  if (next.type === "union") return next.value.every((arm) => preservesReturn(previous, arm));
+  if (next.type === "union") {
+    const previousArms = previous.type === "union" ? previous.value : [previous];
+    return previousArms.every((from) => next.value.some((to) => preservesReturn(from, to)));
+  }
   if (previous.type === "union") return previous.value.some((arm) => preservesReturn(arm, next));
   if (previous.type === "object" && next.type === "object") {
     return Object.entries(previous.value).every(([key, field]) => {
@@ -88,9 +92,11 @@ export function contractChanges(previous, next) {
       for (const [key, field] of Object.entries(before.args.value)) {
         const to = after.args.value[key];
         if (!to) add(name, `args.${key}`, "argument_removed");
-        else if (field.optional && !to.optional) add(name, `args.${key}`, "argument_made_required");
-        else if (!accepts(field.fieldType, to.fieldType))
-          add(name, `args.${key}`, "argument_retyped_or_narrowed");
+        else {
+          if (field.optional && !to.optional) add(name, `args.${key}`, "argument_made_required");
+          if (!accepts(field.fieldType, to.fieldType))
+            add(name, `args.${key}`, "argument_retyped_or_narrowed");
+        }
       }
       for (const [key, field] of Object.entries(after.args.value)) {
         if (!(key in before.args.value) && !field.optional)

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createRequire } from "node:module";
 import { accepts, contractChanges, latestAppTag, unapprovedChanges } from "./compatibility.mjs";
 
-const string = { type: "string" },
-  number = { type: "float64" },
-  any = { type: "any" };
-const literal = (value) => ({ type: "literal", value });
+// Use the pinned SDK's actual wire vocabulary (number/bigint, not TS names).
+const { v } = createRequire(new URL("../../convex/package.json", import.meta.url))("convex/values");
+const string = v.string().json,
+  number = v.number().json,
+  any = v.any().json;
+const literal = (value) => v.literal(value).json;
 const union = (...value) => ({ type: "union", value });
 const field = (fieldType = string, optional = false) => ({ fieldType, optional });
 const object = (value) => ({ type: "object", value });
@@ -42,6 +45,18 @@ test("argument retyping, union narrowing and optional -> required fail", () => {
     "argument_made_required",
   ]);
 });
+test("a requiredness exception cannot mask a simultaneous type narrowing", () => {
+  const changes = contractChanges(
+    api(object({ id: field(string, true) })),
+    api(object({ id: field(number) })),
+  );
+  assert.deepEqual(
+    changes.map((change) => change.code),
+    ["argument_made_required", "argument_retyped_or_narrowed"],
+  );
+  const exception = { ...changes[0], reason: "Retired optional caller", retiresIn: "v0.4.0" };
+  assert.deepEqual(unapprovedChanges(changes, [exception]), [changes[1]]);
+});
 test("new required arguments fail; new optional arguments and required -> optional pass", () => {
   assert.deepEqual(codes(api(), api(object({ id: field(), extra: field() }))), [
     "required_argument_added",
@@ -58,6 +73,10 @@ test("input unions may widen and reorder, and literals may widen", () => {
   );
   assert(accepts(literal("a"), string));
   assert(accepts(literal(2), number));
+  assert(accepts(literal(NaN), number));
+  assert(accepts(literal(2n), v.int64().json));
+  assert(accepts(v.id("tickets").json, string));
+  assert(!accepts(string, v.id("tickets").json));
   assert(!accepts(string, literal("a")));
 });
 test("nested objects, arrays, records and discriminated unions cannot narrow inputs", () => {
@@ -119,10 +138,19 @@ test("new optional return fields pass, existing optional return fields stay pres
     ["return_removed_or_retyped"],
   );
 });
-test("returns use output variance: new unknown union arms fail, known arms and stronger fields pass", () => {
-  assert.deepEqual(codes(api(undefined, string), api(undefined, union(string, number))), [
-    "return_removed_or_retyped",
-  ]);
+test("return unions may widen, but existing arms and fields cannot be retyped", () => {
+  assert.deepEqual(codes(api(undefined, string), api(undefined, union(string, number))), []);
+  assert.deepEqual(
+    codes(
+      api(undefined, union(string, number)),
+      api(undefined, union(string, number, v.boolean().json)),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    codes(api(undefined, union(string, number)), api(undefined, union(string, v.boolean().json))),
+    ["return_removed_or_retyped"],
+  );
   assert.deepEqual(codes(api(undefined, union(string, number)), api(undefined, string)), []);
   assert.deepEqual(
     codes(

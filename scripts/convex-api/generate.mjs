@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import { parseArgs } from "node:util";
 
 import { contractChanges, latestAppTag, unapprovedChanges } from "./compatibility.mjs";
 import { generateSnapshot, serialize } from "./snapshot.mjs";
+import { extractTree, installTree } from "../convex-compat/materialize.mjs";
 
 const workspace = fileURLToPath(new URL("../../", import.meta.url));
 const contractPath = "convex/api-contract.json";
@@ -20,45 +22,51 @@ const root = workspace;
 const git = (args) =>
   execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
 
+// Persist only derived JSON, never baseline dependencies. Invalidate it when
+// the extractor, its toolchain or Node changes; git commits pin baseline code.
+const fingerprint = createHash("sha256");
+for (const path of [
+  "scripts/convex-api/snapshot.mjs",
+  "scripts/convex-compat/materialize.mjs",
+  "pnpm-lock.yaml",
+])
+  fingerprint.update(readFileSync(resolve(root, path)));
+fingerprint.update(process.versions.node);
+const cache = resolve(root, ".scratch/convex-api-cache", fingerprint.digest("hex"));
+const baselines = new Map();
+
+async function baseline(ref) {
+  const commit = git(["rev-parse", "--verify", `${ref}^{commit}`]);
+  if (!baselines.has(commit)) baselines.set(commit, await loadBaseline(commit, ref));
+  return baselines.get(commit);
+}
+
 /** Pre-guard releases have no committed snapshot. Derive their actual source
  * contract instead of silently bootstrapping an empty baseline. Like the N-1
  * harness, archive an immutable commit and install its own frozen dependency
  * graph, with lifecycle scripts off. Never borrow HEAD's shared validators.
  */
-async function baseline(ref) {
-  const commit = git(["rev-parse", "--verify", `${ref}^{commit}`]);
+async function loadBaseline(commit, ref) {
   const paths = git(["ls-tree", "--name-only", commit, "--", contractPath]);
   if (paths) return JSON.parse(git(["show", `${commit}:${contractPath}`]));
+  const cached = resolve(cache, `${commit}.json`);
+  if (existsSync(cached)) {
+    console.log(`Cached pre-snapshot contract: ${ref} (${commit})`);
+    return JSON.parse(readFileSync(cached, "utf8"));
+  }
   const scratch = resolve(root, ".scratch/convex-api");
   mkdirSync(scratch, { recursive: true });
   const tree = mkdtempSync(`${scratch}/baseline-`);
   try {
-    const tar = execFileSync("git", ["archive", "--format=tar", commit], {
-      cwd: root,
-      maxBuffer: 256 * 1024 * 1024,
-    });
-    execFileSync("tar", ["-x", "-C", tree], { input: tar });
+    extractTree(commit, tree, root);
     if (!existsSync(resolve(tree, "convex/functions")))
       throw new Error(`${ref} has no Convex sources`);
-    const args = [
-      "install",
-      "--frozen-lockfile",
-      "--ignore-scripts",
-      "--filter",
-      "@volli/convex...",
-    ];
-    let installed = false;
-    for (const bin of ["vp", "pnpm"]) {
-      const result = spawnSync(bin, args, { cwd: tree, stdio: "inherit" });
-      if (result.error?.code === "ENOENT") continue;
-      if (result.error || result.status !== 0)
-        throw new Error(`${bin} install failed for baseline ${ref}`);
-      installed = true;
-      break;
-    }
-    if (!installed) throw new Error("Neither vp nor pnpm is available to prepare the baseline");
+    installTree(tree, "@volli/convex");
     console.log(`Deriving pre-snapshot contract from ${ref} (${commit})`);
-    return await generateSnapshot(tree);
+    const snapshot = await generateSnapshot(tree);
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(cached, serialize(snapshot));
+    return snapshot;
   } finally {
     rmSync(tree, { recursive: true, force: true });
   }

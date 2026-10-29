@@ -26,7 +26,7 @@
  * to a JSON file an artifact can carry.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -138,6 +138,9 @@ function main() {
     `--maxWorkers=${workers}`,
   ];
   console.log(`Older app ${manifest.tag}: vp ${args.join(" ")} (in ${manifest.tree}/apps/desktop)`);
+  // A reused prepared tree must not reuse an earlier successful report if
+  // this invocation fails before the reporter writes its own evidence.
+  rmSync(reportPath, { force: true });
   const run = spawnSync("vp", args, {
     cwd: join(manifest.tree, "apps", "desktop"),
     stdio: "inherit",

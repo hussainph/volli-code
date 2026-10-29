@@ -511,6 +511,8 @@ board test uses, and shows that every write the raw HTTP API refused under
 it was contention and left nothing behind (`VOLLI_TEST_BOARD_BURST` raises
 the burst to reproduce it harder).
 
+### App compatibility
+
 **Public function arguments are a cross-version contract.** A shipped
 desktop calls these functions directly from its window (VC-889), through the
 generated references this package exports as `@volli/convex/api` (the only
@@ -542,8 +544,8 @@ Input unions may widen, new arguments must be optional, existing arguments
 must remain accepted (including nested objects). Function removals, public to
 internal changes and kind changes fail. Declared return validators preserve
 all existing fields, their requiredness and the values older clients can read;
-new fields are allowed. Output unions cannot gain unknown arms just because
-input unions can. **Undeclared returns are recorded as `null`, not inferred**:
+new fields and widened unions are allowed. Clients must tolerate new union
+cases; existing arms cannot silently lose or retype fields. **Undeclared returns are recorded as `null`, not inferred**:
 this guard cannot prove their handler's return shape. The older-app live lane
 below covers real client behavior, not every possible return value.
 
@@ -754,7 +756,10 @@ then delete the old one on GitHub.
 beside the desktop lanes and never inside them. It restores the binary cache
 (keyed on `backend.json`), regenerates the code and requires that nothing
 changed, and runs both test suites. `CI gate` requires it. `Check + Build`
-typechecks this package along with the rest of the workspace.
+typechecks this package along with the rest of the workspace and runs the
+[public API contract check](#app-compatibility) against both the base and newest app
+tag. CI extended's `Older app (live)` runs the released tag's own live clients
+against this backend on main pushes, nightly and dispatch (details above).
 
 ## Deployments
 
