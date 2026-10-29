@@ -10,7 +10,7 @@ import {
 import { useAutomationsStore, automationHistoryKey } from "../automations";
 import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { clearCloudAutomations, useCloudAutomationsStore } from "./state";
-import { ConvexAutomationSource } from "./source";
+import { ConvexAutomationSource, resolvedRunModel } from "./source";
 import { P, A, R, U, T, automation, arming, schedule, runner, run } from "./fixtures.test-support";
 
 let source: ConvexAutomationSource;
@@ -169,6 +169,10 @@ describe("Automation source seam", () => {
     expect(cloud.mutations[4]?.name).toBe("automations:disarmSchedule");
     cloud.mutations[4]!.resolve({});
     await off;
+    const fromStore = useAutomationsStore.getState().setEnabled(A, true, R);
+    expect(cloud.mutations[5]?.args.runnerId).toBe(R);
+    cloud.mutations[5]!.resolve({});
+    await fromStore;
   });
   it("queues ticket, unbound and Board runs on the caller's runner; the backend owns Place fallback", async () => {
     const { cloud } = setup();
@@ -363,4 +367,256 @@ describe("Automation source seam", () => {
     await expect(reading).rejects.toThrow("Workspace changed");
     expect(useAutomationsStore.getState().byProject[P]).toBeUndefined();
   });
+  it("reads legacy projections without inventing models or skipping unknown evidence", async () => {
+    const { cloud } = setup();
+    for (const value of [
+      undefined,
+      null,
+      "model",
+      {},
+      { providerId: "p" },
+      { providerId: "p", modelId: "m" },
+    ])
+      expect(resolvedRunModel(value)).toBeNull();
+    const model = { providerId: "p", modelId: "m", reasoningLevel: "high" };
+    const rows = [
+      run({ id: "attended", status: "started", model }),
+      run({ id: "auto", status: "started", model, attendance: "unattended" }),
+      run({ id: "no-session", status: "started", sessionId: null, model }),
+      run({ id: "no-model", status: "started" }),
+      run({ id: "skip", status: "skipped", automationName: null, dueAt: null, missedCount: null }),
+      run({ id: "unbound-skip", status: "skipped", automationId: null }),
+    ];
+    for (const name of ["runsForProject", "runsForAutomation"])
+      cloud.queries.set(`automations:${name}`, () => ({
+        page: rows,
+        isDone: true,
+        continueCursor: "end",
+      }));
+    expect(await source.runsForProject({ projectId: P })).toMatchObject({
+      runs: [{ attendance: "attended" }, { attendance: "unattended" }],
+    });
+    expect(await source.skipsForProject({ projectId: P })).toMatchObject({
+      skips: [{ automationName: "Automation", dueAt: 1, missedCount: 1 }],
+    });
+    await source.runsForAutomation({ projectId: P, automationId: A });
+    expect(await source.skipsForAutomation({ projectId: P, automationId: A })).toMatchObject({
+      skips: [{ id: "skip" }],
+    });
+    expect(source.hasMore("missing")).toBe(false);
+    await source.loadMore("missing");
+    await source.loadMore(P);
+    source.closeProject("other");
+    source.closeProject(P);
+  });
+  it("refuses edits of missing records and handles deletion racing a create reply", async () => {
+    const { cloud, answers } = setup();
+    await expect(
+      source.update({
+        commandId: T,
+        automationId: A,
+        name: "Review",
+        instructions: "Work",
+        runtime: null,
+        trigger: NO_AUTOMATION_TRIGGER,
+      }),
+    ).rejects.toThrow("Open this Automation");
+    answers.list = [];
+    const creating = source.create({
+      commandId: T,
+      projectId: P,
+      name: "Review",
+      instructions: "Work",
+      runtime: null,
+      trigger: NO_AUTOMATION_TRIGGER,
+    });
+    cloud.mutations[0]!.resolve({ automationId: A });
+    await expect(creating).rejects.toThrow("no longer available");
+  });
+  it("keeps transport usable without an optimistic identity and surfaces untyped or new refusals", async () => {
+    const { cloud } = setup();
+    adoptLaunch(LOCAL_LAUNCH);
+    const draft = {
+      commandId: A,
+      projectId: P,
+      name: "Review",
+      instructions: "Work",
+      runtime: null,
+      trigger: NO_AUTOMATION_TRIGGER,
+    };
+    const creating = source.create(draft);
+    cloud.mutations[0]!.resolve({ automationId: A });
+    await creating;
+    const updating = source.update({ ...draft, automationId: A });
+    cloud.mutations[1]!.resolve({});
+    await updating;
+    const armingWrite = source.arm({
+      commandId: A,
+      projectId: P,
+      status: "doing",
+      automationId: null,
+    });
+    cloud.mutations[2]!.resolve({});
+    await armingWrite;
+    await source.runners();
+    const old = source.arm({ commandId: A, projectId: P, status: "doing", automationId: A });
+    cloud.mutations[3]!.reject(refusal("runner_needs_update", "raw code"));
+    await expect(old).rejects.toThrow("Update Volli on Ada’s Mac");
+    const newer = source.cancel(P, T);
+    cloud.mutations[4]!.reject(refusal("new_code", "New recovery"));
+    await expect(newer).rejects.toThrow("New recovery");
+    const plain = source.cancel(P, T);
+    cloud.mutations[5]!.reject(new Error("Connection broke"));
+    await expect(plain).rejects.toThrow("Connection broke");
+    const finishing = source.cancel(P, T);
+    source.close();
+    cloud.mutations[6]!.resolve({});
+    await expect(finishing).rejects.toThrow("Workspace changed");
+  });
+  it("fences a removed project's in-flight read and stale callbacks, including a reopened id", async () => {
+    const { cloud } = setup();
+    const callbacks: (() => void)[] = [];
+    const original = cloud.session.client.watchQuery.bind(cloud.session.client);
+    vi.spyOn(cloud.session.client, "watchQuery").mockImplementation(
+      (...args: Parameters<typeof original>) => {
+        const [reference, queryArgs, options] = args;
+        const watch = original(reference, queryArgs, options);
+        return {
+          ...watch,
+          onUpdate: (callback) => {
+            callbacks.push(callback);
+            return watch.onUpdate(callback);
+          },
+        };
+      },
+    );
+    await source.list({ projectId: P });
+    source.closeProject(P);
+    await source.list({ projectId: P });
+    const old = callbacks[0]!;
+    old();
+    expect(useAutomationsStore.getState().byProject[P]?.[0]?.name).toBe("Review");
+    let finish!: (value: unknown) => void;
+    cloud.queries.set(
+      "automations:list",
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const reading = source.list({ projectId: P });
+    source.closeProject(P);
+    finish([]);
+    await expect(reading).rejects.toThrow("project is no longer");
+    source.close();
+    old();
+  });
+  it.each(["project", "client"] as const)(
+    "retires a query closed synchronously during %s subscription",
+    async (kind) => {
+      const { cloud } = setup();
+      const stop = vi.fn();
+      const original = cloud.session.client.watchQuery.bind(cloud.session.client);
+      vi.spyOn(cloud.session.client, "watchQuery").mockImplementation(
+        (...args: Parameters<typeof original>) => {
+          const [reference, queryArgs, options] = args;
+          const watch = original(reference, queryArgs, options);
+          return {
+            ...watch,
+            onUpdate: (callback) => {
+              callback();
+              if (kind === "client") source.close();
+              else source.closeProject(P);
+              return stop;
+            },
+          };
+        },
+      );
+      await expect(source.list({ projectId: P })).rejects.toThrow("project is no longer");
+      expect(stop).toHaveBeenCalledOnce();
+    },
+  );
+  it("retires synchronous Run settlement and surfaces subscription failure", () => {
+    const { cloud } = setup();
+    const callbacks: (() => void)[] = [];
+    const original = cloud.session.client.watchQuery.bind(cloud.session.client);
+    vi.spyOn(cloud.session.client, "watchQuery").mockImplementation(
+      (...args: Parameters<typeof original>) => {
+        const [reference, queryArgs, options] = args;
+        const watch = original(reference, queryArgs, options);
+        return {
+          ...watch,
+          onUpdate: (callback) => {
+            callbacks.push(callback);
+            const stop = watch.onUpdate(callback);
+            callback();
+            return stop;
+          },
+        };
+      },
+    );
+    cloud.answer(
+      "automations:runState",
+      { runId: A },
+      run({ status: "started", sessionAccess: "ready" }),
+    );
+    const settled = vi.fn();
+    source.followRun(P, A, settled);
+    expect(settled).toHaveBeenCalledOnce();
+    source.followRun(P, T, settled);
+    source.followRun(P, T, settled);
+    callbacks[1]!();
+    cloud.fail("automations:runState", { runId: T }, new Error("Read failed"));
+    expect(source.onError).toHaveBeenCalledOnce();
+    source.close();
+    callbacks.at(-1)!();
+  });
+  it.each([false, true])(
+    "pins three history pages and retries an interrupted page (scoped=%s)",
+    async (scoped) => {
+      const { cloud } = setup();
+      const name = scoped ? "automations:runsForAutomation" : "automations:runsForProject";
+      const key = scoped ? automationHistoryKey(P, A) : P;
+      let failNext = false;
+      cloud.queries.set(name, (args) => {
+        const opts = (args as { paginationOpts: { cursor: string | null; endCursor?: string } })
+          .paginationOpts;
+        if (failNext && opts.cursor === "c1" && opts.endCursor === undefined) {
+          failNext = false;
+          throw new Error("Page unavailable");
+        }
+        return {
+          page: [
+            run({
+              id: opts.cursor ?? "first",
+              createdAt: opts.cursor === null ? 3 : opts.cursor === "c1" ? 2 : 1,
+            }),
+          ],
+          isDone: opts.cursor === "c2",
+          continueCursor: opts.cursor === null ? "c1" : opts.cursor === "c1" ? "c2" : "end",
+        };
+      });
+      const read = () =>
+        scoped
+          ? source.runsForAutomation({ projectId: P, automationId: A })
+          : source.runsForProject({ projectId: P });
+      await read();
+      failNext = true;
+      await expect(source.loadMore(key)).rejects.toThrow("Page unavailable");
+      const loading = source.loadMore(key);
+      await source.loadMore(key);
+      await loading;
+      await read();
+      await source.loadMore(key);
+      await source.loadMore(key);
+      expect(useCloudAutomationsStore.getState().histories[key]?.map((row) => row.id)).toEqual([
+        "first",
+        "c1",
+        "c2",
+      ]);
+      expect(source.hasMore(key)).toBe(false);
+      source.closeProject("other");
+      source.closeProject(P);
+    },
+  );
 });

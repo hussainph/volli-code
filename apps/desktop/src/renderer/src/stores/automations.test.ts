@@ -24,6 +24,7 @@ import {
   selectColumnOrders,
   selectColumnRank,
   selectRailFresh,
+  selectPlanningLoaded,
   type OfferedListSlices,
 } from "./automations";
 import { remoteProject } from "./remote-project.test-support";
@@ -220,6 +221,16 @@ describe("cloud launch", () => {
 });
 
 describe("refresh", () => {
+  it("does not treat cold planning caches as an unarmed answer", () => {
+    const store = createAutomationsStore();
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(false);
+    store.setState({ byProject: { p1: [] } });
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(false);
+    store.setState({ armingByProject: { p1: [] } });
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(false);
+    store.setState({ enablementRead: true });
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(true);
+  });
   it("caches the fetched list under its project id", async () => {
     const listed = [automation(), automation({ id: "automation-2", projectId: null })];
     stubApi({ list: () => Promise.resolve({ ok: true, automations: listed }) });

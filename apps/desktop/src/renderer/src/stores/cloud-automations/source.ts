@@ -139,6 +139,7 @@ export class ConvexAutomationSource implements AutomationSource {
       update();
     }
     const entry = this.#watches.get(key);
+    if (entry === undefined) throw new Error("The project is no longer in this Workspace.");
     const rows = await this.#session.client.query(reference, args);
     this.#assertOpen();
     if (this.#watches.get(key) === entry) paint(rows);
@@ -520,6 +521,8 @@ export class ConvexAutomationSource implements AutomationSource {
     read();
   }
 
+  // #read fences every callback to its current watch. Teardown must keep
+  // retiring watches before deleting their pages, so stale replies never paint.
   #paintHistory(key: string): CloudRun[] {
     const history = this.#pages.get(key)!;
     const rows = [...new Map(history.rows.flat().map((row) => [row.id, row])).values()].toSorted(
