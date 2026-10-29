@@ -23,7 +23,11 @@ import {
   type SessionActivityWatchPorts,
   type SessionReadWatch,
 } from "./session-control";
-import { assertProjectWritable, assertSessionWritable } from "./cloud-move/freeze";
+import {
+  assertProjectWritable,
+  assertSessionWritable,
+  cloudClaimsSessionWrite,
+} from "./cloud-move/freeze";
 import { createHostSessionEngine } from "./sessions/engine";
 import type { AttentionDeliveryPort } from "./ports/attention";
 import type { HostEventBus } from "./ports/events";
@@ -102,15 +106,20 @@ const STOPPING_INTENTS: ReadonlySet<SubmitSessionCommandRequest["intent"]["kind"
 
 /**
  * The engine with the move freeze in front of its two person-intent writes
- * (VC-993): a project moving to Volli Cloud starts no Session and takes no
- * command, except one that stops work. Runtime observations still land, and
- * a cloud launch's drain carries any past the moved head.
+ * (VC-993): a project moving to Volli Cloud starts no local Session and its
+ * local Sessions take no command, except one that stops work. A Session Volli
+ * Cloud claims (`cloudClaimsSessionWrite`: the moved ones after the handover,
+ * a cloud launch's new ones) is the cloud project's and is never held.
+ * Runtime observations still land, and a cloud launch's drain carries any
+ * past the moved head.
  */
 function freezeGatedEngine(db: Database.Database, engine: SessionEngine): SessionEngine {
   return {
     ...engine,
     createSession: async (request) => {
-      assertProjectWritable(db, request.projectId);
+      // A cloud launch's birth (it names its owner) is the cloud project's.
+      const birth = { kind: "birth", ownerUserId: request.ownerUserId } as const;
+      if (!cloudClaimsSessionWrite(db, birth)) assertProjectWritable(db, request.projectId);
       return engine.createSession(request);
     },
     submit: async (request) => {

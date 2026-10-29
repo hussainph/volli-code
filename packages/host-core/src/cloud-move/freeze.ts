@@ -8,13 +8,14 @@
  * The write paths that ask: the board's commands (`board/commands.ts`), the
  * ticket commands every other door shares (`ticket-commands.ts`), the Session
  * engine's create and submit (`session-services.ts`; stopping work is always
- * allowed), the Automation and MCP settings services, and the worktree
+ * allowed, and so is every write of a Session Volli Cloud claims), the Automation and MCP settings services, and the worktree
  * reclaim. Reads are never refused: the frozen project stays fully readable.
  *
  * An N−1 build does not know the table and ignores the freeze.
  */
 import type Database from "better-sqlite3";
 
+import { localSessionRow } from "../db/local-product";
 import { prepared } from "../db/prepared";
 import { FROZEN_STATES, type MoveState } from "./states";
 
@@ -64,8 +65,39 @@ export function assertProjectWritable(db: Database.Database, projectId: string):
   if (state !== null) throw new ProjectFrozenError(projectId, state);
 }
 
-/** Refuses a write to a Session of a frozen project. An unknown Session is left to its caller. */
+/**
+ * Whether a Session write is Volli Cloud's, not the local product's: a
+ * birth for a cloud owner (a cloud launch starting a Session, the request
+ * naming its owner), or a Session the cloud claims (this runner drains it
+ * for an owner, or its birth names one; the inverse of `localSessionRow`).
+ *
+ * The freeze holds the frozen or archived LOCAL copy of a project. A moved
+ * project keeps its ids, so after the handover its Sessions sit in the same
+ * project id but belong to the cloud project: their resume, messages and
+ * new Sessions in a cloud launch are never the frozen copy's writes.
+ */
+export function cloudClaimsSessionWrite(
+  db: Database.Database,
+  write:
+    | { kind: "birth"; ownerUserId: string | undefined }
+    | { kind: "session"; sessionId: string },
+): boolean {
+  if (write.kind === "birth") return write.ownerUserId !== undefined;
+  return (
+    prepared<[string], { id: string }>(
+      db,
+      `SELECT id FROM sessions WHERE id = ? AND NOT (${localSessionRow("sessions.id")})`,
+    ).get(write.sessionId) !== undefined
+  );
+}
+
+/**
+ * Refuses a local product write to a Session of a frozen project. A Session
+ * the cloud claims ({@link cloudClaimsSessionWrite}) and an unknown Session
+ * are left to their callers.
+ */
 export function assertSessionWritable(db: Database.Database, sessionId: string): void {
+  if (cloudClaimsSessionWrite(db, { kind: "session", sessionId })) return;
   const row = prepared<[string], { project_id: string }>(
     db,
     "SELECT project_id FROM sessions WHERE id = ?",
