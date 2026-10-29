@@ -93,15 +93,12 @@ test("hostd-darwin pins Node to .nvmrc, packages natively, probes and uploads", 
   assert.equal(checkout.with.ref, "${{ needs.hostd-ref.outputs.ref }}");
   assert.equal(checkout.with["persist-credentials"], false);
   const setup = steps[index("Setup Vite+")];
-  assert.match(setup.uses, /^voidzero-dev\/setup-vp@[0-9a-f]{40}$/);
-  assert.deepEqual(setup.with, { "node-version-file": ".nvmrc", "run-install": false });
-  // Every third-party action is pinned to a full commit SHA.
-  for (const action of steps.filter((step) => step.uses)) {
+  assert.equal(setup.uses, "./.github/actions/setup-toolchain");
+  assert.deepEqual(setup.with, { "run-install": false });
+  // Local actions are checked separately; third-party actions stay SHA-pinned.
+  for (const action of steps.filter((step) => step.uses && !step.uses.startsWith("./"))) {
     assert.match(action.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
   }
-  const pnpm = steps[index("Enable pinned pnpm")].run;
-  assert.match(pnpm, /corepack" enable --install-directory "\$RUNNER_TEMP\/pnpm-bin" pnpm/);
-  assert.match(pnpm, /packageManager/);
   const arch = steps[index("Check runner architecture")];
   assert.equal(arch.env.ARCH, "${{ matrix.arch }}");
   assert.match(arch.run, /test "\$\(node -p process.arch\)" = "\$ARCH"/);
@@ -124,7 +121,7 @@ test("hostd-darwin pins Node to .nvmrc, packages natively, probes and uploads", 
   const pack = steps[index("Package and probe hostd")].run;
   assert.match(pack, /node apps\/hostd\/scripts\/package\.mjs --out "\$RUNNER_TEMP\/hostd"/);
   assert.match(pack, /bash apps\/hostd\/scripts\/ci-boot-artifact\.sh "\$RUNNER_TEMP\/hostd"/);
-  assert.ok(index("Enable pinned pnpm") > index("Setup Vite+"));
+  assert.ok(index("Setup Vite+") < index("Check runner architecture"));
   assert.ok(index("Check runner architecture") < index("Host-only install"));
   assert.ok(index("Host-only install") < index("Hostd integration test"));
   assert.ok(index("Hostd integration test") < index("Package and probe hostd"));

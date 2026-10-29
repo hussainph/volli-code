@@ -238,9 +238,8 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Setup Vite+
         if: steps.scope.outputs.tag != ''
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
       - name: Capture public peer through real adapters
@@ -414,24 +413,9 @@ jobs:
       # the packager copies this Node into the archive and refuses any other.
       # No dependency cache: a release build installs from the lockfile alone.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           run-install: false
-      # The packager and the integration test call `pnpm` itself, which
-      # setup-vp does not put on PATH. Enable it the way the Linux host image
-      # does (corepack, at package.json's packageManager), from the corepack
-      # shipped with this exact Node.
-      - name: Enable pinned pnpm
-        run: |
-          set -euo pipefail
-          node_bin="$(dirname "$(node -p process.execPath)")"
-          mkdir -p "$RUNNER_TEMP/pnpm-bin"
-          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
-          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
-          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
-          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
-          test "$(pnpm --version)" = "$expected"
       - name: Check runner architecture
         env:
           ARCH: ${{ matrix.arch }}
@@ -485,9 +469,8 @@ jobs:
           ref: ${{ needs.hostd-ref.outputs.ref }}
           persist-credentials: false
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           run-install: false
       # Two explicit patterns rather than hostd-*, which would also match
       # hostd-release-assets on a re-run.
@@ -560,9 +543,8 @@ jobs:
           name: hostd-release-assets
           path: ${{ runner.temp }}/hostd-assets
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
       - name: Build desktop with verified hostd pin
@@ -772,9 +754,8 @@ jobs:
       # (rebuild:native) — proven to survive on the macOS image by ci.yml's
       # desktop-smoke lane.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 

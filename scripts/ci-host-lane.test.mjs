@@ -198,6 +198,7 @@ test("actual path classifier selects lanes and fails safe", () => {
       [".devcontainer/host/Dockerfile", "true", "true", "base"],
       [".devcontainer/host/devcontainer.json", "true", "true", "base"],
       [".github/workflows/ci.yml", "true", "true", "all"],
+      [".github/actions/setup-toolchain/action.yml", "true", "true", "all"],
       [".github/workflows/ci-extended.yml", "true", "false", "base"],
       ["scripts/ci-host-lane.test.mjs", "true", "true", "all"],
       ["scripts/check-host-electron-imports.mjs", "true", "true", "base"],
@@ -320,7 +321,7 @@ test("cloud acceptance is macOS-only and separate from flag-off core e2e", () =>
 test("cloud hostd is pinned and packaged before the Electron desktop install", () => {
   const steps = extended.jobs["smoke-cloud"].steps;
   const setup = steps.find((step) => step.name === "Setup Vite+");
-  assert.equal(setup.with["node-version-file"], ".nvmrc");
+  assert.equal(setup.uses, "./.github/actions/setup-toolchain");
   assert.equal(setup.with["run-install"], false);
   const hostInstall = steps.findIndex((step) => step.name === "Host-only install");
   const packaging = steps.findIndex((step) => step.name.startsWith("Package hostd"));
@@ -334,13 +335,22 @@ test("cloud hostd is pinned and packaged before the Electron desktop install", (
     "pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile",
   );
   assert.equal(steps[desktopInstall].run, "pnpm install --frozen-lockfile");
-  const pnpm = steps.find((step) => step.name === "Enable pinned pnpm").run;
-  assert.match(pnpm, /corepack.*enable.*pnpm/);
-  assert.match(pnpm, /packageManager/);
   const guard = steps.find((step) => step.name === "Check hostd target and desktop version").run;
   assert.match(guard, /process\.versions\.node.*cat \.nvmrc/);
   assert.match(guard, /process\.arch.*arm64/);
   assert.match(guard, /package\.json.*version.*apps\/desktop\/package\.json.*version/);
+});
+
+test("package lane rebuilds node-pty with pinned pnpm for the host Node", () => {
+  const rebuild = jobs["test-packages"].steps.find(
+    (step) => step.name === "Build node-pty for Node",
+  );
+  assert.equal(rebuild["working-directory"], "packages/host-core");
+  assert.match(rebuild.run, /npm_config_runtime=node/);
+  assert.match(rebuild.run, /npm_config_target="\$\(node -p 'process\.versions\.node'\)"/);
+  assert.match(rebuild.run, /pnpm rebuild node-pty/);
+  assert.doesNotMatch(rebuild.run, /vp rebuild/);
+  assert.match(rebuild.run, /node scripts\/probe-node-pty\.mjs/);
 });
 
 test("cloud artifact export uses the desktop version and requires archive plus checksum", () => {
@@ -427,10 +437,8 @@ function assertHostCoverage(workspaceRoot) {
 test("existing and future host packages cannot silently omit the coverage script", () => {
   assertHostCoverage(root);
   assert.equal(
-    jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").with[
-      "node-version-file"
-    ],
-    ".nvmrc",
+    jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").uses,
+    "./.github/actions/setup-toolchain",
   );
   const command = jobs["test-packages"].steps.at(-1).run;
   assert.ok(
