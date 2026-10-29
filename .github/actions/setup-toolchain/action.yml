@@ -1,0 +1,63 @@
+name: Setup locked toolchain
+description: Install the workspace Vite+ tree without an unlocked global bootstrap
+
+inputs:
+  run-install:
+    description: Install the full workspace (false leaves installation to the caller)
+    default: "true"
+  cache:
+    description: Restore and save the pnpm store
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pinned Node
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      with:
+        node-version-file: .nvmrc
+        package-manager-cache: false
+
+    # Corepack ships with our exact Node pin. Its project packageManager field
+    # selects an exact pnpm; do not install a separate, unlocked Vite+ tree.
+    - name: Enable pinned pnpm and workspace binaries
+      shell: bash
+      run: |
+        set -euo pipefail
+        node_bin="$(dirname "$(node -p process.execPath)")"
+        mkdir -p "$RUNNER_TEMP/pnpm-bin"
+        "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
+        echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
+        echo "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
+        export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
+        expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+        test "$(pnpm --version)" = "$expected"
+        test "$(node -p process.versions.node)" = "$(cat .nvmrc)"
+
+    - name: Locate pnpm store
+      if: inputs.cache == 'true'
+      id: store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache pnpm store
+      if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: locked-pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc', 'package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml', 'patches/**') }}
+
+    - name: Install from the workspace lockfile
+      if: inputs.run-install == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Report locked toolchain
+      if: inputs.run-install == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(command -v vp)" = "$GITHUB_WORKSPACE/node_modules/.bin/vp"
+        vp --version
+        pnpm --filter volli-code list vite-plus vite --depth 1
+        pnpm --recursive list rolldown --depth 1

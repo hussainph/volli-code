@@ -232,9 +232,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -311,10 +310,7 @@ jobs:
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
       #
-      # `vp run`, not `pnpm run`: setup-vp puts `vp` on PATH and manages pnpm
-      # internally, so a bare `pnpm` in a plain shell step is a 127. The check
-      # itself reads pnpm-workspace.yaml directly for the same reason — it has
-      # to run where pnpm is not a command.
+      # Use the workspace-locked Vite+ CLI shared with the other quality gates.
       - name: Check workspace license metadata
         run: vp run check:workspace-licenses
 
@@ -337,7 +333,7 @@ jobs:
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
-          node --test scripts/ci-host-lane.test.mjs
+          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
@@ -483,9 +479,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -564,9 +559,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -633,10 +627,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          # Exact host/container pin, rather than the root engines caret range.
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -646,7 +638,7 @@ jobs:
       # Electron's headers. Rebuild it from source for this Node (this job runs
       # no Electron; the desktop jobs keep their own Electron build), then
       # prove it loads and runs a shell before the tests depend on it.
-      # `vp rebuild`, not `pnpm rebuild`: pnpm is not a command on this runner.
+      # Rebuild is a package-manager operation, not a local Vite+ command.
       - name: Build node-pty for Node
         working-directory: packages/host-core
         run: |
@@ -655,7 +647,7 @@ jobs:
             npm_config_target="$(node -p 'process.versions.node')" \
             npm_config_disturl=https://nodejs.org/download/release \
             npm_config_build_from_source=true \
-            vp rebuild node-pty
+            pnpm rebuild node-pty
           node scripts/probe-node-pty.mjs
 
       # host-core's Chromium backend suite (VC-619) drives a real browser:
@@ -734,9 +726,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -851,9 +842,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -977,9 +967,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 

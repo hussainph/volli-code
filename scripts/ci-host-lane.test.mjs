@@ -320,7 +320,7 @@ test("cloud acceptance is macOS-only and separate from flag-off core e2e", () =>
 test("cloud hostd is pinned and packaged before the Electron desktop install", () => {
   const steps = extended.jobs["smoke-cloud"].steps;
   const setup = steps.find((step) => step.name === "Setup Vite+");
-  assert.equal(setup.with["node-version-file"], ".nvmrc");
+  assert.equal(setup.uses, "./.github/actions/setup-toolchain");
   assert.equal(setup.with["run-install"], false);
   const hostInstall = steps.findIndex((step) => step.name === "Host-only install");
   const packaging = steps.findIndex((step) => step.name.startsWith("Package hostd"));
@@ -334,9 +334,6 @@ test("cloud hostd is pinned and packaged before the Electron desktop install", (
     "pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile",
   );
   assert.equal(steps[desktopInstall].run, "pnpm install --frozen-lockfile");
-  const pnpm = steps.find((step) => step.name === "Enable pinned pnpm").run;
-  assert.match(pnpm, /corepack.*enable.*pnpm/);
-  assert.match(pnpm, /packageManager/);
   const guard = steps.find((step) => step.name === "Check hostd target and desktop version").run;
   assert.match(guard, /process\.versions\.node.*cat \.nvmrc/);
   assert.match(guard, /process\.arch.*arm64/);
@@ -427,10 +424,8 @@ function assertHostCoverage(workspaceRoot) {
 test("existing and future host packages cannot silently omit the coverage script", () => {
   assertHostCoverage(root);
   assert.equal(
-    jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").with[
-      "node-version-file"
-    ],
-    ".nvmrc",
+    jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").uses,
+    "./.github/actions/setup-toolchain",
   );
   const command = jobs["test-packages"].steps.at(-1).run;
   assert.ok(

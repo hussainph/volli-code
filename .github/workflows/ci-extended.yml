@@ -71,9 +71,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -120,22 +119,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           run-install: false
-
-      # setup-vp manages pnpm internally; package.mjs calls it by name.
-      - name: Enable pinned pnpm
-        run: |
-          set -euo pipefail
-          node_bin="$(dirname "$(node -p process.execPath)")"
-          mkdir -p "$RUNNER_TEMP/pnpm-bin"
-          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
-          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
-          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
-          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
-          test "$(pnpm --version)" = "$expected"
 
       - name: Check hostd target and desktop version
         run: |
@@ -219,9 +205,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -297,9 +282,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -324,9 +308,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -387,9 +370,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
