@@ -338,7 +338,9 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     };
     const f = setup(rearm);
     const row = f.toState(f.enqueue(), "checked", { ok: true });
-    expect((await f.service.snapshot()).moves[0]?.actions).toContain("finish");
+    const snapshot = await f.service.snapshot();
+    expect(snapshot.moves[0]?.actions).toContain("finish");
+    expect(snapshot.moves[0]?.automationRearm).toBeUndefined();
     await vi.waitFor(() => expect(rearm.read).toHaveBeenCalledOnce());
     await f.service.command({ moveId: row.moveId, action: "open-cloud" });
     const confirm = vi.spyOn(f.engine, "confirm").mockResolvedValue(row);

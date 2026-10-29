@@ -298,14 +298,18 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         at: 0,
         pending: false,
         fresh: false,
-        value: {
-          columns: [],
-          schedules: [],
-          inertGlobals: [],
-          canRearmOnThisMac: false,
-          unavailable: "Reading paused Automations…",
-          retryable: false,
-        },
+        ...(view.pausedAutomations.length === 0
+          ? {}
+          : {
+              value: {
+                columns: [],
+                schedules: [],
+                inertGlobals: [],
+                canRearmOnThisMac: false,
+                unavailable: "Reading paused Automations…",
+                retryable: false,
+              },
+            }),
       };
       rearmDetails.set(key, cached);
       while (rearmDetails.size > 128) rearmDetails.delete(rearmDetails.keys().next().value!);

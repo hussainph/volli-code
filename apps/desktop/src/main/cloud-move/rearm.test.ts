@@ -114,6 +114,16 @@ describe("moved Automation result bridge", () => {
     ).rejects.toThrow("connect");
     expect(f.mutation).not.toHaveBeenCalled();
   });
+  it("directs a capability-version problem to an update rather than retry", async () => {
+    const f = setup();
+    f.roster([{ id: "runner", kind: "mac", status: "online", capabilities: { tools: [] } }]);
+    expect(await f.port.read(row)).toMatchObject({
+      canRearmOnThisMac: false,
+      retryable: false,
+      unavailable: "Update Volli to re-arm Automations on this Mac.",
+    });
+    expect(f.mutation).not.toHaveBeenCalled();
+  });
   it("offers an immediate fresh retry when this Mac becomes ready without starting work", async () => {
     const f = setup();
     f.roster([

@@ -146,13 +146,17 @@ export function createMoveRearm(options: {
   async function readiness(
     row: Row,
     fresh = false,
-  ): Promise<{ runnerId: string | null; unavailable: string | null }> {
+  ): Promise<{ runnerId: string | null; unavailable: string | null; retryable: boolean }> {
     assertPerson(row);
     const live = options.fullRunner(row.userId);
     if (live === null)
-      return { runnerId: null, unavailable: "Open in Volli Cloud to re-arm on this Mac." };
+      return {
+        runnerId: null,
+        unavailable: "Open in Volli Cloud to re-arm on this Mac.",
+        retryable: false,
+      };
     if (live.state !== "online" || live.runnerId === null)
-      return { runnerId: null, unavailable: "Waiting for this Mac to connect." };
+      return { runnerId: null, unavailable: "Waiting for this Mac to connect.", retryable: true };
     const key = row.userId + ":" + live.runnerId;
     let cached = fresh ? undefined : runners.get(key);
     if (cached === undefined || Date.now() - cached.at >= RUNNER_CACHE_MS) {
@@ -175,10 +179,14 @@ export function createMoveRearm(options: {
       owned?.kind !== "mac" ||
       (owned.status !== "online" && owned.status !== "degraded")
     )
-      return { runnerId: null, unavailable: "Waiting for this Mac to connect." };
+      return { runnerId: null, unavailable: "Waiting for this Mac to connect.", retryable: true };
     if (!owned.capable)
-      return { runnerId: null, unavailable: "Update Volli to re-arm Automations on this Mac." };
-    return { runnerId: live.runnerId, unavailable: null };
+      return {
+        runnerId: null,
+        unavailable: "Update Volli to re-arm Automations on this Mac.",
+        retryable: false,
+      };
+    return { runnerId: live.runnerId, unavailable: null, retryable: false };
   }
   return {
     async read(row, fresh = false) {
@@ -188,7 +196,7 @@ export function createMoveRearm(options: {
         const ready =
           value.columns.length + value.schedules.length > 0
             ? await readiness(row, fresh)
-            : { runnerId: null, unavailable: null };
+            : { runnerId: null, unavailable: null, retryable: false };
         assertPerson(row);
         return {
           columns: value.columns,
@@ -196,7 +204,7 @@ export function createMoveRearm(options: {
           inertGlobals: value.inertGlobals,
           canRearmOnThisMac: ready.runnerId !== null,
           unavailable: ready.unavailable,
-          retryable: ready.unavailable !== null && options.fullRunner(row.userId) !== null,
+          retryable: ready.retryable,
         };
       } catch (error) {
         const code = refusalCode(error);
