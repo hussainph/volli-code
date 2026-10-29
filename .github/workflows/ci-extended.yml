@@ -27,9 +27,11 @@ name: CI extended
 # (main's own core e2e in ci.yml holds a second), leaving the PR lanes three
 # of the five. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
 # core, credential/legacy exclusions and measured quarantine, so a new smoke
-# joins this lane with no registration step. The small two-Mac cloud wake
-# journey leads the chain so its failure reports before the long rest tier;
-# every later lane still runs after a failure, and the summary requires all.
+# joins this lane with no registration step. The small two-Mac cloud journey
+# leads the chain so its failure reports before the long rest tier: that one
+# job proves the wake path and, in the same slot and build, the Automation
+# path (VC-1004). Every later lane still runs after a failure, and the summary
+# requires all of them.
 on:
   push:
     branches: [main]
@@ -188,6 +190,16 @@ jobs:
   # SIMULATED by main's dual-locked smoke seam (real power events, the runner
   # transport held down); the real lid test is on hardware, by the owner.
   #
+  # The same job and the same build then prove the Automation path (VC-1004,
+  # B3b-6), on a fresh pair of isolated two-Mac instances and a fresh
+  # throwaway backend: Mac A arms a column and a schedule on itself, Mac B
+  # moves a card into that column and the Run starts on Mac A, Mac A sleeps
+  # and B reads the waiting Run, two schedule occurrences coalesce into one
+  # skip and one Run, and Mac A waking starts exactly that one Run. Its sleep
+  # and its clock are both SIMULATED (the power seam; the fixture backend's
+  # guarded `testAutomations` hooks). Sharing this job's loopback-CSP build is
+  # what makes the second journey cost the slot rather than a second build.
+  #
   # First in the same single-slot chain, for quick cloud wake feedback.
   # The rest tier and remote acceptance still run afterward, even if this
   # fails. Its own build: the renderer CSP must reach the loopback backend
@@ -196,7 +208,8 @@ jobs:
     name: Smoke (cloud wake acceptance)
     if: ${{ !cancelled() }}
     runs-on: macos-15
-    timeout-minutes: 40
+    # Two journeys in one slot: the wake path, then the Automation path.
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -241,12 +254,29 @@ jobs:
           node fixture/with-backend.ts --deploy --
           node ../apps/desktop/e2e/volli-drive/cloud-wake-acceptance-smoke.mjs
 
-      - name: Upload cloud wake acceptance evidence
+      # The second two-Mac journey in the same job: same build, same slot,
+      # its own throwaway backend and its own isolated drive homes. It runs
+      # whatever the wake journey's outcome was, so one red never hides the
+      # other's result; the job fails if either step fails.
+      - name: Run the two-Mac Automation acceptance (sleep and clock SIMULATED)
+        if: ${{ !cancelled() }}
+        env:
+          VOLLI_DRIVE_HOME: ${{ runner.temp }}/cloud-automation-drive
+          VOLLI_DRIVE_EVIDENCE: ${{ runner.temp }}/cloud-automation-acceptance
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/cloud-automation-acceptance
+        working-directory: convex
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          node ../apps/desktop/e2e/volli-drive/cloud-automation-acceptance-smoke.mjs
+
+      - name: Upload two-Mac cloud acceptance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-results-cloud-wake-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cloud-wake-acceptance
+          path: |
+            ${{ runner.temp }}/cloud-wake-acceptance
+            ${{ runner.temp }}/cloud-automation-acceptance
           if-no-files-found: warn
           retention-days: 30
 
@@ -357,7 +387,7 @@ jobs:
           }
           report "Smoke (rest tier)" "$SMOKE_REST"
           report "Smoke (cloud acceptance)" "$SMOKE_CLOUD"
-          report "Smoke (cloud wake acceptance)" "$SMOKE_CLOUD_WAKE"
+          report "Smoke (cloud wake + automation acceptance)" "$SMOKE_CLOUD_WAKE"
           report "Move to Volli Cloud" "$MOVE_MATRIX"
           report "Backup restore rehearsal" "$BACKUP_RESTORE"
           exit "$status"
