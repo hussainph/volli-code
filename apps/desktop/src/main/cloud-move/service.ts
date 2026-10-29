@@ -216,19 +216,19 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     await work;
   };
 
+  const currentOwnedMove = (row: MoveRow) => {
+    const latest = engine.journal
+      .movesIn(MOVE_STATES)
+      .findLast((item) => item.projectId === row.projectId);
+    return (
+      own(row) && latest?.moveId === row.moveId && unavailable(options.account.snapshot()) === null
+    );
+  };
   const actionsFor = (
     row: MoveRow,
     status: Omit<CloudMoveStatus, "actions">,
   ): CloudMoveAction[] => {
-    const latest = engine.journal
-      .movesIn(MOVE_STATES)
-      .findLast((item) => item.projectId === row.projectId);
-    if (
-      !own(row) ||
-      latest?.moveId !== row.moveId ||
-      unavailable(options.account.snapshot()) !== null
-    )
-      return [];
+    if (!currentOwnedMove(row)) return [];
     const queue = engine.journal.queue(row.queueId);
     if (row.state === "returned") return ["open-cloud"];
     if (row.state === "superseded" || REPORT_ONLY_FAILURES.has(row.failure?.code ?? "")) return [];
@@ -395,7 +395,8 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         row.state === "rolled_back" &&
         row.failure?.code !== "cancelled" &&
         !REPORT_ONLY_FAILURES.has(row.failure?.code ?? "") &&
-        active !== null
+        active !== null &&
+        currentOwnedMove(row)
       )
         view.message += " Retry after the running move finishes.";
       moves.push({ ...view, actions: actionsFor(row, view) });

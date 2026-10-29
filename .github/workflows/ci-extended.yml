@@ -308,7 +308,8 @@ jobs:
 
   # The real desktop move, including the signed-history URL settling window.
   # Runs through volli-drive: a local ticket Session -> move -> Finish -> cloud
-  # restart -> moved transcript/attachment -> reuse folders -> resume/new Session.
+  # restart -> moved transcript/attachment -> reuse folders -> resume/new Session
+  # -> Go back to local, retaining the cloud project and a readable changes export.
   move-app:
     name: Move to Volli Cloud (app path)
     if: ${{ !cancelled() }}

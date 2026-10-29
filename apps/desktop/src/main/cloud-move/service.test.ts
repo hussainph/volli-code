@@ -414,6 +414,12 @@ describe("desktop move coordinator over the real SQLite journal", () => {
       );
     expect(interrupted).toBe(false);
     expect(f.prepare).not.toHaveBeenCalled();
+    f.enqueue();
+    const superseded = (await f.service.snapshot()).moves.find(
+      (move) => move.moveId === old.moveId,
+    );
+    expect(superseded?.actions).toEqual([]);
+    expect(superseded?.message).not.toContain("Retry after the running move finishes.");
     await f.service.dispose();
   });
   it("sanitizes unexpected dry-run errors while preserving named recovery refusals", async () => {

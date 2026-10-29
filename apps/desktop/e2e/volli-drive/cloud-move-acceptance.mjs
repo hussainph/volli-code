@@ -4,7 +4,8 @@
  *
  * SETUP: UUID local project/tickets + a stored PNG (fixture `move`), fake model HTTP,
  * preview enrollment, one empty Workspace and an S3-compatible signature-checking bucket.
- * The Session/turn, move, verification and Finish are driven through the real UI.
+ * The Session/turn, move, verification, Finish and Go back to local are driven
+ * through the real UI. A passing journey ends returned, with the cloud copy kept.
  * No engine mock, journal patch, clock jump, shortened URL guard or window.api move call.
  * In particular, the production signed-history settling wait (~11 min) runs in full.
  *
@@ -73,7 +74,11 @@ async function step(label, work) {
 }
 async function action(kind, role, name, extra = {}, options = {}) {
   const snap = await drive("snapshot");
-  const hits = visibleControls(snap.text, role, name, options);
+  // Inert background controls can retain their name but have no actionable
+  // ref. Only a control the fresh snapshot permits us to act on can match.
+  const hits = visibleControls(snap.text, role, name, options).filter((line) =>
+    line.includes("[ref="),
+  );
   const hit = options.first ? hits[0] : hits.length === 1 ? hits[0] : null;
   assert.ok(hit, `Expected ${role} ${name} once, found ${hits.length}\n${snap.text}`);
   assert.ok(!hit.includes("[disabled]"), `${name} disabled\n${snap.text}`);
@@ -261,7 +266,7 @@ try {
       "Move is ready after the Workspace-bound dry run",
       async () =>
         visibleControls((await drive("snapshot")).text, "button", "Move").some(
-          (control) => !control.includes("[disabled]"),
+          (control) => control.includes("[ref=") && !control.includes("[disabled]"),
         ),
       { timeout: 60_000, interval: 500 },
     );
