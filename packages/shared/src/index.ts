@@ -206,6 +206,7 @@ export type {
   ProfileRestoreBundle,
   ProfileRestoreProject,
 } from "./profile-restore";
+export { CLOUD_MOVE_ACTIONS, CLOUD_MOVE_STEPS, CLOUD_MOVE_VIEW_STATES } from "./cloud-moves";
 export type {
   CloudMoveCounts,
   CloudMoveExclusion,
@@ -220,5 +221,4 @@ export type {
   CloudMoveCheck,
   CloudMoveStatus,
   CloudMoveSnapshot,
-  CloudMovesApi,
 } from "./cloud-moves";

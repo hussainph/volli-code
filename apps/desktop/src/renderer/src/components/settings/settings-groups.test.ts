@@ -29,7 +29,7 @@ describe("Settings → Volli Cloud", () => {
         .flatMap((group) => group.categories)
         .some((item) => item.key === "volli-cloud"),
     ).toBe(false);
-    const category = settingsGroups(undefined, { hosts: true })
+    const category = settingsGroups(undefined, { moves: true })
       .flatMap((group) => group.categories)
       .find((item) => item.key === "volli-cloud")!;
     const html = renderToStaticMarkup(category.content);

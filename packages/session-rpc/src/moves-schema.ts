@@ -1,5 +1,6 @@
 /** Desktop-only move vocabulary: closed enums ship with the same app as their caller. */
 import { z } from "zod";
+import { CLOUD_MOVE_ACTIONS, CLOUD_MOVE_STEPS, CLOUD_MOVE_VIEW_STATES } from "@volli/shared";
 import type {
   CloudMoveSnapshot,
   CloudMovePreflight,
@@ -20,28 +21,8 @@ const counts = z.object({
   transcriptBytes: count,
   piLogBytes: count,
 });
-const action = z.enum([
-  "pause",
-  "resume",
-  "cancel",
-  "retry",
-  "skip",
-  "finish",
-  "open-cloud",
-  "go-back",
-  "remove-local",
-]);
-const step = z.enum([
-  "backup",
-  "freeze",
-  "export",
-  "upload",
-  "copy",
-  "history",
-  "verify",
-  "handover",
-  "check",
-]);
+const action = z.enum(CLOUD_MOVE_ACTIONS);
+const step = z.enum(CLOUD_MOVE_STEPS);
 const exclusion = z.object({ label: text, reason: text, count: count.optional() });
 
 export const movePreflightInputSchema = z.strictObject({
@@ -97,16 +78,7 @@ export const moveSnapshotSchema = z.object({
       projectId: id,
       projectName: text,
       workspaceName: text,
-      state: z.enum([
-        "queued",
-        "moving",
-        "waiting",
-        "problem",
-        "check",
-        "finished",
-        "rolled-back",
-        "returned",
-      ]),
+      state: z.enum(CLOUD_MOVE_VIEW_STATES),
       step,
       completedSteps: z.array(step),
       message: text,
@@ -119,6 +91,7 @@ export const moveSnapshotSchema = z.object({
       confirmedAt: count.nullable(),
       backupPath: text.nullable(),
       returnExportPath: text.nullable(),
+      rollback: z.object({ changes: z.array(text), requiresConfirmation: z.boolean() }).nullable(),
       checks: z.array(
         z.object({
           label: text,

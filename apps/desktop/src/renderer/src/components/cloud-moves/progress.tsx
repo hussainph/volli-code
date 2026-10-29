@@ -1,5 +1,6 @@
 import * as React from "react";
-import type { CloudMoveAction, CloudMoveStatus, CloudMovesApi } from "@volli/shared";
+import { CLOUD_MOVE_STEPS, type CloudMoveAction, type CloudMoveStatus } from "@volli/shared";
+import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import {
@@ -19,6 +20,7 @@ const ACTION_LABELS: Record<CloudMoveAction, string> = {
   pause: "Pause",
   resume: "Resume",
   cancel: "Cancel move",
+  "roll-back": "Roll back",
   retry: "Retry",
   skip: "Skip this project",
   finish: "Finish move",
@@ -27,18 +29,34 @@ const ACTION_LABELS: Record<CloudMoveAction, string> = {
   "remove-local": "Remove local copy…",
 };
 
-export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudMoveStatus[] }) {
+export function MoveProgress({
+  api,
+  moves,
+  initialCancelMoveId,
+}: {
+  api: CloudMovesClient;
+  moves: CloudMoveStatus[];
+  initialCancelMoveId?: string;
+}) {
   const [busy, setBusy] = React.useState(false);
+  const [copiedMoveId, setCopiedMoveId] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState<{
     move: CloudMoveStatus;
-    action: "go-back" | "remove-local" | "cancel";
-  } | null>(null);
+    action: "go-back" | "remove-local" | "cancel" | "roll-back";
+  } | null>(() => {
+    const move = moves.find((item) => item.moveId === initialCancelMoveId);
+    return move === undefined ? null : { move, action: "cancel" };
+  });
   const [confirmation, setConfirmation] = React.useState("");
   async function perform(moveId: string, action: CloudMoveAction) {
     if (busy) return;
     setBusy(true);
     try {
-      await api.command({ moveId, action, ...(action === "remove-local" ? { confirmation } : {}) });
+      const typed =
+        action === "remove-local" ||
+        (action === "roll-back" &&
+          moves.find((item) => item.moveId === moveId)?.rollback?.requiresConfirmation === true);
+      await api.command({ moveId, action, ...(typed ? { confirmation } : {}) });
       setConfirming(null);
       setConfirmation("");
     } catch {
@@ -50,8 +68,10 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
   async function report(moveId: string) {
     if (busy) return;
     setBusy(true);
+    setCopiedMoveId(null);
     try {
       await navigator.clipboard.writeText(await api.report(moveId));
+      setCopiedMoveId(moveId);
     } catch {
       toastError("Couldn't copy the move report. Try again.");
     } finally {
@@ -62,6 +82,9 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
   const current =
     confirming === null ? null : moves.find((move) => move.moveId === confirming.move.moveId);
   const allowed = confirming !== null && current?.actions.includes(confirming.action) === true;
+  const typedConfirmation =
+    confirming?.action === "remove-local" ||
+    (confirming?.action === "roll-back" && current?.rollback?.requiresConfirmation === true);
   return (
     <>
       <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto text-ui">
@@ -80,10 +103,10 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
             {move.state === "moving" || move.state === "waiting" ? (
               <>
                 <ol aria-label="Move steps" className="flex flex-wrap gap-2 text-muted-foreground">
-                  {Object.entries(MOVE_STEP_LABELS).map(([step, label]) => (
+                  {CLOUD_MOVE_STEPS.map((step) => (
                     <li key={step} aria-current={move.step === step ? "step" : undefined}>
-                      {move.completedSteps.includes(step as CloudMoveStatus["step"]) ? "✓ " : ""}
-                      {label}
+                      {move.completedSteps.includes(step) ? "✓ " : ""}
+                      {MOVE_STEP_LABELS[step]}
                     </li>
                   ))}
                 </ol>
@@ -103,7 +126,7 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
                   </>
                 ) : null}
                 <p className="text-muted-foreground">{moveTime(move.estimateSeconds)}</p>
-                {move.step === "backup" ? (
+                {move.step === "backup" || move.step === "export" ? (
                   <p className="text-muted-foreground">The snapshot cannot stop immediately.</p>
                 ) : null}
               </>
@@ -119,7 +142,11 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
               <ul aria-label="Verification results" className="flex flex-col gap-1">
                 {move.checks.map((check) => (
                   <li key={check.label}>
-                    <span aria-label={check.passed ? "Passed" : "Not matched"}>
+                    <span
+                      role="img"
+                      aria-label={check.passed ? "Passed" : "Not matched"}
+                      className={check.passed ? "text-positive" : "text-destructive"}
+                    >
                       {check.passed ? "✓" : "!"}
                     </span>{" "}
                     {check.label}
@@ -134,6 +161,11 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
             move.checks.length > 0 &&
             move.checks.every((check) => check.passed) ? (
               <p>All checks passed. Open the project in Volli Cloud, then finish the move.</p>
+            ) : null}
+            {move.state === "check" || move.state === "finished" ? (
+              <p className="text-muted-foreground">
+                Don’t install an older Volli build during a move.
+              </p>
             ) : null}
             {move.backupPath !== null ? (
               <p className="break-all text-muted-foreground">Backup: {move.backupPath}</p>
@@ -175,9 +207,20 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
                         ? "destructive"
                         : "outline"
                   }
-                  disabled={busy || (action === "go-back" && move.returnExportPath === null)}
+                  disabled={
+                    busy ||
+                    (action === "go-back" && move.returnExportPath === null) ||
+                    (action === "roll-back" && move.rollback === null) ||
+                    (action === "finish" &&
+                      (move.checks.length === 0 || move.checks.some((check) => !check.passed)))
+                  }
                   onClick={() => {
-                    if (action === "go-back" || action === "remove-local" || action === "cancel") {
+                    if (
+                      action === "go-back" ||
+                      action === "remove-local" ||
+                      action === "cancel" ||
+                      action === "roll-back"
+                    ) {
                       setConfirmation("");
                       setConfirming({ move, action });
                     } else void perform(move.moveId, action);
@@ -192,7 +235,7 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
                 disabled={busy}
                 onClick={() => void report(move.moveId)}
               >
-                Report
+                {copiedMoveId === move.moveId ? "Report copied" : "Report"}
               </Button>
             </div>
           </section>
@@ -211,7 +254,9 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
                 ? "Remove the local copy?"
                 : confirming?.action === "go-back"
                   ? "Go back to local?"
-                  : "Cancel this move?"}
+                  : confirming?.action === "roll-back"
+                    ? "Roll back this move?"
+                    : "Cancel this move?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirming?.action === "remove-local"
@@ -226,14 +271,34 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
               Export: {current?.returnExportPath ?? confirming.move.returnExportPath}
             </p>
           ) : null}
+          {confirming?.action === "roll-back" && current?.rollback != null ? (
+            <div className="text-ui">
+              {current.rollback.changes.length > 0 ? (
+                <>
+                  <p>Cloud changes since the move will be lost:</p>
+                  <ul>
+                    {current.rollback.changes.map((change) => (
+                      <li key={change}>{change}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p>No cloud changes since the move.</p>
+              )}
+            </div>
+          ) : null}
           {confirming?.action === "remove-local" && current?.backupPath ? (
             <p className="break-all text-ui">Backup kept: {current.backupPath}</p>
           ) : null}
-          {confirming?.action === "remove-local" ? (
+          {typedConfirmation && confirming !== null ? (
             <label className="flex flex-col gap-2 text-ui">
               Type {confirming.move.projectName} to confirm
               <Input
-                aria-label="Project name to confirm removal"
+                aria-label={
+                  confirming.action === "roll-back"
+                    ? "Project name to confirm rollback"
+                    : "Project name to confirm removal"
+                }
                 value={confirmation}
                 onChange={(event) => setConfirmation(event.target.value)}
                 disabled={busy}
@@ -249,12 +314,17 @@ export function MoveProgress({ api, moves }: { api: CloudMovesApi; moves: CloudM
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Keep as is</AlertDialogCancel>
             <Button
-              variant={confirming?.action === "remove-local" ? "destructive" : "default"}
+              variant={
+                confirming?.action === "remove-local" || confirming?.action === "roll-back"
+                  ? "destructive"
+                  : "default"
+              }
               disabled={
                 busy ||
                 !allowed ||
                 (confirming?.action === "go-back" && current?.returnExportPath == null) ||
-                (confirming?.action === "remove-local" && confirmation !== current?.projectName)
+                (confirming?.action === "roll-back" && current?.rollback == null) ||
+                (typedConfirmation && confirmation !== current?.projectName)
               }
               onClick={() => {
                 if (confirming !== null) void perform(confirming.move.moveId, confirming.action);

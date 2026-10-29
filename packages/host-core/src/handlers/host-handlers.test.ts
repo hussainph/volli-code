@@ -1952,14 +1952,16 @@ describe("person-only moves to Volli Cloud", () => {
   it("projects the port, and unsubscribes even if the initial delivery fails", async () => {
     const stop = vi.fn();
     let changed!: () => void;
+    let failed!: (error: unknown) => void;
     const moves = {
       snapshot: vi.fn(async () => snapshot),
       preflight: vi.fn(async () => preflight),
       start: vi.fn(async () => {}),
       command: vi.fn(async () => {}),
       report: vi.fn(async () => "{}"),
-      onChanged: vi.fn((listener: () => void) => {
+      onChanged: vi.fn((listener: () => void, onError: (error: unknown) => void) => {
         changed = listener;
+        failed = onError;
         return stop;
       }),
     };
@@ -1978,6 +1980,8 @@ describe("person-only moves to Volli Cloud", () => {
     expect(delivery.emit).toHaveBeenCalledWith(null);
     changed();
     expect(delivery.emit).toHaveBeenCalledTimes(2);
+    failed(new Error("source ended"));
+    expect(delivery.fail).toHaveBeenCalledWith(expect.any(Error));
     const broken = {
       ...sink(),
       emit: vi.fn(async () => {

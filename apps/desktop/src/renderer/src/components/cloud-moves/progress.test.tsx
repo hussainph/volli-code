@@ -29,8 +29,16 @@ afterEach(async () => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
-async function mount(status: Partial<CloudMoveStatus> = {}) {
-  await act(async () => root.render(<MoveProgress api={api} moves={[{ ...move, ...status }]} />));
+async function mount(status: Partial<CloudMoveStatus> = {}, initialCancelMoveId?: string) {
+  await act(async () =>
+    root.render(
+      <MoveProgress
+        api={api}
+        moves={[{ ...move, ...status }]}
+        {...(initialCancelMoveId === undefined ? {} : { initialCancelMoveId })}
+      />,
+    ),
+  );
 }
 function button(label: string) {
   const found = [...document.querySelectorAll("button")].find(
@@ -44,6 +52,50 @@ async function click(label: string) {
 }
 
 describe("Move progress and outcomes", () => {
+  it.each(["backup", "export"] as const)(
+    "explains the uninterruptible snapshot during %s",
+    async (step) => {
+      await mount({ state: "moving", step });
+      expect(container.textContent).toContain("snapshot cannot stop immediately");
+    },
+  );
+  it("opens the cancel confirmation from the paused banner without mutating first", async () => {
+    await mount({ state: "waiting", actions: ["resume", "cancel"] }, "move");
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(
+      "Cancel this move?",
+    );
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("keeps changed-cloud rollback distinct from Go back to local and requires the typed project name", async () => {
+    await mount({
+      state: "check",
+      actions: ["roll-back", "go-back"],
+      rollback: { requiresConfirmation: true, changes: ["2 tickets changed"] },
+    });
+    await click("Roll back");
+    const dialog = document.querySelector('[role="alertdialog"]')!;
+    expect(dialog.textContent).toContain("2 tickets changed");
+    expect(dialog.textContent).toContain("will be lost");
+    const confirm = [...dialog.querySelectorAll("button")].find(
+      (item) => item.textContent === "Roll back",
+    )!;
+    expect(confirm.disabled).toBe(true);
+    expect(api.command).not.toHaveBeenCalled();
+    await act(async () => {
+      const input = dialog.querySelector("input")!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+        input,
+        "Atlas",
+      );
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => confirm.click());
+    expect(api.command).toHaveBeenCalledWith({
+      moveId: "move",
+      action: "roll-back",
+      confirmation: "Atlas",
+    });
+  });
   it("shows durable countable progress, completed steps, remaining time, pause, cancel and content-free report", async () => {
     await mount();
     expect(container.querySelector("progress")?.value).toBe(10);
@@ -55,6 +107,7 @@ describe("Move progress and outcomes", () => {
     await click("Report");
     expect(api.report).toHaveBeenCalledWith("move");
     expect(clipboard).toHaveBeenCalledWith('{"ok":true}');
+    expect(button("Report copied")).toBeDefined();
     await click("Cancel move");
     expect(api.command).toHaveBeenCalledTimes(1);
     expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(
@@ -84,20 +137,24 @@ describe("Move progress and outcomes", () => {
     ]);
   });
   it.each([
-    ["A Session started; the move waits until it’s idle.", ["skip"]],
-    ["Waiting for network. Nothing is lost; the move resumes.", []],
-    ["Needs 3.1 GB free.", ["resume", "cancel"]],
+    ["waiting", "A Session started; the move waits until it’s idle.", ["skip"]],
+    ["waiting", "Waiting for network. Nothing is lost; the move resumes.", []],
+    ["waiting", "Needs 3.1 GB free.", ["resume", "cancel"]],
     [
+      "problem",
       "Volli Cloud refused 2 records. Atlas was rolled back and is unchanged on this Mac.",
       ["retry", "skip"],
     ],
-    ["A check didn’t match. Atlas was rolled back.", ["retry"]],
-    ["This project is already in another Workspace.", []],
-    ["Your Volli Cloud preview access ended.", []],
-    ["Sign in as the person who started this move.", ["resume"]],
-  ] as const)("shows recovery for %s", async (message, actions) => {
-    await mount({ state: "problem", message, actions: [...actions] });
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(message);
+    ["problem", "A check didn’t match. Atlas was rolled back.", ["retry"]],
+    ["problem", "This project is already in another Workspace.", []],
+    ["problem", "Your Volli Cloud preview access ended.", []],
+    ["waiting", "Sign in as the person who started this move.", ["resume"]],
+  ] as const)("shows %s recovery for %s", async (state, message, actions) => {
+    await mount({ state, message, actions: [...actions] });
+    expect(
+      container.querySelector(state === "problem" ? '[role="alert"]' : '[role="status"]')
+        ?.textContent,
+    ).toBe(message);
     expect(container.querySelectorAll("button")).toHaveLength(actions.length + 1);
   });
   it("shows verification counts, backup, paused Automations and credential checklist before Finish move", async () => {
@@ -122,11 +179,17 @@ describe("Move progress and outcomes", () => {
     expect(api.command).toHaveBeenLastCalledWith({ moveId: "move", action: "open-cloud" });
   });
   it("never claims all checks passed for missing or mismatched verification", async () => {
-    await mount({ state: "check", checks: [{ label: "Session history", passed: false }] });
+    await mount({
+      state: "check",
+      checks: [{ label: "Session history", passed: false }],
+      actions: ["finish"],
+    });
     expect(container.textContent).not.toContain("All checks passed");
     expect(container.querySelector('[aria-label="Not matched"]')).not.toBeNull();
-    await mount({ state: "check", checks: [] });
+    expect(button("Finish move").disabled).toBe(true);
+    await mount({ state: "check", checks: [], actions: ["finish"] });
     expect(container.textContent).not.toContain("All checks passed");
+    expect(button("Finish move").disabled).toBe(true);
   });
   it("Go back to local explains preservation and shows the readable export location before and after", async () => {
     await mount({ state: "finished", actions: ["go-back"] });

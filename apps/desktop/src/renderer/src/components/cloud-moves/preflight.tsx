@@ -1,9 +1,10 @@
 import * as React from "react";
+import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
 import type {
   CloudMovePreflight,
   CloudMoveProject,
   CloudMoveSnapshot,
-  CloudMovesApi,
+  CloudMoveExclusion,
 } from "@volli/shared";
 import { AccountPane } from "@renderer/components/settings/panes/account-pane";
 import { Button } from "@renderer/components/ui/button";
@@ -22,7 +23,7 @@ export function MovePreflight({
   snapshot,
   projectIds,
 }: {
-  api: CloudMovesApi;
+  api: CloudMovesClient;
   snapshot: CloudMoveSnapshot;
   projectIds?: string[];
 }) {
@@ -30,7 +31,7 @@ export function MovePreflight({
     () => snapshot.workspaces.find((item) => item.canMove)?.id ?? "",
   );
   const [includeRemoved, setIncludeRemoved] = React.useState(false);
-  const [flight, setFlight] = React.useState<CloudMovePreflight | null>(null);
+  const [preflight, setPreflight] = React.useState<CloudMovePreflight | null>(null);
   const [preparedScope, setPreparedScope] = React.useState<string | null>(null);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [stopAtFirstProblem, setStopAtFirstProblem] = React.useState(true);
@@ -47,7 +48,7 @@ export function MovePreflight({
   React.useEffect(() => {
     let active = true;
     setReading(true);
-    setFlight(null);
+    setPreflight(null);
     setError(null);
     void api
       .preflight({
@@ -57,7 +58,7 @@ export function MovePreflight({
       })
       .then((next) => {
         if (!active) return;
-        setFlight(next);
+        setPreflight(next);
         setPreparedScope(scope);
         setSelected(
           new Set(
@@ -77,8 +78,12 @@ export function MovePreflight({
     };
   }, [api, projectIds, target, includeRemoved, scope]);
 
-  const projects = flight?.projects.filter((item) => selected.has(item.id)) ?? [];
-  const enoughSpace = flight !== null && flight.disk.freeBytes >= flight.disk.requiredBytes;
+  const projects = preflight?.projects.filter((item) => selected.has(item.id)) ?? [];
+  const totalEstimate = projects.some((item) => item.estimateSeconds === null)
+    ? null
+    : projects.reduce((total, item) => total + (item.estimateSeconds ?? 0), 0);
+  const enoughSpace =
+    preflight !== null && preflight.disk.freeBytes >= preflight.disk.requiredBytes;
   const canStart =
     !reading &&
     !starting &&
@@ -90,11 +95,11 @@ export function MovePreflight({
     projects.every((item) => item.blockers.length === 0) &&
     enoughSpace;
   async function start() {
-    if (!canStart || flight === null || target === null) return;
+    if (!canStart || preflight === null || target === null) return;
     setStarting(true);
     try {
       await api.start({
-        preflightId: flight.id,
+        preflightId: preflight.id,
         workspaceId: target,
         projectIds: projects.map((item) => item.id),
         stopAtFirstProblem,
@@ -117,7 +122,6 @@ export function MovePreflight({
             <label className="flex items-center gap-2">
               Workspace
               <select
-                aria-label="Workspace"
                 className="rounded-control border border-input bg-background px-2 py-1"
                 value={target ?? ""}
                 disabled={starting}
@@ -146,16 +150,18 @@ export function MovePreflight({
           </label>
         ) : null}
         {reading ? (
-          <p role="status">Checking projects… The snapshot cannot stop immediately.</p>
+          <p role="status">
+            Checking projects… The snapshot finishes even if you close this sheet.
+          </p>
         ) : null}
         {error !== null ? <p role="alert">{error}</p> : null}
-        {flight !== null && !reading ? (
+        {preflight !== null && !reading ? (
           <>
-            {flight.projects.length === 0 ? (
+            {preflight.projects.length === 0 ? (
               <p>No local projects to move.</p>
             ) : (
               <div className="flex flex-col gap-4">
-                {flight.projects.map((project) => (
+                {preflight.projects.map((project) => (
                   <ProjectSummary
                     key={project.id}
                     project={project}
@@ -173,17 +179,18 @@ export function MovePreflight({
                 ))}
               </div>
             )}
+            {projectIds === undefined && projects.length > 0 ? (
+              <p>
+                Total for {projects.length} {projects.length === 1 ? "project" : "projects"} ·{" "}
+                {moveTime(totalEstimate)}
+              </p>
+            ) : null}
             <section aria-label="What stays on this Mac" className="flex flex-col gap-2">
               <h3 className="font-medium">What stays on this Mac</h3>
               <ul className="list-inside list-disc text-muted-foreground">
                 <li>Secrets and API keys — re-enter them on other machines or for teammates.</li>
                 <li>Skills and templates — files on this Mac.</li>
-                {flight.exclusions.map((item) => (
-                  <li key={item.label}>
-                    {item.label}
-                    {item.count === undefined ? "" : ` (${item.count})`} — {item.reason}
-                  </li>
-                ))}
+                <ExclusionItems items={preflight.exclusions} />
               </ul>
             </section>
             <p>
@@ -191,15 +198,12 @@ export function MovePreflight({
               ad-hoc chats stay private.
             </p>
             <section aria-label="Safety" className="flex flex-col gap-2">
-              <h3 className="font-medium">Backup first</h3>
-              <p>
-                A full backup is made and checked first. Each project is read-only while it moves.
-                Its local copy is kept.
-              </p>
-              <p className="break-all text-muted-foreground">{flight.backupDirectory}</p>
+              <h3 className="font-medium">Full backup, checked first</h3>
+              <p>Each project stays on this Mac, read-only while it moves.</p>
+              <p className="break-all text-muted-foreground">{preflight.backupDirectory}</p>
               <p role={enoughSpace ? undefined : "alert"}>
-                {formatFileSize(flight.disk.requiredBytes)} needed ·{" "}
-                {formatFileSize(flight.disk.freeBytes)} free
+                {formatFileSize(preflight.disk.requiredBytes)} needed ·{" "}
+                {formatFileSize(preflight.disk.freeBytes)} free
               </p>
               <p>Don’t install an older Volli build during a move.</p>
             </section>
@@ -231,6 +235,15 @@ export function MovePreflight({
       </DialogFooter>
     </>
   );
+}
+
+function ExclusionItems({ items }: { items: CloudMoveExclusion[] }) {
+  return items.map((item) => (
+    <li key={item.label}>
+      {item.label}
+      {item.count === undefined ? "" : ` (${item.count})`} — {item.reason}
+    </li>
+  ));
 }
 
 function ProjectSummary({
@@ -309,12 +322,7 @@ function ProjectSummary({
         <details>
           <summary>Excluded items</summary>
           <ul className="list-inside list-disc">
-            {project.exclusions.map((item) => (
-              <li key={item.label}>
-                {item.label}
-                {item.count === undefined ? "" : ` (${item.count})`} — {item.reason}
-              </li>
-            ))}
+            <ExclusionItems items={project.exclusions} />
           </ul>
         </details>
       ) : null}

@@ -10,7 +10,13 @@ import {
 } from "./cloud-moves";
 import { fakeApi, move, snapshot } from "./test-support";
 import { closeCloudMoves, useCloudMovesStore } from "@renderer/stores/cloud-moves";
-const mocks = vi.hoisted(() => ({ enabled: true, launch: "local", projectId: "project" }));
+const mocks = vi.hoisted(() => ({
+  enabled: true,
+  launch: "local",
+  projectId: "project",
+  toast: vi.fn(),
+}));
+vi.mock("@renderer/lib/toast", () => ({ toastError: mocks.toast }));
 vi.mock("@renderer/components/hosts/use-hosts", () => ({ useCloudEnabled: () => mocks.enabled }));
 vi.mock("@renderer/stores/launch", () => ({ launchStore: () => mocks.launch }));
 vi.mock("@renderer/stores/projects", () => ({
@@ -55,10 +61,71 @@ async function render(children: React.ReactNode) {
 }
 
 describe("move entry and persistent surfaces", () => {
+  it("uses the latest move of a project, not an obsolete read-only or failed attempt", async () => {
+    useCloudMovesStore.setState({
+      snapshot: {
+        ...snapshot,
+        moves: [
+          { ...move, state: "problem" },
+          { ...move, moveId: "newer", state: "returned", localReadOnly: false },
+        ],
+      },
+    });
+    await render(
+      <>
+        <CloudMoveRailRow />
+        <CloudMoveReadOnlyBanner />
+      </>,
+    );
+    expect(container.textContent).toBe("");
+  });
+  it.each(["returned", "finished", "rolled-back"] as const)(
+    "does not leave a settled %s move nagging in the rail",
+    async (state) => {
+      useCloudMovesStore.setState({
+        snapshot: { ...snapshot, moves: [{ ...move, state, localReadOnly: false }] },
+      });
+      await render(<CloudMoveRailRow />);
+      expect(container.textContent).toBe("");
+    },
+  );
+  it("paused copies expose Resume and a cancel confirmation, with failures visible", async () => {
+    const api = fakeApi();
+    useCloudMovesStore.setState({
+      api,
+      snapshot: {
+        ...snapshot,
+        moves: [
+          { ...move, state: "waiting", message: "Move paused.", actions: ["resume", "cancel"] },
+        ],
+      },
+    });
+    await render(<CloudMoveReadOnlyBanner />);
+    expect(container.textContent).toContain("Move paused");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((item) => item.textContent === "Resume")!
+        .click(),
+    );
+    expect(api.command).toHaveBeenCalledWith({ moveId: "move", action: "resume" });
+    api.command.mockRejectedValueOnce(new Error("failed"));
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((item) => item.textContent === "Resume")!
+        .click(),
+    );
+    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining("Couldn't resume"));
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((item) => item.textContent === "Cancel…")!
+        .click(),
+    );
+    expect(useCloudMovesStore.getState().sheet).toEqual(
+      expect.objectContaining({ kind: "progress", cancelMoveId: "move" }),
+    );
+  });
   it("flag off has no read, rail row or banner even with journal facts present", async () => {
     const api = fakeApi();
-    vi.stubGlobal("api", undefined);
-    Object.assign(window, { api: { cloudMoves: api } });
     mocks.enabled = false;
     useCloudMovesStore.setState({ snapshot: { ...snapshot, moves: [move] } });
     await render(

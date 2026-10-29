@@ -56,34 +56,50 @@ export interface CloudMoveStartInput {
   stopAtFirstProblem: boolean;
 }
 
-export type CloudMoveAction =
-  | "pause"
-  | "resume"
-  | "cancel"
-  | "retry"
-  | "skip"
-  | "finish"
-  | "open-cloud"
-  | "go-back"
-  | "remove-local";
+export const CLOUD_MOVE_ACTIONS = [
+  "pause",
+  "resume",
+  "cancel",
+  "roll-back",
+  "retry",
+  "skip",
+  "finish",
+  "open-cloud",
+  "go-back",
+  "remove-local",
+] as const;
+export type CloudMoveAction = (typeof CLOUD_MOVE_ACTIONS)[number];
 
 export interface CloudMoveCommand {
   moveId: string;
   action: CloudMoveAction;
-  /** Required for manual removal; main checks the exact project name again. */
+  /** Required for manual removal or discarding changed cloud data; main checks the exact project name again. */
   confirmation?: string;
 }
 
-export type CloudMoveStep =
-  | "backup"
-  | "freeze"
-  | "export"
-  | "upload"
-  | "copy"
-  | "history"
-  | "verify"
-  | "handover"
-  | "check";
+export const CLOUD_MOVE_STEPS = [
+  "backup",
+  "freeze",
+  "export",
+  "upload",
+  "copy",
+  "history",
+  "verify",
+  "handover",
+  "check",
+] as const;
+export type CloudMoveStep = (typeof CLOUD_MOVE_STEPS)[number];
+
+export const CLOUD_MOVE_VIEW_STATES = [
+  "queued",
+  "moving",
+  "waiting",
+  "problem",
+  "check",
+  "finished",
+  "rolled-back",
+  "returned",
+] as const;
 
 export interface CloudMoveCheck {
   label: string;
@@ -98,15 +114,7 @@ export interface CloudMoveStatus {
   projectId: string;
   projectName: string;
   workspaceName: string;
-  state:
-    | "queued"
-    | "moving"
-    | "waiting"
-    | "problem"
-    | "check"
-    | "finished"
-    | "rolled-back"
-    | "returned";
+  state: (typeof CLOUD_MOVE_VIEW_STATES)[number];
   step: CloudMoveStep;
   completedSteps: CloudMoveStep[];
   /** Plain recovery copy, projected from engine codes, never raw exceptions or row contents. */
@@ -120,6 +128,8 @@ export interface CloudMoveStatus {
   backupPath: string | null;
   /** Destination shown before Go back to local; actual readable export shown afterwards. */
   returnExportPath: string | null;
+  /** Post-commit rollback is distinct from the non-destructive preview escape hatch. */
+  rollback: { changes: string[]; requiresConfirmation: boolean } | null;
   checks: CloudMoveCheck[];
   counts: CloudMoveCounts | null;
   pausedAutomations: string[];
@@ -130,17 +140,8 @@ export interface CloudMoveSnapshot {
   revision: number;
   account: { userId: string; displayName: string } | null;
   workspaces: { id: string; name: string; canMove: boolean }[];
+  /** Oldest first. Only the latest move for a project can own its local read-only marker. */
   moves: CloudMoveStatus[];
   /** A missing dependency, sign-in or access problem. Null when new moves can be prepared. */
   unavailable: string | null;
-}
-
-/** App-only, person-authorized door. The host owns all steps, safety rules and persistence. */
-export interface CloudMovesApi {
-  snapshot(): Promise<CloudMoveSnapshot>;
-  preflight(input: CloudMovePreflightInput): Promise<CloudMovePreflight>;
-  start(input: CloudMoveStartInput): Promise<void>;
-  command(input: CloudMoveCommand): Promise<void>;
-  report(moveId: string): Promise<string>;
-  onChanged(listener: () => void, failed?: () => void): () => void;
 }

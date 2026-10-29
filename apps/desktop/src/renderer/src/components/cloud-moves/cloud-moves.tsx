@@ -1,7 +1,6 @@
 import * as React from "react";
 import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
-import type { CloudMovesApi } from "@volli/shared";
-import { desktopCloudMovesApi } from "@renderer/lib/cloud-moves";
+import { desktopCloudMovesApi, type CloudMovesClient } from "@renderer/lib/cloud-moves";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -24,10 +23,11 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { launchStore } from "@renderer/stores/launch";
 import { MovePreflight } from "./preflight";
 import { MoveProgress } from "./progress";
-import { MOVE_STATE_LABELS, movePercent } from "./presentation";
+import { MOVE_STATE_LABELS, movePercentLabel } from "./presentation";
+import { toastError } from "@renderer/lib/toast";
 
 /** One subscription, outside navigation. Closing a sheet never stops the host's queue. */
-export function CloudMovesRoot({ api }: { api?: CloudMovesApi } = {}) {
+export function CloudMovesRoot({ api }: { api?: CloudMovesClient } = {}) {
   const enabled = useCloudEnabled();
   React.useEffect(
     () => (enabled ? bindCloudMoves(api ?? desktopCloudMovesApi()) : undefined),
@@ -55,10 +55,10 @@ function CloudMoveSheet() {
           <DialogTitle>
             {sheet?.kind === "prepare" ? "Move to Volli Cloud" : "Moves to Volli Cloud"}
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className={sheet?.kind === "prepare" ? undefined : "sr-only"}>
             {sheet?.kind === "prepare"
               ? "Your local projects stay on this Mac."
-              : "You can close this sheet. Progress stays in the sidebar."}
+              : "Project move progress"}
           </DialogDescription>
         </DialogHeader>
         {error !== null ? (
@@ -81,7 +81,14 @@ function CloudMoveSheet() {
             {...(sheet.projectIds === undefined ? {} : { projectIds: sheet.projectIds })}
           />
         ) : (
-          <MoveProgress api={api} moves={moves} />
+          <MoveProgress
+            key={sheet?.key}
+            api={api}
+            moves={moves}
+            {...(sheet?.kind === "progress" && sheet.cancelMoveId !== undefined
+              ? { initialCancelMoveId: sheet.cancelMoveId }
+              : {})}
+          />
         )}
       </DialogContent>
     </Dialog>
@@ -109,8 +116,11 @@ export function CloudMovesSettings() {
 export function CloudMoveRailRow() {
   const enabled = useCloudEnabled();
   const snapshot = useCloudMovesStore((state) => state.snapshot);
-  const moves =
-    snapshot?.moves.filter((move) => move.state !== "returned" && move.state !== "finished") ?? [];
+  const latestByProject = new Map(snapshot?.moves.map((move) => [move.projectId, move]));
+  const moves = [...latestByProject.values()].filter(
+    (move) =>
+      move.state !== "returned" && move.state !== "finished" && move.state !== "rolled-back",
+  );
   if (!enabled || moves.length === 0) return null;
   const current =
     moves.find((move) => move.state === "moving") ??
@@ -127,7 +137,7 @@ export function CloudMoveRailRow() {
           <CloudArrowUpIcon />
           <span className="truncate">
             {current.projectName} · {MOVE_STATE_LABELS[current.state]}
-            {current.state === "moving" ? movePercent(current.progress) : ""}
+            {current.state === "moving" ? ` ${movePercentLabel(current.progress)}` : ""}
           </span>
         </SidebarMenuButton>
       </SidebarMenuItem>
@@ -140,10 +150,22 @@ export function CloudMoveReadOnlyBanner() {
   const enabled = useCloudEnabled();
   const projectId = useProjectsStore((state) => state.selectedProjectId);
   const snapshot = useCloudMovesStore((state) => state.snapshot);
-  const move = snapshot?.moves.findLast(
-    (item) => item.projectId === projectId && item.localReadOnly,
-  );
-  if (!enabled || launchStore() !== "local" || move === undefined) return null;
+  const api = useCloudMovesStore((state) => state.api);
+  const [resuming, setResuming] = React.useState(false);
+  const move = snapshot?.moves.findLast((item) => item.projectId === projectId);
+  if (!enabled || launchStore() !== "local" || move === undefined || !move.localReadOnly)
+    return null;
+  async function resume() {
+    if (api === null || move === undefined || resuming) return;
+    setResuming(true);
+    try {
+      await api.command({ moveId: move.moveId, action: "resume" });
+    } catch {
+      toastError("Couldn't resume the move. Try again.");
+    } finally {
+      setResuming(false);
+    }
+  }
   return (
     <div
       role="status"
@@ -151,12 +173,36 @@ export function CloudMoveReadOnlyBanner() {
     >
       <span>
         {move.confirmedAt === null
-          ? `${move.projectName} is read-only while it moves to Volli Cloud.`
+          ? move.state === "waiting"
+            ? `${move.message} The local copy is read-only.`
+            : `${move.projectName} is read-only while it moves to Volli Cloud.`
           : `Moved to Volli Cloud (${move.workspaceName}) on ${new Date(move.confirmedAt).toLocaleDateString()}. This local copy is read-only.`}
       </span>
-      <Button size="xs" variant="outline" onClick={() => showCloudMoves(move.queueId)}>
-        View move
-      </Button>
+      <div className="flex items-center gap-2">
+        {move.actions.includes("resume") ? (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={resuming || api === null}
+            onClick={() => void resume()}
+          >
+            Resume
+          </Button>
+        ) : null}
+        {move.actions.includes("cancel") ? (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={resuming}
+            onClick={() => showCloudMoves(move.queueId, move.moveId)}
+          >
+            Cancel…
+          </Button>
+        ) : null}
+        <Button size="xs" variant="outline" onClick={() => showCloudMoves(move.queueId)}>
+          View move
+        </Button>
+      </div>
     </div>
   );
 }

@@ -82,6 +82,7 @@ describe("Move pre-flight", () => {
     expect(container.textContent).toContain("2 attachments (2.0 KB)");
     expect(container.textContent).toContain("Transcripts 4.0 KB · Pi logs 8.0 KB");
     expect(container.textContent).toContain("About 3 min");
+    expect(container.textContent).toContain("Total for 1 project · About 3 min");
     expect(container.textContent).toContain("/profile/backups");
     expect(container.textContent).toContain("Machine settings — Only used on this Mac");
     expect(container.textContent).toContain("Board and ad-hoc chats stay private");

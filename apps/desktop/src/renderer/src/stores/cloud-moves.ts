@@ -1,12 +1,13 @@
 import { create } from "zustand";
-import type { CloudMoveSnapshot, CloudMovesApi } from "@volli/shared";
+import type { CloudMoveSnapshot } from "@volli/shared";
+import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
 
 export type MoveSheet =
   | { kind: "prepare"; projectIds?: string[]; key: number }
-  | { kind: "progress"; queueId?: string; key: number };
+  | { kind: "progress"; queueId?: string; cancelMoveId?: string; key: number };
 
 interface State {
-  api: CloudMovesApi | null;
+  api: CloudMovesClient | null;
   snapshot: CloudMoveSnapshot | null;
   error: string | null;
   sheet: MoveSheet | null;
@@ -31,9 +32,14 @@ export function prepareCloudMove(projectId?: string): void {
     },
   });
 }
-export function showCloudMoves(queueId?: string): void {
+export function showCloudMoves(queueId?: string, cancelMoveId?: string): void {
   useCloudMovesStore.setState({
-    sheet: { kind: "progress", ...(queueId === undefined ? {} : { queueId }), key: ++sheetKey },
+    sheet: {
+      kind: "progress",
+      ...(queueId === undefined ? {} : { queueId }),
+      ...(cancelMoveId === undefined ? {} : { cancelMoveId }),
+      key: ++sheetKey,
+    },
   });
 }
 export function closeCloudMoves(): void {
@@ -41,7 +47,7 @@ export function closeCloudMoves(): void {
 }
 
 /** Subscribe before reading; a delayed read may never replace a newer journal revision. */
-export function bindCloudMoves(api: CloudMovesApi): () => void {
+export function bindCloudMoves(api: CloudMovesClient): () => void {
   let active = true;
   let request = 0;
   let subscription = 0;

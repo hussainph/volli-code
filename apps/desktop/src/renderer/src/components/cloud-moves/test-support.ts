@@ -1,10 +1,6 @@
 import { vi } from "vite-plus/test";
-import type {
-  CloudMovePreflight,
-  CloudMoveSnapshot,
-  CloudMoveStatus,
-  CloudMovesApi,
-} from "@volli/shared";
+import type { CloudMovePreflight, CloudMoveSnapshot, CloudMoveStatus } from "@volli/shared";
+import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
 
 export const counts = {
   tickets: 12,
@@ -51,6 +47,7 @@ export const move: CloudMoveStatus = {
   confirmedAt: null,
   backupPath: "/profile/backups/safety.tar.gz",
   returnExportPath: "/profile/cloud-moves/move/cloud-changes",
+  rollback: null,
   checks: [],
   counts,
   pausedAutomations: [],
@@ -65,11 +62,11 @@ export const snapshot: CloudMoveSnapshot = {
 };
 export function fakeApi() {
   return {
-    snapshot: vi.fn<CloudMovesApi["snapshot"]>().mockResolvedValue(structuredClone(snapshot)),
-    preflight: vi.fn<CloudMovesApi["preflight"]>().mockResolvedValue(structuredClone(preflight)),
-    start: vi.fn<CloudMovesApi["start"]>().mockResolvedValue(undefined),
-    command: vi.fn<CloudMovesApi["command"]>().mockResolvedValue(undefined),
-    report: vi.fn<CloudMovesApi["report"]>().mockResolvedValue('{"ok":true}'),
-    onChanged: vi.fn<CloudMovesApi["onChanged"]>().mockReturnValue(() => {}),
-  } satisfies CloudMovesApi;
+    snapshot: vi.fn<CloudMovesClient["snapshot"]>().mockResolvedValue(structuredClone(snapshot)),
+    preflight: vi.fn<CloudMovesClient["preflight"]>().mockResolvedValue(structuredClone(preflight)),
+    start: vi.fn<CloudMovesClient["start"]>().mockResolvedValue(undefined),
+    command: vi.fn<CloudMovesClient["command"]>().mockResolvedValue(undefined),
+    report: vi.fn<CloudMovesClient["report"]>().mockResolvedValue('{"ok":true}'),
+    onChanged: vi.fn<CloudMovesClient["onChanged"]>().mockReturnValue(() => {}),
+  } satisfies CloudMovesClient;
 }

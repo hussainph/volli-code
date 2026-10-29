@@ -301,13 +301,14 @@ export interface DesktopRouterHandlers {
   readonly "account.githubInstall": HostHandler<void, null>;
   readonly "account.githubCancel": HostHandler<void, null>;
   readonly "account.githubDisconnect": HostHandler<void, null>;
-  /** This Mac as one of the person's runners (VC-895): desktop main's Mac runner. */
+  /** This Mac's person-only project moves. */
   readonly "moves.snapshot": HostHandler<void, CloudMoveSnapshot>;
   readonly "moves.subscribe": DesktopSubscriptionHandler<void, null>;
   readonly "moves.preflight": HostHandler<CloudMovePreflightInput, CloudMovePreflight>;
   readonly "moves.start": HostHandler<CloudMoveStartInput, null>;
   readonly "moves.command": HostHandler<CloudMoveCommand, null>;
   readonly "moves.report": HostHandler<{ moveId: string }, string>;
+  /** This Mac as one of the person's runners (VC-895): desktop main's Mac runner. */
   readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.subscribeThisMac": DesktopSubscriptionHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.addThisMac": HostHandler<void, null>;
@@ -1081,12 +1082,7 @@ export function createDesktopRouter() {
         .output(z.object({ text: z.string().max(CLOUD_SNAPSHOT_TEXT_MAX).nullable() }))
         .query(({ ctx }) => ctx.handlers["cloud.readSnapshot"](undefined, ctx.call)),
     },
-    /**
-     * This Mac as one of the person's runners (VC-895). Born on the bridge:
-     * host-placed, the person's own window only; desktop main's Mac runner
-     * answers through the map (only with `cloud` on), and every other host
-     * answers unavailable. No procedure carries the runner's credential.
-     */
+    /** Person-only local project moves: desktop main's service, through the shared policy. */
     moves: {
       snapshot: hostProcedure("moves.snapshot")
         .output(moveSnapshotSchema)
@@ -1113,6 +1109,7 @@ export function createDesktopRouter() {
         .output(moveReportSchema)
         .query(({ ctx, input }) => ctx.handlers["moves.report"](input, ctx.call)),
     },
+    /** This Mac as a runner (VC-895): desktop main answers, other hosts are unavailable. */
     runners: {
       thisMac: hostProcedure("runners.thisMac")
         .output(thisMacRunnerSnapshotSchema)

@@ -3,7 +3,7 @@ import type { CloudMoveStep, CloudMoveStatus } from "@volli/shared";
 export const MOVE_STATE_LABELS: Record<CloudMoveStatus["state"], string> = {
   queued: "Waiting",
   moving: "Moving",
-  waiting: "Paused",
+  waiting: "Waiting",
   problem: "Needs you",
   check: "Check it",
   finished: "Moved",
@@ -11,9 +11,9 @@ export const MOVE_STATE_LABELS: Record<CloudMoveStatus["state"], string> = {
   returned: "Back on this Mac",
 };
 
-export function movePercent(progress: CloudMoveStatus["progress"]): string {
+export function movePercentLabel(progress: CloudMoveStatus["progress"]): string {
   if (progress === null || progress.total <= 0) return "";
-  return ` ${Math.min(100, Math.max(0, Math.floor((progress.completed / progress.total) * 100)))} %`;
+  return `${Math.min(100, Math.max(0, Math.floor((progress.completed / progress.total) * 100)))} %`;
 }
 
 export const MOVE_STEP_LABELS: Record<CloudMoveStep, string> = {

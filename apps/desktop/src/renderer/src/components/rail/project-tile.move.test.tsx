@@ -75,6 +75,25 @@ async function menu() {
 }
 
 describe("project menu Move to Volli Cloud", () => {
+  it("does not reopen an obsolete move after the latest one returned to local", async () => {
+    useCloudMovesStore.setState({
+      snapshot: {
+        ...snapshot,
+        moves: [move, { ...move, moveId: "newer", state: "returned", localReadOnly: false }],
+      },
+    });
+    await menu();
+    await act(async () =>
+      (
+        [...document.querySelectorAll('[role="menuitem"]')].find(
+          (item) => item.textContent === "Move to Volli Cloud…",
+        ) as HTMLElement
+      ).click(),
+    );
+    expect(useCloudMovesStore.getState().sheet).toEqual(
+      expect.objectContaining({ kind: "prepare", projectIds: ["project"] }),
+    );
+  });
   it("opens only that project's pre-flight, immediately above Remove from Volli", async () => {
     await menu();
     const items = [...document.querySelectorAll('[role="menuitem"]')];
@@ -93,18 +112,23 @@ describe("project menu Move to Volli Cloud", () => {
     await menu();
     expect(document.body.textContent).not.toContain("Move to Volli Cloud…");
   });
-  it("reopens an existing frozen move instead of preparing a second one", async () => {
-    useCloudMovesStore.setState({ snapshot: { ...snapshot, moves: [move] } });
-    await menu();
-    await act(async () =>
-      (
-        [...document.querySelectorAll('[role="menuitem"]')].find(
-          (item) => item.textContent === "Move to Volli Cloud…",
-        ) as HTMLElement
-      ).click(),
-    );
-    expect(useCloudMovesStore.getState().sheet).toEqual(
-      expect.objectContaining({ kind: "progress", queueId: "queue" }),
-    );
-  });
+  it.each(["moving", "queued"] as const)(
+    "reopens an existing %s move instead of preparing a second one",
+    async (state) => {
+      useCloudMovesStore.setState({
+        snapshot: { ...snapshot, moves: [{ ...move, state, localReadOnly: state === "moving" }] },
+      });
+      await menu();
+      await act(async () =>
+        (
+          [...document.querySelectorAll('[role="menuitem"]')].find(
+            (item) => item.textContent === "Move to Volli Cloud…",
+          ) as HTMLElement
+        ).click(),
+      );
+      expect(useCloudMovesStore.getState().sheet).toEqual(
+        expect.objectContaining({ kind: "progress", queueId: "queue" }),
+      );
+    },
+  );
 });

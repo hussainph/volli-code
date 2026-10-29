@@ -44,7 +44,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
   const remoteHost = useRemoteProjectHost(project.id);
   const cloudEnabled = useCloudEnabled();
   const move = useCloudMovesStore((state) =>
-    state.snapshot?.moves.findLast((item) => item.projectId === project.id && item.localReadOnly),
+    state.snapshot?.moves.findLast((item) => item.projectId === project.id),
   );
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [relinkOpen, setRelinkOpen] = React.useState(false);
@@ -135,7 +135,9 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                 onMove={
                   cloudEnabled && launchStore() === "local"
                     ? () =>
-                        move === undefined
+                        move === undefined ||
+                        move.state === "returned" ||
+                        move.state === "rolled-back"
                           ? prepareCloudMove(project.id)
                           : showCloudMoves(move.queueId)
                     : undefined

@@ -6916,6 +6916,7 @@
                 "pause",
                 "resume",
                 "cancel",
+                "roll-back",
                 "retry",
                 "skip",
                 "finish",
@@ -7292,6 +7293,7 @@
                         "pause",
                         "resume",
                         "cancel",
+                        "roll-back",
                         "retry",
                         "skip",
                         "finish",
@@ -7529,6 +7531,33 @@
                       }
                     ]
                   },
+                  "rollback": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "changes": {
+                            "items": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "requiresConfirmation": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "changes",
+                          "requiresConfirmation"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "state": {
                     "enum": [
                       "queued",
@@ -7578,6 +7607,7 @@
                   "confirmedAt",
                   "backupPath",
                   "returnExportPath",
+                  "rollback",
                   "checks",
                   "counts",
                   "pausedAutomations",
