@@ -417,13 +417,7 @@ export async function startCloudBoard(
   useHostConnectionStore.getState().attach(createCloudHostSource({ projects: useProjectsStore }));
   // The source first: a project the follower seeds opens on a running client.
   followCloudSession((session) => source.attach(session));
-  const stopAutomations = bindCloudAutomations((projectId) =>
-    projectId === undefined
-      ? useCloudLinkInputs.getState().input.snapshotAt !== null
-        ? CLOUD_READ_ONLY
-        : null
-      : cloudReadOnlyReason(projectId),
-  );
+  const stopAutomations = bindCloudAutomations(cloudReadOnlyReason);
   window.addEventListener?.("pagehide", stopAutomations, { once: true });
   followCloudWorkspace({
     follow: followCloudSession,

@@ -46,7 +46,7 @@ export function AutomationRunnerPicker({
   const all = useCloudAutomationsStore((state) => state.runners);
   const thisMac = useCloudPlacesStore((state) => state.thisRunnerId);
   const runners = automationRunners(all);
-  const current = all.find((row) => row.id === thisMac);
+  const current = all.find((row) => row.id === (value ?? thisMac));
   const selected = runners.some((row) => row.id === value) ? value : null;
   return (
     <Select
@@ -57,7 +57,9 @@ export function AutomationRunnerPicker({
       <SelectTrigger aria-label="Automation runner" className="w-auto min-w-32 max-w-64 text-label">
         <SelectValue
           placeholder={
-            runners.length === 0 && current !== undefined
+            selected === null &&
+            current !== undefined &&
+            !runners.some((row) => row.id === current.id)
               ? `Update Volli on ${current.name}`
               : "Choose a runner"
           }
@@ -65,7 +67,11 @@ export function AutomationRunnerPicker({
       </SelectTrigger>
       <SelectContent>
         {runners.map((row) => (
-          <SelectItem key={row.id} value={row.id} disabled={row.status !== "online"}>
+          <SelectItem
+            key={row.id}
+            value={row.id}
+            disabled={row.status !== "online" && row.status !== "degraded"}
+          >
             on {row.name}
             {row.id === thisMac ? " (this Mac)" : ""}
             {row.status === "online" ? "" : ` · ${row.status}`}
@@ -103,7 +109,7 @@ export function CloudColumnArming({
       ? `Arm ${TICKET_STATUS_LABELS[status]}`
       : paused
         ? `${TICKET_STATUS_LABELS[status]} · Paused · Re-arm`
-        : `${TICKET_STATUS_LABELS[status]} runs ${name ?? "Automation"} on ${arming.runnerName}`;
+        : `${TICKET_STATUS_LABELS[status]} runs ${name ?? "Automation"} on ${arming.runnerName} · Armed by ${arming.armedByDisplayName}`;
   async function arm(automationId: string | null, onRunner = runnerId) {
     if (!guardWrite(projectId)) return;
     setSaving(true);
@@ -184,7 +190,9 @@ export function CloudColumnArming({
       </Popover>
       {arming === undefined ? null : (
         <span className="max-w-40 truncate text-label text-muted-foreground">
-          {paused ? "Paused · Re-arm" : `on ${arming.runnerName}`}
+          {paused
+            ? "Paused · Re-arm"
+            : `on ${arming.runnerName} · Armed by ${arming.armedByDisplayName}`}
         </span>
       )}
     </div>

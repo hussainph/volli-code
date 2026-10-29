@@ -25,6 +25,7 @@ import type {
   AutomationRunInput,
   AutomationRunForProjectInput,
 } from "../../../../ipc/contract";
+import { toastError } from "@renderer/lib/toast";
 import type { CloudSession } from "@renderer/lib/cloud-client";
 import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { cloudFailure, CLOUD_READ_ONLY, type Watched } from "../cloud-board/source";
@@ -82,8 +83,8 @@ function skippedRuns(rows: readonly CloudRun[]) {
 
 export class ConvexAutomationSource implements AutomationSource {
   readonly #session: CloudSession;
-  readonly #readOnly: (projectId?: string) => string | null;
-  readonly #stops = new Map<string, { stop(): void; projectId?: string }>();
+  readonly #readOnly: (projectId: string) => string | null;
+  readonly #watches = new Map<string, { stop: (() => void) | null; projectId?: string }>();
   readonly #pages = new Map<
     string,
     {
@@ -97,7 +98,7 @@ export class ConvexAutomationSource implements AutomationSource {
     }
   >();
   #closed = false;
-  constructor(session: CloudSession, readOnly: (projectId?: string) => string | null = () => null) {
+  constructor(session: CloudSession, readOnly: (projectId: string) => string | null = () => null) {
     this.#session = session;
     this.#readOnly = readOnly;
   }
@@ -112,14 +113,14 @@ export class ConvexAutomationSource implements AutomationSource {
   ): Promise<FunctionReturnType<Q>> {
     this.#assertOpen();
     const key = JSON.stringify([getFunctionName(reference), args]);
-    if (!this.#stops.has(key)) {
+    if (!this.#watches.has(key)) {
       const watch = this.#session.client.watchQuery(reference, args) as Watched<
         FunctionReturnType<Q>
       >;
       let failed = false;
-      const entry = { stop: () => {}, projectId };
+      const entry = { stop: null as (() => void) | null, projectId };
       const update = () => {
-        if (this.#closed || this.#stops.get(key) !== entry) return;
+        if (this.#closed || this.#watches.get(key) !== entry) return;
         try {
           const rows = watch.localQueryResult();
           if (rows !== undefined) {
@@ -131,14 +132,16 @@ export class ConvexAutomationSource implements AutomationSource {
           failed = true;
         }
       };
-      this.#stops.set(key, entry);
-      entry.stop = watch.onUpdate(update);
+      this.#watches.set(key, entry);
+      const stop = watch.onUpdate(update);
+      if (this.#watches.get(key) === entry) entry.stop = stop;
+      else stop();
       update();
     }
-    const entry = this.#stops.get(key);
+    const entry = this.#watches.get(key);
     const rows = await this.#session.client.query(reference, args);
     this.#assertOpen();
-    if (this.#stops.get(key) === entry) paint(rows);
+    if (this.#watches.get(key) === entry) paint(rows);
     else throw new Error("The project is no longer in this Workspace.");
     return rows;
   }
@@ -146,8 +149,12 @@ export class ConvexAutomationSource implements AutomationSource {
     // Imported lazily by cloud boot; the same toast convention as local reads.
     this.onError(`Couldn’t load Automations: ${cloudFailure(error).message}`);
   }
-  onError: (message: string) => void = () => {};
-  async #write<T>(projectId: string | undefined, issue: () => Promise<T>): Promise<T> {
+  onError: (message: string) => void = toastError;
+  async #write<T>(
+    projectId: string,
+    issue: () => Promise<T>,
+    runnerId = useCloudPlacesStore.getState().thisRunnerId,
+  ): Promise<T> {
     this.#assertOpen();
     if (!this.#session.client.connectionState().isWebSocketConnected)
       throw new Error(CLOUD_READ_ONLY);
@@ -158,27 +165,55 @@ export class ConvexAutomationSource implements AutomationSource {
       this.#assertOpen();
       return reply;
     } catch (error) {
-      throw new Error(cloudFailure(error).message, { cause: error });
+      const failure = cloudFailure(error);
+      const runnerName =
+        useCloudAutomationsStore.getState().runners.find((row) => row.id === runnerId)?.name ??
+        "this Mac";
+      const messages: Record<string, string> = {
+        runner_needs_update: `Update Volli on ${runnerName}`,
+        runner_not_live: `${runnerName} isn’t accepting work. Choose an online runner.`,
+        runner_unavailable: "Choose an available runner.",
+        runner_not_yours: "Choose one of your own runners.",
+        name_taken: "An Automation with that name already exists.",
+        invalid_draft: "Enter a name and Instructions.",
+        draft_too_large: "Shorten the name or Instructions.",
+        invalid_runtime: "Choose a valid model and effort.",
+        invalid_trigger: "Choose a valid Trigger.",
+        wrong_trigger: "Save the Trigger before arming it.",
+        automation_not_found: "This Automation is no longer available.",
+        automation_not_in_project: "This Automation belongs to another project.",
+        run_already_started: "This Run has already started.",
+        run_already_finished: "This Run has already finished.",
+        retry_unavailable: "This Run is no longer available to retry.",
+      };
+      throw new Error(
+        failure.code === null ? failure.message : (messages[failure.code] ?? failure.message),
+        { cause: error },
+      );
     }
   }
   closeProject(projectId: string): void {
-    for (const [key, watch] of this.#stops)
+    for (const [key, watch] of this.#watches)
       if (watch.projectId === projectId) {
-        watch.stop();
-        this.#stops.delete(key);
+        watch.stop?.();
+        this.#watches.delete(key);
       }
     for (const [key, history] of this.#pages)
       if (history.projectId === projectId) this.#pages.delete(key);
   }
   close(): void {
     this.#closed = true;
-    for (const watch of this.#stops.values()) watch.stop();
-    this.#stops.clear();
+    for (const watch of this.#watches.values()) watch.stop?.();
+    this.#watches.clear();
     this.#pages.clear();
     clearCloudAutomations();
   }
 
-  async list({ projectId }: { projectId: string }): Promise<SourceReply<"list">> {
+  async list({
+    projectId,
+  }: {
+    projectId: string;
+  }): Promise<{ ok: true; automations: Automation[] }> {
     const answer = await this.#read(
       this.#session.api.automations.list,
       { projectId },
@@ -193,7 +228,6 @@ export class ConvexAutomationSource implements AutomationSource {
   }
   async #definition(projectId: string, automationId: string): Promise<Automation> {
     const rows = await this.list({ projectId });
-    if (!rows.ok) throw new Error(rows.error);
     const row = rows.automations.find((candidate) => candidate.id === automationId);
     if (row === undefined) throw new Error("This Automation is no longer available.");
     return row;
@@ -287,18 +321,21 @@ export class ConvexAutomationSource implements AutomationSource {
     const now = Date.now();
     const userId = cloudLaunchNow()?.userId;
     const runners = useCloudAutomationsStore.getState().runners;
-    await this.#write(input.projectId, () =>
-      this.#session.client.mutation(this.#session.api.automations.arm, intent, {
-        optimisticUpdate: (store) => {
-          if (userId !== undefined)
-            optimisticArming(store, this.#session.api.automations, {
-              intent,
-              userId,
-              runners,
-              now,
-            });
-        },
-      }),
+    await this.#write(
+      input.projectId,
+      () =>
+        this.#session.client.mutation(this.#session.api.automations.arm, intent, {
+          optimisticUpdate: (store) => {
+            if (userId !== undefined)
+              optimisticArming(store, this.#session.api.automations, {
+                intent,
+                userId,
+                runners,
+                now,
+              });
+          },
+        }),
+      intent.runnerId,
     );
     return this.armings({ projectId: input.projectId });
   }
@@ -375,17 +412,20 @@ export class ConvexAutomationSource implements AutomationSource {
     input: AutomationSetEnabledInput & { runnerId?: string },
   ): Promise<SourceReply<"setEnabled">> {
     const projectId = this.#projectOf(input.automationId);
-    await this.#write(projectId, () =>
-      input.enabled
-        ? this.#session.client.mutation(this.#session.api.automations.armSchedule, {
-            commandId: input.commandId,
-            automationId: input.automationId,
-            runnerId: input.runnerId ?? useCloudPlacesStore.getState().thisRunnerId,
-          })
-        : this.#session.client.mutation(this.#session.api.automations.disarmSchedule, {
-            commandId: input.commandId,
-            automationId: input.automationId,
-          }),
+    await this.#write(
+      projectId,
+      () =>
+        input.enabled
+          ? this.#session.client.mutation(this.#session.api.automations.armSchedule, {
+              commandId: input.commandId,
+              automationId: input.automationId,
+              runnerId: input.runnerId ?? useCloudPlacesStore.getState().thisRunnerId,
+            })
+          : this.#session.client.mutation(this.#session.api.automations.disarmSchedule, {
+              commandId: input.commandId,
+              automationId: input.automationId,
+            }),
+      input.runnerId ?? useCloudPlacesStore.getState().thisRunnerId,
     );
     await this.schedules(projectId);
     return this.enablement();
@@ -406,29 +446,25 @@ export class ConvexAutomationSource implements AutomationSource {
       projectId,
     );
   }
-  async cancel(jobId: string): Promise<void> {
-    await this.#write(undefined, () =>
+  async cancel(projectId: string, jobId: string): Promise<void> {
+    await this.#write(projectId, () =>
       this.#session.client.mutation(this.#session.api.automations.cancelPendingArrival, {
         commandId: crypto.randomUUID(),
         jobId,
       }),
     );
   }
-  async retry(runId: string): Promise<void> {
-    const failure = Object.values(useCloudAutomationsStore.getState().pending)
-      .flatMap((row) => row.failures)
-      .find((row) => row.runId === runId);
-    if (failure === undefined) throw new Error("This Run is no longer available to retry.");
-    await this.#write(undefined, () =>
+  async retry(input: { projectId: string; runId: string; retryCommandId: string }): Promise<void> {
+    await this.#write(input.projectId, () =>
       this.#session.client.mutation(this.#session.api.automations.retryArrival, {
-        commandId: failure.retryCommandId,
-        runId,
+        commandId: input.retryCommandId,
+        runId: input.runId,
         runnerId: useCloudPlacesStore.getState().thisRunnerId,
       }),
     );
   }
-  async queueRun({ target, ...input }: AutomationRunInput) {
-    return this.#write(undefined, () =>
+  async queueRun({ target, projectId, ...input }: AutomationRunInput & { projectId: string }) {
+    return this.#write(projectId, () =>
       this.#session.client.mutation(this.#session.api.automations.run, {
         ...input,
         ...(target.kind === "automation"
@@ -445,6 +481,43 @@ export class ConvexAutomationSource implements AutomationSource {
         runnerId: useCloudPlacesStore.getState().thisRunnerId,
       }),
     );
+  }
+
+  /** A by-hand Run's toast becomes a Session door only after intake exists. */
+  followRun(projectId: string, runId: string, settled: (run: CloudRun) => void): void {
+    this.#assertOpen();
+    const key = `run:${runId}`;
+    this.#watches.get(key)?.stop?.();
+    const watch = this.#session.client.watchQuery(this.#session.api.automations.runState, {
+      runId,
+    }) as Watched<CloudRun>;
+    const entry = { stop: null as (() => void) | null, projectId };
+    const finish = () => {
+      entry.stop?.();
+      this.#watches.delete(key);
+    };
+    const read = () => {
+      if (this.#closed || this.#watches.get(key) !== entry) return;
+      try {
+        const run = watch.localQueryResult();
+        if (
+          run === undefined ||
+          run.status === "queued" ||
+          (run.status === "started" && run.sessionAccess === "starting")
+        )
+          return;
+        finish();
+        settled(run);
+      } catch (error) {
+        finish();
+        this.#failed(error);
+      }
+    };
+    this.#watches.set(key, entry);
+    const stop = watch.onUpdate(read);
+    if (this.#watches.get(key) === entry) entry.stop = stop;
+    else stop();
+    read();
   }
 
   #paintHistory(key: string): CloudRun[] {
@@ -481,8 +554,7 @@ export class ConvexAutomationSource implements AutomationSource {
         automationId,
       });
     const paint = (page: { page: CloudRun[]; continueCursor: string; isDone: boolean }) => {
-      const history = this.#pages.get(key);
-      if (history === undefined) return;
+      const history = this.#pages.get(key)!;
       history.rows[0] = page.page;
       history.cursors[0] = page.continueCursor;
       if (history.rows.length === 1) {
@@ -519,13 +591,10 @@ export class ConvexAutomationSource implements AutomationSource {
     history.loading = true;
     const index = history.rows.length;
     const paint = (page: { page: CloudRun[]; continueCursor: string; isDone: boolean }) => {
-      if (this.#pages.get(key) !== history) return;
       history.rows[index] = page.page;
       history.cursors[index] = page.continueCursor;
-      if (index === history.rows.length - 1) {
-        history.cursor = page.continueCursor;
-        history.done = page.isDone;
-      }
+      history.cursor = page.continueCursor;
+      history.done = page.isDone;
       this.#paintHistory(key);
     };
     try {
@@ -548,10 +617,9 @@ export class ConvexAutomationSource implements AutomationSource {
         getFunctionName(reference),
         { ...scope, paginationOpts: previousOpts },
       ]);
-      this.#stops.get(previousKey)?.stop();
-      this.#stops.delete(previousKey);
+      this.#watches.get(previousKey)?.stop?.();
+      this.#watches.delete(previousKey);
       const pinned = (page: { page: CloudRun[]; continueCursor: string }) => {
-        if (this.#pages.get(key) !== history) return;
         history.rows[index - 1] = page.page;
         history.cursors[index - 1] = page.continueCursor;
         this.#paintHistory(key);

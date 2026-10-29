@@ -767,6 +767,9 @@ describe("Automation records", () => {
     const privateRun = [...first.page, ...last.page].find((row) => row.id === runs[0]!.runId)!;
     expect(privateRun.sessionId).toBe(privateSession.sessionId);
     expect(privateRun.sessionAccess).toBe("private");
+    expect(await w.bob.as.query(api.automations.runState, { runId: privateRun.id })).toEqual(
+      privateRun,
+    );
     expect(privateRun.runner).toMatchObject({ id: privateRun.runnerId });
     expect(first.page.find((row) => row.id === runs[2]!.runId)?.sessionAccess).toBe("starting");
     const owner = await w.as.query(api.automations.runsForAutomation, {
@@ -774,6 +777,13 @@ describe("Automation records", () => {
       paginationOpts: { numItems: 10, cursor: null },
     });
     expect(owner.page.find((row) => row.id === runs[0]!.runId)?.sessionAccess).toBe("ready");
+    const outsider = await signIn(w.t, "run-state-outsider");
+    await expect(
+      outsider.as.query(api.automations.runState, { runId: privateRun.id }),
+    ).rejects.toThrow(code("not_a_member"));
+    await expect(w.as.query(api.automations.runState, { runId: newId("command") })).rejects.toThrow(
+      code("not_found"),
+    );
     await expect(
       w.bob.as.query(api.sessionVisibility.get, { sessionId: privateSession.sessionId }),
     ).rejects.toThrow(code("not_found"));

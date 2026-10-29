@@ -233,8 +233,8 @@ async function main() {
   // before priming so a window opened mid-countdown cannot miss a replacement
   // between its read and listener registration. Every window receives the same
   // whole snapshot; Cancel travels back to main with the exact arrival id.
-  // Cloud Automations have no runner executor yet. Do not read or subscribe
-  // to this Mac's frozen countdowns in a cloud window.
+  // Cloud arrivals come from the renderer’s Convex source. Never read or
+  // subscribe to this Mac’s frozen countdowns in a cloud window.
   if (!cloudLaunch) {
     window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
     window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);

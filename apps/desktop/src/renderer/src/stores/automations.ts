@@ -4,11 +4,9 @@
  * machine-local enabled set, and the one piece of app-level view state the
  * feature owns: which project/record the page's embedded editor is showing.
  *
- * Local reads are on demand; cloud reads stay subscribed behind the source.
- * Read on demand — the command palette refreshes on open, the page on mount
- * and after every write — rather than subscribed: the record changes only
- * through this app's own doors today, and an open IS the moment staleness
- * would show.
+ * Local reads are on demand: the palette refreshes on open, the page on mount
+ * and after writes. A cloud source keeps these projections subscribed, with
+ * arming as enablement rather than a second machine-local switch.
  *
  * Two failure conventions, and the split is deliberate:
  *
@@ -372,8 +370,8 @@ export function createAutomationsStore() {
       if (!automationSourceIsCloud() && host !== null) return notAvailableOn(host);
       try {
         const result = await automationSource().setColumnOrder({
-          // Durable intent, like every other write here: the projection this
-          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          // Durable intent, like every other write here: the local projection
+          // is machine-local; the cloud source writes shared arming/order.
           commandId: crypto.randomUUID(),
           projectId: input.projectId,
           status: input.status,
@@ -396,8 +394,8 @@ export function createAutomationsStore() {
       if (!automationSourceIsCloud() && host !== null) return notAvailableOn(host);
       try {
         const result = await automationSource().arm({
-          // Durable intent, like every other write here: the projection this
-          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          // Durable intent, like every other write here: the local projection
+          // is machine-local; the cloud source writes shared arming/order.
           commandId: crypto.randomUUID(),
           ...input,
         });
@@ -637,8 +635,8 @@ export function createAutomationsStore() {
     async setEnabled(automationId, enabled, runnerId) {
       try {
         const result = await automationSource().setEnabled({
-          // Durable intent, like every other write here: the projection this
-          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          // Durable intent, like every other write here: the local projection
+          // is machine-local; the cloud source writes shared arming/order.
           commandId: crypto.randomUUID(),
           automationId,
           enabled,

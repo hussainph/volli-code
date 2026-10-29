@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Button } from "@renderer/components/ui/button";
 import { useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { cloudAutomationSource } from "@renderer/stores/automation-source";
+import { requireCloudAutomationSource } from "@renderer/stores/automation-source";
 import {
   useCloudAutomationsStore,
   waitingForRunner,
@@ -72,8 +72,8 @@ function PendingRow({
   const label = row.leased
     ? "Starting…"
     : seconds > 0
-      ? `Starts in ${seconds}s`
-      : waitingForRunner(row.runner.name, row.runner.status);
+      ? `Starts in ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
+      : waitingForRunner(row.runner.name, row.runner.status, row.runner.statusChangedAt);
   return (
     <div
       data-armed-run-window={row.ticketId}
@@ -89,12 +89,8 @@ function PendingRow({
         disabled={!canWrite || saving || row.leased}
         onClick={() => {
           setSaving(true);
-          const source = cloudAutomationSource();
-          void (
-            source === null
-              ? Promise.reject(new Error("Volli Cloud isn’t connected yet."))
-              : source.cancel(row.jobId)
-          )
+          void Promise.resolve()
+            .then(() => requireCloudAutomationSource().cancel(projectId, row.jobId))
             .catch((error) => toastError(error instanceof Error ? error.message : String(error)))
             .finally(() => setSaving(false));
         }}
@@ -126,12 +122,14 @@ function FailedRow({
         disabled={!canWrite || saving}
         onClick={() => {
           setSaving(true);
-          const source = cloudAutomationSource();
-          void (
-            source === null
-              ? Promise.reject(new Error("Volli Cloud isn’t connected yet."))
-              : source.retry(row.runId)
-          )
+          void Promise.resolve()
+            .then(() =>
+              requireCloudAutomationSource().retry({
+                projectId,
+                runId: row.runId,
+                retryCommandId: row.retryCommandId,
+              }),
+            )
             .catch((error) => toastError(error instanceof Error ? error.message : String(error)))
             .finally(() => setSaving(false));
         }}

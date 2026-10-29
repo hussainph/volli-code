@@ -1,5 +1,3 @@
-import { automationSourceIsCloud } from "@renderer/stores/automation-source";
-import { CloudNextScheduledRun } from "./cloud-automation-controls";
 /**
  * The Automation editor: the app's one authoring surface, embedded in the
  * Automations page beside its persistent record rail. Trigger, Instructions
@@ -11,6 +9,8 @@ import { CloudNextScheduledRun } from "./cloud-automation-controls";
  * rather than moving the editor and Run history below it. Chat keeps the
  * shared stack's normal-flow default.
  */
+import { automationSourceIsCloud } from "@renderer/stores/automation-source";
+import { CloudNextScheduledRun } from "./cloud-automation-controls";
 import * as React from "react";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";

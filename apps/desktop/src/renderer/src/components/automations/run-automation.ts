@@ -26,23 +26,64 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { refuseRemote, refuseRemoteTicket } from "@renderer/stores/remote-project";
-import { automationSourceIsCloud, cloudAutomationSource } from "@renderer/stores/automation-source";
+import {
+  automationSourceIsCloud,
+  requireCloudAutomationSource,
+} from "@renderer/stores/automation-source";
 import { waitingForRunner } from "@renderer/stores/cloud-automations/state";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
 type QueuedAction = {
   kind: "session-queued";
+  runId: string;
+  projectId: string;
   sessionId: string;
-  runner: { name: string; status: string };
+  runner: { name: string; status: string; statusChangedAt: number | null };
 };
-function cloudSource() {
-  const source = cloudAutomationSource();
-  if (source === null) throw new Error("Volli Cloud isn’t connected yet.");
-  return source;
-}
-function announceQueued(action: QueuedAction): void {
-  toast.info(waitingForRunner(action.runner.name, action.runner.status));
+function announceQueued(
+  action: QueuedAction,
+  context: { automationName: string; ticketDisplayId?: string },
+): void {
+  const id = `automation-run:${action.runId}`;
+  const target = context.ticketDisplayId === undefined ? "" : ` on ${context.ticketDisplayId}`;
+  const waiting =
+    action.runner.status === "online" || action.runner.status === "degraded"
+      ? `Starting… on ${action.runner.name}`
+      : waitingForRunner(action.runner.name, action.runner.status, action.runner.statusChangedAt);
+  toast.info(`${context.automationName}${target} · ${waiting}`, { id });
+  try {
+    requireCloudAutomationSource().followRun(action.projectId, action.runId, (run) => {
+      if (run.status === "failed") {
+        toastError(`${context.automationName} couldn’t start: ${run.error ?? "Try again."}`, {
+          id,
+        });
+        return;
+      }
+      if (run.status !== "started" || run.sessionAccess !== "ready" || run.sessionId === null) {
+        toast.info(
+          `${context.automationName}${target} · ${run.status === "skipped" ? "Skipped" : "Session unavailable"}`,
+          { id },
+        );
+        return;
+      }
+      useChatSessionsStore.getState().adoptChatSession(run.sessionId);
+      toast.success(`${run.automationName ?? context.automationName} started${target}`, {
+        id,
+        action: {
+          label: "Open session",
+          onClick: () =>
+            openRunSession({
+              sessionId: run.sessionId!,
+              projectId: run.projectId,
+              ticketId: run.ticketId,
+            }),
+        },
+      });
+    });
+  } catch (error) {
+    toastError(`Couldn’t follow this Run: ${errorMessage(error)}`);
+  }
 }
 
 /**
@@ -108,9 +149,21 @@ async function startRun(input: RunRequest): Promise<RunAutomationAction | Queued
   pendingCommandIds.set(retryKey, commandId);
   try {
     if (automationSourceIsCloud()) {
-      const reply = await cloudSource().queueRun({ ...input, commandId });
+      const projectId = ticketProject(input.ticketId);
+      if (projectId === null) throw new Error("The ticket’s project isn’t available.");
+      const reply = await requireCloudAutomationSource().queueRun({
+        ...input,
+        commandId,
+        projectId,
+      });
       pendingCommandIds.delete(retryKey);
-      return { kind: "session-queued", sessionId: reply.sessionId, runner: reply.runner };
+      return {
+        kind: "session-queued",
+        runId: reply.runId,
+        projectId,
+        sessionId: reply.sessionId,
+        runner: reply.runner,
+      };
     }
     const action = runAutomationAction(
       await window.api.automations.run({
@@ -150,9 +203,15 @@ async function startProjectRun(input: {
   pendingCommandIds.set(retryKey, commandId);
   try {
     if (automationSourceIsCloud()) {
-      const reply = await cloudSource().queueProjectRun({ ...input, commandId });
+      const reply = await requireCloudAutomationSource().queueProjectRun({ ...input, commandId });
       pendingCommandIds.delete(retryKey);
-      return { kind: "session-queued", sessionId: reply.sessionId, runner: reply.runner };
+      return {
+        kind: "session-queued",
+        runId: reply.runId,
+        projectId: input.projectId,
+        sessionId: reply.sessionId,
+        runner: reply.runner,
+      };
     }
     const action = runAutomationAction(
       await window.api.automations.runForProject({ ...input, commandId }),
@@ -198,7 +257,7 @@ export async function runAutomationForProject(input: {
   if (action === null) return;
   switch (action.kind) {
     case "session-queued":
-      announceQueued(action);
+      announceQueued(action, input);
       return;
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");
@@ -260,7 +319,7 @@ export async function runAutomationOnTicket(
   if (action === null) return "failed";
   switch (action.kind) {
     case "session-queued":
-      announceQueued(action);
+      announceQueued(action, input);
       return "started";
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");

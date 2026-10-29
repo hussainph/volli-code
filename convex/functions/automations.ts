@@ -578,6 +578,30 @@ export const disarmSchedule = mutation({
 
 const historyArgs = { paginationOpts: paginationOptsValidator, status: v.optional(runStatus) };
 
+async function publicRun(ctx: QueryCtx, scope: SessionScope, row: Doc<"automationRuns">) {
+  const session =
+    row.sessionId === null
+      ? null
+      : await ctx.db
+          .query("sessions")
+          .withIndex("by_uuid", (q) => q.eq("id", row.sessionId!))
+          .unique();
+  // A Run is a team fact; its private Session is not a navigation target.
+  // Missing intake is distinct from private, including completion-before-accept.
+  const sessionAccess =
+    session === null
+      ? ("starting" as const)
+      : session.deletedAt !== null
+        ? ("gone" as const)
+        : scope.canSee(session)
+          ? ("ready" as const)
+          : ("private" as const);
+  return Object.assign(publicRow(row), {
+    sessionAccess,
+    runner: row.runnerId === null ? null : await runnerReply(ctx, row.runnerId),
+  });
+}
+
 async function runPage(
   ctx: QueryCtx,
   scope: SessionScope,
@@ -589,31 +613,7 @@ async function runPage(
   const page = await filtered.paginate(args.paginationOpts);
   return {
     ...page,
-    page: await Promise.all(
-      page.page.map(async (row) => {
-        const session =
-          row.sessionId === null
-            ? null
-            : await ctx.db
-                .query("sessions")
-                .withIndex("by_uuid", (q) => q.eq("id", row.sessionId!))
-                .unique();
-        // A Run is a team fact; its private Session is not a navigation target.
-        // Missing intake is distinct from private, including completion-before-accept.
-        const sessionAccess =
-          session === null
-            ? ("starting" as const)
-            : session.deletedAt !== null
-              ? ("gone" as const)
-              : scope.canSee(session)
-                ? ("ready" as const)
-                : ("private" as const);
-        return Object.assign(publicRow(row), {
-          sessionAccess,
-          runner: row.runnerId === null ? null : await runnerReply(ctx, row.runnerId),
-        });
-      }),
-    ),
+    page: await Promise.all(page.page.map((row) => publicRun(ctx, scope, row))),
   };
 }
 
@@ -672,6 +672,21 @@ export const runsForAutomation = query({
   },
 });
 
+/** One accepted Run followed through runner pickup and Session intake. */
+export const runState = query({
+  args: { runId: v.string() },
+  handler: async (ctx, { runId }) => {
+    const caller = await requireActor(ctx);
+    const row = await ctx.db
+      .query("automationRuns")
+      .withIndex("by_uuid", (q) => q.eq("id", runId))
+      .unique();
+    if (row === null) throw authError("not_found", "That Run does not exist.");
+    const scope = await requireSessionScope(ctx, row.projectId, caller.viewer);
+    return publicRun(ctx, scope, row);
+  },
+});
+
 // ── Runs: by hand, by an agent, and pending arrivals ────────────────────────
 
 const modelOverrideArg = v.optional(
@@ -693,6 +708,7 @@ async function runnerReply(ctx: QueryCtx | MutationCtx, runnerId: string) {
   return {
     id: runnerId,
     name: row?.name ?? "Removed runner",
+    statusChangedAt: row?.statusChangedAt ?? null,
     status: row === null || row.revokedAt !== null ? ("revoked" as const) : row.status,
   };
 }

@@ -45,6 +45,10 @@ export function installCloudAutomationSource(source: ConvexAutomationSource | nu
 export function cloudAutomationSource(): ConvexAutomationSource | null {
   return cloud;
 }
+export function requireCloudAutomationSource(): ConvexAutomationSource {
+  if (cloud === null) throw new Error("Volli Cloud isn’t connected yet.");
+  return cloud;
+}
 export function automationSourceIsCloud(): boolean {
   return launchStore() === "cloud";
 }
@@ -52,7 +56,5 @@ export function automationsAvailable(projectId?: string | null): boolean {
   return automationSourceIsCloud() || remoteHostNow(projectId) === null;
 }
 export function automationSource(): AutomationSource {
-  if (!automationSourceIsCloud()) return window.api.automations;
-  if (cloud === null) throw new Error("Volli Cloud isn’t connected yet.");
-  return cloud;
+  return automationSourceIsCloud() ? requireCloudAutomationSource() : window.api.automations;
 }

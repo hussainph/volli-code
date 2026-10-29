@@ -80,7 +80,7 @@ export function run(patch: Partial<CloudRun> = {}): CloudRun {
     runnerId: R,
     createdAt: 1,
     sessionAccess: "starting",
-    runner: { id: R, name: "Ada’s Mac", status: "asleep" },
+    runner: { id: R, statusChangedAt: null, name: "Ada’s Mac", status: "asleep" },
     ...patch,
   };
 }

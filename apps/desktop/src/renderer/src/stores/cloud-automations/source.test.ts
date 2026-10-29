@@ -173,6 +173,7 @@ describe("Automation source seam", () => {
   it("queues ticket, unbound and Board runs on the caller's runner; the backend owns Place fallback", async () => {
     const { cloud } = setup();
     const ticket = source.queueRun({
+      projectId: P,
       commandId: A,
       ticketId: T,
       target: { kind: "automation", automationId: A },
@@ -188,6 +189,7 @@ describe("Automation source seam", () => {
     cloud.mutations[0]!.resolve({});
     await ticket;
     const unbound = source.queueRun({
+      projectId: P,
       commandId: A,
       ticketId: T,
       target: { kind: "unbound", instructions: "Test" },
@@ -239,21 +241,45 @@ describe("Automation source seam", () => {
     const { cloud, answers } = setup();
     answers.pendingArrivals = { pending: [], failures: [{ runId: A, retryCommandId: T }] };
     await source.pending(P);
-    const cancel = source.cancel(T);
+    const cancel = source.cancel(P, T);
     expect(cloud.mutations[0]).toMatchObject({
       name: "automations:cancelPendingArrival",
       args: { jobId: T },
     });
     cloud.mutations[0]!.resolve({});
     await cancel;
-    const retry = source.retry(A);
+    const retry = source.retry({ projectId: P, runId: A, retryCommandId: T });
     expect(cloud.mutations[1]).toMatchObject({
       name: "automations:retryArrival",
       args: { commandId: T, runId: A, runnerId: R },
     });
     cloud.mutations[1]!.resolve({});
     await retry;
-    await expect(source.retry("gone")).rejects.toThrow("no longer available");
+    // Historical failures remain retryable even outside pendingArrivals' bounded window.
+    const old = source.retry({ projectId: P, runId: "old-run", retryCommandId: T });
+    expect(cloud.mutations[2]?.args.runId).toBe("old-run");
+    cloud.mutations[2]!.resolve({});
+    await old;
+  });
+  it("checks the project's read-only fence for manual, cancel and retry writes", async () => {
+    const { cloud } = setup();
+    source.close();
+    const check = vi.fn((projectId: string) => (projectId === P ? "Project is read-only" : null));
+    source = new ConvexAutomationSource(cloud.session, check);
+    await expect(source.cancel(P, T)).rejects.toThrow("Project is read-only");
+    await expect(source.retry({ projectId: P, runId: A, retryCommandId: T })).rejects.toThrow(
+      "Project is read-only",
+    );
+    await expect(
+      source.queueRun({
+        projectId: P,
+        commandId: A,
+        ticketId: T,
+        target: { kind: "automation", automationId: A },
+        modelOverride: null,
+      }),
+    ).rejects.toThrow("Project is read-only");
+    expect(cloud.mutations).toHaveLength(0);
   });
   it("optimistically paints a shared-rule edit and rolls it back on refusal", async () => {
     const { cloud, answers } = setup();
@@ -276,8 +302,31 @@ describe("Automation source seam", () => {
     });
     expect(useAutomationsStore.getState().byProject[P]?.[0]?.name).toBe("Changed");
     cloud.mutations[0]!.reject(refusal("name_taken", "That name is taken"));
-    await expect(editing).rejects.toThrow("That name is taken");
+    await expect(editing).rejects.toThrow("An Automation with that name already exists");
     expect(useAutomationsStore.getState().byProject[P]?.[0]?.name).toBe("Review");
+  });
+  it("follows an accepted Run until its Session is ready, then releases the watch", () => {
+    const { cloud } = setup();
+    const settled = vi.fn();
+    source.followRun(P, A, settled);
+    cloud.answer("automations:runState", { runId: A }, run());
+    cloud.answer(
+      "automations:runState",
+      { runId: A },
+      run({ status: "started", sessionAccess: "starting" }),
+    );
+    expect(settled).not.toHaveBeenCalled();
+    cloud.answer(
+      "automations:runState",
+      { runId: A },
+      run({ status: "started", sessionAccess: "ready" }),
+    );
+    expect(settled).toHaveBeenCalledOnce();
+    expect(cloud.watchers("automations:runState", { runId: A })).toBe(0);
+    source.followRun(P, T, settled);
+    source.closeProject(P);
+    cloud.answer("automations:runState", { runId: T }, run({ status: "failed" }));
+    expect(settled).toHaveBeenCalledOnce();
   });
   it("reports a watched read failure once until recovery", async () => {
     const { cloud } = setup();

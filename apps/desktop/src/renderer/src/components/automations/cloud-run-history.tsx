@@ -1,5 +1,8 @@
 import * as React from "react";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { displayTicketId } from "@volli/shared";
+import { useBoardStore } from "@renderer/stores/board";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { parseCloudAutomationSkipReason } from "@volli/shared/cloud";
 import { Button } from "@renderer/components/ui/button";
 import { ListRow } from "@renderer/components/ui/list-row";
@@ -10,7 +13,10 @@ import { relativeTime } from "@renderer/lib/relative-time";
 import { useAgeNow } from "@renderer/lib/use-age-now";
 import { useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { automationHistoryKey } from "@renderer/stores/automations";
-import { cloudAutomationSource } from "@renderer/stores/automation-source";
+import {
+  cloudAutomationSource,
+  requireCloudAutomationSource,
+} from "@renderer/stores/automation-source";
 import {
   useCloudAutomationsStore,
   waitingForRunner,
@@ -23,7 +29,11 @@ const EMPTY: readonly CloudRun[] = [];
 export function cloudRunLabel(run: CloudRun): string {
   switch (run.status) {
     case "queued":
-      return waitingForRunner(run.runner?.name ?? "runner", run.runner?.status ?? "offline");
+      return waitingForRunner(
+        run.runner?.name ?? "runner",
+        run.runner?.status ?? "offline",
+        run.runner?.statusChangedAt,
+      );
     case "failed":
       return `Failed · ${run.error ?? "Couldn’t start"}`;
     case "skipped": {
@@ -42,7 +52,7 @@ export function cloudRunLabel(run: CloudRun): string {
                   : reason.kind === "not-observed"
                     ? "Volli didn’t wake in time"
                     : "Reason unreadable";
-      return `Skipped · ${cause}${(run.missedCount ?? 0) > 0 ? ` (${run.missedCount} missed)` : ""}`;
+      return `Skipped · ${cause}${(run.missedCount ?? 0) > 1 ? ` (${run.missedCount} missed)` : ""}`;
     }
     case "started":
       return run.sessionAccess === "private"
@@ -106,6 +116,18 @@ export function CloudRunHistory({
 }
 function CloudRunRow({ run, now }: { run: CloudRun; now: number }) {
   const canWrite = useCanWrite(run.projectId);
+  const ticketNumber = useBoardStore(
+    (state) =>
+      state.ticketsByProject[run.projectId]?.find((ticket) => ticket.id === run.ticketId)
+        ?.ticketNumber,
+  );
+  const prefix = useProjectsStore(
+    (state) => state.projects.find((project) => project.id === run.projectId)?.ticketPrefix,
+  );
+  const ticketLabel =
+    ticketNumber === undefined || prefix === undefined
+      ? (run.ticketId ?? "Ticket")
+      : displayTicketId(prefix, ticketNumber);
   const [retrying, setRetrying] = React.useState(false);
   const model = resolvedRunModel(run.model);
   const ready = run.status === "started" && run.sessionAccess === "ready" && run.sessionId !== null;
@@ -113,7 +135,11 @@ function CloudRunRow({ run, now }: { run: CloudRun; now: number }) {
     if (run.ticketId === null || run.retryCommandId === undefined) return;
     setRetrying(true);
     try {
-      await cloudAutomationSource()?.retry(run.id);
+      await requireCloudAutomationSource().retry({
+        projectId: run.projectId,
+        runId: run.id,
+        retryCommandId: run.retryCommandId,
+      });
     } catch (error) {
       toastError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -179,7 +205,7 @@ function CloudRunRow({ run, now }: { run: CloudRun; now: number }) {
                   target: { kind: "automation", automationId: run.automationId! },
                   automationName: run.automationName ?? "Automation",
                   ticketId: run.ticketId,
-                  ticketDisplayId: "ticket",
+                  ticketDisplayId: ticketLabel,
                   modelOverride: null,
                 });
             }}

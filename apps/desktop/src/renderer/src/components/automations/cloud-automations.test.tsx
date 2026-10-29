@@ -30,8 +30,10 @@ import {
   CloudNextScheduledRun,
 } from "./cloud-automation-controls";
 import { CloudRunHistory, cloudRunLabel } from "./cloud-run-history";
+import { toastError } from "@renderer/lib/toast";
 import { ArmedRunWindows } from "./armed-run-window";
 import { AutomationsOnly } from "./automation-availability";
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 vi.mock("@renderer/components/hosts/use-hosts", () => ({
   useCanWrite: () => true,
   guardWrite: () => true,
@@ -112,7 +114,7 @@ describe("cloud Automation controls", () => {
   });
   it("defaults column arming to this Mac, shows its armer, and has no per-machine switch", async () => {
     await mount(<CloudColumnArming projectId={P} status="doing" />);
-    await click("Doing runs Review on Ada’s Mac");
+    await click("Doing runs Review on Ada’s Mac · Armed by Ada");
     expect(document.body.textContent).toContain("Armed by Ada");
     expect(document.body.textContent).toContain("on Ada’s Mac (this Mac)");
     expect(document.querySelector('[role="switch"]')).toBeNull();
@@ -193,8 +195,28 @@ describe("cloud Automation controls", () => {
   it("names the update recovery when this Mac has an old build", async () => {
     useCloudAutomationsStore.setState({ runners: [runner({ capabilities: { tools: [] } })] });
     await mount(<CloudColumnArming projectId={P} status="doing" />);
-    await click("Doing runs Review on Ada’s Mac");
+    await click("Doing runs Review on Ada’s Mac · Armed by Ada");
     expect(document.body.textContent).toContain("Update Volli on Ada’s Mac");
+  });
+  it("offers a capable degraded runner, never the old-build default", async () => {
+    useCloudAutomationsStore.setState({
+      runners: [
+        runner({ capabilities: { tools: [] } }),
+        runner({ id: "degraded", name: "Other Mac", status: "degraded" }),
+      ],
+    });
+    await mount(<CloudColumnArming projectId={P} status="doing" />);
+    await click("Doing runs Review on Ada’s Mac · Armed by Ada");
+    expect(document.body.textContent).toContain("Update Volli on Ada’s Mac");
+    const picker = document.querySelector('[aria-label="Automation runner"]')!;
+    await act(async () =>
+      picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    const options = [...document.querySelectorAll('[role="option"]')];
+    expect(options.some((option) => option.textContent?.includes("Ada’s Mac"))).toBe(false);
+    const degraded = options.find((option) => option.textContent?.includes("Other Mac"));
+    expect(degraded).toBeDefined();
+    expect(degraded!.hasAttribute("data-disabled")).toBe(false);
   });
   it("allows only Automation children through the cloud availability wrapper", async () => {
     await mount(
@@ -209,8 +231,14 @@ describe("cloud Automation controls", () => {
 describe("cloud Run evidence", () => {
   it.each([
     [run(), "Waiting for Ada’s Mac (asleep)"],
-    [run({ runner: { id: R, name: "Mac", status: "offline" } }), "Waiting for Mac (offline)"],
-    [run({ runner: { id: R, name: "Mac", status: "online" } }), "Waiting for Mac"],
+    [
+      run({ runner: { id: R, statusChangedAt: null, name: "Mac", status: "offline" } }),
+      "Waiting for Mac (offline)",
+    ],
+    [
+      run({ runner: { id: R, statusChangedAt: null, name: "Mac", status: "online" } }),
+      "Waiting for Mac",
+    ],
     [run({ status: "failed", error: "Choose a model" }), "Failed · Choose a model"],
     [
       run({
@@ -261,6 +289,14 @@ describe("cloud Run evidence", () => {
     ).toHaveLength(0);
     expect(container.textContent).not.toContain("effort");
   });
+  it("surfaces Retry failure when the cloud source has closed", async () => {
+    useCloudAutomationsStore.setState({
+      histories: { [P]: [run({ status: "failed", retryCommandId: T })] },
+    });
+    await mount(<CloudRunHistory projectId={P} automationId={null} />);
+    await click("Retry");
+    expect(toastError).toHaveBeenCalledWith("Volli Cloud isn’t connected yet.");
+  });
   it("the pending arrival waits after its countdown and cannot Cancel a leased start", async () => {
     useCloudAutomationsStore.setState({
       pending: {
@@ -275,7 +311,7 @@ describe("cloud Run evidence", () => {
               origin: "armed",
               availableAt: 1,
               leased: false,
-              runner: { id: R, name: "Ada’s Mac", status: "asleep" },
+              runner: { id: R, statusChangedAt: null, name: "Ada’s Mac", status: "asleep" },
             },
           ],
           failures: [],

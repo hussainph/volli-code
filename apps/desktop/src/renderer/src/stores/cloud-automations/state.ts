@@ -40,6 +40,10 @@ export function automationRunners(rows: readonly AutomationRunner[]): readonly A
     );
   });
 }
-export function waitingForRunner(name: string, status: string): string {
-  return `Waiting for ${name}${status === "asleep" ? " (asleep)" : status === "offline" ? " (offline)" : ""}`;
+export function waitingForRunner(name: string, status: string, since?: number | null): string {
+  const offline =
+    since == null
+      ? " (offline)"
+      : ` (offline since ${new Date(since).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })})`;
+  return `Waiting for ${name}${status === "asleep" ? " (asleep)" : status === "offline" ? offline : ""}`;
 }

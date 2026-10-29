@@ -41,7 +41,7 @@ function forget(projectId: string): void {
 }
 /** One binding per cloud window. Client/account/project loss tears down watches
  * and evidence; a socket outage keeps last accepted rows, read-only. */
-export function bindCloudAutomations(readOnly: (projectId?: string) => string | null): () => void {
+export function bindCloudAutomations(readOnly: (projectId: string) => string | null): () => void {
   let source: ConvexAutomationSource | null = null;
   let followed = new Set<string>();
   const sync = () => {
