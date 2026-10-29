@@ -97,6 +97,8 @@ export interface MoveWorld {
   calls: Map<string, number>;
   /** A fresh engine over the same profile and backend: what a relaunch builds. */
   engine(options?: { kill?: Kill; flaps?: Flaps; ports?: Partial<MoveEnginePorts> }): MoveEngine;
+  /** The backend as Alice's sign-in calls it, for a port a test builds itself. */
+  backend(): MoveBackend;
   cleanup(): void;
 }
 
@@ -164,6 +166,7 @@ export async function moveWorld(options: { artifacts?: number } = {}): Promise<M
     workspaceId: world.workspaceId,
     projectId: SYNTHETIC_IDS.project,
     calls,
+    backend: () => backendFor(),
     engine(options = {}) {
       const faultHits = new Map<string, number>();
       const kill = options.kill;

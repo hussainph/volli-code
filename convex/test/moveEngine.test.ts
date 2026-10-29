@@ -13,6 +13,7 @@ import { projectFreeze } from "../../packages/host-core/src/cloud-move/freeze";
 import { MigrationExportError } from "../../packages/host-core/src/migration-export/errors";
 import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-export/exporter";
 import { api } from "../functions/_generated/api";
+import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
 import { finalDigests, moveWorld, type MoveWorld } from "./move-engine-harness";
 
 let world: MoveWorld | undefined;
@@ -204,6 +205,51 @@ describe("Session history", () => {
     const move = engine.journal.move(moveId)!;
     expect(move.state).toBe("checked");
     expect(move.report).toMatchObject({ verify: { objects: { signedNotStored: 1 } } });
+  });
+
+  test("folds that never finish end the check in a clear failure, and a recheck resumes it", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    // A clock the check's own waits move, and a backend whose folds stay behind.
+    let clock = 0;
+    let stuck = true;
+    const backend = world.backend();
+    const stalled = {
+      ...backend,
+      query: async (path: string, args: Record<string, unknown>) => {
+        const answer = await backend.query(path, args);
+        if (path !== "projectImportHistory:foldProgress" || !stuck) return answer;
+        return { ...(answer as object), behind: [{ sessionId: "s", foldedThrough: 0 }] };
+      },
+    };
+    const sleeps: number[] = [];
+    const realPath = windowReadCheck({
+      backend: stalled,
+      now: () => clock,
+      foldTimeoutMs: 60_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    });
+    const engine = world.engine({ ports: { realPath } });
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    const failed = engine.journal.move(moveId)!;
+    // Not a hang, not a pass: the move waits for the person, the folds named.
+    expect(failed.state).toBe("checked");
+    expect(failed.report).toMatchObject({
+      ok: false,
+      realPath: { ok: false, checks: { allSessionsFolded: { checked: 1, failed: 1 } } },
+    });
+    expect(clock).toBeLessThanOrEqual(60_000);
+    expect(sleeps.length).toBeGreaterThan(0);
+
+    // The folds catch up; checking again passes.
+    stuck = false;
+    const again = world.engine({ ports: { realPath } });
+    again.recheck(moveId);
+    expect(await again.run(queueId)).toEqual({ kind: "done" });
+    expect(again.journal.move(moveId)!.report).toMatchObject({ ok: true, realPath: { ok: true } });
   });
 
   test("a history object changed after its upload fails the check and rolls the move back", async () => {
