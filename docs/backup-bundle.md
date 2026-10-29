@@ -132,11 +132,44 @@ A restored profile reuses none of those strings; it also does not hide them.
 
 ## Restore
 
+**Settings → Storage → Backups** lists local bundle dates, sizes, verification
+receipts and move keeps. Restore accepts a listed bundle or a file picked from
+disk, verifies it in a bounded-memory worker, and asks for a local directory
+per project. A current local project with the same id and name and an existing
+directory supplies a proposed mapping; the bundle itself carries no paths.
+
+Prepare restore builds and verifies a separate profile while the live one stays
+open. Nothing switches until **Restart and restore** passes the ordinary quit
+gates. A refused restart or an ordinary quit does not arm activation. On the
+accepted restart, a durable intent makes the next launch switch in a worker
+**before** opening SQLite. The previous database and artifact stores stay in
+`.volli-replaced-<n>` until removed by the owner. After relaunch, Backups keeps
+a Previous profile row whose Show in Finder selects that preserved directory
+for inspection or removal. All local-history changes since
+the backup (including changes made while preparing it) are replaced; project
+files and this machine's credential files are not changed. The report shows the
+credentials sentence. Cancellation waits for the worker to exit and withdraws
+the prepared profile without changing live files.
+
+An interrupted preparation leaves the live profile untouched. An interrupted
+switch uses the database-file recovery fence: boot refuses to open a mixed
+profile, with the previous files preserved. If no switch fence remains, the
+startup failure dialog can cancel the restore and open the current profile.
+If a switch fence remains, Open Recovery transfers to the existing degraded
+database-recovery screen without removing the fence, staging, or either profile;
+recovering a partially switched artifact store may still require manual recovery
+from the preserved files.
+The Settings surface requires a healthy local-mode launch and the default
+profile directory; it does not add bundle restore to the database-recovery
+screen or restore hosted cloud history.
+
+
 A restore never merges and never overwrites. There are two entry points with
 one sequence: `restoreBackupBundleFile` takes a bundle **file** of any size with
 bounded memory (VC-988); `restoreBackupBundle` takes the bundle's bytes and
 remains for small callers (fixtures, tests). Both stage, check and activate
-exactly as below and return the same report or the same problems.
+exactly as below and return the same report or the same problems. The file API
+also accepts `stageOnly` so a live app can stop before activation.
 
 1. Read the archive, then the manifest; check bundle-format compatibility.
 2. Verify every entry's path, size and SHA-256.
@@ -290,7 +323,7 @@ Cleanup failures are logged without replacing the original failure. A late cance
 after publication journals the usable backup before pausing, so resume reuses it.
 The move's own backup runs
 inside its maintenance lease without waiting on itself; daily backups still wait.
-The large-profile restore limitation above remains a stable-release gate.
+The large-profile round trip above remains required release proof.
 
 The opt-in synthetic scale probe is
 `packages/host-core/scripts/benchmark-automatic-backup.mjs`. It reports time,

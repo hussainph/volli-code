@@ -69,6 +69,9 @@ const ROOT_NAMES = ["userData", "userDataPath", "userDataDir", "dataDir"];
 const FILE_ROOTS: Record<string, readonly string[]> = {
   // Restore's `request.profileRoot` is the profile being replaced.
   "packages/host-core/src/backup/restore.ts": ["profileRoot"],
+  "packages/host-core/src/backup/restore-schedule.ts": ["root"],
+  "packages/host-core/src/backup/restore-service.ts": ["root"],
+  "packages/host-core/src/backup/restore-worker.ts": ["root"],
 };
 
 /**
@@ -87,6 +90,30 @@ const FILE_NOT_ROOTS: Record<string, readonly string[]> = {
  * fails until someone reviews it here; one that disappears fails too.
  */
 const REVIEWED_DYNAMIC_SEGMENTS: Record<string, { sample: string; why: string }> = {
+  "packages/host-core/src/backup/restore-service.ts::previous": {
+    sample: ".volli-replaced-1800000000000",
+    why: "status selects only the exact preserved-profile directory namespace to reveal in Finder",
+  },
+  "packages/host-core/src/backup/restore-schedule.ts::name": {
+    sample: ".volli-restore-prepared.json",
+    why: "readIntent accepts only the local prepared or accepted restore record constants",
+  },
+  "packages/host-core/src/backup/restore-schedule.ts::prepared.staging": {
+    sample: ".volli-restore-1800000000000",
+    why: "readIntent validates this single-segment restore staging name before deletion",
+  },
+  "packages/host-core/src/backup/restore-schedule.ts::intent.staging": {
+    sample: ".volli-restore-1800000000000",
+    why: "readIntent validates this single-segment restore staging name before activation or deletion",
+  },
+  "packages/host-core/src/backup/restore-schedule.ts::intent.previous": {
+    sample: ".volli-replaced-1800000000000",
+    why: "readIntent validates this single-segment previous-profile name before activation",
+  },
+  "packages/host-core/src/backup/restore-service.ts::name": {
+    sample: ".volli-inspect-123-00000000-0000-4000-8000-000000000000",
+    why: "the dead-worker sweep validates the inspection scratch namespace and owner pid before deletion",
+  },
   "packages/host-core/src/database-recovery.ts::`${name}.restore-`": {
     sample: "volli.db.restore-Ab12Cd",
     why: "mkdtemp staging beside the database; `name` is the profile database's basename",

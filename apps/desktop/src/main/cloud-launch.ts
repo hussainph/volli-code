@@ -176,8 +176,8 @@ export interface RelaunchLifecycle {
 }
 
 export interface RelaunchController {
-  /** Restart the app into the store the account now chooses. A second request while one waits is the same request. */
-  request(): void;
+  /** Restart into the chosen store. True when accepted/already pending; false when the live-work chooser declines. */
+  request(): boolean;
   /** Whether a restart is waiting on the quit gates now. */
   pending(): boolean;
   /** The quit was accepted: the next process starts. */
@@ -223,11 +223,11 @@ export function createRelaunchController(
   };
   return {
     request() {
-      if (requested || waiting) return;
+      if (requested || waiting) return true;
       const turns = live?.turns() ?? 0;
       if (turns > 0 && live !== undefined) {
         const answer = live.choose(turns);
-        if (answer === "cancel") return;
+        if (answer === "cancel") return false;
         if (answer === "wait") {
           waiting = true;
           const check = () => {
@@ -237,7 +237,7 @@ export function createRelaunchController(
           // A primed subscription may already have observed zero.
           if (!waiting) {
             off();
-            return;
+            return true;
           }
           unsubscribe = off;
           // Live bindings can close without a fold; keep the same fallback
@@ -245,10 +245,11 @@ export function createRelaunchController(
           poll =
             live.setInterval === undefined ? setInterval(check, 1_000) : live.setInterval(check);
           check();
-          return;
+          return true;
         }
       }
       quit();
+      return true;
     },
     pending: () => requested,
     quitAccepted() {

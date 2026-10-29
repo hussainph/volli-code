@@ -200,3 +200,9 @@ export * from "./git-url";
 export * from "./config-resolution";
 
 export type { ProfileBackupStatus } from "./profile-backups";
+
+export type {
+  ProfileRestoreStatus,
+  ProfileRestoreBundle,
+  ProfileRestoreProject,
+} from "./profile-restore";

@@ -27,10 +27,10 @@
  *
  * What this module does not do is decide when to run, ask the questions, or
  * relaunch the app. It takes a bundle and a mapping and returns a report, which
- * keeps it testable against fixture profiles and leaves the surface — and the
- * progress reporting — to the restore UI. No production surface calls either
- * entry point yet; the restore surface (VC-997) is the receiving caller, and a
- * profile-sized restore must use the file entry point.
+ * keeps it testable against fixture profiles. Settings → Storage runs the file
+ * entry point in a worker with `stageOnly`, then arms the fenced switch only
+ * when a requested restart passes the quit gates. The byte entry point has no
+ * production caller; a profile-sized restore must use the file entry point.
  */
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -54,6 +54,7 @@ import {
 } from "../session-runtime/transcript-artifacts";
 import {
   BLOB_PREFIX,
+  DATA_PATH,
   readBackupBundle,
   TRANSCRIPT_PREFIX,
   type BackupManifest,
@@ -129,6 +130,10 @@ export const RESTORE_CREDENTIALS: RestoreCredentials = Object.freeze({
 });
 
 export interface RestoreReport {
+  /** Present only for a stage-only restore. No live files have changed. */
+  stagedPath?: string;
+  /** Worker-computed identity for restart replay; scheduling never hashes a profile on main. */
+  stagedDatabaseSha256?: string;
   /** Where the profile that was there before now sits, untouched. */
   replacedPath: string;
   bundleSchemaVersion: number;
@@ -439,13 +444,19 @@ function readFileSyncSafe(path: string): Buffer | null {
 /** Size and SHA-256 of a byte stream, consumed to its end. */
 async function measureChunks(
   chunks: AsyncIterable<Uint8Array | string>,
+  checkpoint?: () => Promise<void>,
 ): Promise<{ size: number; sha256: string }> {
   const hash = createHash("sha256");
   let size = 0;
+  let chunksSinceCheckpoint = 0;
   for await (const chunk of chunks) {
     const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     hash.update(bytes);
     size += bytes.length;
+    if (++chunksSinceCheckpoint >= 128) {
+      await checkpoint?.();
+      chunksSinceCheckpoint = 0;
+    }
   }
   return { size, sha256: hash.digest("hex") };
 }
@@ -511,11 +522,11 @@ function profileDatabasePath(root: string): string {
  * the marker; only a failure to put it back leaves boot refusing, with the
  * original files kept in the set-aside directory.
  */
-function activateProfile(
+export function activateStagedBackup(
   profileRoot: string,
   staging: string,
   replacedPath: string,
-  faults: DatabaseFileFaults | undefined,
+  faults?: DatabaseFileFaults,
 ): void {
   swapInStagedProfile({
     dbPath: profileDatabasePath(profileRoot),
@@ -559,6 +570,7 @@ interface StagePlan {
    * they always were.
    */
   bounded: boolean;
+  checkpoint?: () => Promise<void>;
   /** Releases the reader's resources before the swap. Must not throw. */
   release(): void;
 }
@@ -569,12 +581,15 @@ interface StagePlan {
  * path except a rollback failure, where it is evidence.
  */
 async function stageAndActivate(
-  request: Pick<RestoreRequest, "profileRoot" | "projectPaths" | "now" | "faults">,
+  request: Pick<RestoreRequest, "profileRoot" | "projectPaths" | "now" | "faults"> & {
+    stageOnly?: boolean;
+  },
   staging: string,
   plan: StagePlan,
 ): Promise<RestoreResult> {
   let db: Database.Database | null = null;
   try {
+    await plan.checkpoint?.();
     const dbPath = profileDatabasePath(staging);
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
@@ -592,11 +607,13 @@ async function stageAndActivate(
     // existed when it was written.
     migrate(db, dbPath, { toVersion: plan.schemaVersion });
     const counts = await plan.writeRows(db);
+    await plan.checkpoint?.();
     // Then the upgrade a person restoring into a newer build is really asking
     // for — the same walk a launch would have performed.
     migrate(db, dbPath);
     await rebuildUsageProjections(db, plan.meteredFrom);
     await plan.writeArtifacts(staging);
+    await plan.checkpoint?.();
 
     const problems = await verifyStagedProfile(
       db,
@@ -613,6 +630,7 @@ async function stageAndActivate(
       return { ok: false, problems };
     }
 
+    await plan.checkpoint?.();
     const usage = {
       rows: (db.prepare("SELECT COUNT(*) AS n FROM session_usage").get() as { n: number }).n,
       meteredFrom: (
@@ -631,7 +649,8 @@ async function stageAndActivate(
 
     const replacedPath = join(request.profileRoot, `.volli-replaced-${request.now}`);
     try {
-      activateProfile(request.profileRoot, staging, replacedPath, request.faults);
+      if (!request.stageOnly)
+        activateStagedBackup(request.profileRoot, staging, replacedPath, request.faults);
     } catch (error) {
       if (error instanceof DatabaseSwapFinalizeError) {
         rmSync(staging, { recursive: true, force: true });
@@ -659,11 +678,19 @@ async function stageAndActivate(
       }
       throw error;
     }
-    rmSync(staging, { recursive: true, force: true });
+    if (!request.stageOnly) rmSync(staging, { recursive: true, force: true });
 
     return {
       ok: true,
       report: {
+        ...(request.stageOnly
+          ? {
+              stagedPath: staging,
+              stagedDatabaseSha256: (
+                await measureChunks(createReadStream(profileDatabasePath(staging)), plan.checkpoint)
+              ).sha256,
+            }
+          : {}),
         replacedPath,
         bundleSchemaVersion: plan.schemaVersion,
         schemaVersion,
@@ -739,6 +766,10 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
 }
 
 export interface RestoreFileRequest extends Omit<RestoreRequest, "bundle"> {
+  /** Prepare and verify only; the caller durably schedules activation before the next DB open. */
+  stageOnly?: boolean;
+  /** The data identity shown in the directory picker, pinned across the person's decision. */
+  expectedDataSha256?: string;
   /** The bundle file. Read twice — verified, then staged — never into memory. */
   bundlePath: string;
   /**
@@ -792,7 +823,16 @@ export async function restoreBackupBundleFile(request: RestoreFileRequest): Prom
   }
   let refusal: BackupProblem[];
   try {
-    refusal = fileRestoreRefusal(held, request.projectPaths);
+    refusal =
+      request.expectedDataSha256 !== undefined &&
+      request.expectedDataSha256 !== held.verifiedEntry(DATA_PATH)?.sha256
+        ? [
+            problem(
+              "verify",
+              "The backup changed after it was selected. Choose it again before restoring.",
+            ),
+          ]
+        : fileRestoreRefusal(held, request.projectPaths);
   } catch (error) {
     refusal = [notRestoredProblem(error)];
   }
@@ -821,6 +861,7 @@ export async function restoreBackupBundleFile(request: RestoreFileRequest): Prom
     writeArtifacts: async () => {},
     manifestEntries: () => held.manifestEntries(),
     bounded: true,
+    checkpoint: request.checkpoint,
     release: () => closeQuietly(held),
   });
 }

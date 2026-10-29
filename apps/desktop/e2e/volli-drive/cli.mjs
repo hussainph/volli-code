@@ -75,6 +75,8 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
                                    --storage-origin (exact HTTPS origins).
                                    Prod requires BOTH prod and --confirm-prod.
   sign-in-url <id>                 recorded WorkOS URL; open it yourself in a browser
+  restore-restart <id> --gen N --ref eN
+                                   click Restart and restore; supervise its local relaunch
   restart <id>                     supervised cloud restart on the same isolated profile
   list [--json]                    instances on this machine (max 3 live)
   doctor [<id>] [--json]           no id: is the build about to launch guarded? (static)
@@ -659,6 +661,12 @@ async function main() {
     }
     case "sign-in-url":
       out(await call(id, "sign-in-url"));
+      break;
+    case "restore-restart":
+      printSnapshot(
+        await call(id, "restore-restart", { gen: flags.gen, ref: flags.ref }, 120_000),
+        flags.find,
+      );
       break;
     case "restart":
       out(JSON.stringify(await call(id, "restart", {}, 120_000)));

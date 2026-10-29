@@ -60,6 +60,8 @@ export interface DesktopRunnerEdgePorts<T extends QuitTerminals> {
   cloudRunner?: { stop(): Promise<unknown> };
   /** Background work that must not start during teardown (VC-643). */
   stopBackgroundWork(): void;
+  /** Cancelled local workers must exit before the profile can be relaunched. */
+  settleBackgroundWork?(): Promise<void>;
   /** Whether the `cloud` flag is on now; read at each quit. */
   cloudEnabled(): boolean;
   /** The busy-terminal gate over the bound terminals (`prepareTerminalQuit`). */
@@ -215,6 +217,7 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
         shutdownNativeSessions: async () => {
           await Promise.all([
             ports.host.stop("quit"),
+            ports.settleBackgroundWork?.(),
             systemShutdownFlush,
             ports.remoteHosts.close(),
             ports.cloudRunner?.stop(),

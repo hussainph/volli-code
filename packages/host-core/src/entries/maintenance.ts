@@ -42,3 +42,13 @@ export { settleShutdownBeforeDeadline } from "../shutdown-deadline";
 
 export { serveAutomaticBackupWorker } from "../backup/automatic-worker";
 export { withProfileMaintenance } from "../backup/profile-maintenance";
+
+export { ProfileRestoreService } from "../backup/restore-service";
+export { runRestoreWorker, serveRestoreWorker } from "../backup/restore-worker";
+export {
+  hasScheduledBackupRestore,
+  hasInterruptedBackupRestore,
+  canCancelScheduledBackupRestore,
+  handoffInterruptedBackupRestore,
+  cancelScheduledBackupRestore,
+} from "../backup/restore-schedule";

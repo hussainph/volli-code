@@ -93,6 +93,13 @@ import {
   revealWindow,
   sealQuietAppActivation,
   createDatabaseRecovery,
+  ProfileRestoreService,
+  hasScheduledBackupRestore,
+  hasInterruptedBackupRestore,
+  canCancelScheduledBackupRestore,
+  handoffInterruptedBackupRestore,
+  cancelScheduledBackupRestore,
+  runRestoreWorker,
   startOrphanScan,
   createLoginPathBootstrap,
   ADOPTION_PROBE,
@@ -808,6 +815,48 @@ const appStartup = app.whenReady().then(async () => {
   // and blame userData for a failure the override caused.
   const dbOverride = isDev ? process.env["VOLLI_DB_PATH"] : undefined;
   const dbPath = dbOverride ?? defaultDatabasePath(app.getPath("userData"));
+  // A restore is switched before ANY credential service, host, migration or SQLite
+  // handle opens. A failed/interrupted switch refuses boot, never a fresh profile.
+  try {
+    if (await hasScheduledBackupRestore(app.getPath("userData"))) {
+      if (dbPath !== defaultDatabasePath(app.getPath("userData")))
+        throw new Error(
+          "A restore is pending for the default profile. Remove the database override and restart.",
+        );
+      const result = await runRestoreWorker(
+        join(__dirname, "restore-worker.cjs"),
+        { kind: "activate", root: app.getPath("userData") },
+        new AbortController().signal,
+        () => {},
+      );
+      if (!result.ok) throw new Error(result.problems.map((problem) => problem.message).join("\n"));
+    }
+  } catch (error) {
+    const mayCancel = await canCancelScheduledBackupRestore(app.getPath("userData")).catch(
+      () => false,
+    );
+    const mayRecover = hasInterruptedBackupRestore(app.getPath("userData"));
+    const answer = dialog.showMessageBoxSync({
+      type: "error",
+      title: "Restore could not be completed",
+      message: "Restore could not be completed",
+      detail: `${errorMessage(error)}\nThe profile has not been opened. Previous profile files are kept beside the database.`,
+      buttons: mayCancel
+        ? ["Keep Closed", "Cancel Restore and Open Current Profile"]
+        : mayRecover
+          ? ["Keep Closed", "Open Recovery"]
+          : ["Keep Closed"],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (mayCancel && answer === 1) await cancelScheduledBackupRestore(app.getPath("userData"));
+    else if (answer === 1 && (await handoffInterruptedBackupRestore(app.getPath("userData")))) {
+      // The database fence remains: createHostCore opens its degraded recovery surface.
+    } else {
+      app.quit();
+      return;
+    }
+  }
   // Log the resolved db up front: a `pnpm dev` boot lands on the empty
   // `Volli Code-dev/volli.db` while your real data sits in the packaged app's
   // `Volli Code/volli.db`. Without this line an empty dev UI is
@@ -1075,8 +1124,22 @@ const appStartup = app.whenReady().then(async () => {
   }
   rendererSources = launchConnectSources(launch, accountConfig.storageOrigin);
   // Signing in or out restarts into the other store, through every quit gate.
+  let restore: ProfileRestoreService | undefined;
   const relaunch = createRelaunchController(
-    { quit: () => app.quit(), relaunch: () => app.relaunch() },
+    {
+      quit: () => app.quit(),
+      relaunch: () => {
+        try {
+          restore?.acceptRestart();
+          app.relaunch();
+        } catch (error) {
+          dialog.showErrorBox(
+            "Restore restart could not be finalized",
+            `${errorMessage(error)}\nThe restore may be scheduled for the next launch. Restart Volli to finish or cancel it; previous profile files are preserved.`,
+          );
+        }
+      },
+    },
     liveHost === undefined
       ? undefined
       : {
@@ -1099,6 +1162,31 @@ const appStartup = app.whenReady().then(async () => {
           },
         },
   );
+  restore = new ProfileRestoreService({
+    root: app.getPath("userData"),
+    workerEntry: join(__dirname, "restore-worker.cjs"),
+    available: () =>
+      launch.store === "local" && dbPath === defaultDatabasePath(app.getPath("userData")),
+    localProjects: () => (sessionDb === null ? [] : listProjects(sessionDb)),
+    pickBundle: async () => {
+      const result = await dialog.showOpenDialog({
+        title: "Restore backup",
+        defaultPath: join(app.getPath("userData"), "backups"),
+        properties: ["openFile"],
+        filters: [{ name: "Volli backup bundle", extensions: ["gz", "failed"] }],
+      });
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
+    pickDirectory: async () => {
+      const result = await dialog.showOpenDialog({
+        title: "Project directory",
+        properties: ["openDirectory"],
+      });
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
+    restart: () => relaunch.request(),
+    revealPrevious: (path) => shell.showItemInFolder(path),
+  });
   // This Mac as one of the signed-in person's runners (VC-895): only in a
   // Volli Cloud launch, which reads the sealed runner link at boot (a runner
   // connects without a window). A local launch, and every flag-off one,
@@ -1452,6 +1540,7 @@ const appStartup = app.whenReady().then(async () => {
     remoteHosts,
     ...(macRunner === null ? {} : { cloudRunner: macRunner }),
     stopBackgroundWork: () => {
+      restore?.stop();
       webSealing.stop();
       // A GitHub flow being polled ends and stops following the account, then a
       // sign-in waiting on the browser ends and the dev issuer stops listening.
@@ -1460,10 +1549,19 @@ const appStartup = app.whenReady().then(async () => {
       releaseTurnPower?.();
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
+    settleBackgroundWork: async () => {
+      await restore?.settled();
+    },
     terminalQuit: prepareTerminalQuit,
     createSessionRpc,
     closeSocket: shutdownAgentSocket,
-    relaunch,
+    relaunch: {
+      ...relaunch,
+      quitRefused: () => {
+        restore?.restartRefused();
+        relaunch.quitRefused();
+      },
+    },
   });
   /**
    * This Mac's runner (VC-671): host-core's Session runtime composition,
@@ -1656,6 +1754,7 @@ const appStartup = app.whenReady().then(async () => {
     return {
       backgroundShells,
       backups: liveHost?.maintenance.backups ?? null,
+      restore,
       experiments: { snapshot: readExperiments, set: setExperiment },
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,

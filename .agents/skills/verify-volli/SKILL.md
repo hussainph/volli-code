@@ -80,6 +80,7 @@ volli-drive act vd-xxxxxx --gen N --ref f2e242 --kind type --text "Title"
 volli-drive act vd-xxxxxx --gen N [--ref …] --kind press --key Enter|Escape|Space|ArrowRight|Meta+Enter
 volli-drive act vd-xxxxxx --gen N --kind scroll --ref … --direction up
 volli-drive wait vd-xxxxxx --text "fake-agent: hello" [--gone] [--timeout 30000]
+volli-drive restore-restart vd-xxxxxx --gen N --ref f2e75 # real Restart and restore click, supervised local relaunch
 volli-drive screenshot vd-xxxxxx --name after-move   # prints the PNG path
 ```
 
@@ -127,6 +128,7 @@ volli-drive list                    # nothing of yours should remain live
 | 05 | Settings: toggle the `cloud` flag | [features/05-settings-cloud-flag.md](features/05-settings-cloud-flag.md) |
 | 06 | Browser: tab groups, open into a pane, reveal, close and Undo | [features/06-browser-groups.md](features/06-browser-groups.md) |
 | 07 | Cloud teammates: attribution, privacy, read-only viewing and Share | [features/07-cloud-teammates.md](features/07-cloud-teammates.md) |
+| 08 | Local backup → change → restore → restart | [features/08-backup-restore.md](features/08-backup-restore.md) |
 
 01 and 02 were driven end to end on the live build (VC-703); 03–05 are mapped from code and carry `UNVERIFIED:` marks — confirm them live and remove the marks as you go. When the app changes under a mapped feature, update its file in the same PR.
 

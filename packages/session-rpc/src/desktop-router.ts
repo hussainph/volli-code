@@ -1,3 +1,4 @@
+import type { ProfileRestoreStatus } from "@volli/shared";
 import type { ProfileBackupStatus } from "@volli/shared";
 /**
  * The desktop-only tier's router (VC-608; HP § Command catalog, D-A1 = (c)):
@@ -161,6 +162,17 @@ export interface DesktopRouterHandlers {
   readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
   readonly "backups.run": HostHandler<{ expectedRevision: string }, ProfileBackupStatus>;
   readonly "backups.reveal": HostHandler<void, null>;
+  readonly "backups.restoreRevealPrevious": HostHandler<void, null>;
+  readonly "backups.restoreStatus": HostHandler<void, ProfileRestoreStatus>;
+  readonly "backups.restoreChoose": HostHandler<{ fileName?: string }, ProfileRestoreStatus>;
+  readonly "backups.restoreDirectory": HostHandler<void, string | null>;
+  readonly "backups.restoreStart": HostHandler<
+    { expectedRevision: string; projectPaths: Record<string, string> },
+    ProfileRestoreStatus
+  >;
+  readonly "backups.restoreCancel": HostHandler<{ expectedRevision: string }, ProfileRestoreStatus>;
+  readonly "backups.restoreRestart": HostHandler<{ expectedRevision: string }, null>;
+
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** A ticket's working copy's environment setup (VC-584): where it stands, and a person's answer. */
   readonly "worktree.setupStatus": HostHandler<{ ticketId: string }, WorktreeSetupStatusView>;
@@ -433,6 +445,39 @@ const browserAppShortcutEventSchema = z.object({
   ]),
 });
 
+const restoreStatusSchema = z.object({
+  revision: z.string(),
+  // Closed output vocabularies: the bundled renderer handles each state exhaustively.
+  phase: z.enum([
+    "idle",
+    "checking",
+    "mapping",
+    "staging",
+    "ready",
+    "failed",
+    "cancelled",
+    "restarting",
+  ]),
+  bundles: z.array(
+    z.object({
+      fileName: z.string(),
+      createdAt: z.number(),
+      sizeBytes: z.number(),
+      verification: z.enum(["verified", "failed", "unknown"]),
+      keptForMove: z.boolean(),
+    }),
+  ),
+  selectedFile: z.string().nullable(),
+  projects: z.array(
+    z.object({ id: z.string(), name: z.string(), directory: z.string().nullable() }),
+  ),
+  checkpoints: z.number(),
+  paused: z.boolean(),
+  problems: z.array(z.object({ kind: z.string(), message: z.string() })),
+  credentialsMessage: z.string().nullable(),
+  previousProfile: z.string().nullable(),
+});
+
 const backupStatusSchema = z.object({
   revision: z.string(),
   running: z.boolean(),
@@ -582,6 +627,36 @@ export function createDesktopRouter() {
         .mutation(({ ctx, input }) => ctx.handlers["project.remove"](input, ctx.call)),
     },
     backups: {
+      restoreRevealPrevious: hostProcedure("backups.restoreRevealPrevious")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["backups.restoreRevealPrevious"](undefined, ctx.call)),
+      restoreStatus: hostProcedure("backups.restoreStatus")
+        .output(restoreStatusSchema)
+        .query(({ ctx }) => ctx.handlers["backups.restoreStatus"](undefined, ctx.call)),
+      restoreChoose: hostProcedure("backups.restoreChoose")
+        .input(z.strictObject({ fileName: z.string().min(1).optional() }))
+        .output(restoreStatusSchema)
+        .mutation(({ ctx, input }) => ctx.handlers["backups.restoreChoose"](input, ctx.call)),
+      restoreDirectory: hostProcedure("backups.restoreDirectory")
+        .output(z.string().nullable())
+        .mutation(({ ctx }) => ctx.handlers["backups.restoreDirectory"](undefined, ctx.call)),
+      restoreStart: hostProcedure("backups.restoreStart")
+        .input(
+          z.strictObject({
+            expectedRevision: z.string().min(1),
+            projectPaths: z.record(z.string(), z.string()),
+          }),
+        )
+        .output(restoreStatusSchema)
+        .mutation(({ ctx, input }) => ctx.handlers["backups.restoreStart"](input, ctx.call)),
+      restoreCancel: hostProcedure("backups.restoreCancel")
+        .input(z.strictObject({ expectedRevision: z.string().min(1) }))
+        .output(restoreStatusSchema)
+        .mutation(({ ctx, input }) => ctx.handlers["backups.restoreCancel"](input, ctx.call)),
+      restoreRestart: hostProcedure("backups.restoreRestart")
+        .input(z.strictObject({ expectedRevision: z.string().min(1) }))
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["backups.restoreRestart"](input, ctx.call)),
       status: hostProcedure("backups.status")
         .output(backupStatusSchema)
         .query(({ ctx }) => ctx.handlers["backups.status"](undefined, ctx.call)),

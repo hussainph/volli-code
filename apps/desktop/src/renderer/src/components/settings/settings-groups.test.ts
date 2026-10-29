@@ -121,6 +121,11 @@ describe("the Storage category's search index", () => {
     const terms = keywordsFor("storage").map((term) => term.toLowerCase());
     for (const label of [
       "Local profile backups",
+      "Backups",
+      "Restore",
+      "Backup bundle",
+      "Restart and restore",
+      "Previous profile",
       "Last backup",
       "Backup notice",
       "Back up now",

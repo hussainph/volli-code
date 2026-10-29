@@ -883,6 +883,7 @@ export default defineConfig(({ mode, command }) => ({
       entry: {
         main: "src/main/index.ts",
         "automatic-backup-worker": "src/main/automatic-backup-worker.ts",
+        "restore-worker": "src/main/restore-worker.ts",
       },
       format: "cjs",
       outDir: "dist-electron",

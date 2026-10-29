@@ -356,6 +356,58 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
       notice: null,
     }),
     "backups.reveal": record("backups.reveal", null),
+    "backups.restoreRevealPrevious": record("backups.restoreRevealPrevious", null),
+    "backups.restoreStatus": record("backups.restoreStatus", {
+      revision: "r",
+      phase: "idle",
+      bundles: [],
+      selectedFile: null,
+      projects: [],
+      checkpoints: 0,
+      paused: false,
+      problems: [],
+      credentialsMessage: null,
+      previousProfile: null,
+    }),
+    "backups.restoreChoose": record("backups.restoreChoose", {
+      revision: "r",
+      phase: "idle",
+      bundles: [],
+      selectedFile: null,
+      projects: [],
+      checkpoints: 0,
+      paused: false,
+      problems: [],
+      credentialsMessage: null,
+      previousProfile: null,
+    }),
+    "backups.restoreDirectory": record("backups.restoreDirectory", null),
+    "backups.restoreStart": record("backups.restoreStart", {
+      revision: "r",
+      phase: "idle",
+      bundles: [],
+      selectedFile: null,
+      projects: [],
+      checkpoints: 0,
+      paused: false,
+      problems: [],
+      credentialsMessage: null,
+      previousProfile: null,
+    }),
+    "backups.restoreCancel": record("backups.restoreCancel", {
+      revision: "r",
+      phase: "idle",
+      bundles: [],
+      selectedFile: null,
+      projects: [],
+      checkpoints: 0,
+      paused: false,
+      problems: [],
+      credentialsMessage: null,
+      previousProfile: null,
+    }),
+    "backups.restoreRestart": record("backups.restoreRestart", null),
+
     "worktree.trimSettings": record("worktree.trimSettings", TRIM),
     "worktree.setupStatus": record("worktree.setupStatus", SETUP_FAILED),
     "worktree.answerSetup": record("worktree.answerSetup", { kind: "pending" }),
@@ -537,6 +589,34 @@ describeContract<Host, DesktopRouter>(
       expect(fixture.calls).toEqual([
         { key: "worktree.trimSettings", input: undefined, call: WINDOW_CALL },
         { key: "project.reorder", input: { orderedIds: ["b", "a"] }, call: WINDOW_CALL },
+      ]);
+    });
+
+    it("carries the restore inventory and revision-fenced intents through the real codec", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.backups.restoreRevealPrevious.mutate()).toBeNull();
+      expect(await client.backups.restoreStatus.query()).toMatchObject({
+        phase: "idle",
+        projects: [],
+        problems: [],
+      });
+      await client.backups.restoreChoose.mutate({ fileName: "bundle.tar.gz" });
+      expect(await client.backups.restoreDirectory.mutate()).toBeNull();
+      await client.backups.restoreStart.mutate({
+        expectedRevision: "r",
+        projectPaths: { p: "/checkout" },
+      });
+      await client.backups.restoreCancel.mutate({ expectedRevision: "r" });
+      expect(await client.backups.restoreRestart.mutate({ expectedRevision: "r" })).toBeNull();
+      expect(fixture.calls.map(({ key }) => key)).toEqual([
+        "backups.restoreRevealPrevious",
+        "backups.restoreStatus",
+        "backups.restoreChoose",
+        "backups.restoreDirectory",
+        "backups.restoreStart",
+        "backups.restoreCancel",
+        "backups.restoreRestart",
       ]);
     });
 
@@ -1797,6 +1877,14 @@ describe("the desktop router's grammar", () => {
         "backups.status",
         "backups.run",
         "backups.reveal",
+        "backups.restoreRevealPrevious",
+        "backups.restoreStatus",
+        "backups.restoreChoose",
+        "backups.restoreDirectory",
+        "backups.restoreStart",
+        "backups.restoreCancel",
+        "backups.restoreRestart",
+
         "worktree.trimSettings",
         "worktree.setupStatus",
         "worktree.answerSetup",

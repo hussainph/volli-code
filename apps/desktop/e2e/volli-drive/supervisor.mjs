@@ -73,6 +73,7 @@ import {
   prepareRemoteAcceptance,
 } from "./lib/remote-acceptance.mjs";
 
+import { assertRestoreRestart } from "./lib/restore-acceptance.mjs";
 import { deploymentElectronEnv, recordedWorkosSignIn } from "./lib/deployment.mjs";
 
 const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -824,6 +825,74 @@ async function restart(reason) {
   }
 }
 
+/** Local restore proof: record ONLY Electron's native relaunch boundary. The real
+ * button, handler, quit gates and durable restore intent run unmodified. */
+async function restoreRestart(args) {
+  assertRestoreRestart(spec, current, args);
+  if (restarting) throw new Error("a restart is already running");
+  const { page } = await pickWindow(current.window);
+  const target = page.locator(`aria-ref=${args.ref}`);
+  assertRestoreRestart(spec, current, args, await target.innerText());
+  const recorder = join(L.harnessDir, "restore-relaunch.json");
+  await fs.rm(recorder, { force: true });
+  const child = electronChild;
+  const pid = electronPid;
+  restarting = true;
+  const started = performance.now();
+  try {
+    await app.evaluate(({ app: electronApp }, path) => {
+      const { writeFileSync: writeRestoreRecord } = process.getBuiltinModule("node:fs");
+      // A native-boundary recorder: never spawn an Electron outside this supervisor.
+      electronApp.relaunch = () =>
+        writeRestoreRecord(path, JSON.stringify({ pid: process.pid }), { mode: 0o600 });
+    }, recorder);
+    await target.click({ timeout: 10000 });
+    transcript({
+      cmd: "act",
+      kind: "click",
+      gen: Number(args.gen),
+      ref: args.ref,
+      double: "app.relaunch recorder",
+    });
+    await waitUntil("restore's accepted quit", () => observedChildExit(child, pid) !== null, {
+      timeout: 20000,
+      interval: 100,
+    });
+    const close = observedChildExit(child, pid);
+    const unclean = cleanQuitProblems(close);
+    if (unclean.length) throw new Error(`restore quit was not clean: ${unclean.join("; ")}`);
+    const record = JSON.parse(await fs.readFile(recorder, "utf8"));
+    if (record.pid !== pid) throw new Error("restore did not request a native relaunch");
+    if (!(await pathExists(join(L.userDataDir, ".volli-restore-on-restart.json"))))
+      throw new Error("restore did not durably arm activation");
+    await waitUntil("restore's old processes to exit", async () => (await owned()).length === 0, {
+      timeout: 10000,
+      interval: 200,
+    });
+    await fs.rm(L.appSocket, { force: true });
+    electronExit = null;
+    mainPage = null;
+    current = { generation: ++generation, window: null, refs: new Set() };
+    const { live } = await startElectron(launchEnv);
+    await waitUntil("the restored app's agent socket", () => pathExists(L.appSocket), {
+      timeout: 30000,
+    });
+    restarts += 1;
+    transcript({
+      cmd: "restore-restart",
+      restarts,
+      electronPid,
+      ms: Math.round(performance.now() - started),
+      close: close.kind,
+      guard: Object.keys(live.trapped).length,
+    });
+    await recordMembers();
+    return snapshot();
+  } finally {
+    restarting = false;
+  }
+}
+
 async function handle(cmd, args) {
   lastCommandAt = Date.now();
   armIdle();
@@ -910,6 +979,8 @@ async function handle(cmd, args) {
     }
     case "restart":
       return restart(String(args.reason ?? "requested"));
+    case "restore-restart":
+      return restoreRestart(args);
     case "runner-power": {
       // SIMULATED sleep: main's dual-locked seam (cloud-runner/smoke-power.ts)
       // emits the real power event; suspend resolves once the asleep report
