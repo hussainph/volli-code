@@ -395,7 +395,14 @@ try {
     assert.deepEqual(list.schedules, [
       { automationId: names.scheduleId, name: "Move schedule proof" },
     ]);
-    assert.deepEqual(list.inertGlobals, [{ id: names.personalId, name: "Move personal proof" }]);
+    // The profile step derives config-entry ids for the person; they are not
+    // the local Automation ids. Retain the committed id and require it to stay inert.
+    assert.deepEqual(
+      list.inertGlobals.map((item) => item.name),
+      ["Move personal proof"],
+    );
+    assert.ok(typeof list.inertGlobals[0].id === "string" && list.inertGlobals[0].id.length > 0);
+    proof.inertGlobals = list.inertGlobals;
     const columns = await read("automations:armings", { projectId: MOVE_PROJECT.id });
     const schedules = await read("automations:schedules", { projectId: MOVE_PROJECT.id });
     const pausedColumn = columns.find((item) => item.automationId === names.columnId);
@@ -410,7 +417,7 @@ try {
       "import carries no executable schedule cursor",
     );
     const quiet = await assertNoAutomationWork(read);
-    await click("button", "Paused Automations", { contains: true });
+    await click("generic", "Paused Automations", { contains: true });
     await wait("Open in Volli Cloud to re-arm on this Mac.");
     const local = await drive("snapshot");
     const buttons = visibleControls(local.text, "button", "Re-arm", { contains: true });
@@ -437,7 +444,7 @@ try {
     await click("button", "Volli Cloud", { first: true });
     await click("button", "Progress and local copies");
     await wait("Paused Automations");
-    await click("button", "Paused Automations", { contains: true });
+    await click("generic", "Paused Automations", { contains: true });
     await waitUntil(
       "this Mac's real full runner can re-arm",
       async () => {
@@ -517,7 +524,7 @@ try {
     assert.ok(scheduled.nextFireAt > Date.now() + 11 * 60 * 60_000);
     assert.ok(scheduled.nextFireAt < Date.now() + 13 * 60 * 60_000);
     const quiet = await assertNoAutomationWork(read);
-    assert.deepEqual(after.inertGlobals, [{ id: names.personalId, name: "Move personal proof" }]);
+    assert.deepEqual(after.inertGlobals, proof.inertGlobals);
     await drive("wait", { text: "Paused Automations", gone: true, timeout: 30_000 });
     const result = await drive("snapshot");
     assert.equal(result.text.match(/Move personal proof · Not armed/gu)?.length, 1);
