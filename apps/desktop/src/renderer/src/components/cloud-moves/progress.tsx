@@ -1,5 +1,10 @@
 import * as React from "react";
-import { CLOUD_MOVE_STEPS, type CloudMoveAction, type CloudMoveStatus } from "@volli/shared";
+import {
+  CLOUD_MOVE_STEPS,
+  errorMessage,
+  type CloudMoveAction,
+  type CloudMoveStatus,
+} from "@volli/shared";
 import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -59,8 +64,8 @@ export function MoveProgress({
       await api.command({ moveId, action, ...(typed ? { confirmation } : {}) });
       setConfirming(null);
       setConfirmation("");
-    } catch {
-      toastError(`Couldn't complete “${ACTION_LABELS[action]}”. Try again.`);
+    } catch (error) {
+      toastError(errorMessage(error));
     } finally {
       setBusy(false);
     }

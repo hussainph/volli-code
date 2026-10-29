@@ -679,7 +679,9 @@ describe("PtyManager.liveSessionCwds", () => {
     if (!second.ok) throw new Error(`expected session, got ${second.error}`);
 
     expect(manager.liveSessionCwds().toSorted()).toEqual([root, sub].toSorted());
-    expect([...manager.liveSessionIds()].toSorted()).toEqual([first.sessionId, second.sessionId].toSorted());
+    expect([...manager.liveSessionIds()].toSorted()).toEqual(
+      [first.sessionId, second.sessionId].toSorted(),
+    );
 
     // A killed session drops out of the snapshot.
     invokeKill(first.sessionId);

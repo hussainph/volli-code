@@ -75,7 +75,7 @@ async function menu() {
 }
 
 describe("project menu Move to Volli Cloud", () => {
-  it("does not reopen an obsolete move after the latest one returned to local", async () => {
+  it("does not offer a second move after Go back retained the cloud copy", async () => {
     useCloudMovesStore.setState({
       snapshot: {
         ...snapshot,
@@ -83,16 +83,8 @@ describe("project menu Move to Volli Cloud", () => {
       },
     });
     await menu();
-    await act(async () =>
-      (
-        [...document.querySelectorAll('[role="menuitem"]')].find(
-          (item) => item.textContent === "Move to Volli Cloud…",
-        ) as HTMLElement
-      ).click(),
-    );
-    expect(useCloudMovesStore.getState().sheet).toEqual(
-      expect.objectContaining({ kind: "prepare", projectIds: ["project"] }),
-    );
+    expect(document.body.textContent).not.toContain("Move to Volli Cloud…");
+    expect(useCloudMovesStore.getState().sheet).toBeNull();
   });
   it("opens only that project's pre-flight, immediately above Remove from Volli", async () => {
     await menu();

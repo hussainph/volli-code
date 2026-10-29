@@ -178,9 +178,9 @@ describe("Move pre-flight", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Couldn't check");
     expect(container.textContent).not.toContain("private raw details");
     await click("Run a dry run only");
-    api.start.mockRejectedValueOnce(new Error("failure"));
+    api.start.mockRejectedValueOnce(new Error("Finish this project’s running Session first."));
     await click("Move");
-    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining("Couldn't start"));
+    expect(mocks.toast).toHaveBeenCalledWith("Finish this project’s running Session first.");
     expect(button("Move").disabled).toBe(false);
   });
 });

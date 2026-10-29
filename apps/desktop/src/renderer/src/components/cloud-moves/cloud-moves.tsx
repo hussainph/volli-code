@@ -1,4 +1,5 @@
 import * as React from "react";
+import { errorMessage } from "@volli/shared";
 import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
 import { desktopCloudMovesApi, type CloudMovesClient } from "@renderer/lib/cloud-moves";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
@@ -160,8 +161,8 @@ export function CloudMoveReadOnlyBanner() {
     setResuming(true);
     try {
       await api.command({ moveId: move.moveId, action: "resume" });
-    } catch {
-      toastError("Couldn't resume the move. Try again.");
+    } catch (error) {
+      toastError(errorMessage(error));
     } finally {
       setResuming(false);
     }
@@ -173,9 +174,11 @@ export function CloudMoveReadOnlyBanner() {
     >
       <span>
         {move.confirmedAt === null
-          ? move.state === "waiting"
-            ? `${move.message} The local copy is read-only.`
-            : `${move.projectName} is read-only while it moves to Volli Cloud.`
+          ? move.completedSteps.includes("verify")
+            ? "In Volli Cloud. This local copy is read-only until you finish the move or go back to local."
+            : move.state === "waiting"
+              ? `${move.message} The local copy is read-only.`
+              : `${move.projectName} is read-only while it moves to Volli Cloud.`
           : `Moved to Volli Cloud (${move.workspaceName}) on ${new Date(move.confirmedAt).toLocaleDateString()}. This local copy is read-only.`}
       </span>
       <div className="flex items-center gap-2">

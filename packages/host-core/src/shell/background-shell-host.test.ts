@@ -267,7 +267,11 @@ describe("BackgroundShellHost", () => {
     const { host, published } = harness();
     await start(host, "sleep 30");
 
+    const busy = host.liveSessionIds();
+    expect([...busy]).toEqual([owner.sessionId]);
     const killed = await host.kill(owner, "sh-1");
+    expect([...host.liveSessionIds()]).toEqual([]);
+    expect([...busy]).toEqual([owner.sessionId]);
     expect(killed.shell).toMatchObject({ state: "exited", code: null, signal: "SIGTERM" });
     expect(published.at(-1)).toMatchObject({ shellId: "sh-1", state: "exited", signal: "SIGTERM" });
 

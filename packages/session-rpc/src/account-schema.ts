@@ -75,6 +75,7 @@ export const cloudLaunchSchema = z.discriminatedUnion("store", [
     deployment: z.enum(["cloud", "local"]).optional(),
     siteUrl: text.min(1).nullable().optional(),
     joinedWorkspaceId: text.min(1).optional(),
+    openProjectId: text.min(1).optional(),
   }),
 ]) satisfies z.ZodType<CloudLaunch>;
 

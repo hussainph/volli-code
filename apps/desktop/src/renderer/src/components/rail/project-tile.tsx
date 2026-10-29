@@ -133,11 +133,9 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                 onRelink={() => setRelinkOpen(true)}
                 onRemove={() => setRemoveOpen(true)}
                 onMove={
-                  cloudEnabled && launchStore() === "local"
+                  cloudEnabled && launchStore() === "local" && move?.state !== "returned"
                     ? () =>
-                        move === undefined ||
-                        move.state === "returned" ||
-                        move.state === "rolled-back"
+                        move === undefined || move.state === "rolled-back"
                           ? prepareCloudMove(project.id)
                           : showCloudMoves(move.queueId)
                     : undefined

@@ -237,10 +237,14 @@ describe("Move progress and outcomes", () => {
     });
   });
   it("reports failed actions and clipboard failures, with no silent success", async () => {
-    api.command.mockRejectedValueOnce(new Error("failed"));
+    api.command.mockRejectedValueOnce(
+      new Error("Type the project name to confirm losing the cloud changes."),
+    );
     await mount();
     await click("Pause");
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining("Couldn't complete"));
+    expect(toast).toHaveBeenCalledWith(
+      "Type the project name to confirm losing the cloud changes.",
+    );
     api.report.mockRejectedValueOnce(new Error("failed"));
     await click("Report");
     expect(toast).toHaveBeenCalledWith(expect.stringContaining("Couldn't copy"));

@@ -2009,6 +2009,11 @@
                   "minLength": 1,
                   "type": "string"
                 },
+                "openProjectId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
                 "siteUrl": {
                   "anyOf": [
                     {
@@ -7080,54 +7085,61 @@
                     "type": "array"
                   },
                   "counts": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "attachmentBytes": {
-                        "maximum": 9007199254740991,
-                        "minimum": 0,
-                        "type": "integer"
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attachmentBytes": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "attachments": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "events": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "piLogBytes": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "sessions": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "tickets": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "transcriptBytes": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "tickets",
+                          "sessions",
+                          "events",
+                          "attachments",
+                          "attachmentBytes",
+                          "transcriptBytes",
+                          "piLogBytes"
+                        ],
+                        "type": "object"
                       },
-                      "attachments": {
-                        "maximum": 9007199254740991,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "events": {
-                        "maximum": 9007199254740991,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "piLogBytes": {
-                        "maximum": 9007199254740991,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "sessions": {
-                        "maximum": 9007199254740991,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "tickets": {
-                        "maximum": 9007199254740991,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "transcriptBytes": {
-                        "maximum": 9007199254740991,
-                        "minimum": 0,
-                        "type": "integer"
+                      {
+                        "type": "null"
                       }
-                    },
-                    "required": [
-                      "tickets",
-                      "sessions",
-                      "events",
-                      "attachments",
-                      "attachmentBytes",
-                      "transcriptBytes",
-                      "piLogBytes"
-                    ],
-                    "type": "object"
+                    ]
                   },
                   "estimateSeconds": {
                     "anyOf": [

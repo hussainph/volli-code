@@ -148,9 +148,22 @@ function moveInput(
         ConvexClient: class {
           constructor() {
             onCloudClient();
-            throw new Error("this test composes no cloud connection");
           }
-        } as unknown as DesktopMacRunnerInput["convex"]["ConvexClient"],
+          setAuth() {}
+          async mutation() {
+            return null;
+          }
+          onUpdate() {
+            return () => {};
+          }
+          connectionState() {
+            return { isWebSocketConnected: false };
+          }
+          subscribeToConnectionState() {
+            return () => {};
+          }
+          async close() {}
+        },
         makeFunctionReference: (name: string) => name,
       },
       account: {
@@ -216,7 +229,8 @@ describe("a registration-only runner (a local launch's move)", () => {
       const runner = createDesktopMacRunner(full.input);
       runner.start();
       await flush();
-      expect(runner.snapshot().state).toBe("connecting");
+      expect(runner.snapshot().runnerId).toBe(MOVE_RUNNER);
+      expect(cloudClients).toBe(1);
       expect(syncs).toEqual([MOVE_RUNNER]);
       await runner.stop();
     } finally {

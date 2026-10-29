@@ -11,7 +11,12 @@ import { createTicketViaBridge } from "../../lib/agent-kit.mjs";
 import { seedDefaultModel, seedProjects } from "../../lib/smoke-kit.mjs";
 import { makeScratchRepo } from "./core.mjs";
 
-export const FIXTURES = ["basic", "empty"];
+export const FIXTURES = ["basic", "empty", "move"];
+export const MOVE_PROJECT = Object.freeze({
+  id: "b7f783e2-6c9c-4a6d-8ea2-137defb38c19",
+  name: "Move Project",
+  prefix: "MOV",
+});
 
 export const DRIVE_PROJECT = Object.freeze({
   id: "drive-project",
@@ -48,12 +53,37 @@ export async function seedFixture(page, name, layout, modelPin) {
 
   // Scratch-created, never a clone: its only remote is a local bare repo in
   // scratch, so nothing an agent does with it can reach a credential.
+  const project = name === "move" ? MOVE_PROJECT : DRIVE_PROJECT;
   const { dir: path, origin } = await makeScratchRepo(layout.projectsDir, "drive-project");
-  await seedProjects(page, [{ ...DRIVE_PROJECT, path }]);
-  seeded.project = { ...DRIVE_PROJECT, path, origin };
+  await seedProjects(page, [{ ...project, path }]);
+  seeded.project = { ...project, path, origin };
   for (const ticket of BASIC_TICKETS) {
-    const created = await createTicketViaBridge(page, DRIVE_PROJECT.name, ticket);
+    const created = await createTicketViaBridge(page, project.name, ticket);
     seeded.tickets.push({ ...created, title: ticket.title, status: ticket.status });
+  }
+  if (name === "move") {
+    // SETUP only: an actual stored attachment and ticket text, before the user moves anything.
+    seeded.attachment = await page.evaluate(async (ticketId) => {
+      const bytes = Uint8Array.from(
+        atob(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWZkAAAAASUVORK5CYII=",
+        ),
+        (char) => char.charCodeAt(0),
+      );
+      const attached = await window.api.attachments.attach({
+        fileName: "move-proof.png",
+        bytes,
+        mime: "image/png",
+        owner: { ticketId },
+      });
+      if (!attached.ok || attached.blob === null) throw new Error("Move fixture attachment failed");
+      const updated = await window.api.tickets.update({
+        ticketId,
+        body: "Move proof — café 🌍\n\n![Moved attachment](.volli/attachments/move-proof.png)",
+      });
+      if (!updated.ok) throw new Error(updated.error);
+      return attached.blob;
+    }, seeded.tickets[0].ticketId);
   }
   // The bridge writes are live, but a reload makes the board read them the way
   // a person's next launch would, with no optimistic state left over.

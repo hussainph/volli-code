@@ -125,6 +125,26 @@ describe("the launch's product store (VC-889)", () => {
   });
 });
 
+it("carries a moved-project navigation as a launch intent, not renderer selection state", () => {
+  const marker = decodeLaunchMarker(encodeLaunchMarker(USER, "workspace", "project"));
+  expect(marker).toEqual({
+    userId: USER,
+    joinedWorkspaceId: "workspace",
+    openProjectId: "project",
+  });
+  expect(
+    chooseProductStore({
+      cloudFlag: true,
+      readMarker: () => marker,
+      backendUrl: URL,
+      signInConfigured: true,
+    }),
+  ).toMatchObject({ openProjectId: "project" });
+  for (const openProjectId of [12, "", null])
+    expect(decodeLaunchMarker(JSON.stringify({ userId: USER, openProjectId }))).toEqual({
+      userId: USER,
+    });
+});
 function row(initial?: string) {
   let value = initial;
   const live = {
@@ -171,6 +191,22 @@ describe("the launch marker's row", () => {
     expect(store.read()).toEqual({ userId: "someone-else" });
   });
 
+  it("preserves moved-project intent for its person, then consumes it exactly once", () => {
+    const live = row();
+    const store = launchMarkerStore(() => live, log());
+    store.write(USER, "workspace", "project");
+    store.write(USER);
+    expect(store.read()).toEqual({
+      userId: USER,
+      joinedWorkspaceId: "workspace",
+      openProjectId: "project",
+    });
+    store.write(USER, null, null);
+    expect(store.read()).toEqual({ userId: USER });
+    store.write(USER, "workspace", "project");
+    store.write("other");
+    expect(store.read()).toEqual({ userId: "other" });
+  });
   it("reads as no marker, and writes nothing, without a database", () => {
     const store = launchMarkerStore(() => null, log());
     expect(store.read()).toBeNull();

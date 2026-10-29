@@ -194,6 +194,9 @@ import { ACCOUNT_CLOUD_OFF } from "./account/service";
 import { previewAtLaunch } from "./preview-gate";
 import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import { createCloudProductStore } from "@volli/host-core/cloud-runner";
+import { createDesktopMoves } from "./cloud-move";
+import { moveIdentity } from "./cloud-move/identity";
+import type { DesktopMovesService } from "./cloud-move/service";
 import { decodeRunnerRecords } from "./cloud-runner/record";
 import { runnerTrayStatus } from "./cloud-runner/tray-status";
 import { keepCloudRunnerAvailable } from "./cloud-runner/residency";
@@ -1119,8 +1122,11 @@ const appStartup = app.whenReady().then(async () => {
     signInConfigured: accountConfig.provider !== null,
   });
   // A Workspace joined at sign-in opens on this launch only; later ones return to the selection.
-  if (launch.store === "cloud" && launch.joinedWorkspaceId !== undefined) {
-    launchMarker.write(launch.userId, null);
+  if (
+    launch.store === "cloud" &&
+    (launch.joinedWorkspaceId !== undefined || launch.openProjectId !== undefined)
+  ) {
+    launchMarker.write(launch.userId, null, null);
   }
   rendererSources = launchConnectSources(launch, accountConfig.storageOrigin);
   // Signing in or out restarts into the other store, through every quit gate.
@@ -1534,6 +1540,7 @@ const appStartup = app.whenReady().then(async () => {
    * gate below as it builds what the gate guards; every gate is read when a
    * quit runs.
    */
+  let desktopMoves: DesktopMovesService | null = null;
   const runnerEdge = createDesktopRunnerEdge({
     lifecycle: quittingApp,
     host: hostCore,
@@ -1541,6 +1548,8 @@ const appStartup = app.whenReady().then(async () => {
     ...(macRunner === null ? {} : { cloudRunner: macRunner }),
     stopBackgroundWork: () => {
       restore?.stop();
+      if (desktopMoves !== null && liveHost !== undefined)
+        liveHost.detachedWork.track(desktopMoves.dispose());
       webSealing.stop();
       // A GitHub flow being polled ends and stops following the account, then a
       // sign-in waiting on the browser ends and the dev issuer stops listening.
@@ -1616,6 +1625,86 @@ const appStartup = app.whenReady().then(async () => {
     automations: runtimeAutomations,
   } = runner;
   runnerEdge.bind({ automations: runtimeAutomations });
+  // A local launch registers this Mac only for the move, never connects it to cloud jobs.
+  // The exact same sealed identity and registration rules serve a later cloud launch.
+  if (
+    isExperimentEnabled("cloud") &&
+    liveHost !== undefined &&
+    accountConfig.backendUrl !== null &&
+    accountConfig.siteUrl !== null
+  ) {
+    const backendUrl = accountConfig.backendUrl;
+    const siteUrl = accountConfig.siteUrl;
+    const identity = moveIdentity({
+      account,
+      registrationOnly: macRunner === null,
+      runner: async (userId) =>
+        macRunner ??
+        createDesktopMacRunner({
+          backendUrl,
+          siteUrl,
+          deployment: "cloud",
+          userId,
+          convex: {
+            ConvexClient: (await import("convex/browser")).ConvexClient,
+            makeFunctionReference: (await import("convex/server")).makeFunctionReference,
+          },
+          registrationOnly: true,
+          account: {
+            subscribe: (listener) => account.subscribe(listener),
+            accessToken: () => account.accessToken(),
+          },
+          inventory: hostPrivateInventory,
+          unlockInventory: unlockHostPrivate,
+          recordRow: () => ({
+            read: () => getAppState(liveHost.database.db, CLOUD_RUNNER_APP_STATE_KEY),
+            write: (value) =>
+              setAppState(liveHost.database.db, CLOUD_RUNNER_APP_STATE_KEY, value, Date.now()),
+          }),
+          power: powerMonitor,
+          liveWork: () => liveHost.liveWork.current(),
+          dataDir: app.getPath("userData"),
+          appVersion: app.getVersion(),
+          packaged: app.isPackaged,
+          browser: () => ({ state: "available", backend: "electron" }),
+          log: hostLogger("cloud-runner"),
+        }),
+    });
+    desktopMoves = createDesktopMoves({
+      host: liveHost,
+      enabled: () => isExperimentEnabled("cloud"),
+      backendUrl,
+      account,
+      identity,
+      workRoot: join(app.getPath("userData"), "cloud-moves"),
+      workerEntry: join(__dirname, "migration-export-worker.cjs"),
+      backupWorkerEntry: join(__dirname, "automatic-backup-worker.cjs"),
+      stores: {
+        blobsDir: blobsRoot(app.getPath("userData")),
+        transcriptsDir: join(app.getPath("userData"), "session-transcripts"),
+        piLogsDir: piSessionsDirectory,
+      },
+      homeDir: fsDeps.homeDir,
+      appVersion: app.getVersion(),
+      artifacts: transcriptArtifacts,
+      busySessionIds: () =>
+        new Set([
+          ...liveHost.liveWork.activeTurnSessionIds(),
+          ...backgroundShells.liveSessionIds(),
+          ...(ptyManagerRef?.liveSessionIds() ?? []),
+        ]),
+      credentials: async (projectId) => {
+        const result = await secrets.list(projectId);
+        if (!result.ok)
+          throw new OperationUnavailableError("Could not read this Mac’s credential names.");
+        return result.secrets.map((secret) => secret.name);
+      },
+      openCloud: (projectId, workspaceId, userId) => {
+        launchMarker.write(userId, workspaceId, projectId);
+        relaunch.request();
+      },
+    });
+  }
   const listOpenNativeBindings =
     sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
@@ -1801,6 +1890,7 @@ const appStartup = app.whenReady().then(async () => {
       // This Mac as a Volli Cloud runner (VC-895); `off` outside a cloud launch.
       runners: runnerAccountPort(macRunner, () => isExperimentEnabled("cloud")),
       checkouts: cloudCheckouts,
+      ...(desktopMoves === null ? {} : { moves: desktopMoves }),
       // The Volli Cloud account (VC-884).
       account: accountPort(
         account,
@@ -1922,6 +2012,8 @@ const appStartup = app.whenReady().then(async () => {
   // connecting before asking the lifecycle to judge interrupted cloud turns.
   macRunner?.start();
   await hostCore.start(runnerEdge.ownerFor(runner));
+  if (desktopMoves !== null && liveHost !== undefined)
+    liveHost.detachedWork.track(desktopMoves.resume());
   const readyRuntimeServices = await runner.ready();
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and

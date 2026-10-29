@@ -75,11 +75,11 @@ async function* artifacts(
   }>;
   for (const row of rows) {
     options.signal?.throwIfAborted();
-    const payload = JSON.parse(row.payload) as { reference: TranscriptReference; digest?: string };
+    const payload = JSON.parse(row.payload) as { reference: TranscriptReference };
     let bytes: Buffer;
     try {
-      if (payload.digest !== undefined && payload.digest !== payload.reference.id)
-        throw new Error("event digest differs from reference");
+      // The event's `digest` is a SessionTranscriptDigest (message semantics),
+      // not a checksum. The store validates reference.digest against its id and bytes.
       bytes = await store.readCanonicalBytes(payload.reference);
       if (!Buffer.from(bytes.toString("utf8")).equals(bytes))
         throw new Error("artifact is not UTF-8 JSON");

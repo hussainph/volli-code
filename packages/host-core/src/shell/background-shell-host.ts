@@ -1027,6 +1027,11 @@ export class BackgroundShellHost {
 
   // ---- the renderer's doors: every shell, unscoped by Session -------------
 
+  /** Actual processes, including a foreground call not yet promoted to a background shell. */
+  liveSessionIds(): ReadonlySet<string> {
+    return new Set([...this.processes].map((entry) => entry.owner.sessionId));
+  }
+
   /** Every running shell cwd, including shells between a turn and attachment cleanup. */
   liveCwds(): string[] {
     return [...this.processes].map((entry) => entry.cwd);

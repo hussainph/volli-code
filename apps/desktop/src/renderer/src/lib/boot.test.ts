@@ -1669,7 +1669,9 @@ describe("a cloud launch's boot (VC-889)", () => {
     const withSaved = fakeGateway({
       bootstrap: vi.fn(async () => ({ ok: true as const, data: payload({ appState: saved }) })),
     });
-    const persisted = async (launch: typeof CLOUD & { joinedWorkspaceId?: string }) => {
+    const persisted = async (
+      launch: typeof CLOUD & { joinedWorkspaceId?: string; openProjectId?: string },
+    ) => {
       vi.mocked(followCloudWorkspace).mockClear();
       await boot(
         withSaved,
@@ -1684,6 +1686,9 @@ describe("a cloud launch's boot (VC-889)", () => {
       workspaceId: "joined",
       projectId: null,
     });
+    expect(
+      await persisted({ ...CLOUD, joinedWorkspaceId: "joined", openProjectId: "moved" }),
+    ).toEqual({ workspaceId: "joined", projectId: "moved" });
     expect(await persisted(CLOUD)).toEqual({ workspaceId: "w1", projectId: "c2" });
   });
 

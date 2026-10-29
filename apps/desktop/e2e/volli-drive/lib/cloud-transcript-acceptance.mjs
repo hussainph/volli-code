@@ -71,7 +71,7 @@ export async function startTranscriptStore(fixture, reportDir) {
         // Production's renderer fetches from the store, not from Convex. Handle
         // real Chromium CORS/preflight as an S3-compatible deployment would.
         response.setHeader("access-control-allow-origin", "*");
-        response.setHeader("access-control-allow-methods", "GET, PUT, OPTIONS");
+        response.setHeader("access-control-allow-methods", "GET, HEAD, PUT, OPTIONS");
         response.setHeader("access-control-allow-headers", "*");
         response.setHeader(
           "access-control-expose-headers",
@@ -93,6 +93,11 @@ export async function startTranscriptStore(fixture, reportDir) {
           key = verifyS3Request(request, url, { ...credentials, bucket, region: "auto" });
           let body;
           if (request.method === "PUT") {
+            if (request.headers["if-none-match"] === "*" && objects.has(key)) {
+              request.resume();
+              response.writeHead(412).end();
+              return;
+            }
             const length = Number(request.headers["content-length"]);
             assert.ok(Number.isSafeInteger(length) && length > 0 && length <= MAX_BYTES);
             const chunks = [];
@@ -118,7 +123,10 @@ export async function startTranscriptStore(fixture, reportDir) {
             objects.set(key, body);
           } else {
             body = objects.get(key);
-            assert.ok(body, "GET names an object the runner actually uploaded");
+            if (body === undefined) {
+              response.writeHead(404).end();
+              return;
+            }
           }
           requests.push({
             method: request.method,
@@ -135,7 +143,7 @@ export async function startTranscriptStore(fixture, reportDir) {
                 "content-length": body.length,
                 "x-amz-checksum-sha256": createHash("sha256").update(body).digest("base64"),
               })
-              .end(body);
+              .end(request.method === "HEAD" ? undefined : body);
         } catch (error) {
           problems.push({ method: request.method, key, error: error.message });
           if (!response.headersSent) response.writeHead(400);

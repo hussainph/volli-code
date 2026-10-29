@@ -108,13 +108,13 @@ describe("move entry and persistent surfaces", () => {
         .click(),
     );
     expect(api.command).toHaveBeenCalledWith({ moveId: "move", action: "resume" });
-    api.command.mockRejectedValueOnce(new Error("failed"));
+    api.command.mockRejectedValueOnce(new Error("Sign in as the person who started the move."));
     await act(async () =>
       [...container.querySelectorAll("button")]
         .find((item) => item.textContent === "Resume")!
         .click(),
     );
-    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining("Couldn't resume"));
+    expect(mocks.toast).toHaveBeenCalledWith("Sign in as the person who started the move.");
     await act(async () =>
       [...container.querySelectorAll("button")]
         .find((item) => item.textContent === "Cancel…")!

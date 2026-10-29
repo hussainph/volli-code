@@ -306,6 +306,67 @@ jobs:
       - name: Kill/resume matrix
         run: vp run --filter @volli/convex test:matrix -- --maxWorkers=$(nproc)
 
+  # The real desktop move, including the signed-history URL settling window.
+  # Runs through volli-drive: a local ticket Session -> move -> Finish -> cloud
+  # restart -> moved transcript/attachment -> reuse folders -> resume/new Session.
+  move-app:
+    name: Move to Volli Cloud (app path)
+    if: ${{ !cancelled() }}
+    needs: smoke-cloud-wake
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      - name: Place the backend cache outside the checkout
+        run: echo "VOLLI_CONVEX_BACKEND_CACHE=$RUNNER_TEMP/convex-local-backend" >> "$GITHUB_ENV"
+
+      - name: Restore the pinned Convex local backend
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/convex-local-backend
+          key: convex-local-backend-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('convex/fixture/backend.json') }}
+
+      - name: Fetch and verify the pinned backend
+        run: vp run --filter @volli/convex backend:fetch
+
+      - name: Build with the loopback CSP and fetch Electron
+        env:
+          VOLLI_CLOUD_LOOPBACK: "1"
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+
+      - name: Drive the real move and cloud handover
+        env:
+          VOLLI_DRIVE_HOME: ${{ runner.temp }}/move-drive
+          VOLLI_DRIVE_EVIDENCE: ${{ runner.temp }}/move-acceptance
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/move-acceptance
+        working-directory: convex
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          node ../apps/desktop/e2e/volli-drive/cloud-move-acceptance.mjs
+
+      - name: Upload move app-path evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: move-app-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/move-acceptance
+          if-no-files-found: warn
+          retention-days: 30
+
   # The large-profile backup -> restore round trip (VC-988): a synthetic
   # profile of 2,150,000 Session events whose data.json is past 1.6 GB (and
   # past V8's maximum string length), backed up by the production worker,
@@ -354,7 +415,8 @@ jobs:
   summary:
     name: Extended result
     if: always()
-    needs: [smoke-rest, smoke-cloud, smoke-cloud-wake, move-matrix, backup-restore-rehearsal]
+    needs:
+      [smoke-rest, smoke-cloud, smoke-cloud-wake, move-matrix, move-app, backup-restore-rehearsal]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -366,6 +428,7 @@ jobs:
           SMOKE_CLOUD: ${{ needs.smoke-cloud.result }}
           SMOKE_CLOUD_WAKE: ${{ needs.smoke-cloud-wake.result }}
           MOVE_MATRIX: ${{ needs.move-matrix.result }}
+          MOVE_APP: ${{ needs.move-app.result }}
           BACKUP_RESTORE: ${{ needs.backup-restore-rehearsal.result }}
         run: |
           set -euo pipefail
@@ -389,5 +452,6 @@ jobs:
           report "Smoke (cloud acceptance)" "$SMOKE_CLOUD"
           report "Smoke (cloud wake + automation acceptance)" "$SMOKE_CLOUD_WAKE"
           report "Move to Volli Cloud" "$MOVE_MATRIX"
+          report "Move to Volli Cloud (app path)" "$MOVE_APP"
           report "Backup restore rehearsal" "$BACKUP_RESTORE"
           exit "$status"

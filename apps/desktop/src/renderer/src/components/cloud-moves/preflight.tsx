@@ -1,4 +1,5 @@
 import * as React from "react";
+import { errorMessage } from "@volli/shared";
 import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
 import type {
   CloudMovePreflight,
@@ -105,8 +106,8 @@ export function MovePreflight({
         stopAtFirstProblem,
       });
       showCloudMoves();
-    } catch {
-      toastError("Couldn't start the move. Run the dry run again, then retry.");
+    } catch (failure) {
+      toastError(errorMessage(failure));
     } finally {
       setStarting(false);
     }
@@ -188,8 +189,6 @@ export function MovePreflight({
             <section aria-label="What stays on this Mac" className="flex flex-col gap-2">
               <h3 className="font-medium">What stays on this Mac</h3>
               <ul className="list-inside list-disc text-muted-foreground">
-                <li>Secrets and API keys — re-enter them on other machines or for teammates.</li>
-                <li>Skills and templates — files on this Mac.</li>
                 <ExclusionItems items={preflight.exclusions} />
               </ul>
             </section>
@@ -273,10 +272,22 @@ function ProjectSummary({
         {project.name}
         {project.removed ? " · Removed" : ""}
       </label>
-      {counts === null ? <p>Counts unavailable until this problem is resolved.</p> : <>
-        <p>{counts.tickets.toLocaleString()} tickets · {counts.sessions.toLocaleString()} Sessions · {counts.events.toLocaleString()} events</p>
-        <p className="text-muted-foreground">{counts.attachments.toLocaleString()} attachments ({formatFileSize(counts.attachmentBytes)}) · Transcripts {formatFileSize(counts.transcriptBytes)} · Pi logs {formatFileSize(counts.piLogBytes)}</p>
-      </>}
+      {counts === null ? (
+        <p>Counts unavailable until this problem is resolved.</p>
+      ) : (
+        <>
+          <p>
+            {counts.tickets.toLocaleString()} tickets · {counts.sessions.toLocaleString()} Sessions
+            · {counts.events.toLocaleString()} events
+          </p>
+          <p className="text-muted-foreground">
+            {counts.attachments.toLocaleString()}{" "}
+            {counts.attachments === 1 ? "attachment" : "attachments"} (
+            {formatFileSize(counts.attachmentBytes)}) · Transcripts{" "}
+            {formatFileSize(counts.transcriptBytes)} · Pi logs {formatFileSize(counts.piLogBytes)}
+          </p>
+        </>
+      )}
       <p className="text-muted-foreground">{moveTime(project.estimateSeconds)}</p>
       {project.blockers.length > 0 ? (
         <div role="status">
