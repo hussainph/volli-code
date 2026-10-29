@@ -23,7 +23,6 @@ import {
   MINUTES,
   automationRunToolCall,
   coalescingProblems,
-  noticeDeliveredCopy,
   noticeTurnFinishedCopy,
   writeFakeScript,
   hourlyBackdateAt,
@@ -255,11 +254,13 @@ describe("the agent's scripted turn", () => {
     }
   });
 
-  it("waits for the notice's own sentences, as production composes them", () => {
-    const notice = source("packages/shared/src/session-notice.ts");
-    assert.match(notice, /This notice is from Volli, not your user\.\]/u);
-    assert.match(notice, /finished its turn\./u);
-    assert.equal(noticeDeliveredCopy(), "This notice is from Volli, not your user.");
-    assert.equal(noticeTurnFinishedCopy(), "finished its turn.");
+  it("waits for the visible structured notice, including the target Session", () => {
+    const notice = source("packages/session-presentation/src/host-notice.ts");
+    assert.match(notice, /"turn-completed": "finished its turn"/u);
+    assert.match(notice, /event\.label.*WATCH_FACT_WORD\[event\.fact\]/u);
+    assert.equal(
+      noticeTurnFinishedCopy("abcd1234-0000-4000-8000-000000000001"),
+      "abcd1234 finished its turn",
+    );
   });
 });

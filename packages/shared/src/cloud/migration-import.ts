@@ -664,7 +664,7 @@ const MAPPERS: Readonly<Record<MigrationImportStream, Mapper>> = {
     return {
       ...pick(record, ["automationId", "armedByUserId", "runnerId", "spec", "timezone", "armedAt"]),
       // Inert sentinel, NOT an imported cursor. Only explicit re-arm computes an occurrence.
-      nextFireAt: 0,
+      nextFireAt: Number.MAX_SAFE_INTEGER,
       lastFiredAt: null,
       pausedAt: importedAt,
       pausedReason: "moved",

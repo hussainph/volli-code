@@ -64,7 +64,7 @@ describe("migrationDocument", () => {
       expect(migrationRowDigest(stream, doc)).toBe(migrationRowDigest(stream, later));
     }
     expect(map("automationSchedules")).toMatchObject({
-      nextFireAt: 0,
+      nextFireAt: Number.MAX_SAFE_INTEGER,
       lastFiredAt: null,
       pendingJobId: null,
       pendingRunId: null,

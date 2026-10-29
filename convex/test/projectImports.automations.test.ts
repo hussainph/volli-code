@@ -88,7 +88,7 @@ describe("moved Automation safety", () => {
     }
     const stored = await w.t.run((ctx) => ctx.db.query("automationSchedules").collect());
     expect(stored[0]).toMatchObject({
-      nextFireAt: 0,
+      nextFireAt: Number.MAX_SAFE_INTEGER,
       lastFiredAt: null,
       pendingJobId: null,
       pendingRunId: null,

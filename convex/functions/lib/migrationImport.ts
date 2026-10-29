@@ -133,6 +133,7 @@ export class ProjectScope {
   private readonly projects = new Map<string, Row | null>();
   private readonly sessions = new Map<string, string | null>();
   private readonly tickets = new Map<string, string | null>();
+  private readonly automations = new Map<string, string | null>();
 
   constructor(private readonly db: Reader) {}
 
@@ -184,11 +185,14 @@ export class ProjectScope {
   /** The project of a schedule, which hangs off its Automation, not a project field. */
   async automationProject(automationId: unknown): Promise<string | null> {
     if (typeof automationId !== "string") return null;
-    const row = await this.db
-      .query("automations")
-      .withIndex("by_uuid", (q) => q.eq("id", automationId))
-      .unique();
-    return row?.projectId ?? null;
+    if (!this.automations.has(automationId)) {
+      const row = await this.db
+        .query("automations")
+        .withIndex("by_uuid", (q) => q.eq("id", automationId))
+        .unique();
+      this.automations.set(automationId, row?.projectId ?? null);
+    }
+    return this.automations.get(automationId) ?? null;
   }
 
   /**

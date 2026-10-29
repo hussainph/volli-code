@@ -8,13 +8,12 @@
  * needs, kept apart from the wake scenario so neither has to know the other:
  *
  * - the generic volli-drive driver (snapshot → one action → fresh snapshot),
- *   the cloud launch, the dev sign-in and the board's own navigation — the
- *   same shape the wake journey uses, lifted here so this file does not copy
- *   a scenario;
+ *   cloud launch, dev sign-in and board navigation. These parallel the wake
+ *   journey's private driver without changing that established acceptance;
  * - SETUP writes through the backend's own public functions (an Automation, a
  *   ticket), never through a product shortcut;
  * - the guarded test hooks the fixture backend exposes for time
- *   (`testAutomations.fireDueAt`, `backdateSchedule`, `inspectSchedule`),
+ *   (`testAutomations.coalescePastOccurrences`, `inspectSchedule`),
  *   which the clock test also uses, and the pure arithmetic that makes a
  *   backdated schedule fire exactly one occurrence;
  * - the copy the renderer prints for "waiting" and "skipped", mirrored here so
@@ -23,7 +22,7 @@
  *
  * **Every clock and sleep step is a simulation, and says so.** No OS sleep
  * happens (`runner-power`, main's dual-locked seam) and no scheduled minute
- * passes (`backdateSchedule` + `fireDueAt`); the product code path is the real
+ * passes (`coalescePastOccurrences`); the product code path is the real
  * one in both cases.
  */
 import assert from "node:assert/strict";
@@ -54,11 +53,10 @@ export const ARRIVAL_TICKET = Object.freeze({ title: "Move me into Doing" });
  * authored data, not the behaviour under test); the Macs arm them themselves,
  * which is what this journey measures.
  *
- * `minute: 17` is deliberate: a top-of-hour schedule is the only one the
- * shared stagger pushes, and a staggered occurrence would make the
- * "one occurrence was due" arithmetic below approximate. At :17 the schedule
- * fires exactly on the minute, in UTC, with no stagger
- * (`scheduleStaggerMs` returns 0 when `minute !== 0`).
+ * The fixture default is :17, not a staggered top-of-hour occurrence. The
+ * live journey chooses another NONZERO minute far enough in the future that
+ * no natural occurrence can race its explicit clock simulation. In UTC,
+ * consecutive occurrences remain exactly one hour apart.
  */
 export const DOING_AUTOMATION = Object.freeze({
   name: "Doing sweep",
@@ -258,11 +256,9 @@ export async function scheduleHooks({ convexUrl, adminKey }) {
   client.setAdminAuth(adminKey);
   const call = (name, args) => client.mutation(ref(name), args);
   return {
-    /** Moves an armed schedule's cursor, as if its time had come while nobody looked. */
-    backdate: (automationId, nextFireAt) =>
-      call("testAutomations:backdateSchedule", { automationId, nextFireAt }),
-    /** One clock pass as if it were `now`; the same page `fireDue` runs every minute. */
-    fireDueAt: (now) => call("testAutomations:fireDueAt", { now }),
+    /** Two distinct past occurrences through the real clock, isolated from its live cron. */
+    coalescePastOccurrences: (automationId, firstDueAt) =>
+      call("testAutomations:coalescePastOccurrences", { automationId, firstDueAt }),
     /** The schedule row, its Run rows and their jobs, straight from the backend. */
     inspect: (automationId) => call("testAutomations:inspectSchedule", { automationId }),
   };
@@ -370,19 +366,10 @@ export function automationRunToolCall({ automationName, ticketId }) {
   };
 }
 
-/**
- * The sentence every delivered watch notice opens with, whichever changes it
- * carries (`composeWatchNotice` in `@volli/shared/session-notice`). Stable
- * across the change count, which is why it is the needle: a notice that names
- * one change and one that names five both start here.
- */
-export function noticeDeliveredCopy() {
-  return "This notice is from Volli, not your user.";
-}
-
-/** What a notice says about a watched Session that has finished a turn. */
-export function noticeTurnFinishedCopy() {
-  return "finished its turn.";
+/** The visible WatchNoticeRow, NOT the hidden envelope sent to the model.
+ * Match its target handle too, so an unrelated notice cannot pass this check. */
+export function noticeTurnFinishedCopy(sessionId) {
+  return `${sessionId.slice(0, 8)} finished its turn`;
 }
 
 /* ------------------------------------------------------------- the clock --- */

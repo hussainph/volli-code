@@ -461,7 +461,7 @@ pending/gap and Run fields, and fence leased outcomes against current armings.
 The shared move mapping forces `pausedAt`/`pausedReason: moved` on imported
 arms and schedules. `automationSchedules` is an importer stream found by its
 Automation; read-back pages the original armer index and keeps only schedules
-of the moved project. A moved schedule has inert `nextFireAt: 0`, no pending
+of the moved project. A moved schedule has inert `nextFireAt: Number.MAX_SAFE_INTEGER`, no pending
 Run/job/gap pointers and no last fire time. Only explicit re-arm computes a fresh
 future cursor. Pending arrivals and original schedule cursors stay archived. The Needs-you
 reader must expose project-scoped non-Session `automation_paused` runner alerts;

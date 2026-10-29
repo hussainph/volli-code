@@ -16,11 +16,11 @@
  *   4. Mac B moves one ticket into Doing. The armed arrival's Run starts on
  *      Mac A (never on B, the Mac that only moved the card), and its Session —
  *      ticket work is shared — appears on Mac B.
- *   5. Mac A sleeps (SIMULATED: see below) and the schedule's first occurrence
- *      comes due (SIMULATED clock): Mac B reads "Waiting for <Mac A> (asleep)".
- *   6. A second occurrence comes due while Mac A is still asleep: the waiting
- *      Run is superseded — ONE skipped occurrence (missed 1) and the same ONE
- *      waiting Run, never two.
+ *   5. Mac A sleeps (SIMULATED: see below). Two distinct past occurrences
+ *      pass through the real clock atomically (SIMULATED), recording a snapshot
+ *      after each pass. Mac B reads "Waiting for <Mac A> (asleep)".
+ *   6. The first snapshot queues one Run; the second supersedes it — ONE skipped
+ *      occurrence (missed 1) and the same ONE waiting Run, never two.
  *   7. Mac A wakes: exactly one schedule Run starts, and Mac B's waiting row
  *      is gone.
  *
@@ -34,9 +34,10 @@
  * **The clock is simulated**: no scheduled minute passes. The fixture
  * backend's guarded hooks (`convex/functions/testAutomations.ts`: internal, so
  * admin-key only, and each refuses a deployment that does not trust the test
- * issuer) move one armed schedule's cursor and run one clock page as if it
- * were now — the same `fireDuePage` the one-minute cron runs. The backend's
- * own coalescing rules then decide the outcome; nothing is injected.
+ * issuer) backdate one cursor and run the cron's `fireDuePage` at two DISTINCT
+ * past occurrences. Both passes share a transaction only to fence the live
+ * cron between assertions. The hook returns actual per-pass snapshots; jobs
+ * are genuinely due at wake. No Run, job, outcome or notice is injected.
  *
  * SETUP and doubles, never the behaviour under test (each is in the
  * transcript): preview enrollment for the dev profile, the person's project,
@@ -108,7 +109,6 @@ import {
   seedTicket,
   AUTOMATION_RUN_TOOL,
   automationRunToolCall,
-  noticeDeliveredCopy,
   noticeTurnFinishedCopy,
   writeFakeScript,
   signInCloud,
@@ -143,11 +143,11 @@ const STEPS = [
   ],
   [
     5,
-    "SIMULATED sleep on Mac A; the first schedule occurrence comes due (SIMULATED clock): B reads Waiting for <Mac A> (asleep)",
+    "SIMULATED sleep and atomic clock passes at two distinct past occurrences: first snapshot queues one Run; B reads Waiting for <Mac A> (asleep)",
   ],
   [
     6,
-    "SIMULATED clock: a second occurrence comes due while Mac A sleeps — one skipped occurrence (missed 1) and the same one waiting Run",
+    "SIMULATED clock's second snapshot: one skipped occurrence (missed 1) and the same one waiting Run at the later dueAt",
   ],
   [7, "Mac A wakes: exactly one schedule Run starts; B's waiting row is gone"],
   [
@@ -217,8 +217,9 @@ async function journey(fixture, store, evidenceDir) {
     { text: RUN_TURN_MARKER },
     { text: RUN_TURN_MARKER },
     automationRunToolCall({ automationName: DOING_AUTOMATION.name, ticketId }),
+    // These two requests may race: the caller continuation and the new Run.
     { text: AGENT_FOLLOW_UP },
-    { text: RUN_TURN_MARKER },
+    { text: AGENT_FOLLOW_UP },
     { text: NOTICE_TURN_MARKER },
   ]);
   const macA = await launchCloudInstance({
@@ -227,8 +228,8 @@ async function journey(fixture, store, evidenceDir) {
     storageOrigin: store.endpoint,
     fakeScriptPath,
   });
-  const macB = await launchCloudInstance({ label: "B", subject, storageOrigin: store.endpoint });
   instances.A = { id: macA.id, evidence: macA.evidence, layout: macA.layout, drive: macA.drive };
+  const macB = await launchCloudInstance({ label: "B", subject, storageOrigin: store.endpoint });
   instances.B = { id: macB.id, evidence: macB.evidence, layout: macB.layout, drive: macB.drive };
 
   await step(1, async () => {
@@ -296,13 +297,20 @@ async function journey(fixture, store, evidenceDir) {
     instructions: DOING_AUTOMATION.instructions,
     trigger: DOING_AUTOMATION.trigger,
   });
+  // Keep the natural next occurrence beyond this 55-minute CI job. The
+  // explicit test-clock passes below still use two genuine past occurrences.
+  // Avoid minute 0 (staggered), so the stored hourly rule is exact to a minute.
+  const scheduleSpec = {
+    ...SCHEDULE_AUTOMATION.schedule,
+    minute: (new Date().getUTCMinutes() + 59) % 60 || 59,
+  };
   const scheduleAutomationId = await seedAutomation({
     convexUrl: fixture.convexUrl,
     token: token(),
     projectId: project.projectId,
     name: SCHEDULE_AUTOMATION.name,
     instructions: SCHEDULE_AUTOMATION.instructions,
-    trigger: { kind: "schedule", schedule: SCHEDULE_AUTOMATION.schedule },
+    trigger: { kind: "schedule", schedule: scheduleSpec },
   });
   await seedTicket({
     convexUrl: fixture.convexUrl,
@@ -432,6 +440,12 @@ async function journey(fixture, store, evidenceDir) {
     };
     await openProjectHome(macB.drive, AUTOMATION_PROJECT.name);
     await macB.drive.wait(provenanceMarkCopy(DOING_AUTOMATION.name), 60_000);
+    // Finish the first scripted turn before the sleep/wake schedule turn can
+    // consume the next reply in this instance's ordered fake-provider queue.
+    await openProjectHome(macA.drive, AUTOMATION_PROJECT.name);
+    await macA.drive.click("button", session.title ?? "Chat", { contains: true, first: true });
+    await macA.drive.wait(RUN_TURN_MARKER, 120_000);
+    await macA.drive.gone("Stop turn", 60_000);
     return {
       detail: `Run ${arrivalRun.id.slice(0, 8)} started on ${nameA}; shared Session ${arrivalRun.sessionId.slice(
         0,
@@ -440,22 +454,10 @@ async function journey(fixture, store, evidenceDir) {
     };
   });
 
-  /** SIMULATED CLOCK: one occurrence comes due, through the guarded hooks. */
-  async function occurrenceDue() {
-    const before = (await hooks.inspect(scheduleAutomationId)).runs.length;
-    await hooks.backdate(
-      scheduleAutomationId,
-      hourlyBackdateAt(Date.now(), SCHEDULE_AUTOMATION.schedule.minute),
-    );
-    await hooks.fireDueAt(Date.now());
-    await waitUntil(
-      "the schedule's cursor to advance",
-      async () => (await hooks.inspect(scheduleAutomationId)).runs.length > before,
-      { timeout: 30_000, interval: 500 },
-    );
-    return hooks.inspect(scheduleAutomationId);
-  }
-
+  // Both passes are one backend transaction: the real minute cron cannot
+  // interleave and consume the second occurrence before our first assertion.
+  // The hook returns genuine snapshots after each pass, not fabricated facts.
+  let occurrences;
   await step(5, async () => {
     const asleep = await macA.drive.call("runner-power", { action: "suspend" });
     assert.equal(asleep.simulated, true);
@@ -464,8 +466,12 @@ async function journey(fixture, store, evidenceDir) {
       async () => (await runnerStatus(fixture, token(), a.runnerId))?.status === "asleep",
       { timeout: 30_000, interval: 500 },
     );
-    // SIMULATED CLOCK: the first occurrence. No minute passed.
-    const after = await occurrenceDue();
+    // SIMULATED CLOCK: the last two DISTINCT hourly occurrences, both in the
+    // past so the remaining job is honestly eligible on the real clock at wake.
+    const lastDueAt = hourlyBackdateAt(Date.now(), scheduleSpec.minute);
+    occurrences = await hooks.coalescePastOccurrences(scheduleAutomationId, lastDueAt - 3_600_000);
+    assert.equal(occurrences.secondDueAt - occurrences.firstDueAt, 3_600_000);
+    const after = occurrences.first;
     const counts = runStatusCounts(after.runs);
     assert.deepEqual(counts, { queued: 1, started: 0, skipped: 0, failed: 0 });
     // The first occurrence covers itself alone: the job's own count, which is
@@ -484,7 +490,7 @@ async function journey(fixture, store, evidenceDir) {
       nextFireAt: after.schedule.nextFireAt,
     };
     return {
-      detail: `SIMULATED sleep (real suspend event, transport held down) and SIMULATED clock (one clock page at now); B reads "${waitingForAsleepCopy(
+      detail: `SIMULATED sleep (real suspend event, transport held down) and SIMULATED clock (two distinct past occurrences, atomic clock passes); B reads "${waitingForAsleepCopy(
         nameA,
       )}"`,
     };
@@ -492,8 +498,16 @@ async function journey(fixture, store, evidenceDir) {
 
   await step(6, async () => {
     const before = evidence.firstOccurrence.runId;
-    // SIMULATED CLOCK: the second occurrence, while the first Run still waits.
-    const after = await occurrenceDue();
+    // The second real clock pass from the same atomic simulation, while A
+    // stayed asleep. It must advance dueAt, never replay the first occurrence.
+    const after = occurrences.second;
+    assert.equal(after.runs.find((run) => run.status === "queued").dueAt, occurrences.secondDueAt);
+    assert.ok(occurrences.secondDueAt > occurrences.firstDueAt);
+    assert.equal(after.runs.find((run) => run.status === "skipped").dueAt, occurrences.firstDueAt);
+    assert.ok(
+      after.jobs[0].availableAt <= Date.now(),
+      "the remaining Run must be honestly due at wake",
+    );
     const problems = coalescingProblems({ runs: after.runs, jobs: after.jobs });
     assert.equal(problems.length, 0, problems.join("; "));
     const waiting = after.runs.find((run) => run.status === "queued");
@@ -508,6 +522,9 @@ async function journey(fixture, store, evidenceDir) {
         skipReason: after.runs.find((run) => run.status === "skipped").skipReason,
       },
       waitingRunId: before,
+      firstDueAt: occurrences.firstDueAt,
+      secondDueAt: occurrences.secondDueAt,
+      atomicClockPasses: true,
       jobs: after.jobs.map((job) => ({ id: job.id, status: job.status, lease: job.lease })),
       problems,
     };
@@ -571,6 +588,12 @@ async function journey(fixture, store, evidenceDir) {
     });
     assert.equal(sessions.length, 2, `${sessions.length} Sessions exist, expected one per Run`);
     await macB.drive.gone(waitingForAsleepCopy(nameA), 60_000);
+    // 'started' is not a finished model turn. Consume the second scripted reply
+    // before creating the caller whose next reply must be the tool call.
+    await openProjectHome(macA.drive, AUTOMATION_PROJECT.name);
+    await macA.drive.click("button", session.title ?? "Chat", { contains: true, first: true });
+    await macA.drive.wait(RUN_TURN_MARKER, 120_000);
+    await macA.drive.gone("Stop turn", 60_000);
     evidence.started = {
       runId: started.id,
       sessionId: started.sessionId,
@@ -588,6 +611,15 @@ async function journey(fixture, store, evidenceDir) {
   });
 
   await step(8, async () => {
+    const beforeCaller = new Set(
+      (
+        await projectSessions({
+          convexUrl: fixture.convexUrl,
+          token: token(),
+          projectId: project.projectId,
+        })
+      ).map((row) => row.id),
+    );
     // The caller's own kickoff on Mac A: this is the instance's third agent
     // turn, so the reply queue's `automation_run` call lands here and nowhere
     // else. The tool turn carries no text; its continuation does.
@@ -620,18 +652,31 @@ async function journey(fixture, store, evidenceDir) {
       typeof agentRun.requestedBySessionId === "string" && agentRun.requestedBySessionId.length > 0,
       "the agent's Run does not name the Session that asked for it",
     );
+    const callerSessions = (
+      await projectSessions({
+        convexUrl: fixture.convexUrl,
+        token: token(),
+        projectId: project.projectId,
+      })
+    ).filter((row) => !beforeCaller.has(row.id) && row.role === "project");
+    assert.equal(callerSessions.length, 1, "one actual caller Session must be born");
+    assert.equal(
+      agentRun.requestedBySessionId,
+      callerSessions[0].id,
+      "the Run names a different caller",
+    );
     // The started notice, composed by the backend and delivered by the
     // runner's own outbox when that Run's Session finished its first turn:
-    // its opening sentence, and the line naming the turn that ended.
-    await macA.drive.wait(noticeDeliveredCopy(), 240_000);
-    await macA.drive.wait(noticeTurnFinishedCopy(), 240_000);
+    // The visible structured WatchNoticeRow names the exact Run Session;
+    // the model-facing prose envelope is deliberately not rendered.
+    await macA.drive.wait(noticeTurnFinishedCopy(agentRun.sessionId), 240_000);
     evidence.agentRun = {
       runId: agentRun.id,
       sessionId: agentRun.sessionId,
       requestedBySessionId: agentRun.requestedBySessionId,
       attendance: agentRun.attendance,
       trigger: agentRun.trigger,
-      noticed: noticeDeliveredCopy(),
+      noticed: noticeTurnFinishedCopy(agentRun.sessionId),
     };
     return {
       detail: `scripted ${AUTOMATION_RUN_TOOL} queued Run ${agentRun.id.slice(0, 8)} from the caller's Session; it started on ${nameA} and its finished-turn notice reached that Session`,
@@ -709,7 +754,7 @@ try {
       {
         commit: (await exec("git", ["rev-parse", "HEAD"], { cwd: REPO })).stdout.trim(),
         simulation:
-          "Sleep is SIMULATED (real power events through main's dual-locked smoke seam, runner transport held down; no OS sleep). The clock is SIMULATED (testAutomations.backdateSchedule + fireDueAt, which run the cron's own fireDuePage; no minute passed).",
+          "Sleep is SIMULATED (real power events through main's dual-locked smoke seam, runner transport held down; no OS sleep). The clock is SIMULATED (testAutomations.coalescePastOccurrences runs two distinct past occurrences through the cron's fireDuePage atomically, returning each genuine state; no minute passed).",
         agentTurnScript:
           "Mac A launches with an ordered fake-provider reply queue (fake-script.json, kept here). It feeds the next turn that carries tools, so it scripts this instance's agent turns in order: the arrival Run's turn, the schedule Run's turn, the caller's scripted automation_run kickoff, then plain replies (the Run's own turn and the caller's continuation may race). No token, watch or notice is injected: the Run goes through automations:run under the caller Session's Agent token, and the notice is the backend's session.notice composed by the runner's outbox.",
         complete,

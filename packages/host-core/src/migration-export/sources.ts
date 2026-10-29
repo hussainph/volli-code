@@ -1314,6 +1314,7 @@ const automationsSource = source<AutomationRow>({
         runnerId: RUNNER,
         spec: schedule,
         timezone: schedule.timeZone,
+        // Local schedules have no arm timestamp; re-arm replaces this carried definition time.
         armedAt: row.updated_at,
       });
     }

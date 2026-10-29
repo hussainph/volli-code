@@ -12,9 +12,13 @@
  */
 
 import { v } from "convex/values";
-import { nextScheduleOccurrence, type AutomationSchedule } from "@volli/shared";
+import {
+  nextScheduleOccurrence,
+  parseAutomationSchedule,
+  type AutomationSchedule,
+} from "@volli/shared";
 
-import { internalMutation } from "./_generated/server";
+import { internalMutation, type MutationCtx } from "./_generated/server";
 import { fireDuePage } from "./lib/automationClock";
 
 function requireTestDeployment(): void {
@@ -104,32 +108,76 @@ function strip<T extends { _id: unknown; _creationTime: number }>(row: T) {
   return fields;
 }
 
+async function scheduleState(ctx: Pick<MutationCtx, "db">, automationId: string) {
+  const schedule = await ctx.db
+    .query("automationSchedules")
+    .withIndex("by_automation", (q) => q.eq("automationId", automationId))
+    .unique();
+  const runs = await ctx.db
+    .query("automationRuns")
+    .withIndex("by_automation", (q) => q.eq("automationId", automationId))
+    .collect();
+  const jobs = [];
+  for (const run of runs) {
+    if (run.jobId == null) continue;
+    const job = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_uuid", (q) => q.eq("id", run.jobId!))
+      .unique();
+    if (job !== null) jobs.push(strip(job));
+  }
+  return {
+    schedule: schedule === null ? null : strip(schedule),
+    runs: runs.map(strip),
+    jobs,
+  };
+}
+
 /** One schedule's row, its Run rows and its jobs, for assertions. */
 export const inspectSchedule = internalMutation({
   args: { automationId: v.string() },
   handler: async (ctx, { automationId }) => {
     requireTestDeployment();
-    const schedule = await ctx.db
+    return scheduleState(ctx, automationId);
+  },
+});
+
+/** Two DISTINCT past occurrences through the real clock, in one transaction.
+ * Atomic only to keep the live minute cron from advancing the second cursor
+ * between assertions. Jobs remain honestly due on the real clock at wake. */
+export const coalescePastOccurrences = internalMutation({
+  args: { automationId: v.string(), firstDueAt: v.number() },
+  handler: async (ctx, { automationId, firstDueAt }) => {
+    requireTestDeployment();
+    const row = await ctx.db
       .query("automationSchedules")
       .withIndex("by_automation", (q) => q.eq("automationId", automationId))
       .unique();
-    const runs = await ctx.db
-      .query("automationRuns")
-      .withIndex("by_automation", (q) => q.eq("automationId", automationId))
-      .collect();
-    const jobs = [];
-    for (const run of runs) {
-      if (run.jobId == null) continue;
-      const job = await ctx.db
-        .query("runnerJobs")
-        .withIndex("by_uuid", (q) => q.eq("id", run.jobId!))
-        .unique();
-      if (job !== null) jobs.push(strip(job));
+    if (row === null || row.pausedAt != null) throw new Error("An unpaused schedule is required.");
+    const spec = parseAutomationSchedule(row.spec);
+    if (spec === null) throw new Error("No readable schedule.");
+    const occurrence = (after: number) =>
+      nextScheduleOccurrence({
+        schedule: { ...spec, timeZone: row.timezone },
+        staggerKey: automationId,
+        after,
+      });
+    const secondDueAt = occurrence(firstDueAt);
+    if (
+      !Number.isFinite(firstDueAt) ||
+      occurrence(firstDueAt - 1) !== firstDueAt ||
+      secondDueAt > Date.now() ||
+      occurrence(secondDueAt) <= Date.now()
+    ) {
+      throw new Error("Choose the last two distinct past occurrences.");
     }
-    return {
-      schedule: schedule === null ? null : strip(schedule),
-      runs: runs.map(strip),
-      jobs,
-    };
+    await ctx.db.patch(row._id, { nextFireAt: firstDueAt });
+    const firstPass = await fireDuePage(ctx, { now: firstDueAt, cursor: null });
+    const first = await scheduleState(ctx, automationId);
+    const secondPass = await fireDuePage(ctx, { now: secondDueAt, cursor: null });
+    const second = await scheduleState(ctx, automationId);
+    if (firstPass.fired !== 1 || secondPass.fired !== 1)
+      throw new Error("Use a fixture with exactly one due schedule.");
+    return { first, second, firstDueAt, secondDueAt };
   },
 });

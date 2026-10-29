@@ -283,7 +283,7 @@ function checkExpected(expected: readonly Expected[]): Map<MigrationImportStream
     byStream.set("automationSchedules", {
       stream: "automationSchedules",
       count: 0,
-      digest: "0".repeat(32),
+      digest: new MigrationDigest().value,
     });
   }
   if (byStream.size !== MIGRATION_IMPORT_STREAMS.length) {
@@ -731,7 +731,13 @@ export const importRows = mutation({
 
 /** Still-paused moved records for the result screen; re-arm uses the ordinary
  * receipt-backed automations.arm / armSchedule doors with this Mac's runner.
- * Receiving UI: MOVE-8's local-launch result bridge reads this under the person's sign-in. */
+ * Receiving-task contract (VC-998, not yet wired here): its move-result bridge
+ * must query api.projectImports.rearmList({moveId}) under the current account
+ * after commit. Display columns/schedules with per-item Re-arm on this Mac:
+ * api.automations.arm({commandId: UUID, projectId, status, automationId, runnerId})
+ * or api.automations.armSchedule({commandId: UUID, automationId, runnerId}).
+ * runnerId must be the live account-bound full MacRunner advertising automation.run,
+ * never the registration-only import runner. Inert globals have no action. */
 export const rearmList = query({
   args: { moveId: v.string() },
   handler: async (ctx, { moveId }) => {
@@ -753,17 +759,20 @@ export const rearmList = query({
       .query("automations")
       .withIndex("by_project_name", (q) => q.eq("projectId", row.projectId))
       .collect();
+    const byId = new Map(automations.map((automation) => [automation.id, automation]));
+    for (const arm of arms) {
+      const automation = byId.get(arm.automationId);
+      if (
+        automation !== undefined &&
+        automation.deletedAt === null &&
+        arm.pausedAt != null &&
+        arm.pausedReason === "moved"
+      ) {
+        columns.push({ automationId: automation.id, name: automation.name, status: arm.status });
+      }
+    }
     for (const automation of automations) {
       if (automation.deletedAt !== null) continue;
-      for (const arm of arms) {
-        if (
-          arm.automationId === automation.id &&
-          arm.pausedAt != null &&
-          arm.pausedReason === "moved"
-        ) {
-          columns.push({ automationId: automation.id, name: automation.name, status: arm.status });
-        }
-      }
       const schedule = await ctx.db
         .query("automationSchedules")
         .withIndex("by_automation", (q) => q.eq("automationId", automation.id))

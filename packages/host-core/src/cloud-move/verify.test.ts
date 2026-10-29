@@ -13,6 +13,10 @@ import { importCalls } from "./backend";
 import type { MovePlan } from "./plan";
 import { verifyHiddenImport } from "./verify";
 
+async function unexpected(): Promise<never> {
+  throw new Error("unexpected write or object read");
+}
+
 describe("moved Automation pause verification", () => {
   test.each(["automationArmings", "automationSchedules"] as const)(
     "checks the non-digested pause stamp on %s",
@@ -37,9 +41,6 @@ describe("moved Automation pause verification", () => {
         exported: {},
       };
       let pausedAt: unknown = 100;
-      const unexpected = async (): Promise<never> => {
-        throw new Error("unexpected write or object read");
-      };
       const calls = importCalls(
         {
           query: async (path, args) =>
