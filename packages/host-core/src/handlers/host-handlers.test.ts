@@ -1857,3 +1857,60 @@ describe("local profile backup commands", () => {
     expect(backups.reveal).toHaveBeenCalledOnce();
   });
 });
+
+describe("local profile restore commands", () => {
+  it("reports unavailable for every restore door without a composed service", async () => {
+    const map = handlers();
+    for (const call of [
+      () => map["backups.restoreStatus"](undefined, WINDOW),
+      () => map["backups.restoreChoose"]({}, WINDOW),
+      () => map["backups.restoreDirectory"](undefined, WINDOW),
+      () => map["backups.restoreStart"]({ expectedRevision: "r", projectPaths: {} }, WINDOW),
+      () => map["backups.restoreCancel"]({ expectedRevision: "r" }, WINDOW),
+      () => map["backups.restoreRestart"]({ expectedRevision: "r" }, WINDOW),
+    ])
+      expect(await unavailable(call)).toBe("Local restore is unavailable.");
+  });
+  it("projects each intent onto the same host-owned restore service", async () => {
+    const status: import("@volli/shared").ProfileRestoreStatus = {
+      revision: "r",
+      phase: "idle",
+      bundles: [],
+      selectedFile: null,
+      projects: [],
+      checkpoints: 0,
+      paused: false,
+      problems: [],
+      credentialsMessage: null,
+      previousProfile: null,
+    };
+    const restore = {
+      status: vi.fn(async () => status),
+      choose: vi.fn(async () => status),
+      directory: vi.fn(async () => "/checkout"),
+      start: vi.fn(async () => status),
+      cancel: vi.fn(async () => status),
+      restart: vi.fn(async () => {}),
+    };
+    const map = handlers({ restore });
+    expect(await map["backups.restoreStatus"](undefined, WINDOW)).toEqual(status);
+    expect(await map["backups.restoreChoose"]({ fileName: "bundle.tar.gz" }, WINDOW)).toEqual(
+      status,
+    );
+    expect(restore.choose).toHaveBeenCalledWith("bundle.tar.gz");
+    expect(await map["backups.restoreDirectory"](undefined, WINDOW)).toBe("/checkout");
+    expect(
+      await map["backups.restoreStart"](
+        { expectedRevision: "r", projectPaths: { p: "/checkout" } },
+        WINDOW,
+      ),
+    ).toEqual(status);
+    expect(restore.start).toHaveBeenCalledWith("r", { p: "/checkout" });
+    expect(await map["backups.restoreCancel"]({ expectedRevision: "r" }, WINDOW)).toEqual(status);
+    expect(restore.cancel).toHaveBeenCalledWith("r");
+    expect(await map["backups.restoreRestart"]({ expectedRevision: "r" }, WINDOW)).toBeNull();
+    expect(restore.restart).toHaveBeenCalledWith("r");
+    expect(restore.status).toHaveBeenCalledOnce();
+    expect(restore.directory).toHaveBeenCalledOnce();
+  });
+});

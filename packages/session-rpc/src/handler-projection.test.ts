@@ -72,6 +72,13 @@ const SAMPLE_INPUTS: {
   "backups.status": undefined,
   "backups.run": { expectedRevision: "history-revision" },
   "backups.reveal": undefined,
+  "backups.restoreStatus": undefined,
+  "backups.restoreChoose": {},
+  "backups.restoreDirectory": undefined,
+  "backups.restoreStart": { expectedRevision: "r", projectPaths: {} },
+  "backups.restoreCancel": { expectedRevision: "r" },
+  "backups.restoreRestart": { expectedRevision: "r" },
+
   "worktree.trimSettings": undefined,
   "worktree.setupStatus": { ticketId: "ticket-1" },
   "worktree.answerSetup": { ticketId: "ticket-1", answer: "retry" },

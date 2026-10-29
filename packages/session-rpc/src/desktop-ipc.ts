@@ -164,6 +164,13 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "backups.status": "ipc",
   "backups.run": "ipc",
   "backups.reveal": "ipc",
+  "backups.restoreStatus": "ipc",
+  "backups.restoreChoose": "ipc",
+  "backups.restoreDirectory": "ipc",
+  "backups.restoreStart": "ipc",
+  "backups.restoreCancel": "ipc",
+  "backups.restoreRestart": "ipc",
+
   "worktree.trimSettings": "ipc",
   "worktree.setupStatus": "ipc",
   "worktree.answerSetup": "ipc",

@@ -44,6 +44,7 @@ const nextImmediate = () => new Promise<void>((resolve) => setImmediate(resolve)
 function harness(
   options: {
     cloud?: boolean;
+    settleBackgroundWork?: () => Promise<void>;
     /** The unsaved-drafts confirm's answer: Discard and Quit, or Cancel. */
     unsaved?: "discard" | "keep";
     /**
@@ -95,6 +96,7 @@ function harness(
     stopBackgroundWork: () => {
       calls.push("web-sealing.stop");
     },
+    ...(options.settleBackgroundWork ? { settleBackgroundWork: options.settleBackgroundWork } : {}),
     cloudEnabled: () => options.cloud === true,
     terminalQuit: (bound, event) => {
       askedAbout.push(bound);
@@ -267,6 +269,17 @@ describe("the accepted-quit hold the runner installs", () => {
     } finally {
       captured.restore();
     }
+  });
+
+  it("waits for cancelled local workers before exiting on an accepted quit", async () => {
+    const worker = Promise.withResolvers<void>();
+    const settle = vi.fn(() => worker.promise);
+    const h = harness({ settleBackgroundWork: settle });
+    h.boot();
+    h.quit();
+    expect(settle).toHaveBeenCalledOnce();
+    worker.resolve();
+    expect(await h.exited).toBe(0);
   });
 
   it("an accepted quit runs all four gates in order, then stops the host and exits 0", async () => {

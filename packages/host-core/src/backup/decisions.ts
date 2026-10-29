@@ -782,7 +782,13 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
   {
     area: ".volli-restore-*",
     decision: "exclude",
-    reason: "Temporary restore staging; never a source of user data for another backup.",
+    reason:
+      "Restore staging and local restart/attempt records; never a source of user data for another backup.",
+  },
+  {
+    area: ".volli-inspect-*",
+    decision: "exclude",
+    reason: "Disposable disk-backed verification inventory for the restore picker.",
   },
   {
     area: ".volli-replaced-*",

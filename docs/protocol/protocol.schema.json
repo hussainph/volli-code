@@ -816,6 +816,754 @@
         "outputValidation": "documented-yield",
         "voidOutput": false
       },
+      "backups.restoreCancel": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "bundles": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "type": "number"
+                  },
+                  "fileName": {
+                    "type": "string"
+                  },
+                  "keptForMove": {
+                    "type": "boolean"
+                  },
+                  "sizeBytes": {
+                    "type": "number"
+                  },
+                  "verification": {
+                    "enum": [
+                      "verified",
+                      "failed",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "createdAt",
+                  "sizeBytes",
+                  "verification",
+                  "keptForMove"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "checkpoints": {
+              "type": "number"
+            },
+            "credentialsMessage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "phase": {
+              "enum": [
+                "idle",
+                "checking",
+                "mapping",
+                "staging",
+                "ready",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "previousProfile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "problems": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "projects": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "directory"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "selectedFile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "revision",
+            "phase",
+            "bundles",
+            "selectedFile",
+            "projects",
+            "checkpoints",
+            "paused",
+            "problems",
+            "credentialsMessage",
+            "previousProfile"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "backups.restoreChoose": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "fileName": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "bundles": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "type": "number"
+                  },
+                  "fileName": {
+                    "type": "string"
+                  },
+                  "keptForMove": {
+                    "type": "boolean"
+                  },
+                  "sizeBytes": {
+                    "type": "number"
+                  },
+                  "verification": {
+                    "enum": [
+                      "verified",
+                      "failed",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "createdAt",
+                  "sizeBytes",
+                  "verification",
+                  "keptForMove"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "checkpoints": {
+              "type": "number"
+            },
+            "credentialsMessage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "phase": {
+              "enum": [
+                "idle",
+                "checking",
+                "mapping",
+                "staging",
+                "ready",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "previousProfile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "problems": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "projects": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "directory"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "selectedFile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "revision",
+            "phase",
+            "bundles",
+            "selectedFile",
+            "projects",
+            "checkpoints",
+            "paused",
+            "problems",
+            "credentialsMessage",
+            "previousProfile"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "backups.restoreDirectory": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "backups.restoreRestart": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "backups.restoreStart": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "projectPaths": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "expectedRevision",
+            "projectPaths"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "bundles": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "type": "number"
+                  },
+                  "fileName": {
+                    "type": "string"
+                  },
+                  "keptForMove": {
+                    "type": "boolean"
+                  },
+                  "sizeBytes": {
+                    "type": "number"
+                  },
+                  "verification": {
+                    "enum": [
+                      "verified",
+                      "failed",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "createdAt",
+                  "sizeBytes",
+                  "verification",
+                  "keptForMove"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "checkpoints": {
+              "type": "number"
+            },
+            "credentialsMessage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "phase": {
+              "enum": [
+                "idle",
+                "checking",
+                "mapping",
+                "staging",
+                "ready",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "previousProfile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "problems": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "projects": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "directory"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "selectedFile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "revision",
+            "phase",
+            "bundles",
+            "selectedFile",
+            "projects",
+            "checkpoints",
+            "paused",
+            "problems",
+            "credentialsMessage",
+            "previousProfile"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "backups.restoreStatus": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "bundles": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "type": "number"
+                  },
+                  "fileName": {
+                    "type": "string"
+                  },
+                  "keptForMove": {
+                    "type": "boolean"
+                  },
+                  "sizeBytes": {
+                    "type": "number"
+                  },
+                  "verification": {
+                    "enum": [
+                      "verified",
+                      "failed",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "createdAt",
+                  "sizeBytes",
+                  "verification",
+                  "keptForMove"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "checkpoints": {
+              "type": "number"
+            },
+            "credentialsMessage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "phase": {
+              "enum": [
+                "idle",
+                "checking",
+                "mapping",
+                "staging",
+                "ready",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "previousProfile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "problems": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "projects": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "directory"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "selectedFile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "revision",
+            "phase",
+            "bundles",
+            "selectedFile",
+            "projects",
+            "checkpoints",
+            "paused",
+            "problems",
+            "credentialsMessage",
+            "previousProfile"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "backups.reveal": {
         "compatibility": "host-command",
         "input": {
@@ -39862,7 +40610,7 @@
           "properties": {
             "omitted": {
               "maximum": 9007199254740991,
-              "minimum": 0,
+              "minimum": -9007199254740991,
               "type": "integer"
             },
             "workspaces": {

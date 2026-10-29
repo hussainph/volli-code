@@ -1,3 +1,4 @@
+import type { ProfileRestoreStatus, ProfileRestorePort } from "@volli/shared";
 import type { ProfileBackupsPort } from "../backup/automatic";
 import type { ProfileBackupStatus } from "@volli/shared";
 import type {
@@ -344,6 +345,16 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
   readonly "backups.run": HostHandler<{ expectedRevision: string }, ProfileBackupStatus>;
   readonly "backups.reveal": HostHandler<void, null>;
+  readonly "backups.restoreStatus": HostHandler<void, ProfileRestoreStatus>;
+  readonly "backups.restoreChoose": HostHandler<{ fileName?: string }, ProfileRestoreStatus>;
+  readonly "backups.restoreDirectory": HostHandler<void, string | null>;
+  readonly "backups.restoreStart": HostHandler<
+    { expectedRevision: string; projectPaths: Record<string, string> },
+    ProfileRestoreStatus
+  >;
+  readonly "backups.restoreCancel": HostHandler<{ expectedRevision: string }, ProfileRestoreStatus>;
+  readonly "backups.restoreRestart": HostHandler<{ expectedRevision: string }, null>;
+
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** Where the ticket's working copy's environment setup stands (VC-584). */
   readonly "worktree.setupStatus": HostHandler<{ ticketId: string }, WorktreeSetupStatusView>;
@@ -597,6 +608,7 @@ export interface HostHandlerOptions {
   /** The host's data directory: where a worktree's attachment bytes live. */
   readonly dataDir: string;
   readonly backups?: ProfileBackupsPort | null;
+  readonly restore?: ProfileRestorePort | null;
   /** The same screenshot store Code Mode writes; absent means an explicit unavailable picture. */
   readonly pictures?: BrowserPictureStore;
   /** The recovered Session runtime, or null when this launch has none. */
@@ -1127,6 +1139,23 @@ function hostHandlerEntries(
         );
         return null;
       }),
+    "backups.restoreStatus": () =>
+      present(options.restore ?? null, "Local restore is unavailable.").status(),
+    "backups.restoreChoose": ({ fileName }) =>
+      present(options.restore ?? null, "Local restore is unavailable.").choose(fileName),
+    "backups.restoreDirectory": () =>
+      present(options.restore ?? null, "Local restore is unavailable.").directory(),
+    "backups.restoreStart": ({ expectedRevision, projectPaths }) =>
+      present(options.restore ?? null, "Local restore is unavailable.").start(
+        expectedRevision,
+        projectPaths,
+      ),
+    "backups.restoreCancel": ({ expectedRevision }) =>
+      present(options.restore ?? null, "Local restore is unavailable.").cancel(expectedRevision),
+    "backups.restoreRestart": ({ expectedRevision }) =>
+      done(() =>
+        present(options.restore ?? null, "Local restore is unavailable.").restart(expectedRevision),
+      ),
     "backups.status": () =>
       present(options.backups ?? null, "Local backups are unavailable.").status(),
     "backups.run": ({ expectedRevision }) =>

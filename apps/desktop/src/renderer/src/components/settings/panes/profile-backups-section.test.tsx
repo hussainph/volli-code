@@ -21,6 +21,7 @@ vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
     },
   }),
 }));
+vi.mock("./backup-restore", () => ({ BackupRestore: () => null }));
 vi.mock("@renderer/lib/toast", () => ({ toastError: mocks.toast }));
 let root: Root;
 let container: HTMLElement;

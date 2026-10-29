@@ -728,7 +728,7 @@ CREATE TABLE link_refs (
   row_index INTEGER NOT NULL,
   key       TEXT NOT NULL
 );
-CREATE TABLE project_ids (seq INTEGER PRIMARY KEY, id TEXT NOT NULL);
+CREATE TABLE project_ids (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, name TEXT NOT NULL);
 `;
 
 /**
@@ -867,8 +867,10 @@ class ScratchDatabase {
   }
 
   /** A project id the data document carries, in document order, for a restore's mapping. */
-  insertProjectId(id: string): void {
-    this.#write(() => this.#statement("INSERT INTO project_ids (id) VALUES (?)").run(id));
+  insertProjectId(id: string, name: string): void {
+    this.#write(() =>
+      this.#statement("INSERT INTO project_ids (id, name) VALUES (?, ?)").run(id, name),
+    );
   }
 
   /* A restore's reads of a finished verification. */
@@ -887,6 +889,15 @@ class ScratchDatabase {
         after = seq;
         yield id;
       }
+    }
+  }
+
+  *projects(): Generator<{ id: string; name: string }> {
+    for (const id of this.projectIds()) {
+      const row = this.#statement("SELECT name FROM project_ids WHERE id = ? LIMIT 1").get(id) as {
+        name: string;
+      };
+      yield { id, name: row.name };
     }
   }
 
@@ -1210,6 +1221,8 @@ export interface VerifiedBundleInventory {
   readonly projectsMappable: boolean;
   /** Project ids in document order, read the way `restoreBackupBundle` reads them. */
   projectIds(): Iterable<string>;
+  /** Verified project labels for the restore directory picker; paths are never bundled. */
+  projects(): Iterable<{ id: string; name: string }>;
   carriesProject(id: string): boolean;
   /** The column list the verifier accepted for one table, in document order. */
   verifiedColumns(table: string): readonly string[] | undefined;
@@ -1268,6 +1281,7 @@ export async function openVerifiedBackupBundleFile(
       bundle: result.bundle,
       projectsMappable: projectColumns?.includes("id") ?? false,
       projectIds: () => scratch.projectIds(),
+      projects: () => scratch.projects(),
       carriesProject: (id) => scratch.hasProjectId(id),
       verifiedColumns: (table) => outcome.data.tableColumns.get(table),
       verifiedEntry: (path) => scratch.getInventory(path),
@@ -2163,7 +2177,11 @@ function observeRow(
     // What a file restore maps to local directories, read the way the
     // in-memory restore reads it: `String` of the raw id value.
     const index = columns.indexOf("id");
-    if (index !== -1) scratch.insertProjectId(String(row[index]));
+    if (index !== -1)
+      scratch.insertProjectId(
+        String(row[index]),
+        String(row[columns.indexOf("name")] ?? row[index]),
+      );
   }
   const transcriptColumns = TRANSCRIPT_COLUMNS[table];
   if (transcriptColumns !== undefined) {

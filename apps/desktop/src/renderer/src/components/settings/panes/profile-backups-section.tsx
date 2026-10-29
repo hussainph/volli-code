@@ -1,4 +1,5 @@
 import * as React from "react";
+import { BackupRestore } from "./backup-restore";
 import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { errorMessage, type ProfileBackupStatus } from "@volli/shared";
@@ -50,7 +51,7 @@ export function ProfileBackupsSection() {
   const last = status?.lastBackup;
   return (
     <PrefSection
-      title="Local profile backups"
+      title="Backups"
       icon={DatabaseIcon}
       action={
         <SectionAction label="Show in Finder" icon={FolderOpenIcon} onAct={() => void reveal()} />
@@ -75,6 +76,7 @@ export function ProfileBackupsSection() {
           {busy ? "Backing up…" : "Back up now"}
         </Button>
       </PrefRow>
+      <BackupRestore />
       {failure || status?.notice ? (
         <PrefRow label="Backup notice">
           <span role="status" className="text-ui text-muted-foreground">

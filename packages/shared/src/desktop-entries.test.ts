@@ -48,6 +48,13 @@ describe("the desktop-only tier", () => {
       "backups.status",
       "backups.run",
       "backups.reveal",
+      "backups.restoreStatus",
+      "backups.restoreChoose",
+      "backups.restoreDirectory",
+      "backups.restoreStart",
+      "backups.restoreCancel",
+      "backups.restoreRestart",
+
       "project.reorder",
       "worktree.trimSettings",
       "project.remove",
