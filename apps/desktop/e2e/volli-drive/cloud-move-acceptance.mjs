@@ -2,9 +2,9 @@
 /**
  * Real MOVE app path through volli-drive, against only the pinned throwaway backend.
  *
- * SETUP: UUID local project/tickets + a stored PNG (fixture `move`), fake model HTTP,
+ * SETUP: UUID local project/tickets + PNG + Automation definitions (fixture `move`), fake model HTTP,
  * preview enrollment, one empty Workspace and an S3-compatible signature-checking bucket.
- * The Session/turn, move, verification, Finish and Go back to local are driven
+ * The Session/turn, move, verification, Finish, explicit re-arm and Go back to local are driven
  * through the real UI. A passing journey ends returned, with the cloud copy kept.
  * No engine mock, journal patch, clock jump, shortened URL guard or window.api move call.
  * In particular, the production signed-history settling wait (~11 min) runs in full.
@@ -46,7 +46,7 @@ const proof = {
   doubles: [
     "fake model HTTP",
     "dev sign-in browser",
-    "fixture local board and PNG",
+    "fixture local board, PNG and disabled Automation definitions",
     "preview enrollment and empty Workspace",
     "S3-compatible HTTP bucket",
     "supervised restart",
@@ -179,6 +179,9 @@ try {
   store = await startTranscriptStore(fixture, reportDir);
   const subject = `move-${randomBytes(4).toString("hex")}`;
   const token = devAccessToken({ privateKeyPem: fixture.privateKeyPem, subject });
+  const cloud = new ConvexHttpClient(fixture.convexUrl);
+  cloud.setAuth(token);
+  const read = (name, args) => cloud.query(makeFunctionReference(name), args);
   const output = await exec(
     process.execPath,
     [
@@ -348,16 +351,146 @@ try {
     proof.moveResult = result;
     return { state: result.state, checksPassed: true };
   });
-  await step("Finish and reopen through the real cloud board", async () => {
+  await step("Finish keeps moved Automations paused", async () => {
     await click("button", "Finish move");
     await wait("Moved to Volli Cloud");
-    assert.equal(
-      (await sql("SELECT state FROM cloud_moves ORDER BY created_at DESC LIMIT 1"))[0].state,
-      "confirmed",
-    );
+    const moved = (
+      await sql("SELECT move_id,state FROM cloud_moves ORDER BY created_at DESC LIMIT 1")
+    )[0];
+    assert.equal(moved.state, "confirmed");
     proof.confirmed = true;
+    proof.moveId = moved.move_id;
+    const names = launched.seeded.automations;
+    const list = await read("projectImports:rearmList", { moveId: proof.moveId });
+    assert.deepEqual(list.columns, [
+      { automationId: names.columnId, name: "Move column proof", status: "done" },
+    ]);
+    assert.deepEqual(list.schedules, [
+      { automationId: names.scheduleId, name: "Move schedule proof" },
+    ]);
+    assert.deepEqual(list.inertGlobals, [{ id: names.personalId, name: "Move personal proof" }]);
+    const columns = await read("automations:armings", { projectId: MOVE_PROJECT.id });
+    const schedules = await read("automations:schedules", { projectId: MOVE_PROJECT.id });
+    assert.equal(columns[0]?.pausedReason, "moved");
+    assert.equal(schedules[0]?.pausedReason, "moved");
+    assert.deepEqual(
+      (
+        await read("automations:runsForProject", {
+          projectId: MOVE_PROJECT.id,
+          paginationOpts: { numItems: 10, cursor: null },
+        })
+      ).page,
+      [],
+      "moving starts no Automation work",
+    );
+    await click("button", "Paused Automations", { contains: true });
+    await wait("Open in Volli Cloud to re-arm on this Mac.");
+    const local = await drive("snapshot");
+    const buttons = visibleControls(local.text, "button", "Re-arm", { contains: true });
+    assert.equal(buttons.length, 2);
+    assert.ok(
+      buttons.every((line) => line.includes("[disabled]")),
+      "a registration-only runner must not re-arm",
+    );
+    assert.equal(local.text.match(/Move personal proof · Not armed/gu)?.length, 1);
+    return { list, pausedWithoutStarting: true, localRearmDisabled: true };
+  });
+  await step("Re-arm moved Automations explicitly on this Mac", async () => {
     await drive("restart", { reason: "Open the moved project in Volli Cloud (supervised)" });
     await wait(MOVE_PROJECT.name);
+    await click("button", "Settings", { first: true });
+    await wait("Settings categories");
+    await click("button", "Volli Cloud", { first: true });
+    await click("button", "Progress and local copies");
+    await wait("Paused Automations");
+    await click("button", "Paused Automations", { contains: true });
+    await waitUntil(
+      "this Mac's real full runner can re-arm",
+      async () => {
+        const snap = await drive("snapshot");
+        const button = visibleControls(
+          snap.text,
+          "button",
+          "Re-arm Move column proof on this Mac (Done)",
+        )[0];
+        if (button?.includes("[ref=") && !button.includes("[disabled]")) return true;
+        if (
+          visibleControls(snap.text, "button", "Try again").some(
+            (line) => line.includes("[ref=") && !line.includes("[disabled]"),
+          )
+        )
+          await click("button", "Try again");
+        return false;
+      },
+      { timeout: 60_000, interval: 1_000 },
+    );
+    const current = await drive("cloud-state");
+    assert.ok(current.runnerId, "the cloud launch has a real full MacRunner");
+    const runners = await read("runners:list", {});
+    const runner = runners.find((item) => item.id === current.runnerId);
+    assert.equal(runner?.kind, "mac");
+    assert.ok(runner.capabilities.tools.includes("automation.run"));
+    await drive("screenshot", { name: "paused-automations-ready-on-this-mac" });
+    const names = launched.seeded.automations;
+    await click("button", "Re-arm Move column proof on this Mac (Done)");
+    let columns;
+    await waitUntil(
+      "the ordinary column arm receipt is visible",
+      async () => {
+        columns = await read("automations:armings", { projectId: MOVE_PROJECT.id });
+        return columns.some(
+          (item) =>
+            item.automationId === names.columnId &&
+            item.runnerId === current.runnerId &&
+            item.pausedAt == null,
+        );
+      },
+      { timeout: 30_000, interval: 250 },
+    );
+    const afterColumn = await read("projectImports:rearmList", { moveId: proof.moveId });
+    assert.deepEqual(afterColumn.columns, []);
+    assert.deepEqual(
+      afterColumn.schedules.map((item) => item.automationId),
+      [names.scheduleId],
+    );
+    await click("button", "Re-arm Move schedule proof schedule on this Mac");
+    let schedules;
+    await waitUntil(
+      "the ordinary schedule arm receipt is visible",
+      async () => {
+        schedules = await read("automations:schedules", { projectId: MOVE_PROJECT.id });
+        return schedules.some(
+          (item) =>
+            item.automationId === names.scheduleId &&
+            item.runnerId === current.runnerId &&
+            item.pausedAt == null,
+        );
+      },
+      { timeout: 30_000, interval: 250 },
+    );
+    const after = await read("projectImports:rearmList", { moveId: proof.moveId });
+    assert.deepEqual(after.columns, []);
+    assert.deepEqual(after.schedules, []);
+    assert.deepEqual(
+      (
+        await read("automations:runsForProject", {
+          projectId: MOVE_PROJECT.id,
+          paginationOpts: { numItems: 10, cursor: null },
+        })
+      ).page,
+      [],
+      "arming neither replays old arrivals nor runs a future schedule early",
+    );
+    assert.deepEqual(after.inertGlobals, [{ id: names.personalId, name: "Move personal proof" }]);
+    await drive("wait", { text: "Paused Automations", gone: true, timeout: 30_000 });
+    const result = await drive("snapshot");
+    assert.equal(result.text.match(/Move personal proof · Not armed/gu)?.length, 1);
+    assert.equal(visibleControls(result.text, "button", "Re-arm", { contains: true }).length, 0);
+    await drive("screenshot", { name: "explicit-rearm-result-and-inert-personal-definition" });
+    await click("button", "Close");
+    return { runnerId: current.runnerId, columns, schedules, inertGlobals: after.inertGlobals };
+  });
+  await step("Read moved history and attachments through the real cloud board", async () => {
     await click("button", "Home", { first: true });
     await openTicket("MOV-1");
     // Monaco's body image is a decoration rather than accessible text. Use
