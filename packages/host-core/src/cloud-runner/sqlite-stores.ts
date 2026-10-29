@@ -138,9 +138,11 @@ export class MovedSessionCursorConflictError extends Error {
  * left as it is; any other cursor for one of these Sessions refuses the lot
  * ({@link MovedSessionCursorConflictError}).
  *
- * Receiving wiring (MOVE-5, the move engine's handover step): call it with
- * every moved Session's `sessionIntake.acceptedThrough` once the move is
- * committed, and {@link releaseMovedSessionCursors} when it is rolled back.
+ * The move engine's handover calls it (`MoveSessionHistory.seedCursors`)
+ * with every moved Session's imported head once the move is committed. A roll
+ * back or Go back to local takes back every cursor on the project at once
+ * (`releaseProjectCursors`, in `cloud-move/handover.ts`), so the ids reach a
+ * running drain.
  */
 export function seedMovedSessionCursors(
   db: Database.Database,
@@ -173,36 +175,6 @@ export function seedMovedSessionCursors(
       }
     }
     return { seeded, unchanged };
-  });
-}
-
-/**
- * Takes back what {@link seedMovedSessionCursors} handed over, for a move
- * rolled back: each Session's cursor goes if it is still exactly as seeded
- * (this owner, generation 1, the imported head). A Session whose cursor moved
- * on (it took new facts in Volli Cloud) keeps it and is returned, so the
- * caller can say so rather than hide that history.
- */
-export function releaseMovedSessionCursors(
-  db: Database.Database,
-  ownerUserId: string,
-  sessions: readonly MovedSessionHead[],
-): { released: number; kept: string[] } {
-  return withTransaction(db, () => {
-    let released = 0;
-    const kept: string[] = [];
-    for (const { sessionId, acceptedThrough } of sessions) {
-      const removed = prepared(
-        db,
-        `DELETE FROM session_drain_cursors
-          WHERE session_id = @sessionId AND owner_user_id = @ownerUserId
-            AND claim_generation = 1 AND accepted_through = @acceptedThrough
-            AND blocked_code IS NULL`,
-      ).run({ sessionId, ownerUserId, acceptedThrough });
-      if (removed.changes > 0) released += 1;
-      else if (sqliteDrainCursorStore(db).get(sessionId) !== null) kept.push(sessionId);
-    }
-    return { released, kept };
   });
 }
 

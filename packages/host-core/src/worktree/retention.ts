@@ -265,6 +265,8 @@ export async function reclaimIfStale(
 
   const busy = (await deps.busyWorktreeSites?.(ticket.worktree_path)) ?? [];
   if (busy.length > 0) return SKIP("work in flight");
+  // The freeze again, at the delete: the look for work in flight awaits.
+  if (projectFreeze(db, ticket.project_id) !== null) return SKIP("moving to Volli Cloud");
 
   const removed = await remove(deps.worktree, ticketId, {
     force: false,

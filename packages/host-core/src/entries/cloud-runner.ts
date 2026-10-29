@@ -26,8 +26,8 @@
  * yet): `createMoveHistoryUploader` packs and commits a moved Session's
  * transcript bodies and Pi logs through the import's own doors before the
  * commit (`piLogFilesOf` finds its Pi files, as the runner's packing does),
- * and `seedMovedSessionCursors` / `releaseMovedSessionCursors` hand the moved
- * Sessions to this runner after the commit, and take them back on a roll back.
+ * and `seedMovedSessionCursors` hands the moved Sessions to this runner after
+ * the commit (a roll back takes back every cursor on the project).
  *
  * Agent verbs in a cloud launch: `createCloudProductStore` composes the
  * HTTP functions client and per-Session Agent-token cache over this same
@@ -87,7 +87,6 @@ export {
 } from "../cloud-runner/inbox";
 export {
   MovedSessionCursorConflictError,
-  releaseMovedSessionCursors,
   seedMovedSessionCursors,
   sqliteDrainCursorStore,
   sqliteJobJournalStore,

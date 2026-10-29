@@ -253,6 +253,42 @@ describe("a Session born in Volli Cloud's copy", () => {
     expect(named).toContain(born);
     for (const sessionId of strangers) expect(named).not.toContain(sessionId);
   });
+
+  test("a roll back resumed after it took cursors back keeps the names it gave before", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const born = await cloudBorn(world);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "rollback.cursors", hit: 1, onKilled: () => killed() } })
+      .rollBack(moveId, { confirmChanged: true });
+    await stopped;
+    const first = world.engine().journal.move(moveId)!;
+    expect(first.state).toBe("rolling_back");
+    const earlier = (first.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack;
+    expect(earlier).toContain(born);
+    expect(earlier.length).toBeGreaterThan(1);
+    // A cursor written back before the relaunch (a drain's late reply, say).
+    world.db
+      .prepare(
+        `INSERT INTO session_drain_cursors
+           (session_id, owner_user_id, claim_generation, accepted_through, updated_at)
+         VALUES (?, ?, 1, 0, 1)`,
+      )
+      .run(born, world.userId);
+    const released: string[] = [];
+    const rolled = await world
+      .engine({ ports: { cursorsReleased: (ids) => void released.push(...ids) } })
+      .rollBack(moveId, { confirmChanged: true });
+    expect(rolled.state).toBe("rolled_back");
+    expect(released).toEqual([born]);
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    expect((rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack).toEqual(
+      earlier,
+    );
+  });
 });
 
 /**

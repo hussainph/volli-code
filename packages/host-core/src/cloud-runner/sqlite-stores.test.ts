@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { openTestDb, type TestDb } from "../db/test-helpers";
 import {
   MovedSessionCursorConflictError,
-  releaseMovedSessionCursors,
   seedMovedSessionCursors,
   sqliteDrainCursorStore,
   sqliteJobJournalStore,
@@ -256,7 +255,7 @@ describe("a moved project's Sessions handed to this runner", () => {
     { sessionId: "m2", acceptedThrough: 0 },
   ];
 
-  it("seeds a cursor at the imported head, once, and takes it back while unchanged", () => {
+  it("seeds a cursor at the imported head, once", () => {
     const handle = db();
     const store = sqliteDrainCursorStore(handle);
     expect(seedMovedSessionCursors(handle, "u", moved, () => 5)).toEqual({
@@ -272,20 +271,6 @@ describe("a moved project's Sessions handed to this runner", () => {
     });
     // Idempotent: a resumed handover changes nothing.
     expect(seedMovedSessionCursors(handle, "u", moved)).toEqual({ seeded: 0, unchanged: 2 });
-
-    // m1 took new facts in Volli Cloud: a roll back keeps its cursor and says so.
-    store.save({ ...store.get("m1")!, acceptedThrough: 13 });
-    expect(
-      releaseMovedSessionCursors(handle, "u", [
-        ...moved,
-        { sessionId: "gone", acceptedThrough: 1 },
-      ]),
-    ).toEqual({
-      released: 1,
-      kept: ["m1"],
-    });
-    expect(store.get("m2")).toBeNull();
-    expect(store.get("m1")?.acceptedThrough).toBe(13);
   });
 
   it("refuses the lot when one Session already drains under another claim", () => {

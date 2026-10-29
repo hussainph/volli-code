@@ -11,8 +11,10 @@
  *   resumes it and owes the backend only what happens after the move.
  *
  * No board row changes and git is untouched. Each write is an upsert by id,
- * so the step runs again safely; what it wrote is journaled so a roll back
- * takes back exactly that ({@link releaseHandover}).
+ * so the step runs again safely; the path registrations it wrote are
+ * journaled so a roll back takes back exactly those ({@link releaseHandover}),
+ * and the cursors go with every other cursor on the project
+ * ({@link releaseProjectCursors}).
  */
 import type Database from "better-sqlite3";
 
@@ -147,26 +149,19 @@ export function releaseProjectCursors(
 }
 
 /**
- * Takes back what {@link handOver} wrote: the path registrations still as it
- * wrote them, and the drain cursors no new fact moved. Answers the Sessions
- * that kept a cursor because they took new facts in Volli Cloud since.
+ * Takes back the path registrations {@link handOver} wrote, still as it
+ * wrote them. Its drain cursors are not this function's: every cursor on the
+ * project goes by {@link releaseProjectCursors} (Go back to local, a roll
+ * back), so the ids it takes back reach a running drain. A roll back takes a
+ * handover back only after the commit (`handover` is journaled in the
+ * `committed` step), when the cloud copy is purged with every cursor on it.
  */
 export function releaseHandover(input: {
   db: Database.Database;
-  history: MoveSessionHistory;
-  userId: string;
   runnerId: string;
   record: HandoverRecord;
-  /**
-   * Leave the drain cursors to the caller: the paths alone go. For when every
-   * cursor on the project goes by {@link releaseProjectCursors} (Go back to
-   * local, a roll back after the commit).
-   */
-  pathsOnly?: true;
-}): string[] {
+}): void {
   const { db, record, runnerId } = input;
-  const kept =
-    input.pathsOnly === true ? [] : input.history.releaseCursors(input.userId, record.cursors);
   db.transaction(() => {
     for (const checkout of record.checkouts) {
       prepared(
@@ -182,5 +177,4 @@ export function releaseHandover(input: {
       ).run(runnerId, copy.ticketId, copy.projectRepoId, copy.absPath);
     }
   })();
-  return kept;
 }

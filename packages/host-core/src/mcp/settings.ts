@@ -487,6 +487,10 @@ export class McpSettingsService {
       server = prepared.server;
       workspacePath = prepared.workspacePath;
     } else {
+      // A draft's sign-in writes its tokens before any save does: the freeze
+      // asks here as it does for a saved server (`#owned`).
+      const frozen = this.#frozen(input.projectId);
+      if (frozen !== null) return { ok: false, cancelled: false, message: frozen.error };
       const prepared = this.#prepare(input.projectId, input.server);
       if (!prepared.ok) return { ok: false, cancelled: false, message: prepared.error };
       const existing = getMcpServer(this.#db, prepared.server.id);
@@ -504,6 +508,9 @@ export class McpSettingsService {
     return this.#oauth.signIn(server, {
       sources: this.sources(pending),
       signal,
+      // The freeze again at every write, the tokens included: the person can
+      // take minutes in the browser, and a move can freeze the project meanwhile.
+      writeRefusal: () => this.#frozen(input.projectId)?.error ?? null,
       probe: async (auth, probeSignal) => {
         const client = await createMcpProtocolClientOpener(
           { sources: () => this.sources(pending) },

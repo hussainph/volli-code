@@ -482,7 +482,6 @@ function journal(fixture: Fixture) {
       eventRecord: sessionEventImportRecord,
       upload: nope,
       seedCursors: () => {},
-      releaseCursors: () => [],
     },
     backup: { write: nope },
     identity: { current: async () => null },
