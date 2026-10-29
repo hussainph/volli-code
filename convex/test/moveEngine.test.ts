@@ -9,7 +9,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
+import { createFactDrain } from "../../packages/host-core/src/cloud-runner/drain";
 import { sqliteDrainCursorStore } from "../../packages/host-core/src/cloud-runner/sqlite-stores";
+import { localSessionRow } from "../../packages/host-core/src/db/local-product";
+import { sqliteDrainLedger } from "../../packages/host-core/src/session-control/sqlite-ledger";
 import {
   bindCloudSessionOwner,
   projectFreeze,
@@ -249,6 +252,80 @@ describe("a Session born in Volli Cloud's copy", () => {
     const named = (rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack;
     expect(named).toContain(born);
     for (const sessionId of strangers) expect(named).not.toContain(sessionId);
+  });
+});
+
+/**
+ * A cloud launch's drain over the moved profile, with one moved Session's
+ * last fact left to send and its send held until `answer`.
+ */
+async function drainMidSend(w: MoveWorld) {
+  const { session_id: sessionId, accepted_through: through } = w.db
+    .prepare(
+      `SELECT session_id, accepted_through FROM session_drain_cursors
+        WHERE owner_user_id = ? AND accepted_through > 0 ORDER BY session_id LIMIT 1`,
+    )
+    .get(w.userId) as { session_id: string; accepted_through: number };
+  w.db
+    .prepare("UPDATE session_drain_cursors SET accepted_through = ? WHERE session_id = ?")
+    .run(through - 1, sessionId);
+  let answer!: (outcome: Error | null) => void;
+  const answered = new Promise<Error | null>((resolve) => (answer = resolve));
+  let sent!: () => void;
+  const sending = new Promise<void>((resolve) => (sent = resolve));
+  const drain = createFactDrain({
+    ownerUserId: w.userId,
+    ledger: sqliteDrainLedger(w.db),
+    cursors: sqliteDrainCursorStore(w.db),
+    accept: async () => {
+      sent();
+      const outcome = await answered;
+      if (outcome !== null) throw outcome;
+      return { acceptedThrough: through, duplicates: 0, quarantined: 0 };
+    },
+  });
+  drain.start();
+  await sending;
+  return { sessionId, drain, answer };
+}
+
+/** The local copy lists this Session (no cursor hides it). */
+const listedLocally = (w: MoveWorld, sessionId: string) =>
+  w.db
+    .prepare(`SELECT 1 AS listed FROM sessions WHERE id = ? AND ${localSessionRow("sessions.id")}`)
+    .get(sessionId) !== undefined;
+
+describe("a cloud drain mid-send while the project goes back (VC-1013)", () => {
+  test("Go back to local: the answer writes no cursor back; the local copy lists the Session", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    await engine.confirm(moveId);
+    const { sessionId, drain, answer } = await drainMidSend(world);
+    expect(listedLocally(world, sessionId)).toBe(false);
+    await engine.goBackToLocal(moveId);
+    answer(null);
+    await drain.idle();
+    drain.stop();
+    expect(cursorOf(world, sessionId)).toEqual({ n: 0 });
+    expect(listedLocally(world, sessionId)).toBe(true);
+  });
+
+  test("a roll back after the commit: a refusal from the purged copy writes no cursor back", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const { sessionId, drain, answer } = await drainMidSend(world);
+    expect((await engine.rollBack(moveId, { confirmChanged: true })).state).toBe("rolled_back");
+    answer(
+      Object.assign(new Error("not_your_runner"), {
+        data: { code: "not_your_runner", message: "gone", acceptedThrough: null },
+      }),
+    );
+    await drain.idle();
+    drain.stop();
+    expect(cursorOf(world, sessionId)).toEqual({ n: 0 });
+    expect(listedLocally(world, sessionId)).toBe(true);
   });
 });
 

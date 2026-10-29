@@ -67,8 +67,14 @@ export interface DrainCursor {
 export interface DrainCursorStore {
   list(): readonly DrainCursor[];
   get(sessionId: string): DrainCursor | null;
-  /** Durable before it returns. */
+  /** Durable before it returns. Writes the row whether or not it exists: a claim's birth. */
   save(cursor: DrainCursor): void;
+  /**
+   * Durable before it returns. Writes the row only while it still exists for
+   * this owner; false when it is gone (taken back, as a move's Go back or roll
+   * back does) or another owner's. Never creates one.
+   */
+  update(cursor: DrainCursor): boolean;
 }
 
 /** The two ledger reads the drain needs: events after a sequence, in order, and the head. */
@@ -200,6 +206,8 @@ interface Stream {
   epoch: number;
   failures: number;
   timer: unknown;
+  /** Its cursor row was taken back: nothing it sends or hears changes anything here again. */
+  released: boolean;
 }
 
 /** Refusals a single fact can earn that no resend fixes; as a batch, they mean "send it singly". */
@@ -234,25 +242,50 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
         epoch: 0,
         failures: 0,
         timer: null,
+        released: false,
       };
       streams.set(cursor.sessionId, stream);
     }
     return stream;
   }
 
-  function persist(stream: Stream, patch: Partial<DrainCursor>) {
+  /**
+   * Its cursor row is gone (or no longer this owner's): this runner no longer
+   * drains the Session. Dropped, so no reply, retry or nudge writes the row
+   * back, which would hide a Session the local copy owns again.
+   */
+  function release(stream: Stream) {
+    stream.released = true;
+    stream.epoch += 1;
+    if (stream.timer !== null) clearTimer(stream.timer);
+    stream.timer = null;
+    if (streams.get(stream.cursor.sessionId) === stream) streams.delete(stream.cursor.sessionId);
+  }
+
+  /** Answers false, having dropped the stream, when its row was taken back. */
+  function persist(stream: Stream, patch: Partial<DrainCursor>): boolean {
     stream.cursor = { ...stream.cursor, ...patch };
-    options.cursors.save(stream.cursor);
+    if (options.cursors.update(stream.cursor)) return true;
+    release(stream);
+    return false;
+  }
+
+  /** The row is still this owner's; drops the stream otherwise. */
+  function held(stream: Stream): boolean {
+    const row = options.cursors.get(stream.cursor.sessionId);
+    if (row !== null && row.ownerUserId === options.ownerUserId) return true;
+    release(stream);
+    return false;
   }
 
   function block(stream: Stream, code: string, message: string) {
     stream.epoch += 1;
     const blocked = { code, message, at: now() };
-    persist(stream, { blocked });
-    options.onBlocked?.(stream.cursor.sessionId, blocked);
+    if (persist(stream, { blocked })) options.onBlocked?.(stream.cursor.sessionId, blocked);
   }
 
   function retryLater(stream: Stream, error: unknown) {
+    if (stream.released) return;
     stream.epoch += 1;
     stream.next = stream.cursor.acceptedThrough + 1;
     // Stopped: `start` resends from the cursor; no timer outlives `stop`.
@@ -309,8 +342,12 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
   }
 
   function pumpOnce(stream: Stream) {
-    if (!running || stream.cursor.blocked !== null || stream.timer !== null) return;
+    if (stream.released || !running || stream.cursor.blocked !== null || stream.timer !== null) {
+      return;
+    }
     const head = options.ledger.latestEventSequence(stream.cursor.sessionId);
+    // Nothing to send, or a row taken back since: no fact leaves after a release.
+    if (stream.next > head || !held(stream)) return;
     if (stream.inFlight === 0) {
       // Only with nothing queued or in flight may the lane change.
       stream.lane = head - stream.next + 1 > DRAIN_LIMITS.liveWindow ? "backlog" : "live";
@@ -347,15 +384,18 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
         (reply) => {
           stream.inFlight -= 1;
           stream.failures = 0;
-          if (reply.acceptedThrough > stream.cursor.acceptedThrough) {
-            persist(stream, { acceptedThrough: reply.acceptedThrough });
+          if (stream.released) return;
+          if (
+            reply.acceptedThrough > stream.cursor.acceptedThrough &&
+            persist(stream, { acceptedThrough: reply.acceptedThrough })
+          ) {
             options.onAccepted?.(sessionId, reply.acceptedThrough);
           }
         },
         (error: unknown) => {
           stream.inFlight -= 1;
           // A reply to a send already disregarded changes nothing.
-          if (epoch === stream.epoch) refused(stream, batch, first, error);
+          if (epoch === stream.epoch && !stream.released) refused(stream, batch, first, error);
         },
       )
       .catch((error: unknown) => retryLater(stream, error))
@@ -485,8 +525,7 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
       if (stream === undefined || stream.cursor.blocked === null) return;
       stream.failures = 0;
       stream.next = stream.cursor.acceptedThrough + 1;
-      persist(stream, { blocked: null });
-      pump(stream);
+      if (persist(stream, { blocked: null })) pump(stream);
     },
     resumeAll() {
       for (const stream of streams.values()) {

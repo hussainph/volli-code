@@ -52,6 +52,8 @@ function fixture() {
       save: (row) => {
         rows.set(row.sessionId, row);
       },
+      update: (row) =>
+        rows.get(row.sessionId)?.ownerUserId === row.ownerUserId && !!rows.set(row.sessionId, row),
     },
     ledger: { listEvents, latestEventSequence: () => events.length },
   });

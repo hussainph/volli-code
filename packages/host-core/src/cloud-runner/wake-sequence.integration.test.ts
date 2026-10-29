@@ -474,6 +474,9 @@ function memoryCursors(initial: DrainCursor): DrainCursorStore {
     list: () => [...rows.values()],
     get: (sessionId) => rows.get(sessionId) ?? null,
     save: (cursor) => void rows.set(cursor.sessionId, cursor),
+    update: (cursor) =>
+      rows.get(cursor.sessionId)?.ownerUserId === cursor.ownerUserId &&
+      !!rows.set(cursor.sessionId, cursor),
   };
 }
 

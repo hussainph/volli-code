@@ -302,6 +302,8 @@ describe("the composed sync over one gate", () => {
         list: () => [...rows.values()],
         get: (id) => rows.get(id) ?? null,
         save: (c) => void rows.set(c.sessionId, c),
+        update: (c) =>
+          rows.get(c.sessionId)?.ownerUserId === c.ownerUserId && !!rows.set(c.sessionId, c),
       },
       accept: acceptOverLink(link),
       ownerUserId: "u",

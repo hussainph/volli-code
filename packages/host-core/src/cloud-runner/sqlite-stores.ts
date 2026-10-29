@@ -80,6 +80,27 @@ export function sqliteDrainCursorStore(
         updatedAt: now(),
       });
     },
+    update(cursor) {
+      return (
+        prepared(
+          db,
+          `UPDATE session_drain_cursors SET
+             claim_generation = @generation, accepted_through = @acceptedThrough,
+             blocked_code = @code, blocked_message = @message, blocked_at = @at,
+             updated_at = @updatedAt
+           WHERE session_id = @sessionId AND owner_user_id = @ownerUserId`,
+        ).run({
+          sessionId: cursor.sessionId,
+          ownerUserId: cursor.ownerUserId,
+          generation: cursor.generation,
+          acceptedThrough: cursor.acceptedThrough,
+          code: cursor.blocked?.code ?? null,
+          message: cursor.blocked?.message ?? null,
+          at: cursor.blocked?.at ?? null,
+          updatedAt: now(),
+        }).changes > 0
+      );
+    },
   };
 }
 
