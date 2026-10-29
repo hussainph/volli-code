@@ -198,6 +198,7 @@ test("actual path classifier selects lanes and fails safe", () => {
       [".devcontainer/host/Dockerfile", "true", "true", "base"],
       [".devcontainer/host/devcontainer.json", "true", "true", "base"],
       [".github/workflows/ci.yml", "true", "true", "all"],
+      [".github/actions/setup-toolchain/action.yml", "true", "true", "all"],
       [".github/workflows/ci-extended.yml", "true", "false", "base"],
       ["scripts/ci-host-lane.test.mjs", "true", "true", "all"],
       ["scripts/check-host-electron-imports.mjs", "true", "true", "base"],
@@ -338,6 +339,18 @@ test("cloud hostd is pinned and packaged before the Electron desktop install", (
   assert.match(guard, /process\.versions\.node.*cat \.nvmrc/);
   assert.match(guard, /process\.arch.*arm64/);
   assert.match(guard, /package\.json.*version.*apps\/desktop\/package\.json.*version/);
+});
+
+test("package lane rebuilds node-pty with pinned pnpm for the host Node", () => {
+  const rebuild = jobs["test-packages"].steps.find(
+    (step) => step.name === "Build node-pty for Node",
+  );
+  assert.equal(rebuild["working-directory"], "packages/host-core");
+  assert.match(rebuild.run, /npm_config_runtime=node/);
+  assert.match(rebuild.run, /npm_config_target="\$\(node -p 'process\.versions\.node'\)"/);
+  assert.match(rebuild.run, /pnpm rebuild node-pty/);
+  assert.doesNotMatch(rebuild.run, /vp rebuild/);
+  assert.match(rebuild.run, /node scripts\/probe-node-pty\.mjs/);
 });
 
 test("cloud artifact export uses the desktop version and requires archive plus checksum", () => {

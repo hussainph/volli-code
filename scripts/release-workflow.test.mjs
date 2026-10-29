@@ -99,10 +99,6 @@ test("hostd-darwin pins Node to .nvmrc, packages natively, probes and uploads", 
   for (const action of steps.filter((step) => step.uses && !step.uses.startsWith("./"))) {
     assert.match(action.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
   }
-  const toolchain = parse(
-    readFileSync(new URL("../.github/actions/setup-toolchain/action.yml", import.meta.url), "utf8"),
-  );
-  assert.equal(toolchain.runs.steps[0].with["node-version-file"], ".nvmrc");
   const arch = steps[index("Check runner architecture")];
   assert.equal(arch.env.ARCH, "${{ matrix.arch }}");
   assert.match(arch.run, /test "\$\(node -p process.arch\)" = "\$ARCH"/);

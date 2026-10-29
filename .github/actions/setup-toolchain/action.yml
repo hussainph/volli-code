@@ -45,7 +45,11 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.store.outputs.path }}
-        key: locked-pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc', 'package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml', 'patches/**') }}
+        key: locked-pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'patches/**') }}
+        # Content-addressed store entries remain usable after lockfile changes;
+        # the frozen install still checks the exact tree and package integrity.
+        restore-keys: |
+          locked-pnpm-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Install from the workspace lockfile
       if: inputs.run-install == 'true'

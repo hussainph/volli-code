@@ -193,7 +193,7 @@ jobs:
 
           # Container inputs and host code. Workflow edits run it too, so the
           # job and gate are exercised on the PR changing their own definition.
-          host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|scripts/(check-host-electron-imports|ci-host-lane)[./])'
+          host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|\.github/actions/|scripts/(check-host-electron-imports|ci-host-lane)[./])'
           if grep -qE "$host" <<<"$changed"; then
             echo "host-container=true" >> "$GITHUB_OUTPUT"
           else
@@ -208,7 +208,7 @@ jobs:
           # through the harness. Those PRs run every lane, which also holds the
           # release policy (no floor raise while the latest release predates
           # the guard) at PR time. The merge runs every lane regardless.
-          n1='^(packages/host-core/src/(db|backup|session-control|session-runtime)/|packages/host-core/src/(blob-store|ticket-commands)|packages/host-core/scripts/n1/|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$)'
+          n1='^(packages/host-core/src/(db|backup|session-control|session-runtime)/|packages/host-core/src/(blob-store|ticket-commands)|packages/host-core/scripts/n1/|\.github/workflows/ci\.yml$|\.github/actions/|scripts/ci-host-lane\.test\.mjs$)'
           if grep -qE "$n1" <<<"$changed"; then
             echo "n1-lanes=$n1_all" >> "$GITHUB_OUTPUT"
             echo "-> migration or N-1 inputs changed; running every N-1 lane"

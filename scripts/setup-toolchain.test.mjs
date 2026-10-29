@@ -18,15 +18,15 @@ const step = (name) => {
 };
 
 test("all Vite+ workflow sites use the shared locked bootstrap after checkout", () => {
-  let sites = 0;
-  let deferredInstalls = 0;
+  const sites = [];
+  const deferredInstalls = [];
   for (const file of ["ci.yml", "ci-extended.yml", "release.yml", "smoke-quarantine.yml"]) {
     const workflow = load(`.github/workflows/${file}`);
     for (const [name, job] of Object.entries(workflow.jobs)) {
       for (const [index, setup] of (job.steps ?? []).entries()) {
         assert.ok(!setup.uses?.startsWith("voidzero-dev/setup-vp@"), `${file}: ${name}`);
         if (setup.name !== "Setup Vite+") continue;
-        sites++;
+        sites.push(`${file}: ${name}`);
         assert.equal(setup.uses, "./.github/actions/setup-toolchain");
         assert.ok(
           job.steps.slice(0, index).some((entry) => entry.uses?.startsWith("actions/checkout@")),
@@ -35,12 +35,14 @@ test("all Vite+ workflow sites use the shared locked bootstrap after checkout", 
           Object.keys(setup.with).toSorted(),
           setup.with.cache ? ["cache", "run-install"] : ["run-install"],
         );
-        if (setup.with["run-install"] === false) deferredInstalls++;
+        if (setup.with["run-install"] === false) deferredInstalls.push(`${file}: ${name}`);
       }
     }
   }
-  assert.equal(sites, 19);
-  assert.equal(deferredInstalls, 3);
+  // Keep an explicit inventory so removing an entire setup step cannot silently
+  // pass a loop that checks only the sites it still discovers.
+  assert.equal(sites.length, 19, `bootstrap inventory changed:\n${sites.join("\n")}`);
+  assert.equal(deferredInstalls.length, 3, `deferred installs:\n${deferredInstalls.join("\n")}`);
 });
 
 test("Node and third-party actions are pinned; store caching is opt-in and lock-keyed", () => {
@@ -59,17 +61,11 @@ test("Node and third-party actions are pinned; store caching is opt-in and lock-
   assert.equal(cache.if, "inputs.cache == 'true'");
   assert.equal(step("Locate pnpm store").if, cache.if);
   assert.equal(cache.with.path, "${{ steps.store.outputs.path }}");
-  for (const input of [
-    "runner.os",
-    "runner.arch",
-    ".nvmrc",
-    "package.json",
-    "pnpm-workspace.yaml",
-    "pnpm-lock.yaml",
-    "patches/**",
-  ]) {
+  for (const input of ["runner.os", "runner.arch", "pnpm-lock.yaml", "patches/**"]) {
     assert.ok(cache.with.key.includes(input), input);
   }
+  assert.ok(!cache.with.key.includes("package.json"), "version bumps reuse the store");
+  assert.equal(cache.with["restore-keys"], "locked-pnpm-${{ runner.os }}-${{ runner.arch }}-\n");
   assert.equal(step("Install from the workspace lockfile").if, "inputs.run-install == 'true'");
   assert.equal(step("Install from the workspace lockfile").run, "pnpm install --frozen-lockfile");
   assert.equal(step("Report locked toolchain").if, "inputs.run-install == 'true'");
