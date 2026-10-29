@@ -66,7 +66,8 @@ export async function seedFixture(page, name, layout, modelPin) {
     seeded.attachment = await page.evaluate(async (ticketId) => {
       const bytes = Uint8Array.from(
         atob(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWZkAAAAASUVORK5CYII=",
+          // A visible 128 × 64 checkerboard for screenshot and accessibility evidence.
+          "iVBORw0KGgoAAAANSUhEUgAAAIAAAABACAIAAABdtOgoAAAAu0lEQVR4nO3RsQmAQBBFwSvJ3HpsxGItwdgOBKM7eQM/fuwy4zq2T9vP+9P03zf+/sDf+wAAtPsAALT7AAC0+wAAtPsAALT7AAC0+wAAtPtjtYNqfQAA2n0AANp9AADafQAA2n0AANp9AADafQAA2n0AswFWO6jWBwCg3QcAoN0HAKDdBwCg3QcAoN0HAKDdBwCg3QcwG2C1g2p9AADafQAA2n0AANp9AADafQAA2n0AANp9AADafQCT+w+OBeLvcsfjZAAAAABJRU5ErkJggg==",
         ),
         (char) => char.charCodeAt(0),
       );

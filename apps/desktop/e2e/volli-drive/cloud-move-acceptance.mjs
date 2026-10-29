@@ -360,7 +360,14 @@ try {
     await wait(MOVE_PROJECT.name);
     await click("button", "Home", { first: true });
     await openTicket("MOV-1");
-    await wait("Moved attachment");
+    // Monaco's body image is a decoration rather than accessible text. Use
+    // the real comment viewer to render the moved attachment and to leave a
+    // cloud-side change that Go back must preserve in its readable export.
+    await action("type", "textbox", "Add a comment", {
+      text: "Cloud comment after move.\n\n![Moved attachment](.volli/attachments/move-proof.png)",
+    });
+    await press("textbox", "Add a comment", "Meta+Enter");
+    await wait("Cloud comment after move.");
     const imageHash = launched.seeded.attachment.blobHash;
     await waitUntil(
       "the moved attachment renders through the cloud reader",
@@ -435,6 +442,10 @@ try {
     assert.match(
       await fs.readFile(join(directory, "cloud-changes.md"), "utf8"),
       /Changes made in Volli Cloud/u,
+    );
+    assert.match(
+      await fs.readFile(join(directory, "cloud-changes.md"), "utf8"),
+      /Cloud comment after move\./u,
     );
     const client = new ConvexHttpClient(fixture.convexUrl);
     client.setAuth(token);
