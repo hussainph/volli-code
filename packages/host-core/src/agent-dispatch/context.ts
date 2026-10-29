@@ -274,6 +274,9 @@ export interface AgentCommandServiceOptions {
    * runtime's tool door. Session listing is always a backend read.
    */
   cloudSessionVerbs?: import("../cloud-agent/session-verbs").CloudSessionVerbs;
+  /** Cloud identity/roster reads plus this runner's paths; absent in signed-out launches.
+   * Production: cloud-store.agentCommands, through desktop's socket composition. */
+  cloudWorktreeTickets?: import("../cloud-agent/worktree-tickets").CloudWorktreeTickets;
   /**
    * The projects this door's roster folds and resolves against, as machine
    * identity only (never board authority). Absent (every local launch): this

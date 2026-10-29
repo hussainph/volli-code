@@ -6,6 +6,9 @@
  * moved to another runner ends the token at once.
  */
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { ConvexHttpClient } from "convex/browser";
 import { describe, expect, test } from "vite-plus/test";
@@ -28,6 +31,14 @@ import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 import { wire, writeSession } from "./sessionFixtures";
 import { createCloudSessionVerbs } from "../../packages/host-core/src/cloud-agent/session-verbs";
+import { createCloudWorktreeTickets } from "../../packages/host-core/src/cloud-agent/worktree-tickets";
+import { createAgentCommandService } from "../../packages/host-core/src/agent-commands";
+import { createRunnerPathRegistry } from "../../packages/host-core/src/cloud-store/paths";
+import { insertProject } from "../../packages/host-core/src/db/projects-repo";
+import { insertTicket } from "../../packages/host-core/src/db/tickets-repo";
+import { openTestDb, testProject, testTicket } from "../../packages/host-core/src/db/test-helpers";
+import { testHostHandlers } from "../../packages/host-core/src/testing/host-handlers";
+import { createSessionTokenRegistry } from "../../packages/host-core/src/session-tokens";
 
 const backend = connectBackend();
 const linkClient = createRunnerLinkClient({ siteUrl: backend.siteUrl });
@@ -60,6 +71,9 @@ async function linkRunner(person: ConvexHttpClient) {
   client.setAuth(token);
   return { id: link.runnerId, client, tokens };
 }
+
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 function request(cmd: AgentCommand, args: Record<string, unknown>): AgentRequest {
   return { v: 1, cmd, args, ctx: { cwd: "/work", env: {} } };
@@ -245,3 +259,155 @@ describe("agent verbs through the runner", () => {
     });
   });
 });
+
+// This uses the admitted socket dispatch, real Agent-token HTTP reads and real
+// git in registered folders. SQLite contains only inert, filtered identities.
+test("Cloud worktree status/diff/sync/conflicts resolve before machine git", async () => {
+  const email = `worktree-verbs-${randomUUID()}@example.test`;
+  await backend.admin(internal.previewAccess.set, { kind: "email", value: email, enabled: true });
+  const person = backend.client(`user:${randomUUID()}`, {
+    claims: { email, email_verified: true },
+  });
+  await person.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
+  const [workspace] = await person.query(api.workspaces.listMine, {});
+  const projectId = randomUUID();
+  await person.mutation(api.projects.create, {
+    commandId: randomUUID(),
+    projectId,
+    workspaceId: workspace!.workspaceId,
+    name: "Worktree verbs",
+    origin: "blank",
+    ticketPrefix: "WT",
+  });
+  const ticketIds = [randomUUID(), randomUUID()];
+  for (const ticketId of ticketIds) {
+    await person.mutation(api.board.createTicket, {
+      commandId: randomUUID(),
+      projectId,
+      ticketId,
+      title: "Cloud copy",
+      status: "doing",
+    });
+  }
+  const runner = await linkRunner(person);
+  const { sessionId, events, engine } = await writeSession({ projectId, ticketId: ticketIds[0] });
+  await runner.client.mutation(api.sessions.accept, {
+    sessionId,
+    generation: 1,
+    events: events.map(wire),
+  });
+  let connected = true;
+  const agentBackend = createAgentBackend({
+    functions: createCloudFunctionsClient({ url: backend.url }),
+    runnerToken: () => runner.tokens.token(),
+    connected: () => connected,
+  });
+  const db = openTestDb();
+  try {
+    const root = join(db.dbPath, "..");
+    const checkout = join(root, "checkout");
+    mkdirSync(checkout);
+    git(checkout, "init", "-b", "main");
+    git(
+      checkout,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.test",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "base",
+    );
+    const project = testProject({
+      id: projectId,
+      name: "Frozen",
+      ticketPrefix: "OLD",
+      path: join(root, "shadow"),
+    });
+    insertProject(db.db, project);
+    insertTicket(
+      db.db,
+      testTicket(projectId, {
+        id: ticketIds[0],
+        worktreePath: join(root, "never-read"),
+        branch: "frozen",
+      }),
+    );
+    db.db
+      .prepare(
+        "INSERT INTO cloud_shadow_rows(kind,id,owner_user_id) VALUES ('project',?,'owner'),('ticket',?,'owner')",
+      )
+      .run(projectId, ticketIds[0]);
+    const frozen = db.db.prepare("SELECT * FROM tickets").all();
+    const registry = createRunnerPathRegistry(db.db, { runnerId: runner.id });
+    const repoId = randomUUID();
+    registry.checkouts.register({ projectId, projectRepoId: repoId, absPath: checkout });
+    for (const [index, ticketId] of ticketIds.entries()) {
+      const copy = join(root, `copy-${index}`);
+      git(checkout, "worktree", "add", "-b", `cloud-${index}`, copy, "main");
+      writeFileSync(join(copy, "shared.txt"), "untracked work\n");
+      registry.workingCopies.register({
+        ticketId,
+        projectRepoId: repoId,
+        absPath: copy,
+        branch: `cloud-${index}`,
+        baseBranch: "main",
+      });
+    }
+    const tokens = createSessionTokenRegistry();
+    const token = tokens.mint({ sessionId, attachmentId: "test" });
+    const service = createAgentCommandService({
+      db: db.db,
+      appVersion: "test",
+      sessionEngine: engine,
+      handlers: testHostHandlers({ db: db.db }),
+      projects: () => [{ ...project, path: checkout }],
+      verifySessionToken: tokens.verify,
+      cloudWorktreeTickets: createCloudWorktreeTickets({
+        backend: agentBackend,
+        registry: () => registry,
+        ticketDisplayIdOf: () => null,
+      }),
+    });
+    const call = (cmd: AgentCommand, args: Record<string, unknown> = {}) =>
+      service.execute({
+        v: 1,
+        cmd,
+        args,
+        ctx: { cwd: checkout, env: { session: sessionId, token } },
+      });
+    expect(await call("worktree.status")).toMatchObject({
+      ok: true,
+      data: { ticket: "WT-1", project: "Worktree verbs", branch: "cloud-0", uncommitted: true },
+    });
+    expect(await call("worktree.diff", { id: "WT-2", workingTree: true })).toMatchObject({
+      ok: true,
+      data: { ticket: "WT-2", totalFiles: 1 },
+    });
+    expect(await call("worktree.sync", { dryRun: true })).toMatchObject({
+      ok: true,
+      data: { dryRun: true },
+    });
+    expect(await call("worktree.sync")).toMatchObject({
+      ok: true,
+      data: { ticket: "WT-1", status: "already-up-to-date", mergedRef: "main" },
+    });
+    expect(await call("conflicts", { project: "WT" })).toMatchObject({
+      ok: true,
+      data: { scanned: 2, overlaps: [{ path: "shared.txt", tickets: ["WT-1", "WT-2"] }] },
+    });
+    git(join(root, "copy-0"), "switch", "-c", "wrong-branch");
+    expect(await call("worktree.sync")).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("not cloud-0") },
+    });
+    expect(db.db.prepare("SELECT * FROM tickets").all()).toEqual(frozen);
+    connected = false;
+    expect(await call("conflicts")).toMatchObject({ ok: false, error: { code: "OFFLINE" } });
+  } finally {
+    db.cleanup();
+  }
+}, 60_000);

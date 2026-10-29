@@ -157,4 +157,14 @@ it("composes owner cursor routing, Agent overlays, runner notify and fenced arti
     { ok: false, error: { code: "SESSION_NOT_FOUND" } },
   );
   expect(calls.some((c) => c.path === "agentTokens:mint")).toBe(true);
+  expect(cloud.agentCommands.cloudWorktreeTickets.machinePaths.kind).toBe("cloud");
+  expect(
+    await cloud.agentCommands.cloudWorktreeTickets.roster({
+      sessionId: SESSION,
+      request: { ...read, cmd: "conflicts" },
+    }),
+  ).toMatchObject({ ok: false, response: { ok: false, error: { code: "PROJECT_NOT_FOUND" } } });
+  expect(
+    calls.some((c) => c.path === "projects:listForActor" && c.auth === "Bearer agent-token"),
+  ).toBe(true);
 });

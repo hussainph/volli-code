@@ -26,6 +26,12 @@ import type { CollisionMatrix, Project, Ticket } from "@volli/shared";
 import { listTicketsByProject } from "../db/tickets-repo";
 import { readWorktreeChangeSetPaths, type WorktreeReadPorts } from "./read";
 
+/** Board scheduling facts and machine git pointers needed by the scan. */
+export type CollisionTicket = Pick<
+  Ticket,
+  "id" | "projectId" | "ticketNumber" | "status" | "worktreePath" | "branch" | "baseBranch"
+>;
+
 /** One scanned worktree and how much of it the radar measured. */
 export interface ScannedWorktree {
   readonly ticket: string;
@@ -69,7 +75,7 @@ const DEADLINE_REASON = `Not scanned before the deadline (${COLLISION_SCAN_DEADL
 /** One worktree the sweep set out to read, and where its answer lands. */
 interface ScanTarget {
   readonly project: number;
-  readonly ticket: Ticket;
+  readonly ticket: CollisionTicket;
   readonly displayId: string;
 }
 
@@ -91,11 +97,12 @@ async function readTarget(deps: WorktreeReadPorts, { ticket }: ScanTarget): Prom
       };
     case "change-set-error":
       return { kind: "skipped", reason: read.error };
-    // `missing-ticket` cannot happen for a row this sweep just read, and a
-    // `no-worktree` answer contradicts the guard that picked it; either way
-    // there is nothing to measure and nothing honest to say about it.
+    // Keep local roster behavior unchanged. A Cloud registry can disappear
+    // after the roster read; name that lost coverage instead of dropping it.
     default:
-      return { kind: "nothing" };
+      return deps.machinePaths?.kind === "cloud"
+        ? { kind: "skipped", reason: "Its registered Working copy is no longer available." }
+        : { kind: "nothing" };
   }
 }
 
@@ -117,12 +124,20 @@ async function readTarget(deps: WorktreeReadPorts, { ticket }: ScanTarget): Prom
  * named in `skipped` rather than dropped.
  */
 export async function scanCollisions(
-  deps: WorktreeReadPorts & { db: Database.Database },
-  projects: readonly Project[],
+  deps: WorktreeReadPorts & {
+    db: Database.Database;
+    tickets?: readonly CollisionTicket[];
+    deadline?: number;
+  },
+  projects: readonly Pick<Project, "id" | "ticketPrefix">[],
 ): Promise<CollisionScan> {
   const targets: ScanTarget[] = [];
   for (const [index, project] of projects.entries()) {
-    for (const ticket of listTicketsByProject(deps.db, project.id)) {
+    const tickets =
+      deps.tickets === undefined
+        ? listTicketsByProject(deps.db, project.id)
+        : deps.tickets.filter((ticket) => ticket.projectId === project.id);
+    for (const ticket of tickets) {
       // A ticket with no worktree has no diff to collide with. Not a fault, and
       // not a skip — simply not part of this question.
       if (ticket.worktreePath === null) continue;
@@ -138,7 +153,7 @@ export async function scanCollisions(
   // Outcomes are kept by position, so the answer is in board order however the
   // reads interleave. A slot still `undefined` at the deadline was cut off.
   const outcomes: (ScanOutcome | undefined)[] = Array.from({ length: targets.length });
-  let expired = false;
+  let expired = deps.deadline !== undefined && deps.deadline <= Date.now();
   let next = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
@@ -152,10 +167,13 @@ export async function scanCollisions(
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<void>((resolve) => {
-    timer = setTimeout(() => {
-      expired = true;
-      resolve();
-    }, COLLISION_SCAN_DEADLINE_MS);
+    timer = setTimeout(
+      () => {
+        expired = true;
+        resolve();
+      },
+      Math.min(COLLISION_SCAN_DEADLINE_MS, Math.max(0, (deps.deadline ?? Infinity) - Date.now())),
+    );
   });
   try {
     await Promise.race([
@@ -179,7 +197,11 @@ export async function scanCollisions(
   // scheduling collision.
   const touches: { ticket: string; paths: readonly string[] }[][] = projects.map(() => []);
   for (const [position, { project, ticket, displayId }] of targets.entries()) {
-    const outcome = outcomes[position] ?? { kind: "skipped", reason: DEADLINE_REASON };
+    const outcome = outcomes[position] ?? {
+      kind: "skipped",
+      reason:
+        deps.deadline === undefined ? DEADLINE_REASON : "Not scanned before the command deadline.",
+    };
     switch (outcome.kind) {
       case "ok":
         worktrees.push({

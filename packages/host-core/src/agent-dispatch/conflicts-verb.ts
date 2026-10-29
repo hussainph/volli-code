@@ -52,9 +52,22 @@ export async function conflictsVerb(
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, gitAsync, worktreeExists } = context;
-  const scope = scopedProjects(projects, request.args["project"]);
+  const cloud = options.cloudWorktreeTickets;
+  const scope =
+    cloud === undefined
+      ? scopedProjects(projects, request.args["project"])
+      : await cloud.roster({ sessionId: context.authenticatedSessionId, request });
   if (!scope.ok) return scope.response;
-  const scan = await scanCollisions({ db: options.db, gitAsync, worktreeExists }, scope.projects);
+  const scan = await scanCollisions(
+    {
+      db: options.db,
+      gitAsync,
+      worktreeExists,
+      machinePaths: cloud?.machinePaths,
+      ...("tickets" in scope ? { tickets: scope.tickets, deadline: scope.deadline } : {}),
+    },
+    scope.projects,
+  );
   return {
     v: 1,
     ok: true,

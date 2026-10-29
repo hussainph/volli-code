@@ -98,6 +98,8 @@ const ROUTES = {
   "ticket.signal": write,
   // Composed on the runner from the backend's reads: presentation, not a rule.
   "ticket.brief": read,
+  // Cloud ticket identities/rosters, runner-registry paths and local git.
+  // agent-dispatch reaches cloudWorktreeTickets before any machine operation.
   "worktree.status": machine,
   "worktree.diff": machine,
   "worktree.sync": machine,
