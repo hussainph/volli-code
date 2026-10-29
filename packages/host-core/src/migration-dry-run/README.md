@@ -6,7 +6,154 @@ again → report → clean up. `dry-run.ts` holds the steps; the backend side is
 `convex/functions/migration.ts`; the record → document mapping both sides
 apply is `migrationDocument` in `@volli/shared/cloud` (`migration-import.ts`).
 
-## Running it
+## Staging rehearsal: the real move engine
+
+`--move --target <deployment-url>` is a separate mode. It runs the actual
+`cloud-move` queue, backup, exporter, object uploads, person-authorized import,
+three-way verification, history packing and window read checks. The old mode
+below remains loopback-only and read-only.
+
+### Prepare staging (owner)
+
+Follow [`cloud-deploy.md` §1–8](../../../../docs/runbooks/cloud-deploy.md) with
+`<ref>=staging`. Nothing in this command provisions a deployment. You need:
+
+1. A dedicated non-production Convex deployment (a prod-type deployment named
+   `staging` is fine), its exact `.convex.cloud` URL, and an operator key
+   scoped to **that deployment only**. If the plan cannot create another
+   deployment, use a dedicated dev deployment or separate staging project.
+2. WorkOS staging environment/client, runner signing key + JWKS, secrets root
+   key, and S3 credentials configured there. Never copy production secrets.
+3. A separate staging R2 bucket/token, `volli-app://bundle` CORS, and lifecycle
+   rules for `v1/m/` and `v1/x/`, as in the runbook. Push this revision's
+   functions and pass `health:deploymentChecks`.
+4. Invite the rehearsal account with `previewAccess:set`, accept the current
+   Preview Agreement, and register a staging Mac runner owned by that account.
+   Use a **disposable staging account**: Move all also imports its personal
+   settings; those account-level settings are not Workspace data and remain.
+5. Explicitly enable the narrow operator-only cleanup helper **on staging**:
+
+   ```sh
+   pnpm -C convex exec convex env set VOLLI_MIGRATION_REHEARSAL enabled --deployment staging
+   ```
+
+6. Supply the person's staging access token (not a runner or deploy token) as
+   `VOLLI_MOVE_TOKEN`, or preferably `VOLLI_MOVE_TOKEN_FILE`, an absolute path
+   to a mode-0600 file containing only that token. The operator's staging OAuth
+   session/token refresh process must replace this file before expiry; it is
+   re-read on each call. A frozen environment token must live long enough for
+   the whole rehearsal. Set `VOLLI_MOVE_ADMIN_KEY` to the deployment-scoped
+   operator key. These are explicit inputs: the harness never discovers
+   credentials, unlocks the keychain, or reads the copied account/Pi auth.
+   Do not put tokens in argv, reports, git, tickets, or terminal history.
+
+### Run on the profile copy
+
+Quit Volli completely, including menu-bar hosts and dev instances. Keep it
+quit until copying finishes; do not launch another app on the source or copy
+while the engine runs. Choose **new** scratch/report paths on an APFS volume:
+
+```sh
+pnpm install
+mkdir -p .scratch/rehearsal
+SOURCE="$HOME/Library/Application Support/Volli Code"
+COPY="$PWD/.scratch/rehearsal/profile"
+REPORT="$PWD/.scratch/rehearsal/report.json"
+
+# Export the credential inputs securely in this shell first (see above).
+pnpm --filter @volli/host-core migration:dry-run \
+  --move --target 'https://<staging-deployment>.convex.cloud' \
+  --source-profile "$SOURCE" --profile "$COPY" \
+  --runner-id '<staging-runner-uuid>' --report "$REPORT" \
+  --kill-upload --kill-import --rollback-one --go-back-one --hold
+```
+
+`--profile` here means a **new directory**, not the old mode's database file.
+The harness uses `cp -cR` (APFS clone), never hard links or the source database
+for writes. Pi's absolute history locators are rebased only in the copy.
+Existing scratch/report paths, live-profile aliases/descendants, app markers,
+open SQLite handles, symlinked stores, and unknown/unavailable liveness checks
+are refused. `lsof` is required; macOS supplies it. Non-macOS operator runs
+are refused rather than falling back to a different copy mechanism.
+
+The target is explicit and never taken from ambient deployment variables.
+The known production deployment is refused without `--allow-production`;
+**do not use that flag for a rehearsal**. A URL cannot identify every future
+production deployment: verify it against your operator inventory. Staging's
+cleanup opt-in is a second required gate.
+
+Moves are sequential, with **stop at first problem** forced on. Removed
+projects are excluded unless `--include-removed-projects` is added. The kill
+options SIGKILL an engine child with a PUT/import request in flight, then
+restart a new child over the same durable queue. Requests may have landed;
+resume must reconcile them, not assume they failed. A second completed run
+must be unchanged. `--rollback-one` rolls back the first project, waits for its
+purge, then moves it again. `--go-back-one` saves one project's readable cloud
+changes and unlocks its local copy through the real escape hatch.
+
+### Owner UI check at `--hold`
+
+The command pauses **after all projects verify**, before rollback/escape-hatch
+exercises and cleanup. In another terminal, use an unpackaged dev build on
+`$COPY`, with staging's four public runtime values from the runbook:
+
+```sh
+pnpm build
+VOLLI_EXPERIMENTAL=cloud VOLLI_ACCOUNT_PROVIDER=workos \
+VOLLI_WORKOS_CLIENT_ID='<staging-public-client-id>' \
+VOLLI_CONVEX_URL='https://<staging-deployment>.convex.cloud' \
+VOLLI_CONVEX_SITE_URL='https://<staging-deployment>.convex.site' \
+VOLLI_CLOUD_STORAGE_ORIGIN='https://<staging-account>.r2.cloudflarestorage.com' \
+pnpm -C apps/desktop exec electron dist-electron/main.cjs --user-data-dir="$COPY"
+```
+
+Sign in to the staging account, select the disposable `migration-rehearsal-…`
+Workspace, and check the moved project: board, a Session transcript, an
+attachment, folder/Working-copy reuse and starting a Session. This is a manual
+UI check, **not** something the harness's window-read verification proves.
+The reviewed `volli-drive launch --deployment staging --fixture empty` path
+can establish staging sign-in separately, but it creates its own fresh
+profile; it is not the copied-profile UI check. Never substitute the live
+profile. Quit the dev app completely before pressing Enter in the harness.
+Staging-only changes from this check are deliberately discarded at cleanup.
+
+### Results and cleanup
+
+The JSON file contains only per-run elapsed times, peak engine-process RSS
+(including its backup worker), counts, verification booleans, states and
+refusal codes. No content, paths, project/move ids, tokens or exception text.
+Exit 0 requires every selected project verified, no refused rows, every
+requested kill point reached, and both cleanups complete. Keep the separate
+manual UI result beside it, outside git. No staging or owner-profile run is
+claimed by the synthetic backend test.
+
+Cleanup uncommits/aborts **only this fresh Workspace's imports**, waits for the
+normal row/object purge, then removes its empty Workspace, membership, policy,
+audit and import bookkeeping. It never deletes an existing Workspace or
+runner. Upload expiry protection means rollback/cleanup can each take
+**30–45 minutes**; keep refreshing the staging person token. The scratch
+profile (including its backups and readable escape-hatch export) is deleted.
+Save anything you want from it before continuing past `--hold`.
+
+If auth/network/purge cleanup fails, the report stays failed and a private
+`$COPY.rehearsal.json` recovery file remains. After renewing the staging
+credentials, run:
+
+```sh
+pnpm --filter @volli/host-core migration:dry-run --cleanup "$COPY.rehearsal.json"
+```
+
+This retries cloud cleanup only; it never removes a running app's profile.
+After confirming the app is quit and cleanup succeeded, remove any remaining
+scratch profile and recovery file yourself. An externally SIGKILLed parent
+also leaves this recovery file and the copy for the same recovery procedure.
+Do not disable the staging cleanup opt-in until recovery is complete; disable
+it afterward. Never commit the copy, reports, OAuth material or deployment
+profiles.
+
+## Original loopback importer
+
+### Running it
 
 ```sh
 pnpm -C convex backend:fetch      # once per backend pin

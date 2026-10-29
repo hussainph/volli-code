@@ -315,3 +315,111 @@ export const readSessionEvents = internalQuery({
     return { rows: docs.map((doc) => withoutSystemFields(doc as Row)) };
   },
 });
+
+/** Operator-only cleanup of the harness's disposable Workspace, AFTER the
+ * normal project-import purge has removed every row and object. Never a
+ * generic Workspace deletion door; staging must explicitly opt in.
+ * One bounded page per call. The harness retries until done.
+ */
+export const cleanupRehearsal = internalMutation({
+  args: { workspaceId: v.string(), userId: v.string(), checkOnly: v.optional(v.boolean()) },
+  handler: async (ctx, { workspaceId, userId, checkOnly }): Promise<{ done: boolean }> => {
+    if (process.env.VOLLI_MIGRATION_REHEARSAL !== "enabled")
+      throw migrationError("rehearsal_disabled", "Enable rehearsal cleanup on staging first.");
+    const workspace = await ctx.db
+      .query("workspaces")
+      .withIndex("by_uuid", (q) => q.eq("id", workspaceId))
+      .unique();
+    if (workspace === null) return { done: true };
+    if (
+      workspace.name !== `migration-rehearsal-${workspaceId}` ||
+      workspace.createdByUserId !== userId
+    )
+      throw migrationError("not_rehearsal", "Only a fresh rehearsal Workspace can be removed.");
+    const members = await ctx.db
+      .query("workspaceMembers")
+      .withIndex("by_workspace_user", (q) => q.eq("workspaceId", workspaceId))
+      .take(2);
+    if (members.length > 1 || members.some((member) => member.userId !== userId))
+      throw migrationError("shared_workspace", "A shared Workspace is not disposable.");
+    if (
+      await ctx.db
+        .query("workspaceInvites")
+        .withIndex("by_workspace_email", (q) => q.eq("workspaceId", workspaceId))
+        .first()
+    )
+      throw migrationError("invites_remain", "A rehearsal Workspace must not be shared.");
+    // A rehearsal creates no Workspace-level resources. Refuse rather than
+    // orphan anything an operator added during the manual hold.
+    const extras = await Promise.all([
+      ctx.db
+        .query("legalHolds")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+        .first(),
+      ctx.db
+        .query("billingAccounts")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+        .first(),
+      ctx.db
+        .query("workspaceBlobs")
+        .withIndex("by_workspace_sha", (q) => q.eq("workspaceId", workspaceId))
+        .first(),
+      ctx.db
+        .query("secretKeys")
+        .withIndex("by_owner", (q) => q.eq("owner", `w:${workspaceId}`))
+        .first(),
+      ctx.db
+        .query("secrets")
+        .withIndex("by_scope_name", (q) => q.eq("scopeKey", `w:${workspaceId}`))
+        .first(),
+      ctx.db
+        .query("configEntries")
+        .withIndex("by_scope_kind_name", (q) => q.eq("scopeKey", `w:${workspaceId}`))
+        .first(),
+    ]);
+    if (extras.some(Boolean))
+      throw migrationError(
+        "workspace_extended",
+        "Remove added Workspace resources through their own lifecycle first.",
+      );
+    // This is a shape/opt-in check before uncommit, not permission to delete
+    // projects. The deletion call below still requires the imports purged.
+    if (checkOnly) return { done: false };
+    if (
+      await ctx.db
+        .query("projects")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+        .first()
+    )
+      throw migrationError("projects_remain", "Purge the rehearsal imports first.");
+    const move = await ctx.db
+      .query("projectImports")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .first();
+    if (move) {
+      if (move.status !== "purged")
+        throw migrationError("purge_incomplete", "Wait for the normal import purge.");
+      for (const stream of await ctx.db
+        .query("projectImportStreams")
+        .withIndex("by_move_stream", (q) => q.eq("moveId", move.id))
+        .take(100))
+        await ctx.db.delete(stream._id);
+      await ctx.db.delete(move._id);
+      return { done: false };
+    }
+    const audits = await ctx.db
+      .query("auditLog")
+      .withIndex("by_workspace_at", (q) => q.eq("workspaceId", workspaceId))
+      .take(100);
+    for (const row of audits) await ctx.db.delete(row._id);
+    if (audits.length === 100) return { done: false };
+    const policy = await ctx.db
+      .query("workspacePolicies")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .unique();
+    if (policy) await ctx.db.delete(policy._id);
+    for (const member of members) await ctx.db.delete(member._id);
+    await ctx.db.delete(workspace._id);
+    return { done: true };
+  },
+});

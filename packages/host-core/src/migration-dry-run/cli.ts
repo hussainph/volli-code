@@ -12,6 +12,7 @@ import { constants } from "node:os";
 import { parseArgs } from "node:util";
 import { connectConvexAdmin } from "./convex-admin";
 import { DEFAULT_HOT_DAYS, runMigrationDryRun } from "./dry-run";
+import { cleanupRehearsalState, runMoveRehearsal } from "./move-rehearsal";
 
 const USAGE = `usage: migration-dry-run --profile <volli.db> [--blobs <dir>] [--hot-days <n>]
                          [--include-removed-projects] [--no-rerun] [--report <file>]
@@ -27,6 +28,17 @@ export async function main(argv: readonly string[]): Promise<number> {
     args: [...argv],
     options: {
       profile: { type: "string" },
+      move: { type: "boolean" },
+      cleanup: { type: "string" },
+      hold: { type: "boolean" },
+      target: { type: "string" },
+      "source-profile": { type: "string" },
+      "runner-id": { type: "string" },
+      "allow-production": { type: "boolean" },
+      "kill-upload": { type: "boolean" },
+      "kill-import": { type: "boolean" },
+      "rollback-one": { type: "boolean" },
+      "go-back-one": { type: "boolean" },
       project: { type: "string", multiple: true },
       blobs: { type: "string" },
       "hot-days": { type: "string" },
@@ -37,6 +49,61 @@ export async function main(argv: readonly string[]): Promise<number> {
       "home-dir": { type: "string" },
     },
   });
+  if (values.cleanup) {
+    try {
+      await cleanupRehearsalState(values.cleanup);
+      return 0;
+    } catch {
+      say(
+        "rehearsal cleanup incomplete; retain the private state file and renew the staging credentials",
+      );
+      return 1;
+    }
+  }
+  if (values.move) {
+    if (
+      !values.target ||
+      !values.profile ||
+      !values["source-profile"] ||
+      !values["runner-id"] ||
+      !values.report
+    ) {
+      say(
+        "usage: migration-dry-run --move --target <deployment-url> --source-profile <dir> --profile <new-scratch-dir> --runner-id <staging-runner> --report <file> [--kill-upload] [--kill-import] [--rollback-one] [--go-back-one]",
+      );
+      return 2;
+    }
+    try {
+      return (await runMoveRehearsal({
+        target: values.target,
+        source: values["source-profile"],
+        profile: values.profile,
+        runnerId: values["runner-id"],
+        report: values.report,
+        allowProduction: values["allow-production"] === true,
+        includeRemoved: values["include-removed-projects"] === true,
+        killUpload: values["kill-upload"] === true,
+        killImport: values["kill-import"] === true,
+        rollback: values["rollback-one"] === true,
+        goBack: values["go-back-one"] === true,
+        hold: values.hold === true,
+      }))
+        ? 0
+        : 1;
+    } catch (error) {
+      // Do not print backend errors: they can echo imported content.
+      const code =
+        error instanceof Error && /^[a-z_]+$/.test(error.message)
+          ? error.message
+          : "safety_or_setup_failed";
+      say(`move rehearsal: ${code}; check the safety rules and staging setup in README.md`);
+      return 1;
+    }
+  }
+  if (values.target) {
+    say("--target requires --move");
+    return 2;
+  }
   const url = process.env.CONVEX_SELF_HOSTED_URL ?? process.env.VOLLI_CONVEX_URL;
   const adminKey = process.env.CONVEX_SELF_HOSTED_ADMIN_KEY ?? process.env.VOLLI_CONVEX_ADMIN_KEY;
   if (values.profile === undefined || url === undefined || adminKey === undefined) {
