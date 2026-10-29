@@ -110,7 +110,8 @@ describe("the migration dry run", () => {
     expect(report.streams.projects!.inserted).toBe(2);
     expect(report.streams.sessions!.inserted).toBe(3);
     expect(report.streams.runnerJobs!.inserted).toBe(0);
-    expect(report.streams.automationArmings!.inserted).toBe(0);
+    // Arms now carry over paused; only pending runner work stays absent.
+    expect(report.streams.automationArmings!.inserted).toBe(1);
     expect(
       Object.keys(report.invariants).filter((name) => name.startsWith("structuralPathHits")),
     ).toEqual([]);

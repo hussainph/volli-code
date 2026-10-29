@@ -332,6 +332,12 @@ async function journey(fixture, store, evidenceDir) {
     await macA.drive.click("button", choose);
     await macA.drive.gone(choose, 30_000);
     await openBoard(macA.drive);
+    // Empty columns start collapsed. Expand Doing through its real control
+    // before looking for the column's bolt (no card has arrived there yet).
+    if (!(await macA.drive.has("button", "Arm Doing"))) {
+      await macA.drive.click("button", "Doing 0");
+      await macA.drive.wait("Arm Doing", 30_000);
+    }
     // The column's own bolt: the person arms Doing, on this Mac (the picker's
     // default), with the one Automation offered there.
     await macA.drive.click("button", "Arm Doing");
