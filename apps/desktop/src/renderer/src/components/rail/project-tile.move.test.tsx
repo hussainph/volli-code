@@ -46,7 +46,7 @@ afterEach(async () => {
   container.remove();
   vi.unstubAllGlobals();
 });
-async function menu() {
+async function menu(key?: "ContextMenu" | "F10") {
   await act(async () =>
     root.render(
       <TooltipProvider>
@@ -70,7 +70,11 @@ async function menu() {
   await act(async () =>
     container
       .querySelector("button")!
-      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 })),
+      .dispatchEvent(
+        key === undefined
+          ? new MouseEvent("contextmenu", { bubbles: true, button: 2 })
+          : new KeyboardEvent("keydown", { key, shiftKey: key === "F10", bubbles: true }),
+      ),
   );
 }
 
@@ -86,6 +90,14 @@ describe("project menu Move to Volli Cloud", () => {
     expect(document.body.textContent).not.toContain("Move to Volli Cloud…");
     expect(useCloudMovesStore.getState().sheet).toBeNull();
   });
+  it.each(["ContextMenu", "F10"] as const)(
+    "opens the project menu with keyboard %s",
+    async (key) => {
+      await menu(key);
+      expect(document.body.textContent).toContain("Move to Volli Cloud…");
+      expect(useCloudMovesStore.getState().sheet).toBeNull();
+    },
+  );
   it("opens only that project's pre-flight, immediately above Remove from Volli", async () => {
     await menu();
     const items = [...document.querySelectorAll('[role="menuitem"]')];

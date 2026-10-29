@@ -79,6 +79,25 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                 <button
                   type="button"
                   onClick={() => select(project.id)}
+                  onKeyDown={(event) => {
+                    if (!cloudEnabled) return;
+                    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))
+                      return;
+                    // macOS does not synthesize contextmenu for keyboard activation.
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const target = event.currentTarget;
+                    const rect = target.getBoundingClientRect();
+                    target.dispatchEvent(
+                      new MouseEvent("contextmenu", {
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: rect.right,
+                        clientY: rect.top,
+                        button: 2,
+                      }),
+                    );
+                  }}
                   style={{ backgroundColor: projectColor(project.colorIndex) }}
                   className={cn(
                     // `text-white` is ink on the PROJECT's own color, not on
