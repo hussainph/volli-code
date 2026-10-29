@@ -22,6 +22,17 @@ import { sqliteMoveJournal } from "./journal";
 import { COMMITTED_STATES, FROZEN_STATES, MOVE_STATES } from "./states";
 
 let ctx: TestDb;
+
+/** Whether a write went through, or the freeze held it. */
+function passes(write: Promise<unknown>): Promise<boolean> {
+  return write.then(
+    () => true,
+    (error: unknown) => {
+      if (!(error instanceof ProjectFrozenError)) throw error;
+      return false;
+    },
+  );
+}
 let services: HostSessionServices | undefined;
 afterEach(() => {
   services?.sessionActivityWatch.stop();
@@ -232,15 +243,7 @@ describe("the move freeze", () => {
         .run(moved, A);
       const setState = (state: string) =>
         ctx.db.prepare("UPDATE cloud_moves SET state = ? WHERE move_id = 'm'").run(state);
-      const passes = (write: Promise<unknown>) =>
-        write.then(
-          () => true,
-          (error: unknown) => {
-            if (!(error instanceof ProjectFrozenError)) throw error;
-            return false;
-          },
-        );
-      return { project, engine, birth, command, moved, local, uncursored, setState, passes };
+      return { project, engine, birth, command, moved, local, uncursored, setState };
     }
 
     afterEach(() => {
@@ -248,7 +251,7 @@ describe("the move freeze", () => {
     });
 
     it("passes only once the move committed, only for the launch's own person, and never a local write", async () => {
-      const { engine, birth, command, moved, local, setState, passes } = await claims();
+      const { engine, birth, command, moved, local, setState } = await claims();
       bindCloudSessionOwner(ctx.db, A);
       for (const state of FROZEN_STATES) {
         setState(state);
@@ -277,7 +280,7 @@ describe("the move freeze", () => {
     });
 
     it("gives a local launch, or another person's, no claim at all", async () => {
-      const { engine, birth, command, moved, setState, passes } = await claims();
+      const { engine, birth, command, moved, setState } = await claims();
       setState("confirmed");
       // A local launch (no cloud owner here): the archived copy is the only view.
       expect(await passes(engine.submit(command(moved)))).toBe(false);
