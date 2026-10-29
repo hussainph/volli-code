@@ -266,6 +266,7 @@ test("caps workers at the Session's parallelism budget, never above the lane's o
 
 test("a step summary is written where Actions points, and nowhere else", () => {
   const { dir, close } = scratch();
+  const previousSummary = process.env.GITHUB_STEP_SUMMARY;
   try {
     const path = join(dir, "summary.md");
     writeFileSync(path, "first\n");
@@ -276,10 +277,19 @@ test("a step summary is written where Actions points, and nowhere else", () => {
       "first\n### Older app (live): result\nsecond\n",
       "each block ends with exactly one newline",
     );
-    // Outside Actions there is no summary file, and that is not an error.
+    // Model both environments explicitly: CI itself already sets this name.
+    delete process.env.GITHUB_STEP_SUMMARY;
     assert.equal(appendStepSummary("ignored", ""), false);
     assert.equal(appendStepSummary("ignored", undefined), false);
+    process.env.GITHUB_STEP_SUMMARY = path;
+    assert.equal(appendStepSummary("from environment"), true);
+    assert.equal(
+      readFileSync(path, "utf8"),
+      "first\n### Older app (live): result\nsecond\nfrom environment\n",
+    );
   } finally {
+    if (previousSummary === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = previousSummary;
     close();
   }
 });
