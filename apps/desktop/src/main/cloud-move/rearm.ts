@@ -100,7 +100,7 @@ const REFUSALS: Readonly<Record<string, string>> = {
 };
 
 export interface MoveRearmPort {
-  read(row: MoveRow): Promise<CloudMoveAutomationRearm>;
+  read(row: MoveRow, fresh?: boolean): Promise<CloudMoveAutomationRearm>;
   perform(row: MoveRow, target: CloudMoveRearmTarget): Promise<void>;
 }
 
@@ -181,13 +181,13 @@ export function createMoveRearm(options: {
     return { runnerId: live.runnerId, unavailable: null };
   }
   return {
-    async read(row) {
+    async read(row, fresh = false) {
       let value: RearmList | undefined;
       try {
-        value = await list(row);
+        value = await list(row, fresh);
         const ready =
           value.columns.length + value.schedules.length > 0
-            ? await readiness(row)
+            ? await readiness(row, fresh)
             : { runnerId: null, unavailable: null };
         assertPerson(row);
         return {
@@ -196,7 +196,7 @@ export function createMoveRearm(options: {
           inertGlobals: value.inertGlobals,
           canRearmOnThisMac: ready.runnerId !== null,
           unavailable: ready.unavailable,
-          retryable: false,
+          retryable: ready.unavailable !== null && options.fullRunner(row.userId) !== null,
         };
       } catch (error) {
         const code = refusalCode(error);

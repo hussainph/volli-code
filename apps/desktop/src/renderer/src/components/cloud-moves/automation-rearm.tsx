@@ -5,6 +5,21 @@ import {
 } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 
+export function MovedAutomationNames({ names }: { names: readonly string[] }) {
+  const counts = new Map<string, number>();
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return (
+    <ul className="flex flex-col gap-2">
+      {[...counts].map(([name, count]) => (
+        <li key={name}>
+          {name}
+          {count > 1 ? ` (${count})` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** Only project records are actionable; personal definitions are displayed once by the result. */
 export function MoveAutomationRearm({
   move,
@@ -39,7 +54,10 @@ export function MoveAutomationRearm({
   return (
     <details>
       <summary>
-        Paused Automations{rearm.retryable || fallbackNames.length > 0 ? "" : ` (${items.length})`}
+        Paused Automations
+        {rearm.retryable || fallbackNames.length > 0 || items.length === 0
+          ? ""
+          : ` (${items.length})`}
       </summary>
       {rearm.unavailable !== null ? <p role="status">{rearm.unavailable}</p> : null}
       {rearm.retryable ? (
@@ -47,10 +65,8 @@ export function MoveAutomationRearm({
           Try again
         </Button>
       ) : null}
+      {fallbackNames.length > 0 ? <MovedAutomationNames names={fallbackNames} /> : null}
       <ul className="flex flex-col gap-2">
-        {fallbackNames.map((name) => (
-          <li key={name}>{name}</li>
-        ))}
         {items.map((item) => (
           <li key={item.key} className="flex flex-wrap items-center justify-between gap-2">
             <span>{item.label}</span>

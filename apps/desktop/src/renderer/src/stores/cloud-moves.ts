@@ -41,6 +41,8 @@ export function showCloudMoves(queueId?: string, cancelMoveId?: string): void {
       key: ++sheetKey,
     },
   });
+  // Reopening results also refreshes optional backend details, not just the journal.
+  useCloudMovesStore.getState().refresh();
 }
 export function closeCloudMoves(): void {
   useCloudMovesStore.setState({ sheet: null });

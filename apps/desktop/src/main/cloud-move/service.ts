@@ -128,7 +128,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
   const rollback = new Map<string, CloudMoveStatus["rollback"]>();
   const rearmDetails = new Map<
     string,
-    { at: number; pending: boolean; value?: CloudMoveAutomationRearm }
+    { at: number; pending: boolean; fresh: boolean; value?: CloudMoveAutomationRearm }
   >();
   const pending = new Set<string>();
   const preflightReads = new Set<AbortController>();
@@ -294,26 +294,40 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     const key = row.userId + ":" + row.moveId;
     let cached = rearmDetails.get(key);
     if (cached === undefined) {
-      cached = { at: 0, pending: false };
+      cached = {
+        at: 0,
+        pending: false,
+        fresh: false,
+        value: {
+          columns: [],
+          schedules: [],
+          inertGlobals: [],
+          canRearmOnThisMac: false,
+          unavailable: "Reading paused Automations…",
+          retryable: false,
+        },
+      };
       rearmDetails.set(key, cached);
       while (rearmDetails.size > 128) rearmDetails.delete(rearmDetails.keys().next().value!);
     }
-    if (!cached.pending && Date.now() - cached.at >= 5_000) {
+    if (!cached.pending && (cached.fresh || Date.now() - cached.at >= 5_000)) {
       const reading = cached;
+      const fresh = reading.fresh;
+      reading.fresh = false;
       reading.pending = true;
       reading.at = Date.now();
       // Optional network details never hold up the journal or its recovery controls.
       const work = Promise.resolve()
-        .then(() => port.read(row))
+        .then(() => port.read(row, fresh))
         .then((value) => {
-          if (!disposed && currentOwnedMove(row)) {
+          if (!disposed && currentOwnedMove(row) && rearmDetails.get(key) === reading) {
             reading.value = value;
             reading.at = Date.now();
             notify();
           }
         })
         .catch(() => {
-          if (!disposed && currentOwnedMove(row)) {
+          if (!disposed && currentOwnedMove(row) && rearmDetails.get(key) === reading) {
             reading.value = {
               columns: [],
               schedules: [],
@@ -328,10 +342,21 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         })
         .finally(() => {
           reading.pending = false;
+          if (!disposed && reading.fresh && rearmDetails.get(key) === reading) notify();
         });
       options.track?.(work);
     }
-    const value = cached.value;
+    const value =
+      cached.value === undefined
+        ? undefined
+        : cached.pending && cached.value.retryable
+          ? {
+              ...cached.value,
+              canRearmOnThisMac: false,
+              unavailable: "Refreshing paused Automations…",
+              retryable: false,
+            }
+          : cached.value;
     if (value !== undefined) {
       const blocked =
         value.columns.length + value.schedules.length > 0
@@ -501,6 +526,9 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     onChanged(listener, fail) {
       requireEnabled();
       listeners.set(listener, fail);
+      // The window resubscribes on an explicit refresh. Bypass both metadata
+      // caches then, while still coalescing a read that is already in flight.
+      for (const cached of rearmDetails.values()) cached.fresh = true;
       service.startWatching();
       return () => {
         listeners.delete(listener);
@@ -752,10 +780,40 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
             case "re-arm":
               if (input.rearm === undefined || options.rearm === undefined)
                 throw new OperationUnavailableError("Choose a paused Automation to re-arm.");
-              try {
-                await options.rearm.perform(row, input.rearm);
-              } finally {
-                rearmDetails.delete(row.userId + ":" + row.moveId);
+              {
+                let accepted = false;
+                try {
+                  await options.rearm.perform(row, input.rearm);
+                  accepted = true;
+                } finally {
+                  const key = row.userId + ":" + row.moveId;
+                  const previous = rearmDetails.get(key)?.value;
+                  const value =
+                    previous === undefined
+                      ? undefined
+                      : !accepted
+                        ? previous
+                        : {
+                            ...previous,
+                            columns: previous.columns.filter(
+                              (item) =>
+                                input.rearm?.kind !== "column" ||
+                                item.automationId !== input.rearm.automationId ||
+                                item.status !== input.rearm.status,
+                            ),
+                            schedules: previous.schedules.filter(
+                              (item) =>
+                                input.rearm?.kind !== "schedule" ||
+                                item.automationId !== input.rearm.automationId,
+                            ),
+                          };
+                  rearmDetails.set(key, {
+                    at: 0,
+                    pending: false,
+                    fresh: true,
+                    ...(value === undefined ? {} : { value }),
+                  });
+                }
               }
               break;
             case "finish":

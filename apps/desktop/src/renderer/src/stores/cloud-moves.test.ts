@@ -49,6 +49,8 @@ describe("durable move view binding", () => {
     expect(api.onChanged).toHaveBeenCalledBefore(api.snapshot);
     expect(useCloudMovesStore.getState().snapshot?.moves[0]?.moveId).toBe("move");
     showCloudMoves("queue");
+    await flush();
+    expect(api.onChanged).toHaveBeenCalledTimes(2);
     closeCloudMoves();
     expect(useCloudMovesStore.getState().snapshot?.moves).toHaveLength(1);
     api.snapshot.mockResolvedValue({
@@ -56,7 +58,7 @@ describe("durable move view binding", () => {
       revision: 2,
       moves: [{ ...move, state: "check" }],
     });
-    api.onChanged.mock.calls[0]![0]();
+    api.onChanged.mock.calls.at(-1)![0]();
     await flush();
     expect(useCloudMovesStore.getState().snapshot?.moves[0]?.state).toBe("check");
     prepareCloudMove("project");

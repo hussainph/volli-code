@@ -327,7 +327,7 @@ describe("desktop move coordinator over the real SQLite journal", () => {
       unavailable: null,
       retryable: false,
     });
-    expect((await reading).moves[0]?.automationRearm).toBeUndefined();
+    expect((await reading).moves[0]?.automationRearm?.inertGlobals ?? []).toEqual([]);
     expect((await f.service.snapshot()).moves[0]?.automationRearm).toBeUndefined();
     expect(rearm.perform).not.toHaveBeenCalled();
   });
@@ -351,6 +351,81 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     expect(back).toHaveBeenCalledOnce();
     expect(rearm.perform).not.toHaveBeenCalled();
     expect(rearm.read).toHaveBeenCalledOnce();
+  });
+  it("bypasses the metadata throttle on a refreshed watch and coalesces an existing read", async () => {
+    const ready = {
+      columns: [],
+      schedules: [{ automationId: "auto", name: "Nightly" }],
+      inertGlobals: [],
+      canRearmOnThisMac: true,
+      unavailable: null,
+      retryable: false,
+    };
+    let finish!: (value: import("@volli/shared").CloudMoveAutomationRearm) => void;
+    const read = vi.fn(
+      async (
+        _row: MoveRow,
+        _fresh?: boolean,
+      ): Promise<import("@volli/shared").CloudMoveAutomationRearm> => ready,
+    );
+    read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const f = setup({ read, perform: vi.fn(async () => {}) });
+    f.toState(f.enqueue(), "confirmed", { ok: true });
+    await f.service.snapshot();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    const stop = f.service.onChanged(
+      () => {},
+      () => {},
+    );
+    await f.service.snapshot();
+    expect(read).toHaveBeenCalledOnce();
+    finish(ready);
+    await vi.waitFor(async () => {
+      await f.service.snapshot();
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+    expect(read.mock.calls[1]?.[1]).toBe(true);
+    stop();
+  });
+  it("keeps accepted re-arm results and personal names visible while refreshing", async () => {
+    let accepted = false;
+    const details = {
+      columns: [{ automationId: "auto", name: "Review", status: "doing" as const }],
+      schedules: [{ automationId: "schedule", name: "Nightly" }],
+      inertGlobals: [{ id: "global", name: "Personal helper" }],
+      canRearmOnThisMac: true,
+      unavailable: null,
+      retryable: false,
+    };
+    const read = vi.fn(() =>
+      accepted
+        ? new Promise<import("@volli/shared").CloudMoveAutomationRearm>(() => {})
+        : Promise.resolve(details),
+    );
+    const f = setup({
+      read,
+      perform: vi.fn(async () => {
+        accepted = true;
+      }),
+    });
+    const row = f.toState(f.enqueue(), "confirmed", { ok: true });
+    await vi.waitFor(async () =>
+      expect((await f.service.snapshot()).moves[0]?.actions).toContain("re-arm"),
+    );
+    await f.service.command({
+      moveId: row.moveId,
+      action: "re-arm",
+      rearm: { kind: "column", automationId: "auto", status: "doing" },
+    });
+    const view = (await f.service.snapshot()).moves[0]?.automationRearm;
+    expect(view?.columns).toEqual([]);
+    expect(view?.schedules).toEqual(details.schedules);
+    expect(view?.inertGlobals).toEqual(details.inertGlobals);
   });
   it("does nothing behind the flag and rejects commands before any outside call", async () => {
     const f = setup();

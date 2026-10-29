@@ -22,7 +22,7 @@ import { formatFileSize } from "@renderer/components/attachments/attachment-mode
 import { toastError } from "@renderer/lib/toast";
 import { useCloudMovesStore } from "@renderer/stores/cloud-moves";
 import { MOVE_STEP_LABELS, MOVE_STATE_LABELS, moveTime } from "./presentation";
-import { MoveAutomationRearm } from "./automation-rearm";
+import { MoveAutomationRearm, MovedAutomationNames } from "./automation-rearm";
 
 const ACTION_LABELS: Record<CloudMoveAction, string> = {
   pause: "Pause",
@@ -205,11 +205,7 @@ export function MoveProgress({
               <details>
                 <summary>Paused Automations ({move.pausedAutomations.length})</summary>
                 <p>Re-arm these when Automations are available in Volli Cloud.</p>
-                <ul>
-                  {move.pausedAutomations.map((name) => (
-                    <li key={name}>{name}</li>
-                  ))}
-                </ul>
+                <MovedAutomationNames names={move.pausedAutomations} />
               </details>
             ) : null}
             {move.localCredentials.length > 0 ? (
@@ -274,7 +270,7 @@ export function MoveProgress({
           <section aria-label="Personal Automations" className="flex flex-col gap-2">
             <h3 className="font-medium">Personal Automations</h3>
             <p className="text-muted-foreground">
-              Personal definitions stay inactive until shared config is available.
+              Only project Automations can run in Volli Cloud.
             </p>
             <ul>
               {inertGlobals.map((item) => (

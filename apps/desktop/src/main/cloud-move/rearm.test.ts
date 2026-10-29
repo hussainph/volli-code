@@ -114,6 +114,22 @@ describe("moved Automation result bridge", () => {
     ).rejects.toThrow("connect");
     expect(f.mutation).not.toHaveBeenCalled();
   });
+  it("offers an immediate fresh retry when this Mac becomes ready without starting work", async () => {
+    const f = setup();
+    f.roster([
+      { id: "runner", kind: "mac", status: "offline", capabilities: { tools: ["automation.run"] } },
+    ]);
+    expect(await f.port.read(row)).toMatchObject({ canRearmOnThisMac: false, retryable: true });
+    f.roster([
+      { id: "runner", kind: "mac", status: "online", capabilities: { tools: ["automation.run"] } },
+    ]);
+    expect(await f.port.read(row, true)).toMatchObject({
+      canRearmOnThisMac: true,
+      retryable: false,
+    });
+    expect(f.query).toHaveBeenCalledTimes(4);
+    expect(f.mutation).not.toHaveBeenCalled();
+  });
   it.each([
     [
       { kind: "column", automationId: "column", status: "needs_review" } as const,

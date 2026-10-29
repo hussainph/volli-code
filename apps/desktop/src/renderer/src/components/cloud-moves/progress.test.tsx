@@ -66,7 +66,7 @@ describe("Move progress and outcomes", () => {
     expect(api.command).not.toHaveBeenCalled();
     const globals = container.querySelector('[aria-label="Personal Automations"]')!;
     expect(globals.textContent).toContain("Personal helper · Not armed");
-    expect(globals.textContent).toContain("stay inactive until shared config is available");
+    expect(globals.textContent).toContain("Only project Automations can run in Volli Cloud.");
     expect(globals.querySelector("button")).toBeNull();
     const column = container.querySelector<HTMLButtonElement>(
       '[aria-label="Re-arm Review on this Mac (Doing)"]',
@@ -137,6 +137,34 @@ describe("Move progress and outcomes", () => {
       ),
     ).toBe(false);
     expect(api.command).not.toHaveBeenCalled();
+  });
+  it("counts duplicate fallback names without duplicate React keys", async () => {
+    const warnings = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await mount({
+        state: "finished",
+        actions: ["open-cloud"],
+        pausedAutomations: ["Same name", "Same name"],
+        automationRearm: {
+          columns: [],
+          schedules: [],
+          inertGlobals: [],
+          canRearmOnThisMac: false,
+          unavailable: "Re-arm when Automations are available in Volli Cloud.",
+          retryable: false,
+        },
+      });
+      expect(container.textContent).toContain("Same name (2)");
+      expect(container.textContent?.match(/Same name/gu)).toHaveLength(1);
+      await mount({
+        state: "finished",
+        actions: ["open-cloud"],
+        pausedAutomations: ["Same name", "Same name"],
+      });
+      expect(warnings).not.toHaveBeenCalled();
+    } finally {
+      warnings.mockRestore();
+    }
   });
   it("deduplicates personal definitions across the result and offers a real refresh after a failed list read", async () => {
     const refresh = vi.fn();
