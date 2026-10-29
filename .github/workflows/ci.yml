@@ -281,15 +281,15 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .scratch/convex-api-cache
-          key: convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', '.nvmrc') }}-${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          key: convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', '.nvmrc') }}-${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
           restore-keys: |
-            convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', '.nvmrc') }}-
+            convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', '.nvmrc') }}-
 
       - name: Check committed Convex API and additive compatibility
         env:
           CONVEX_API_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          node --test scripts/convex-api/*.test.mjs
+          node --test scripts/convex-api/*.test.mjs scripts/convex-compat/*.test.mjs
           args=()
           if [[ -n "$CONVEX_API_BASE" && "$CONVEX_API_BASE" != 0000000000000000000000000000000000000000 ]]; then
             args=(--base "$CONVEX_API_BASE")
@@ -297,7 +297,7 @@ jobs:
           node scripts/convex-api/generate.mjs --check "${args[@]}"
 
       - name: Save derived pre-snapshot Convex API baselines
-        if: always() && steps.convex-api-cache.outcome == 'success' && steps.convex-api-cache.outputs.cache-hit != 'true'
+        if: always() && steps.convex-api-cache.outcome == 'success' && steps.convex-api-cache.outputs.cache-hit != 'true' && hashFiles('.scratch/convex-api-cache/**/*.json') != ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .scratch/convex-api-cache

@@ -26,6 +26,7 @@ const git = (args) =>
 // the extractor, its toolchain or Node changes; git commits pin baseline code.
 const fingerprint = createHash("sha256");
 for (const path of [
+  "scripts/convex-api/generate.mjs",
   "scripts/convex-api/snapshot.mjs",
   "scripts/convex-compat/materialize.mjs",
   "pnpm-lock.yaml",
