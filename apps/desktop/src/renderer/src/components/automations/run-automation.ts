@@ -26,9 +26,24 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { refuseRemote, refuseRemoteTicket } from "@renderer/stores/remote-project";
+import { automationSourceIsCloud, cloudAutomationSource } from "@renderer/stores/automation-source";
+import { waitingForRunner } from "@renderer/stores/cloud-automations/state";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
+type QueuedAction = {
+  kind: "session-queued";
+  sessionId: string;
+  runner: { name: string; status: string };
+};
+function cloudSource() {
+  const source = cloudAutomationSource();
+  if (source === null) throw new Error("Volli Cloud isn’t connected yet.");
+  return source;
+}
+function announceQueued(action: QueuedAction): void {
+  toast.info(waitingForRunner(action.runner.name, action.runner.status));
+}
 
 /**
  * What became of a hand-run, for a surface that gates its own control on it
@@ -77,9 +92,9 @@ export interface TicketRunRequest extends RunRequest {
  * transport itself failed — that arm has already toasted, because a person is
  * waiting on a Session and no other surface will tell them.
  */
-async function startRun(input: RunRequest): Promise<RunAutomationAction | null> {
+async function startRun(input: RunRequest): Promise<RunAutomationAction | QueuedAction | null> {
   // A remote project's ticket runs on its host, not here (VC-711).
-  if (refuseRemoteTicket(input.ticketId)) return null;
+  if (!automationSourceIsCloud() && refuseRemoteTicket(input.ticketId)) return null;
   // What a lost reply is retried AS: the WHOLE intent (`automationRunRetryKey`)
   // — the record or the Unbound Run's own words, the Ticket, and this
   // invocation's model override. Running the same work on a different model is
@@ -92,6 +107,11 @@ async function startRun(input: RunRequest): Promise<RunAutomationAction | null> 
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
   try {
+    if (automationSourceIsCloud()) {
+      const reply = await cloudSource().queueRun({ ...input, commandId });
+      pendingCommandIds.delete(retryKey);
+      return { kind: "session-queued", sessionId: reply.sessionId, runner: reply.runner };
+    }
     const action = runAutomationAction(
       await window.api.automations.run({
         ...input,
@@ -123,12 +143,17 @@ async function startRun(input: RunRequest): Promise<RunAutomationAction | null> 
 async function startProjectRun(input: {
   automationId: string;
   projectId: string;
-}): Promise<RunAutomationAction | null> {
-  if (refuseRemote(input.projectId)) return null;
+}): Promise<RunAutomationAction | QueuedAction | null> {
+  if (!automationSourceIsCloud() && refuseRemote(input.projectId)) return null;
   const retryKey = `project\u0000${input.automationId}\u0000${input.projectId}`;
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
   try {
+    if (automationSourceIsCloud()) {
+      const reply = await cloudSource().queueProjectRun({ ...input, commandId });
+      pendingCommandIds.delete(retryKey);
+      return { kind: "session-queued", sessionId: reply.sessionId, runner: reply.runner };
+    }
     const action = runAutomationAction(
       await window.api.automations.runForProject({ ...input, commandId }),
     );
@@ -172,6 +197,9 @@ export async function runAutomationForProject(input: {
   });
   if (action === null) return;
   switch (action.kind) {
+    case "session-queued":
+      announceQueued(action);
+      return;
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");
       return;
@@ -231,6 +259,9 @@ export async function runAutomationOnTicket(
   });
   if (action === null) return "failed";
   switch (action.kind) {
+    case "session-queued":
+      announceQueued(action);
+      return "started";
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");
       return "needs-model-access";

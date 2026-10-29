@@ -53,7 +53,7 @@ import {
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
-import { launchStore } from "@renderer/stores/launch";
+import { automationsAvailable } from "@renderer/stores/automation-source";
 
 /** Stable empty array so the per-card session-records selector never forces a
  *  re-render of every OTHER card's menu when one ticket's cache is touched. */
@@ -261,7 +261,7 @@ export function TicketContextMenu({
             context-menu home of the per-invocation model override. The rows
             are the ticket rail's own (`automation-run-menu.tsx`), so a card and
             an open Ticket cannot disagree about what this column offers. */}
-        {launchStore() === "cloud" ? null : (
+        {!automationsAvailable(projectId) ? null : (
           <ContextMenuSub>
             <ContextMenuSubTrigger icon={LightningIcon}>Automations</ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-56">

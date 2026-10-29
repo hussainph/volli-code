@@ -17,6 +17,8 @@ import {
 
 import { AutomationEditorPanel } from "./automation-editor";
 import { startAutomationAuthoring } from "./automation-authoring";
+import { adoptLaunch } from "@renderer/stores/launch";
+import { LOCAL_LAUNCH } from "@volli/shared";
 
 vi.mock("./automation-authoring", () => ({ startAutomationAuthoring: vi.fn(async () => null) }));
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -204,9 +206,20 @@ afterEach(async () => {
   clearEditorDraft("p1");
   clearEditorDraft("p1", undefined, "automation-1");
   vi.unstubAllGlobals();
+  adoptLaunch(LOCAL_LAUNCH);
 });
 
 describe("the page editor hierarchy", () => {
+  it("cloud authoring offers only this project, never All projects", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    await mountEditor();
+    const ownership = document.querySelector('[aria-label="Ownership"]') as HTMLButtonElement;
+    await act(async () =>
+      ownership.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    expect(document.body.textContent).toContain("This project");
+    expect(document.body.textContent).not.toContain("All projects");
+  });
   it("keeps one clear save action and moves record settings into the inspector", async () => {
     await mountEditor();
 

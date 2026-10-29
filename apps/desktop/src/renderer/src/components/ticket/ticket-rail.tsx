@@ -90,6 +90,7 @@ import {
   type TicketRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
 import { RAIL_NARROW_MAX_WIDTH, useUiStore } from "@renderer/stores/ui";
+import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = {
@@ -226,9 +227,9 @@ export function TicketRail({
                   listed where Sessions are — in the roster above, wearing the
                   bolt — not under this block. The rail never authors: it runs,
                   and links to the page. */}
-              <LocalOnly projectId={projectId} fallback={null}>
+              <AutomationsOnly projectId={projectId} fallback={null}>
                 <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
-              </LocalOnly>
+              </AutomationsOnly>
             </div>
             {/* What this Ticket cost (VC-87), pinned under the scroller and
                 folding open above its row. Absent — not empty — when cost is

@@ -36,6 +36,8 @@ import { cancelArmedRun, useArmedRunStore } from "./armed-run";
 import { Button } from "@renderer/components/ui/button";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
+import { automationSourceIsCloud } from "@renderer/stores/automation-source";
+import { CloudPendingRuns } from "./cloud-pending-runs";
 
 /**
  * A frame clock, running only while something is counting down.
@@ -67,6 +69,9 @@ function useFrameClock(active: boolean): number {
  * board's mount either way.
  */
 export function ArmedRunWindows() {
+  return automationSourceIsCloud() ? <CloudPendingRuns /> : <LocalArmedRunWindows />;
+}
+function LocalArmedRunWindows() {
   const pending = useArmedRunStore((state) => state.pending);
   const windows = Object.values(pending).toSorted((a, b) => a.openedAt - b.openedAt);
   const now = useFrameClock(windows.length > 0);

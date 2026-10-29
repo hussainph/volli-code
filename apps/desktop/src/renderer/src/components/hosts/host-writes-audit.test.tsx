@@ -119,12 +119,12 @@ function renderCard(on: HostWorld) {
 }
 
 describe("a card's context menu", () => {
-  it("hides Automations in a cloud launch while retaining the board controls", async () => {
+  it("offers Automations in a cloud launch while retaining the board controls", async () => {
     world = hostWorld({ cloud: false });
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
     const container = await renderCard(world);
     await openCardMenu(container);
-    expect(menuItem("Automations")).toBeUndefined();
+    expect(menuItem("Automations")).toBeDefined();
     expect(menuItem("Priority")).toBeDefined();
     expect(menuItem("Archive")).toBeDefined();
   });

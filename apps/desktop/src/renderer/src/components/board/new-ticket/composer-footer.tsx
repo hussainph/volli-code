@@ -16,7 +16,7 @@ import {
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { launchStore } from "@renderer/stores/launch";
+import { automationsAvailable } from "@renderer/stores/automation-source";
 
 /**
  * TWO COMMITS AND A CHOOSER, in that order of prominence.
@@ -136,11 +136,13 @@ export function ComposerFooter({
           aria-label={action.label}
           aria-keyshortcuts="Shift+Meta+Enter Shift+Control+Enter"
           title={`${action.label} (⇧⌘↵)`}
-          className={launchStore() === "cloud" ? "min-w-0 rounded-l-none" : "min-w-0 rounded-none"}
+          className={
+            !automationsAvailable(projectId) ? "min-w-0 rounded-l-none" : "min-w-0 rounded-none"
+          }
         >
           <span className="max-w-64 truncate">{action.label}</span>
         </Button>
-        {launchStore() === "cloud" ? null : (
+        {!automationsAvailable(projectId) ? null : (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button

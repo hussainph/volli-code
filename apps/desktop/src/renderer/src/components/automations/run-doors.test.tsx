@@ -491,9 +491,9 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     );
   });
 
-  it("the cloud command palette offers no Automation Run or authoring shortcut", async () => {
+  it("the cloud command palette offers Automation Run and authoring without local reads", async () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
-    // Even a retained local cache must not advertise a cloud launch's controls.
+    // The live cloud source paints into the same listing cache.
     useAutomationsStore.setState({ byProject: { p1: [AUTOMATION] } });
     useProjectUiStore.getState().openTicket("p1", "t1");
     await render(<CommandPalette open onOpenChange={() => {}} />);
@@ -502,10 +502,10 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
       [...document.querySelectorAll("[cmdk-group-heading]")].some(
         (heading) => heading.textContent === "Automations",
       ),
-    ).toBe(false);
+    ).toBe(true);
     const items = [...document.querySelectorAll("[cmdk-item]")];
-    expect(items.some((item) => item.textContent?.includes("New, edit, duplicate"))).toBe(false);
-    expect(items.some((item) => item.textContent?.includes("Run on VC-12"))).toBe(false);
+    expect(items.some((item) => item.textContent?.includes("New, edit, duplicate"))).toBe(true);
+    expect(items.some((item) => item.textContent?.includes("Run on VC-12"))).toBe(true);
     expect(doors.list).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });

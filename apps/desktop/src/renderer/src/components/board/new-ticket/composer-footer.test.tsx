@@ -98,13 +98,13 @@ it("offers both commits as buttons at rest, with no create-more switch", () => {
   expect(html).not.toContain('aria-label="Create and run an automation"');
 });
 
-it("offers creation and chat but no Automation chooser in a cloud launch", () => {
+it("offers creation, chat and the Automation chooser in a cloud launch", () => {
   adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
   const html = render();
   expect(html).toContain('data-testid="composer-create"');
   expect(html).toContain('data-testid="composer-kickoff"');
-  expect(html).not.toContain('data-testid="composer-launch-picker"');
-  expect(html).not.toContain("Automation");
+  expect(html).toContain('data-testid="composer-launch-picker"');
+  expect(html).toContain("Automation");
 });
 
 it("gives the unmodified chord to Create and the shifted one to the primary", () => {

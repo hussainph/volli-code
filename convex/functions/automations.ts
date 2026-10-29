@@ -38,7 +38,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { PERSON_OR_AGENT, requireActor, type Caller } from "./lib/actorAuth";
 import { clearAttention } from "./lib/attention";
-import { authError, requireProject } from "./lib/auth";
+import { authError, requireProject, requireSessionScope, type SessionScope } from "./lib/auth";
 import {
   executablePayload,
   findRun,
@@ -579,21 +579,52 @@ export const disarmSchedule = mutation({
 const historyArgs = { paginationOpts: paginationOptsValidator, status: v.optional(runStatus) };
 
 async function runPage(
+  ctx: QueryCtx,
+  scope: SessionScope,
   rows: OrderedQuery<DataModel["automationRuns"]>,
   args: { paginationOpts: PaginationOptions; status?: Doc<"automationRuns">["status"] },
 ) {
   const filtered =
     args.status === undefined ? rows : rows.filter((q) => q.eq(q.field("status"), args.status!));
   const page = await filtered.paginate(args.paginationOpts);
-  return { ...page, page: page.page.map(publicRow) };
+  return {
+    ...page,
+    page: await Promise.all(
+      page.page.map(async (row) => {
+        const session =
+          row.sessionId === null
+            ? null
+            : await ctx.db
+                .query("sessions")
+                .withIndex("by_uuid", (q) => q.eq("id", row.sessionId!))
+                .unique();
+        // A Run is a team fact; its private Session is not a navigation target.
+        // Missing intake is distinct from private, including completion-before-accept.
+        const sessionAccess =
+          session === null
+            ? ("starting" as const)
+            : session.deletedAt !== null
+              ? ("gone" as const)
+              : scope.canSee(session)
+                ? ("ready" as const)
+                : ("private" as const);
+        return Object.assign(publicRow(row), {
+          sessionAccess,
+          runner: row.runnerId === null ? null : await runnerReply(ctx, row.runnerId),
+        });
+      }),
+    ),
+  };
 }
 
 /** Run rows are team facts; a private Session id still resolves as not_found to teammates. */
 export const runsForProject = query({
   args: { ...projectArgs, ...historyArgs },
   handler: async (ctx, args) => {
-    await requireProject(ctx, args.projectId);
+    const scope = await requireSessionScope(ctx, args.projectId);
     return runPage(
+      ctx,
+      scope,
       ctx.db
         .query("automationRuns")
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -607,8 +638,11 @@ export const runsForTicket = query({
   args: { ticketId: v.string(), ...historyArgs },
   handler: async (ctx, args) => {
     const caller = await requireActor(ctx);
-    await requireTicket(ctx, args.ticketId, caller.viewer);
+    const { project } = await requireTicket(ctx, args.ticketId, caller.viewer);
+    const scope = await requireSessionScope(ctx, project.id, caller.viewer);
     return runPage(
+      ctx,
+      scope,
       ctx.db
         .query("automationRuns")
         .withIndex("by_ticket", (q) => q.eq("ticketId", args.ticketId))
@@ -625,8 +659,10 @@ export const runsForAutomation = query({
     const caller = await requireActor(ctx);
     const automation = await findAutomation(ctx, args.automationId);
     if (automation === null) throw automationError("automation_not_found");
-    await requireProject(ctx, automation.projectId, caller.viewer);
+    const scope = await requireSessionScope(ctx, automation.projectId, caller.viewer);
     return runPage(
+      ctx,
+      scope,
       ctx.db
         .query("automationRuns")
         .withIndex("by_automation", (q) => q.eq("automationId", args.automationId))

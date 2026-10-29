@@ -764,9 +764,16 @@ describe("Automation records", () => {
       paginationOpts: pageOpts,
     });
     expect(queued.page).toHaveLength(2);
-    expect([...first.page, ...last.page].find((row) => row.id === runs[0]!.runId)!.sessionId).toBe(
-      privateSession.sessionId,
-    );
+    const privateRun = [...first.page, ...last.page].find((row) => row.id === runs[0]!.runId)!;
+    expect(privateRun.sessionId).toBe(privateSession.sessionId);
+    expect(privateRun.sessionAccess).toBe("private");
+    expect(privateRun.runner).toMatchObject({ id: privateRun.runnerId });
+    expect(first.page.find((row) => row.id === runs[2]!.runId)?.sessionAccess).toBe("starting");
+    const owner = await w.as.query(api.automations.runsForAutomation, {
+      automationId: w.automationId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(owner.page.find((row) => row.id === runs[0]!.runId)?.sessionAccess).toBe("ready");
     await expect(
       w.bob.as.query(api.sessionVisibility.get, { sessionId: privateSession.sessionId }),
     ).rejects.toThrow(code("not_found"));

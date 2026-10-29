@@ -73,7 +73,7 @@ import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-h
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
-import { launchStore } from "@renderer/stores/launch";
+import { automationsAvailable } from "@renderer/stores/automation-source";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -268,7 +268,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // would show. The Session rows no longer work this way — they come from a
   // pushed cache (VC-385) and are read once per project, not once per open.
   React.useEffect(() => {
-    if (!open || selectedProjectId === null || launchStore() === "cloud") return;
+    if (!open || selectedProjectId === null || !automationsAvailable(selectedProjectId)) return;
     void useAutomationsStore.getState().refresh(selectedProjectId);
   }, [open, selectedProjectId]);
 
@@ -406,7 +406,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const scopeDef = paletteScopeById(scope);
   const showTickets = scope === null || scope === "tickets";
   const showSessions = scope === null || scope === "sessions";
-  const showAutomations = launchStore() !== "cloud" && (scope === null || scope === "automations");
+  const showAutomations =
+    automationsAvailable(selectedProjectId) && (scope === null || scope === "automations");
 
   // The palette is a global destination surface, so every tracked project's
   // baseline has to exist before it can draw one list over all of them.
@@ -538,7 +539,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         {showScopeSuggestions(query, scope) ? (
           <Command.Group heading="Filter" className={MENU_LABEL_CMDK}>
             {PALETTE_SCOPES.filter(
-              (candidate) => launchStore() !== "cloud" || candidate.id !== "automations",
+              (candidate) =>
+                automationsAvailable(selectedProjectId) || candidate.id !== "automations",
             ).map((candidate) => {
               const ScopeIcon = SCOPE_ICONS[candidate.id];
               return (
