@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
-import { connectBackend } from "../fixture/testing";
+import { concurrently, connectBackend } from "../fixture/testing";
 import { enrollBackendPreview } from "./preview-fixtures";
 
 const backend = connectBackend();
@@ -17,7 +17,7 @@ const uuid = () => randomUUID();
 const subject = `user:${uuid()}`;
 let projectId: string;
 
-/** A fresh client per call, so calls really run concurrently (one client queues its mutations). */
+/** An HTTP client for reads and setup (one client queues its mutations; writers below have their own). */
 const client = () => backend.client(subject);
 
 /**
@@ -30,17 +30,6 @@ const client = () => backend.client(subject);
  */
 const WRITERS = 8;
 const windows: ConvexClient[] = [];
-
-/**
- * Every write, run at once, settled before the test goes on: a refusal fails
- * the test without a straggler landing in the next one's project history.
- */
-async function concurrently<T>(writes: readonly (() => Promise<T>)[]): Promise<T[]> {
-  const results = await Promise.allSettled(writes.map((write) => write()));
-  const refused = results.find((result) => result.status === "rejected");
-  if (refused !== undefined) throw refused.reason;
-  return results.map((result) => (result as PromiseFulfilledResult<T>).value);
-}
 
 /** Creates a ticket through writer `writer`'s socket. */
 async function createTicket(title: string, status: "todo" | "doing" = "todo", writer = 0) {

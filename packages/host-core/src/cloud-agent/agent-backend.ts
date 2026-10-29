@@ -28,7 +28,9 @@
  * which applied nothing. A mutation that meets it is sent again with the same
  * arguments after a jittered, doubling wait, at most
  * {@link CONTENTION_RETRIES} times and never past the deadline; after that the
- * contention error is the answer (`BUSY` at the socket: nothing was written).
+ * contention error is the answer (`BUSY` at the socket: this change applied
+ * nothing), unless an earlier attempt timed out, which may still have landed
+ * (`TIMEOUT`, outcome unknown).
  * Only contention is retried this way: a function's own refusal is an answer
  * and is never sent twice.
  *
@@ -232,14 +234,19 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
     return pending;
   }
 
+  /**
+   * One command's sends. `sent.resent` outlives a `send`: once an attempt
+   * timed out, whatever any later attempt (under this token or a fresh one)
+   * meets leaves the outcome unknown, and no second timeout is resent.
+   */
   async function send(
     kind: CloudFunctionKind,
     path: string,
     args: Record<string, unknown>,
     token: string,
     deadline: number | undefined,
+    sent: { resent: boolean },
   ): Promise<unknown> {
-    let resent = false;
     let contended = 0;
     for (;;) {
       try {
@@ -257,10 +264,10 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
             continue;
           }
           // An earlier attempt that timed out may still have landed.
-          if (resent) throw new CloudOfflineError("timeout", error.message, "unknown");
+          if (sent.resent) throw new CloudOfflineError("timeout", error.message, "unknown");
           throw error;
         }
-        if (resent) {
+        if (sent.resent) {
           // The first attempt may have landed whatever this one met.
           if (error instanceof CloudOfflineError && error.delivery === "not_sent") {
             throw new CloudOfflineError(error.reason, error.message, "unknown");
@@ -276,7 +283,7 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
         }
         // Once more with the same arguments: the backend's receipt for this
         // `commandId` answers a duplicate with the first one's reply.
-        resent = true;
+        sent.resent = true;
       }
     }
   }
@@ -302,8 +309,9 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
       );
     }
     const token = await tokenFor(sessionId, deadline);
+    const sent = { resent: false };
     try {
-      return await send(kind, path, args, token, deadline);
+      return await send(kind, path, args, token, deadline, sent);
     } catch (error) {
       if (!(error instanceof CloudFunctionError) || !DROPS_TOKEN.has(error.code)) throw error;
       // A refusal is an answer: nothing was applied, so the same call under a
@@ -312,7 +320,7 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
       if (timeLeft(deadline) < RETRY_MIN_MS) throw error;
       const fresh = await tokenFor(sessionId, deadline);
       try {
-        return await send(kind, path, args, fresh, deadline);
+        return await send(kind, path, args, fresh, deadline, sent);
       } catch (retry) {
         if (retry instanceof CloudFunctionError && DROPS_TOKEN.has(retry.code)) {
           tokens.delete(sessionId);

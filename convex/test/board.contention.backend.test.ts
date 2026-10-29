@@ -40,8 +40,7 @@ import type { AgentCommand, AgentRequest } from "@volli/shared";
 import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
-import { mintTestToken } from "../fixture/jwt";
-import { connectBackend } from "../fixture/testing";
+import { concurrently, connectBackend } from "../fixture/testing";
 import { wire, writeSession } from "./sessionFixtures";
 import { CloudContentionError } from "../../packages/host-core/src/cloud-agent/functions-client";
 
@@ -77,14 +76,6 @@ async function column(project: string, status: string) {
   return tickets
     .filter((ticket) => ticket.status === status)
     .toSorted((a, b) => (a.position < b.position ? -1 : 1));
-}
-
-/** All of them at once, every one settled before the test goes on. */
-async function concurrently<T>(writes: readonly (() => Promise<T>)[]): Promise<T[]> {
-  const results = await Promise.allSettled(writes.map((write) => write()));
-  const refused = results.find((result) => result.status === "rejected");
-  if (refused !== undefined) throw refused.reason;
-  return results.map((result) => (result as PromiseFulfilledResult<T>).value);
 }
 
 function agentRequest(cmd: AgentCommand, args: Record<string, unknown> = {}): AgentRequest {
@@ -213,9 +204,19 @@ describe("a burst of board writes to one project", () => {
       generation: 1,
       events: events.map(wire),
     });
+    // The real HTTP client, counting what the backend answered with contention.
+    const http = createCloudFunctionsClient({ url: backend.url });
+    let contended = 0;
+    const functions: typeof http = {
+      call: (...call) =>
+        http.call(...call).catch((error: unknown) => {
+          if (error instanceof CloudContentionError) contended += 1;
+          throw error;
+        }),
+    };
     const verbs = createCloudBoardVerbs({
       backend: createAgentBackend({
-        functions: createCloudFunctionsClient({ url: backend.url }),
+        functions,
         runnerToken: () => tokens.token(),
         connected: () => true,
       }),
@@ -236,6 +237,10 @@ describe("a burst of board writes to one project", () => {
           }),
       ),
     );
+    // Retained evidence in the run's log: how often the runner's retry was needed.
+    console.info(
+      `board contention: the runner resent ${contended} agent writes that lost every backend retry`,
+    );
     const refused = answers.filter((answer) => !answer.ok);
     expect(refused).toEqual([]);
     const numbers = answers.map((answer) =>
@@ -252,7 +257,7 @@ describe("a burst of board writes to one project", () => {
   test("with no retry at all, every write the burst refused was contention, and it left nothing behind", async () => {
     const rawProject = await newProject("Raw burst", "RB");
     const functions = createCloudFunctionsClient({ url: backend.url });
-    const token = mintTestToken(process.env.VOLLI_CONVEX_TEST_PRIVATE_KEY!, subject, { claims });
+    const token = backend.token(subject, { claims });
     const ticketIds = Array.from({ length: BURST }, () => uuid());
     const results = await Promise.allSettled(
       ticketIds.map((ticketId, index) =>

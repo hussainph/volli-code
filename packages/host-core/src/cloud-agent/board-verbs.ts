@@ -198,11 +198,11 @@ function actorToken(actor: ActorRow): string {
   }
 }
 
-/** A backend refusal in the socket's vocabulary. */
-/** What a write that kept losing to concurrent writes (and applied nothing) says. */
+/** What a write that kept losing to concurrent writes says: that write applied nothing. */
 export const BUSY_MESSAGE =
-  "Volli Cloud was busy with concurrent changes and applied nothing; the same command is safe to send again.";
+  "Volli Cloud was busy with concurrent changes, and this change applied nothing; the same command is safe to send again.";
 
+/** A backend refusal in the socket's vocabulary. */
 export function cloudFunctionRefusal(error: CloudFunctionError): AgentResponse {
   switch (error.code) {
     case "not_found":

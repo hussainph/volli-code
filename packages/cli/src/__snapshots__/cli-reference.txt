@@ -1559,7 +1559,7 @@ Error codes:
     Why: Volli Cloud has not received this Session's start yet, so it cannot act for it.
     Next: Wait a few seconds and retry the same command once.
   BUSY                 75 temporary failure (retryable)
-    Why: Volli Cloud was busy with concurrent changes to the same board or Session and applied nothing, even after the runner retried.
+    Why: Volli Cloud was busy with concurrent changes to the same board or Session, and this change applied nothing (after any retries the runner made).
     Next: Retry the same command once; nothing was written.
   SIGN_IN_REQUIRED     1 failure
     Why: Board and Session verbs in Volli Cloud act for a Session's owner, and this caller is not a Volli Session; the CLI holds no sign-in of its own.

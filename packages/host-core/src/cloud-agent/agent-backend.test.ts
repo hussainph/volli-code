@@ -295,6 +295,34 @@ describe("the agent backend", () => {
     expect(error).toMatchObject({ reason: "timeout", delivery: "unknown" });
   });
 
+  it("a timed-out attempt stays possibly landed across a fresh token: contention after it is not BUSY", async () => {
+    const answers: unknown[] = [
+      new CloudOfflineError("timeout", "slow"),
+      new CloudFunctionError("unauthenticated", "expired"),
+    ];
+    const { client, calls } = scripted((call) =>
+      call.path === "agentTokens:mint"
+        ? grant()
+        : (answers.shift() ?? new CloudContentionError("busy")),
+    );
+    const backend = createAgentBackend({
+      functions: client,
+      runnerToken: async () => "runner",
+      connected: () => true,
+      sleep: async () => {},
+    });
+    const error = await backend
+      .mutation(SESSION, "board:createComment", { commandId: "c" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CloudOfflineError);
+    expect(error).toMatchObject({ reason: "timeout", delivery: "unknown" });
+    // Two tokens; one timeout resend in all, then the contention retries.
+    expect(calls.filter((call) => call.path === "agentTokens:mint")).toHaveLength(2);
+    expect(calls.filter((call) => call.path === "board:createComment")).toHaveLength(
+      2 + CONTENTION_RETRIES + 1,
+    );
+  });
+
   it("a timeout after contention is still resent once", async () => {
     const answers: unknown[] = [
       new CloudContentionError("busy"),

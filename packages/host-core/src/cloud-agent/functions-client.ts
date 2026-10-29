@@ -87,8 +87,9 @@ export const CONVEX_OCC_CODE = "OptimisticConcurrencyControlFailure";
  * committed, so sending the same arguments again is the same command.
  */
 export class CloudContentionError extends CloudFunctionError {
-  constructor(message: string) {
-    super("contention", message);
+  /** `detail`: the platform's own sentence (it names the contended table), for diagnosis. */
+  constructor(message: string, detail: string | null = null) {
+    super("contention", message, detail === null ? {} : { detail });
     this.name = "CloudContentionError";
   }
 }
@@ -170,10 +171,12 @@ export function createCloudFunctionsClient(
         const code = typeof data["code"] === "string" ? data["code"] : "server_error";
         throw new CloudFunctionError(code, message.slice(0, MAX_MESSAGE), data);
       }
-      // The platform's own typed body (`{ code, message }`), not a function's.
-      if (isRecord(body) && body["code"] === CONVEX_OCC_CODE) {
+      // The platform's own typed body (`{ code, message }`), not a function's:
+      // a mutation's, which commits nothing it ran.
+      if (kind === "mutation" && isRecord(body) && body["code"] === CONVEX_OCC_CODE) {
         throw new CloudContentionError(
           `${path}: Volli Cloud was busy with concurrent changes and applied nothing.`,
+          typeof body["message"] === "string" ? body["message"].slice(0, MAX_MESSAGE) : null,
         );
       }
       if (response.status === 401 || response.status === 403) {

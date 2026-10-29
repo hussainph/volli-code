@@ -463,7 +463,7 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
     next: "Wait a few seconds and retry the same command once.",
   },
   BUSY: {
-    why: "Volli Cloud was busy with concurrent changes to the same board or Session and applied nothing, even after the runner retried.",
+    why: "Volli Cloud was busy with concurrent changes to the same board or Session, and this change applied nothing (after any retries the runner made).",
     next: "Retry the same command once; nothing was written.",
   },
   SIGN_IN_REQUIRED: {

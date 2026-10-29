@@ -128,6 +128,13 @@ describe("the HTTP functions client", () => {
     expect(error).not.toBeInstanceOf(CloudOfflineError);
     expect(error).toMatchObject({ name: "CloudContentionError", code: "contention" });
     expect((error as Error).message).toContain("board:createTicket");
+    // The platform's sentence names the contended table, kept for diagnosis.
+    expect((error as CloudContentionError).data["detail"]).toContain('"projectCounters" table');
+
+    // Only a mutation's: the same body for another kind is not a claim that nothing ran.
+    await expect(
+      createCloudFunctionsClient({ url }).call("action", "x:y", {}, "tok"),
+    ).rejects.toMatchObject({ name: "CloudOfflineError", reason: "unavailable" });
   });
 
   it("a token the deployment does not accept is unauthenticated, not offline", async () => {

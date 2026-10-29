@@ -496,13 +496,15 @@ few attempts in about a second) is the client transport's to answer, and
 nothing a lost attempt ran was committed:
 
 - a window (WebSocket): the Convex client closes the socket (1013),
-  reconnects and resends the same mutation; the window says "Still saving"
-  after five seconds and never drops it;
+  reconnects and resends the same mutation, and never drops it; while the
+  socket is down the window reads as offline;
 - a runner, for its agents' verbs (HTTP): the 503 with the platform's
   `OptimisticConcurrencyControlFailure` body is contention, not offline; the
   runner sends the same arguments again after jittered, doubling waits, a
   bounded number of times inside the verb's deadline, and past that answers
-  `BUSY` (exit 75, nothing written). A function's own refusal is never resent.
+  `BUSY` (exit 75: that change applied nothing), or `TIMEOUT` if an earlier
+  attempt timed out and so may have landed. A function's own refusal is never
+  resent.
 
 `board.contention.backend.test.ts` holds both at four times the burst the
 board test uses, and shows that every write the raw HTTP API refused under

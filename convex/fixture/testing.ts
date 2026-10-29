@@ -31,6 +31,10 @@ export function connectBackend() {
       if (subject !== undefined) client.setAuth(mintTestToken(privateKeyPem, subject, options));
       return client;
     },
+    /** A token signed in as `subject` through the test issuer, for a caller that sends its own requests. */
+    token(subject: string, options?: MintOptions): string {
+      return mintTestToken(privateKeyPem, subject, options);
+    },
     /**
      * A WebSocket client signed in as `subject`: the transport a desktop
      * window writes the board through. Unlike the HTTP client, it answers a
@@ -64,4 +68,16 @@ export function connectBackend() {
       );
     },
   };
+}
+
+/**
+ * Runs every write at once and settles them all before answering: a refusal
+ * rejects with the first one's reason, but only after the rest have landed or
+ * failed, so no straggler lands in the next test's history.
+ */
+export async function concurrently<T>(writes: readonly (() => Promise<T>)[]): Promise<T[]> {
+  const results = await Promise.allSettled(writes.map((write) => write()));
+  const refused = results.find((result) => result.status === "rejected");
+  if (refused !== undefined) throw refused.reason;
+  return results.map((result) => (result as PromiseFulfilledResult<T>).value);
 }
