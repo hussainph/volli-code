@@ -310,10 +310,21 @@ describe("sessionHandlersFrom", () => {
     // the launch's store and restart, its unanswered board writes, and its
     // last-seen board (VC-889), the account's GitHub half's five (VC-897),
     // this Mac's runner's four (VC-895), a cloud project's folder's two
-    // (VC-895 N2-3), and the local-profile backup read/run/reveal and seven restore commands.
-    expect(Object.keys(context.handlers)).toHaveLength(123);
+    // (VC-895 N2-3), the local-profile backup read/run/reveal and seven restore commands,
+    // and the six desktop move commands/projections.
+    expect(Object.keys(context.handlers)).toHaveLength(129);
     expect(Object.keys(context.handlers)).toEqual(
-      expect.arrayContaining(["backups.status", "backups.run", "backups.reveal"]),
+      expect.arrayContaining([
+        "backups.status",
+        "backups.run",
+        "backups.reveal",
+        "moves.snapshot",
+        "moves.subscribe",
+        "moves.preflight",
+        "moves.start",
+        "moves.command",
+        "moves.report",
+      ]),
     );
   });
 });
