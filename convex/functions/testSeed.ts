@@ -9,6 +9,7 @@
 import { v } from "convex/values";
 
 import { internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { seedTestRunner, seedTestWorld } from "./lib/testWorld";
 import { RATE_LIMIT_SWEEP_PAGE_SIZE } from "./lib/runnerLinkRateLimit";
 
@@ -43,6 +44,28 @@ export const seedWorld = internalMutation({
   handler: async (ctx, args) => {
     requireTestDeployment();
     return seedTestWorld(ctx, args);
+  },
+});
+
+/** Only the synthetic pinned-backend rehearsal may fast-forward expiry.
+ * The caller has joined every disposable engine process before invoking this.
+ * Cloud deployments never trust the test issuer, so this cannot bypass a
+ * real upload's 30-minute purge safety window.
+ */
+export const expireRehearsalUploads = internalMutation({
+  args: { moveId: v.string() },
+  handler: async (ctx, { moveId }) => {
+    requireTestDeployment();
+    const row = await ctx.db
+      .query("projectImports")
+      .withIndex("by_uuid", (q) => q.eq("id", moveId))
+      .unique();
+    if (!row || row.status !== "aborting" || !row.purge) return;
+    await ctx.db.patch(row._id, { abortedAt: Date.now() - 31 * 60_000 });
+    await ctx.scheduler.runAfter(0, internal.projectImportPurge.step, {
+      moveId,
+      run: row.purge.run,
+    });
   },
 });
 

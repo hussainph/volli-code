@@ -377,6 +377,18 @@ Each was a decision made while turning the design into code.
     `lib/projectPurge.ts` names every table; a new table states whether a
     purge deletes it.
 
+## Rehearsal Workspace cleanup
+
+`projectImports.by_workspace` is an additive index used only by the staging
+rehearsal's operator cleanup lookup, not the import read-back. The internal
+`migration:cleanupRehearsal` requires `VOLLI_MIGRATION_REHEARSAL=enabled` and the
+exact disposable Workspace name/id/owner. It refuses unfinished imports or
+shared/extended Workspaces, removes membership/policy and pages audit rows,
+then sets the existing `workspaces.deletedAt` (no new fields/tables). Purged
+import/stream records and the Workspace tombstone remain: move ids are never
+reusable and retained accounting references keep their parent. Project rows
+and object bytes must already be removed by the normal import purge.
+
 ## Operator rescue of project imports
 
 Operator rescue (`projectImports:rescue`, internal only) adds an optional

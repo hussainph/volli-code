@@ -192,6 +192,20 @@ into another Workspace and never overwriting them; `readPage` and
 (keys, conflicts, `unchanged`) is `functions/lib/migrationImport.ts`, which
 the person-authorized import below shares.
 
+The separate `--move --target` rehearsal uses the real person-authorized
+engine, not these admin import functions. Its only admin call here is
+`migration:cleanupRehearsal`, enabled explicitly on staging with
+`VOLLI_MIGRATION_REHEARSAL=enabled`. It accepts only the harness's generated
+Workspace name/id and owner, refuses shared/extended Workspaces and unfinished
+imports, pages out audit rows, removes membership/policy, then tombstones the
+empty Workspace. Normal purged import/stream tombstones remain, preserving
+single-use move ids and retention/accounting references. It never deletes
+project data directly: the normal purge must first remove all project rows
+and objects. `checkOnly` validates the deployment opt-in and Workspace shape,
+not readiness to delete. The rehearsal owns the new `projectImports.by_workspace`
+cleanup lookup. Operator steps and private-input rules:
+[`migration-dry-run/README.md`](../packages/host-core/src/migration-dry-run/README.md).
+
 ## The person-authorized project import
 
 `functions/projectImports.ts` is "Move to Volli Cloud" for one project, called

@@ -290,11 +290,15 @@ jobs:
       # refused), home containment parity with the app, scratch-only fixture
       # repos, identity-exact stop — plus the fake provider. No Electron. The
       # sshd fixture test runs only on macOS and reports itself skipped here.
+      - name: Ensure the rehearsal profile liveness probe
+        run: command -v lsof || (sudo apt-get update -qq && sudo apt-get install -y lsof)
+
       - name: Test volli-drive harness rules
         run: >-
           node --test apps/desktop/e2e/volli-drive/lib/core.test.mjs
           apps/desktop/e2e/volli-drive/lib/launch-gate.test.mjs
           apps/desktop/e2e/volli-drive/lib/deployment.test.mjs
+          apps/desktop/e2e/volli-drive/lib/rehearsal-ui.test.mjs
           apps/desktop/e2e/volli-drive/lib/stop.test.mjs
           apps/desktop/e2e/volli-drive/lib/fake-provider.test.mjs
           apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs
@@ -767,6 +771,9 @@ jobs:
 
       - name: Unit tests (convex-test)
         run: vp run --filter @volli/convex test --coverage --maxWorkers=$(nproc)
+
+      - name: Ensure the rehearsal profile liveness probe
+        run: command -v lsof || (sudo apt-get update -qq && sudo apt-get install -y lsof)
 
       - name: Backend tests (pinned local backend)
         run: vp run --filter @volli/convex test:backend

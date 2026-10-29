@@ -63,7 +63,7 @@ test("only the exact disposable Workspace/owner may be removed, and checkOnly ne
   ).rejects.toMatchObject(code("not_rehearsal"));
 });
 
-test("an unpurged reservation blocks deletion; purged bookkeeping is removed in pages", async () => {
+test("an unpurged reservation blocks deletion; purged ids and stream tombstones stay reserved", async () => {
   vi.stubEnv("VOLLI_MIGRATION_REHEARSAL", "enabled");
   const { t, args } = await rehearsal();
   const moveId = randomUUID();
@@ -97,16 +97,21 @@ test("an unpurged reservation blocks deletion; purged bookkeeping is removed in 
     code("purge_incomplete"),
   );
   await t.run((ctx) => ctx.db.patch(doc, { status: "purged" }));
-  expect(await t.mutation(internal.migration.cleanupRehearsal, args)).toEqual({ done: false });
   expect(await t.mutation(internal.migration.cleanupRehearsal, args)).toEqual({ done: true });
   await t.run(async (ctx) => {
-    expect(await ctx.db.get(doc)).toBeNull();
+    expect(await ctx.db.get(doc)).toMatchObject({ status: "purged" });
     expect(
       await ctx.db
         .query("projectImportStreams")
         .withIndex("by_move_stream", (q) => q.eq("moveId", moveId))
         .collect(),
-    ).toEqual([]);
+    ).toHaveLength(1);
+    expect(
+      await ctx.db
+        .query("workspaces")
+        .withIndex("by_uuid", (q) => q.eq("id", args.workspaceId))
+        .unique(),
+    ).toMatchObject({ deletedAt: expect.any(Number) });
   });
 });
 

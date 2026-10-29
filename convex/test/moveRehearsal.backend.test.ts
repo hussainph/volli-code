@@ -1,10 +1,12 @@
-/** The actual rehearsal worker against the pinned backend and an HTTP S3
- * fixture. Only expiry sleeps are shortened by direct composition; the CLI
- * has no bypass. Backup, exporter, imports, history, window reads are real.
+/** Parent orchestration end to end against the pinned backend and HTTP S3.
+ * Simulated wiring: cross-platform file copy and expiry waits only. The CLI
+ * has no bypass; all safety checks, real SIGKILLs, backup, exporter, imports,
+ * verification, rollback/re-move, escape hatch, report and cleanup run.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openRawDb } from "../../packages/host-core/src/db/test-helpers";
@@ -12,14 +14,26 @@ import { expect, test, vi } from "vite-plus/test";
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 import { mintTestToken } from "../fixture/jwt";
-import { verifyS3MoveRequest, verifyS3ReadRequest, verifyS3Request } from "../fixture/s3-boundary";
+import {
+  verifyS3MoveRequest,
+  verifyS3ReadRequest,
+  verifyS3Request,
+  verifyS3ListRequest,
+} from "../fixture/s3-boundary";
 import { enrollBackendPreview } from "./preview-fixtures";
-import { runRehearsalChild } from "../../packages/host-core/src/migration-dry-run/move-rehearsal";
+import {
+  runMoveRehearsal,
+  runRehearsalChild,
+} from "../../packages/host-core/src/migration-dry-run/move-rehearsal";
 import {
   runMoveJob,
   type MoveJob,
 } from "../../packages/host-core/src/migration-dry-run/move-worker";
 import { writeMoveProfile } from "../../packages/host-core/src/migration-dry-run/test-support/move-profile";
+
+function quote(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
 
 test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and goes back to local", async () => {
   const backend = connectBackend();
@@ -31,11 +45,6 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
     ownerUserId: userId,
     name: "Rehearsal",
   });
-  const workspaceId = randomUUID();
-  await person.mutation(api.workspaces.create, {
-    workspaceId,
-    name: `migration-rehearsal-${workspaceId}`,
-  });
   const root = mkdtempSync(join(tmpdir(), "move-rehearsal-http-"));
   const source = join(root, "source"),
     profile = join(root, "copy");
@@ -46,7 +55,12 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
   try {
     unique.pragma("foreign_keys = OFF");
     const prefix = randomUUID().slice(0, 24);
-    const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+    // This is fixture construction, not a product write. Preserve every
+    // production trigger verbatim while re-keying its immutable identities.
+    const triggers = unique
+      .prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'")
+      .all() as { name: string; sql: string }[];
+    for (const trigger of triggers) unique.exec(`DROP TRIGGER ${quote(trigger.name)}`);
     for (const { name } of unique
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
       .all() as { name: string }[]) {
@@ -54,21 +68,26 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
         name: string;
         type: string;
       }[]) {
-        if (column.type === "TEXT")
-          unique
-            .prepare(
-              `UPDATE ${quote(name)} SET ${quote(column.name)}=replace(${quote(column.name)},?,?) WHERE instr(${quote(column.name)},?)>0`,
-            )
-            .run("7a1f0c2e-0000-4000-8000-", prefix, "7a1f0c2e-0000-4000-8000-");
+        if (column.type === "TEXT") {
+          for (const [from, to] of [
+            ["7a1f0c2e-0000-4000-8000-", prefix],
+            ["mcp-docs", `mcp-docs-${prefix}`],
+          ]) {
+            unique
+              .prepare(
+                `UPDATE ${quote(name)} SET ${quote(column.name)}=replace(${quote(column.name)},?,?) WHERE instr(${quote(column.name)},?)>0`,
+              )
+              .run(from, to, from);
+          }
+        }
       }
     }
+    for (const trigger of triggers) unique.exec(trigger.sql);
     expect(unique.pragma("foreign_key_check")).toEqual([]);
   } finally {
     unique.close();
   }
   const original = readFileSync(fixture.dbPath);
-  // Cross-platform test copy; the operator CLI strictly requires cp -c on APFS.
-  cpSync(source, profile, { recursive: true });
   const objects = new Map<string, Buffer>();
   const config = {
     endpoint: "",
@@ -84,7 +103,18 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
         Object.entries(req.headers).map(([k, v]) => [k, String(v)]),
       );
       const request = { method: req.method!, headers };
-      if (req.method === "PUT") {
+      if (req.method === "GET" && url.searchParams.has("list-type")) {
+        const { prefix } = verifyS3ListRequest(request, url, config);
+        const keys = [...objects.keys()].filter((key) => key.startsWith(prefix));
+        res
+          .writeHead(200, { "content-type": "application/xml" })
+          .end(
+            `<ListBucketResult><IsTruncated>false</IsTruncated>${keys.map((key) => `<Contents><Key>${encodeURIComponent(key)}</Key></Contents>`).join("")}</ListBucketResult>`,
+          );
+      } else if (req.method === "DELETE") {
+        objects.delete(verifyS3MoveRequest(request, url, config));
+        res.writeHead(204).end();
+      } else if (req.method === "PUT") {
         const key =
           headers["if-none-match"] === "*"
             ? verifyS3MoveRequest(request, url, config)
@@ -139,93 +169,128 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
     }),
   });
   expect(update.ok).toBe(true);
+  vi.stubEnv("VOLLI_MOVE_TOKEN_FILE", "");
+  const redactions = join(root, "redactions.json");
+  writeFileSync(redactions, "[]"); // known synthetic data; loopback only
+  vi.stubEnv("VOLLI_MOVE_REDACTIONS_FILE", redactions);
   vi.stubEnv(
     "VOLLI_MOVE_TOKEN",
     mintTestToken(process.env.VOLLI_CONVEX_TEST_PRIVATE_KEY!, subject),
   );
-  const file = join(root, "job.json");
-  const job: MoveJob = {
-    source,
-    profile,
-    target: backend.url,
-    allowProduction: false,
-    userId,
-    runnerId,
-    workspaceId,
-    includeRemoved: false,
-    operation: "run",
-  };
-  writeFileSync(file, JSON.stringify(job));
+  vi.stubEnv("VOLLI_MOVE_ADMIN_KEY", process.env.VOLLI_CONVEX_ADMIN_KEY!);
+  const reportPath = join(root, "report.json");
+  let workspaceId = "";
+  let returned = false;
   try {
     // Public clients cannot call the cleanup helper, even with its exact args.
     await expect(
       person.mutation(
         internal.migration.cleanupRehearsal as never,
-        { workspaceId, userId } as never,
+        { workspaceId: randomUUID(), userId } as never,
       ),
     ).rejects.toThrow();
-    for (const kill of ["upload", "import"] as const) {
-      const current = JSON.parse(readFileSync(file, "utf8")) as MoveJob;
-      writeFileSync(file, JSON.stringify({ ...current, kill }));
-      expect((await runRehearsalChild(file, () => {})).killed).toBe(true);
-    }
-    writeFileSync(
-      file,
-      JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), kill: undefined }),
+    const ok = await runMoveRehearsal(
+      {
+        target: backend.url,
+        source,
+        profile,
+        report: reportPath,
+        runnerId,
+        allowProduction: false,
+        includeRemoved: false,
+        killUpload: true,
+        killImport: true,
+        rollback: true,
+        goBack: true,
+        hold: false,
+      },
+      {
+        cloneProfile: async (from, to) => {
+          cpSync(from, to, { recursive: true });
+        },
+        async runChild(file, onRss) {
+          const job = JSON.parse(readFileSync(file, "utf8")) as MoveJob;
+          workspaceId = job.workspaceId;
+          if (job.kill) return runRehearsalChild(file, onRss);
+          if (job.operation === "rollback") {
+            // The manual UI check changed the cloud copy: rehearsal rollback
+            // must explicitly confirm discarding those sandbox-only changes.
+            const db = openRawDb(join(profile, "volli.db"));
+            try {
+              const ticketId = db
+                .prepare(
+                  "SELECT t.id FROM tickets t JOIN cloud_moves m ON m.project_id=t.project_id WHERE m.move_id=? LIMIT 1",
+                )
+                .pluck()
+                .get(job.moveId) as string;
+              await person.mutation(api.board.createComment, {
+                commandId: randomUUID(),
+                commentId: randomUUID(),
+                ticketId,
+                body: "synthetic UI change",
+              });
+            } finally {
+              db.close();
+            }
+          }
+          onRss(process.memoryUsage().rss);
+          const result = await runMoveJob(file, async () => {});
+          if (job.operation === "go-back") {
+            const db = openRawDb(join(profile, "volli.db"));
+            try {
+              returned =
+                db
+                  .prepare("SELECT state FROM cloud_moves WHERE move_id=?")
+                  .pluck()
+                  .get(job.moveId) === "returned";
+            } finally {
+              db.close();
+            }
+          }
+          return { killed: false, result };
+        },
+        async waitPurged(client, moveId) {
+          await backend.admin(internal.testSeed.expireRehearsalUploads, { moveId });
+          const until = Date.now() + 15_000;
+          while (Date.now() < until) {
+            if (
+              ((await client.query("projectImports:status", { moveId })) as { status: string })
+                .status === "purged"
+            )
+              return;
+            await delay(20);
+          }
+          throw new Error("test purge did not finish");
+        },
+      },
     );
-    try {
-      await runMoveJob(file, async () => {});
-    } catch (error) {
-      const diagnostic = openRawDb(join(profile, "volli.db"));
-      try {
-        throw new Error(
-          JSON.stringify(
-            diagnostic
-              .prepare("SELECT state,paused,failure_json,report_json FROM cloud_moves")
-              .all(),
-          ),
-          { cause: error },
-        );
-      } finally {
-        diagnostic.close();
-      }
-    }
-    const db = openRawDb(join(profile, "volli.db"));
-    try {
-      const moves = db
-        .prepare(
-          "SELECT move_id,state,report_json FROM cloud_moves WHERE workspace_id=? ORDER BY position",
-        )
-        .all(workspaceId) as { move_id: string; state: string; report_json: string }[];
-      expect(moves).toHaveLength(2);
-      expect(
-        moves.every((m) => m.state === "checked" && JSON.parse(m.report_json).ok === true),
-      ).toBe(true);
-      const before = db.prepare("SELECT * FROM cloud_moves").all();
-      await runMoveJob(file, async () => {});
-      expect(db.prepare("SELECT * FROM cloud_moves").all()).toEqual(before);
-      expect(objects.size).toBeGreaterThan(0);
-      const first = moves[0]!.move_id;
-      const current = JSON.parse(readFileSync(file, "utf8")) as MoveJob;
-      writeFileSync(file, JSON.stringify({ ...current, operation: "rollback", moveId: first }));
-      await runMoveJob(file, async () => {});
-      expect(db.prepare("SELECT state FROM cloud_moves WHERE move_id=?").pluck().get(first)).toBe(
-        "rolled_back",
-      );
-      const second = moves[1]!.move_id;
-      writeFileSync(file, JSON.stringify({ ...current, operation: "go-back", moveId: second }));
-      await runMoveJob(file, async () => {});
-      expect(db.prepare("SELECT state FROM cloud_moves WHERE move_id=?").pluck().get(second)).toBe(
-        "returned",
-      );
-      expect(readFileSync(fixture.dbPath)).toEqual(original);
-    } finally {
-      db.close();
-    }
+    const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    expect(ok, JSON.stringify(report)).toBe(true);
+    expect(report).toMatchObject({
+      ok: true,
+      kills: ["upload", "import"],
+      failures: [],
+      cleanup: { profile: true, workspace: true },
+    });
+    expect(
+      report.runs.filter((run: { operation: string }) => run.operation === "move-again"),
+    ).toHaveLength(1);
+    expect(
+      report.runs.every(
+        (run: { elapsedMs: number; peakRssBytes: number }) =>
+          run.elapsedMs >= 0 && run.peakRssBytes > 0,
+      ),
+    ).toBe(true);
+    expect(returned).toBe(true);
+    expect(existsSync(profile)).toBe(false);
+    expect(existsSync(`${profile}.rehearsal.json`)).toBe(false);
+    expect(objects.size).toBe(0);
+    expect(readFileSync(fixture.dbPath)).toEqual(original);
+    expect(readFileSync(reportPath, "utf8")).not.toContain("synthetic UI change");
+    expect(readFileSync(reportPath, "utf8")).not.toContain(workspaceId);
+    await expect(person.query(api.workspaces.get, { workspaceId })).rejects.toThrow();
   } finally {
     vi.unstubAllEnvs();
-    // The fixture backend is destroyed by global teardown, including its
-    // scheduled purge. The unit cleanup tests cover final Workspace removal.
     await new Promise<void>((done) => server.close(() => done()));
     rmSync(root, { recursive: true, force: true });
     await fetch(`${backend.url}/api/update_environment_variables`, {

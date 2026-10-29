@@ -330,7 +330,7 @@ export const cleanupRehearsal = internalMutation({
       .query("workspaces")
       .withIndex("by_uuid", (q) => q.eq("id", workspaceId))
       .unique();
-    if (workspace === null) return { done: true };
+    if (workspace === null || workspace.deletedAt !== null) return { done: true };
     if (
       workspace.name !== `migration-rehearsal-${workspaceId}` ||
       workspace.createdByUserId !== userId
@@ -392,21 +392,14 @@ export const cleanupRehearsal = internalMutation({
         .first()
     )
       throw migrationError("projects_remain", "Purge the rehearsal imports first.");
-    const move = await ctx.db
+    const unfinished = await ctx.db
       .query("projectImports")
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .filter((q) => q.neq(q.field("status"), "purged"))
       .first();
-    if (move) {
-      if (move.status !== "purged")
-        throw migrationError("purge_incomplete", "Wait for the normal import purge.");
-      for (const stream of await ctx.db
-        .query("projectImportStreams")
-        .withIndex("by_move_stream", (q) => q.eq("moveId", move.id))
-        .take(100))
-        await ctx.db.delete(stream._id);
-      await ctx.db.delete(move._id);
-      return { done: false };
-    }
+    if (unfinished) throw migrationError("purge_incomplete", "Wait for the normal import purge.");
+    // Keep the normal purge's count/digest tombstones: a move id is never
+    // reusable. No project content or objects remain at this point.
     const audits = await ctx.db
       .query("auditLog")
       .withIndex("by_workspace_at", (q) => q.eq("workspaceId", workspaceId))
@@ -419,7 +412,14 @@ export const cleanupRehearsal = internalMutation({
       .unique();
     if (policy) await ctx.db.delete(policy._id);
     for (const member of members) await ctx.db.delete(member._id);
-    await ctx.db.delete(workspace._id);
+    // The Workspace tombstone also keeps any retention/accounting references
+    // valid. Product reads already hide deleted Workspaces; this is not a
+    // general hard-delete lifecycle for arbitrary Workspace resources.
+    await ctx.db.patch(workspace._id, {
+      deletedAt: Date.now(),
+      purgeAfter: null,
+      activeMemberCount: 0,
+    });
     return { done: true };
   },
 });

@@ -57,6 +57,7 @@ describe("profile separation", () => {
     const f = fixture();
     expect(() => assertCopyPaths(f.live, f.scratch, f.live)).not.toThrow();
     expect(() => assertCopyPaths(f.source, f.live, f.live)).toThrow();
+    expect(() => assertCopyPaths(f.source, `${f.live}-dev`, f.live)).toThrow();
     expect(() => assertCopyPaths(f.source, join(f.live, "copy"), f.live)).toThrow();
     expect(() => assertCopyPaths(f.source, f.root, f.live)).toThrow();
     expect(() => assertCopyPaths(f.source, join(f.source, "copy"), f.live)).toThrow();

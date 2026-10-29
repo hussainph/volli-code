@@ -8,13 +8,19 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createInterface } from "node:readline/promises";
 import Database from "better-sqlite3";
+import { MIGRATION_IMPORT_STREAMS } from "@volli/shared/cloud";
 import {
   assertCopyPaths,
   assertProfileIdle,
   assertReportPath,
   rehearsalTarget,
 } from "./move-safety";
-import { moveAuthorization, rehearsalBackend, type MoveJob } from "./move-worker";
+import {
+  moveAuthorization,
+  rehearsalBackend,
+  rehearsalRedaction,
+  type MoveJob,
+} from "./move-worker";
 
 interface ProjectResult {
   moveId: string;
@@ -29,6 +35,57 @@ export interface RehearsalResult {
   outcome: string;
   projects: ProjectResult[];
   profileRefused: Record<string, number>;
+}
+
+const REFUSAL_CODES = new Set([
+  "invalid_id",
+  "invalid_field",
+  "unstorable",
+  "conflict",
+  "duplicate_key",
+  "schema",
+  "foreign_identity",
+  "not_personal",
+  "invalid_argument",
+  "runner_unavailable",
+  "already_migrated",
+  "github_link",
+  "invalid_key",
+  "invalid_visibility",
+  "missing_reference",
+  "not_found",
+  "not_moved",
+  "outside_project",
+  "backend_error",
+]);
+function reportCounts(
+  counts: Record<string, number>,
+  allowed: ReadonlySet<string>,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const [key, count] of Object.entries(counts)) {
+    if (!Number.isSafeInteger(count) || count < 0) continue;
+    const name = allowed.has(key) ? key : "other";
+    result[name] = (result[name] ?? 0) + count;
+  }
+  return result;
+}
+
+/** Report projection is deliberately explicit: never spread a journal/result. */
+export function rehearsalMetrics(result: RehearsalResult, elapsedMs: number) {
+  return {
+    elapsedMs,
+    outcome: result.outcome,
+    profileRefused: reportCounts(result.profileRefused, REFUSAL_CODES),
+    projects: result.projects.map((project) => ({
+      state: project.state,
+      rows: reportCounts(project.rows, new Set(MIGRATION_IMPORT_STREAMS)),
+      failureCode: project.failureCode,
+      refused: reportCounts(project.refused, REFUSAL_CODES),
+      verified: project.verified,
+      realPath: project.realPath,
+    })),
+  };
 }
 
 function rehearsalImports(job: MoveJob): string[] {
@@ -48,7 +105,10 @@ function rehearsalImports(job: MoveJob): string[] {
 }
 
 /** Recovery after a killed parent or an expired token. State is private, not a report. */
-export async function cleanupRehearsalState(file: string): Promise<void> {
+export async function cleanupRehearsalState(
+  file: string,
+  waitPurged = waitForPurge,
+): Promise<void> {
   const job = JSON.parse(readFileSync(file, "utf8")) as MoveJob & { cleanupMoves?: string[] };
   const target = rehearsalTarget(job.target, job.allowProduction);
   if (
@@ -83,7 +143,7 @@ export async function cleanupRehearsalState(file: string): Promise<void> {
     }
   }
   // All expiry clocks run together, not N projects × the 30-minute floor.
-  const purges = await Promise.allSettled(pending.map((moveId) => waitForPurge(backend, moveId)));
+  const purges = await Promise.allSettled(pending.map((moveId) => waitPurged(backend, moveId)));
   if (purges.some((result) => result.status === "rejected")) throw new Error("purge_incomplete");
   while (
     !(
@@ -189,15 +249,29 @@ export async function runRehearsalChild(
   });
 }
 
-export async function runMoveRehearsal(options: RehearsalOptions): Promise<boolean> {
+interface RehearsalRuntime {
+  /** Platform edges, injectable for the cross-platform pinned-backend fixture;
+   * no CLI flag/environment bypass exists. All safety checks still run.
+   */
+  cloneProfile?: (source: string, destination: string) => Promise<void>;
+  runChild?: typeof runRehearsalChild;
+  waitPurged?: typeof waitForPurge;
+}
+
+export async function runMoveRehearsal(
+  options: RehearsalOptions,
+  runtime: RehearsalRuntime = {},
+): Promise<boolean> {
   const target = rehearsalTarget(options.target, options.allowProduction);
   assertCopyPaths(options.source, options.profile);
   assertReportPath(options.source, options.profile, options.report);
   assertProfileIdle(options.source);
-  if (process.platform !== "darwin") throw new Error("APFS_clone_requires_macos");
+  if (!runtime.cloneProfile && process.platform !== "darwin")
+    throw new Error("apfs_clone_requires_macos");
   const adminKey = process.env.VOLLI_MOVE_ADMIN_KEY;
   if ((!process.env.VOLLI_MOVE_TOKEN && !process.env.VOLLI_MOVE_TOKEN_FILE) || !adminKey)
-    throw new Error("VOLLI_MOVE_TOKEN_and_VOLLI_MOVE_ADMIN_KEY_required");
+    throw new Error("staging_person_token_and_admin_key_required");
+  rehearsalRedaction(target); // refuse before copying/uploading if no complete inventory
   const backend = rehearsalBackend(target, moveAuthorization);
   const admin = rehearsalBackend(target, `Convex ${adminKey}`);
   const viewer = (await backend.query("accounts:viewer", {})) as { userId: string } | null;
@@ -249,27 +323,34 @@ export async function runMoveRehearsal(options: RehearsalOptions): Promise<boole
       mode: 0o600,
     });
     const start = Date.now();
-    let answer;
+    let peakRssBytes = 0;
+    let result: RehearsalResult | undefined;
+    let killed = false;
+    let failed = false;
     try {
-      answer = await runRehearsalChild(stateFile, (rss) => {
+      const answer = await (runtime.runChild ?? runRehearsalChild)(stateFile, (rss) => {
+        peakRssBytes = Math.max(peakRssBytes, rss);
         report.peakRssBytes = Math.max(report.peakRssBytes, rss);
       });
+      result = answer.result;
+      killed = answer.killed;
+      return answer;
     } catch (error) {
-      const result = (error as { result?: RehearsalResult }).result;
-      if (result) record(result, Date.now() - start);
+      failed = true;
+      result = (error as { result?: RehearsalResult }).result;
       throw error;
+    } finally {
+      report.runs.push({
+        operation,
+        kill: kill ?? null,
+        killed,
+        failed,
+        peakRssBytes,
+        ...(result
+          ? rehearsalMetrics(result, Date.now() - start)
+          : { elapsedMs: Date.now() - start }),
+      });
     }
-    if (answer.result) record(answer.result, Date.now() - start);
-    return answer;
-  };
-  const record = (result: RehearsalResult, elapsedMs: number) => {
-    // Explicit allowlist. No move/project ids, messages, digests or arbitrary backend values.
-    report.runs.push({
-      elapsedMs,
-      outcome: result.outcome,
-      profileRefused: result.profileRefused,
-      projects: result.projects.map(({ moveId: _id, ...metrics }) => metrics),
-    });
   };
   try {
     await backend.mutation("workspaces:create", {
@@ -280,7 +361,8 @@ export async function runMoveRehearsal(options: RehearsalOptions): Promise<boole
     // Fail rather than silently change the copy's safety/space contract.
     await mkdir(profile, { mode: 0o700 });
     cloned = true;
-    execFileSync("cp", ["-cR", `${source}/.`, profile], { stdio: "pipe" });
+    if (runtime.cloneProfile) await runtime.cloneProfile(source, profile);
+    else execFileSync("cp", ["-cR", `${source}/.`, profile], { stdio: "pipe" });
     assertProfileIdle(source);
     assertProfileIdle(profile);
     for (const path of [
@@ -308,6 +390,11 @@ export async function runMoveRehearsal(options: RehearsalOptions): Promise<boole
     const again = (await run("run")).result!;
     if (JSON.stringify(again) !== JSON.stringify(moved)) throw new Error("resume_changed_result");
     if (options.hold) {
+      writeFileSync(
+        stateFile,
+        JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), uiReady: true }),
+        { mode: 0o600 },
+      );
       const terminal = createInterface({ input: process.stdin, output: process.stderr });
       try {
         await terminal.question(
@@ -315,23 +402,40 @@ export async function runMoveRehearsal(options: RehearsalOptions): Promise<boole
         );
       } finally {
         terminal.close();
+        writeFileSync(
+          stateFile,
+          JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), uiReady: false }),
+          { mode: 0o600 },
+        );
       }
       assertProfileIdle(profile);
     }
     const first = moved.projects[0]!.moveId;
     if (options.rollback) {
       await run("rollback", undefined, first);
-      await waitForPurge(backend, first);
+      await (runtime.waitPurged ?? waitForPurge)(backend, first);
       moved = (await run("move-again", undefined, first)).result!;
     }
     if (options.goBack) await run("go-back", undefined, moved.projects[0]!.moveId);
     report.ok = true;
-  } catch {
-    report.failures.push("rehearsal_failed");
+  } catch (error) {
+    const safe = new Set([
+      "purge_timeout",
+      "purge_stopped_operator_inspection_required",
+      "requested_kill_point_not_reached",
+      "resume_changed_result",
+      "engine_child_failed",
+      "profile_store_symlink_refused",
+      "profile_has_an_app_marker_quit_the_app_first",
+      "profile_database_is_open_quit_the_app_first",
+    ]);
+    report.failures.push(
+      error instanceof Error && safe.has(error.message) ? error.message : "rehearsal_failed",
+    );
   } finally {
     // Read every reservation, including one whose child was killed before replying.
     try {
-      await cleanupRehearsalState(stateFile);
+      await cleanupRehearsalState(stateFile, runtime.waitPurged);
       report.cleanup.workspace = true;
     } catch {
       report.failures.push("workspace_cleanup_incomplete_use_rehearsal_state");

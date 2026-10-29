@@ -16,6 +16,7 @@ import { migrate } from "../db/migrations";
 import { exportMigrationSnapshot } from "../migration-export/exporter";
 import { createFileTranscriptArtifactStore } from "../session-runtime/transcript-artifacts";
 import { rehearsalTarget } from "./move-safety";
+import type { RehearsalResult } from "./move-rehearsal";
 
 export interface MoveJob {
   source: string;
@@ -75,6 +76,26 @@ export function rehearsalBackend(
   };
 }
 
+/** Explicit operator-supplied inventory, never discovered in the source profile.
+ * Use the same streaming redactor as the runner. Empty is test-loopback only.
+ */
+export function rehearsalRedaction(target: string) {
+  const path = process.env.VOLLI_MOVE_REDACTIONS_FILE;
+  if (!path) throw new Error("redaction_inventory_required");
+  const values: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(target).hostname);
+  if (
+    !Array.isArray(values) ||
+    values.some((value) => typeof value !== "string" || value.length === 0) ||
+    (!loopback && values.length === 0)
+  )
+    throw new Error("complete_redaction_inventory_required");
+  const redactor = new ExactValueByteRedactor(
+    (values as string[]).map((value) => [value, "[REDACTED]"] as const),
+  );
+  return { step: redactor.step.bind(redactor), complete: () => true };
+}
+
 function sampleRss(): void {
   process.send?.({
     rss: Math.max(process.memoryUsage().rss, process.resourceUsage().maxRSS * 1024),
@@ -85,10 +106,11 @@ function sampleRss(): void {
 export async function runMoveJob(
   file: string,
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>,
-): Promise<void> {
+): Promise<RehearsalResult | undefined> {
   const job = JSON.parse(readFileSync(file, "utf8")) as MoveJob;
   const target = rehearsalTarget(job.target, job.allowProduction);
   const backend = rehearsalBackend(target, moveAuthorization);
+  const redaction = rehearsalRedaction(target);
   let armed = true;
   const inFlight = async (point: "upload" | "import") => {
     if (!armed || job.kill !== point) return;
@@ -164,12 +186,7 @@ export async function runMoveJob(
         backend: intercepted,
         artifacts: createFileTranscriptArtifactStore(transcripts),
         piDirectory: join(job.profile, "pi-sessions"),
-        // Canonical transcripts are already redacted; do not unlock or read
-        // credential stores merely to rehearse. Pi logs remain private data.
-        redaction: {
-          step: (window, from, final) => new ExactValueByteRedactor([]).step(window, from, final),
-          complete: () => true,
-        },
+        redaction,
         fetch: uploadFetch,
         sleep,
       }),
@@ -194,7 +211,11 @@ export async function runMoveJob(
       sleep,
     });
     if (job.operation === "rollback") {
-      await engine.rollBack(job.moveId!);
+      // The explicit rehearsal command discards UI-check changes in this
+      // disposable Workspace; normal product rollback still asks the person.
+      if (engine.journal.move(job.moveId!)?.workspaceId !== job.workspaceId)
+        throw new Error("foreign_move_refused");
+      await engine.rollBack(job.moveId!, { confirmChanged: true });
     } else if (job.operation === "go-back") {
       await engine.goBackToLocal(job.moveId!);
     } else {
@@ -223,30 +244,32 @@ export async function runMoveJob(
       const profileReport = JSON.parse(
         readFileSync(join(workRoot, `profile-${job.queueId}`, "report.json"), "utf8"),
       ) as { refused: Record<string, number> };
-      process.send?.({
-        result: {
-          outcome: outcome.kind,
-          projects: moves.map((move) => ({
-            moveId: move.moveId,
-            state: move.state,
-            rows: move.journal.rows ?? {},
-            failureCode: move.failure?.code ?? null,
-            refused: move.failure?.detail?.codes ?? {},
-            verified: (move.report?.verify as { ok?: boolean } | undefined)?.ok === true,
-            realPath: move.report?.ok === true,
-          })),
-          profileRefused: profileReport.refused,
-        },
-      });
+      const result: RehearsalResult = {
+        outcome: outcome.kind,
+        projects: moves.map((move) => ({
+          moveId: move.moveId,
+          state: move.state,
+          rows: move.journal.rows ?? {},
+          failureCode: move.failure?.code ?? null,
+          refused: (move.failure?.detail?.codes as Record<string, number> | undefined) ?? {},
+          verified: (move.report?.verify as { ok?: boolean } | undefined)?.ok === true,
+          realPath: move.report?.ok === true,
+        })),
+        profileRefused: profileReport.refused,
+      };
+      process.send?.({ result });
       if (
         outcome.kind !== "done" ||
+        Object.keys(profileReport.refused).length > 0 ||
         moves.some((m) => m.state !== "checked" || m.report?.ok !== true)
       )
-        throw new Error("move_did_not_pass");
+        throw Object.assign(new Error("move_did_not_pass"), { result });
+      return result;
     }
   } finally {
     sampleRss();
     clearInterval(timer);
     db.close();
   }
+  return undefined;
 }

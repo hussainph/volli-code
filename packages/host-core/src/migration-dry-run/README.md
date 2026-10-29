@@ -46,6 +46,14 @@ Follow [`cloud-deploy.md` §1–8](../../../../docs/runbooks/cloud-deploy.md) wi
    operator key. These are explicit inputs: the harness never discovers
    credentials, unlocks the keychain, or reads the copied account/Pi auth.
    Do not put tokens in argv, reports, git, tickets, or terminal history.
+7. Supply `VOLLI_MOVE_REDACTIONS_FILE`: an absolute, mode-0600 JSON file
+   containing the complete list of sensitive plaintext values the runner must
+   redact from transcript bodies and Pi logs (a JSON string array). Prepare it
+   through your trusted secret-inventory workflow, never tickets/chat. The
+   harness uses the runner's streaming redactor and refuses real targets when
+   this inventory is missing or empty. It never pretends an empty inventory is
+   complete or unlocks the source profile to discover values. Do not proceed
+   unless the inventory is complete; staging still receives private history.
 
 ### Run on the profile copy
 
@@ -57,7 +65,8 @@ while the engine runs. Choose **new** scratch/report paths on an APFS volume:
 pnpm install
 mkdir -p .scratch/rehearsal
 SOURCE="$HOME/Library/Application Support/Volli Code"
-COPY="$PWD/.scratch/rehearsal/profile"
+REHEARSAL_ROOT=$(mktemp -d /tmp/volli-rehearsal.XXXXXX)
+COPY="$REHEARSAL_ROOT/profile"
 REPORT="$PWD/.scratch/rehearsal/report.json"
 
 # Export the credential inputs securely in this shell first (see above).
@@ -94,46 +103,65 @@ changes and unlocks its local copy through the real escape hatch.
 ### Owner UI check at `--hold`
 
 The command pauses **after all projects verify**, before rollback/escape-hatch
-exercises and cleanup. In another terminal, use an unpackaged dev build on
-`$COPY`, with staging's four public runtime values from the runbook:
+exercises and cleanup. Create the checkout-local public
+`.scratch/deployments/staging.json` from the runbook's reviewed dev-target
+instructions (exactly the same target URL). In another terminal:
 
 ```sh
 pnpm build
-VOLLI_EXPERIMENTAL=cloud VOLLI_ACCOUNT_PROVIDER=workos \
-VOLLI_WORKOS_CLIENT_ID='<staging-public-client-id>' \
-VOLLI_CONVEX_URL='https://<staging-deployment>.convex.cloud' \
-VOLLI_CONVEX_SITE_URL='https://<staging-deployment>.convex.site' \
-VOLLI_CLOUD_STORAGE_ORIGIN='https://<staging-account>.r2.cloudflarestorage.com' \
-pnpm -C apps/desktop exec electron dist-electron/main.cjs --user-data-dir="$COPY"
+node apps/desktop/e2e/volli-drive/rehearsal-ui.mjs \
+  --profile '<absolute COPY path printed/chosen above>' --deployment staging
 ```
 
+This is a visible, keychain-trapped dev launch with isolated HOME, Pi auth,
+git config, SSH-agent exclusion and a loopback fake model, using the existing
+volli-drive launch gate and environment rules. The copy's parent must be a
+private temporary root outside your home; do not launch Electron directly on
+the clone with the real keychain/home. The copied production account cannot be
+unsealed by the harness. Click sign-in; open the staging WorkOS URL recorded
+in `$REHEARSAL_ROOT/harness/external-requests.jsonl` yourself in a browser.
+The launcher first replaces the copy's checkout pointers with empty scratch
+folders, clears copied Working-copy/cleanup/process registrations, and turns
+off copied process auto-reaping. It never runs git in the owner's repositories.
+Do not enter real model/provider credentials, open terminals, select a real
+folder, or start/resume a Session during this owner-history check.
+
 Sign in to the staging account, select the disposable `migration-rehearsal-…`
-Workspace, and check the moved project: board, a Session transcript, an
-attachment, folder/Working-copy reuse and starting a Session. This is a manual
-UI check, **not** something the harness's window-read verification proves.
-The reviewed `volli-drive launch --deployment staging --fixture empty` path
-can establish staging sign-in separately, but it creates its own fresh
-profile; it is not the copied-profile UI check. Never substitute the live
-profile. Quit the dev app completely before pressing Enter in the harness.
-Staging-only changes from this check are deliberately discarded at cleanup.
+Workspace, and check the moved project **read-only**: board, a Session
+transcript and an attachment. This is a manual UI check, **not** something the
+harness's window-read verification proves. Real-folder/Working-copy reuse and
+new-Session execution must be checked separately on disposable repository and
+worktree fixtures, never on the owner's original checkout from this copy.
+Those execution checks are not claimed by this owner-history rehearsal.
+The ordinary `volli-drive launch --deployment staging --fixture empty` path
+creates a fresh profile and is not this copied-profile check. Never substitute
+the live profile. Quit the dev app completely before pressing Enter in the
+harness. Rollback explicitly confirms discarding changes from this rehearsal's
+UI check; no normal product rollback policy is changed. After this UI check,
+rollback/re-move/return use the copy's scrubbed machine paths, not the owner's
+original checkout registrations.
 
 ### Results and cleanup
 
-The JSON file contains only per-run elapsed times, peak engine-process RSS
-(including its backup worker), counts, verification booleans, states and
-refusal codes. No content, paths, project/move ids, tokens or exception text.
+The JSON file contains per-operation elapsed times and peak engine-process
+RSS (including killed runs, rollback and go-back), an overall RSS peak,
+counts, verification booleans, states and allowlisted refusal/failure codes. No content, paths, project/move ids, tokens or exception text.
 Exit 0 requires every selected project verified, no refused rows, every
 requested kill point reached, and both cleanups complete. Keep the separate
 manual UI result beside it, outside git. No staging or owner-profile run is
 claimed by the synthetic backend test.
 
 Cleanup uncommits/aborts **only this fresh Workspace's imports**, waits for the
-normal row/object purge, then removes its empty Workspace, membership, policy,
-audit and import bookkeeping. It never deletes an existing Workspace or
+normal row/object purge, then removes its membership, policy and audit rows
+and marks the empty Workspace deleted. Content-free Workspace/import/stream
+tombstones remain: move ids stay single-use and accounting references are not
+orphaned. It never deletes an existing Workspace or
 runner. Upload expiry protection means rollback/cleanup can each take
 **30–45 minutes**; keep refreshing the staging person token. The scratch
 profile (including its backups and readable escape-hatch export) is deleted.
-Save anything you want from it before continuing past `--hold`.
+Save anything you want from it before continuing past `--hold`. Afterward
+remove the temporary root's UI HOME/evidence and sensitive input files through
+your usual secure workflow; the harness deletes only the copied profile.
 
 If auth/network/purge cleanup fails, the report stays failed and a private
 `$COPY.rehearsal.json` recovery file remains. After renewing the staging

@@ -4,7 +4,7 @@ import { existsSync, lstatSync, realpathSync, readlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-export const LIVE_PROFILE = join(homedir(), "Library/Application Support/Volli Code");
+const LIVE_PROFILE = join(homedir(), "Library/Application Support/Volli Code");
 
 export function rehearsalTarget(raw: string, allowProduction = false): string {
   const url = new URL(raw);
@@ -43,7 +43,7 @@ export function assertReportPath(
   live = LIVE_PROFILE,
 ): void {
   const output = canonical(report);
-  if ([source, scratch, live].some((path) => inside(canonical(path), output)))
+  if ([source, scratch, live, `${live}-dev`].some((path) => inside(canonical(path), output)))
     throw new Error("report_must_be_outside_profile_directories");
   if (existsSync(report)) throw new Error("report_must_be_a_new_file");
 }
@@ -51,8 +51,12 @@ export function assertReportPath(
 export function assertCopyPaths(source: string, scratch: string, live = LIVE_PROFILE): void {
   const from = canonical(source);
   const to = canonical(scratch);
-  const livePath = canonical(live);
-  if (inside(livePath, to) || inside(to, livePath) || inside(from, to) || inside(to, from))
+  const livePaths = [canonical(live), canonical(`${live}-dev`)];
+  if (
+    livePaths.some((path) => inside(path, to) || inside(to, path)) ||
+    inside(from, to) ||
+    inside(to, from)
+  )
     throw new Error("scratch_must_be_separate_from_source_and_live_profile");
   if (existsSync(scratch)) throw new Error("scratch_profile_must_not_exist");
   if (!lstatSync(source).isDirectory()) throw new Error("source_must_be_a_profile_directory");
