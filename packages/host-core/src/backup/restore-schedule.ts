@@ -27,11 +27,12 @@ async function syncDirectory(root: string): Promise<void> {
   }
 }
 export async function scheduleBackupRestore(root: string, report: RestoreReport): Promise<void> {
-  if (!report.stagedPath) throw new Error("Restore has not been staged.");
+  if (!report.stagedPath || !report.stagedDatabaseSha256)
+    throw new Error("Restore has not been staged and fingerprinted.");
   const intent: RestoreIntent = {
     staging: basename(report.stagedPath),
     previous: basename(report.replacedPath),
-    databaseSha256: await digest(join(report.stagedPath, "volli.db")),
+    databaseSha256: report.stagedDatabaseSha256,
   };
   const path = join(root, PREPARED);
   // One pending restore, never replace a previous accepted intent.
@@ -145,6 +146,17 @@ export async function activateScheduledBackupRestore(root: string): Promise<void
   }
   await rm(join(root, INTENT));
   await rm(join(root, PREPARED), { force: true });
+  await rm(join(root, ".volli-restore-attempt.json"), { force: true });
   await syncDirectory(root);
   await rm(staging, { recursive: true, force: true });
+}
+
+/** Transfer an interrupted switch to the existing degraded recovery screen.
+ * Keep the database fence, staging, and both profiles as evidence. */
+export async function handoffInterruptedBackupRestore(root: string): Promise<boolean> {
+  if (!hasPendingDatabaseRecovery(join(root, "volli.db"))) return false;
+  await rm(join(root, INTENT), { force: true });
+  await rm(join(root, PREPARED), { force: true });
+  await syncDirectory(root);
+  return true;
 }

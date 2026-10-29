@@ -898,7 +898,8 @@
                 "staging",
                 "ready",
                 "failed",
-                "cancelled"
+                "cancelled",
+                "restarting"
               ],
               "type": "string"
             },
@@ -1071,7 +1072,8 @@
                 "staging",
                 "ready",
                 "failed",
-                "cancelled"
+                "cancelled",
+                "restarting"
               ],
               "type": "string"
             },
@@ -1212,6 +1214,21 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "backups.restoreRevealPrevious": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "backups.restoreStart": {
         "compatibility": "host-command",
         "input": {
@@ -1304,7 +1321,8 @@
                 "staging",
                 "ready",
                 "failed",
-                "cancelled"
+                "cancelled",
+                "restarting"
               ],
               "type": "string"
             },
@@ -1470,7 +1488,8 @@
                 "staging",
                 "ready",
                 "failed",
-                "cancelled"
+                "cancelled",
+                "restarting"
               ],
               "type": "string"
             },

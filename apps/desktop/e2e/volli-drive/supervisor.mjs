@@ -840,8 +840,8 @@ async function restoreRestart(args) {
   restarting = true;
   const started = performance.now();
   try {
-    await app.evaluate(async ({ app: electronApp }, path) => {
-      const { writeFileSync: writeRestoreRecord } = await import("node:fs");
+    await app.evaluate(({ app: electronApp }, path) => {
+      const { writeFileSync: writeRestoreRecord } = process.getBuiltinModule("node:fs");
       // A native-boundary recorder: never spawn an Electron outside this supervisor.
       electronApp.relaunch = () =>
         writeRestoreRecord(path, JSON.stringify({ pid: process.pid }), { mode: 0o600 });

@@ -80,6 +80,7 @@ export function BackupRestore() {
     );
   }
   const busy = phase === "checking" || phase === "staging";
+  const activeRestore = busy || phase === "mapping" || phase === "ready" || phase === "restarting";
   return (
     <>
       <PrefRow label="Restore">
@@ -88,7 +89,7 @@ export function BackupRestore() {
           variant="outline"
           disabled={pending || status === null}
           onClick={() => {
-            if (phase === "mapping" || phase === "ready" || busy) setOpen(true);
+            if (activeRestore) setOpen(true);
             else void choose();
           }}
         >
@@ -121,7 +122,7 @@ export function BackupRestore() {
           <Button
             size="xs"
             variant="ghost"
-            disabled={pending || busy || phase === "ready"}
+            disabled={pending || activeRestore}
             aria-label={`Restore ${bundle.fileName}`}
             onClick={() => void choose(bundle.fileName)}
           >
@@ -129,16 +130,39 @@ export function BackupRestore() {
           </Button>
         </ItemRow>
       ))}
+      {status?.previousProfile && phase !== "ready" && phase !== "restarting" ? (
+        <ItemRow name="Previous profile" meta={status.previousProfile}>
+          <Button
+            size="xs"
+            variant="outline"
+            aria-label="Show previous profile in Finder"
+            onClick={() => {
+              void sessionRpcClient()
+                .backups.restoreRevealPrevious.mutate()
+                .catch((error: unknown) =>
+                  toastError(`Couldn't show previous profile: ${errorMessage(error)}`),
+                );
+            }}
+          >
+            Show in Finder
+          </Button>
+        </ItemRow>
+      ) : null}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Restore backup</DialogTitle>
             <DialogDescription>
-              The backup replaces local history on restart. The current profile stays intact until
-              then and is kept as a backup afterwards. Project files are not changed.
+              Restarting replaces local history with this backup, including changes made while
+              preparing the restore. The previous profile is kept. Project files are not changed.
             </DialogDescription>
           </DialogHeader>
           {status?.selectedFile ? <p className="text-ui break-all">{status.selectedFile}</p> : null}
+          {phase === "restarting" ? (
+            <p role="status" className="text-ui">
+              Restarting…
+            </p>
+          ) : null}
           {busy ? (
             <div role="status" aria-live="polite">
               <progress aria-label="Restore progress" />
@@ -207,9 +231,9 @@ export function BackupRestore() {
           <DialogFooter>
             <Button
               variant="outline"
-              disabled={pending}
+              disabled={pending || phase === "restarting"}
               onClick={() => {
-                if (status && (busy || phase === "mapping" || phase === "ready"))
+                if (status && activeRestore)
                   void mutate(() =>
                     sessionRpcClient().backups.restoreCancel.mutate({
                       expectedRevision: status.revision,
@@ -218,7 +242,7 @@ export function BackupRestore() {
                 else setOpen(false);
               }}
             >
-              {busy || phase === "mapping" || phase === "ready" ? "Cancel restore" : "Close"}
+              {activeRestore ? "Cancel restore" : "Close"}
             </Button>
             {phase === "mapping" ? (
               <Button
@@ -240,12 +264,15 @@ export function BackupRestore() {
               <Button
                 disabled={pending}
                 onClick={() => {
-                  if (status)
+                  if (status) {
+                    setStatus({ ...status, phase: "restarting" });
                     void sessionRpcClient()
                       .backups.restoreRestart.mutate({ expectedRevision: status.revision })
-                      .catch((error: unknown) =>
-                        toastError(`Couldn't restart: ${errorMessage(error)}`),
-                      );
+                      .catch((error: unknown) => {
+                        setStatus(status);
+                        toastError(`Couldn't restart: ${errorMessage(error)}`);
+                      });
+                  }
                 }}
               >
                 Restart and restore

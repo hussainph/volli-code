@@ -205,5 +205,4 @@ export type {
   ProfileRestoreStatus,
   ProfileRestoreBundle,
   ProfileRestoreProject,
-  ProfileRestorePort,
 } from "./profile-restore";

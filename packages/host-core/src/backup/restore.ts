@@ -132,6 +132,8 @@ export const RESTORE_CREDENTIALS: RestoreCredentials = Object.freeze({
 export interface RestoreReport {
   /** Present only for a stage-only restore. No live files have changed. */
   stagedPath?: string;
+  /** Worker-computed identity for restart replay; scheduling never hashes a profile on main. */
+  stagedDatabaseSha256?: string;
   /** Where the profile that was there before now sits, untouched. */
   replacedPath: string;
   bundleSchemaVersion: number;
@@ -442,13 +444,19 @@ function readFileSyncSafe(path: string): Buffer | null {
 /** Size and SHA-256 of a byte stream, consumed to its end. */
 async function measureChunks(
   chunks: AsyncIterable<Uint8Array | string>,
+  checkpoint?: () => Promise<void>,
 ): Promise<{ size: number; sha256: string }> {
   const hash = createHash("sha256");
   let size = 0;
+  let chunksSinceCheckpoint = 0;
   for await (const chunk of chunks) {
     const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     hash.update(bytes);
     size += bytes.length;
+    if (++chunksSinceCheckpoint >= 128) {
+      await checkpoint?.();
+      chunksSinceCheckpoint = 0;
+    }
   }
   return { size, sha256: hash.digest("hex") };
 }
@@ -675,7 +683,14 @@ async function stageAndActivate(
     return {
       ok: true,
       report: {
-        ...(request.stageOnly ? { stagedPath: staging } : {}),
+        ...(request.stageOnly
+          ? {
+              stagedPath: staging,
+              stagedDatabaseSha256: (
+                await measureChunks(createReadStream(profileDatabasePath(staging)), plan.checkpoint)
+              ).sha256,
+            }
+          : {}),
         replacedPath,
         bundleSchemaVersion: plan.schemaVersion,
         schemaVersion,

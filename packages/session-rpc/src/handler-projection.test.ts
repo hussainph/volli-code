@@ -72,6 +72,7 @@ const SAMPLE_INPUTS: {
   "backups.status": undefined,
   "backups.run": { expectedRevision: "history-revision" },
   "backups.reveal": undefined,
+  "backups.restoreRevealPrevious": undefined,
   "backups.restoreStatus": undefined,
   "backups.restoreChoose": {},
   "backups.restoreDirectory": undefined,

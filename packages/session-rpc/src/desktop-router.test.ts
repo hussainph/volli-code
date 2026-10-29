@@ -356,6 +356,7 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
       notice: null,
     }),
     "backups.reveal": record("backups.reveal", null),
+    "backups.restoreRevealPrevious": record("backups.restoreRevealPrevious", null),
     "backups.restoreStatus": record("backups.restoreStatus", {
       revision: "r",
       phase: "idle",
@@ -594,6 +595,7 @@ describeContract<Host, DesktopRouter>(
     it("carries the restore inventory and revision-fenced intents through the real codec", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);
       const client = await connect(fixture);
+      expect(await client.backups.restoreRevealPrevious.mutate()).toBeNull();
       expect(await client.backups.restoreStatus.query()).toMatchObject({
         phase: "idle",
         projects: [],
@@ -608,6 +610,7 @@ describeContract<Host, DesktopRouter>(
       await client.backups.restoreCancel.mutate({ expectedRevision: "r" });
       expect(await client.backups.restoreRestart.mutate({ expectedRevision: "r" })).toBeNull();
       expect(fixture.calls.map(({ key }) => key)).toEqual([
+        "backups.restoreRevealPrevious",
         "backups.restoreStatus",
         "backups.restoreChoose",
         "backups.restoreDirectory",
@@ -1874,6 +1877,7 @@ describe("the desktop router's grammar", () => {
         "backups.status",
         "backups.run",
         "backups.reveal",
+        "backups.restoreRevealPrevious",
         "backups.restoreStatus",
         "backups.restoreChoose",
         "backups.restoreDirectory",

@@ -1862,6 +1862,7 @@ describe("local profile restore commands", () => {
   it("reports unavailable for every restore door without a composed service", async () => {
     const map = handlers();
     for (const call of [
+      () => map["backups.restoreRevealPrevious"](undefined, WINDOW),
       () => map["backups.restoreStatus"](undefined, WINDOW),
       () => map["backups.restoreChoose"]({}, WINDOW),
       () => map["backups.restoreDirectory"](undefined, WINDOW),
@@ -1891,8 +1892,11 @@ describe("local profile restore commands", () => {
       start: vi.fn(async () => status),
       cancel: vi.fn(async () => status),
       restart: vi.fn(async () => {}),
+      revealPrevious: vi.fn(async () => {}),
     };
     const map = handlers({ restore });
+    expect(await map["backups.restoreRevealPrevious"](undefined, WINDOW)).toBeNull();
+    expect(restore.revealPrevious).toHaveBeenCalledOnce();
     expect(await map["backups.restoreStatus"](undefined, WINDOW)).toEqual(status);
     expect(await map["backups.restoreChoose"]({ fileName: "bundle.tar.gz" }, WINDOW)).toEqual(
       status,

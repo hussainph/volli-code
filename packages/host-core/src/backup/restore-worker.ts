@@ -1,3 +1,5 @@
+import { errorMessage } from "@volli/shared";
+import { randomUUID } from "node:crypto";
 import { Worker, parentPort, workerData } from "node:worker_threads";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,7 +13,7 @@ import { openVerifiedBackupBundleFile } from "./streaming";
 import { activateScheduledBackupRestore } from "./restore-schedule";
 
 export type RestoreWorkerRequest =
-  | { kind: "inspect"; root: string; bundlePath: string }
+  | { kind: "inspect"; root: string; bundlePath: string; workDir?: string }
   | {
       kind: "stage";
       root: string;
@@ -40,8 +42,12 @@ export function runRestoreWorker(
 ): Promise<RestoreWorkerResult> {
   if (signal.aborted) return Promise.reject(new Error("Restore cancelled."));
   return new Promise((resolve, reject) => {
+    const inspectWork =
+      request.kind === "inspect"
+        ? join(request.root, `.volli-inspect-${process.pid}-${randomUUID()}`)
+        : null;
     const worker = new Worker(entry, {
-      workerData: request,
+      workerData: inspectWork ? { ...request, workDir: inspectWork } : request,
       resourceLimits: { maxOldGenerationSizeMb: 192 },
       ...(execArgv ? { execArgv } : {}),
     });
@@ -82,7 +88,9 @@ export function runRestoreWorker(
                   recursive: true,
                   force: true,
                 })
-              : Promise.resolve();
+              : inspectWork
+                ? rm(inspectWork, { recursive: true, force: true })
+                : Promise.resolve();
         void cleanup.then(
           () => reject(new Error("Restore cancelled. The current profile is unchanged.")),
           reject,
@@ -144,7 +152,8 @@ export function serveRestoreWorker(): void {
         checkpoint,
         expectedDataSha256: request.expectedDataSha256,
       });
-    const work = await mkdtemp(join(request.root, `.volli-inspect-${process.pid}-`));
+    const work =
+      request.workDir ?? (await mkdtemp(join(request.root, `.volli-inspect-${process.pid}-`)));
     try {
       const result = await openVerifiedBackupBundleFile(request.bundlePath, work, checkpoint);
       if (!result.ok) return result;
@@ -164,8 +173,7 @@ export function serveRestoreWorker(): void {
   void run()
     .then(
       (result) => port.postMessage({ result }),
-      (error: unknown) =>
-        port.postMessage({ error: error instanceof Error ? error.message : String(error) }),
+      (error: unknown) => port.postMessage({ error: errorMessage(error) }),
     )
     .finally(() => {
       port.removeAllListeners();

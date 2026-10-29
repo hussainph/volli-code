@@ -1,4 +1,5 @@
-import type { ProfileRestoreStatus, ProfileRestorePort } from "@volli/shared";
+import type { ProfileRestorePort } from "../backup/restore-service";
+import type { ProfileRestoreStatus } from "@volli/shared";
 import type { ProfileBackupsPort } from "../backup/automatic";
 import type { ProfileBackupStatus } from "@volli/shared";
 import type {
@@ -345,6 +346,7 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
   readonly "backups.run": HostHandler<{ expectedRevision: string }, ProfileBackupStatus>;
   readonly "backups.reveal": HostHandler<void, null>;
+  readonly "backups.restoreRevealPrevious": HostHandler<void, null>;
   readonly "backups.restoreStatus": HostHandler<void, ProfileRestoreStatus>;
   readonly "backups.restoreChoose": HostHandler<{ fileName?: string }, ProfileRestoreStatus>;
   readonly "backups.restoreDirectory": HostHandler<void, string | null>;
@@ -1139,6 +1141,10 @@ function hostHandlerEntries(
         );
         return null;
       }),
+    "backups.restoreRevealPrevious": () =>
+      done(() =>
+        present(options.restore ?? null, "Local restore is unavailable.").revealPrevious(),
+      ),
     "backups.restoreStatus": () =>
       present(options.restore ?? null, "Local restore is unavailable.").status(),
     "backups.restoreChoose": ({ fileName }) =>

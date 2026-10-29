@@ -83,6 +83,7 @@ describe("the desktop's IPC exposure", () => {
       "backups.status",
       "backups.run",
       "backups.reveal",
+      "backups.restoreRevealPrevious",
       "backups.restoreStatus",
       "backups.restoreChoose",
       "backups.restoreDirectory",

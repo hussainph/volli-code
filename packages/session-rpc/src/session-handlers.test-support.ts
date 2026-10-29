@@ -233,6 +233,7 @@ export function sessionHandlersFrom(
     "backups.status": remote("backups.status"),
     "backups.run": remote("backups.run"),
     "backups.reveal": remote("backups.reveal"),
+    "backups.restoreRevealPrevious": remote("backups.restoreRevealPrevious"),
     "backups.restoreStatus": remote("backups.restoreStatus"),
     "backups.restoreChoose": remote("backups.restoreChoose"),
     "backups.restoreDirectory": remote("backups.restoreDirectory"),

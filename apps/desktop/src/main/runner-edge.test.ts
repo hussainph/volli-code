@@ -277,7 +277,13 @@ describe("the accepted-quit hold the runner installs", () => {
     const h = harness({ settleBackgroundWork: settle });
     h.boot();
     h.quit();
+    let exited = false;
+    void h.exited.then(() => {
+      exited = true;
+    });
+    await nextImmediate();
     expect(settle).toHaveBeenCalledOnce();
+    expect(exited).toBe(false);
     worker.resolve();
     expect(await h.exited).toBe(0);
   });

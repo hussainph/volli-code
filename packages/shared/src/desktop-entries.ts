@@ -82,6 +82,13 @@ export const DESKTOP_ENTRIES = [
     summary: "Show the local profile backups folder in Finder.",
   },
   {
+    key: "backups.restoreRevealPrevious",
+    compatibility: "host-command",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Reveal the previous local profile preserved by restore.",
+  },
+  {
     key: "backups.restoreStatus",
     compatibility: "host-command",
     placement: "host",

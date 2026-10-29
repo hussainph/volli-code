@@ -162,6 +162,7 @@ export interface DesktopRouterHandlers {
   readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
   readonly "backups.run": HostHandler<{ expectedRevision: string }, ProfileBackupStatus>;
   readonly "backups.reveal": HostHandler<void, null>;
+  readonly "backups.restoreRevealPrevious": HostHandler<void, null>;
   readonly "backups.restoreStatus": HostHandler<void, ProfileRestoreStatus>;
   readonly "backups.restoreChoose": HostHandler<{ fileName?: string }, ProfileRestoreStatus>;
   readonly "backups.restoreDirectory": HostHandler<void, string | null>;
@@ -447,7 +448,16 @@ const browserAppShortcutEventSchema = z.object({
 const restoreStatusSchema = z.object({
   revision: z.string(),
   // Closed output vocabularies: the bundled renderer handles each state exhaustively.
-  phase: z.enum(["idle", "checking", "mapping", "staging", "ready", "failed", "cancelled"]),
+  phase: z.enum([
+    "idle",
+    "checking",
+    "mapping",
+    "staging",
+    "ready",
+    "failed",
+    "cancelled",
+    "restarting",
+  ]),
   bundles: z.array(
     z.object({
       fileName: z.string(),
@@ -617,6 +627,9 @@ export function createDesktopRouter() {
         .mutation(({ ctx, input }) => ctx.handlers["project.remove"](input, ctx.call)),
     },
     backups: {
+      restoreRevealPrevious: hostProcedure("backups.restoreRevealPrevious")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["backups.restoreRevealPrevious"](undefined, ctx.call)),
       restoreStatus: hostProcedure("backups.restoreStatus")
         .output(restoreStatusSchema)
         .query(({ ctx }) => ctx.handlers["backups.restoreStatus"](undefined, ctx.call)),

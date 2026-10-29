@@ -1,16 +1,27 @@
 import { Worker } from "node:worker_threads";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { openVolliDb } from "../db/database-file";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "./test-fixture";
 import { createBackupBundle } from "./bundle";
-import { restoreBackupBundleFile, RESTORE_CREDENTIALS } from "./restore";
+import { activateStagedBackup, restoreBackupBundleFile, RESTORE_CREDENTIALS } from "./restore";
 import {
   acceptPreparedBackupRestore,
   activateScheduledBackupRestore,
   cancelScheduledBackupRestore,
   hasScheduledBackupRestore,
+  handoffInterruptedBackupRestore,
   scheduleBackupRestore,
 } from "./restore-schedule";
 import { ProfileRestoreService, listRestoreBundles } from "./restore-service";
@@ -18,6 +29,7 @@ import { runRestoreWorker } from "./restore-worker";
 
 const ENTRY = new URL("./test-support/restore-worker-under-node.mjs", import.meta.url);
 const ARGS = ["--experimental-transform-types", "--disable-warning=ExperimentalWarning"];
+const crashRoots: string[] = [];
 let profile: FixtureProfile;
 let bundlePath: string;
 let paths: Record<string, string>;
@@ -46,6 +58,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   profile.cleanup();
+  for (const root of crashRoots.splice(0)) rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 function stage(now = 1800000000000) {
@@ -74,6 +87,7 @@ function service() {
     pickBundle: async () => bundlePath,
     pickDirectory: async () => paths["proj-alpha"]!,
     restart: vi.fn(),
+    revealPrevious: vi.fn(),
     localProjects: () =>
       profile.db.prepare("SELECT id, name, path FROM projects").all() as {
         id: string;
@@ -241,9 +255,91 @@ describe("Storage restore staging and restart", () => {
     restore.acceptRestart();
     expect(await hasScheduledBackupRestore(profile.root)).toBe(false);
     await restore.restart(ready.revision);
+    await expect(restore.cancel(ready.revision)).rejects.toThrow("already in progress");
     restore.acceptRestart();
     expect(await hasScheduledBackupRestore(profile.root)).toBe(true);
-    expect((await restore.cancel(ready.revision)).phase).toBe("cancelled");
+    await cancelScheduledBackupRestore(profile.root);
     expect(await hasScheduledBackupRestore(profile.root)).toBe(false);
+  });
+  it("hands an interrupted fenced switch to degraded recovery without deleting either profile", async () => {
+    const result = await stage();
+    if (!result.ok) throw new Error(JSON.stringify(result.problems));
+    await scheduleBackupRestore(profile.root, result.report);
+    acceptPreparedBackupRestore(profile.root);
+    const crashed = mkdtempSync(join(tmpdir(), "volli-restore-crash-"));
+    crashRoots.push(crashed);
+    expect(() =>
+      activateStagedBackup(
+        profile.root,
+        result.report.stagedPath!,
+        result.report.replacedPath,
+        (step) => {
+          if (step === "swap:publish") {
+            cpSync(profile.root, crashed, { recursive: true });
+            throw new Error("power cut snapshot");
+          }
+        },
+      ),
+    ).toThrow("power cut snapshot");
+    await expect(activateScheduledBackupRestore(crashed)).rejects.toThrow("interrupted");
+    expect(await handoffInterruptedBackupRestore(crashed)).toBe(true);
+    expect(await hasScheduledBackupRestore(crashed)).toBe(false);
+    expect(() => openVolliDb(join(crashed, "volli.db"))).toThrow("interrupted");
+    expect(
+      existsSync(join(crashed, result.report.replacedPath.split("/").at(-1)!, "volli.db")),
+    ).toBe(true);
+    expect(
+      existsSync(join(crashed, result.report.stagedPath!.split("/").at(-1)!, "volli.db")),
+    ).toBe(true);
+    expect(liveTitle()).toBe("change after backup");
+  });
+  it("replays a completed switch if the app crashed before removing its restart intent", async () => {
+    const result = await stage();
+    if (!result.ok) throw new Error(JSON.stringify(result.problems));
+    await scheduleBackupRestore(profile.root, result.report);
+    acceptPreparedBackupRestore(profile.root);
+    profile.db.close();
+    activateStagedBackup(profile.root, result.report.stagedPath!, result.report.replacedPath);
+    expect(await hasScheduledBackupRestore(profile.root)).toBe(true);
+    await activateScheduledBackupRestore(profile.root);
+    expect(await hasScheduledBackupRestore(profile.root)).toBe(false);
+    const fresh = service();
+    expect((await fresh.status()).previousProfile).toBe(result.report.replacedPath);
+    await fresh.revealPrevious();
+  });
+  it("does not arm a merely prepared restore on ordinary quit", async () => {
+    const restore = service();
+    await restore.choose("test.tar.gz");
+    await restore.settled();
+    const mapped = await restore.status();
+    await restore.start(mapped.revision, paths);
+    await restore.settled();
+    expect((await restore.status()).phase).toBe("ready");
+    restore.stop();
+    expect(await hasScheduledBackupRestore(profile.root)).toBe(false);
+    const fresh = service();
+    expect((await fresh.status()).problems).toEqual([
+      expect.objectContaining({ kind: "cancelled" }),
+    ]);
+    expect(liveTitle()).toBe("change after backup");
+  });
+  it("refuses data different from the project picker identity before staging", async () => {
+    const result = await restoreBackupBundleFile({
+      bundlePath,
+      profileRoot: profile.root,
+      projectPaths: paths,
+      now: 1800000000009,
+      stageOnly: true,
+      expectedDataSha256: "0".repeat(64),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      problems: [
+        expect.objectContaining({
+          message: expect.stringContaining("changed after it was selected"),
+        }),
+      ],
+    });
+    expect(liveTitle()).toBe("change after backup");
   });
 });

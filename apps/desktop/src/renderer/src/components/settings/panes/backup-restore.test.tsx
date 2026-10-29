@@ -12,11 +12,13 @@ const mocks = vi.hoisted(() => ({
   start: vi.fn(),
   cancel: vi.fn(),
   restart: vi.fn(),
+  reveal: vi.fn(),
   toast: vi.fn(),
 }));
 vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
   sessionRpcClient: () => ({
     backups: {
+      restoreRevealPrevious: { mutate: mocks.reveal },
       restoreStatus: { query: mocks.status },
       restoreChoose: { mutate: mocks.choose },
       restoreDirectory: { mutate: mocks.directory },
@@ -81,6 +83,13 @@ function button(label: string): HTMLButtonElement {
   return found;
 }
 describe("Storage backup restore", () => {
+  it("keeps the preserved previous profile discoverable after relaunch", async () => {
+    mocks.status.mockResolvedValue({ ...idle, previousProfile: "/profile/.volli-replaced-123" });
+    mocks.reveal.mockResolvedValue(null);
+    await mount();
+    await act(async () => button("Show previous profile in Finder").click());
+    expect(mocks.reveal).toHaveBeenCalledOnce();
+  });
   it("lists bundles and asks for each directory before staging; shows credentials and restarts", async () => {
     const mapped: ProfileRestoreStatus = {
       ...idle,

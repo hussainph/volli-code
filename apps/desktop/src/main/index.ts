@@ -96,6 +96,7 @@ import {
   ProfileRestoreService,
   hasScheduledBackupRestore,
   canCancelScheduledBackupRestore,
+  handoffInterruptedBackupRestore,
   cancelScheduledBackupRestore,
   runRestoreWorker,
   startOrphanScan,
@@ -840,12 +841,14 @@ const appStartup = app.whenReady().then(async () => {
       detail: `${errorMessage(error)}\nThe profile has not been opened. Previous profile files are kept beside the database.`,
       buttons: mayCancel
         ? ["Keep Closed", "Cancel Restore and Open Current Profile"]
-        : ["Keep Closed"],
+        : ["Keep Closed", "Open Recovery"],
       defaultId: 0,
       cancelId: 0,
     });
     if (mayCancel && answer === 1) await cancelScheduledBackupRestore(app.getPath("userData"));
-    else {
+    else if (answer === 1 && (await handoffInterruptedBackupRestore(app.getPath("userData")))) {
+      // The database fence remains: createHostCore opens its degraded recovery surface.
+    } else {
       app.quit();
       return;
     }
@@ -1127,8 +1130,8 @@ const appStartup = app.whenReady().then(async () => {
           app.relaunch();
         } catch (error) {
           dialog.showErrorBox(
-            "Restore was not scheduled",
-            `${errorMessage(error)}\nThe current profile is unchanged.`,
+            "Restore restart could not be finalized",
+            `${errorMessage(error)}\nThe restore may be scheduled for the next launch. Restart Volli to finish or cancel it; previous profile files are preserved.`,
           );
         }
       },
@@ -1178,6 +1181,7 @@ const appStartup = app.whenReady().then(async () => {
       return result.canceled ? null : (result.filePaths[0] ?? null);
     },
     restart: () => relaunch.request(),
+    revealPrevious: (path) => shell.showItemInFolder(path),
   });
   // This Mac as one of the signed-in person's runners (VC-895): only in a
   // Volli Cloud launch, which reads the sealed runner link at boot (a runner

@@ -48,6 +48,7 @@ describe("the desktop-only tier", () => {
       "backups.status",
       "backups.run",
       "backups.reveal",
+      "backups.restoreRevealPrevious",
       "backups.restoreStatus",
       "backups.restoreChoose",
       "backups.restoreDirectory",

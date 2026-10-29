@@ -48,5 +48,6 @@ export { runRestoreWorker, serveRestoreWorker } from "../backup/restore-worker";
 export {
   hasScheduledBackupRestore,
   canCancelScheduledBackupRestore,
+  handoffInterruptedBackupRestore,
   cancelScheduledBackupRestore,
 } from "../backup/restore-schedule";

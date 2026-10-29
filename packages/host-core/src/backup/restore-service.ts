@@ -1,8 +1,10 @@
 /** Local Storage restore orchestration. Every expensive read runs in a worker. */
+import { hasPendingDatabaseRecovery } from "../db/database-file";
+import { errorMessage } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { lstat, readFile, readdir, rm, stat, open } from "node:fs/promises";
-import type { ProfileRestoreBundle, ProfileRestorePort, ProfileRestoreStatus } from "@volli/shared";
+import type { ProfileRestoreBundle, ProfileRestoreStatus } from "@volli/shared";
 import { runRestoreWorker } from "./restore-worker";
 import {
   acceptPreparedBackupRestore,
@@ -12,6 +14,19 @@ import {
 } from "./restore-schedule";
 import { withProfileMaintenance, profileOwnerAlive } from "./profile-maintenance";
 
+export interface ProfileRestorePort {
+  status(): Promise<ProfileRestoreStatus>;
+  choose(fileName?: string): Promise<ProfileRestoreStatus>;
+  directory(): Promise<string | null>;
+  start(
+    expectedRevision: string,
+    projectPaths: Record<string, string>,
+  ): Promise<ProfileRestoreStatus>;
+  cancel(expectedRevision: string): Promise<ProfileRestoreStatus>;
+  restart(expectedRevision: string): Promise<void>;
+  revealPrevious(): Promise<void>;
+}
+
 interface RestoreOptions {
   root: string;
   workerEntry: string | URL;
@@ -19,6 +34,7 @@ interface RestoreOptions {
   pickDirectory(): Promise<string | null>;
   localProjects(): { id: string; name: string; path: string }[];
   restart(): void;
+  revealPrevious(path: string): void;
   /** Restore is local-only, with database and artifacts under one profile root. */
   available(): boolean;
   workerExecArgv?: string[];
@@ -46,15 +62,14 @@ export class ProfileRestoreService implements ProfileRestorePort {
   #loaded: Promise<void>;
   constructor(private readonly options: RestoreOptions) {
     this.#loaded = this.#recoverAttempt().catch((error: unknown) =>
-      this.#fail([
-        { kind: "interrupted", message: error instanceof Error ? error.message : String(error) },
-      ]),
+      this.#fail([{ kind: "interrupted", message: errorMessage(error) }]),
     );
   }
   async #recoverAttempt(): Promise<void> {
+    if (hasPendingDatabaseRecovery(join(this.options.root, "volli.db"))) return;
     const attempt = join(this.options.root, ".volli-restore-attempt.json");
     for (const name of await readdir(this.options.root)) {
-      const match = /^\.volli-inspect-(\d+)-[A-Za-z0-9]{6}$/.exec(name);
+      const match = /^\.volli-inspect-(\d+)-(?:[A-Za-z0-9]{6}|[a-f0-9-]{36})$/.exec(name);
       if (match && !profileOwnerAlive(Number(match[1])))
         await rm(join(this.options.root, name), { recursive: true, force: true });
     }
@@ -105,12 +120,24 @@ export class ProfileRestoreService implements ProfileRestorePort {
       );
   }
   #busy(): boolean {
-    return this.#cancelling || !!this.#flight || this.#state.phase === "ready";
+    return (
+      this.#cancelling ||
+      !!this.#flight ||
+      this.#state.phase === "ready" ||
+      this.#state.phase === "restarting"
+    );
   }
   async status(): Promise<ProfileRestoreStatus> {
     this.#assertAvailable();
     await this.#loaded;
     this.#state.bundles = await listRestoreBundles(this.options.root);
+    if (this.#state.phase !== "ready" && this.#state.phase !== "restarting") {
+      const previous = (await readdir(this.options.root))
+        .filter((name) => /^\.volli-replaced-\d+$/.test(name))
+        .toSorted()
+        .at(-1);
+      this.#state.previousProfile = previous ? join(this.options.root, previous) : null;
+    }
     return structuredClone(this.#state);
   }
   async choose(fileName?: string): Promise<ProfileRestoreStatus> {
@@ -217,7 +244,6 @@ export class ProfileRestoreService implements ProfileRestorePort {
             throw new Error("Restore did not prepare a profile.");
           try {
             this.#abort.signal.throwIfAborted();
-            await rm(attempt);
             await scheduleBackupRestore(this.options.root, result.report);
             if (this.#abort.signal.aborted) {
               await cancelScheduledBackupRestore(this.options.root);
@@ -241,6 +267,8 @@ export class ProfileRestoreService implements ProfileRestorePort {
   async cancel(expectedRevision: string): Promise<ProfileRestoreStatus> {
     this.#assertAvailable();
     if (expectedRevision !== this.#state.revision) return this.status();
+    if (this.#state.phase === "restarting")
+      throw new Error("The restore restart is already in progress.");
     if (this.#cancelling) return this.status();
     this.#cancelling = true;
     try {
@@ -263,7 +291,18 @@ export class ProfileRestoreService implements ProfileRestorePort {
     )
       throw new Error("No verified restore is ready. Refresh and try again.");
     this.#restartRequested = true;
+    this.#state.phase = "restarting";
     this.options.restart();
+  }
+  async revealPrevious(): Promise<void> {
+    const state = await this.status();
+    if (
+      !state.previousProfile ||
+      !/^\.volli-replaced-\d+$/.test(basename(state.previousProfile)) ||
+      !(await lstat(state.previousProfile)).isDirectory()
+    )
+      throw new Error("No previous profile is available to reveal.");
+    this.options.revealPrevious(state.previousProfile);
   }
   /** The Electron restart lifecycle calls this only after quit gates accept. */
   acceptRestart(): void {
@@ -272,6 +311,7 @@ export class ProfileRestoreService implements ProfileRestorePort {
     this.#restartRequested = false;
   }
   restartRefused(): void {
+    if (this.#state.phase === "restarting") this.#state.phase = "ready";
     this.#restartRequested = false;
   }
   stop(): void {
@@ -302,10 +342,7 @@ export class ProfileRestoreService implements ProfileRestorePort {
     this.#flight = work()
       .catch((error: unknown) => {
         if (this.#abort.signal.aborted) this.#state.phase = "cancelled";
-        else
-          this.#fail([
-            { kind: "restore", message: error instanceof Error ? error.message : String(error) },
-          ]);
+        else this.#fail([{ kind: "restore", message: errorMessage(error) }]);
       })
       .finally(() => {
         this.#flight = undefined;

@@ -143,7 +143,9 @@ open. Nothing switches until **Restart and restore** passes the ordinary quit
 gates. A refused restart or an ordinary quit does not arm activation. On the
 accepted restart, a durable intent makes the next launch switch in a worker
 **before** opening SQLite. The previous database and artifact stores stay in
-`.volli-replaced-<n>` until removed by the owner. All local-history changes since
+`.volli-replaced-<n>` until removed by the owner. After relaunch, Backups keeps
+a Previous profile row whose Show in Finder selects that preserved directory
+for inspection or removal. All local-history changes since
 the backup (including changes made while preparing it) are replaced; project
 files and this machine's credential files are not changed. The report shows the
 credentials sentence. Cancellation waits for the worker to exit and withdraws
@@ -153,6 +155,10 @@ An interrupted preparation leaves the live profile untouched. An interrupted
 switch uses the database-file recovery fence: boot refuses to open a mixed
 profile, with the previous files preserved. If no switch fence remains, the
 startup failure dialog can cancel the restore and open the current profile.
+If a switch fence remains, Open Recovery transfers to the existing degraded
+database-recovery screen without removing the fence, staging, or either profile;
+recovering a partially switched artifact store may still require manual recovery
+from the preserved files.
 The Settings surface requires a healthy local-mode launch and the default
 profile directory; it does not add bundle restore to the database-recovery
 screen or restore hosted cloud history.

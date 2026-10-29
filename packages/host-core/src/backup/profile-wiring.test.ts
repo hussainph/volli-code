@@ -90,6 +90,10 @@ const FILE_NOT_ROOTS: Record<string, readonly string[]> = {
  * fails until someone reviews it here; one that disappears fails too.
  */
 const REVIEWED_DYNAMIC_SEGMENTS: Record<string, { sample: string; why: string }> = {
+  "packages/host-core/src/backup/restore-service.ts::previous": {
+    sample: ".volli-replaced-1800000000000",
+    why: "status selects only the exact preserved-profile directory namespace to reveal in Finder",
+  },
   "packages/host-core/src/backup/restore-schedule.ts::name": {
     sample: ".volli-restore-prepared.json",
     why: "readIntent accepts only the local prepared or accepted restore record constants",
