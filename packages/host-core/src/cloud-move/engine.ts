@@ -913,7 +913,10 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         takenBack = releaseProjectCursors(ports.db, move.userId, move.projectId);
         if (takenBack.length === 0 || failure === null) return move;
         const earlier = failure.detail?.["cursorsTakenBack"];
-        const named = new Set([...(Array.isArray(earlier) ? earlier : []), ...takenBack]);
+        const kept = Array.isArray(earlier)
+          ? earlier.filter((id): id is string => typeof id === "string")
+          : [];
+        const named = new Set([...kept, ...takenBack]);
         return journal.patch(move.moveId, {
           failure: {
             ...failure,

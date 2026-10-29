@@ -25,9 +25,10 @@
  * 5. tell every window, so a second one drops the project too.
  *
  * A binding that will not close refuses the removal before anything else is
- * stopped or detached: the person can stop that Session and try again. So
- * does a project a move froze (VC-993), asked before the release and again
- * after it, since the release awaits.
+ * stopped or detached: the person can stop that Session and try again. A
+ * project a move froze (VC-993) is refused too: before the release, and again
+ * after it, since the release awaits. Refused there, its Sessions' bindings
+ * stay released and nothing else is stopped or detached.
  */
 import type Database from "better-sqlite3";
 

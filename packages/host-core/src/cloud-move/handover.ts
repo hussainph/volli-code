@@ -11,8 +11,10 @@
  *   resumes it and owes the backend only what happens after the move.
  *
  * No board row changes and git is untouched. Each write is an upsert by id,
- * so the step runs again safely; what it wrote is journaled so a roll back
- * takes back exactly that ({@link releaseHandover}).
+ * so the step runs again safely; the path registrations it wrote are
+ * journaled so a roll back takes back exactly those ({@link releaseHandover}),
+ * and the cursors go with every other cursor on the project
+ * ({@link releaseProjectCursors}).
  */
 import type Database from "better-sqlite3";
 

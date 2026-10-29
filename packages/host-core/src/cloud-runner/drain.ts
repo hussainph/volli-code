@@ -543,8 +543,11 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
       // A raise whose compare-and-set meets a row changed under it (a later
       // move seeded it again) rebuilds the stream from that row; the raise is
       // then made on the rebuilt stream, so the generation asked for holds.
+      // Twice at most: the rebuilt stream holds what the row says, so its
+      // compare-and-set meets nothing new unless the store disagrees with
+      // itself, and that must not spin the host's thread.
       let stream = streamOf(stored);
-      while (generation > stream.cursor.generation) {
+      for (let pass = 0; pass < 2 && generation > stream.cursor.generation; pass += 1) {
         stream.epoch += 1;
         stream.next = stream.cursor.acceptedThrough + 1;
         const raised = persist(stream, {

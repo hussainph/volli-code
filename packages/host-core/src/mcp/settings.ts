@@ -510,7 +510,7 @@ export class McpSettingsService {
       signal,
       // The freeze again at every write, the tokens included: the person can
       // take minutes in the browser, and a move can freeze the project meanwhile.
-      mayWrite: () => this.#frozen(input.projectId)?.error ?? null,
+      writeRefusal: () => this.#frozen(input.projectId)?.error ?? null,
       probe: async (auth, probeSignal) => {
         const client = await createMcpProtocolClientOpener(
           { sources: () => this.sources(pending) },

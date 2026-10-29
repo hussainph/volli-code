@@ -121,7 +121,7 @@ function oauthStateStore(
   store: McpCredentialStore,
   serverId: string,
   ephemeral: { serverUrl?: string; codeVerifier?: string; oauthState?: string },
-  mayWrite: () => void = () => undefined,
+  assertMayWrite: () => void = () => undefined,
 ): McpOAuthStateStore {
   return {
     load(): McpOAuthState | undefined {
@@ -142,7 +142,7 @@ function oauthStateStore(
       else ephemeral.codeVerifier = codeVerifier;
       if (oauthState === undefined) delete ephemeral.oauthState;
       else ephemeral.oauthState = oauthState;
-      mayWrite();
+      assertMayWrite();
       store.update(serverId, (current) => ({
         ...current,
         oauth: durable as McpStoredOAuthState,
@@ -216,7 +216,7 @@ function signInFailure(serverName: string, error: unknown): string {
 /** A failure on the way to a pending browser callback, said plainly. */
 class SignInWaitError extends McpConnectionProblem {}
 
-/** A write the sign-in's caller no longer allows ({@link McpSignInOptions.mayWrite}), said as it said it. */
+/** A write the sign-in's starter refused ({@link McpSignInOptions.writeRefusal}), in its own words. */
 class SignInHeldError extends McpConnectionProblem {}
 
 /** What one sign-in is given by the caller that starts it. */
@@ -225,13 +225,16 @@ export interface McpSignInOptions {
   signal: AbortSignal;
   probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
   /**
-   * Asked before every write the sign-in makes to the credential store, the
-   * tokens included: a sentence stops the sign-in there, with nothing more
-   * written, and is its outcome. A sign-in can wait minutes on the browser,
-   * and the server's project can stop taking writes meanwhile (a move froze
-   * it). Callers that join a sign-in already running share its starter's.
+   * Asked before each write the sign-in itself makes to the credential
+   * store (discovery, registration, the tokens, the cleared refusal): a
+   * sentence stops the sign-in there, with nothing more written, and is its
+   * outcome; null lets the write through. A sign-in can wait minutes on the
+   * browser, and the server's project can stop taking writes meanwhile (a
+   * move froze it). The check-by-connecting probe that follows the stored
+   * tokens is an ordinary connection and does not ask. Callers that join a
+   * sign-in already running share its starter's.
    */
-  mayWrite?: () => string | null;
+  writeRefusal?: () => string | null;
 }
 
 export interface McpOAuthBrokerOptions {
@@ -472,9 +475,9 @@ export class McpOAuthBroker {
   }
 
   async #signIn(server: McpServerDraft, options: McpSignInOptions): Promise<McpSignInOutcome> {
-    const mayWrite = (): void => {
-      const held = options.mayWrite?.() ?? null;
-      if (held !== null) throw new SignInHeldError(held);
+    const assertMayWrite = (): void => {
+      const refusal = options.writeRefusal?.() ?? null;
+      if (refusal !== null) throw new SignInHeldError(refusal);
     };
     if (
       server.transport.type === "streamable-http" &&
@@ -518,7 +521,7 @@ export class McpOAuthBroker {
         },
         ...(target.oauth?.clientId === undefined ? {} : { clientId: target.oauth.clientId }),
         ...(clientSecret === undefined ? {} : { clientSecret }),
-        store: oauthStateStore(this.#store, server.id, {}, mayWrite),
+        store: oauthStateStore(this.#store, server.id, {}, assertMayWrite),
         onRedirect: (url) => {
           authorizationUrl = url;
         },
@@ -655,7 +658,7 @@ export class McpOAuthBroker {
               | undefined
           )?.client_id;
       const port = Number(new URL(callback.redirectUrl).port);
-      mayWrite();
+      assertMayWrite();
       this.#store.update(server.id, (current) => ({
         ...current,
         signInRequired: undefined,

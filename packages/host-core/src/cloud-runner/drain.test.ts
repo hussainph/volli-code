@@ -929,6 +929,29 @@ describe("the fact drain", () => {
       expect(drain.status().sessions).toBe(0);
     });
 
+    it("a newer claim gives up after two refused writes from a store that disagrees with itself", async () => {
+      const backend = fakeBackend();
+      const { ledger, append } = memoryLedger();
+      const cursors = memoryCursors();
+      let refusedRaises = 0;
+      const drain = drainOver(backend, ledger, {
+        ...cursors.store,
+        update: (cursor, expected) => {
+          if (cursor.generation !== 2) return cursors.store.update(cursor, expected);
+          refusedRaises += 1;
+          return false;
+        },
+      });
+      drain.start();
+      append("s1", 1);
+      drain.adopt("s1");
+      await drain.idle();
+      drain.adopt("s1", 2);
+      await drain.idle();
+      expect(refusedRaises).toBe(2);
+      expect(cursors.rows.get("s1")).toMatchObject({ generation: 1, acceptedThrough: 1 });
+    });
+
     it("a busy read after a refused write leaves the stream live, its retry one stop clears", async () => {
       const timers: (() => void)[] = [];
       const cleared: unknown[] = [];
