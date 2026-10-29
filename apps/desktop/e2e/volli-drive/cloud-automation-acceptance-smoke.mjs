@@ -402,7 +402,7 @@ async function journey(fixture, store, evidenceDir) {
     await openBoard(macB.drive);
     // The card's keyboard door is its Enter key (a double-click is not a drive
     // gesture): focus the card, then open the ticket's full page.
-    await macB.drive.press("button", ARRIVAL_TICKET.title, "Enter", { contains: true });
+    await macB.drive.openTicketCard(ARRIVAL_TICKET.title);
     await macB.drive.wait("Properties", 30_000);
     await macB.drive.click("button", "Status: Todo");
     await macB.drive.click("menuitemradio", "Doing");

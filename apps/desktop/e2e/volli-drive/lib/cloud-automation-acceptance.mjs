@@ -72,6 +72,36 @@ export const SCHEDULE_AUTOMATION = Object.freeze({
 
 /* ----------------------------------------------------------- the driver --- */
 
+/** Board cards are unnamed buttons. Resolve the enclosing button from the
+ * title paragraph INSIDE its article, using only refs in this snapshot.
+ * See verify-volli's board recipe; never guess a ref or target an unrelated button. */
+export function ticketCardButtonRef(tree, title) {
+  const ancestors = [];
+  const matches = [];
+  for (const line of tree.split("\n")) {
+    const node = /^(\s*)- '?([a-z]+)(?=[\s:]|$)/u.exec(line);
+    if (node === null) continue;
+    const indent = node[1].length;
+    while (ancestors.length > 0 && ancestors.at(-1).indent >= indent) ancestors.pop();
+    const ref = /\[ref=([^\]]+)\]/u.exec(line)?.[1];
+    if (node[2] === "paragraph" && ref !== undefined && /\]: (.*)$/u.exec(line)?.[1] === title) {
+      const article = ancestors.findLastIndex((parent) => parent.role === "article");
+      const button =
+        article < 0
+          ? undefined
+          : ancestors.slice(0, article).findLast((parent) => parent.role === "button");
+      if (button?.ref !== undefined) matches.push(button.ref);
+    }
+    ancestors.push({ indent, role: node[2], ref });
+  }
+  assert.equal(
+    matches.length,
+    1,
+    `expected one card titled ${JSON.stringify(title)}; found ${matches.length}\n${tree}`,
+  );
+  return matches[0];
+}
+
 /**
  * One instance's drive: every action from a fresh tree; ambiguity is a failure.
  * The same contract `cloud-wake-acceptance-smoke.mjs` uses, so a scenario
@@ -103,6 +133,18 @@ export function driveInstance(label, socket) {
     gone,
     click: (role, name, options) => action("click", role, name, {}, options),
     press: (role, name, key, options) => action("press", role, name, { key }, options),
+    async openTicketCard(title) {
+      // Click selects/focuses the card; Enter opens its real keyboard door.
+      // Re-resolve after the click because that action creates a new generation.
+      for (const [kind, extra] of [
+        ["click", {}],
+        ["press", { key: "Enter" }],
+      ]) {
+        const current = await snap();
+        const ref = ticketCardButtonRef(current.text, title);
+        await call("act", { gen: current.generation, ref, kind, ...extra });
+      }
+    },
     /** A key to whatever holds focus — how a Popover or sheet is dismissed. */
     async pressKey(key) {
       const current = await snap();

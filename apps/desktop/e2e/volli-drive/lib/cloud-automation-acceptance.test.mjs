@@ -20,6 +20,7 @@ import { describe, it } from "node:test";
 
 import {
   AUTOMATION_RUN_TOOL,
+  ticketCardButtonRef,
   MINUTES,
   automationRunToolCall,
   coalescingProblems,
@@ -44,6 +45,53 @@ function nextHourlyOccurrence(after, minute) {
   while (slot.getTime() <= after) slot.setUTCHours(slot.getUTCHours() + 1);
   return slot.getTime();
 }
+
+describe("the unnamed board card's semantic ancestor ref", () => {
+  const tree = `- main [ref=e44]:
+  - button "New ticket" [ref=e87]
+  - generic [ref=e88]:
+    - button [ref=e99]:
+      - article [ref=e100]:
+        - generic [ref=e102]: AUTO-1
+        - paragraph [ref=e108]: Move me into Doing
+    - button "New" [ref=e109]`;
+  it("resolves the actual enclosing button from the title paragraph inside the article", () => {
+    assert.equal(ticketCardButtonRef(tree, "Move me into Doing"), "e99");
+    assert.equal(
+      ticketCardButtonRef(tree.replaceAll("e99", "f2e345"), "Move me into Doing"),
+      "f2e345",
+    );
+  });
+  it("matches a literal title, not a regular expression or partial substring", () => {
+    assert.equal(
+      ticketCardButtonRef(tree.replace("Move me into Doing", "Ticket [x].*"), "Ticket [x].*"),
+      "e99",
+    );
+    assert.throws(() => ticketCardButtonRef(tree, "Move me"), /found 0/u);
+  });
+  it("refuses duplicate card titles rather than selecting the first", () => {
+    assert.throws(
+      () => ticketCardButtonRef(tree + "\n" + tree.replaceAll("e99", "e200"), "Move me into Doing"),
+      /found 2/u,
+    );
+  });
+  it("never treats another paragraph in a button as a ticket card", () => {
+    assert.throws(
+      () =>
+        ticketCardButtonRef(
+          "- button [ref=b]:\n  - paragraph [ref=p]: Move me into Doing",
+          "Move me into Doing",
+        ),
+      /found 0/u,
+    );
+  });
+  it("refuses an inert card whose button has no actionable ref", () => {
+    assert.throws(
+      () => ticketCardButtonRef(tree.replace(" [ref=e99]", ""), "Move me into Doing"),
+      /found 0/u,
+    );
+  });
+});
 
 describe("hourlyBackdateAt", () => {
   const NOWS = [
