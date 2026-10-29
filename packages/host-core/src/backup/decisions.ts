@@ -659,6 +659,12 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
       "Local backup bundles, receipts and maintenance pause markers; never recursively backed up.",
   },
   {
+    area: "cloud-moves",
+    decision: "exclude",
+    reason:
+      "Machine-local move snapshots, reports, return exports and recovery artifacts contain source paths and backend progress; portable restores omit the move journals and must not resume this machine's imports.",
+  },
+  {
     area: "volli.db.backup-v*",
     decision: "exclude",
     reason: "Migration safety copies of an older schema on this machine only.",

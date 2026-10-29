@@ -243,6 +243,14 @@ describe("profile file decisions", () => {
     expect(byArea.get(profileLogsRoot(""))?.decision).toBe("exclude");
   });
 
+  it("keeps machine-bound move artifacts out of portable restores alongside their journals", () => {
+    expect(PROFILE_FILE_DECISIONS.find((entry) => entry.area === "cloud-moves")?.decision).toBe(
+      "exclude",
+    );
+    expect(tableBackupDecision("cloud_move_queues")?.decision).toBe("exclude");
+    expect(tableBackupDecision("cloud_moves")?.decision).toBe("exclude");
+  });
+
   it("never backs up the CLI install, the update cache, or a migration safety copy", () => {
     const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
 
