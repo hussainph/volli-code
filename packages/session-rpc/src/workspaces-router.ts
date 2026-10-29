@@ -60,7 +60,8 @@ export function createWorkspacesRouter() {
         .output(
           z.object({
             workspaces: z.array(workspace).max(bounds.rows).readonly(),
-            omitted: z.number().int().nonnegative().safe(),
+            // Apply the narrower bound last: safe() also writes JSON-schema minima.
+            omitted: z.number().int().safe().nonnegative(),
           }),
         )
         .query(({ ctx }) => ctx.handlers["workspaces.list"](undefined, ctx.call)),

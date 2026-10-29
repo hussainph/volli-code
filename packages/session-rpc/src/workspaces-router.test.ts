@@ -5,6 +5,7 @@ import {
   type HostWorkspace,
   type HostWorkspaceCreateResult,
 } from "@volli/shared";
+import { z } from "zod";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { LOCAL_DESKTOP_CALLER, type RouterCaller } from "./catalog";
@@ -208,6 +209,12 @@ describe("closed, bounded Workspace schemas", () => {
       createOutput.safeParse({ ok: true, workspace: { ...workspace, gitRemoteUrl: undefined } })
         .success,
     ).toBe(false);
+  });
+
+  it("publishes the same nonnegative omitted bound that the runtime validates", () => {
+    expect(z.toJSONSchema(listOutput)).toMatchObject({
+      properties: { omitted: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
+    });
   });
 
   it("bounds the roster and its explicit omitted count", () => {
