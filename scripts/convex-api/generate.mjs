@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -51,17 +51,20 @@ async function loadBaseline(commit, ref) {
   const paths = git(["ls-tree", "--name-only", commit, "--", contractPath]);
   if (paths) return JSON.parse(git(["show", `${commit}:${contractPath}`]));
   const cached = resolve(cache, `${commit}.json`);
-  if (existsSync(cached)) {
+  try {
+    const snapshot = JSON.parse(readFileSync(cached, "utf8"));
     console.log(`Cached pre-snapshot contract: ${ref} (${commit})`);
-    return JSON.parse(readFileSync(cached, "utf8"));
+    return snapshot;
+  } catch (error) {
+    // Read directly: an existence pre-check races with cache removal. Only a
+    // genuinely missing cache may bootstrap; corrupt/unreadable JSON fails.
+    if (error?.code !== "ENOENT") throw error;
   }
   const scratch = resolve(root, ".scratch/convex-api");
   mkdirSync(scratch, { recursive: true });
   const tree = mkdtempSync(`${scratch}/baseline-`);
   try {
     extractTree(commit, tree, root);
-    if (!existsSync(resolve(tree, "convex/functions")))
-      throw new Error(`${ref} has no Convex sources`);
     installTree(tree, "@volli/convex");
     console.log(`Deriving pre-snapshot contract from ${ref} (${commit})`);
     const snapshot = await generateSnapshot(tree);
