@@ -3,24 +3,50 @@
  * disarm an arming; a new arm always uses the caller's own capable live runner.
  * Cloud arming IS enablement. No machine-local switch and no clock here.
  *
+ * Runs: `run` (a ticket; people and agents), `runForProject` (a project-level
+ * "Run now"), `pendingArrivals`, `cancelPendingArrival` and `retryArrival`.
+ * The minute clock that fires armed schedules is `automationSchedules.ts`;
+ * what a runner reads before it starts a Run is `automationRunner.ts`; the Run
+ * row's outcome is written from the runner inbox (`lib/automationRuns.ts`).
+ *
  * Receiving-task wiring: the cloud UI subscribes to these reads and sends
- * caller-minted receipt ids; the clock/Run task owns enqueue, pending arrivals,
- * runner context and completion. Merely storing a schedule does not fire it.
+ * caller-minted receipt ids and this Mac's runner; the cloud agent route calls
+ * `run` under the Session's Agent token for `automation_run`.
  */
 import { paginationOptsValidator, type OrderedQuery, type PaginationOptions } from "convex/server";
 import { v } from "convex/values";
-import { nextScheduleOccurrence } from "@volli/shared";
 import {
+  REASONING_LEVELS,
+  nextScheduleOccurrence,
+  type AutomationRunAttendance,
+  type ModelSelection,
+} from "@volli/shared";
+import {
+  AUTOMATION_INSTRUCTIONS_MAX_CHARS,
   TICKET_STATUSES,
+  automationRunFailedAttentionId,
   decideArming,
   decideAutomationChange,
+  decideAutomationRunRouting,
   decideScheduleArming,
+  isUuid,
+  newId,
   parseId,
+  type AutomationRunJobPayload,
 } from "@volli/shared/cloud";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
-import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
-import { requireProject } from "./lib/auth";
+import { PERSON_OR_AGENT, requireActor, type Caller } from "./lib/actorAuth";
+import { clearAttention } from "./lib/attention";
+import { authError, requireProject } from "./lib/auth";
+import {
+  executablePayload,
+  findRun,
+  newRunId,
+  queuedRunRow,
+  settleAutomationRunJob,
+} from "./lib/automationRuns";
+import { cancelJob, tryEnqueueJob } from "./lib/jobs";
 import { publicRow, recordBoardEvents, requireTicket, requireWritableProject } from "./lib/board";
 import { withBoardReceipt } from "./lib/boardReceipts";
 import { literals, nullable } from "./lib/validators";
@@ -36,6 +62,7 @@ import {
   publicArming,
   reconcileColumns,
   removeScheduleArming,
+  requireAutomation,
   writableAutomation,
 } from "./lib/automations";
 
@@ -607,4 +634,452 @@ export const runsForAutomation = query({
       args,
     );
   },
+});
+
+// ── Runs: by hand, by an agent, and pending arrivals ────────────────────────
+
+const modelOverrideArg = v.optional(
+  nullable(
+    v.object({
+      providerId: v.string(),
+      modelId: v.string(),
+      reasoningLevel: literals(REASONING_LEVELS),
+    }),
+  ),
+);
+
+/** Who a queued Run waits for: the reply a by-hand or agent Run answers. */
+async function runnerReply(ctx: QueryCtx | MutationCtx, runnerId: string) {
+  const row = await ctx.db
+    .query("runners")
+    .withIndex("by_uuid", (q) => q.eq("id", runnerId))
+    .unique();
+  return {
+    id: runnerId,
+    name: row?.name ?? "Removed runner",
+    status: row === null || row.revokedAt !== null ? ("revoked" as const) : row.status,
+  };
+}
+
+/**
+ * Queues one by-hand or agent Run: a `queued` Run row and its `automation.run`
+ * job, in one transaction, for the runner `decideAutomationRunRouting` picks
+ * (the ticket's Place when it is the caller's own runner, else the caller's).
+ * Nothing runs on a teammate's machine or credentials. Waiting for an asleep
+ * runner is normal: the reply names the runner so the caller can say so.
+ */
+async function queueManualRun(
+  ctx: MutationCtx,
+  input: {
+    caller: Caller;
+    project: Doc<"projects">;
+    ticket: Doc<"tickets"> | null;
+    automation: Doc<"automations"> | null;
+    instructions: string | null;
+    modelOverride: ModelSelection | null;
+    /** A person's current Mac; an agent's runner comes from its token. */
+    runnerId: string | null | undefined;
+    attendance: AutomationRunAttendance;
+    /** Client-minted, so an optimistic Run row agrees with the backend's. */
+    ids: { runId?: string | null; sessionId?: string | null };
+  },
+) {
+  const { caller, project, ticket, automation } = input;
+  const decision = decideAutomationRunRouting({
+    callerUserId: caller.viewer.userId,
+    callerRunner: await automationRunner(
+      ctx,
+      caller.kind === "agent" ? caller.agent.runnerId : input.runnerId,
+    ),
+    ticketPlace: ticket === null ? null : await automationRunner(ctx, ticket.placeRunnerId),
+  });
+  if (decision.kind === "refused") throw automationError(decision.code);
+  const now = Date.now();
+  if (input.ids.runId != null && !isUuid(input.ids.runId)) throw automationError("invalid_request");
+  const runId = input.ids.runId ?? newRunId();
+  const sessionId =
+    input.ids.sessionId == null ? newId("session") : parseId("session", input.ids.sessionId);
+  // A client id is the Run's from now on; another Run under it is a client bug.
+  if (input.ids.runId != null && (await findRun(ctx, runId)) !== null)
+    throw automationError("run_exists");
+  if (
+    input.ids.sessionId != null &&
+    (await ctx.db
+      .query("sessions")
+      .withIndex("by_uuid", (q) => q.eq("id", sessionId))
+      .unique()) !== null
+  )
+    throw automationError("session_exists");
+  const common = {
+    trigger: "manual" as const,
+    runId,
+    sessionId,
+    dueAt: now,
+    missedCount: 0,
+    attendance: input.attendance,
+    modelOverride: input.modelOverride,
+    requestedBySessionId: caller.kind === "agent" ? caller.agent.sessionId : null,
+    armedByUserId: null,
+  };
+  const payload: AutomationRunJobPayload =
+    automation !== null
+      ? {
+          ...common,
+          automationId: parseId("automation", automation.id),
+          ticketId: ticket === null ? null : parseId("ticket", ticket.id),
+        }
+      : {
+          ...common,
+          automationId: null,
+          ticketId: parseId("ticket", ticket!.id),
+          instructions: input.instructions!,
+        };
+  const outcome = await tryEnqueueJob(ctx, {
+    runnerId: decision.runnerId,
+    kind: "automation.run",
+    projectId: project.id,
+    ticketId: ticket?.id ?? null,
+    payload,
+    availableAt: now,
+    createdBy: caller.actor,
+    onBehalfOf: decision.onBehalfOf,
+  });
+  if ("refused" in outcome) throw automationError(outcome.refused);
+  await ctx.db.insert(
+    "automationRuns",
+    queuedRunRow({
+      payload,
+      jobId: outcome.jobId,
+      projectId: project.id,
+      runnerId: decision.runnerId,
+      automationName: automation?.name ?? null,
+      now,
+    }),
+  );
+  return {
+    runId,
+    sessionId: payload.sessionId,
+    jobId: outcome.jobId,
+    runner: await runnerReply(ctx, decision.runnerId),
+  };
+}
+
+/**
+ * A by-hand or agent Run on a ticket: a saved Automation, or Unbound
+ * Instructions. Agents call it for `automation_run` (a ticket Session may name
+ * any ticket in its own project); their Run is unattended, and the completion
+ * arms the calling Session's watch on the Run's Session. The agent's runner is
+ * its token's; a person passes this Mac's `runnerId`.
+ */
+export const run = mutation({
+  args: {
+    commandId: v.string(),
+    automationId: v.optional(nullable(v.string())),
+    instructions: v.optional(nullable(v.string())),
+    ticketId: v.string(),
+    modelOverride: modelOverrideArg,
+    runnerId: v.optional(nullable(v.string())),
+    runId: v.optional(nullable(v.string())),
+    sessionId: v.optional(nullable(v.string())),
+  },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "automations.run", intent, allow: PERSON_OR_AGENT },
+      async (caller) => {
+        const { project, ticket } = await requireTicket(ctx, intent.ticketId, caller.viewer);
+        requireWritableProject(project);
+        if (caller.kind === "agent" && caller.agent.session.projectId !== project.id)
+          throw authError("not_found", "That ticket does not exist.");
+        if (ticket.archivedAt !== null) throw automationError("ticket_archived");
+        const automationId = intent.automationId ?? null;
+        let automation: Doc<"automations"> | null = null;
+        let instructions: string | null = null;
+        if (automationId !== null) {
+          automation = (await requireAutomation(ctx, automationId, caller.viewer)).automation;
+          if (automation.projectId !== project.id)
+            throw automationError("automation_not_in_project");
+        } else {
+          instructions = intent.instructions ?? "";
+          if (instructions.trim().length === 0) throw automationError("invalid_draft");
+          if (instructions.length > AUTOMATION_INSTRUCTIONS_MAX_CHARS)
+            throw automationError("draft_too_large");
+        }
+        const queued = await queueManualRun(ctx, {
+          caller,
+          project,
+          ticket,
+          automation,
+          instructions,
+          modelOverride: (intent.modelOverride ?? null) as ModelSelection | null,
+          runnerId: intent.runnerId,
+          attendance: caller.kind === "agent" ? "unattended" : "attended",
+          ids: intent,
+        });
+        return { projectId: project.id, reply: queued };
+      },
+    ),
+});
+
+/** "Run now" for a project-level Automation (a schedule's target): a Board Session, by hand. */
+export const runForProject = mutation({
+  args: {
+    commandId: v.string(),
+    automationId: v.string(),
+    runnerId: v.optional(nullable(v.string())),
+    runId: v.optional(nullable(v.string())),
+    sessionId: v.optional(nullable(v.string())),
+  },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "automations.runForProject", intent },
+      async (caller) => {
+        const { automation, project } = await writableAutomation(
+          ctx,
+          intent.automationId,
+          caller.viewer,
+        );
+        const queued = await queueManualRun(ctx, {
+          caller,
+          project,
+          ticket: null,
+          automation,
+          instructions: null,
+          modelOverride: null,
+          runnerId: intent.runnerId,
+          attendance: "attended",
+          ids: intent,
+        });
+        return { projectId: project.id, reply: queued };
+      },
+    ),
+});
+
+/**
+ * The project's armed-column countdowns and waiting arrivals (queued, or
+ * leased while their runner starts them), each with the runner it waits for,
+ * and the failed arrivals a person may Retry.
+ */
+export const pendingArrivals = query({
+  args: projectArgs,
+  handler: async (ctx, { projectId }) => {
+    await requireProject(ctx, projectId);
+    const pending = [];
+    for (const status of ["queued", "leased"] as const) {
+      const jobs = await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_project_kind_status", (q) =>
+          q.eq("projectId", projectId).eq("kind", "automation.run").eq("status", status),
+        )
+        .take(200);
+      for (const job of jobs) {
+        const payload = executablePayload(job);
+        if (payload === null || payload.trigger !== "arrival") continue;
+        pending.push({
+          jobId: job.id,
+          runId: payload.runId,
+          ticketId: payload.ticketId,
+          automationId: payload.automationId,
+          status: payload.status,
+          origin: payload.origin,
+          availableAt: job.availableAt,
+          // Held by a runner now or before: it is starting, and cannot be cancelled.
+          leased: job.lease !== null,
+          runner: await runnerReply(ctx, job.runnerId),
+        });
+      }
+    }
+    const failures = (
+      await ctx.db
+        .query("automationRuns")
+        .withIndex("by_project_status", (q) => q.eq("projectId", projectId).eq("status", "failed"))
+        .order("desc")
+        .take(200)
+    )
+      .filter((row) => row.trigger === "arrival" && row.retryCommandId !== undefined)
+      .slice(0, 50)
+      .map((row) => ({
+        runId: row.id,
+        ticketId: row.ticketId,
+        automationId: row.automationId,
+        automationName: row.automationName,
+        error: row.error ?? null,
+        retryCommandId: row.retryCommandId!,
+        createdAt: row.createdAt,
+      }));
+    return { pending: pending.toSorted((a, b) => a.availableAt - b.availableAt), failures };
+  },
+});
+
+/**
+ * Withdraws a waiting Automation Run that no runner has picked up yet (an
+ * armed countdown, or a Run waiting for an asleep runner). Once a runner holds
+ * it, it is starting and the answer is `run_already_started`.
+ */
+export const cancelPendingArrival = mutation({
+  args: { commandId: v.string(), jobId: v.string() },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "automations.cancelPendingArrival", intent },
+      async ({ viewer }) => {
+        const job = await ctx.db
+          .query("runnerJobs")
+          .withIndex("by_uuid", (q) => q.eq("id", intent.jobId))
+          .unique();
+        if (job === null || job.kind !== "automation.run")
+          throw authError("not_found", "That Run does not exist.");
+        const { project } = await requireProject(ctx, job.projectId, viewer);
+        requireWritableProject(project);
+        if (job.status === "cancelled") return { projectId: project.id, reply: { jobId: job.id } };
+        if (job.status !== "queued" || job.lease !== null)
+          throw automationError(
+            job.status === "leased" || job.status === "queued"
+              ? "run_already_started"
+              : "run_already_finished",
+          );
+        const now = Date.now();
+        await cancelJob(ctx, job, now, { code: "cancelled", detail: "Cancelled by a person." });
+        await settleAutomationRunJob(
+          ctx,
+          job,
+          {
+            kind: "withdrawn",
+            code: "cancelled",
+            reason: {
+              kind: "run-refused",
+              code: "cancelled",
+              error: "Cancelled before it started.",
+            },
+          },
+          now,
+        );
+        return { projectId: project.id, reply: { jobId: job.id } };
+      },
+    ),
+});
+
+/**
+ * Retries a failed arrival under the command id its failure retained, so a
+ * second press finds the same Run. The Run keeps its id. The person whose
+ * work it was, with its original job still at hand, sends it again as it was
+ * (same runner, same Session id; the runner re-checks the ticket and the
+ * column). Anyone else, or a Run the inbox no longer keeps (a moved one, or
+ * one older than a week), runs it as the caller's own by-hand Run on that
+ * ticket: a Retry never lands on a teammate's machine.
+ */
+export const retryArrival = mutation({
+  args: { commandId: v.string(), runId: v.string(), runnerId: v.optional(nullable(v.string())) },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "automations.retryArrival", intent },
+      async (caller) => {
+        const failed = await findRun(ctx, intent.runId);
+        if (failed === null) throw authError("not_found", "That Run does not exist.");
+        const { project } = await requireProject(ctx, failed.projectId, caller.viewer);
+        requireWritableProject(project);
+        if (
+          failed.status !== "failed" ||
+          failed.trigger !== "arrival" ||
+          failed.retryCommandId === undefined ||
+          failed.ticketId === null ||
+          failed.automationId === null
+        )
+          throw automationError("retry_unavailable");
+        const retryJobId = parseId("job", failed.retryCommandId);
+        const automation = await findAutomation(ctx, failed.automationId);
+        if (automation === null || automation.deletedAt !== null)
+          throw automationError("automation_not_found");
+        const { ticket } = await requireTicket(ctx, failed.ticketId, caller.viewer);
+        const original =
+          failed.jobId == null
+            ? null
+            : await ctx.db
+                .query("runnerJobs")
+                .withIndex("by_uuid", (q) => q.eq("id", failed.jobId!))
+                .unique();
+        const originalPayload = original === null ? null : executablePayload(original);
+        const now = Date.now();
+        let payload: AutomationRunJobPayload;
+        let runnerId: string;
+        let onBehalfOf: string;
+        const originalRunner =
+          original === null || originalPayload === null
+            ? null
+            : await automationRunner(ctx, original.runnerId);
+        if (
+          originalPayload !== null &&
+          originalRunner !== null &&
+          originalRunner.status !== "revoked" &&
+          originalRunner.ownerUserId === caller.viewer.userId
+        ) {
+          // The caller's own work, kept as it was: same runner, same Session id.
+          payload = originalPayload;
+          runnerId = originalRunner.id;
+          onBehalfOf = originalRunner.ownerUserId;
+        } else {
+          // Anyone else's Retry is their own by-hand Run: never a teammate's machine.
+          const decision = decideAutomationRunRouting({
+            callerUserId: caller.viewer.userId,
+            callerRunner: await automationRunner(ctx, intent.runnerId),
+            ticketPlace: await automationRunner(ctx, ticket.placeRunnerId),
+          });
+          if (decision.kind === "refused") throw automationError(decision.code);
+          runnerId = decision.runnerId;
+          onBehalfOf = decision.onBehalfOf;
+          // A Session this Run already started on that runner is resumed, not
+          // conflicted with: the runner derives its create from the Run id.
+          const born =
+            failed.jobId == null || failed.sessionId === null
+              ? null
+              : await ctx.db
+                  .query("sessions")
+                  .withIndex("by_uuid", (q) => q.eq("id", failed.sessionId!))
+                  .unique();
+          payload = {
+            trigger: "manual",
+            automationId: parseId("automation", automation.id),
+            ticketId: parseId("ticket", ticket.id),
+            armedByUserId: null,
+            runId: failed.id,
+            sessionId:
+              born !== null && born.placeRunnerId === runnerId && born.ownerUserId === onBehalfOf
+                ? parseId("session", born.id)
+                : newId("session"),
+            dueAt: now,
+            missedCount: 0,
+            attendance: "attended",
+            modelOverride: null,
+            requestedBySessionId: null,
+          };
+        }
+        const outcome = await tryEnqueueJob(ctx, {
+          id: retryJobId,
+          runnerId,
+          kind: "automation.run",
+          projectId: project.id,
+          ticketId: ticket.id,
+          payload,
+          availableAt: now,
+          createdBy: caller.actor,
+          onBehalfOf,
+        });
+        if ("refused" in outcome) throw automationError(outcome.refused);
+        await ctx.db.patch(failed._id, {
+          status: "queued",
+          jobId: outcome.jobId,
+          runnerId,
+          sessionId: payload.sessionId === failed.sessionId ? failed.sessionId : null,
+          error: undefined,
+          retryCommandId: undefined,
+        });
+        await clearAttention(ctx, automationRunFailedAttentionId(failed.id), "resolved", now);
+        return {
+          projectId: project.id,
+          reply: { runId: failed.id, jobId: outcome.jobId },
+        };
+      },
+    ),
 });

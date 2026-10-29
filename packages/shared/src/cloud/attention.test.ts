@@ -5,6 +5,7 @@ import {
   ATTENTION_CLEARED_REASONS,
   ATTENTION_SOURCES,
   automationPauseAttentionId,
+  automationRunFailedAttentionId,
   notifySourceId,
   quarantineSourceId,
   SESSION_BLOCKED_SOURCE_ID,
@@ -48,6 +49,7 @@ describe("frozen ids", () => {
     expect(quarantineSourceId(7)).toBe("volli:quarantine:7");
     expect(reviewAttentionId(TICKET, BOB)).toBe(`t:${TICKET}:review:${BOB}`);
     expect(automationPauseAttentionId("project", ALICE)).toBe(`a:project:${ALICE}:paused`);
+    expect(automationRunFailedAttentionId("run")).toBe("a:run:failed");
     expect(automationPauseAttentionId("project", BOB)).not.toBe(
       automationPauseAttentionId("project", ALICE),
     );

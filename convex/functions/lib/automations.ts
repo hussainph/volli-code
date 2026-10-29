@@ -25,6 +25,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { clearAttention, raiseAttention } from "./attention";
 import { authError, isShownProject, requireProject, type Viewer } from "./auth";
 import { publicRow, recordBoardEvents, requireWritableProject } from "./board";
+import { settleAutomationRunJob } from "./automationRuns";
 import { cancelJob, ownerMayWorkOn } from "./jobs";
 
 type Reader = Pick<QueryCtx, "db">;
@@ -382,6 +383,27 @@ export async function pauseArmingsFor(
       .collect();
     for (const job of jobs)
       if (job.kind === "automation.run") await registerAffectedProject(job.projectId);
+  }
+  if (!byUser) {
+    // A removed runner will never claim or report again: Runs it had leased
+    // (or that went back to its queue after a lease) end here, not "waiting".
+    for (const status of ["queued", "leased"] as const) {
+      const held = await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_runner_ready", (q) => q.eq("runnerId", target.runnerId).eq("status", status))
+        .collect();
+      for (const job of held) {
+        if (job.kind !== "automation.run" || (status === "queued" && job.lease === null)) continue;
+        if (!(await cancelJob(ctx, job, now, { code: reason, detail: "The runner was removed." })))
+          continue;
+        await settleAutomationRunJob(
+          ctx,
+          job,
+          { kind: "withdrawn", code: reason, reason: { kind: "runner-unavailable", code: reason } },
+          now,
+        );
+      }
+    }
   }
   for (const [projectId, group] of affected) {
     await cancelAutomationJobs(

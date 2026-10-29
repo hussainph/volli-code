@@ -90,6 +90,12 @@ const MUST_FIND = {
   "automations:arm": "mutation",
   "automations:armSchedule": "mutation",
   "automations:runsForTicket": "query",
+  "automations:run": "mutation",
+  "automations:runForProject": "mutation",
+  "automations:pendingArrivals": "query",
+  "automations:cancelPendingArrival": "mutation",
+  "automations:retryArrival": "mutation",
+  "automationRunner:runContext": "query",
 } as const satisfies Partial<Record<PublicPath, FunctionType>>;
 
 /** Internal functions the enumeration must leave out. */
@@ -98,6 +104,8 @@ const MUST_SKIP = [
   "testJobs:enqueue",
   "previewAccess:set",
   "projectImports:rescue",
+  "automationSchedules:fireDue",
+  "testAutomations:fireDueAt",
 ];
 
 // ── calls ────────────────────────────────────────────────────────────────────

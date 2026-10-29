@@ -264,12 +264,71 @@ export async function tryArmSessionWatch(
   }
 }
 
+/**
+ * Frozen: the watch command id of an agent's `automation_run` on the Run's
+ * Session. Durable, not live: both the Run's completion and the Session's
+ * first accept arm it under this id, so whichever comes second replays.
+ */
+export function automationRunWatchCommandId(runId: string): string {
+  return `automation-run:${runId}:watch`;
+}
+
+/**
+ * The caller's automatic watch on the Session an agent's `automation_run`
+ * started, as `session_start` arms one. The Run's completion can reach the
+ * backend before its Session's first accept (and the reverse), so both call
+ * this; with no Session row yet it does nothing and the accept arms it.
+ */
+export async function armAutomationRunWatch(
+  ctx: MutationCtx,
+  run: Pick<Doc<"automationRuns">, "id" | "projectId" | "requestedBySessionId" | "sessionId">,
+  target: Doc<"sessions"> | null,
+  armedThroughSequence?: number,
+): Promise<void> {
+  const watcherId = run.requestedBySessionId ?? null;
+  if (watcherId === null || target === null) return;
+  if (target.projectId !== run.projectId || (run.sessionId != null && run.sessionId !== target.id))
+    return;
+  const watcher = await sessionRow(ctx, watcherId);
+  if (
+    watcher === null ||
+    watcher.ownerUserId !== target.ownerUserId ||
+    watcher.status !== "open" ||
+    watcher.stopped !== null
+  )
+    return;
+  await tryArmSessionWatch(ctx, {
+    watcher,
+    target,
+    origin: "started",
+    actor: {
+      kind: "agent",
+      userId: watcher.ownerUserId as UserId,
+      sessionId: watcher.id as SessionId,
+      ticketId: watcher.ticketId as TicketId | null,
+    },
+    commandId: automationRunWatchCommandId(run.id),
+    ...(armedThroughSequence === undefined ? {} : { armedThroughSequence }),
+  });
+}
+
 /** Historical buffered starts/steers cannot resurrect a watch after its owner stopped. */
 async function autoArm(ctx: MutationCtx, target: Doc<"sessions">, fact: SessionEvent) {
   const { payload } = fact;
   if (payload.kind !== "command.recorded") return;
   const intent = payload.command.intent;
   if (intent.kind !== "session.create" && intent.kind !== "message.submit") return;
+  if (intent.kind === "session.create") {
+    const born = readSessionOrigin(target.origin);
+    if (born?.kind === "automation") {
+      const run = await ctx.db
+        .query("automationRuns")
+        .withIndex("by_uuid", (q) => q.eq("id", born.automationRunId))
+        .unique();
+      if (run !== null) await armAutomationRunWatch(ctx, run, target, fact.sequence);
+      return;
+    }
+  }
   const detail = fact.provenance.source.detail;
   const origin = readSessionOrigin(
     typeof detail === "object" && detail !== null && !Array.isArray(detail)

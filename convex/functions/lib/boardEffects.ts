@@ -17,9 +17,11 @@
  * job (a defect, not a routing refusal) still fails the write, loudly.
  *
  * An Automation run is only queued for a runner that advertises the executor
- * in its capability report (a desktop runner from 0.3.0 names it), so an
- * older build is never handed an `automation.run` job it cannot execute; the
- * board fact still stands.
+ * in its capability report, so an older build is never handed an
+ * `automation.run` job it cannot execute; the board fact still stands. An
+ * arrival's job carries its producer-minted Run and Session ids
+ * (`AutomationRunJobPayload`), so a re-leased job lands on the same Run; its
+ * Run row is written at its outcome (`lib/automationRuns.ts`).
  */
 
 import {
@@ -35,6 +37,7 @@ import {
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server.js";
+import { newRunId, settleAutomationRunJob } from "./automationRuns";
 import { cancelJob, tryEnqueueJob, type JobDraft, type JobRefusalCode } from "./jobs";
 
 /** A job this module builds; the project and ticket are the effect's ticket's. */
@@ -261,6 +264,13 @@ async function jobsFor(
             code: "superseded",
             detail: "A later move replaced this arrival.",
           });
+          // A retried arrival waits with a Run row; the countdown alone has none.
+          await settleAutomationRunJob(
+            ctx,
+            job,
+            { kind: "withdrawn", code: "superseded", reason: { kind: "superseded" } },
+            now,
+          );
         }
       }
       if (effect.choice?.kind === "move-only") return [];
@@ -341,6 +351,7 @@ async function jobsFor(
         }
         return [];
       }
+      const whose = armed ? activeArming!.armedByUserId : picker;
       return [
         {
           runnerId,
@@ -353,11 +364,20 @@ async function jobsFor(
             status: effect.to,
             origin: effect.choice?.kind === "automation" ? "chosen" : "armed",
             armedByUserId: armed ? activeArming!.armedByUserId : null,
+            runId: newRunId(),
+            sessionId: newId("session"),
+            dueAt: effect.notBefore,
+            missedCount: 0,
+            // Local parity: a person at the board made this move; it is
+            // attended when the Run is theirs (a pick, or their own arming).
+            attendance: whose === picker ? "attended" : "unattended",
+            modelOverride: null,
+            requestedBySessionId: null,
           },
           availableAt: effect.notBefore,
           createdBy: actor,
           // Armed: the armer's work, with their credentials. Picked: the picker's.
-          onBehalfOf: armed ? activeArming!.armedByUserId : picker,
+          onBehalfOf: whose,
         },
       ];
     }

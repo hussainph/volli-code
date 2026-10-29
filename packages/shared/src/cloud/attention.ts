@@ -97,6 +97,14 @@ export function automationPauseAttentionId(
   return `a:${projectId}:${userId}:paused`;
 }
 
+/**
+ * Frozen: one "this Automation Run did not start" alert per Run, for the
+ * person whose work it was. A Retry that starts the Run clears it.
+ */
+export function automationRunFailedAttentionId(runId: string): string {
+  return `a:${runId}:failed`;
+}
+
 // ── review requests ─────────────────────────────────────────────────────────────
 
 /** What the review-request rule reads of a ticket. */

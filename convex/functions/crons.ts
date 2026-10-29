@@ -53,6 +53,14 @@ crons.interval(
   internal.sessionViewers.sweepExpired,
   {},
 );
+// The Automation clock (automationSchedules.ts): due schedules fire within a
+// minute of their time, never before it.
+crons.interval(
+  "automations: fire due schedules",
+  { minutes: 1 },
+  internal.automationSchedules.fireDue,
+  {},
+);
 // Stream chunks older than 15 minutes (streamChunks.ts), whatever their message did.
 crons.interval("streamChunks: ttl sweep", { minutes: 5 }, internal.streamChunks.sweep, {});
 

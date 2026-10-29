@@ -215,7 +215,7 @@ export type SessionNoticeJobPayload = WatchNoticeJobPayload | SubagentNoticeJobP
 /** The longest Session title a job carries. */
 export const JOB_TITLE_MAX_CHARS = 200;
 
-/** Legacy enqueue-only arrival shape. Kept until the board arrival producer is upgraded. */
+/** Legacy enqueue-only arrival shape: no producer writes it now; kept parseable for old rows. */
 export interface AutomationArrivalRunPayload {
   trigger: "arrival";
   automationId: AutomationId;

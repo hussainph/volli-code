@@ -70,6 +70,7 @@ import {
 import { projectImporting } from "./lib/auth";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
 import { noticeForClaim } from "./lib/watches";
+import { settleAutomationRunJob } from "./lib/automationRuns";
 
 /** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
 const LEASED_SCAN = 256;
@@ -85,6 +86,22 @@ const NOT_A_MEMBER = {
   code: "not_a_member",
   detail: "The runner's owner can no longer work in this project.",
 };
+
+/** A job withdrawn because its owner left: an Automation Run waiting on it is skipped. */
+async function withdrawForMembership(ctx: MutationCtx, job: Doc<"runnerJobs">, now: number) {
+  if (!(await cancelJob(ctx, job, now, NOT_A_MEMBER))) return;
+  if (job.kind === "automation.run")
+    await settleAutomationRunJob(
+      ctx,
+      job,
+      {
+        kind: "withdrawn",
+        code: NOT_A_MEMBER.code,
+        reason: { kind: "runner-unavailable", code: NOT_A_MEMBER.code },
+      },
+      now,
+    );
+}
 
 /** Whether `ref` can name a lease at all: a lease's boot id is a UUID, its attempt a positive integer. */
 function wellFormed(ref: LeaseRef): boolean {
@@ -189,7 +206,7 @@ export const claim = mutation({
         allowed.set(job.projectId, mayWork);
       }
       if (!mayWork) {
-        await cancelJob(ctx, job, now, NOT_A_MEMBER);
+        await withdrawForMembership(ctx, job, now);
         continue;
       }
       const deliverable = await noticeForClaim(ctx, job);
@@ -218,7 +235,7 @@ export const renew = mutation({
     if (!wellFormed(ref) || !leaseMayContinue(job, ref)) return { ok: false, reason: "fenced" };
     const now = Date.now();
     if (!(await ownerMayWorkOn(ctx, ownerUserId, job.projectId))) {
-      await cancelJob(ctx, job, now, NOT_A_MEMBER);
+      await withdrawForMembership(ctx, job, now);
       return { ok: false, reason: "cancelled" };
     }
     const extended = now + bounded(args.extendMs, JOB_LEASE_MS, 1_000, JOB_LEASE_MAX_MS);
@@ -305,6 +322,15 @@ export const complete = mutation({
           result: reported.result as Doc<"runnerJobs">["result"],
           ...terminal(now),
         });
+        // The Run row, its board event, attention and the caller's watch, in this
+        // transaction. A dead letter already settled its Run as failed: a late
+        // outcome may only say it started after all.
+        if (
+          job.kind === "automation.run" &&
+          (job.status !== "expired" ||
+            (reported.result as { kind?: unknown } | null | undefined)?.kind === "started")
+        )
+          await settleAutomationRunJob(ctx, job, { kind: "done", result: reported.result }, now);
         return { ack: "recorded", status: "done" };
       }
       return recordFailure(ctx, job, ref, now, {
@@ -351,6 +377,14 @@ async function recordFailure(
     failure,
     ...(status === "queued" ? { availableAt: now + retryDelayMs(ref.attempt) } : terminal(now)),
   });
+  // A dead letter already settled its Run; a late failure report adds nothing.
+  if (status === "failed" && job.kind === "automation.run" && job.status !== "expired")
+    await settleAutomationRunJob(
+      ctx,
+      job,
+      { kind: "failed", code: failure.code, detail: failure.detail },
+      now,
+    );
   return { ack: "recorded", status };
 }
 
@@ -364,6 +398,17 @@ async function deadLetterExpired(ctx: MutationCtx, job: Doc<"runnerJobs">, now: 
     ...terminal(now),
     failure: leaseExpired(job.lease!.attempt, false, now),
   });
+  if (job.kind === "automation.run")
+    await settleAutomationRunJob(
+      ctx,
+      job,
+      {
+        kind: "failed",
+        code: "lease_expired",
+        detail: "The runner stopped answering while starting this Run.",
+      },
+      now,
+    );
 }
 
 /**
