@@ -23,6 +23,7 @@ import { sqliteDrainLedger } from "../session-control/sqlite-ledger";
 import { createRunnerPathRegistry, type RunnerPathRegistry } from "./paths";
 import { createCloudWorktreeTickets } from "../cloud-agent/worktree-tickets";
 import { createCloudContext, type CloudRunnerContext } from "./context";
+import { bindCloudSessionOwner } from "../cloud-move/freeze";
 import { createCloudSessionOwner } from "./owner";
 import { createCloudSessionLocationResolver, type CloudSessionLocationOptions } from "./location";
 import { registerWorkingCopyJobs } from "./jobs";
@@ -169,6 +170,9 @@ export function createCloudProductStore(options: {
       return (await live.query("runnerContext:forSession", { ...input })) as CloudRunnerContext;
     },
   });
+  // This launch's person: once a moved project is shown in Volli Cloud, the
+  // freeze lets their Sessions' writes through (and no one else's).
+  bindCloudSessionOwner(db, ownerUserId);
   const owner = createCloudSessionOwner({
     db,
     engine: host.sessionEngine,

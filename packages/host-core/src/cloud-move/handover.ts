@@ -125,14 +125,16 @@ export function releaseHandover(input: {
   runnerId: string;
   record: HandoverRecord;
   /**
-   * Going back to local: every moved Session's cursor goes, moved on or not.
-   * What this runner drained since the move is in the local ledger already.
+   * Going back to local, for this project: every Session's cursor goes, the
+   * moved ones (moved on or not) and those born in Volli Cloud since. What
+   * this runner drained since the move is in the local ledger already.
    */
-  everyCursor?: boolean;
+  everyCursor?: { projectId: string };
 }): string[] {
   const { db, record, runnerId } = input;
   let kept: string[] = [];
-  if (input.everyCursor === true) {
+  if (input.everyCursor !== undefined) {
+    const { projectId } = input.everyCursor;
     db.transaction(() => {
       for (const { sessionId } of record.cursors) {
         prepared(
@@ -140,6 +142,13 @@ export function releaseHandover(input: {
           "DELETE FROM session_drain_cursors WHERE session_id = ? AND owner_user_id = ?",
         ).run(sessionId, input.userId);
       }
+      // And the Sessions born in Volli Cloud's copy since: this runner serves
+      // none of the project's Sessions any more.
+      prepared(
+        db,
+        `DELETE FROM session_drain_cursors WHERE owner_user_id = ?
+          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
+      ).run(input.userId, projectId);
     })();
   } else {
     kept = input.history.releaseCursors(input.userId, record.cursors);

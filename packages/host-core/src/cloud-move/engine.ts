@@ -1410,7 +1410,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
           userId: move.userId,
           runnerId: move.runnerId,
           record: move.journal.handover,
-          everyCursor: true,
+          everyCursor: { projectId: move.projectId },
         });
       }
       await rm(exportDir(move), { recursive: true, force: true, maxRetries: 3 });

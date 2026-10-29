@@ -12,9 +12,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { finalDigests, moveWorld, type Kill, type MoveWorld } from "./move-engine-harness";
+
+// Every case moves a whole profile, twice over: generous for a cold CI runner.
+vi.setConfig({ testTimeout: 60_000 });
 
 let world: MoveWorld | undefined;
 afterEach(() => {
