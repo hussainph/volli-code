@@ -287,6 +287,16 @@ project move** section.
   only while the move is open: how the client's verification reads back what
   it uploaded. Once shown, a project's objects are read through the window's
   own paths.
+- Automation column armings and scheduled definitions arrive **paused**
+  (`pausedReason: moved`); schedule pending pointers are empty and the cursor
+  stays inert until explicit re-arm. Pending arrivals and old schedule cursors
+  remain in the legacy archive. `rearmList({moveId})` lists still-paused moved
+  columns and schedules after commit; the result screen uses the ordinary
+  `automations.arm` / `armSchedule` commands with this Mac's live, capable runner.
+  A registration-only import runner cannot re-arm: open Volli Cloud first.
+  Deploy this backend before a desktop that sends the new `automationSchedules`
+  import stream. Older clients may omit its zero-count promise; moves already
+  in progress without that accumulator can still finish.
 - `status` answers the accumulators; `readRows` reads one stream back by the
   project's own indexes (or one ticket's or the importer's Session's), for the
   client's verification, and only while the project has never been shown
