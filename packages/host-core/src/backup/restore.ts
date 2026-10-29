@@ -18,13 +18,22 @@
  * at whatever happens to be at that path here, and then create worktrees and
  * run setup commands inside it.
  *
+ * TWO READERS, ONE RESTORE. `restoreBackupBundleFile` reads a bundle file of
+ * any size with bounded memory (VC-988): the bounded v1 verifier, then a
+ * second, pinned read that stages it (`restore-stream.ts`).
+ * `restoreBackupBundle` takes the bytes and stays for small callers. Both run
+ * {@link stageAndActivate}: the same migrations, usage rebuild, staged checks
+ * and fenced swap.
+ *
  * What this module does not do is decide when to run, ask the questions, or
- * relaunch the app. It takes bytes and a mapping and returns a report, which
+ * relaunch the app. It takes a bundle and a mapping and returns a report, which
  * keeps it testable against fixture profiles and leaves the surface — and the
- * streaming/progress/cancellation work — to VC-317 and the restore UI.
+ * progress reporting — to the restore UI. No production surface calls either
+ * entry point yet; the restore surface (VC-997) is the receiving caller, and a
+ * profile-sized restore must use the file entry point.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 
@@ -48,11 +57,15 @@ import {
   readBackupBundle,
   TRANSCRIPT_PREFIX,
   type BackupManifest,
+  type BackupManifestEntry,
   type ReadBackupBundle,
 } from "./bundle";
 import { decodeValue, isSchemaMarkerRow } from "./data-document";
 import type { BackupDataDocument, BackupProblem } from "./data-document";
 import { BACKUP_INCLUDED_TABLES } from "./decisions";
+import { stageBundleFile, TRIGGER_FILLED_TABLES } from "./restore-stream";
+import { openVerifiedBackupBundleFile } from "./streaming";
+import type { VerifiedBundleInventory } from "./streaming";
 
 /** The newest schema this build can migrate a restored profile to. */
 export function headSchemaVersion(): number {
@@ -137,6 +150,9 @@ function problem(kind: BackupProblem["kind"], message: string): BackupProblem {
   return { kind, message };
 }
 
+/** Problems a file restore reports per refusal before summarizing the rest. */
+const MAX_MAPPING_PROBLEMS = 100;
+
 /**
  * Every project has a directory on this machine, each is its own, and none of
  * them came from the bundle.
@@ -151,39 +167,63 @@ function checkProjectMapping(
     return [problem("shape", "Bundle data has no projects table to map.")];
   }
   const ids = projects.rows.map((row) => String(row[idIndex]));
+  const carried = new Set(ids);
+  return projectMappingProblems(
+    () => ids,
+    (id) => carried.has(id),
+    projectPaths,
+  );
+}
+
+/**
+ * The mapping rules over any source of project ids: the parsed document's
+ * rows, or the verifier's disk-backed list for a bundle file. `limit` bounds
+ * the report for a file restore, whose bundle could carry any number of
+ * projects; the in-memory restore reports every problem, as it always has.
+ */
+function projectMappingProblems(
+  ids: () => Iterable<string>,
+  carries: (id: string) => boolean,
+  projectPaths: Record<string, string>,
+  limit = Number.POSITIVE_INFINITY,
+): BackupProblem[] {
   const problems: BackupProblem[] = [];
-  for (const id of ids) {
-    const path = projectPaths[id];
+  let truncated = false;
+  const report = (entry: BackupProblem): void => {
+    if (problems.length >= limit) truncated = true;
+    else problems.push(entry);
+  };
+  // Own keys only: a project id like `constructor` is not mapped by Object's prototype.
+  const mapped = (id: string): string | undefined =>
+    Object.hasOwn(projectPaths, id) ? projectPaths[id] : undefined;
+  for (const id of ids()) {
+    const path = mapped(id);
     if (path === undefined || path.trim() === "") {
-      problems.push(
+      report(
         problem("mapping", `Project ${id} needs a local directory before it can be restored.`),
       );
       continue;
     }
     if (!isAbsolute(path)) {
-      problems.push(problem("mapping", `Project ${id} was given a relative directory: ${path}.`));
+      report(problem("mapping", `Project ${id} was given a relative directory: ${path}.`));
       continue;
     }
     if (!existsSync(path) || !statSync(path).isDirectory()) {
-      problems.push(
-        problem("mapping", `Project ${id} was mapped to ${path}, which is not a directory.`),
-      );
+      report(problem("mapping", `Project ${id} was mapped to ${path}, which is not a directory.`));
     }
   }
   for (const id of Object.keys(projectPaths)) {
-    if (!ids.includes(id)) {
-      problems.push(
-        problem("mapping", `Mapping names project ${id}, which the bundle does not carry.`),
-      );
+    if (!carries(id)) {
+      report(problem("mapping", `Mapping names project ${id}, which the bundle does not carry.`));
     }
   }
   const used = new Map<string, string>();
-  for (const id of ids) {
-    const path = projectPaths[id];
+  for (const id of ids()) {
+    const path = mapped(id);
     if (path === undefined) continue;
     const owner = used.get(path);
     if (owner !== undefined) {
-      problems.push(
+      report(
         problem(
           "mapping",
           `Projects ${owner} and ${id} were mapped to the same directory: ${path}.`,
@@ -191,6 +231,14 @@ function checkProjectMapping(
       );
     }
     used.set(path, id);
+  }
+  if (truncated) {
+    problems.push(
+      problem(
+        "mapping",
+        `The project mapping has more problems than this report lists; the first ${limit} are shown.`,
+      ),
+    );
   }
   return problems;
 }
@@ -271,8 +319,9 @@ async function rebuildUsageProjections(db: Database.Database, meteredFrom: numbe
 async function verifyStagedProfile(
   db: Database.Database,
   staging: string,
-  bundle: ReadBackupBundle,
+  manifestEntries: Iterable<BackupManifestEntry>,
   counts: Record<string, number>,
+  streamArtifacts: boolean,
 ): Promise<BackupProblem[]> {
   const problems: BackupProblem[] = [];
   const violations = db.pragma("foreign_key_check") as unknown[];
@@ -323,15 +372,18 @@ async function verifyStagedProfile(
   }
   // Every artifact on disk, re-hashed where it now lives. Transcript hashes
   // describe canonical bytes, not their compressed storage representation.
+  // A file restore streams each one, so no single attachment is held whole;
+  // the in-memory restore reads each one whole, as it always has.
   const transcripts = createFileTranscriptArtifactStore(sessionTranscriptsRoot(staging));
-  for (const entry of bundle.manifest.entries) {
+  for (const entry of manifestEntries) {
     if (entry.kind === "data") continue;
-    let bytes: Buffer | null;
+    let measured: { size: number; sha256: string } | null;
     if (entry.kind === "transcript") {
       try {
-        bytes = await transcripts.readCanonicalBytes(
-          transcriptReferenceForId(`sha256:${entry.sha256}`),
-        );
+        const reference = transcriptReferenceForId(`sha256:${entry.sha256}`);
+        measured = streamArtifacts
+          ? await measureChunks(transcripts.readCanonicalChunks(reference))
+          : measureBytes(await transcripts.readCanonicalBytes(reference));
       } catch (error) {
         if (isMissing(error)) {
           problems.push(
@@ -339,7 +391,8 @@ async function verifyStagedProfile(
           );
           continue;
         }
-        bytes = null;
+        // The store refuses bytes that are not this digest's: unreadable here.
+        measured = null;
       }
     } else {
       const path = stagedBlobArtifactPath(staging, entry.path);
@@ -355,25 +408,24 @@ async function verifyStagedProfile(
         );
         continue;
       }
-      bytes = readFileSyncSafe(path);
+      measured = streamArtifacts
+        ? await measureChunks(createReadStream(path)).catch(() => null)
+        : measureBytes(readFileSyncSafe(path));
     }
-    if (bytes === null || bytes.length !== entry.sizeBytes) {
+    if (measured === null || measured.size !== entry.sizeBytes) {
       problems.push(problem("artifact-corrupt", `${entry.path} has the wrong size after restore.`));
       continue;
     }
-    if (createHash("sha256").update(bytes).digest("hex") !== entry.sha256) {
+    if (measured.sha256 !== entry.sha256) {
       problems.push(problem("artifact-corrupt", `${entry.path} failed its SHA-256 after restore.`));
     }
   }
   return problems;
 }
 
-function isMissing(error: unknown): error is NodeJS.ErrnoException {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
+function measureBytes(bytes: Buffer | null): { size: number; sha256: string } | null {
+  if (bytes === null) return null;
+  return { size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
 function readFileSyncSafe(path: string): Buffer | null {
@@ -382,6 +434,28 @@ function readFileSyncSafe(path: string): Buffer | null {
   } catch {
     return null;
   }
+}
+
+/** Size and SHA-256 of a byte stream, consumed to its end. */
+async function measureChunks(
+  chunks: AsyncIterable<Uint8Array | string>,
+): Promise<{ size: number; sha256: string }> {
+  const hash = createHash("sha256");
+  let size = 0;
+  for await (const chunk of chunks) {
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    hash.update(bytes);
+    size += bytes.length;
+  }
+  return { size, sha256: hash.digest("hex") };
+}
+
+function isMissing(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 /** Where a blob entry lands inside a staged profile. */
@@ -453,38 +527,52 @@ function activateProfile(
   });
 }
 
-/**
- * Reads, checks, stages, verifies, and only then activates.
- *
- * Returns a report or a list of problems; it never throws for a bundle a
- * person could plausibly hand it, because every one of those cases is
- * something to show them rather than a crash.
- */
-export async function restoreBackupBundle(request: RestoreRequest): Promise<RestoreResult> {
-  const read = readBackupBundle(request.bundle);
-  if (!read.ok) return { ok: false, problems: read.problems };
-  const bundle = read.bundle;
-
+/** The refusal for a bundle whose database is newer than this build, or null. */
+function newerSchemaProblem(schemaVersion: number): BackupProblem | null {
   const head = headSchemaVersion();
-  if (bundle.document.schemaVersion > head) {
-    return {
-      ok: false,
-      problems: [
-        problem(
-          "unsupported-version",
-          `This backup holds a database from a newer version of Volli (schema ${bundle.document.schemaVersion}); this build knows schema ${head}. Update Volli and try again.`,
-        ),
-      ],
-    };
-  }
+  if (schemaVersion <= head) return null;
+  return problem(
+    "unsupported-version",
+    `This backup holds a database from a newer version of Volli (schema ${schemaVersion}); this build knows schema ${head}. Update Volli and try again.`,
+  );
+}
 
-  const mappingProblems = checkProjectMapping(bundle.document, request.projectPaths);
-  if (mappingProblems.length > 0) return { ok: false, problems: mappingProblems };
+/**
+ * What one restore stages, whichever reader produced it. The in-memory and
+ * file restores differ only in how rows and artifacts reach the staged
+ * profile; migrations, the usage rebuild, every staged check and the fenced
+ * swap are this one sequence.
+ */
+interface StagePlan {
+  schemaVersion: number;
+  meteredFrom: number;
+  artifactsVerified: number;
+  /** Writes the bundle's rows into the staged database; returns rows per table. */
+  writeRows(db: Database.Database): Promise<Record<string, number>>;
+  /** Writes artifacts not already written with the rows. */
+  writeArtifacts(staging: string): Promise<void>;
+  manifestEntries(): Iterable<BackupManifestEntry>;
+  /**
+   * A file restore: staged artifacts are re-hashed as streams rather than
+   * whole, and SQLite's temporary structures (a migration's VACUUM copy, large
+   * sorts) go to disk rather than RAM. The in-memory restore keeps both as
+   * they always were.
+   */
+  bounded: boolean;
+  /** Releases the reader's resources before the swap. Must not throw. */
+  release(): void;
+}
 
-  const staging = join(request.profileRoot, `.volli-restore-${request.now}`);
-  rmSync(staging, { recursive: true, force: true });
-  mkdirSync(staging, { recursive: true });
-
+/**
+ * Stages a whole profile in `staging`, verifies it, and only then activates.
+ * `staging` exists and holds nothing the swap moves; it is removed on every
+ * path except a rollback failure, where it is evidence.
+ */
+async function stageAndActivate(
+  request: Pick<RestoreRequest, "profileRoot" | "projectPaths" | "now" | "faults">,
+  staging: string,
+  plan: StagePlan,
+): Promise<RestoreResult> {
   let db: Database.Database | null = null;
   try {
     const dbPath = profileDatabasePath(staging);
@@ -494,22 +582,33 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
     // As at startup: the second walk below takes a safety copy and compacts,
     // and the migration free-space budget assumes VACUUM builds its compacted
     // copy in memory, not as a third copy on this disk (`disk-preflight.ts`).
-    db.pragma("temp_store = MEMORY");
+    // A file restore is the exception: its staged database can be gigabytes,
+    // so that copy (and any large sort) goes to SQLite's temporary directory
+    // (`SQLITE_TMPDIR`, else `TMPDIR`, else `/var/tmp`) instead of RAM. The
+    // free-space preflight does not count it; a compaction that runs out of
+    // room is reported and skipped by the migration, never a failed restore.
+    db.pragma(plan.bounded ? "temp_store = FILE" : "temp_store = MEMORY");
     // To the bundle's schema first: its rows are shaped for the columns that
     // existed when it was written.
-    migrate(db, dbPath, { toVersion: bundle.document.schemaVersion });
-    const staged = db;
-    const counts = db.transaction(() => writeRows(staged, bundle.document, request.projectPaths))();
+    migrate(db, dbPath, { toVersion: plan.schemaVersion });
+    const counts = await plan.writeRows(db);
     // Then the upgrade a person restoring into a newer build is really asking
     // for — the same walk a launch would have performed.
     migrate(db, dbPath);
-    await rebuildUsageProjections(db, bundle.document.usageCoverage.meteredFrom);
-    await writeArtifacts(staging, bundle);
+    await rebuildUsageProjections(db, plan.meteredFrom);
+    await plan.writeArtifacts(staging);
 
-    const problems = await verifyStagedProfile(db, staging, bundle, counts);
+    const problems = await verifyStagedProfile(
+      db,
+      staging,
+      plan.manifestEntries(),
+      counts,
+      plan.bounded,
+    );
     if (problems.length > 0) {
       db.close();
       db = null;
+      plan.release();
       rmSync(staging, { recursive: true, force: true });
       return { ok: false, problems };
     }
@@ -528,6 +627,7 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
     db.pragma("wal_checkpoint(TRUNCATE)");
     db.close();
     db = null;
+    plan.release();
 
     const replacedPath = join(request.profileRoot, `.volli-replaced-${request.now}`);
     try {
@@ -565,33 +665,216 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
       ok: true,
       report: {
         replacedPath,
-        bundleSchemaVersion: bundle.document.schemaVersion,
+        bundleSchemaVersion: plan.schemaVersion,
         schemaVersion,
         rowCounts: counts,
         usage,
-        artifactsVerified: countArtifacts(bundle.manifest),
+        artifactsVerified: plan.artifactsVerified,
         projectPaths: { ...request.projectPaths },
         credentials: RESTORE_CREDENTIALS,
       },
     };
   } catch (error) {
     db?.close();
+    plan.release();
     rmSync(staging, { recursive: true, force: true });
     // Truthful either way: everything before the swap writes only into the
     // staging directory removed above, and the swap itself puts the previous
     // profile back before it rethrows.
-    return {
-      ok: false,
-      problems: [
-        problem(
-          "verify",
-          `The restore did not happen and the current profile is unchanged: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        ),
-      ],
-    };
+    return { ok: false, problems: [notRestoredProblem(error)] };
   }
+}
+
+function notRestoredProblem(error: unknown): BackupProblem {
+  return problem(
+    "verify",
+    `The restore did not happen and the current profile is unchanged: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+  );
+}
+
+/** The staging directory one restore attempt owns, emptied of any earlier attempt's. */
+function freshStaging(profileRoot: string, now: number): string {
+  const staging = join(profileRoot, `.volli-restore-${now}`);
+  rmSync(staging, { recursive: true, force: true });
+  mkdirSync(staging, { recursive: true });
+  return staging;
+}
+
+/**
+ * Reads, checks, stages, verifies, and only then activates.
+ *
+ * Returns a report or a list of problems; it never throws for a bundle a
+ * person could plausibly hand it, because every one of those cases is
+ * something to show them rather than a crash.
+ *
+ * Holds the whole bundle in memory, so it is for small bundles (fixtures,
+ * tests, older callers). A profile-sized backup goes through
+ * {@link restoreBackupBundleFile}.
+ */
+export async function restoreBackupBundle(request: RestoreRequest): Promise<RestoreResult> {
+  const read = readBackupBundle(request.bundle);
+  if (!read.ok) return { ok: false, problems: read.problems };
+  const bundle = read.bundle;
+
+  const newer = newerSchemaProblem(bundle.document.schemaVersion);
+  if (newer !== null) return { ok: false, problems: [newer] };
+
+  const mappingProblems = checkProjectMapping(bundle.document, request.projectPaths);
+  if (mappingProblems.length > 0) return { ok: false, problems: mappingProblems };
+
+  const staging = freshStaging(request.profileRoot, request.now);
+  return stageAndActivate(request, staging, {
+    schemaVersion: bundle.document.schemaVersion,
+    meteredFrom: bundle.document.usageCoverage.meteredFrom,
+    artifactsVerified: countArtifacts(bundle.manifest),
+    writeRows: async (db) =>
+      db.transaction(() => writeRows(db, bundle.document, request.projectPaths))(),
+    writeArtifacts: (target) => writeArtifacts(target, bundle),
+    manifestEntries: () => bundle.manifest.entries,
+    bounded: false,
+    release: () => {},
+  });
+}
+
+export interface RestoreFileRequest extends Omit<RestoreRequest, "bundle"> {
+  /** The bundle file. Read twice — verified, then staged — never into memory. */
+  bundlePath: string;
+  /**
+   * Awaited at bounded row, byte and entry intervals during both reads, as the
+   * automatic backup's verifier awaits it: it may pause (memory pressure) and
+   * may reject to cancel. A rejection before activation leaves the profile
+   * unchanged.
+   */
+  checkpoint?: () => Promise<void>;
+}
+
+/**
+ * {@link restoreBackupBundle} for a bundle FILE of any size, with bounded
+ * memory (VC-988).
+ *
+ * The same refusals, the same staged profile, the same checks and the same
+ * fenced swap; only the reading differs. The bundle is verified by the
+ * bounded v1 verifier the automatic backup uses (`openVerifiedBackupBundleFile`),
+ * then read a second time to stage it, every entry pinned to the size and
+ * SHA-256 the verifier recorded (`restore-stream.ts`). Neither read holds the
+ * data document, so a profile whose `data.json` exceeds V8's string limit
+ * restores like a fixture.
+ *
+ * Scratch space lives inside the staging directory under `profileRoot`:
+ * the verifier's inventory (bounded by the bundle's entry, link and project
+ * counts) and the staged profile itself. Like the in-memory restore, every
+ * refusal and failure before activation removes it.
+ */
+export async function restoreBackupBundleFile(request: RestoreFileRequest): Promise<RestoreResult> {
+  let staging: string;
+  try {
+    staging = freshStaging(request.profileRoot, request.now);
+  } catch (error) {
+    return { ok: false, problems: [notRestoredProblem(error)] };
+  }
+  let held: VerifiedBundleInventory;
+  try {
+    const opened = await openVerifiedBackupBundleFile(
+      request.bundlePath,
+      join(staging, "verify"),
+      request.checkpoint,
+    );
+    if (!opened.ok) {
+      rmSync(staging, { recursive: true, force: true });
+      return { ok: false, problems: opened.problems };
+    }
+    held = opened.inventory;
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    return { ok: false, problems: [notRestoredProblem(error)] };
+  }
+  let refusal: BackupProblem[];
+  try {
+    refusal = fileRestoreRefusal(held, request.projectPaths);
+  } catch (error) {
+    refusal = [notRestoredProblem(error)];
+  }
+  if (refusal.length > 0) {
+    closeQuietly(held);
+    rmSync(staging, { recursive: true, force: true });
+    return { ok: false, problems: refusal };
+  }
+
+  return stageAndActivate(request, staging, {
+    schemaVersion: held.bundle.document.schemaVersion,
+    meteredFrom: held.bundle.document.usageCoverage.meteredFrom,
+    artifactsVerified: held.bundle.manifest.entries.blob + held.bundle.manifest.entries.transcript,
+    writeRows: async (db) => {
+      const staged = await stageBundleFile({
+        filePath: request.bundlePath,
+        db,
+        staging,
+        inventory: held,
+        projectPaths: request.projectPaths,
+        checkpoint: request.checkpoint,
+      });
+      return staged.counts;
+    },
+    // Streamed into place during the same read as the rows.
+    writeArtifacts: async () => {},
+    manifestEntries: () => held.manifestEntries(),
+    bounded: true,
+    release: () => closeQuietly(held),
+  });
+}
+
+/**
+ * Closes the verifier's scratch inventory. Its directory sits inside staging,
+ * which every path removes (or keeps as evidence) anyway, so a failure here
+ * must not turn a report into a thrown error.
+ */
+function closeQuietly(inventory: VerifiedBundleInventory): void {
+  try {
+    inventory.close();
+  } catch {
+    // Removed with the staging directory.
+  }
+}
+
+/**
+ * The refusals a file restore makes after verification and before staging,
+ * in the in-memory restore's order: a newer schema, then the mapping.
+ */
+function fileRestoreRefusal(
+  inventory: VerifiedBundleInventory,
+  projectPaths: Record<string, string>,
+): BackupProblem[] {
+  const newer = newerSchemaProblem(inventory.bundle.document.schemaVersion);
+  if (newer !== null) return [newer];
+  if (!inventory.projectsMappable) {
+    return [problem("shape", "Bundle data has no projects table to map.")];
+  }
+  const mapping = projectMappingProblems(
+    () => inventory.projectIds(),
+    (id) => inventory.carriesProject(id),
+    projectPaths,
+    MAX_MAPPING_PROBLEMS,
+  );
+  if (mapping.length > 0) return mapping;
+  // The one ordering the in-memory restore does not need: it loads tables in
+  // its own order, while a stream loads them in the document's. Both Volli
+  // writers put each event table before the sequence table its trigger fills.
+  const order = Object.keys(inventory.bundle.document.tables);
+  for (const [sequenceTable, eventTable] of Object.entries(TRIGGER_FILLED_TABLES)) {
+    const sequenceAt = order.indexOf(sequenceTable);
+    const eventsAt = order.indexOf(eventTable);
+    if (sequenceAt !== -1 && eventsAt > sequenceAt) {
+      return [
+        problem(
+          "shape",
+          `Bundle data lists ${sequenceTable} before ${eventTable}; a file restore needs ${eventTable} first, as Volli writes it.`,
+        ),
+      ];
+    }
+  }
+  return [];
 }
 
 function countArtifacts(manifest: BackupManifest): number {

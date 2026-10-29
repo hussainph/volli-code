@@ -65,7 +65,7 @@ import {
 import { mapPiActivity } from "../../../agent-runtime/src/pi/activity";
 import { createSqliteSessionFollowUpLedger } from "./session-follow-up-repo";
 import { createBackupBundle, readBackupBundle } from "../backup/bundle";
-import { restoreBackupBundle } from "../backup/restore";
+import { restoreBackupBundle, restoreBackupBundleFile } from "../backup/restore";
 import { blobsRoot } from "../blob-store";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import {
@@ -1798,6 +1798,20 @@ describe.skipIf(manifest === null)(
       });
       expect(ours.ok ? ours.report.schemaVersion : ours.problems).toBe(SCHEMA_HEAD);
       assertHeadReads(join(headTarget, "volli.db"));
+
+      // And this build's bounded file restore (VC-988) reads N-1's bundle too.
+      const fileTarget = join(root, "head-file-target");
+      mkdirSync(fileTarget);
+      const fromFile = await restoreBackupBundleFile({
+        bundlePath,
+        profileRoot: fileTarget,
+        projectPaths: projectPaths(),
+        now: NOW,
+      });
+      expect(fromFile.ok ? fromFile.report.rowCounts : fromFile.problems).toEqual(
+        ours.ok ? ours.report.rowCounts : null,
+      );
+      assertHeadReads(join(fileTarget, "volli.db"));
     });
 
     it("refuses a profile whose floor is above its head, leaving db and WAL byte-identical", async () => {

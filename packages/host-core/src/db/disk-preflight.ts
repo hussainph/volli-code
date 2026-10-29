@@ -18,8 +18,10 @@
  *
  * Its one assumption is that SQLite's temporary storage is in memory
  * (`temp_store = MEMORY`), which every caller that migrates an existing
- * database sets: `openVolliDb` at startup and a backup restore's staging
- * handle. VACUUM builds the compacted database in a temporary database first
+ * database sets: `openVolliDb` at startup and the in-memory backup restore's
+ * staging handle. The bounded file restore (`restoreBackupBundleFile`) sets
+ * `temp_store = FILE` instead, so its VACUUM copy lands in SQLite's temporary
+ * directory, uncounted here; a compaction that fails for room is skipped. VACUUM builds the compacted database in a temporary database first
  * and then writes it back through the WAL; with memory temp storage that
  * build costs RAM, so the disk sees only the safety copy and the WAL rewrite,
  * the two copies counted here. With file-backed temp storage on the same

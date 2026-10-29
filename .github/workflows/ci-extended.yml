@@ -2,7 +2,8 @@ name: CI extended
 
 # The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
 # smoke tier (every non-core, non-quarantined journey) and flag-on cloud
-# acceptance, plus the move engine's kill/resume matrix (Linux). The smoke
+# acceptance, plus the move engine's kill/resume matrix and the large-profile
+# backup restore rehearsal (both Linux). The smoke
 # lanes are macOS-only and long, and gating every PR on them held
 # all five of the account's concurrent macOS slots per PR run, so PRs queued
 # behind each other. Here they run:
@@ -275,6 +276,47 @@ jobs:
       - name: Kill/resume matrix
         run: vp run --filter @volli/convex test:matrix -- --maxWorkers=$(nproc)
 
+  # The large-profile backup -> restore round trip (VC-988): a synthetic
+  # profile of 2,150,000 Session events whose data.json is past 1.6 GB (and
+  # past V8's maximum string length), backed up by the production worker,
+  # restored with the bounded file restore in its own process, and compared
+  # with its source table by table and artifact by artifact. Fails on any
+  # count or digest mismatch, or when the restore's peak RSS grows past its
+  # budget. Linux, no macOS slot; several GB of scratch disk, removed after.
+  backup-restore-rehearsal:
+    name: Backup restore rehearsal
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      - name: Rehearse a large-profile round trip
+        env:
+          TMPDIR: ${{ github.workspace }}/.tmp/rehearsal
+        run: |
+          set -euo pipefail
+          df -h "$GITHUB_WORKSPACE"
+          node --experimental-transform-types --disable-warning=ExperimentalWarning \
+            packages/host-core/scripts/rehearse-backup-restore.mjs | tee "$RUNNER_TEMP/rehearsal.json"
+          {
+            echo "### Backup restore rehearsal"
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/rehearsal.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # One place to read the outcome, on the run page and in its summary. It
   # waits on every lane (`always()`, so a cancelled or failed lane is still
   # reported) and fails unless every lane succeeded — nothing here may skip.
@@ -282,7 +324,7 @@ jobs:
   summary:
     name: Extended result
     if: always()
-    needs: [smoke-rest, smoke-cloud, smoke-cloud-wake, move-matrix]
+    needs: [smoke-rest, smoke-cloud, smoke-cloud-wake, move-matrix, backup-restore-rehearsal]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -294,6 +336,7 @@ jobs:
           SMOKE_CLOUD: ${{ needs.smoke-cloud.result }}
           SMOKE_CLOUD_WAKE: ${{ needs.smoke-cloud-wake.result }}
           MOVE_MATRIX: ${{ needs.move-matrix.result }}
+          BACKUP_RESTORE: ${{ needs.backup-restore-rehearsal.result }}
         run: |
           set -euo pipefail
           status=0
@@ -316,4 +359,5 @@ jobs:
           report "Smoke (cloud acceptance)" "$SMOKE_CLOUD"
           report "Smoke (cloud wake acceptance)" "$SMOKE_CLOUD_WAKE"
           report "Move to Volli Cloud" "$MOVE_MATRIX"
+          report "Backup restore rehearsal" "$BACKUP_RESTORE"
           exit "$status"

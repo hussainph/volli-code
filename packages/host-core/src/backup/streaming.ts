@@ -728,6 +728,7 @@ CREATE TABLE link_refs (
   row_index INTEGER NOT NULL,
   key       TEXT NOT NULL
 );
+CREATE TABLE project_ids (seq INTEGER PRIMARY KEY, id TEXT NOT NULL);
 `;
 
 /**
@@ -863,6 +864,67 @@ class ScratchDatabase {
     this.#write(() =>
       this.#statement("INSERT OR IGNORE INTO link_targets (fk, key) VALUES (?, ?)").run(fk, key),
     );
+  }
+
+  /** A project id the data document carries, in document order, for a restore's mapping. */
+  insertProjectId(id: string): void {
+    this.#write(() => this.#statement("INSERT INTO project_ids (id) VALUES (?)").run(id));
+  }
+
+  /* A restore's reads of a finished verification. */
+
+  /** Project ids in document order, in keyset batches so no cursor stays open. */
+  *projectIds(): Generator<string> {
+    let after = 0;
+    for (;;) {
+      const batch = this.#statement(
+        "SELECT seq, id FROM project_ids WHERE seq > ? ORDER BY seq LIMIT 256",
+      )
+        .raw()
+        .all(after) as [number, string][];
+      if (batch.length === 0) return;
+      for (const [seq, id] of batch) {
+        after = seq;
+        yield id;
+      }
+    }
+  }
+
+  hasProjectId(id: string): boolean {
+    return this.#statement("SELECT 1 FROM project_ids WHERE id = ? LIMIT 1").get(id) !== undefined;
+  }
+
+  inventoryCount(): number {
+    return (this.#statement("SELECT COUNT(*) AS n FROM inventory").get() as { n: number }).n;
+  }
+
+  /** Manifest entries in manifest order, in keyset batches so no cursor stays open. */
+  *manifestEntriesInBatches(): Generator<BackupManifestEntry> {
+    let after = 0;
+    for (;;) {
+      const batch = this.#statement(
+        "SELECT seq, path, kind, size_bytes, sha256 FROM manifest_entries WHERE seq > ? ORDER BY seq LIMIT 256",
+      )
+        .raw()
+        .all(after) as [number, string, BackupEntryKind, number, string][];
+      if (batch.length === 0) return;
+      for (const [seq, path, kind, sizeBytes, sha256] of batch) {
+        after = seq;
+        yield { path, kind, sizeBytes, sha256 };
+      }
+    }
+  }
+
+  /** A fresh disk-backed path registry for a second read of the same archive. */
+  secondPassPathRegistry(): ArchivePathRegistry {
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS second_pass_paths (path TEXT PRIMARY KEY) WITHOUT ROWID",
+    );
+    this.db.exec("DELETE FROM second_pass_paths");
+    const statement = this.db.prepare("INSERT OR IGNORE INTO second_pass_paths (path) VALUES (?)");
+    return {
+      add: (path: string): boolean => this.#write(() => statement.run(path)).changes > 0,
+    };
   }
 
   getInventory(path: string): { sizeBytes: number; sha256: string } | undefined {
@@ -1090,20 +1152,150 @@ async function verifyBundleFile(
   staging: string,
   checkpoint?: () => Promise<void>,
 ): Promise<VerifyBackupBundleFileResult> {
+  const scanned = await scanBundleFile(filePath, staging, checkpoint, "report-all");
+  scanned.scratch.close();
+  return scanned.result;
+}
+
+/**
+ * The verification itself, leaving its scratch database open for a caller
+ * that reads the same archive again (a file restore). The caller closes it.
+ */
+async function scanBundleFile(
+  filePath: string,
+  staging: string,
+  checkpoint: (() => Promise<void>) | undefined,
+  errors: "report-all" | "report-archive",
+): Promise<{
+  result: VerifyBackupBundleFileResult;
+  scratch: ScratchDatabase;
+  outcome: ScanOutcome;
+}> {
   const scratch = new ScratchDatabase(join(staging, `verify-${randomUUID()}.db`));
+  const outcome = newScanOutcome();
   try {
     scratch.exec(VERIFIER_SCRATCH_SCHEMA);
     scratch.exec("BEGIN");
-    const outcome = newScanOutcome();
     try {
       await scanArchive(filePath, scratch, outcome, new CheckpointCounter(checkpoint));
     } catch (error) {
-      return { ok: false, problems: [archiveProblem(error)] };
+      // The verifier has always named every failure of its read as an archive
+      // problem. A restore must not: a rejected checkpoint is the person
+      // cancelling, and a full scratch disk is not a damaged bundle.
+      if (errors === "report-archive" && !isArchiveReadError(error)) throw error;
+      return { result: { ok: false, problems: [archiveProblem(error)] }, scratch, outcome };
     }
-    return concludeVerification(outcome, scratch);
-  } finally {
+    return { result: await concludeVerification(outcome, scratch), scratch, outcome };
+  } catch (error) {
     scratch.close();
+    throw error;
   }
+}
+
+/**
+ * A bundle file that passed {@link verifyBackupBundleFile}, with the
+ * verifier's disk-backed inventory still open.
+ *
+ * A file restore reads the archive twice — once to verify it, once to stage
+ * it — and a file can change between two reads. This handle is what pins the
+ * second read to the first: the size and SHA-256 the verifier recorded for
+ * every entry, the manifest it accepted, and the project ids the data
+ * document carries (for the directory mapping, checked before anything is
+ * staged). Every read is SQL against the scratch database, so a bundle with a
+ * hundred thousand artifacts costs disk, not heap.
+ */
+export interface VerifiedBundleInventory {
+  readonly bundle: VerifiedBackupBundleFile;
+  /** False when the data document carries no projects table with an id column. */
+  readonly projectsMappable: boolean;
+  /** Project ids in document order, read the way `restoreBackupBundle` reads them. */
+  projectIds(): Iterable<string>;
+  carriesProject(id: string): boolean;
+  /** The column list the verifier accepted for one table, in document order. */
+  verifiedColumns(table: string): readonly string[] | undefined;
+  /** The size and SHA-256 the verifier read for one archive entry. */
+  verifiedEntry(path: string): { sizeBytes: number; sha256: string } | undefined;
+  /** How many archive entries the verifier read. */
+  verifiedEntryCount(): number;
+  /** The verified manifest's entries, in manifest order. */
+  manifestEntries(): Iterable<BackupManifestEntry>;
+  /** A fresh, disk-backed duplicate-path registry for the second read. */
+  secondPassPathRegistry(): ArchivePathRegistry;
+  /** Closes the scratch database and removes its directory. Idempotent. */
+  close(): void;
+}
+
+export type OpenVerifiedBundleResult =
+  | { ok: true; inventory: VerifiedBundleInventory }
+  | { ok: false; problems: BackupProblem[] };
+
+/**
+ * {@link verifyBackupBundleFile}, keeping what it learned for a second read.
+ *
+ * The same scan, the same problems and the same conclusion — this is the
+ * bounded v1 verifier, not a second one. On failure nothing stays open; on
+ * success the caller owns the returned inventory and must `close()` it.
+ */
+export async function openVerifiedBackupBundleFile(
+  filePath: string,
+  workDir: string,
+  checkpoint?: () => Promise<void>,
+): Promise<OpenVerifiedBundleResult> {
+  await mkdir(workDir, { recursive: true, mode: 0o700 });
+  const staging = await mkdtemp(join(workDir, "backup-verify-"));
+  let scanned: Awaited<ReturnType<typeof scanBundleFile>>;
+  try {
+    scanned = await scanBundleFile(filePath, staging, checkpoint, "report-archive");
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+  const { result, scratch, outcome } = scanned;
+  if (!result.ok) {
+    scratch.close();
+    await rm(staging, { recursive: true, force: true });
+    return result;
+  }
+  // The scan's write transaction is still open; reads below share it, and a
+  // second-pass registry writes into it like any other scratch insert. The
+  // mapping looks projects up by id, once per mapped directory.
+  scratch.exec("CREATE INDEX IF NOT EXISTS project_ids_id ON project_ids (id)");
+  let closed = false;
+  const projectColumns = outcome.data.tableColumns.get("projects");
+  return {
+    ok: true,
+    inventory: {
+      bundle: result.bundle,
+      projectsMappable: projectColumns?.includes("id") ?? false,
+      projectIds: () => scratch.projectIds(),
+      carriesProject: (id) => scratch.hasProjectId(id),
+      verifiedColumns: (table) => outcome.data.tableColumns.get(table),
+      verifiedEntry: (path) => scratch.getInventory(path),
+      verifiedEntryCount: () => scratch.inventoryCount(),
+      manifestEntries: () => scratch.manifestEntriesInBatches(),
+      secondPassPathRegistry: () => scratch.secondPassPathRegistry(),
+      close: () => {
+        if (closed) return;
+        closed = true;
+        scratch.close();
+        rmSync(staging, { recursive: true, force: true });
+      },
+    },
+  };
+}
+
+/** An error of the archive's bytes: a damaged tar stream or gzip stream. */
+export function isArchiveFormatError(error: unknown): boolean {
+  if (error instanceof ArchiveError) return true;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && code.startsWith("Z_");
+}
+
+/** An error {@link archiveProblem} names precisely: the archive's bytes or reading the file. */
+function isArchiveReadError(error: unknown): boolean {
+  if (isArchiveFormatError(error)) return true;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && /^E[A-Z]+$/.test(code);
 }
 
 function archiveProblem(error: unknown): BackupProblem {
@@ -1136,7 +1328,27 @@ async function scanArchive(
   outcome: ScanOutcome,
   gate: CheckpointCounter,
 ): Promise<void> {
-  const reader = new ArchiveStreamReader(readGunzipped(filePath), scratch.archivePathRegistry());
+  const source = readGunzipped(filePath);
+  try {
+    await scanEntries(
+      new ArchiveStreamReader(source, scratch.archivePathRegistry()),
+      scratch,
+      outcome,
+      gate,
+    );
+  } finally {
+    // An early stop (a cancel, a refused entry) must not leave the file open:
+    // ending the generator ends its pipeline, which closes the descriptor.
+    await source.return(undefined);
+  }
+}
+
+async function scanEntries(
+  reader: ArchiveStreamReader,
+  scratch: ScratchDatabase,
+  outcome: ScanOutcome,
+  gate: CheckpointCounter,
+): Promise<void> {
   for (;;) {
     const entry = await reader.nextEntry();
     if (entry === null) return;
@@ -1165,7 +1377,7 @@ async function scanArchive(
   }
 }
 
-async function* hashedChunks(
+export async function* hashedChunks(
   entry: ArchiveStreamEntry,
   hash: ReturnType<typeof createHash>,
   gate: CheckpointCounter,
@@ -1188,7 +1400,7 @@ async function* hashedChunks(
  * destination that is never drained all surface here as one rejected
  * iteration rather than a hang.
  */
-async function* readGunzipped(filePath: string): AsyncGenerator<Buffer> {
+export async function* readGunzipped(filePath: string): AsyncGenerator<Buffer> {
   const gunzip = createGunzip();
   const completion = pipeline(createReadStream(filePath), gunzip);
   // Handled below; this only closes the window in which an early pipe error
@@ -1205,7 +1417,7 @@ async function* readGunzipped(filePath: string): AsyncGenerator<Buffer> {
   }
 }
 
-class CheckpointCounter {
+export class CheckpointCounter {
   #bytes = 0;
   #entries = 0;
   #rows = 0;
@@ -1258,7 +1470,7 @@ type JsonToken =
   | { kind: "end" };
 
 /** A JSON document (or a UTF-8 stream) this reader cannot accept. */
-class JsonSyntaxError extends Error {}
+export class JsonSyntaxError extends Error {}
 
 const JSON_VALUE_DEPTH = 32;
 const COLUMN_COUNT_LIMIT = 4_096;
@@ -1274,7 +1486,7 @@ const COLUMN_COUNT_LIMIT = 4_096;
  * kilobytes of text at a time. Multi-byte UTF-8 is decoded with a streaming
  * `TextDecoder`, so a character split across archive chunks is not a failure.
  */
-class JsonTokenizer {
+export class JsonTokenizer {
   readonly #bytes: AsyncIterator<Uint8Array>;
   readonly #decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   #buffer = "";
@@ -1459,7 +1671,7 @@ async function expectColon(tokenizer: JsonTokenizer): Promise<void> {
   if (token.kind !== "colon") throw new JsonSyntaxError("Expected : after a property name");
 }
 
-async function readJsonValueFrom(
+export async function readJsonValueFrom(
   tokenizer: JsonTokenizer,
   token: JsonToken,
   depth: number,
@@ -1491,7 +1703,7 @@ async function readJsonValueFrom(
   }
 }
 
-async function skipJsonValueFrom(
+export async function skipJsonValueFrom(
   tokenizer: JsonTokenizer,
   token: JsonToken,
   depth: number,
@@ -1518,7 +1730,7 @@ async function skipJsonValueFrom(
   throw new JsonSyntaxError("Unexpected token in JSON value");
 }
 
-async function readArrayItems(
+export async function readArrayItems(
   tokenizer: JsonTokenizer,
   onItem: (token: JsonToken) => Promise<void>,
 ): Promise<void> {
@@ -1532,7 +1744,7 @@ async function readArrayItems(
   }
 }
 
-async function readObjectEntries(
+export async function readObjectEntries(
   tokenizer: JsonTokenizer,
   onField: (key: string, value: JsonToken) => Promise<void>,
 ): Promise<void> {
@@ -1946,6 +2158,12 @@ function observeRow(
     const index = columns.indexOf("hash");
     const hash = index === -1 ? undefined : row[index];
     if (typeof hash === "string") scratch.insertBlobRef(hash);
+  }
+  if (table === "projects") {
+    // What a file restore maps to local directories, read the way the
+    // in-memory restore reads it: `String` of the raw id value.
+    const index = columns.indexOf("id");
+    if (index !== -1) scratch.insertProjectId(String(row[index]));
   }
   const transcriptColumns = TRANSCRIPT_COLUMNS[table];
   if (transcriptColumns !== undefined) {

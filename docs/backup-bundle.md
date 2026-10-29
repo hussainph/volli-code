@@ -132,7 +132,11 @@ A restored profile reuses none of those strings; it also does not hide them.
 
 ## Restore
 
-`restoreBackupBundle` never merges and never overwrites.
+A restore never merges and never overwrites. There are two entry points with
+one sequence: `restoreBackupBundleFile` takes a bundle **file** of any size with
+bounded memory (VC-988); `restoreBackupBundle` takes the bundle's bytes and
+remains for small callers (fixtures, tests). Both stage, check and activate
+exactly as below and return the same report or the same problems.
 
 1. Read the archive, then the manifest; check bundle-format compatibility.
 2. Verify every entry's path, size and SHA-256.
@@ -154,27 +158,41 @@ A restored profile reuses none of those strings; it also does not hide them.
 Any failure before step 7 removes the staging directory and leaves the original
 profile byte-for-byte unchanged, with a list of named problems to show.
 
-Activation is the fenced swap of `db/database-file.ts` (VC-628), the one module
-that may put a file at the database path. It holds the open lock, writes the
-`volli.db.recovery-pending` marker durably before moving anything, and takes
-SQLite's exclusive ownership of the live database. A restore under a running
-app is refused rather than renaming the file out from under its writer. The
-live database stays at its path until the staged one replaces it with one
-atomic rename, so the path is never empty. A crash mid-swap leaves the marker,
-and the next launch refuses to open instead of creating an empty profile. A
-failure puts the previous profile back and clears the marker. If the previous
-profile cannot be put back, the marker stays and its files stay in
-`.volli-replaced-<n>/`.
+**The file restore** reads the archive twice and holds neither read in memory.
+The first read is the bounded v1 verifier the automatic backup uses (steps 1–3,
+with its inventory, link index and coverage on disk); it also records the
+project ids for step 4, so a missing directory is refused before anything is
+staged. The second read stages the rows and artifacts (step 5) as they stream:
+rows committed every few thousand into the staged database, blobs streamed to
+disk, one transcript at a time through the transcript store. Every entry of the
+second read is hashed and must match the size and SHA-256 the first read
+recorded, and every table's row count must match too, so a file that changes
+between the two reads is refused (`The backup file changed after it was
+verified`) rather than half-restored. Its scratch files live inside the staging
+directory. Two limits are its own: a refusal list is cut at 100 mapping problems,
+and a data document that lists `ticket_event_sequence` or
+`session_event_sequence` before its event table is refused by name (both Volli
+writers list the event table first; the in-memory restore loads in its own
+order). A `checkpoint` callback is awaited at bounded intervals in both reads;
+rejecting it cancels the restore before activation, reported as the restore
+not happening rather than as a damaged bundle. The staged database keeps
+SQLite's temporary structures on disk (`temp_store = FILE`), so a VACUUM run by
+an upgrade migration does not hold a copy of the database in RAM.
 
-**Credentials (VC-559).** No bundle carries a credential, whichever
-secret-key adapter sealed it: the macOS keychain or a headless host's key
-file. A bundle from a Mac therefore restores onto a headless host, or the
-other way around, like any other. The swap moves only `volli.db*`, `blobs` and
-`session-transcripts`, so the target's `session-secrets.enc`,
-`session-secrets.key` and `mcp-credentials.json` stay exactly as they were. The
-report's `credentials` field says nothing was carried, lists what to enter
-again, and gives one sentence to show. See
-[docs/secrets.md](secrets.md#across-machines-and-adapters).
+At large-profile scale the round trip is rehearsed by
+`packages/host-core/scripts/rehearse-backup-restore.mjs`, which CI extended runs
+on every main push and nightly. It builds a synthetic profile of 2,150,000
+Session events whose `data.json` is past 1.6 GB (and past V8's maximum string
+length). A twentieth of the events are usage events, so the usage rebuild runs
+at scale. The profile also carries a few thousand transcripts and attachments,
+including a 64 MiB attachment and a 16 MiB transcript. The production worker
+backs it up, and `restoreBackupBundleFile` restores it in its own process. The
+result is compared with its source table by table (row counts and digests of
+every carried row) and artifact by artifact, and the rebuilt usage index is
+checked against its events. The restore runs under the automatic backup
+worker's 192 MiB old-generation cap, so completing at all shows a bounded heap.
+The rehearsal also fails if the restore's peak RSS grows more than 768 MiB
+(measured: +366 MiB on macOS, +464 MiB on the Linux CI runner).
 
 ## Supported versions
 
@@ -192,13 +210,14 @@ profile. A bundle whose schema is newer than the build is refused; the answer is
 to update Volli.
 
 Format compatibility: **a bundle restores into the app version that wrote it or any later
-one; never into an earlier one**, subject to the reader's resource limits. The
-current in-memory restore can exceed V8's string/memory limits on large profiles.
-A file-based staged restore and large-profile round-trip rehearsal are tracked in
-VC-988 and are required before stable large-profile backup/restore readiness.
-A successful file verification is not a claim that this old restore path has
-been rehearsed at that size. `restore.test.ts` exercises the newest schema
-and the two below it end to end, including the two rebuilt usage views.
+one; never into an earlier one**. A profile-sized bundle restores through
+`restoreBackupBundleFile`; the in-memory `restoreBackupBundle` holds the whole
+data document as one string and cannot restore a profile whose `data.json`
+exceeds V8's maximum string length (about 512 MiB). `restore.test.ts` exercises the newest schema
+and the two below it end to end, including the two rebuilt usage views, and
+`restore-file.test.ts` holds the file restore to the in-memory one on the same
+bundles (identical restored databases and artifacts, identical refusals),
+including the two older schemas.
 
 ## Host API boundary
 
