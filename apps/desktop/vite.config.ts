@@ -884,6 +884,7 @@ export default defineConfig(({ mode, command }) => ({
         main: "src/main/index.ts",
         "automatic-backup-worker": "src/main/automatic-backup-worker.ts",
         "restore-worker": "src/main/restore-worker.ts",
+        "migration-export-worker": "src/main/cloud-move/export-worker.ts",
       },
       format: "cjs",
       outDir: "dist-electron",

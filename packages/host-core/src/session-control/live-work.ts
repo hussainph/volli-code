@@ -117,6 +117,8 @@ export interface HostLiveWorkWatch {
   forgetShell(shellId: string): void;
   /** The live work right now. Cheap and synchronous: a quit gate calls it. */
   current(): HostLiveWork;
+  /** The same canonical active/about-to-start turns as current().turns, by Session id. Idle bindings are excluded. */
+  activeTurnSessionIds(): ReadonlySet<string>;
   /**
    * The idle-exit barrier: when nothing is live, take the runtime's start
    * latch and answer true — atomically, in one synchronous call. When work is
@@ -147,16 +149,19 @@ export function createHostLiveWork(ports: HostLiveWorkPorts): HostLiveWorkWatch 
   let announced = NO_LIVE_WORK;
   let latched = false;
 
-  function current(): HostLiveWork {
-    const pending = ports.pendingStartSessionIds?.();
-    let turns = pending?.size ?? 0;
+  function activeTurnSessionIds(): ReadonlySet<string> {
+    const active = new Set(ports.pendingStartSessionIds?.());
     if (turnsOpen.size > 0) {
       const bound = ports.openSessionIds();
       for (const sessionId of turnsOpen) {
-        if (bound.has(sessionId) && pending?.has(sessionId) !== true) turns += 1;
+        if (bound.has(sessionId)) active.add(sessionId);
       }
     }
-    return { turns, shells: shellsRunning.size };
+    return active;
+  }
+
+  function current(): HostLiveWork {
+    return { turns: activeTurnSessionIds().size, shells: shellsRunning.size };
   }
 
   function announce(): void {
@@ -211,6 +216,7 @@ export function createHostLiveWork(ports: HostLiveWorkPorts): HostLiveWorkWatch 
       announce();
     },
     current,
+    activeTurnSessionIds,
     tryBeginIdleExit() {
       if (latched) return true;
       if (hasLiveWork(current())) return false;

@@ -3,6 +3,7 @@ import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
+import { CloudMoveReadOnlyBanner } from "@renderer/components/cloud-moves/cloud-moves";
 import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
@@ -41,6 +42,7 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      <CloudMoveReadOnlyBanner />
       {/* Both measure THIS Mac's tools in the project's folder: a remote
           project's folder is on its host (VC-711), so neither runs for it. */}
       <LocalOnly projectId={selected?.id ?? null} fallback={null}>

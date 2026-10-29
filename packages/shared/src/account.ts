@@ -149,6 +149,8 @@ export type CloudLaunch =
        * instead of the last selection on the first cloud launch after it.
        */
       readonly joinedWorkspaceId?: string;
+      /** One requested project to open after a move; a launch-time navigation intent, not UI state. */
+      readonly openProjectId?: string;
     };
 
 /** The largest last-seen board snapshot the window may keep (VC-889, D3), in characters. */

@@ -38,7 +38,15 @@ export function SettingsPage({
     void useExperimentsStore.getState().ensure();
   }, []);
   const groups = React.useMemo(
-    () => settingsGroups(initialSignInProviderId, { logs, hosts, account, runners, experiments }),
+    () =>
+      settingsGroups(initialSignInProviderId, {
+        logs,
+        hosts,
+        moves: hosts,
+        account,
+        runners,
+        experiments,
+      }),
     [initialSignInProviderId, logs, hosts, account, runners, experiments],
   );
 

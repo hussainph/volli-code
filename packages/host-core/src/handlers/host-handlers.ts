@@ -131,6 +131,14 @@ import type { DetachedWorkPort } from "../detached-work";
 import type { AccountPort } from "./account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RunnerAccountPort } from "./runner-account-port";
+import type { CloudMovesPort } from "./cloud-moves-port";
+import type {
+  CloudMoveSnapshot,
+  CloudMovePreflightInput,
+  CloudMovePreflight,
+  CloudMoveStartInput,
+  CloudMoveCommand,
+} from "@volli/shared";
 import type { CloudCheckoutPort } from "./cloud-checkout-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
@@ -488,10 +496,14 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "account.githubInstall": HostHandler<void, null>;
   readonly "account.githubCancel": HostHandler<void, null>;
   readonly "account.githubDisconnect": HostHandler<void, null>;
-  /**
-   * This Mac as one of the person's runners (VC-895): desktop main's Mac
-   * runner, {@link HostHandlerOptions.runners}'s, or unavailable.
-   */
+  /** This Mac's person-only move service, or unavailable on other hosts. */
+  readonly "moves.snapshot": HostHandler<void, CloudMoveSnapshot>;
+  readonly "moves.subscribe": HostSubscriptionHandler<void, null>;
+  readonly "moves.preflight": HostHandler<CloudMovePreflightInput, CloudMovePreflight>;
+  readonly "moves.start": HostHandler<CloudMoveStartInput, null>;
+  readonly "moves.command": HostHandler<CloudMoveCommand, null>;
+  readonly "moves.report": HostHandler<{ moveId: string }, string>;
+  /** This Mac as one of the person's runners (VC-895), through desktop main's port. */
   readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
   /** The current snapshot first, then every change. */
   readonly "runners.subscribeThisMac": HostSubscriptionHandler<void, ThisMacRunnerSnapshot>;
@@ -732,6 +744,8 @@ export interface HostHandlerOptions {
    * unavailable.
    */
   readonly runners?: RunnerAccountPort | null;
+  /** Desktop main's person-only move service; absent on other hosts. */
+  readonly moves?: CloudMovesPort | null;
   /**
    * Desktop main's cloud project folders (VC-895 N2-3): the runner-local
    * registry and the folder picker; absent or null on hostd: `checkouts.*`
@@ -758,6 +772,7 @@ const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this hos
 const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
 const ACCOUNT_UNAVAILABLE = "Accounts are unavailable on this host";
 const RUNNERS_UNAVAILABLE = "Runners are unavailable on this host";
+const MOVES_UNAVAILABLE = "Moves to Volli Cloud are unavailable on this host";
 const CHECKOUTS_UNAVAILABLE = "Project folders are unavailable on this host";
 const PROJECT_REMOVAL_UNAVAILABLE = "Removing a project is unavailable on this host";
 
@@ -873,6 +888,7 @@ function hostHandlerEntries(
     present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
   const account = () => present(options.account ?? null, ACCOUNT_UNAVAILABLE);
   const runners = () => present(options.runners ?? null, RUNNERS_UNAVAILABLE);
+  const moves = () => present(options.moves ?? null, MOVES_UNAVAILABLE);
   const checkouts = () => present(options.checkouts ?? null, CHECKOUTS_UNAVAILABLE);
   const feed = options.boardFeed ?? createBoardChangeFeed();
 
@@ -1321,6 +1337,25 @@ function hostHandlerEntries(
     "account.githubInstall": () => done(() => account().github.install()),
     "account.githubCancel": () => done(() => account().github.cancel()),
     "account.githubDisconnect": () => done(() => account().github.disconnect()),
+    // This Mac's person-only project moves, through desktop main's port.
+    "moves.snapshot": () => moves().snapshot(),
+    "moves.subscribe": async (_input, _call, sink) => {
+      const stop = moves().onChanged(
+        () => void sink.emit(null),
+        (error) => sink.fail(error),
+      );
+      try {
+        await sink.emit(null);
+        return stop;
+      } catch (error) {
+        stop();
+        throw error;
+      }
+    },
+    "moves.preflight": (input) => moves().preflight(input),
+    "moves.start": (input) => done(() => moves().start(input)),
+    "moves.command": (input) => done(() => moves().command(input)),
+    "moves.report": ({ moveId }) => moves().report(moveId),
     // This Mac as a runner (VC-895): desktop main's Mac runner, through its port.
     "runners.thisMac": () => runners().thisMac(),
     "runners.subscribeThisMac": async (_input, _call, sink) =>

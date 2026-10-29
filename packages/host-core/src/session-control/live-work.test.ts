@@ -30,6 +30,21 @@ function latched(pending: Set<string>, bound: string[] = []) {
 }
 
 describe("host live work (VC-577)", () => {
+  it("names only canonical busy turns, deduplicating pending starts and excluding idle bindings", () => {
+    const pending = new Set(["pending", "overlap"]);
+    const live = createHostLiveWork({
+      openSessionIds: () => new Set(["active", "idle", "overlap"]),
+      pendingStartSessionIds: () => pending,
+    });
+    live.observeSession(fold("active", true));
+    live.observeSession(fold("overlap", true));
+    live.observeSession(fold("idle", false));
+    live.observeSession(fold("unbound", true));
+    expect([...live.activeTurnSessionIds()].toSorted()).toEqual(["active", "overlap", "pending"]);
+    expect(live.current().turns).toBe(3);
+    (live.activeTurnSessionIds() as Set<string>).clear();
+    expect(live.activeTurnSessionIds().size).toBe(3);
+  });
   it("starts with nothing running", () => {
     const { live } = watch();
     expect(live.current()).toEqual(NO_LIVE_WORK);

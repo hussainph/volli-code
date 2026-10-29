@@ -53,7 +53,7 @@ const execFileAsync = promisify(execFile);
 
 const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
-  launch [--fixture basic|empty] [--model fake|env] [--idle-min 20]
+  launch [--fixture basic|empty|move] [--model fake|env] [--idle-min 20]
          [--fake-script file.json] deterministic fake-provider reply sequence
          [--no-build] [--json]     start an instance (dev build only; packed
                                    apps are refused until VC-705); prints its

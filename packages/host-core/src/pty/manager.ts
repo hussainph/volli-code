@@ -1357,6 +1357,11 @@ export class PtyManager {
     return Array.from(this.sessions.values(), (session) => session.cwd);
   }
 
+  /** Live terminal owners only, including idle terminals; historical unclosed attachments are not processes. */
+  liveSessionIds(): ReadonlySet<string> {
+    return new Set(this.sessions.keys());
+  }
+
   /** Read-only snapshot used by the CLI; it never writes to or controls the observed PTY. */
   peek(
     sessionId: string,

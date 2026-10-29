@@ -125,13 +125,14 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
         if (stream.name === "sessionEvents") {
           const payload = row.payload as {
             kind?: string;
-            reference?: { id?: string };
-            digest?: string;
+            reference?: { id?: string; digest?: unknown };
           };
           if (payload?.kind === "transcript.referenced") {
+            // Event.digest is message semantics; file identity belongs to reference.
             if (
               typeof payload.reference?.id !== "string" ||
-              (payload.digest !== undefined && payload.digest !== payload.reference.id)
+              (payload.reference.digest !== undefined &&
+                payload.reference.digest !== payload.reference.id)
             )
               fail("Invalid transcript reference.");
             references.set(key, payload.reference.id);

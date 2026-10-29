@@ -1918,3 +1918,77 @@ describe("local profile restore commands", () => {
     expect(restore.directory).toHaveBeenCalledOnce();
   });
 });
+
+describe("person-only moves to Volli Cloud", () => {
+  const snapshot = { revision: 1, account: null, workspaces: [], moves: [], unavailable: null };
+  const preflight = {
+    id: "dry-run",
+    projects: [],
+    backupDirectory: "/backup",
+    disk: { requiredBytes: 1, freeBytes: 2 },
+    stopAtFirstProblem: true,
+    exclusions: [],
+  };
+  const input = { workspaceId: null, includeRemoved: false };
+  const start = {
+    preflightId: "dry-run",
+    projectIds: [PROJECT],
+    workspaceId: "workspace",
+    stopAtFirstProblem: true,
+  };
+  const command = { moveId: "move", action: "pause" as const };
+  it("answers unavailable on a host without the desktop move service", async () => {
+    const map = handlers();
+    for (const call of [
+      () => map["moves.snapshot"](undefined, WINDOW),
+      () => map["moves.subscribe"](undefined, WINDOW, sink()),
+      () => map["moves.preflight"](input, WINDOW),
+      () => map["moves.start"](start, WINDOW),
+      () => map["moves.command"](command, WINDOW),
+      () => map["moves.report"]({ moveId: "move" }, WINDOW),
+    ])
+      expect(await unavailable(call)).toBe("Moves to Volli Cloud are unavailable on this host");
+  });
+  it("projects the port, and unsubscribes even if the initial delivery fails", async () => {
+    const stop = vi.fn();
+    let changed!: () => void;
+    let failed!: (error: unknown) => void;
+    const moves = {
+      snapshot: vi.fn(async () => snapshot),
+      preflight: vi.fn(async () => preflight),
+      start: vi.fn(async () => {}),
+      command: vi.fn(async () => {}),
+      report: vi.fn(async () => "{}"),
+      onChanged: vi.fn((listener: () => void, onError: (error: unknown) => void) => {
+        changed = listener;
+        failed = onError;
+        return stop;
+      }),
+    };
+    const map = handlers({ moves });
+    expect(await map["moves.snapshot"](undefined, WINDOW)).toEqual(snapshot);
+    expect(await map["moves.preflight"](input, WINDOW)).toEqual(preflight);
+    expect(moves.preflight).toHaveBeenCalledWith(input);
+    expect(await map["moves.start"](start, WINDOW)).toBeNull();
+    expect(moves.start).toHaveBeenCalledWith(start);
+    expect(await map["moves.command"](command, WINDOW)).toBeNull();
+    expect(moves.command).toHaveBeenCalledWith(command);
+    expect(await map["moves.report"]({ moveId: "move" }, WINDOW)).toBe("{}");
+    expect(moves.report).toHaveBeenCalledWith("move");
+    const delivery = sink();
+    expect(await map["moves.subscribe"](undefined, WINDOW, delivery)).toBe(stop);
+    expect(delivery.emit).toHaveBeenCalledWith(null);
+    changed();
+    expect(delivery.emit).toHaveBeenCalledTimes(2);
+    failed(new Error("source ended"));
+    expect(delivery.fail).toHaveBeenCalledWith(expect.any(Error));
+    const broken = {
+      ...sink(),
+      emit: vi.fn(async () => {
+        throw new Error("closed");
+      }),
+    };
+    await expect(map["moves.subscribe"](undefined, WINDOW, broken)).rejects.toThrow("closed");
+    expect(stop).toHaveBeenCalledOnce();
+  });
+});

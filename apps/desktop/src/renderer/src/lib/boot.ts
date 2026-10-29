@@ -735,11 +735,12 @@ async function bootCloudLaunch(
   localSelection: string | null,
 ): Promise<BootResult> {
   const raw = payload.appState[PROJECTS_UI_APP_STATE_KEY];
-  // A Workspace just joined with a team code at sign-in opens first, this launch only.
+  // A just-joined Workspace or moved project is a one-launch navigation intent.
+  // Main never writes this store's persisted selection shape.
   bootCloudSelection =
     launch.joinedWorkspaceId === undefined
       ? decodeCloudSelection(raw)
-      : { workspaceId: launch.joinedWorkspaceId, projectId: null };
+      : { workspaceId: launch.joinedWorkspaceId, projectId: launch.openProjectId ?? null };
   useProjectsStore.setState({ pendingRemoteSelection: null });
   useProjectsStore
     .getState()

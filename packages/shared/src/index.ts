@@ -206,3 +206,21 @@ export type {
   ProfileRestoreBundle,
   ProfileRestoreProject,
 } from "./profile-restore";
+export { CLOUD_MOVE_ACTIONS, CLOUD_MOVE_STEPS, CLOUD_MOVE_VIEW_STATES } from "./cloud-moves";
+export type {
+  CloudMoveCounts,
+  CloudMoveExclusion,
+  CloudMoveBlocker,
+  CloudMoveProject,
+  CloudMovePreflightInput,
+  CloudMovePreflight,
+  CloudMoveStartInput,
+  CloudMoveAction,
+  CloudMoveCommand,
+  CloudMoveRearmTarget,
+  CloudMoveAutomationRearm,
+  CloudMoveStep,
+  CloudMoveCheck,
+  CloudMoveStatus,
+  CloudMoveSnapshot,
+} from "./cloud-moves";

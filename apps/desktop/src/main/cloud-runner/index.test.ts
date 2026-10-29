@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { LOCAL_LAUNCH, OperationUnavailableError, THIS_MAC_RUNNER_OFF } from "@volli/shared";
+import { NO_POWER_EVENTS } from "@volli/host-core/ports";
+import {
+  LOCAL_LAUNCH,
+  OperationUnavailableError,
+  THIS_MAC_RUNNER_OFF,
+  type AccountSnapshot,
+} from "@volli/shared";
 
+import { tempInventory } from "../account/test-support";
 import { chooseProductStore } from "../cloud-launch";
+import type { RunnerConnectionDeps } from "./connection";
+import { runnerLinkPurpose } from "./identity-store";
 import {
   createDesktopMacRunner,
   runnerAccountPort,
@@ -80,5 +89,152 @@ describe("the runners port", () => {
     await on.removeThisMac();
     expect(typeof on.subscribeThisMac(() => {})).toBe("function");
     expect(calls).toEqual(["add", "remove"]);
+  });
+});
+
+const MOVE_USER = "11111111-1111-4111-8111-111111111111";
+const MOVE_RUNNER = "22222222-2222-4222-8222-222222222222";
+const MOVE_LINK = { runnerId: MOVE_RUNNER, name: "danas-mac", credential: "vrc_1", generation: 1 };
+
+const flush = async () => {
+  for (let index = 0; index < 5; index += 1) await new Promise((done) => setImmediate(done));
+};
+
+function signedIn(): AccountSnapshot {
+  return {
+    state: "signed-in",
+    provider: "dev",
+    failure: null,
+    account: {
+      displayName: "Dana",
+      email: null,
+      userId: MOVE_USER,
+      deletionPurgeAfter: null,
+      backend: "synced",
+    },
+  } as unknown as AccountSnapshot;
+}
+
+/**
+ * The factory over its real ports: a sealed temp inventory already holding
+ * this Mac's link (so nothing registers, which would run `scutil`/`ioreg`),
+ * and a Convex client module that fails the test if a connection is opened.
+ */
+function moveInput(
+  options: {
+    registrationOnly?: boolean;
+    sync?: RunnerConnectionDeps["sync"];
+    onCloudClient?: () => void;
+  } = {},
+): {
+  input: DesktopMacRunnerInput;
+  dispose: () => void;
+} {
+  const temp = tempInventory();
+  temp.inventory.put(
+    "host-private",
+    { purpose: runnerLinkPurpose(MOVE_USER) },
+    JSON.stringify({ v: 1, ownerUserId: MOVE_USER, ...MOVE_LINK }),
+  );
+  const onCloudClient = options.onCloudClient ?? (() => {});
+  return {
+    dispose: temp.dispose,
+    input: {
+      deployment: "cloud",
+      userId: MOVE_USER,
+      backendUrl: "https://a.convex.cloud",
+      siteUrl: "https://a.convex.site",
+      convex: {
+        ConvexClient: class {
+          constructor() {
+            onCloudClient();
+          }
+          setAuth() {}
+          async mutation() {
+            return null;
+          }
+          onUpdate() {
+            return () => {};
+          }
+          connectionState() {
+            return { isWebSocketConnected: false };
+          }
+          subscribeToConnectionState() {
+            return () => {};
+          }
+          async close() {}
+        },
+        makeFunctionReference: (name: string) => name,
+      },
+      account: {
+        subscribe(listener) {
+          listener(signedIn());
+          return () => {};
+        },
+        accessToken: async () => "person-token",
+      },
+      inventory: temp.inventory,
+      unlockInventory: async () => {},
+      recordRow: () => null,
+      power: NO_POWER_EVENTS,
+      liveWork: () => ({ turns: 0, shells: 0 }),
+      dataDir: "/tmp/volli-move-runner",
+      appVersion: "0.3.0",
+      packaged: false,
+      browser,
+      log: { info: () => {}, warn: () => {} },
+      ...(options.registrationOnly === true ? { registrationOnly: true } : {}),
+      ...(options.sync === undefined ? {} : { sync: options.sync }),
+    },
+  };
+}
+
+describe("a registration-only runner (a local launch's move)", () => {
+  it("forwards the mode through the factory: linked and offline, with no connection built", async () => {
+    // `sync` is built once per connection the factory composes, so it says whether one was.
+    const syncs: string[] = [];
+    const sync: RunnerConnectionDeps["sync"] = (parts) => {
+      syncs.push(parts.runnerId);
+      return { start: () => {}, stop: async () => {}, close: async () => {}, waiting: () => 0 };
+    };
+    let cloudClients = 0;
+
+    const only = moveInput({
+      registrationOnly: true,
+      sync,
+      onCloudClient: () => (cloudClients += 1),
+    });
+    try {
+      const runner = createDesktopMacRunner(only.input);
+      runner.start();
+      await flush();
+      // Honest: linked, with the id a move records, and not connected.
+      expect(runner.snapshot()).toMatchObject({
+        state: "offline",
+        runnerId: MOVE_RUNNER,
+        runnerName: "danas-mac",
+      });
+      expect(syncs).toEqual([]);
+      runner.refreshCapabilities();
+      await runner.stop();
+      expect(syncs).toEqual([]);
+      expect(cloudClients).toBe(0);
+    } finally {
+      only.dispose();
+    }
+
+    // The same ports without the flag are a cloud launch's runner: it connects.
+    const full = moveInput({ sync, onCloudClient: () => (cloudClients += 1) });
+    try {
+      const runner = createDesktopMacRunner(full.input);
+      runner.start();
+      await flush();
+      expect(runner.snapshot().runnerId).toBe(MOVE_RUNNER);
+      expect(cloudClients).toBe(1);
+      expect(syncs).toEqual([MOVE_RUNNER]);
+      await runner.stop();
+    } finally {
+      full.dispose();
+    }
   });
 });

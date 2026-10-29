@@ -30,27 +30,42 @@ export const CLOUD_LAUNCH_APP_STATE_KEY = "volli:cloud-launch";
 export interface LaunchMarker {
   readonly userId: string;
   readonly joinedWorkspaceId?: string;
+  /** One requested navigation after a move, consumed by the next launch. */
+  readonly openProjectId?: string;
 }
 
-/** The marker's stored form. */
-export function encodeLaunchMarker(userId: string, joinedWorkspaceId?: string): string {
-  return JSON.stringify(
-    joinedWorkspaceId === undefined ? { userId } : { userId, joinedWorkspaceId },
-  );
+/** The marker's stored form. Older readers keep the sign-in and ignore new navigation. */
+export function encodeLaunchMarker(
+  userId: string,
+  joinedWorkspaceId?: string,
+  openProjectId?: string,
+): string {
+  return JSON.stringify({
+    userId,
+    ...(joinedWorkspaceId === undefined ? {} : { joinedWorkspaceId }),
+    ...(openProjectId === undefined ? {} : { openProjectId }),
+  });
 }
 
 /** The marker in a stored value; anything that is not one reads as no marker (a local launch). */
 export function decodeLaunchMarker(raw: string | undefined): LaunchMarker | null {
   if (raw === undefined) return null;
   try {
-    const value = JSON.parse(raw) as { userId?: unknown; joinedWorkspaceId?: unknown } | null;
+    const value = JSON.parse(raw) as {
+      userId?: unknown;
+      joinedWorkspaceId?: unknown;
+      openProjectId?: unknown;
+    } | null;
     const userId = value?.userId;
     if (typeof userId !== "string" || userId.length === 0) return null;
     const joined = value?.joinedWorkspaceId;
     // An unreadable joined Workspace is dropped, never the sign-in.
-    return typeof joined === "string" && joined.length > 0
-      ? { userId, joinedWorkspaceId: joined }
-      : { userId };
+    const project = value?.openProjectId;
+    return {
+      userId,
+      ...(typeof joined === "string" && joined.length > 0 ? { joinedWorkspaceId: joined } : {}),
+      ...(typeof project === "string" && project.length > 0 ? { openProjectId: project } : {}),
+    };
   } catch {
     return null;
   }
@@ -94,6 +109,7 @@ export function chooseProductStore(input: {
     ...(marker.joinedWorkspaceId === undefined
       ? {}
       : { joinedWorkspaceId: marker.joinedWorkspaceId }),
+    ...(marker.openProjectId === undefined ? {} : { openProjectId: marker.openProjectId }),
   };
 }
 
@@ -112,7 +128,7 @@ export interface LaunchMarkerStore {
    * `null` drops it (the launch opened it); absent keeps the one recorded for
    * the same person, so a later account check never loses it first.
    */
-  write(userId: string, joinedWorkspaceId?: string | null): void;
+  write(userId: string, joinedWorkspaceId?: string | null, openProjectId?: string | null): void;
   /** The sign-in ended: the next launch is a local one. */
   clear(): void;
 }
@@ -138,7 +154,7 @@ export function launchMarkerStore(
   };
   return {
     read: () => attempt("read", (live) => decodeLaunchMarker(live.read()), null),
-    write(userId, joinedWorkspaceId) {
+    write(userId, joinedWorkspaceId, openProjectId) {
       attempt(
         "write",
         (live) => {
@@ -149,7 +165,13 @@ export function launchMarkerStore(
                 ? before.joinedWorkspaceId
                 : undefined
               : (joinedWorkspaceId ?? undefined);
-          const value = encodeLaunchMarker(userId, joined);
+          const project =
+            openProjectId === undefined
+              ? before?.userId === userId
+                ? before.openProjectId
+                : undefined
+              : (openProjectId ?? undefined);
+          const value = encodeLaunchMarker(userId, joined, project);
           if (live.read() !== value) live.write(value);
         },
         undefined,

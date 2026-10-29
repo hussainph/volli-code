@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
+import type { SessionTranscriptDigest } from "@volli/shared";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { FileTranscriptArtifactStore } from "../session-runtime/transcript-artifacts";
+import { blobFilePath } from "../blob-store";
 import { exportFileStreams, type FileStreamOptions } from "./file-streams";
 
 const fault = vi.hoisted(() => ({
@@ -99,7 +101,7 @@ function attachment(
       .join(",")})`,
   ).run(...Object.values(row));
 }
-function artifact(digestOverride?: string) {
+function artifact(referenceDigestOverride?: string) {
   const body = JSON.stringify({
     version: 1,
     threadId: "t",
@@ -114,8 +116,11 @@ function artifact(digestOverride?: string) {
   db.prepare("INSERT INTO session_events VALUES ('s',1,?)").run(
     JSON.stringify({
       kind: "transcript.referenced",
-      reference: { id, digest: id, mediaType: "application/vnd.volli.ui-message+json" },
-      ...(digestOverride ? { digest: digestOverride } : {}),
+      reference: {
+        id,
+        digest: referenceDigestOverride ?? id,
+        mediaType: "application/vnd.volli.ui-message+json",
+      },
     }),
   );
 }
@@ -218,9 +223,9 @@ it("names non-Error filesystem failures", async () => {
   fault.nonError = true;
   await expect(run()).rejects.toThrow(/unreadable/);
 });
-it("refuses an event whose digest disagrees with its artifact", async () => {
+it("still refuses a reference whose checksum disagrees with its id", async () => {
   artifact("different");
-  await expect(run()).rejects.toThrow(/digest differs/);
+  await expect(run()).rejects.toThrow(/reference is invalid/);
 });
 it("names non-Error artifact failures", async () => {
   artifact();
@@ -229,11 +234,16 @@ it("names non-Error artifact failures", async () => {
   );
   await expect(run()).rejects.toThrow(/unreadable/);
 });
-it("checks a matching event digest", async () => {
+it("accepts the modern event's semantic digest, not mistaking it for the file checksum", async () => {
   artifact();
-  db.prepare(
-    "UPDATE session_events SET payload=json_set(payload,'$.digest',json_extract(payload,'$.reference.id'))",
-  ).run();
+  const digest = { role: "assistant", reply: true } satisfies SessionTranscriptDigest;
+  db.prepare("UPDATE session_events SET payload=json_set(payload,'$.digest',json(?))").run(
+    JSON.stringify(digest),
+  );
+  expect((await run()).checkpoints[0]!.rowsThrough).toBe(1);
+});
+it("keeps exporting older transcript events without a semantic digest", async () => {
+  artifact();
   expect((await run()).checkpoints[0]!.rowsThrough).toBe(1);
 });
 it("can cancel before artifact IO", async () => {
@@ -246,6 +256,26 @@ it("can cancel before blob IO", async () => {
   options.signal = AbortSignal.abort();
   await expect(run()).rejects.toThrow();
 });
+
+it.each(["matching", "checksum", "size", "missing"])(
+  "checks referenced blob bytes: %s",
+  async (kind) => {
+    const body = Buffer.from("hello");
+    const hash = createHash("sha256").update(body).digest("hex");
+    db.prepare("INSERT INTO blobs VALUES (?,?)").run(
+      hash,
+      kind === "size" ? body.length + 1 : body.length,
+    );
+    db.prepare("INSERT INTO blob_links VALUES (?)").run(hash);
+    if (kind !== "missing") {
+      const file = blobFilePath(options.blobsDir, hash);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, kind === "checksum" ? Buffer.from("other") : body);
+    }
+    if (kind === "matching") expect((await run()).checkpoints).toHaveLength(2);
+    else await expect(run()).rejects.toThrow(/blob .* missing or corrupt/);
+  },
+);
 
 it("refuses non-UTF-8 canonical bodies rather than changing their bytes", async () => {
   artifact();

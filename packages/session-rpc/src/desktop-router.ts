@@ -92,6 +92,22 @@ import {
 } from "./account-schema";
 import { AsyncQueue } from "./async-queue";
 import { thisMacRunnerSnapshotSchema } from "./runners-schema";
+import type {
+  CloudMoveSnapshot,
+  CloudMovePreflight,
+  CloudMovePreflightInput,
+  CloudMoveStartInput,
+  CloudMoveCommand,
+} from "@volli/shared";
+import {
+  moveSnapshotSchema,
+  movePreflightInputSchema,
+  movePreflightSchema,
+  moveStartInputSchema,
+  moveCommandSchema,
+  moveIdInputSchema,
+  moveReportSchema,
+} from "./moves-schema";
 import {
   cloudCheckoutChoiceSchema,
   cloudCheckoutInputSchema,
@@ -285,6 +301,13 @@ export interface DesktopRouterHandlers {
   readonly "account.githubInstall": HostHandler<void, null>;
   readonly "account.githubCancel": HostHandler<void, null>;
   readonly "account.githubDisconnect": HostHandler<void, null>;
+  /** This Mac's person-only project moves. */
+  readonly "moves.snapshot": HostHandler<void, CloudMoveSnapshot>;
+  readonly "moves.subscribe": DesktopSubscriptionHandler<void, null>;
+  readonly "moves.preflight": HostHandler<CloudMovePreflightInput, CloudMovePreflight>;
+  readonly "moves.start": HostHandler<CloudMoveStartInput, null>;
+  readonly "moves.command": HostHandler<CloudMoveCommand, null>;
+  readonly "moves.report": HostHandler<{ moveId: string }, string>;
   /** This Mac as one of the person's runners (VC-895): desktop main's Mac runner. */
   readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.subscribeThisMac": DesktopSubscriptionHandler<void, ThisMacRunnerSnapshot>;
@@ -1059,12 +1082,34 @@ export function createDesktopRouter() {
         .output(z.object({ text: z.string().max(CLOUD_SNAPSHOT_TEXT_MAX).nullable() }))
         .query(({ ctx }) => ctx.handlers["cloud.readSnapshot"](undefined, ctx.call)),
     },
-    /**
-     * This Mac as one of the person's runners (VC-895). Born on the bridge:
-     * host-placed, the person's own window only; desktop main's Mac runner
-     * answers through the map (only with `cloud` on), and every other host
-     * answers unavailable. No procedure carries the runner's credential.
-     */
+    /** Person-only local project moves: desktop main's service, through the shared policy. */
+    moves: {
+      snapshot: hostProcedure("moves.snapshot")
+        .output(moveSnapshotSchema)
+        .query(({ ctx }) => ctx.handlers["moves.snapshot"](undefined, ctx.call)),
+      subscribe: hostProcedure("moves.subscribe").subscription(async function* ({ ctx, signal }) {
+        yield* desktopStream<null>(ctx, "moves.subscribe", signal, (sink) =>
+          ctx.handlers["moves.subscribe"](undefined, ctx.call, sink),
+        );
+      }),
+      preflight: hostProcedure("moves.preflight")
+        .input(movePreflightInputSchema)
+        .output(movePreflightSchema)
+        .query(({ ctx, input }) => ctx.handlers["moves.preflight"](input, ctx.call)),
+      start: hostProcedure("moves.start")
+        .input(moveStartInputSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["moves.start"](input, ctx.call)),
+      command: hostProcedure("moves.command")
+        .input(moveCommandSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["moves.command"](input, ctx.call)),
+      report: hostProcedure("moves.report")
+        .input(moveIdInputSchema)
+        .output(moveReportSchema)
+        .query(({ ctx, input }) => ctx.handlers["moves.report"](input, ctx.call)),
+    },
+    /** This Mac as a runner (VC-895): desktop main answers, other hosts are unavailable. */
     runners: {
       thisMac: hostProcedure("runners.thisMac")
         .output(thisMacRunnerSnapshotSchema)
@@ -1130,5 +1175,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "account.subscribe": accountSnapshotSchema,
     "account.githubSubscribe": accountGithubSnapshotSchema,
     "runners.subscribeThisMac": thisMacRunnerSnapshotSchema,
+    "moves.subscribe": z.null(),
   });
 }

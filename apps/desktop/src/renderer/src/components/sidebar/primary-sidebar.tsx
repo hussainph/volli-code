@@ -1,6 +1,7 @@
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
+import { CloudMoveRailRow } from "@renderer/components/cloud-moves/cloud-moves";
 import { NavList } from "@renderer/components/sidebar/nav-list";
 import { UpdateButton } from "@renderer/components/sidebar/update-button";
 import { SidebarScrollArea } from "@renderer/components/sidebar/sidebar-scroll";
@@ -90,6 +91,7 @@ export function PrimarySidebar() {
         )}
 
         <SidebarFooter>
+          <CloudMoveRailRow />
           {/* Settings keeps the wide row; the updater (VC-59) is the square
               beside it — a rare, occasionally-important control that must not
               compete with a daily one. UpdateButton renders null in dev and

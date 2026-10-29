@@ -22,6 +22,30 @@ function keywordsFor(key: string): readonly string[] {
   throw new Error(`no settings category ${key}`);
 }
 
+describe("Settings → Volli Cloud", () => {
+  it("offers one quiet move entry only with cloud on, and indexes its controls", () => {
+    expect(
+      settingsGroups()
+        .flatMap((group) => group.categories)
+        .some((item) => item.key === "volli-cloud"),
+    ).toBe(false);
+    const category = settingsGroups(undefined, { moves: true })
+      .flatMap((group) => group.categories)
+      .find((item) => item.key === "volli-cloud")!;
+    const html = renderToStaticMarkup(category.content);
+    expect(html).toContain("Move all projects…");
+    for (const label of [
+      "Move projects to Volli Cloud",
+      "Move all projects",
+      "Local projects",
+      "Moves",
+      "Progress and local copies",
+    ]) {
+      expect(category.keywords?.some((term) => term.includes(label.toLowerCase()))).toBe(true);
+    }
+  });
+});
+
 describe("Settings → General", () => {
   it("offers window preferences, with no app-wide Protection experiment or search entry", () => {
     const general = settingsGroups()

@@ -13,7 +13,12 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
-import { verifyS3Request } from "../../../../../convex/fixture/s3-boundary.ts";
+import {
+  verifyS3Request,
+  verifyS3MoveRequest,
+  verifyS3ReadRequest,
+  verifyS3ListRequest,
+} from "../../../../../convex/fixture/s3-boundary.ts";
 import { waitUntil } from "../../lib/smoke-kit.mjs";
 
 const exec = promisify(execFile);
@@ -51,6 +56,44 @@ async function tableRows(fixture, table, sessionId) {
   throw new Error(`Unexpectedly large throwaway backend table: ${table}`);
 }
 
+/** Authenticate before dispatch: every supported operation must pass a full SigV4 verifier. */
+function verifyStoreRequest(request, url, config) {
+  const verifiers = [
+    () => ({ kind: "list", verification: "list", list: verifyS3ListRequest(request, url, config) }),
+    () => ({
+      kind: "object",
+      verification: "read",
+      key: verifyS3ReadRequest(request, url, config),
+    }),
+    () => ({
+      kind: "object",
+      verification: "move",
+      key: verifyS3MoveRequest(request, url, config),
+    }),
+    () => {
+      const key = verifyS3Request(request, url, config);
+      assert.equal(
+        request.headers["if-none-match"],
+        undefined,
+        "Conditional PUT must sign If-None-Match",
+      );
+      return { kind: "object", verification: "history", key };
+    },
+  ];
+  const refusals = [];
+  for (const verify of verifiers) {
+    try {
+      return verify();
+    } catch (error) {
+      refusals.push(error);
+    }
+  }
+  throw new AggregateError(
+    refusals,
+    `S3 request rejected: ${refusals.map((error) => error.message).join("; ")}`,
+  );
+}
+
 /** A same-process, bounded, path-style S3 bucket with renderer CORS support. */
 export async function startTranscriptStore(fixture, reportDir) {
   const credentials = {
@@ -68,10 +111,11 @@ export async function startTranscriptStore(fixture, reportDir) {
     (request, response) => {
       void (async () => {
         let key = null;
+        let path = null;
         // Production's renderer fetches from the store, not from Convex. Handle
         // real Chromium CORS/preflight as an S3-compatible deployment would.
         response.setHeader("access-control-allow-origin", "*");
-        response.setHeader("access-control-allow-methods", "GET, PUT, OPTIONS");
+        response.setHeader("access-control-allow-methods", "GET, HEAD, PUT, DELETE, OPTIONS");
         response.setHeader("access-control-allow-headers", "*");
         response.setHeader(
           "access-control-expose-headers",
@@ -79,20 +123,77 @@ export async function startTranscriptStore(fixture, reportDir) {
         );
         try {
           const url = new URL(request.url, endpoint);
+          path = url.pathname;
+          const config = { ...credentials, bucket, region: "auto" };
+          // CORS preflight grants no access to the bucket or its objects.
+          if (request.method === "OPTIONS") {
+            assert.ok(url.pathname.startsWith(`/${bucket}/v1/`));
+            response.writeHead(204).end();
+            return;
+          }
+          const verified = verifyStoreRequest(request, url, config);
+          if (verified.kind === "list") {
+            const list = verified.list;
+            const offset = Number(list.continuationToken ?? 0);
+            assert.ok(Number.isSafeInteger(offset) && offset >= 0, "Invalid list continuation");
+            const all = [...objects.keys()]
+              .filter((name) => name.startsWith(list.prefix))
+              .toSorted();
+            const page = all.slice(offset, offset + list.maxKeys);
+            const truncated = offset + page.length < all.length;
+            const contents = page
+              .map(
+                (name) =>
+                  `<Contents><Key>${encodeURIComponent(name)}</Key><Size>${objects.get(name).length}</Size></Contents>`,
+              )
+              .join("");
+            const next = truncated
+              ? `<NextContinuationToken>${offset + page.length}</NextContinuationToken>`
+              : "";
+            response
+              .writeHead(200, { "content-type": "application/xml" })
+              .end(
+                `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>${truncated}</IsTruncated>${contents}${next}</ListBucketResult>`,
+              );
+            requests.push({
+              method: "LIST",
+              verification: verified.verification,
+              key: list.prefix,
+              bytes: 0,
+              sha256: null,
+              origin: null,
+            });
+            return;
+          }
           assert.ok(url.pathname.startsWith(`/${bucket}/v1/`));
-          key = decodeURIComponent(url.pathname.slice(bucket.length + 2));
+          key = verified.key;
           assert.ok(
             key
               .split("/")
               .every((part) => /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(part) && !part.includes("..")),
           );
-          if (request.method === "OPTIONS") {
+          if (request.method === "DELETE") {
+            const previous = objects.get(key);
+            objects.delete(key);
+            totalBytes -= previous?.length ?? 0;
+            requests.push({
+              method: "DELETE",
+              verification: verified.verification,
+              key,
+              bytes: previous?.length ?? 0,
+              sha256: null,
+              origin: null,
+            });
             response.writeHead(204).end();
             return;
           }
-          key = verifyS3Request(request, url, { ...credentials, bucket, region: "auto" });
           let body;
           if (request.method === "PUT") {
+            if (request.headers["if-none-match"] === "*" && objects.has(key)) {
+              request.resume();
+              response.writeHead(412).end();
+              return;
+            }
             const length = Number(request.headers["content-length"]);
             assert.ok(Number.isSafeInteger(length) && length > 0 && length <= MAX_BYTES);
             const chunks = [];
@@ -118,10 +219,14 @@ export async function startTranscriptStore(fixture, reportDir) {
             objects.set(key, body);
           } else {
             body = objects.get(key);
-            assert.ok(body, "GET names an object the runner actually uploaded");
+            if (body === undefined) {
+              response.writeHead(404).end();
+              return;
+            }
           }
           requests.push({
             method: request.method,
+            verification: verified.verification,
             key,
             bytes: body.length,
             sha256: sha256(body),
@@ -135,9 +240,9 @@ export async function startTranscriptStore(fixture, reportDir) {
                 "content-length": body.length,
                 "x-amz-checksum-sha256": createHash("sha256").update(body).digest("base64"),
               })
-              .end(body);
+              .end(request.method === "HEAD" ? undefined : body);
         } catch (error) {
-          problems.push({ method: request.method, key, error: error.message });
+          problems.push({ method: request.method, key, path, error: error.message });
           if (!response.headersSent) response.writeHead(400);
           response.end("Object-store boundary rejected the request");
         }

@@ -1,8 +1,9 @@
 /**
  * This Mac as one of the signed-in person's runners (VC-895): the state
- * machine desktop main runs in a Volli Cloud launch. No Electron import:
- * power, the account, the sealed store and the connection all come in as
- * ports, so it runs under plain Node in its tests.
+ * machine desktop main runs — connected in a Volli Cloud launch, and
+ * registration only while a local launch moves a project in. No Electron
+ * import: power, the account, the sealed store and the connection all come in
+ * as ports, so it runs under plain Node in its tests.
  *
  * **Registering.** Signed in, with no sealed link for this person and no
  * tombstone: `runners.registerThisMac` with the person's own access token, no
@@ -19,6 +20,19 @@
  * reached (work here keeps running), `asleep` between a sleep and its wake.
  * On sleep it reports `asleep` best-effort; on wake it reconnects, refreshes
  * its token and beats at once.
+ *
+ * **Registration only.** `MacRunnerOptions.registrationOnly` keeps all of the
+ * above and connects nothing: desktop main composes it in a local launch when
+ * a person starts moving a project to Volli Cloud (VC-998), because a move is
+ * accepted under this Mac's runner identity, while a local launch runs no
+ * cloud job. Registration, sealing, the record, tombstones, epochs and the
+ * account switch are the same code; a linked identity publishes `offline`
+ * (registered, deliberately not connected) and nothing ever exchanges a
+ * runner token, heartbeats, runs a job or reports power. A registration the
+ * backend could not be reached for still retries, bounded at most every five
+ * minutes, until the caller stops it — main's job when the move ends. Because
+ * nothing is connected, nothing here learns that the runner was removed
+ * elsewhere: the move's own backend call is where a replaced runner surfaces.
  *
  * **Ending.** Each link gets an epoch; anything an older epoch finishes
  * (a rotation, a registration) after it ended is dropped, so nothing the
@@ -92,6 +106,14 @@ export interface MacRunnerOptions {
    */
   machine(): Promise<string>;
   readonly power: PowerPort;
+  /**
+   * Register and keep this Mac's runner identity, and nothing else (a local
+   * launch's move to Volli Cloud, VC-998): the same sealed store, record,
+   * tombstones and epochs, but no connection, token exchange, heartbeat, job
+   * or power report. A linked identity publishes `offline`. `false` (the
+   * default) is the full runner a Volli Cloud launch composes.
+   */
+  readonly registrationOnly?: boolean;
   readonly now?: () => number;
   readonly newId?: () => string;
   readonly timers?: MacRunnerTimers;
@@ -168,6 +190,7 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
   const now = options.now ?? Date.now;
   const newId = options.newId ?? (() => crypto.randomUUID());
   const timers = options.timers ?? DEFAULT_TIMERS;
+  const registrationOnly = options.registrationOnly === true;
   const listeners = new Set<(snapshot: ThisMacRunnerSnapshot) => void>();
   let snapshot: ThisMacRunnerSnapshot = THIS_MAC_RUNNER_OFF;
   /** Advanced by every begin and end: work begun under an older one drops its result. */
@@ -283,8 +306,17 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     };
   }
 
+  /**
+   * Linked. A cloud launch's runner (`registrationOnly` off) connects here and
+   * heartbeats; a registration-only one publishes the identity and connects
+   * nothing, so no token, beat, job or power report leaves this Mac.
+   */
   function connect(mine: number, linked: RunnerLink) {
     link = linked;
+    if (registrationOnly) {
+      publishState("offline");
+      return;
+    }
     connection = options.connect({
       store: fenced(mine),
       runnerId: linked.runnerId,
