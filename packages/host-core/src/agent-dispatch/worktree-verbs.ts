@@ -39,7 +39,7 @@ import { ticketForDisplayId } from "./resolution";
  * worktree paths (agent cwd → worktree → ticket) — the whole point of a
  * worktree query when nothing else pins the ticket. Read-only: no git, no writes.
  */
-function resolveWorktreeTicket(
+function resolveLocalWorktreeTicket(
   db: Database.Database,
   projects: readonly Project[],
   envSession: EnvSessionIdentity | null,
@@ -142,6 +142,17 @@ function resolveWorktreeTicket(
       };
 }
 
+async function resolveWorktreeTicket(context: AgentVerbContext, request: AgentRequest) {
+  const { options, projects, envSession, authenticatedSessionId } = context;
+  return options.cloudWorktreeTickets === undefined
+    ? resolveLocalWorktreeTicket(options.db, projects, envSession, request)
+    : options.cloudWorktreeTickets.resolve({
+        sessionId: authenticatedSessionId,
+        request,
+        envSession,
+      });
+}
+
 /**
  * The refusal a worktree read verb returns when the ticket has no worktree.
  *
@@ -163,11 +174,11 @@ export async function worktreeStatusVerb(
   context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, worktreeReads } = context;
+  const { worktreeReads } = context;
   // Context resolution (which ticket the agent means) stays this door's
   // concern; the git compose + the no-worktree / stamped-but-deleted
   // discrimination live behind the ticketId-in read verb (CONCEPT #42).
-  const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
+  const resolved = await resolveWorktreeTicket(context, request);
   if (!resolved.ok) return resolved.response;
   // The host's one read service (VC-788): the same last-known snapshot the
   // rail reads (an agent asking about a ticket whose rail is open gets the
@@ -206,8 +217,8 @@ export async function worktreeDiffVerb(
   context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, worktreeReads } = context;
-  const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
+  const { worktreeReads } = context;
+  const resolved = await resolveWorktreeTicket(context, request);
   if (!resolved.ok) return resolved.response;
   // Merge-base ("what the PR would contain") is the default; --working-tree
   // switches to the uncommitted view. Same two-mode diff the rail reads, through
@@ -275,11 +286,16 @@ export async function worktreeSyncVerb(
   context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, gitAsync, worktreeExists, worktreeReads } = context;
-  const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
+  const { options, gitAsync, worktreeExists, worktreeReads } = context;
+  const resolved = await resolveWorktreeTicket(context, request);
   if (!resolved.ok) return resolved.response;
   const mode = request.args["abort"] === true ? "abort" : "merge";
-  const deps = { db: options.db, gitAsync, worktreeExists };
+  const deps = {
+    db: options.db,
+    gitAsync,
+    worktreeExists,
+    machinePaths: options.cloudWorktreeTickets?.machinePaths,
+  };
 
   // A preview has to resolve the same base and safety check as the real write,
   // but it must stop before either `git merge --no-edit` or `git merge --abort`.

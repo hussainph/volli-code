@@ -21,7 +21,7 @@ import {
 import type { RunnerPresence } from "../cloud-runner/presence";
 import { sqliteDrainLedger } from "../session-control/sqlite-ledger";
 import { createRunnerPathRegistry, type RunnerPathRegistry } from "./paths";
-import { cloudMachinePaths } from "./machine-paths";
+import { createCloudWorktreeTickets } from "../cloud-agent/worktree-tickets";
 import { createCloudContext, type CloudRunnerContext } from "./context";
 import { createCloudSessionOwner } from "./owner";
 import { createCloudSessionLocationResolver, type CloudSessionLocationOptions } from "./location";
@@ -237,11 +237,12 @@ export function createCloudProductStore(options: {
     (active?.runnerId ?? options.runnerId()) === null
       ? null
       : (registry().checkouts.ofProject(projectId)?.absPath ?? null);
-  const machinePaths = cloudMachinePaths({
+  const cloudWorktreeTickets = createCloudWorktreeTickets({
+    backend: agentBackend,
     registry: () => ((active?.runnerId ?? options.runnerId()) === null ? null : registry()),
     ticketDisplayIdOf: context.ticketDisplayIdOf,
   });
-  host.machinePaths.bindCloud(machinePaths);
+  host.machinePaths.bindCloud(cloudWorktreeTickets.machinePaths);
   const agentCommands = {
     // Cloud project policies have not shipped; never borrow a frozen local policy.
     readAuthorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
@@ -254,6 +255,7 @@ export function createCloudProductStore(options: {
       }),
     cloudBoardVerbs: createCloudBoardVerbs({ backend: agentBackend }),
     cloudSessionVerbs,
+    cloudWorktreeTickets,
   };
   // Cloud Automation Runs: `automation.run` jobs run once runtime recovery
   // has bound the Session services (`bindAutomations`); a job claimed before

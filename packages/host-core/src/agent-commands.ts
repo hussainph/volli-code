@@ -95,7 +95,14 @@ export function createAgentCommandService(
   const worktreeExists = options.worktreeExists ?? existsSync;
   const worktreeReads =
     options.worktreeReads ??
-    createWorktreeReadService({ deps: () => ({ db: options.db, gitAsync, worktreeExists }) });
+    createWorktreeReadService({
+      deps: () => ({
+        db: options.db,
+        gitAsync,
+        worktreeExists,
+        machinePaths: options.cloudWorktreeTickets?.machinePaths,
+      }),
+    });
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
   /**

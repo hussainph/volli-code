@@ -196,7 +196,7 @@ function actorToken(actor: ActorRow): string {
 }
 
 /** A backend refusal in the socket's vocabulary. */
-function refusalOf(error: CloudFunctionError): AgentResponse {
+export function cloudFunctionRefusal(error: CloudFunctionError): AgentResponse {
   switch (error.code) {
     case "not_found":
       return failure("TICKET_NOT_FOUND", error.message);
@@ -452,7 +452,7 @@ export function createCloudBoardVerbs(options: CloudBoardVerbsOptions): CloudBoa
         if (error instanceof NotYetSyncedError) {
           return failure("NOT_YET_SYNCED", error.message);
         }
-        if (error instanceof CloudFunctionError) return refusalOf(error);
+        if (error instanceof CloudFunctionError) return cloudFunctionRefusal(error);
         throw error;
       }
     };
