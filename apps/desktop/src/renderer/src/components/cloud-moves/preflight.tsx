@@ -273,15 +273,10 @@ function ProjectSummary({
         {project.name}
         {project.removed ? " · Removed" : ""}
       </label>
-      <p>
-        {counts.tickets.toLocaleString()} tickets · {counts.sessions.toLocaleString()} Sessions ·{" "}
-        {counts.events.toLocaleString()} events
-      </p>
-      <p className="text-muted-foreground">
-        {counts.attachments.toLocaleString()} attachments ({formatFileSize(counts.attachmentBytes)})
-        · Transcripts {formatFileSize(counts.transcriptBytes)} · Pi logs{" "}
-        {formatFileSize(counts.piLogBytes)}
-      </p>
+      {counts === null ? <p>Counts unavailable until this problem is resolved.</p> : <>
+        <p>{counts.tickets.toLocaleString()} tickets · {counts.sessions.toLocaleString()} Sessions · {counts.events.toLocaleString()} events</p>
+        <p className="text-muted-foreground">{counts.attachments.toLocaleString()} attachments ({formatFileSize(counts.attachmentBytes)}) · Transcripts {formatFileSize(counts.transcriptBytes)} · Pi logs {formatFileSize(counts.piLogBytes)}</p>
+      </>}
       <p className="text-muted-foreground">{moveTime(project.estimateSeconds)}</p>
       {project.blockers.length > 0 ? (
         <div role="status">

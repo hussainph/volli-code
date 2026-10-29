@@ -69,6 +69,7 @@ function harness(
     sealed?: RunnerLink | null;
     record?: MacRunnerRecord | null;
     account?: AccountSnapshot;
+    registrationOnly?: boolean;
   } = {},
 ) {
   const calls: string[] = [];
@@ -174,6 +175,8 @@ function harness(
     machine: async () => "m1",
     newId: () => `reg-${registrations + 1}`,
     power,
+    // Absent unless asked for, so every other test runs the full runner.
+    ...(options.registrationOnly === true ? { registrationOnly: true } : {}),
     now: () => 1_000,
     timers: {
       setTimeout: (run, ms) => {
@@ -525,5 +528,130 @@ describe("the Mac runner", () => {
     h.runner.refreshCapabilities();
     await h.runner.stop();
     expect(h.connections[0]!.calls).toEqual(["start", "capabilities", "stop"]);
+  });
+});
+
+/**
+ * A local launch's move to Volli Cloud (VC-998): the move is accepted under
+ * this Mac's runner identity, so desktop main registers one without the cloud
+ * launch's connection.
+ */
+describe("the Mac runner, registration only", () => {
+  it("registers and seals the identity, remembers it, and publishes offline without connecting", async () => {
+    const h = harness({ registrationOnly: true });
+    h.runner.start();
+    await flush();
+    expect(h.calls).toEqual([
+      "register person-token replaces=null reg=reg-1 name=Dana's Mac-dev",
+      `seal ${NEW} gen=1`,
+    ]);
+    expect(h.record).toEqual({
+      runnerId: NEW,
+      machine: "m1",
+      registrationId: null,
+      tombstone: null,
+    });
+    expect(h.connections).toHaveLength(0);
+    // Linked, and honest that it is not connected: the move reads the id.
+    expect(h.runner.snapshot()).toEqual({
+      state: "offline",
+      runnerId: NEW,
+      runnerName: "danas-mac",
+      since: 1_000,
+      waitingFacts: 0,
+      problem: null,
+      message: null,
+    });
+    h.runner.refreshCapabilities();
+    await h.runner.stop();
+    expect(h.connections).toHaveLength(0);
+  });
+
+  it("reuses the sealed link it already has", async () => {
+    const h = harness({ sealed: LINK, registrationOnly: true });
+    h.runner.start();
+    await flush();
+    expect(h.calls).toEqual([]);
+    expect(h.connections).toHaveLength(0);
+    expect(h.runner.snapshot()).toMatchObject({
+      state: "offline",
+      runnerId: OLD,
+      runnerName: "danas-mac",
+      problem: null,
+    });
+    expect(h.sealed).toEqual(LINK);
+  });
+
+  it("starts nothing on sleep or wake: no connection and no power report", async () => {
+    const h = harness({ sealed: LINK, registrationOnly: true });
+    h.runner.start();
+    await flush();
+    h.power.emit("suspend");
+    h.power.emit("resume");
+    await flush();
+    expect(h.connections).toHaveLength(0);
+    expect(h.runner.snapshot()).toMatchObject({ state: "offline", runnerId: OLD });
+  });
+
+  it("retries an unreachable registration with the same id, and still connects nothing", async () => {
+    const h = harness({ registrationOnly: true });
+    h.registerAnswers.push(
+      new BackendUnreachableError("offline"),
+      new BackendUnreachableError("offline"),
+    );
+    h.runner.start();
+    await flush();
+    expect(h.runner.snapshot()).toMatchObject({ state: "failed", problem: "unreachable" });
+    expect(h.record).toMatchObject({ runnerId: null, registrationId: "reg-1" });
+    h.timers.shift()!.run();
+    await flush();
+    expect(h.connections).toHaveLength(0);
+    expect(h.runner.snapshot()).toMatchObject({ state: "failed", problem: "unreachable" });
+    h.power.emit("suspend");
+    h.power.emit("resume");
+    await flush();
+    expect(h.connections).toHaveLength(0);
+    expect(h.runner.snapshot()).toMatchObject({ state: "offline", runnerId: NEW });
+    expect(h.record).toMatchObject({ runnerId: NEW, registrationId: null, tombstone: null });
+    const registrations = h.calls.filter((call) => call.startsWith("register"));
+    expect(registrations).toHaveLength(3);
+    expect(new Set(registrations.map((call) => /reg=(\S+)/u.exec(call)![1]))).toEqual(
+      new Set(["reg-1"]),
+    );
+  });
+
+  it("a tombstoned runner stays removed: nothing registers and nothing connects", async () => {
+    const h = harness({
+      record: { ...RECORD, tombstone: "removed" },
+      registrationOnly: true,
+    });
+    h.runner.start();
+    await flush();
+    expect(h.calls).toEqual([]);
+    expect(h.connections).toHaveLength(0);
+    expect(h.timers).toEqual([]);
+    expect(h.runner.snapshot()).toMatchObject({
+      state: "removed",
+      problem: "removed",
+      runnerId: OLD,
+      message: "This Mac was removed from your account.",
+    });
+  });
+
+  it("signing out stops the identity and keeps the link for the next sign-in", async () => {
+    const h = harness({ sealed: LINK, registrationOnly: true });
+    h.runner.start();
+    await flush();
+    expect(h.runner.snapshot()).toMatchObject({ state: "offline", runnerId: OLD });
+    h.setAccount(SIGNED_OUT);
+    await flush();
+    expect(h.runner.snapshot()).toMatchObject({ state: "off", runnerId: null });
+    expect(h.sealed).toEqual(LINK);
+    h.setAccount(signedIn());
+    await flush();
+    // Back: the same runner, without registering or connecting.
+    expect(h.runner.snapshot()).toMatchObject({ state: "offline", runnerId: OLD });
+    expect(h.calls).toEqual([]);
+    expect(h.connections).toHaveLength(0);
   });
 });

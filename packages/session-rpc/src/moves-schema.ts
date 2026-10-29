@@ -55,7 +55,7 @@ export const movePreflightSchema = z.object({
       id,
       name: text,
       removed: z.boolean(),
-      counts,
+      counts: counts.nullable(),
       estimateSeconds: count.nullable(),
       blockers: z.array(
         z.object({ message: text, sessionId: id.optional(), ticketId: id.optional() }),

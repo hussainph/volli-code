@@ -4,12 +4,19 @@
  * record, the person's backend calls and the runner connection, plus the
  * handler map's `RunnerAccountPort` over it.
  *
- * Composed only in a Volli Cloud launch (`../cloud-launch.ts`): a launch that
+ * Composed in a Volli Cloud launch (`../cloud-launch.ts`): a launch that
  * shows this Mac's own projects runs nothing here, and with the `cloud` flag
  * off every `runners.*` entry answers unavailable. A cloud launch reads the
  * sealed store at boot, because a runner has to connect without a window:
  * that is one unattended keychain read, only for a person who signed in with
  * the flag on.
+ *
+ * A local launch composes none of that, but it still needs this Mac's runner
+ * identity: a project moved to Volli Cloud is accepted under it (VC-998).
+ * Desktop main composes `registrationOnly` from this same factory when a
+ * person starts a move — lazily, for that move — so the registration, the
+ * sealed link and the record are the same code, and only the connection the
+ * move never uses is absent.
  */
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -88,9 +95,11 @@ export async function thisMacName(packaged: boolean): Promise<string> {
 }
 
 /**
- * The Convex store's runner identity and explicit HTTP-actions origin.
- * A SQLite launch composes nothing. Embedded deployments must also provide
- * their local token source to createDesktopMacRunner (VC-938).
+ * The Convex store's runner identity and explicit HTTP-actions origin, for the
+ * always-on runner a cloud launch connects. A SQLite launch answers `null`:
+ * the registration-only runner a move composes there (VC-998) is main's own
+ * composition. Embedded deployments must also provide their local token
+ * source to createDesktopMacRunner (VC-938).
  */
 export function thisMacRunnerLaunch(launch: CloudLaunch): {
   deployment: CloudLaunchDeployment;
@@ -116,6 +125,13 @@ export interface DesktopMacRunnerInput {
   readonly siteUrl: string;
   /** `convex/browser`'s client and `convex/server`'s references, from the composition root. */
   readonly convex: ConvexClientModule;
+  /**
+   * Register this Mac's runner identity for a local launch's move to Volli
+   * Cloud (VC-998), and connect nothing: no token exchange, no heartbeat, no
+   * jobs, no power reports. A linked identity reports `offline`; the move
+   * reads its `runnerId`. Absent (the default) is the full cloud-launch runner.
+   */
+  readonly registrationOnly?: boolean;
   readonly account: MacRunnerAccount;
   readonly inventory: RunnerLinkInventory;
   readonly unlockInventory: () => Promise<void>;
@@ -202,6 +218,7 @@ export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner 
     }),
     machine: thisMachineId,
     power: input.power,
+    registrationOnly: input.registrationOnly === true,
     log: input.log,
   });
 }

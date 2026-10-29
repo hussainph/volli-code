@@ -25,6 +25,10 @@
       "types": "./src/entries/cloud-move.ts",
       "import": "./src/entries/cloud-move.ts"
     },
+    "./migration-export": {
+      "types": "./src/entries/migration-export.ts",
+      "import": "./src/entries/migration-export.ts"
+    },
     "./board": {
       "types": "./src/entries/board.ts",
       "import": "./src/entries/board.ts"

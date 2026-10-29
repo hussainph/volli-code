@@ -25,7 +25,7 @@ export interface CloudMoveProject {
   id: string;
   name: string;
   removed: boolean;
-  counts: CloudMoveCounts;
+  counts: CloudMoveCounts | null;
   estimateSeconds: number | null;
   blockers: CloudMoveBlocker[];
   exclusions: CloudMoveExclusion[];
