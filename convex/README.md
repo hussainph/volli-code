@@ -291,7 +291,9 @@ project move** section.
   (`pausedReason: moved`); schedule pending pointers are empty and the cursor
   stays inert until explicit re-arm. Pending arrivals and old schedule cursors
   remain in the legacy archive. `rearmList({moveId})` lists still-paused moved
-  columns and schedules after commit; the result screen uses the ordinary
+  columns and schedules after commit, plus `inertGlobals: [{id, name}]` from
+  the current person's carried personal Automation configs (no re-arm action
+  or Instructions for those). The result screen uses the ordinary
   `automations.arm` / `armSchedule` commands with this Mac's live, capable runner.
   A registration-only import runner cannot re-arm: open Volli Cloud first.
   Deploy this backend before a desktop that sends the new `automationSchedules`

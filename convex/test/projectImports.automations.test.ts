@@ -104,6 +104,7 @@ describe("moved Automation safety", () => {
       projectId: MOVED.projectId,
       columns: [{ automationId: U(30), name: "Arrival", status: "todo" }],
       schedules: [{ automationId: U(10), name: "Nightly" }],
+      inertGlobals: [],
     });
     await expect(
       w.bob.as.query(api.projectImports.rearmList, { moveId: w.moveId }),
@@ -130,6 +131,7 @@ describe("moved Automation safety", () => {
       projectId: MOVED.projectId,
       columns: [],
       schedules: [],
+      inertGlobals: [],
     });
     const rows = await w.t.run((ctx) => ctx.db.query("automationSchedules").collect());
     expect(rows[0]).toMatchObject({
@@ -140,6 +142,47 @@ describe("moved Automation safety", () => {
     });
     expect(rows[0]!.nextFireAt).toBeGreaterThan(NOW);
     expect(await w.t.run((ctx) => ctx.db.query("runnerJobs").collect())).toEqual([]);
+  });
+
+  test("lists only the current person's inert globals, without executable definitions", async () => {
+    const w = await world();
+    await commit(w);
+    const entry = {
+      id: U(91),
+      level: "personal",
+      userId: "$local-user",
+      workspaceId: null,
+      projectId: null,
+      kind: "automation",
+      name: "Global sweep",
+      state: "on",
+      definition: { instructions: "private Instructions" },
+      revision: 1,
+      updatedBy: { kind: "person", userId: "$local-user" },
+      updatedAt: 1,
+    };
+    await w.alice.as.mutation(api.profileImports.importPersonalSettings, {
+      workspaceId: w.workspaceId,
+      runnerId: w.runnerId,
+      rows: [entry],
+    });
+    await w.t.run(async (ctx) => {
+      const own = await ctx.db
+        .query("configEntries")
+        .withIndex("by_uuid", (q) => q.eq("id", U(91)))
+        .unique();
+      const { _id, _creationTime, ...fields } = own!;
+      await ctx.db.insert("configEntries", {
+        ...fields,
+        id: U(92),
+        userId: w.bob.userId,
+        scopeKey: `u:${w.bob.userId}`,
+        name: "Other person's global",
+      });
+    });
+    const result = await w.alice.as.query(api.projectImports.rearmList, { moveId: w.moveId });
+    expect(result.inertGlobals).toEqual([{ id: U(91), name: "Global sweep" }]);
+    expect(JSON.stringify(result)).not.toContain("private Instructions");
   });
 
   test("schedule read-back never includes another project's schedule on the same armer", async () => {

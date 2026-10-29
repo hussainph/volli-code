@@ -772,7 +772,25 @@ export const rearmList = query({
         schedules.push({ automationId: automation.id, name: automation.name });
       }
     }
-    return { projectId: row.projectId, columns, schedules };
+    // Global definitions are carried by the profile step, not project records.
+    // They remain inert personal configuration, including entries from earlier
+    // profile moves. Never return their Instructions or offer them a re-arm.
+    const personal = await ctx.db
+      .query("configEntries")
+      .withIndex("by_scope_kind_name", (q) =>
+        q.eq("scopeKey", `u:${viewer.userId}`).eq("kind", "automation"),
+      )
+      .collect();
+    const inertGlobals = personal
+      .filter(
+        (entry) =>
+          entry.level === "personal" &&
+          entry.userId === viewer.userId &&
+          entry.projectId === null &&
+          entry.workspaceId === null,
+      )
+      .map(({ id, name }) => ({ id, name }));
+    return { projectId: row.projectId, columns, schedules, inertGlobals };
   },
 });
 
