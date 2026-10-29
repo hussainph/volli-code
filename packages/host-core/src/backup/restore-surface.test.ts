@@ -164,6 +164,7 @@ describe("Storage restore staging and restart", () => {
   });
   it("a worker crash mid-restore never changes the live profile or schedules activation", async () => {
     const before = readFileSync(profile.dbPath);
+    const word = new SharedArrayBuffer(4);
     const worker = new Worker(ENTRY, {
       workerData: {
         kind: "stage",
@@ -171,19 +172,39 @@ describe("Storage restore staging and restart", () => {
         bundlePath,
         projectPaths: paths,
         now: 1800000000001,
+        crashAtCheckpoint: { at: 3, word },
       },
+      resourceLimits: { maxOldGenerationSizeMb: 192 },
       execArgv: ARGS,
     });
-    await new Promise<void>((resolve, reject) => {
-      worker.on("error", reject);
-      worker.on("message", (message: { checkpoints?: number }) => {
-        if (message.checkpoints === 3) void worker.terminate().then(() => resolve(), reject);
-      });
+    const checkpoint = Promise.withResolvers<void>();
+    const deadline = setTimeout(
+      () => checkpoint.reject(new Error("Worker did not reach the crash checkpoint.")),
+      15_000,
+    );
+    worker.once("error", checkpoint.reject);
+    worker.once("exit", () => {
+      if (Atomics.load(new Int32Array(word), 0) === 0)
+        checkpoint.reject(new Error("Worker exited before the crash checkpoint."));
     });
+    worker.on("message", (message: { checkpoints?: number }) => {
+      if (message.checkpoints === 3) checkpoint.resolve();
+    });
+    try {
+      await checkpoint.promise;
+      clearTimeout(deadline);
+      expect(Atomics.load(new Int32Array(word), 0)).toBe(1);
+      expect(await worker.terminate()).toBe(1);
+    } finally {
+      clearTimeout(deadline);
+      await worker.terminate();
+    }
     expect(readFileSync(profile.dbPath)).toEqual(before);
     expect(liveTitle()).toBe("change after backup");
     expect(await hasScheduledBackupRestore(profile.root)).toBe(false);
-  });
+    // Match automatic-worker cases: startup + forced V8 coverage teardown took
+    // 9.4s on CI. This is a crash proof, not a product latency assertion.
+  }, 30_000);
   it("worker inspection returns verified project labels, and cancellation crosses the real worker boundary", async () => {
     const inspect = await runRestoreWorker(
       ENTRY,
