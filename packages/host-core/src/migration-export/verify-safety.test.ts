@@ -16,7 +16,11 @@ const digest = `sha256:${sha("{}")}`;
 const event = {
   sessionId: "s",
   sequence: 1,
-  payload: { kind: "transcript.referenced", reference: { id: digest }, digest },
+  payload: {
+    kind: "transcript.referenced",
+    reference: { id: digest, digest },
+    digest: { role: "assistant", reply: true },
+  },
 };
 const artifact = { sessionId: "s", sequence: 1, digest, canonicalJson: "{}" };
 const pi = (start = 0, fileBytes = 4) => ({
@@ -84,11 +88,27 @@ it("refuses forged work promises, malformed history and incomplete source covera
         error: /Invalid transcript/,
       },
       {
-        rows: { sessionEvents: [{ ...event, payload: { ...event.payload, digest: "different" } }] },
+        rows: {
+          sessionEvents: [
+            {
+              ...event,
+              payload: { ...event.payload, reference: { id: digest, digest: "different" } },
+            },
+          ],
+        },
         error: /Invalid transcript/,
       },
       { rows: { sessionEvents: [{ ...event, payload: null }] } },
+      // Modern semantic digest and older reference-only events both retain exact file coverage.
       { rows: { sessionEvents: [event], transcriptArtifacts: [artifact] } },
+      {
+        rows: {
+          sessionEvents: [
+            { ...event, payload: { kind: "transcript.referenced", reference: { id: digest } } },
+          ],
+          transcriptArtifacts: [artifact],
+        },
+      },
       {
         rows: { sessionEvents: [event], transcriptArtifacts: [artifact, artifact] },
         error: /Duplicate transcript/,
@@ -223,6 +243,17 @@ it("refuses forged work promises, malformed history and incomplete source covera
       },
       { rows: { piLogs: [{ ...pi(), sourceSha256: "wrong" }] }, error: /checksum mismatch/ },
       { rows: { piLogs: [pi(0)] }, error: /coverage is incomplete/ },
+      {
+        edit: (m) => {
+          m.piLogFiles.push({
+            sessionId: "s",
+            attachmentId: "a",
+            piFileId: "absent",
+            fileBytes: 0,
+          });
+        },
+        error: /Pi log coverage is incomplete/,
+      },
       {
         rows: {
           piLogs: [

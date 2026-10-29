@@ -17,7 +17,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createMoveEngine, type MoveEnginePorts } from "@volli/host-core/cloud-move";
 import { automaticBackupDiskRequirement } from "@volli/host-core/migration-export";
-import type { CloudMoveCounts, CloudMoveProject } from "@volli/shared";
+import type { CloudMoveCounts, CloudMoveProject, SessionTranscriptDigest } from "@volli/shared";
 import {
   MOVE_IDS,
   writeMoveProfile,
@@ -139,6 +139,13 @@ function bytesUnder(directory: string): number {
 describe("a dry run over a real profile", () => {
   it("counts what each project's export and plan actually carry", async () => {
     const fixture = setup();
+    // The real runtime writes message semantics here, not the artifact checksum.
+    const digest = { role: "assistant", reply: true } satisfies SessionTranscriptDigest;
+    fixture.db
+      .prepare(
+        "UPDATE session_events SET payload=json_set(payload,'$.digest',json(?)) WHERE json_extract(payload,'$.kind')='transcript.referenced'",
+      )
+      .run(JSON.stringify(digest));
     const before = readFileSync(fixture.dbPath);
     const answered = await fixture.run({ projectIds: [ALPHA, CAFE] });
     const alpha = project(answered, ALPHA);

@@ -22,7 +22,7 @@ import type { PreparedLocalMoves, PreviewSummary } from "./preflight";
 export interface MoveDesktopOptions {
   enabled(): boolean;
   engine: MoveEngine;
-  backend: MoveBackend;
+  backend: Pick<MoveBackend, "query">;
   account: Pick<import("../account/service").AccountService, "snapshot" | "subscribe">;
   identity(signal?: AbortSignal): Promise<{ userId: string; runnerId: string } | null>;
   prepare(input: CloudMovePreflightInput, signal: AbortSignal): Promise<PreparedLocalMoves>;
@@ -443,6 +443,15 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
           while (prepared.size > 4) prepared.delete(prepared.keys().next().value!);
           return value.preflight;
         });
+      } catch (error) {
+        if (
+          error instanceof OperationUnavailableError ||
+          (error as { name?: unknown } | null)?.name === "AbortError"
+        )
+          throw error;
+        throw new OperationUnavailableError(
+          "Couldn’t check these projects. Run the dry run again.",
+        );
       } finally {
         preflightReads.delete(read);
       }
@@ -536,6 +545,8 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     async command(input: CloudMoveCommand) {
       requireEnabled();
       const first = readMove(input.moveId);
+      if (input.action === "retry" && first.state === "rolled_back" && active !== null)
+        throw new OperationUnavailableError("Pause the running move before retrying this project.");
       // Commands keep their priority over a read-only export, including a queued one.
       for (const read of preflightReads) read.abort();
       if (input.action === "pause" && BEFORE_COMMIT.has(first.state)) {

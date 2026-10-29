@@ -381,6 +381,42 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     expect(await reading).toMatchObject({ name: "AbortError" });
     expect(rollback).toHaveBeenCalledOnce();
   });
+  it("does not interrupt another project's move to dry-run a retry", async () => {
+    const f = setup();
+    const old = f.toState(f.enqueue(), "rolled_back");
+    f.engine.journal.setQueue(old.queueId, { state: "done" });
+    const other = f.engine.enqueue({
+      projectIds: ["other-project"],
+      target: { userId: USER, workspaceId: WORKSPACE, runnerId: RUNNER },
+    }).moves[0]!;
+    let interrupted = false;
+    f.run.mockImplementation(async (_id, signal) => {
+      await new Promise<void>((resolve) =>
+        signal!.addEventListener(
+          "abort",
+          () => {
+            interrupted = true;
+            resolve();
+          },
+          { once: true },
+        ),
+      );
+      return { kind: "waiting", moveId: other.moveId, reason: "paused" };
+    });
+    await f.service.resume();
+    await vi.waitFor(() => expect(f.run).toHaveBeenCalled());
+    await expect(f.service.command({ moveId: old.moveId, action: "retry" })).rejects.toThrow(
+      "Pause the running move",
+    );
+    expect(interrupted).toBe(false);
+    expect(f.prepare).not.toHaveBeenCalled();
+    await f.service.dispose();
+  });
+  it("sanitizes unexpected dry-run errors while preserving named recovery refusals", async () => {
+    const f = setup();
+    f.prepare.mockRejectedValue(new Error("private source path and content"));
+    await expect(f.service.preflight(f.input)).rejects.toThrow("Couldn’t check these projects");
+  });
   it("rechecks a rolled-back retry before adding a fresh move", async () => {
     const f = setup();
     const row = f.toState(f.enqueue(), "rolled_back");

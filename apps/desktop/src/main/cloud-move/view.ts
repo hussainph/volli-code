@@ -115,6 +115,7 @@ export function createMoveView(options: {
   credentials(projectId: string): Promise<string[]>;
 }) {
   const rate = moveRateEstimator();
+  const actualFacts = new Map<string, PreviewSummary & { sourceManifest?: string }>();
   const warned = new Set<string>();
   const credentials = new Map<string, { at: number; value: Promise<string[]> }>();
   const warn = (row: MoveRow, kind: string) => {
@@ -151,10 +152,14 @@ export function createMoveView(options: {
     };
     let detailsUnavailable = false;
     try {
-      let preview = (await json(join(directory, "preview.json"))) as
-        | (PreviewSummary & { sourceManifest?: string })
-        | null;
       const plan = (await json(join(directory, "plan.json"))) as MovePlan | null;
+      const cached = actualFacts.get(row.moveId);
+      let preview =
+        cached !== undefined && cached.sourceManifest === plan?.exportManifestSha256
+          ? cached
+          : ((await json(join(directory, "preview.json"))) as
+              | (PreviewSummary & { sourceManifest?: string })
+              | null);
       // A dry run can precede the freeze. Keep actual frozen-export facts before Finish removes it.
       if (plan !== null && preview?.sourceManifest !== plan.exportManifestSha256) {
         const exportDir = join(directory, "export");
@@ -181,7 +186,13 @@ export function createMoveView(options: {
             expected: Object.fromEntries(plan.expected.map((item) => [item.stream, item.count])),
             estimatedExportBytes: preview?.estimatedExportBytes ?? 0,
           };
-          await saveMovePreview(options.workRoot, row, preview);
+          actualFacts.set(row.moveId, preview);
+          try {
+            await saveMovePreview(options.workRoot, row, preview);
+          } catch {
+            detailsUnavailable = true;
+            warn(row, "counts_cache_write");
+          }
         }
       }
       view.counts =
@@ -215,20 +226,35 @@ export function createMoveView(options: {
         row.paused === null ? view.progress : null,
         performance.now(),
       );
-      const hasHistoryFiles =
-        (view.counts?.transcriptBytes ?? 0) + (view.counts?.piLogBytes ?? 0) > 0;
-      if (measured !== null)
-        view.estimateSeconds = measured + 120 + (hasHistoryFiles ? MOVE_HISTORY_SETTLE_SECONDS : 0);
+      const historyBytes = (view.counts?.transcriptBytes ?? 0) + (view.counts?.piLogBytes ?? 0);
+      const hasHistoryFiles = historyBytes > 0;
+      if (measured !== null) {
+        const byteRate =
+          view.progress?.unit === "bytes" && measured > 0
+            ? Math.max(1, (view.progress.total - view.progress.completed) / measured)
+            : 2_500_000;
+        const remainingHistory =
+          view.step === "history" ? 0 : historyBytes / Math.min(byteRate, 2_500_000);
+        // Current-step throughput is measured; untouched phases retain conservative
+        // starting rates until their first real batches give us a better sample.
+        const remainingRecords = view.step === "upload" ? expected / 500 : expected / 1000;
+        view.estimateSeconds =
+          measured +
+          Math.ceil(remainingHistory + remainingRecords) +
+          120 +
+          (hasHistoryFiles ? MOVE_HISTORY_SETTLE_SECONDS : 0);
+      }
       if (row.state === "history" && row.paused === null && hasHistoryFiles) {
-        view.message =
-          "Waiting for file uploads to settle before checking. This can take around 15 minutes.";
+        view.message = "Waiting for file uploads to settle before checking.";
         // Presentation only: history completed after the last signed upload. This
         // conservative countdown never changes the engine's monotonic safety guard.
         view.estimateSeconds =
           Math.max(
             0,
             Math.ceil((row.updatedAt + MOVE_HISTORY_SETTLE_SECONDS * 1000 - Date.now()) / 1000),
-          ) + 120;
+          ) +
+          Math.ceil(expected / 1000) +
+          120;
       }
       if (
         view.counts !== null &&

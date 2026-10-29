@@ -68,8 +68,8 @@ export function MovePreflight({
         );
         setStopAtFirstProblem(next.stopAtFirstProblem);
       })
-      .catch(() => {
-        if (active) setError("Couldn't check these projects. Run the dry run again.");
+      .catch((failure: unknown) => {
+        if (active) setError(errorMessage(failure));
       })
       .finally(() => {
         if (active) setReading(false);

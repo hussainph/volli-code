@@ -1,5 +1,6 @@
 /** Production desktop composition: the engine and its real ports, once per profile. */
 import { dirname, join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { OperationUnavailableError } from "@volli/shared";
@@ -53,9 +54,10 @@ export function createDesktopMoves(options: {
   const db = host.database.db;
   const workRoot = options.workRoot;
   let service: DesktopMovesService | null = null;
-  let laneSignal: AbortSignal | undefined;
+  const signals = new AsyncLocalStorage<AbortSignal | undefined>();
   const lifetime = new AbortController();
   const moveFetch: typeof fetch = (input, init) => {
+    const laneSignal = signals.getStore();
     const caller = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const signal = AbortSignal.any([
       lifetime.signal,
@@ -69,7 +71,7 @@ export function createDesktopMoves(options: {
     enabled: options.enabled,
     accessToken: () => options.account.accessToken(),
     onSignInLost: () => service?.signInLost(),
-    signal: () => laneSignal,
+    signal: () => signals.getStore(),
     fetch: moveFetch,
   });
   const history = createMoveSessionHistory({
@@ -142,7 +144,8 @@ export function createDesktopMoves(options: {
   service = createDesktopMovesService({
     enabled: options.enabled,
     engine,
-    backend,
+    // Workspace refinements are independent of whichever move requested a token refresh.
+    backend: { query: (path, args) => signals.run(undefined, () => backend.query(path, args)) },
     account: options.account,
     identity: options.identity.current,
     prepare: (input, signal) =>
@@ -191,15 +194,7 @@ export function createDesktopMoves(options: {
     openCloud: (row) => options.openCloud(row.projectId, row.workspaceId, row.userId),
     track: (work) => host.detachedWork.track(work),
     releaseIdentity: options.identity.release,
-    async withSignal(signal, work) {
-      const previous = laneSignal;
-      laneSignal = signal;
-      try {
-        return await work();
-      } finally {
-        laneSignal = previous;
-      }
-    },
+    withSignal: (signal, work) => signals.run(signal, work),
     disposeBackend: () => {
       lifetime.abort();
       backend.dispose();

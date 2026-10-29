@@ -173,9 +173,13 @@ describe("Move pre-flight", () => {
     );
   });
   it("shows read failures and mutation failures, retaining a retry", async () => {
-    api.preflight.mockRejectedValueOnce(new Error("private raw details"));
+    api.preflight.mockRejectedValueOnce(
+      new Error("Pause the running move before preparing another one."),
+    );
     await mount();
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Couldn't check");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Pause the running move before preparing another one.",
+    );
     expect(container.textContent).not.toContain("private raw details");
     await click("Run a dry run only");
     api.start.mockRejectedValueOnce(new Error("Finish this project’s running Session first."));
