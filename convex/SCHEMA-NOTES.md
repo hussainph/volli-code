@@ -449,10 +449,14 @@ the clock must paginate through the due index (continuing past paused rows),
 not repeatedly take its first page, or an overdue paused prefix can starve
 active schedules.
 
-Receiving-task wiring: the cloud Automation source must consume `list`,
-`armings`, `columnOrders`, `schedules` and the paginated `runsFor*` reads,
-send UUID `commandId`s for record writes, and supply this Mac's runner for
-arming. The clock/Run layer must skip paused rows, populate the optional
+The desktop cloud Automation source consumes `list`, `armings`,
+`columnOrders`, `schedules`, pending arrivals and paginated Run history,
+sends UUID `commandId`s for record writes, and supplies this Mac's runner
+(or the person's chosen own runner) for arming. Run history includes runner
+presence and `sessionAccess`: `starting` before intake, `ready` when visible,
+`private` when the current Session scope hides it, and `gone` after deletion.
+These are read-time projections, not additional stored facts. Deploy these
+additive read fields before the desktop that displays them. The clock/Run layer must skip paused rows, populate the optional
 pending/gap and Run fields, and fence leased outcomes against current armings.
 The move importer must set `pausedAt`/`pausedReason: moved` on imported arms;
 adding optional fields does not itself change imported records. The Needs-you

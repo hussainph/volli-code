@@ -26,9 +26,65 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { refuseRemote, refuseRemoteTicket } from "@renderer/stores/remote-project";
+import {
+  automationSourceIsCloud,
+  requireCloudAutomationSource,
+} from "@renderer/stores/automation-source";
+import { waitingForRunner } from "@renderer/stores/cloud-automations/state";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
+type QueuedAction = {
+  kind: "session-queued";
+  runId: string;
+  projectId: string;
+  sessionId: string;
+  runner: { name: string; status: string; statusChangedAt: number | null };
+};
+function announceQueued(
+  action: QueuedAction,
+  context: { automationName: string; ticketDisplayId?: string },
+): void {
+  const id = `automation-run:${action.runId}`;
+  const target = context.ticketDisplayId === undefined ? "" : ` on ${context.ticketDisplayId}`;
+  const waiting =
+    action.runner.status === "online" || action.runner.status === "degraded"
+      ? `Starting… on ${action.runner.name}`
+      : waitingForRunner(action.runner.name, action.runner.status, action.runner.statusChangedAt);
+  toast.info(`${context.automationName}${target} · ${waiting}`, { id });
+  try {
+    requireCloudAutomationSource().followRun(action.projectId, action.runId, (run) => {
+      if (run.status === "failed") {
+        toastError(`${context.automationName} couldn’t start: ${run.error ?? "Try again."}`, {
+          id,
+        });
+        return;
+      }
+      if (run.status !== "started" || run.sessionAccess !== "ready" || run.sessionId === null) {
+        toast.info(
+          `${context.automationName}${target} · ${run.status === "skipped" ? "Skipped" : "Session unavailable"}`,
+          { id },
+        );
+        return;
+      }
+      useChatSessionsStore.getState().adoptChatSession(run.sessionId);
+      toast.success(`${run.automationName ?? context.automationName} started${target}`, {
+        id,
+        action: {
+          label: "Open session",
+          onClick: () =>
+            openRunSession({
+              sessionId: run.sessionId!,
+              projectId: run.projectId,
+              ticketId: run.ticketId,
+            }),
+        },
+      });
+    });
+  } catch (error) {
+    toastError(`Couldn’t follow this Run: ${errorMessage(error)}`);
+  }
+}
 
 /**
  * What became of a hand-run, for a surface that gates its own control on it
@@ -77,9 +133,9 @@ export interface TicketRunRequest extends RunRequest {
  * transport itself failed — that arm has already toasted, because a person is
  * waiting on a Session and no other surface will tell them.
  */
-async function startRun(input: RunRequest): Promise<RunAutomationAction | null> {
+async function startRun(input: RunRequest): Promise<RunAutomationAction | QueuedAction | null> {
   // A remote project's ticket runs on its host, not here (VC-711).
-  if (refuseRemoteTicket(input.ticketId)) return null;
+  if (!automationSourceIsCloud() && refuseRemoteTicket(input.ticketId)) return null;
   // What a lost reply is retried AS: the WHOLE intent (`automationRunRetryKey`)
   // — the record or the Unbound Run's own words, the Ticket, and this
   // invocation's model override. Running the same work on a different model is
@@ -92,6 +148,23 @@ async function startRun(input: RunRequest): Promise<RunAutomationAction | null> 
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
   try {
+    if (automationSourceIsCloud()) {
+      const projectId = ticketProject(input.ticketId);
+      if (projectId === null) throw new Error("The ticket’s project isn’t available.");
+      const reply = await requireCloudAutomationSource().queueRun({
+        ...input,
+        commandId,
+        projectId,
+      });
+      pendingCommandIds.delete(retryKey);
+      return {
+        kind: "session-queued",
+        runId: reply.runId,
+        projectId,
+        sessionId: reply.sessionId,
+        runner: reply.runner,
+      };
+    }
     const action = runAutomationAction(
       await window.api.automations.run({
         ...input,
@@ -123,12 +196,23 @@ async function startRun(input: RunRequest): Promise<RunAutomationAction | null> 
 async function startProjectRun(input: {
   automationId: string;
   projectId: string;
-}): Promise<RunAutomationAction | null> {
-  if (refuseRemote(input.projectId)) return null;
+}): Promise<RunAutomationAction | QueuedAction | null> {
+  if (!automationSourceIsCloud() && refuseRemote(input.projectId)) return null;
   const retryKey = `project\u0000${input.automationId}\u0000${input.projectId}`;
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
   try {
+    if (automationSourceIsCloud()) {
+      const reply = await requireCloudAutomationSource().queueProjectRun({ ...input, commandId });
+      pendingCommandIds.delete(retryKey);
+      return {
+        kind: "session-queued",
+        runId: reply.runId,
+        projectId: input.projectId,
+        sessionId: reply.sessionId,
+        runner: reply.runner,
+      };
+    }
     const action = runAutomationAction(
       await window.api.automations.runForProject({ ...input, commandId }),
     );
@@ -172,6 +256,9 @@ export async function runAutomationForProject(input: {
   });
   if (action === null) return;
   switch (action.kind) {
+    case "session-queued":
+      announceQueued(action, input);
+      return;
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");
       return;
@@ -231,6 +318,9 @@ export async function runAutomationOnTicket(
   });
   if (action === null) return "failed";
   switch (action.kind) {
+    case "session-queued":
+      announceQueued(action, input);
+      return "started";
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");
       return "needs-model-access";

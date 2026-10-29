@@ -7,6 +7,7 @@ import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
 import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
+import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
@@ -75,9 +76,9 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
         ) : activeNav === "automations" ? (
           // Stateless like Configure, so plain conditional rendering: nothing
           // on this page owns a live PTY, and it re-reads its record on mount.
-          <LocalOnly projectId={selected.id}>
+          <AutomationsOnly projectId={selected.id}>
             <AutomationsPage />
-          </LocalOnly>
+          </AutomationsOnly>
         ) : null /* home: rendered by the always-mounted HomeSurface above */
       }
     </div>

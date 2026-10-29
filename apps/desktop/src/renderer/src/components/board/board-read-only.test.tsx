@@ -217,7 +217,7 @@ describe("a column composer", () => {
 });
 
 describe("column arming", () => {
-  it("shows no arming control in a cloud launch", async () => {
+  it("offers the cloud arming control through the launch-selected source", async () => {
     world = hostWorld({ cloud: false });
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
     const { ColumnArmingButton } = await import("./column-arming");
@@ -226,8 +226,9 @@ describe("column arming", () => {
         <ColumnArmingButton projectId="local" status="todo" />
       </TooltipProvider>,
     );
-    expect(container.querySelector("[data-column-arming]")).toBeNull();
-    expect(container.textContent).toBe("");
+    const control = container.querySelector<HTMLButtonElement>("[data-column-arming]");
+    expect(control?.getAttribute("aria-label")).toBe("Arm Todo");
+    expect(control?.getAttribute("data-arming-state")).toBe("unarmed");
   });
 
   it("an arming menu open before the host went away cannot arm through it", async () => {

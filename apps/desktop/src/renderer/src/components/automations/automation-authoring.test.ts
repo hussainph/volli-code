@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER, LOCAL_LAUNCH } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 
 import { bootChatSession, type ChatBoot } from "@renderer/components/sessions/session-create";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -20,9 +21,21 @@ const DRAFT: AutomationAuthoringContext = {
   skillSlugs: ["code-review"],
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  adoptLaunch(LOCAL_LAUNCH);
+});
 
 describe("automation authoring assistance", () => {
+  it("describes cloud arming without changing the local authoring prompt", () => {
+    const local = automationAuthoringPrompt(DRAFT);
+    expect(local).toContain("separate, machine-local choices");
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    expect(automationAuthoringPrompt(DRAFT)).toContain("Arming is the switch");
+    expect(automationAuthoringPrompt(DRAFT)).not.toContain("machine-local");
+    adoptLaunch(LOCAL_LAUNCH);
+    expect(automationAuthoringPrompt(DRAFT)).toBe(local);
+  });
   it("carries the exact current draft and catalogue, with review-only intent", () => {
     const prompt = automationAuthoringPrompt(DRAFT);
     expect(prompt).toContain(JSON.stringify(DRAFT, null, 2));

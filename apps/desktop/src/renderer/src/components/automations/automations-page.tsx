@@ -106,6 +106,9 @@ import {
   useAutomationsStore,
 } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
+import { automationSourceIsCloud } from "@renderer/stores/automation-source";
+import { CloudAutomationControls } from "./cloud-automation-controls";
+import { CloudRunHistory } from "./cloud-run-history";
 
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
@@ -333,14 +336,22 @@ function AutomationsSurface({
       )
     ) : (
       <>
-        <label className="flex items-center gap-2 text-ui text-muted-foreground">
-          Automatic triggers
-          <Switch
-            checked={enabledIds.includes(selectedAutomation.id)}
-            aria-label={`Automatic triggers on this machine: ${selectedAutomation.name}`}
-            onCheckedChange={(enabled) => void setEnabled(selectedAutomation.id, enabled)}
+        {automationSourceIsCloud() ? (
+          <CloudAutomationControls
+            key={selectedAutomation.id}
+            projectId={projectId}
+            automation={selectedAutomation}
           />
-        </label>
+        ) : (
+          <label className="flex items-center gap-2 text-ui text-muted-foreground">
+            Automatic triggers
+            <Switch
+              checked={enabledIds.includes(selectedAutomation.id)}
+              aria-label={`Automatic triggers on this machine: ${selectedAutomation.name}`}
+              onCheckedChange={(enabled) => void setEnabled(selectedAutomation.id, enabled)}
+            />
+          </label>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -561,71 +572,73 @@ function AutomationRail({
           New Automation
         </div>
       ) : null}
-      {groups.map((group) => (
-        <section key={group.label} className="flex flex-col gap-1 pb-4">
-          <div className="flex h-6 items-center px-2">
-            <h2 className="text-label text-muted-foreground uppercase">{group.label}</h2>
-            <button
-              type="button"
-              aria-label={`New automation in ${group.label}`}
-              onClick={onCreate}
-              className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <PlusIcon weight="bold" className="size-3" />
-            </button>
-          </div>
-          {group.automations.length === 0 ? (
-            <p className="px-2 py-1 text-label text-muted-foreground">Nothing here</p>
-          ) : (
-            group.automations.map((automation) => (
+      {groups
+        .filter((group) => !automationSourceIsCloud() || group.label !== "All projects")
+        .map((group) => (
+          <section key={group.label} className="flex flex-col gap-1 pb-4">
+            <div className="flex h-6 items-center px-2">
+              <h2 className="text-label text-muted-foreground uppercase">{group.label}</h2>
               <button
-                key={automation.id}
                 type="button"
-                data-automation-rail-row={automation.id}
-                aria-current={automation.id === selectedId ? "page" : undefined}
-                onClick={() => onSelect(automation)}
-                className={cn(
-                  "flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left outline-none",
-                  "focus-visible:ring-2 focus-visible:ring-ring",
-                  automation.id === selectedId
-                    ? "bg-accent text-foreground"
-                    : "text-muted-foreground hover:bg-accent/50",
-                )}
+                aria-label={`New automation in ${group.label}`}
+                onClick={onCreate}
+                className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <span className="flex w-full min-w-0 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-ui font-medium">
-                    {automation.name}
+                <PlusIcon weight="bold" className="size-3" />
+              </button>
+            </div>
+            {group.automations.length === 0 ? (
+              <p className="px-2 py-1 text-label text-muted-foreground">Nothing here</p>
+            ) : (
+              group.automations.map((automation) => (
+                <button
+                  key={automation.id}
+                  type="button"
+                  data-automation-rail-row={automation.id}
+                  aria-current={automation.id === selectedId ? "page" : undefined}
+                  onClick={() => onSelect(automation)}
+                  className={cn(
+                    "flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left outline-none",
+                    "focus-visible:ring-2 focus-visible:ring-ring",
+                    automation.id === selectedId
+                      ? "bg-accent text-foreground"
+                      : "text-muted-foreground hover:bg-accent/50",
+                  )}
+                >
+                  <span className="flex w-full min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-ui font-medium">
+                      {automation.name}
+                    </span>
+                    <span
+                      aria-label={
+                        enabledIds.includes(automation.id) ? "Automatic triggers" : "Manual only"
+                      }
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        enabledIds.includes(automation.id) ? "bg-primary" : "border border-border",
+                      )}
+                    />
                   </span>
-                  <span
-                    aria-label={
-                      enabledIds.includes(automation.id) ? "Automatic triggers" : "Manual only"
-                    }
-                    className={cn(
-                      "size-2 shrink-0 rounded-full",
-                      enabledIds.includes(automation.id) ? "bg-primary" : "border border-border",
-                    )}
-                  />
-                </span>
-                <span className="flex w-full min-w-0 flex-wrap items-center gap-x-1 text-label text-muted-foreground">
-                  {triggerLabel(automation.trigger)} ·{" "}
-                  {/* Only pins name a model. Inherited, tier and invalid
+                  <span className="flex w-full min-w-0 flex-wrap items-center gap-x-1 text-label text-muted-foreground">
+                    {triggerLabel(automation.trigger)} ·{" "}
+                    {/* Only pins name a model. Inherited, tier and invalid
                       runtimes keep their own labels. Effort carries its noun
                       so `High` cannot read as an adjective on the model. */}
-                  {isAutomationRuntimePin(automation.runtime) ? (
-                    <ResolvedModelName
-                      selection={automation.runtime}
-                      className="max-w-full"
-                      trailing={`${effortLabel(automation.runtime.reasoningLevel)} effort`}
-                    />
-                  ) : (
-                    runtimeLabel(automation.runtime)
-                  )}
-                </span>
-              </button>
-            ))
-          )}
-        </section>
-      ))}
+                    {isAutomationRuntimePin(automation.runtime) ? (
+                      <ResolvedModelName
+                        selection={automation.runtime}
+                        className="max-w-full"
+                        trailing={`${effortLabel(automation.runtime.reasoningLevel)} effort`}
+                      />
+                    ) : (
+                      runtimeLabel(automation.runtime)
+                    )}
+                  </span>
+                </button>
+              ))
+            )}
+          </section>
+        ))}
       {/* The way back to the whole project's work (VC-297).
 
           The rail always leaves one record selected once the list lands, so
@@ -843,7 +856,14 @@ function RunOnTicketDialog({
  * project's history to draw one record's — the read a phone or a browser
  * should never be made to do.
  */
-function RunHistory({
+function RunHistory(props: Parameters<typeof LocalRunHistory>[0]) {
+  return automationSourceIsCloud() ? (
+    <CloudRunHistory projectId={props.projectId} automationId={props.automationId} />
+  ) : (
+    <LocalRunHistory {...props} />
+  );
+}
+function LocalRunHistory({
   projectId,
   ticketPrefix,
   runs,

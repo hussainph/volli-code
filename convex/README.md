@@ -197,6 +197,15 @@ Time and outcomes live beside it:
 - `testAutomations.ts`: test-only clock hooks for `test:backend`, guarded like
   `testJobs.ts`.
 
+The desktop's cloud Automation source subscribes directly to these reads;
+local launches retain their IPC transport. The paginated Run reads add the
+runner's name/status and `sessionAccess` (`starting`, `ready`, `private`,
+`gone`), so a queued Run or delayed Session intake never looks like an
+already-open Session. `runState` follows one accepted Run through that same
+projection before the by-hand toast offers its Session door.
+Visibility uses the project's current Session scope,
+including `shareAll`; Run rows themselves remain team facts.
+
 Conventions and frozen ids: `SCHEMA-NOTES.md`, "Automation clock and Runs".
 
 ## The migration import

@@ -9,6 +9,8 @@
  * rather than moving the editor and Run history below it. Chat keeps the
  * shared stack's normal-flow default.
  */
+import { automationSourceIsCloud } from "@renderer/stores/automation-source";
+import { CloudNextScheduledRun } from "./cloud-automation-controls";
 import * as React from "react";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
@@ -635,7 +637,8 @@ export function AutomationEditorPanel({
       : triggerChoice === "columns" && columns.length > 0
         ? { kind: "columns", columns }
         : NO_AUTOMATION_TRIGGER;
-  const ownershipChoice: OwnershipChoice = triggerChoice === "schedule" ? "project" : ownership;
+  const ownershipChoice: OwnershipChoice =
+    automationSourceIsCloud() || triggerChoice === "schedule" ? "project" : ownership;
   const savingProjectId =
     automation === null ? (ownershipChoice === "project" ? projectId : null) : automation.projectId;
   const scheduleProblem = automationScheduleProblem({ projectId: savingProjectId, trigger });
@@ -846,10 +849,12 @@ export function AutomationEditorPanel({
                     <FolderOpenIcon />
                     This project
                   </SelectItem>
-                  <SelectItem value="global">
-                    <GlobeIcon />
-                    All projects
-                  </SelectItem>
+                  {automationSourceIsCloud() ? null : (
+                    <SelectItem value="global">
+                      <GlobeIcon />
+                      All projects
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             ) : (
@@ -953,11 +958,17 @@ export function AutomationEditorPanel({
                   className="w-full max-w-none"
                 />
                 {firesHere && automationId !== null && scheduleProblem === null ? (
-                  <NextScheduledRun schedule={schedule} automationId={automationId} />
+                  automationSourceIsCloud() ? (
+                    <CloudNextScheduledRun projectId={projectId} automationId={automationId} />
+                  ) : (
+                    <NextScheduledRun schedule={schedule} automationId={automationId} />
+                  )
                 ) : null}
-                <p className="text-ui text-muted-foreground">
-                  {SCHEDULE_SKIPPED_OCCURRENCE_POLICY}
-                </p>
+                {automationSourceIsCloud() ? null : (
+                  <p className="text-ui text-muted-foreground">
+                    {SCHEDULE_SKIPPED_OCCURRENCE_POLICY}
+                  </p>
+                )}
               </div>
             ) : null}
             {scheduleProblem === null ? null : (

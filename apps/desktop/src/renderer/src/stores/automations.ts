@@ -4,10 +4,9 @@
  * machine-local enabled set, and the one piece of app-level view state the
  * feature owns: which project/record the page's embedded editor is showing.
  *
- * Read on demand — the command palette refreshes on open, the page on mount
- * and after every write — rather than subscribed: the record changes only
- * through this app's own doors today, and an open IS the moment staleness
- * would show.
+ * Local reads are on demand: the palette refreshes on open, the page on mount
+ * and after writes. A cloud source keeps these projections subscribed, with
+ * arming as enablement rather than a second machine-local switch.
  *
  * Two failure conventions, and the split is deliberate:
  *
@@ -40,8 +39,11 @@ import type { AutomationCreateInput, AutomationUpdateInput } from "../../../ipc/
 import { duplicateName } from "@renderer/components/automations/automations-page-model";
 import { toastError } from "@renderer/lib/toast";
 import { notAvailableOn, refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
-import { launchStore } from "@renderer/stores/launch";
-import { CLOUD_HOST } from "@renderer/stores/host-connection";
+import {
+  automationSource,
+  automationSourceIsCloud,
+  automationsAvailable,
+} from "./automation-source";
 
 type AutomationDraftInput = Omit<AutomationCreateInput, "commandId"> & {
   /** Kept by a caller across a transport retry; generated here when omitted. */
@@ -203,6 +205,7 @@ interface AutomationsState {
     projectId: string;
     status: TicketStatus;
     automationId: string | null;
+    runnerId?: string;
   }): Promise<string | null>;
   /**
    * Fills whichever of this project's four caches has never landed, and
@@ -243,7 +246,7 @@ interface AutomationsState {
    * command door every other write uses — only the projection it lands in is
    * machine-local.
    */
-  setEnabled(automationId: string, enabled: boolean): Promise<void>;
+  setEnabled(automationId: string, enabled: boolean, runnerId?: string): Promise<void>;
 }
 
 /** Factory so tests get isolated instances (the store module's own convention). */
@@ -302,12 +305,12 @@ export function createAutomationsStore() {
     async refresh(projectId) {
       // A remote project's Automations are its host's, not this Mac's (VC-711):
       // none listed here, and nothing asked of this Mac's database.
-      if (remoteHostNow(projectId) !== null) {
+      if (!automationsAvailable(projectId)) {
         set((state) => ({ byProject: { ...state.byProject, [projectId]: [] } }));
         return true;
       }
       try {
-        const result = await window.api.automations.list({ projectId });
+        const result = await automationSource().list({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load automations: ${result.error}`);
           return false;
@@ -321,12 +324,12 @@ export function createAutomationsStore() {
     },
 
     async refreshArming(projectId) {
-      if (remoteHostNow(projectId) !== null) {
+      if (!automationsAvailable(projectId)) {
         set((state) => ({ armingByProject: { ...state.armingByProject, [projectId]: [] } }));
         return true;
       }
       try {
-        const result = await window.api.automations.armings({ projectId });
+        const result = await automationSource().armings({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load armed columns: ${result.error}`);
           return false;
@@ -342,12 +345,12 @@ export function createAutomationsStore() {
     },
 
     async refreshOrder(projectId) {
-      if (remoteHostNow(projectId) !== null) {
+      if (!automationsAvailable(projectId)) {
         set((state) => ({ orderByProject: { ...state.orderByProject, [projectId]: [] } }));
         return true;
       }
       try {
-        const result = await window.api.automations.columnOrders({ projectId });
+        const result = await automationSource().columnOrders({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load automation order: ${result.error}`);
           return false;
@@ -364,11 +367,11 @@ export function createAutomationsStore() {
 
     async setColumnOrder(input) {
       const host = remoteHostNow(input.projectId);
-      if (host !== null) return notAvailableOn(host);
+      if (!automationSourceIsCloud() && host !== null) return notAvailableOn(host);
       try {
-        const result = await window.api.automations.setColumnOrder({
-          // Durable intent, like every other write here: the projection this
-          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+        const result = await automationSource().setColumnOrder({
+          // Durable intent, like every other write here: the local projection
+          // is machine-local; the cloud source writes shared arming/order.
           commandId: crypto.randomUUID(),
           projectId: input.projectId,
           status: input.status,
@@ -388,11 +391,11 @@ export function createAutomationsStore() {
 
     async arm(input) {
       const host = remoteHostNow(input.projectId);
-      if (host !== null) return notAvailableOn(host);
+      if (!automationSourceIsCloud() && host !== null) return notAvailableOn(host);
       try {
-        const result = await window.api.automations.arm({
-          // Durable intent, like every other write here: the projection this
-          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+        const result = await automationSource().arm({
+          // Durable intent, like every other write here: the local projection
+          // is machine-local; the cloud source writes shared arming/order.
           commandId: crypto.randomUUID(),
           ...input,
         });
@@ -409,9 +412,9 @@ export function createAutomationsStore() {
     },
 
     async refreshRuns(projectId) {
-      if (remoteHostNow(projectId) !== null) return;
+      if (!automationsAvailable(projectId)) return;
       try {
-        const result = await window.api.automations.runsForProject({ projectId });
+        const result = await automationSource().runsForProject({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load run history: ${result.error}`);
           return;
@@ -424,11 +427,11 @@ export function createAutomationsStore() {
 
     async refreshAutomationHistory(projectId, automationId) {
       const key = automationHistoryKey(projectId, automationId);
-      if (remoteHostNow(projectId) !== null) return;
+      if (!automationsAvailable(projectId)) return;
       try {
         const [runs, skips] = await Promise.all([
-          window.api.automations.runsForAutomation({ projectId, automationId }),
-          window.api.automations.skipsForAutomation({ projectId, automationId }),
+          automationSource().runsForAutomation({ projectId, automationId }),
+          automationSource().skipsForAutomation({ projectId, automationId }),
         ]);
         if (!runs.ok) {
           toastError(`Couldn't load run history: ${runs.error}`);
@@ -450,9 +453,9 @@ export function createAutomationsStore() {
     },
 
     async refreshSkips(projectId) {
-      if (remoteHostNow(projectId) !== null) return;
+      if (!automationsAvailable(projectId)) return;
       try {
-        const result = await window.api.automations.skipsForProject({ projectId });
+        const result = await automationSource().skipsForProject({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load skipped occurrences: ${result.error}`);
           return;
@@ -466,14 +469,8 @@ export function createAutomationsStore() {
     },
 
     async refreshEnablement() {
-      // Unlike the project reads, enablement has no project id for the
-      // local-only guard. A cloud launch must never read this Mac's switches.
-      if (launchStore() === "cloud") {
-        set({ enabledIds: [], enablementRead: true });
-        return true;
-      }
       try {
-        const result = await window.api.automations.enablement();
+        const result = await automationSource().enablement();
         if (!result.ok) {
           toastError(`Couldn't read which automations are on: ${result.error}`);
           return false;
@@ -525,12 +522,11 @@ export function createAutomationsStore() {
     },
 
     async save(input) {
-      if (launchStore() === "cloud") return notAvailableOn(CLOUD_HOST);
       const host = remoteHostNow(input.projectId ?? get().editor?.projectId);
-      if (host !== null) return notAvailableOn(host);
+      if (!automationSourceIsCloud() && host !== null) return notAvailableOn(host);
       try {
         const { commandId, ...draft } = input;
-        const result = await window.api.automations.create({
+        const result = await automationSource().create({
           ...draft,
           // The renderer owns the durable retry identity. A caller can hold
           // this id across a transport retry; main never invents a host-local
@@ -556,10 +552,9 @@ export function createAutomationsStore() {
     },
 
     async update(input) {
-      if (launchStore() === "cloud") return notAvailableOn(CLOUD_HOST);
       try {
         const { commandId, ...draft } = input;
-        const result = await window.api.automations.update({
+        const result = await automationSource().update({
           ...draft,
           commandId: commandId ?? crypto.randomUUID(),
         });
@@ -576,10 +571,10 @@ export function createAutomationsStore() {
     },
 
     async duplicate(projectId, automation) {
-      if (refuseRemote(projectId)) return;
+      if (!automationSourceIsCloud() && refuseRemote(projectId)) return;
       const listed = get().byProject[projectId] ?? [];
       try {
-        const result = await window.api.automations.create({
+        const result = await automationSource().create({
           commandId: crypto.randomUUID(),
           // Ownership is copied, never reset: a global Automation duplicated
           // into a project-owned one would quietly change where it is listed,
@@ -621,9 +616,9 @@ export function createAutomationsStore() {
     },
 
     async remove(projectId, automation) {
-      if (refuseRemote(projectId)) return;
+      if (!automationSourceIsCloud() && refuseRemote(projectId)) return;
       try {
-        const result = await window.api.automations.delete({
+        const result = await automationSource().delete({
           commandId: crypto.randomUUID(),
           automationId: automation.id,
         });
@@ -637,18 +632,15 @@ export function createAutomationsStore() {
       }
     },
 
-    async setEnabled(automationId, enabled) {
-      if (launchStore() === "cloud") {
-        toastError(notAvailableOn(CLOUD_HOST));
-        return;
-      }
+    async setEnabled(automationId, enabled, runnerId) {
       try {
-        const result = await window.api.automations.setEnabled({
-          // Durable intent, like every other write here: the projection this
-          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+        const result = await automationSource().setEnabled({
+          // Durable intent, like every other write here: the local projection
+          // is machine-local; the cloud source writes shared arming/order.
           commandId: crypto.randomUUID(),
           automationId,
           enabled,
+          ...(runnerId === undefined ? {} : { runnerId }),
         });
         if (!result.ok) {
           toastError(`Couldn't change that automation: ${result.error}`);

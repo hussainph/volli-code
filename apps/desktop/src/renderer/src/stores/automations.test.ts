@@ -24,6 +24,7 @@ import {
   selectColumnOrders,
   selectColumnRank,
   selectRailFresh,
+  selectPlanningLoaded,
   type OfferedListSlices,
 } from "./automations";
 import { remoteProject } from "./remote-project.test-support";
@@ -166,10 +167,10 @@ describe("cloud launch", () => {
     stubApi({});
   });
 
-  it("warms empty automation offers without reading the frozen local service", async () => {
+  it("never falls back to the frozen local service before the cloud source connects", async () => {
     const store = createAutomationsStore();
     await store.getState().ensureLoaded("p1");
-    expect(await store.getState().refreshRail("p1", 1)).toBe(true);
+    expect(await store.getState().refreshRail("p1", 1)).toBe(false);
     await store.getState().refreshRuns("p1");
     await store.getState().refreshSkips("p1");
     await store.getState().refreshAutomationHistory("p1", "a1");
@@ -181,7 +182,7 @@ describe("cloud launch", () => {
     for (const door of Object.values(window.api.automations)) {
       expect(door).not.toHaveBeenCalled();
     }
-    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalled();
   });
 
   it("refuses project-less mutations before reaching local automation rows", async () => {
@@ -194,7 +195,7 @@ describe("cloud launch", () => {
         trigger: NO_AUTOMATION_TRIGGER,
         runtime: null,
       }),
-    ).toBe("Not available on Volli Cloud yet");
+    ).toBe("Volli Cloud isn’t connected yet.");
     expect(
       await store.getState().update({
         automationId: "local-automation",
@@ -203,20 +204,33 @@ describe("cloud launch", () => {
         trigger: NO_AUTOMATION_TRIGGER,
         runtime: null,
       }),
-    ).toBe("Not available on Volli Cloud yet");
+    ).toBe("Volli Cloud isn’t connected yet.");
     await store.getState().setEnabled("local-automation", true);
 
     expect(window.api.automations.create).not.toHaveBeenCalled();
     expect(window.api.automations.update).not.toHaveBeenCalled();
     expect(window.api.automations.setEnabled).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith("Not available on Volli Cloud yet", {
-      duration: 8000,
-      closeButton: true,
-    });
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't change that automation: Volli Cloud isn’t connected yet.",
+      {
+        duration: 8000,
+        closeButton: true,
+      },
+    );
   });
 });
 
 describe("refresh", () => {
+  it("does not treat cold planning caches as an unarmed answer", () => {
+    const store = createAutomationsStore();
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(false);
+    store.setState({ byProject: { p1: [] } });
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(false);
+    store.setState({ armingByProject: { p1: [] } });
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(false);
+    store.setState({ enablementRead: true });
+    expect(selectPlanningLoaded(store.getState(), "p1")).toBe(true);
+  });
   it("caches the fetched list under its project id", async () => {
     const listed = [automation(), automation({ id: "automation-2", projectId: null })];
     stubApi({ list: () => Promise.resolve({ ok: true, automations: listed }) });

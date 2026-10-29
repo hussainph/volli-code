@@ -32,6 +32,7 @@ import {
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
 import { cloudBoardSource, installCloudBoardSource } from "@renderer/stores/board-source";
+import { bindCloudAutomations } from "@renderer/stores/cloud-automations/bind";
 import { CLOUD_READ_ONLY, ConvexBoardSource } from "@renderer/stores/cloud-board/source";
 import {
   BOARD_SNAPSHOT_AFTER_MS,
@@ -416,6 +417,8 @@ export async function startCloudBoard(
   useHostConnectionStore.getState().attach(createCloudHostSource({ projects: useProjectsStore }));
   // The source first: a project the follower seeds opens on a running client.
   followCloudSession((session) => source.attach(session));
+  const stopAutomations = bindCloudAutomations(cloudReadOnlyReason);
+  window.addEventListener?.("pagehide", stopAutomations, { once: true });
   followCloudWorkspace({
     follow: followCloudSession,
     projects: useProjectsStore,
