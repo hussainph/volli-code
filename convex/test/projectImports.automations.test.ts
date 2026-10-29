@@ -6,7 +6,7 @@ import {
   newId,
 } from "@volli/shared/cloud";
 import { api, internal } from "../functions/_generated/api";
-import { code } from "./board-helpers";
+import { code, createTicket } from "./board-helpers";
 import {
   MOVED,
   U,
@@ -98,6 +98,7 @@ describe("moved Automation safety", () => {
       w.alice.as.query(api.projectImports.rearmList, { moveId: w.moveId }),
     ).rejects.toThrow(code("import_closed"));
     await commit(w);
+    await createTicket(w.alice.as, MOVED.projectId, { status: "todo" });
     await w.t.mutation(internal.testAutomations.fireDueAt, { now: NOW + 86_400_000 });
     expect(await w.t.run((ctx) => ctx.db.query("runnerJobs").collect())).toEqual([]);
     expect(await w.alice.as.query(api.projectImports.rearmList, { moveId: w.moveId })).toEqual({

@@ -839,7 +839,9 @@ export const commit = mutation({
     const missing = MIGRATION_IMPORT_STREAMS.filter(
       (stream) => stream !== "automationSchedules" && !present.has(stream),
     );
-    if (missing.length > 0 || mismatched.length > 0) {
+    const expectedLength =
+      MIGRATION_IMPORT_STREAMS.length - (present.has("automationSchedules") ? 0 : 1);
+    if (streams.length !== expectedLength || missing.length > 0 || mismatched.length > 0) {
       throw importError(
         "verification_failed",
         "What arrived does not match the manifest; nothing was shown.",
