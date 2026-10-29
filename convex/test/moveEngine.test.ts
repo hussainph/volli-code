@@ -7,7 +7,7 @@
 import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { sqliteDrainCursorStore } from "../../packages/host-core/src/cloud-runner/sqlite-stores";
 import {
@@ -21,6 +21,10 @@ import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-
 import { api } from "../functions/_generated/api";
 import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
 import { finalDigests, moveWorld, type MoveWorld } from "./move-engine-harness";
+
+// Each case writes, migrates, exports and moves a whole profile: on a cold CI
+// runner the first one alone can pass the default 5 s.
+vi.setConfig({ testTimeout: 60_000 });
 
 let world: MoveWorld | undefined;
 afterEach(() => {
