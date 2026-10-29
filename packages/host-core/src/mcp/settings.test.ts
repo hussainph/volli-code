@@ -112,6 +112,37 @@ describe("a project moved to Volli Cloud, in a cloud launch (VC-1008)", () => {
   });
 });
 
+describe("a move that starts while a save connects", () => {
+  it("writes nothing: the freeze is asked again at the write", async () => {
+    expect((await service().save({ projectId: "p1", server: draft, enabledTools: [] })).ok).toBe(
+      true,
+    );
+    const before = service().list("p1");
+    const connecting = new McpSettingsService({
+      db: ctx.db,
+      now: () => 200,
+      open: async (): Promise<McpProtocolClient> => ({
+        listTools: async () => {
+          // The move freezes the project mid-handshake.
+          ctx.db.exec(`
+            INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+            INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+              runner_id, state, app_version, mapper_version, created_at, updated_at)
+            VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+          `);
+          return listedTools;
+        },
+        callTool: vi.fn(async () => ({ content: [] })),
+        close: closed,
+      }),
+    });
+    expect(
+      await connecting.save({ projectId: "p1", server: draft, enabledTools: ["echo"] }),
+    ).toEqual({ ok: false, error: expect.stringContaining("moving to Volli Cloud") });
+    expect(service().list("p1")).toEqual(before);
+  });
+});
+
 describe("McpSettingsService", () => {
   it("adds by connecting and discovering, then stores only the exact selected tool set", async () => {
     const result = await service().save({ projectId: "p1", server: draft, enabledTools: ["echo"] });

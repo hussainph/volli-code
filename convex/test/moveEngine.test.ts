@@ -20,7 +20,13 @@ import { MigrationExportError } from "../../packages/host-core/src/migration-exp
 import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-export/exporter";
 import { api } from "../functions/_generated/api";
 import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
-import { finalDigests, moveWorld, type MoveWorld } from "./move-engine-harness";
+import {
+  cloudBorn,
+  cursorOf,
+  finalDigests,
+  moveWorld,
+  type MoveWorld,
+} from "./move-engine-harness";
 
 // Each case writes, migrates, exports and moves a whole profile: on a cold CI
 // runner the first one alone can pass the default 5 s.
@@ -156,58 +162,45 @@ describe("a move, start to finish", () => {
 });
 
 /**
- * A Session born in Volli Cloud's copy of the moved project, as a cloud
- * launch for the mover starts one here (the cloud product store binds them,
- * the owner adopts the Session's drain cursor).
+ * Cursors no release on the moved project may touch: the mover's on another
+ * project's Session, and someone else's on one of the moved project's.
  */
-async function cloudBorn(w: MoveWorld): Promise<string> {
-  const services = createHostSessionServices(w.db, {
-    log: { error: () => {}, warn: () => {} },
-    events: { publish: () => {} },
-    attention: {
-      deliver: () => ({ delivered: true as const }),
-      focusedSessionIds: () => new Set<string>(),
-    },
-  });
-  bindCloudSessionOwner(w.db, w.userId);
-  try {
-    const cloud = createCloudSessionOwner({
-      db: w.db,
-      engine: services.sessionEngine,
-      ownerUserId: w.userId,
-      adopt: (sessionId) =>
-        sqliteDrainCursorStore(w.db).save({
-          sessionId,
-          ownerUserId: w.userId,
-          generation: 1,
-          acceptedThrough: 0,
-          blocked: null,
-        }),
-    });
-    const born = await cloud.engine.createSession({
-      commandId: crypto.randomUUID(),
-      projectId: w.projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "Born in Volli Cloud",
-      provenance: {
-        source: { kind: "system", id: "cloud-launch", detail: null },
-        venue: { id: w.runnerId, kind: "remote" },
-      },
-    });
-    return born.session.id;
-  } finally {
-    bindCloudSessionOwner(w.db, null);
-    services.sessionActivityWatch.stop();
-  }
+/** The mover's cursors on the moved project's Sessions. */
+function projectCursors(w: MoveWorld) {
+  return w.db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM session_drain_cursors WHERE owner_user_id = ?
+        AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
+    )
+    .get(w.userId, w.projectId);
 }
 
-/** How many drain cursors hold a Session. */
-const cursorOf = (w: MoveWorld, sessionId: string) =>
-  w.db
-    .prepare("SELECT COUNT(*) AS n FROM session_drain_cursors WHERE session_id = ?")
-    .get(sessionId);
+function strangerCursors(w: MoveWorld): string[] {
+  const elsewhere = w.db
+    .prepare("SELECT id FROM sessions WHERE project_id != ? ORDER BY id LIMIT 1")
+    .get(w.projectId) as { id: string };
+  const theirs = w.db
+    .prepare(
+      `SELECT id FROM sessions WHERE project_id = ?
+        AND id NOT IN (SELECT session_id FROM session_drain_cursors) ORDER BY id LIMIT 1`,
+    )
+    .get(w.projectId) as { id: string } | undefined;
+  const theirsId =
+    theirs?.id ??
+    (
+      w.db
+        .prepare("SELECT id FROM sessions WHERE project_id = ? ORDER BY id DESC LIMIT 1")
+        .get(w.projectId) as { id: string }
+    ).id;
+  const plant = w.db.prepare(
+    `INSERT OR REPLACE INTO session_drain_cursors
+       (session_id, owner_user_id, claim_generation, accepted_through, updated_at)
+     VALUES (?, ?, 1, 0, 1)`,
+  );
+  plant.run(elsewhere.id, w.userId);
+  plant.run(theirsId, "someone-else");
+  return [elsewhere.id, theirsId];
+}
 
 describe("a Session born in Volli Cloud's copy", () => {
   test("Go back to local takes its cursor back too", async () => {
@@ -217,9 +210,11 @@ describe("a Session born in Volli Cloud's copy", () => {
     await engine.confirm(moveId);
     const born = await cloudBorn(world);
     expect(cursorOf(world, born)).toEqual({ n: 1 });
+    const strangers = strangerCursors(world);
     await engine.goBackToLocal(moveId);
     expect(cursorOf(world, born)).toEqual({ n: 0 });
-    expect(movedCursors(world)).toEqual({ n: 0 });
+    for (const sessionId of strangers) expect(cursorOf(world, sessionId)).toEqual({ n: 1 });
+    expect(projectCursors(world)).toEqual({ n: 0 });
   });
 
   test("Go back to local from a commit the handover never followed takes it back", async () => {
@@ -245,13 +240,15 @@ describe("a Session born in Volli Cloud's copy", () => {
     const { engine, queueId, moveId } = enqueue(world);
     await engine.run(queueId);
     const born = await cloudBorn(world);
+    const strangers = strangerCursors(world);
     const rolled = await engine.rollBack(moveId, { confirmChanged: true });
     expect(rolled.state).toBe("rolled_back");
     expect(cursorOf(world, born)).toEqual({ n: 0 });
-    expect(movedCursors(world)).toEqual({ n: 0 });
-    expect((rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack).toContain(
-      born,
-    );
+    for (const sessionId of strangers) expect(cursorOf(world, sessionId)).toEqual({ n: 1 });
+    expect(projectCursors(world)).toEqual({ n: 0 });
+    const named = (rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack;
+    expect(named).toContain(born);
+    for (const sessionId of strangers) expect(named).not.toContain(sessionId);
   });
 });
 

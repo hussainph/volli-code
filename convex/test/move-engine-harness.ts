@@ -25,6 +25,10 @@ import { MIGRATION_IMPORT_STREAMS, MigrationDigest, migrationRowDigest } from "@
 import { vi } from "vite-plus/test";
 
 import { createMoveEngine, type MoveEngine } from "../../packages/host-core/src/cloud-move/engine";
+import { bindCloudSessionOwner } from "../../packages/host-core/src/cloud-move/freeze";
+import { sqliteDrainCursorStore } from "../../packages/host-core/src/cloud-runner/sqlite-stores";
+import { createCloudSessionOwner } from "../../packages/host-core/src/cloud-store/owner";
+import { createHostSessionServices } from "../../packages/host-core/src/session-services";
 import { presignedMoveObjects } from "../../packages/host-core/src/cloud-move/objects";
 import { createMoveSessionHistory } from "../../packages/host-core/src/cloud-move/session-history";
 import { openRawDb } from "../../packages/host-core/src/db/test-helpers";
@@ -275,3 +279,57 @@ export async function finalDigests(world: MoveWorld, moveId: string) {
     scanned,
   };
 }
+
+/**
+ * A Session born in Volli Cloud's copy of the moved project, as a cloud
+ * launch for the mover starts one here (the cloud product store binds them,
+ * the owner adopts the Session's drain cursor).
+ */
+export async function cloudBorn(w: MoveWorld): Promise<string> {
+  const services = createHostSessionServices(w.db, {
+    log: { error: () => {}, warn: () => {} },
+    events: { publish: () => {} },
+    attention: {
+      deliver: () => ({ delivered: true as const }),
+      focusedSessionIds: () => new Set<string>(),
+    },
+  });
+  bindCloudSessionOwner(w.db, w.userId);
+  try {
+    const cloud = createCloudSessionOwner({
+      db: w.db,
+      engine: services.sessionEngine,
+      ownerUserId: w.userId,
+      adopt: (sessionId) =>
+        sqliteDrainCursorStore(w.db).save({
+          sessionId,
+          ownerUserId: w.userId,
+          generation: 1,
+          acceptedThrough: 0,
+          blocked: null,
+        }),
+    });
+    const born = await cloud.engine.createSession({
+      commandId: crypto.randomUUID(),
+      projectId: w.projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Born in Volli Cloud",
+      provenance: {
+        source: { kind: "system", id: "cloud-launch", detail: null },
+        venue: { id: w.runnerId, kind: "remote" },
+      },
+    });
+    return born.session.id;
+  } finally {
+    bindCloudSessionOwner(w.db, null);
+    services.sessionActivityWatch.stop();
+  }
+}
+
+/** How many drain cursors hold a Session. */
+export const cursorOf = (w: MoveWorld, sessionId: string) =>
+  w.db
+    .prepare("SELECT COUNT(*) AS n FROM session_drain_cursors WHERE session_id = ?")
+    .get(sessionId) as { n: number };

@@ -883,29 +883,32 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       move = journal.patch(move.moveId, { journal: { aborted: true } });
       await fault("rollback.aborted");
     }
-    let kept: string[] = [];
+    // `uncommitted` too: a roll back resumed after its uncommit no longer asks
+    // the backend, so `shown` can read false there.
+    const purged = shown || move.journal.uncommitted === true;
     if (move.journal.handover !== undefined) {
-      kept = releaseHandover({
+      releaseHandover({
         db: ports.db,
         history: ports.history,
         userId: move.userId,
         runnerId: move.runnerId,
         record: move.journal.handover,
+        ...(purged ? { pathsOnly: true as const } : {}),
       });
     }
-    // `uncommitted` too: a roll back resumed after its uncommit no longer asks
-    // the backend, so `shown` can read false there.
-    if (shown || move.journal.uncommitted === true) {
+    if (purged) {
       // The cloud copy is purged: no Session of the project is served from
       // here any more, the ones that moved on since and those born in Volli
-      // Cloud included (whether or not the handover ran). Name them.
-      const takenBack = releaseProjectCursors(ports.db, move.userId, move.projectId);
-      const named = [...new Set([...kept, ...takenBack])].toSorted();
-      if (named.length > 0 && move.failure !== null) {
-        move = journal.patch(move.moveId, {
-          failure: { ...move.failure, detail: { ...move.failure.detail, cursorsTakenBack: named } },
+      // Cloud included (whether or not the handover ran). Taken back and named
+      // in one transaction, so a crash between cannot lose the names.
+      const failure = move.failure;
+      move = ports.db.transaction(() => {
+        const takenBack = releaseProjectCursors(ports.db, move.userId, move.projectId);
+        if (takenBack.length === 0 || failure === null) return move;
+        return journal.patch(move.moveId, {
+          failure: { ...failure, detail: { ...failure.detail, cursorsTakenBack: takenBack } },
         });
-      }
+      })();
     }
     await rm(workDir(move), { recursive: true, force: true, maxRetries: 3 });
     const again = move.journal.againOnRunner;
@@ -1419,11 +1422,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
           userId: move.userId,
           runnerId: move.runnerId,
           record: move.journal.handover,
-          everyCursor: { projectId: move.projectId },
+          pathsOnly: true,
         });
       }
-      // Whether or not the handover ran: Sessions born in Volli Cloud since
-      // the commit hold cursors of their own.
+      // Every cursor on the project, whether or not the handover ran: the
+      // moved Sessions and those born in Volli Cloud since the commit.
       releaseProjectCursors(ports.db, move.userId, move.projectId);
       await rm(exportDir(move), { recursive: true, force: true, maxRetries: 3 });
       return journal.advance(moveId, "returning", "returned", { returnedAt: now() });

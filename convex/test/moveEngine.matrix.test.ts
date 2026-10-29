@@ -14,7 +14,15 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { finalDigests, moveWorld, type Kill, type MoveWorld } from "./move-engine-harness";
+import { COMMITTED_STATES } from "../../packages/host-core/src/cloud-move/states";
+import {
+  cloudBorn,
+  cursorOf,
+  finalDigests,
+  moveWorld,
+  type Kill,
+  type MoveWorld,
+} from "./move-engine-harness";
 
 // Every case moves a whole profile, twice over: generous for a cold CI runner.
 vi.setConfig({ testTimeout: 60_000 });
@@ -124,6 +132,7 @@ describe("kill while rolling back or going back, resume, same end", () => {
       stopAtFirstProblem: false,
     });
     await engine.run(queue.queueId);
+    const born = await cloudBorn(world);
     let killed!: () => void;
     const stopped = new Promise<void>((resolve) => (killed = resolve));
     void world
@@ -137,6 +146,56 @@ describe("kill while rolling back or going back, resume, same end", () => {
     await world.engine().resume();
     expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolled_back");
     expect((await finalDigests(world, moves[0]!.moveId)).status).toBe("aborting");
+    // The cloud copy is purged: a Session born there keeps no cursor here.
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+  });
+
+  test("rollback.uncommitted, from a commit this Mac never recorded", async () => {
+    world = await moveWorld();
+    const engine = world.engine();
+    const { queue, moves } = engine.enqueue({
+      projectIds: [world.projectId],
+      target: { userId: world.userId, workspaceId: world.workspaceId, runnerId: world.runnerId },
+      stopAtFirstProblem: false,
+    });
+    const moveId = moves[0]!.moveId;
+    // The backend commits; the crash comes before this Mac hears so.
+    await killedAt(world, queue.queueId, {
+      point: "call:projectImports:commit",
+      hit: 1,
+      after: true,
+    });
+    expect(COMMITTED_STATES.has(world.engine().journal.move(moveId)!.state)).toBe(false);
+    // A cursor this runner holds on one of the project's Sessions.
+    const held = (
+      world.db
+        .prepare("SELECT id FROM sessions WHERE project_id = ? ORDER BY id LIMIT 1")
+        .get(world.projectId) as { id: string }
+    ).id;
+    world.db
+      .prepare(
+        `INSERT OR REPLACE INTO session_drain_cursors
+           (session_id, owner_user_id, claim_generation, accepted_through, updated_at)
+         VALUES (?, ?, 1, 0, 1)`,
+      )
+      .run(held, world.userId);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "rollback.uncommitted", hit: 1, onKilled: () => killed() } })
+      .rollBack(moveId);
+    await stopped;
+    expect(world.engine().journal.move(moveId)!.journal.uncommitted).toBe(true);
+    // The resumed roll back no longer asks the backend whether it showed the
+    // project; the uncommit it already made says so.
+    world.engine().journal.setQueue(queue.queueId, { state: "stopped" });
+    await world.engine().resume();
+    const rolled = world.engine().journal.move(moveId)!;
+    expect(rolled.state).toBe("rolled_back");
+    expect(cursorOf(world, held)).toEqual({ n: 0 });
+    expect((rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack).toEqual([
+      held,
+    ]);
   });
 
   test("returning.saved", async () => {
