@@ -114,6 +114,39 @@ export function handOver(input: {
 }
 
 /**
+ * Takes back every drain cursor this runner holds for `userId` on the
+ * project's Sessions: the moved ones (moved on or not) and those born in
+ * Volli Cloud since. For when the project is the local copy's again (Go back
+ * to local) or its cloud copy is purged (a roll back after the commit): this
+ * runner serves none of them any more, and what it drained is in the local
+ * ledger already. Only this person's cursors, only on this project's
+ * Sessions. A Session born in Volli Cloud keeps its local row, now with no
+ * cursor: an orphan the local copy lists and nothing uploads (intended).
+ * Answers the Sessions whose cursors went.
+ */
+export function releaseProjectCursors(
+  db: Database.Database,
+  userId: string,
+  projectId: string,
+): string[] {
+  return db.transaction(() => {
+    const held = prepared<[string, string], { session_id: string }>(
+      db,
+      `SELECT session_id FROM session_drain_cursors WHERE owner_user_id = ?
+        AND session_id IN (SELECT id FROM sessions WHERE project_id = ?) ORDER BY session_id`,
+    )
+      .all(userId, projectId)
+      .map((row) => row.session_id);
+    prepared(
+      db,
+      `DELETE FROM session_drain_cursors WHERE owner_user_id = ?
+        AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
+    ).run(userId, projectId);
+    return held;
+  })();
+}
+
+/**
  * Takes back what {@link handOver} wrote: the path registrations still as it
  * wrote them, and the drain cursors no new fact moved. Answers the Sessions
  * that kept a cursor because they took new facts in Volli Cloud since.
@@ -125,34 +158,15 @@ export function releaseHandover(input: {
   runnerId: string;
   record: HandoverRecord;
   /**
-   * Going back to local, for this project: every Session's cursor goes, the
-   * moved ones (moved on or not) and those born in Volli Cloud since. What
-   * this runner drained since the move is in the local ledger already.
+   * Leave the drain cursors to the caller: the paths alone go. For when every
+   * cursor on the project goes by {@link releaseProjectCursors} (Go back to
+   * local, a roll back after the commit).
    */
-  everyCursor?: { projectId: string };
+  pathsOnly?: true;
 }): string[] {
   const { db, record, runnerId } = input;
-  let kept: string[] = [];
-  if (input.everyCursor !== undefined) {
-    const { projectId } = input.everyCursor;
-    db.transaction(() => {
-      for (const { sessionId } of record.cursors) {
-        prepared(
-          db,
-          "DELETE FROM session_drain_cursors WHERE session_id = ? AND owner_user_id = ?",
-        ).run(sessionId, input.userId);
-      }
-      // And the Sessions born in Volli Cloud's copy since: this runner serves
-      // none of the project's Sessions any more.
-      prepared(
-        db,
-        `DELETE FROM session_drain_cursors WHERE owner_user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
-      ).run(input.userId, projectId);
-    })();
-  } else {
-    kept = input.history.releaseCursors(input.userId, record.cursors);
-  }
+  const kept =
+    input.pathsOnly === true ? [] : input.history.releaseCursors(input.userId, record.cursors);
   db.transaction(() => {
     for (const checkout of record.checkouts) {
       prepared(

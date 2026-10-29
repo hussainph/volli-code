@@ -23,7 +23,11 @@ import {
   putMcpServer,
   selectedMcpToolDefinitions,
 } from "../db/mcp-servers-repo";
-import { ProjectFrozenError, assertProjectWritable } from "../cloud-move/freeze";
+import {
+  ProjectFrozenError,
+  assertProjectWritable,
+  cloudServesProject,
+} from "../cloud-move/freeze";
 import { isProjectAttached } from "../db/projects-repo";
 import { FOLDER_REQUIRED, localMachinePaths, type MachinePathReader } from "../machine-paths";
 import { createMcpProtocolClientOpener } from "./client";
@@ -389,6 +393,10 @@ export class McpSettingsService {
           throw new Error(`Enabled MCP tool ${enabled} was not discovered.`);
         }
       }
+      // The freeze again, at the write: a move can start (or a cloud launch
+      // stop serving the project) while discovery takes its seconds.
+      const frozenNow = this.#frozen(input.projectId);
+      if (frozenNow !== null) return frozenNow;
       const now = this.#now();
       const saved = putMcpServer(this.#db, {
         ...prepared.server,
@@ -686,8 +694,18 @@ export class McpSettingsService {
     return message(error);
   }
 
-  /** A project moving to (or moved to) Volli Cloud keeps its MCP configuration as it is (VC-993). */
+  /**
+   * A project moving to (or moved to) Volli Cloud keeps its MCP configuration
+   * as it is on a local launch (VC-993). A cloud launch serving the moved
+   * project edits it as the cloud project's: this Mac's Sessions of it use
+   * these servers (VC-1008). Those are the same `mcp_servers` rows the local
+   * copy reads, so a Go back to local or a roll back keeps whatever a cloud
+   * launch wrote, a `remove` (and the credentials it deleted) included.
+   * Intended for the preview: the servers are this Mac's, whichever copy
+   * runs them.
+   */
   #frozen(projectId: string): { ok: false; error: string } | null {
+    if (cloudServesProject(this.#db, projectId)) return null;
     try {
       assertProjectWritable(this.#db, projectId);
       return null;

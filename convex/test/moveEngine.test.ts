@@ -20,7 +20,13 @@ import { MigrationExportError } from "../../packages/host-core/src/migration-exp
 import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-export/exporter";
 import { api } from "../functions/_generated/api";
 import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
-import { finalDigests, moveWorld, type MoveWorld } from "./move-engine-harness";
+import {
+  cloudBorn,
+  cursorOf,
+  finalDigests,
+  moveWorld,
+  type MoveWorld,
+} from "./move-engine-harness";
 
 // Each case writes, migrates, exports and moves a whole profile: on a cold CI
 // runner the first one alone can pass the default 5 s.
@@ -152,6 +158,97 @@ describe("a move, start to finish", () => {
     expect(projectFreeze(world.db, world.projectId)).toBe("confirmed");
     expect(existsSync(join(world.root, "cloud-moves", moveId, "export"))).toBe(false);
     expect(existsSync(join(world.root, "cloud-moves", moveId, "plan.json"))).toBe(true);
+  });
+});
+
+/**
+ * Cursors no release on the moved project may touch: the mover's on another
+ * project's Session, and someone else's on one of the moved project's.
+ */
+/** The mover's cursors on the moved project's Sessions. */
+function projectCursors(w: MoveWorld) {
+  return w.db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM session_drain_cursors WHERE owner_user_id = ?
+        AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
+    )
+    .get(w.userId, w.projectId);
+}
+
+function strangerCursors(w: MoveWorld): string[] {
+  const elsewhere = w.db
+    .prepare("SELECT id FROM sessions WHERE project_id != ? ORDER BY id LIMIT 1")
+    .get(w.projectId) as { id: string };
+  const theirs = w.db
+    .prepare(
+      `SELECT id FROM sessions WHERE project_id = ?
+        AND id NOT IN (SELECT session_id FROM session_drain_cursors) ORDER BY id LIMIT 1`,
+    )
+    .get(w.projectId) as { id: string } | undefined;
+  const theirsId =
+    theirs?.id ??
+    (
+      w.db
+        .prepare("SELECT id FROM sessions WHERE project_id = ? ORDER BY id DESC LIMIT 1")
+        .get(w.projectId) as { id: string }
+    ).id;
+  const plant = w.db.prepare(
+    `INSERT OR REPLACE INTO session_drain_cursors
+       (session_id, owner_user_id, claim_generation, accepted_through, updated_at)
+     VALUES (?, ?, 1, 0, 1)`,
+  );
+  plant.run(elsewhere.id, w.userId);
+  plant.run(theirsId, "someone-else");
+  return [elsewhere.id, theirsId];
+}
+
+describe("a Session born in Volli Cloud's copy", () => {
+  test("Go back to local takes its cursor back too", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    await engine.confirm(moveId);
+    const born = await cloudBorn(world);
+    expect(cursorOf(world, born)).toEqual({ n: 1 });
+    const strangers = strangerCursors(world);
+    await engine.goBackToLocal(moveId);
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    for (const sessionId of strangers) expect(cursorOf(world, sessionId)).toEqual({ n: 1 });
+    expect(projectCursors(world)).toEqual({ n: 0 });
+  });
+
+  test("Go back to local from a commit the handover never followed takes it back", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "handing_over", hit: 1, onKilled: () => killed() } })
+      .run(queueId);
+    await stopped;
+    const engine = world.engine();
+    // The crash came after the commit and before the handover wrote anything.
+    expect(engine.journal.move(moveId)!.state).toBe("committed");
+    const born = await cloudBorn(world);
+    engine.journal.patch(moveId, { journal: { handover: undefined } });
+    expect((await engine.goBackToLocal(moveId)).state).toBe("returned");
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+  });
+
+  test("a roll back after the commit takes it back and names it", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const born = await cloudBorn(world);
+    const strangers = strangerCursors(world);
+    const rolled = await engine.rollBack(moveId, { confirmChanged: true });
+    expect(rolled.state).toBe("rolled_back");
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    for (const sessionId of strangers) expect(cursorOf(world, sessionId)).toEqual({ n: 1 });
+    expect(projectCursors(world)).toEqual({ n: 0 });
+    const named = (rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack;
+    expect(named).toContain(born);
+    for (const sessionId of strangers) expect(named).not.toContain(sessionId);
   });
 });
 

@@ -11,14 +11,17 @@
  * (`session-services.ts`: stopping work always passes, and so does a write
  * Volli Cloud claims once the project is shown there,
  * {@link cloudClaimsSessionWrite}); the Automation service's edits and the
- * MCP settings writes; project remove and relink; and the pull-request poll
+ * MCP settings writes (which pass in a cloud launch serving the moved
+ * project, {@link cloudServesProject}); project remove and relink; and the pull-request poll
  * and worktree reclaim. Reads are never refused: the frozen project stays
  * fully readable.
  *
- * The check runs before the write's own transaction, not inside it: one
- * process writes the profile, and a move freezes only after a project is
- * idle, so nothing can start between the two (a cross-process writer would
- * need it inside; tracked with the MCP settings gate, VC-1008).
+ * The check runs before the write's own transaction, not inside it. That is
+ * sound while one process writes the profile: a move freezes only after a
+ * project is idle, so nothing can start between the two. A write that awaits
+ * between its check and its write asks again at the write (MCP `save`).
+ * TODO: a second process writing the profile would need the check inside
+ * the transaction.
  *
  * An N−1 build does not know the table and ignores the freeze.
  */
@@ -87,6 +90,24 @@ const cloudOwners = new WeakMap<Database.Database, string>();
 export function bindCloudSessionOwner(db: Database.Database, ownerUserId: string | null): void {
   if (ownerUserId === null) cloudOwners.delete(db);
   else cloudOwners.set(db, ownerUserId);
+}
+
+/**
+ * Whether a cloud launch here serves the person a moved project now belongs
+ * to: the person bound ({@link bindCloudSessionOwner}) is the one who moved
+ * it, and the move has committed. Then the project on this Mac is the cloud
+ * project's working state (its runner-local configuration, such as MCP
+ * servers, included), not the frozen local copy. A local launch, a launch
+ * for someone else, or a move that has not committed answers false.
+ */
+export function cloudServesProject(db: Database.Database, projectId: string): boolean {
+  const owner = cloudOwners.get(db);
+  if (owner === undefined || !hasJournal(db)) return false;
+  const row = prepared<[string], { state: MoveState; user_id: string }>(
+    db,
+    `SELECT state, user_id FROM cloud_moves WHERE project_id = ? AND state IN (${FROZEN_LIST}) LIMIT 1`,
+  ).get(projectId);
+  return row !== undefined && COMMITTED_STATES.has(row.state) && row.user_id === owner;
 }
 
 /** A Session write the freeze is asked about: a birth in a project, or a write to a Session. */
