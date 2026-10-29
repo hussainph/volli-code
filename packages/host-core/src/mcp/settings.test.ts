@@ -5,6 +5,7 @@ import { detachProject, insertProject } from "../db/projects-repo";
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
+import { bindCloudSessionOwner } from "../cloud-move/freeze";
 import { McpSessionHost, serversForFrozenMcpTools } from "./session-host";
 
 let ctx: TestDb;
@@ -68,6 +69,41 @@ describe("a project moving to Volli Cloud (VC-993)", () => {
       refused,
     );
     expect(service().remove({ projectId: "p1", serverId: "server-1" })).toEqual(refused);
+  });
+});
+
+describe("a project moved to Volli Cloud, in a cloud launch (VC-1008)", () => {
+  afterEach(() => bindCloudSessionOwner(ctx.db, null));
+
+  it("edits the moved project's servers once its move committed, and only in a cloud launch", async () => {
+    const saved = await service().save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(saved.ok).toBe(true);
+    ctx.db.exec(`
+      INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+      INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+        runner_id, state, app_version, mapper_version, created_at, updated_at)
+      VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'confirmed', 'test', 3, 1, 1);
+    `);
+    const refused = { ok: false, error: expect.stringContaining("Volli Cloud") };
+    // A local launch: the archived copy keeps its configuration.
+    expect(service().setEnabled({ projectId: "p1", serverId: "server-1", enabled: false })).toEqual(
+      refused,
+    );
+    // A cloud launch serving the moved project: its servers are the cloud project's here.
+    bindCloudSessionOwner(ctx.db, "u");
+    expect(
+      service().setEnabled({ projectId: "p1", serverId: "server-1", enabled: false }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await service().save({ projectId: "p1", server: draft, enabledTools: ["echo"] }),
+    ).toMatchObject({
+      ok: true,
+    });
+    // Still moving: held in a cloud launch too.
+    ctx.db.exec("UPDATE cloud_moves SET state = 'rows'");
+    expect(service().remove({ projectId: "p1", serverId: "server-1" })).toEqual(refused);
+    ctx.db.exec("UPDATE cloud_moves SET state = 'checked'");
+    expect(service().remove({ projectId: "p1", serverId: "server-1" })).toEqual({ ok: true });
   });
 });
 

@@ -89,6 +89,20 @@ export function bindCloudSessionOwner(db: Database.Database, ownerUserId: string
   else cloudOwners.set(db, ownerUserId);
 }
 
+/**
+ * Whether a cloud launch here serves the person a moved project now belongs
+ * to: someone is bound ({@link bindCloudSessionOwner}) and the project's move
+ * has committed. Then the project on this Mac is the cloud project's working
+ * state (its runner-local configuration, such as MCP servers, included), not
+ * the frozen local copy. A local launch, or a move that has not committed,
+ * answers false.
+ */
+export function cloudServesProject(db: Database.Database, projectId: string): boolean {
+  if (!cloudOwners.has(db)) return false;
+  const state = projectFreeze(db, projectId);
+  return state !== null && COMMITTED_STATES.has(state);
+}
+
 /** A Session write the freeze is asked about: a birth in a project, or a write to a Session. */
 export type SessionWrite =
   | { kind: "birth"; projectId: string; ownerUserId: string | undefined }

@@ -155,6 +155,106 @@ describe("a move, start to finish", () => {
   });
 });
 
+/**
+ * A Session born in Volli Cloud's copy of the moved project, as a cloud
+ * launch for the mover starts one here (the cloud product store binds them,
+ * the owner adopts the Session's drain cursor).
+ */
+async function cloudBorn(w: MoveWorld): Promise<string> {
+  const services = createHostSessionServices(w.db, {
+    log: { error: () => {}, warn: () => {} },
+    events: { publish: () => {} },
+    attention: {
+      deliver: () => ({ delivered: true as const }),
+      focusedSessionIds: () => new Set<string>(),
+    },
+  });
+  bindCloudSessionOwner(w.db, w.userId);
+  try {
+    const cloud = createCloudSessionOwner({
+      db: w.db,
+      engine: services.sessionEngine,
+      ownerUserId: w.userId,
+      adopt: (sessionId) =>
+        sqliteDrainCursorStore(w.db).save({
+          sessionId,
+          ownerUserId: w.userId,
+          generation: 1,
+          acceptedThrough: 0,
+          blocked: null,
+        }),
+    });
+    const born = await cloud.engine.createSession({
+      commandId: crypto.randomUUID(),
+      projectId: w.projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Born in Volli Cloud",
+      provenance: {
+        source: { kind: "system", id: "cloud-launch", detail: null },
+        venue: { id: w.runnerId, kind: "remote" },
+      },
+    });
+    return born.session.id;
+  } finally {
+    bindCloudSessionOwner(w.db, null);
+    services.sessionActivityWatch.stop();
+  }
+}
+
+/** How many drain cursors hold a Session. */
+const cursorOf = (w: MoveWorld, sessionId: string) =>
+  w.db
+    .prepare("SELECT COUNT(*) AS n FROM session_drain_cursors WHERE session_id = ?")
+    .get(sessionId);
+
+describe("a Session born in Volli Cloud's copy", () => {
+  test("Go back to local takes its cursor back too", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    await engine.confirm(moveId);
+    const born = await cloudBorn(world);
+    expect(cursorOf(world, born)).toEqual({ n: 1 });
+    await engine.goBackToLocal(moveId);
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    expect(movedCursors(world)).toEqual({ n: 0 });
+  });
+
+  test("Go back to local from a commit the handover never followed takes it back", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "handing_over", hit: 1, onKilled: () => killed() } })
+      .run(queueId);
+    await stopped;
+    const engine = world.engine();
+    // The crash came after the commit and before the handover wrote anything.
+    expect(engine.journal.move(moveId)!.state).toBe("committed");
+    const born = await cloudBorn(world);
+    engine.journal.patch(moveId, { journal: { handover: undefined } });
+    expect((await engine.goBackToLocal(moveId)).state).toBe("returned");
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+  });
+
+  test("a roll back after the commit takes it back and names it", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const born = await cloudBorn(world);
+    const rolled = await engine.rollBack(moveId, { confirmChanged: true });
+    expect(rolled.state).toBe("rolled_back");
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    expect(movedCursors(world)).toEqual({ n: 0 });
+    expect((rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack).toContain(
+      born,
+    );
+  });
+});
+
 describe("Session history", () => {
   test("uploads transcripts and Pi logs, then checks them once the last upload URL expired", async () => {
     world = await moveWorld();
