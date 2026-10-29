@@ -13,7 +13,6 @@ import {
   MIN_READER_VERSION_KEY,
   listAllLabels,
   countProjects,
-  getProjectById,
   insertProject,
   listProjects,
   updateProjectAuthorityPolicy,
@@ -47,7 +46,12 @@ import {
   sanitizeLegacyProjects,
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
-import { attachBlob, sessionLinkBudgetRefusal } from "@volli/host-core/files";
+import {
+  attachBlob,
+  sessionLinkBudgetRefusal,
+  type MachinePathReader,
+  localMachinePaths,
+} from "@volli/host-core/files";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import {
@@ -329,6 +333,7 @@ export function registerDataIpcHandlers(
      * database; a degraded boot registers no handler that would read it.
      */
     worktreeReads?: WorktreeReadService;
+    machinePaths?: MachinePathReader;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -847,7 +852,7 @@ export function registerDataIpcHandlers(
         // turn repository files into frozen copies. The renderer supplies it
         // only for an unowned attach (the new-Ticket composer), whose Ticket
         // does not exist to derive from yet.
-        const refRoot = input.refRoot ?? resolveRefRoot(db, input.owner);
+        const refRoot = input.refRoot ?? resolveRefRoot(db, input.owner, options.machinePaths);
         const outcome = await attachBlob(
           db,
           blobsRootPath,
@@ -1057,7 +1062,13 @@ export function registerDataIpcHandlers(
       // `readWorkingCopy` owns which directory this is — the same rule the Session
       // runtime binds one by — so a renderer never names a path for main to run
       // git in, and the drawing can never be of a tree the agent is not in.
-      const read = await readWorkingCopy(worktreeDeps(db), input);
+      const read = await readWorkingCopy(
+        {
+          ...worktreeDeps(db),
+          ...(options.machinePaths === undefined ? {} : { machinePaths: options.machinePaths }),
+        },
+        input,
+      );
       if (!read.ok) return { ok: false, error: read.error };
       return { ok: true, reading: read.value };
     },
@@ -1693,6 +1704,7 @@ export function registerDataIpcHandlers(
 function resolveRefRoot(
   db: Database.Database,
   owner: BlobAttachInput["owner"],
+  paths: MachinePathReader = localMachinePaths(db),
 ): string | undefined {
   if ("unowned" in owner) return undefined;
   const ticketId =
@@ -1708,9 +1720,10 @@ function resolveRefRoot(
       db,
       "SELECT project_id FROM sessions WHERE id = ?",
     ).get(owner.sessionId)?.project_id;
-    return projectId === undefined ? undefined : getProjectById(db, projectId)?.path;
+    return projectId === undefined ? undefined : (paths.projectPath(projectId) ?? undefined);
   }
-  const ticket = getTicketRow(db, ticketId);
-  if (ticket === undefined) return undefined;
-  return ticket.worktree_path ?? getProjectById(db, ticket.project_id)?.path;
+  const ticket = paths.ticket(ticketId);
+  if (ticket === null) return undefined;
+  if (paths.kind === "cloud" && ticket.usesWorktree) return ticket.worktreePath ?? undefined;
+  return ticket.worktreePath ?? paths.projectPath(ticket.projectId) ?? undefined;
 }

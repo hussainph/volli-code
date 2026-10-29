@@ -121,7 +121,12 @@ export function registerFileIpcHandlers(
     // through, so quick-open can never offer a row the read then answers from
     // the other checkout.
     "volli:file-index": async (input: FileIndexInput): Promise<FileIndexResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       const { files, truncated } = await buildFileIndex(scope.value.projectPath, {
         worktreeRoot: scope.value.worktreeRoot,
@@ -130,7 +135,12 @@ export function registerFileIpcHandlers(
     },
 
     "volli:file-read": async (input: FilePathInput): Promise<FileReadResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       return await readFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
     },
@@ -142,7 +152,12 @@ export function registerFileIpcHandlers(
     // apply to, and a ticket searches its worktree whole (falling back to Main
     // when that worktree is gone, exactly as a read does).
     "volli:search": async (input: FileSearchInput): Promise<FileSearchResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       const run = await searchFiles({ root: searchRoot(scope.value), query: input.query });
       if (!run.ok) return run;
@@ -160,7 +175,12 @@ export function registerFileIpcHandlers(
     }),
 
     "volli:external-app-open-file": async (input: ExternalAppOpenFileInput): Promise<Result> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       const resolved = await resolveExternalFileTarget(scope.value, input.ticketId, input.relPath);
       if (!resolved.ok) return resolved;
@@ -170,13 +190,23 @@ export function registerFileIpcHandlers(
     "volli:external-app-open-worktree": async (
       input: ExternalAppOpenWorktreeInput,
     ): Promise<Result> => {
-      const resolved = await resolveLiveWorktree(db, input.projectId, input.ticketId);
+      const resolved = await resolveLiveWorktree(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!resolved.ok) return resolved;
       return await externalApps.open(input.appId, resolved.value.filePath);
     },
 
     "volli:worktree-reveal": async (input: WorktreeRevealInput): Promise<Result> => {
-      const resolved = await resolveLiveWorktree(db, input.projectId, input.ticketId);
+      const resolved = await resolveLiveWorktree(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!resolved.ok) return resolved;
       try {
         services.client.revealInFolder(resolved.value.filePath);
@@ -187,7 +217,12 @@ export function registerFileIpcHandlers(
     },
 
     "volli:file-write": async (input: FileWriteInput): Promise<FileWriteResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       return await writeFile(
         scope.value.projectPath,
@@ -204,13 +239,23 @@ export function registerFileIpcHandlers(
     // acts on the main checkout, and neither can act on a path the other's
     // navigator was showing.
     "volli:file-create": async (input: FilePathInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       return await createFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
     },
 
     "volli:dir-create": async (input: FilePathInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       return await createDirectory(
         scope.value.projectPath,
@@ -220,7 +265,12 @@ export function registerFileIpcHandlers(
     },
 
     "volli:file-rename": async (input: FileRenameInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       return await renameEntry(
         scope.value.projectPath,
@@ -231,13 +281,23 @@ export function registerFileIpcHandlers(
     },
 
     "volli:file-duplicate": async (input: FilePathInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       return await duplicateFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
     },
 
     "volli:file-delete": async (input: FilePathInput): Promise<Result> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       return await services.trashEntry(
         scope.value.projectPath,
@@ -247,13 +307,18 @@ export function registerFileIpcHandlers(
     },
 
     "volli:artifact-create": async (input: ArtifactCreateInput): Promise<ArtifactCreateResult> => {
-      const project = resolveProjectPath(db, input.projectId);
+      const project = resolveProjectPath(db, input.projectId, services.machinePaths);
       if (!project.ok) return project;
       return await createArtifact(project.projectPath, input.name);
     },
 
     "volli:file-reveal": async (input: FilePathInput): Promise<RevealResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       const resolved = await resolveExternalFileTarget(scope.value, input.ticketId, input.relPath);
       if (!resolved.ok) return resolved;
@@ -266,7 +331,12 @@ export function registerFileIpcHandlers(
     },
 
     "volli:file-watch": async (input: FilePathInput, sender: WebContents): Promise<Result> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      const scope = await resolveFileScope(
+        db,
+        input.projectId,
+        input.ticketId,
+        services.machinePaths,
+      );
       if (!scope.ok) return scope;
       const resolved = await resolveSafePath(
         scope.value.projectPath,
@@ -305,7 +375,7 @@ export function registerFileIpcHandlers(
     "volli:dir-watch": async (input: DirPathInput, sender: WebContents): Promise<Result> => {
       // Main-checkout-scoped on purpose (CONCEPT #54): no ticket lookup, so an
       // expanded tree row can never drift onto a worktree copy of the repo.
-      const project = resolveProjectPath(db, input.projectId);
+      const project = resolveProjectPath(db, input.projectId, services.machinePaths);
       if (!project.ok) return project;
       const resolved = await resolveSafeDir(project.projectPath, input.relPath);
       if (!resolved.ok) return resolved;
@@ -341,11 +411,13 @@ export function registerFileIpcHandlers(
     "volli:prompt-template-create": async (
       input: PromptTemplateCreateInput,
     ): Promise<PromptTemplateCreateResult> => {
-      const project = getProjectById(db, input.projectId);
-      if (!project) return { ok: false, error: "Unknown project" };
+      const project = resolveProjectPath(db, input.projectId, services.machinePaths);
+      if (!project.ok) return project;
       return writePromptTemplate({
         dir:
-          input.scope === "project" ? projectCommandsDir(project.path) : options.globalCommandsDir,
+          input.scope === "project"
+            ? projectCommandsDir(project.projectPath)
+            : options.globalCommandsDir,
         name: input.name,
         description: input.description,
         body: input.body,
@@ -355,16 +427,16 @@ export function registerFileIpcHandlers(
     "volli:prompt-templates": async (
       input: PromptTemplateIndexInput,
     ): Promise<PromptTemplateIndexResult> => {
-      const project = getProjectById(db, input.projectId);
-      if (!project) return { ok: false, error: "Unknown project" };
+      const project = resolveProjectPath(db, input.projectId, services.machinePaths);
+      if (!project.ok) return project;
       const [loaded, skills] = await Promise.all([
         loadPromptTemplates({
-          projectCommandsDir: projectCommandsDir(project.path),
+          projectCommandsDir: projectCommandsDir(project.projectPath),
           globalCommandsDir: options.globalCommandsDir,
           cloud: options.cloudEnabled(),
         }),
         loadSkills({
-          projectSkillsDir: projectSkillsDir(project.path),
+          projectSkillsDir: projectSkillsDir(project.projectPath),
           globalSkillsDir: options.globalSkillsDir,
         }),
       ]);

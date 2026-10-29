@@ -12,6 +12,7 @@ export { importBlob } from "../blob-import";
 export { blobProtocolResponse } from "../blob-protocol";
 export { blobsRoot, removeBlob } from "../blob-store";
 export { searchFiles } from "../file-search";
+export { localMachinePaths, type MachinePathReader } from "../machine-paths";
 export { createHostFileServices, type HostFileServices } from "../file-services";
 export { globalCommandsRoot, loadPromptTemplates, writePromptTemplate } from "../prompt-templates";
 export { loadSkills } from "../skills";

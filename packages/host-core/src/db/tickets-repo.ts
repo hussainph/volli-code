@@ -513,6 +513,8 @@ export function listRetentionCandidates(db: Database.Database): TicketRow[] {
     `SELECT * FROM tickets
        WHERE archived_at IS NULL
          AND (worktree_path IS NOT NULL OR branch IS NOT NULL)
+         AND ${localProductRow("tickets", "ticket")}
+         AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = tickets.project_id)
          AND NOT EXISTS (SELECT 1 FROM working_copy_paths WHERE ticket_id = tickets.id)`,
   ).all();
 }
@@ -532,6 +534,8 @@ export function listTrimCandidates(db: Database.Database): TicketRow[] {
     `SELECT * FROM tickets
        WHERE worktree_path IS NOT NULL
          AND (status = 'done' OR archived_at IS NOT NULL)
+         AND ${localProductRow("tickets", "ticket")}
+         AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = tickets.project_id)
          AND NOT EXISTS (SELECT 1 FROM working_copy_paths WHERE ticket_id = tickets.id)`,
   ).all();
 }

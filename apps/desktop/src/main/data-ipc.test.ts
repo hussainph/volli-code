@@ -5221,6 +5221,50 @@ describe("attachments (VC-50)", () => {
     expect(listed.blobs[0]?.originalName).toBe("pasted.png");
   });
 
+  it.each(["located", "missing"] as const)(
+    "derives Cloud attachment @ refs from the %s machine copy, never Main",
+    async (state) => {
+      const sourcePath = join(workspace, "registry.pdf");
+      writeFileSync(sourcePath, PNG);
+      ctx.db.prepare("INSERT INTO cloud_shadow_rows VALUES ('project', ?, 'owner')").run(projectId);
+      ctx.db.prepare("INSERT INTO cloud_shadow_rows VALUES ('ticket', ?, 'owner')").run(ticket.id);
+      handlers.clear();
+      registerDataIpcHandlers(
+        { ok: true, db: ctx.db },
+        {
+          sessionEngine: fixtureSessionEngine,
+          blobsRoot: blobsDir,
+          machinePaths: {
+            kind: "cloud",
+            projectPath: () => workspace,
+            ticket: () => ({
+              projectId,
+              displayId: "VC-42",
+              usesWorktree: true,
+              worktreePath: state === "located" ? workspace : null,
+              branch: "topic",
+              baseBranch: "main",
+            }),
+          },
+        },
+      );
+      const attached = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+        fileName: "registry.pdf",
+        sourcePath,
+        owner: { ticketId: ticket.id },
+      });
+      expect(attached).toMatchObject(
+        state === "located"
+          ? { ok: true, relPath: "registry.pdf", blob: null }
+          : {
+              ok: true,
+              relPath: null,
+              blob: expect.objectContaining({ originalName: "registry.pdf" }),
+            },
+      );
+    },
+  );
+
   it("names a repo document live instead of copying it", async () => {
     const sourcePath = join(workspace, "spec.pdf");
     writeFileSync(sourcePath, PNG);

@@ -24,7 +24,8 @@ import {
   selectedMcpToolDefinitions,
 } from "../db/mcp-servers-repo";
 import { ProjectFrozenError, assertProjectWritable } from "../cloud-move/freeze";
-import { getProjectById, isProjectAttached } from "../db/projects-repo";
+import { isProjectAttached } from "../db/projects-repo";
+import { FOLDER_REQUIRED, localMachinePaths, type MachinePathReader } from "../machine-paths";
 import { createMcpProtocolClientOpener } from "./client";
 import { MemoryMcpCredentialStore, type McpCredentialStore } from "./credential-store";
 import {
@@ -91,6 +92,7 @@ function spentItsDeadline(elapsedMs: number): boolean {
 
 export interface McpSettingsOptions {
   db: Database.Database;
+  machinePaths?: MachinePathReader;
   /**
    * Replaces the real client entirely. Tests that do not exercise credentials
    * inject one; when it is injected, credentials are not resolved here.
@@ -144,6 +146,7 @@ function pendingFor(server: McpServerDraft, secrets: unknown): McpPendingSecrets
 /** Main-owned settings owner. No client library or repository file crosses this boundary. */
 export class McpSettingsService {
   readonly #db: Database.Database;
+  readonly #paths: MachinePathReader;
   readonly #injectedOpen: OpenMcpProtocolClient | undefined;
   readonly #now: () => number;
   readonly #store: McpCredentialStore;
@@ -157,6 +160,7 @@ export class McpSettingsService {
 
   constructor(options: McpSettingsOptions) {
     this.#db = options.db;
+    this.#paths = options.machinePaths ?? localMachinePaths(options.db);
     this.#injectedOpen = options.open;
     this.#now = options.now ?? Date.now;
     this.#store = options.credentials ?? new MemoryMcpCredentialStore();
@@ -645,8 +649,12 @@ export class McpSettingsService {
     projectId: string,
     candidate: unknown,
   ): { ok: true; server: McpServerDraft; workspacePath: string } | { ok: false; error: string } {
-    const project = getProjectById(this.#db, projectId);
-    if (project === undefined) return { ok: false, error: "Project not found." };
+    const workspacePath = this.#paths.projectPath(projectId);
+    if (workspacePath === null)
+      return {
+        ok: false,
+        error: this.#paths.kind === "cloud" ? FOLDER_REQUIRED : "Project not found.",
+      };
     if (candidate === null || typeof candidate !== "object") {
       return { ok: false, error: "MCP server configuration is invalid." };
     }
@@ -658,7 +666,7 @@ export class McpSettingsService {
       transport: row["transport"],
     });
     return sanitized.ok
-      ? { ok: true, server: sanitized.server, workspacePath: project.path }
+      ? { ok: true, server: sanitized.server, workspacePath }
       : { ok: false, error: sanitized.reason };
   }
 

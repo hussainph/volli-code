@@ -12,6 +12,7 @@ import type { BackendLink } from "../cloud-runner/backend-link";
 import type { RunnerPresence } from "../cloud-runner/presence";
 import * as sessionJobs from "./session-jobs";
 import { createCloudProductStore } from "./index";
+import { createMachinePaths } from "../machine-paths";
 
 const PROJECT = "a0000000-0000-4000-8000-000000000001";
 const SESSION = "c0000000-0000-4000-8000-000000000001";
@@ -81,6 +82,7 @@ it("composes owner cursor routing, Agent overlays, runner notify and fenced arti
   };
   cursors.save(cursor);
   const host = {
+    machinePaths: createMachinePaths(db.db),
     database: { ok: true, db: db.db },
     sessionEngine: wake.engine,
     sessionWakeBus: wake,
