@@ -436,9 +436,117 @@ try {
       localRearmDisabled: true,
     };
   });
-  await step("Re-arm moved Automations explicitly on this Mac", async () => {
+  await step("Read moved history and attachments through the real cloud board", async () => {
     await drive("restart", { reason: "Open the moved project in Volli Cloud (supervised)" });
     await wait(MOVE_PROJECT.name);
+    await click("button", "Home", { first: true });
+    await openTicket("MOV-1");
+    // Monaco's body image is a decoration rather than accessible text. Use
+    // the real comment viewer to render the moved attachment and to leave a
+    // cloud-side change that Go back must preserve in its readable export.
+    await action("type", "textbox", "Add a comment", {
+      text: "Cloud comment after move.\n\n![Moved attachment](.volli/attachments/move-proof.png)",
+    });
+    await press("textbox", "Add a comment", "Meta+Enter");
+    await wait("Cloud comment after move.");
+    const imageHash = launched.seeded.attachment.blobHash;
+    await waitUntil(
+      "the moved attachment renders through the cloud reader",
+      async () => {
+        const image = await drive("snapshot");
+        return (
+          image.text.includes('img "Moved attachment"') &&
+          !image.text.includes("Image could not be loaded") &&
+          store.requests.some(
+            (item) =>
+              item.method === "GET" &&
+              item.sha256 === imageHash &&
+              item.origin === "volli-app://bundle",
+          )
+        );
+      },
+      { timeout: 60_000, interval: 500 },
+    );
+    await drive("screenshot", { name: "moved-attachment-rendered" });
+    const image = await drive("snapshot");
+    assert.ok(image.text.includes('img "Moved attachment"'));
+    assert.ok(!image.text.includes("Image could not be loaded"));
+    // This fixture has exactly one Session. Its auto-title comes from the
+    // ticket, not the first message; choose the actual Session list entry.
+    await click("button", "azure-openai-responses · Idle", { contains: true, first: true });
+    await wait("fake-agent: Move proof before the move");
+    const after = await sql(
+      "SELECT projects.id, projects.path, tickets.worktree_path FROM projects LEFT JOIN tickets ON tickets.project_id=projects.id WHERE projects.id='" +
+        MOVE_PROJECT.id +
+        "' AND tickets.ticket_number=1",
+    );
+    assert.deepEqual(
+      after,
+      proof.beforePaths,
+      "handover reused the existing folder and Working copy",
+    );
+    const quiet = await assertNoAutomationWork(read);
+    return { transcriptRead: true, attachmentRendered: true, foldersReused: true, quiet };
+  });
+  let sessionWriteError;
+  try {
+    await step("Resume the moved Session and create another Session", async () => {
+      const listing = {
+        projectId: MOVE_PROJECT.id,
+        ticketId: launched.seeded.tickets[0].ticketId,
+        paginationOpts: { numItems: 10, cursor: null },
+      };
+      const before = (await read("sessions:list", listing)).page.find(
+        (item) => item.id === proof.sessionId,
+      );
+      assert.ok(before, "the moved Session is visible before resume");
+      await send("Move proof after the move");
+      await click("button", "New chat", { first: true });
+      await send("New cloud Session after move");
+      const sessions = await read("sessions:list", listing);
+      assert.ok(
+        sessions.page.find((item) => item.id === proof.sessionId)?.lastActivityAt >
+          before.lastActivityAt,
+        "the resumed moved Session advanced in the backend",
+      );
+      assert.ok(
+        sessions.page.some((item) => item.id === proof.sessionId),
+        "the moved Session remains visible in the cloud list",
+      );
+      const created = sessions.page.filter((item) => item.id !== proof.sessionId);
+      assert.equal(created.length, 1, "New chat created a distinct cloud Session");
+      assert.equal(created[0].ticketId, listing.ticketId);
+      assert.match(created[0].id, /^[0-9a-f-]{36}$/u);
+      proof.newSessionId = created[0].id;
+      await waitUntil(
+        "both moved and cloud-born cursors exist before Go back",
+        async () => {
+          proof.cursorsBeforeReturn = await sql(
+            "SELECT session_id FROM session_drain_cursors WHERE session_id IN ('" +
+              proof.sessionId +
+              "','" +
+              proof.newSessionId +
+              "')",
+          );
+          return proof.cursorsBeforeReturn.length === 2;
+        },
+        { timeout: 30_000, interval: 250 },
+      );
+      return {
+        resumed: true,
+        newSession: true,
+        movedSessionId: proof.sessionId,
+        newSessionId: proof.newSessionId,
+      };
+    });
+  } catch (error) {
+    // Keep the actual failure, but still prove the escape hatch on this same
+    // moved project. The whole journey remains failed if either path fails.
+    sessionWriteError = error;
+    proof.sessionWriteError = error.stack;
+    await drive("screenshot", { name: "cloud-session-write-failed" });
+  }
+  await step("Re-arm moved Automations explicitly on this Mac", async () => {
     await click("button", "Settings", { first: true });
     await wait("Settings categories");
     await click("button", "Volli Cloud", { first: true });
@@ -540,71 +648,6 @@ try {
       inertGlobals: after.inertGlobals,
     };
   });
-  await step("Read moved history and attachments through the real cloud board", async () => {
-    await click("button", "Home", { first: true });
-    await openTicket("MOV-1");
-    // Monaco's body image is a decoration rather than accessible text. Use
-    // the real comment viewer to render the moved attachment and to leave a
-    // cloud-side change that Go back must preserve in its readable export.
-    await action("type", "textbox", "Add a comment", {
-      text: "Cloud comment after move.\n\n![Moved attachment](.volli/attachments/move-proof.png)",
-    });
-    await press("textbox", "Add a comment", "Meta+Enter");
-    await wait("Cloud comment after move.");
-    const imageHash = launched.seeded.attachment.blobHash;
-    await waitUntil(
-      "the moved attachment renders through the cloud reader",
-      async () => {
-        const image = await drive("snapshot");
-        return (
-          image.text.includes('img "Moved attachment"') &&
-          !image.text.includes("Image could not be loaded") &&
-          store.requests.some(
-            (item) =>
-              item.method === "GET" &&
-              item.sha256 === imageHash &&
-              item.origin === "volli-app://bundle",
-          )
-        );
-      },
-      { timeout: 60_000, interval: 500 },
-    );
-    await drive("screenshot", { name: "moved-attachment-rendered" });
-    const image = await drive("snapshot");
-    assert.ok(image.text.includes('img "Moved attachment"'));
-    assert.ok(!image.text.includes("Image could not be loaded"));
-    // This fixture has exactly one Session. Its auto-title comes from the
-    // ticket, not the first message; choose the actual Session list entry.
-    await click("button", "azure-openai-responses · Idle", { contains: true, first: true });
-    await wait("fake-agent: Move proof before the move");
-    const after = await sql(
-      "SELECT projects.id, projects.path, tickets.worktree_path FROM projects LEFT JOIN tickets ON tickets.project_id=projects.id WHERE projects.id='" +
-        MOVE_PROJECT.id +
-        "' AND tickets.ticket_number=1",
-    );
-    assert.deepEqual(
-      after,
-      proof.beforePaths,
-      "handover reused the existing folder and Working copy",
-    );
-    const quiet = await assertNoAutomationWork(read);
-    return { transcriptRead: true, attachmentRendered: true, foldersReused: true, quiet };
-  });
-  let sessionWriteError;
-  try {
-    await step("Resume the moved Session and create another Session", async () => {
-      await send("Move proof after the move");
-      await click("button", "New chat", { first: true });
-      await send("New cloud Session after move");
-      return { resumed: true, newSession: true };
-    });
-  } catch (error) {
-    // Keep the actual failure, but still prove the escape hatch on this same
-    // moved project. The whole journey remains failed if either path fails.
-    sessionWriteError = error;
-    proof.sessionWriteError = error.stack;
-    await drive("screenshot", { name: "cloud-session-write-failed" });
-  }
   await step("Go back to local keeps the cloud copy and saves a readable export", async () => {
     await click("button", "Settings", { first: true });
     await wait("Settings categories");
@@ -613,6 +656,19 @@ try {
     await click("button", "Go back to local");
     await wait("Volli Cloud keeps its copy.");
     await drive("screenshot", { name: "go-back-confirmation-and-export-location" });
+    proof.cursorsAtReturn = await sql(
+      "SELECT session_id FROM session_drain_cursors WHERE session_id IN ('" +
+        proof.sessionId +
+        "','" +
+        (proof.newSessionId ?? proof.sessionId) +
+        "')",
+    );
+    if (sessionWriteError === undefined)
+      assert.equal(
+        proof.cursorsAtReturn.length,
+        2,
+        "both cursors still exist immediately before Go back",
+      );
     await click("button", "Go back to local");
     await wait("Cloud changes saved to:");
     const returned = (
@@ -638,14 +694,21 @@ try {
     });
     assert.equal(retained.id, MOVE_PROJECT.id);
     const cursors = await sql(
-      "SELECT session_id FROM session_drain_cursors WHERE session_id='" + proof.sessionId + "'",
+      "SELECT session_id FROM session_drain_cursors WHERE session_id IN ('" +
+        proof.sessionId +
+        "','" +
+        (proof.newSessionId ?? proof.sessionId) +
+        "')",
     );
     assert.deepEqual(cursors, []);
     return {
       localUnlocked: true,
       cloudCopyRetained: true,
       readableExport: true,
-      movedCursorReleased: true,
+      movedCursorReleased: proof.cursorsAtReturn.some((row) => row.session_id === proof.sessionId),
+      cloudBornCursorReleased: proof.cursorsAtReturn.some(
+        (row) => row.session_id === proof.newSessionId,
+      ),
     };
   });
   proof.finalAutomationQuiet = await assertNoAutomationWork(read);
