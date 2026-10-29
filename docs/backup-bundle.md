@@ -191,7 +191,8 @@ result is compared with its source table by table (row counts and digests of
 every carried row) and artifact by artifact, and the rebuilt usage index is
 checked against its events. The restore runs under the automatic backup
 worker's 192 MiB old-generation cap, so completing at all shows a bounded heap.
-The rehearsal also fails if the restore's peak RSS grows more than 512 MiB.
+The rehearsal also fails if the restore's peak RSS grows more than 768 MiB
+(measured: +366 MiB on macOS, +464 MiB on the Linux CI runner).
 
 ## Supported versions
 

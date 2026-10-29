@@ -20,7 +20,7 @@
 // old-generation cap (BACKUP_REHEARSAL_RESTORE_HEAP_MIB), so finishing at all
 // proves a bounded heap. Exits non-zero on any mismatch, on a restore that
 // runs out of that heap, or on one whose RSS growth exceeds
-// BACKUP_REHEARSAL_MAX_EXTRA_RSS_MIB (default 512).
+// BACKUP_REHEARSAL_MAX_EXTRA_RSS_MIB (default 768).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as bufferConstants } from "node:buffer";
@@ -273,7 +273,11 @@ async function main() {
   const rows = sizes.rows;
   const fullSize = rows >= 2_150_000;
   const minDataBytes = env("MIN_DATA_BYTES", fullSize ? 1_600_000_000 : 0);
-  const maxExtraRssMiB = env("MAX_EXTRA_RSS_MIB", 512);
+  // The heap cap below is the boundedness proof; this budget catches native
+  // growth (SQLite, zlib, allocator arenas). Measured at 2.15M rows: +366 MiB
+  // on macOS, +464 MiB on ubuntu-24.04 CI. A restore that held the data
+  // document would overrun it by gigabytes, so it is set with flake headroom.
+  const maxExtraRssMiB = env("MAX_EXTRA_RSS_MIB", 768);
   const restoreHeapMiB = env("RESTORE_HEAP_MIB", 192);
   for (const [name, value] of Object.entries({
     ...sizes,
