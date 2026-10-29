@@ -98,6 +98,7 @@ import {
   cloudRunnerState,
   coalescingProblems,
   hourlyBackdateAt,
+  finishRunTurn,
   launchCloudInstance,
   openBoard,
   openProjectHome,
@@ -199,21 +200,6 @@ async function runnerStatus(fixture, token, runnerId) {
 async function runsFor(fixture, token, projectId, automationId) {
   const runs = await automationRuns({ convexUrl: fixture.convexUrl, token, projectId });
   return runs.filter((run) => run.automationId === automationId);
-}
-
-/** Backend acceptance can beat the renderer subscription. Wait for the actual
- * Session control before clicking; the unique reply marker proves which turn finished. */
-async function finishRunTurn(drive, session, marker) {
-  await openProjectHome(drive, AUTOMATION_PROJECT.name);
-  const title = session.title ?? "Chat";
-  await waitUntil(
-    `${drive.label}: Run Session is listed`,
-    () => drive.has("button", title, { contains: true }),
-    { timeout: 60_000, interval: 200 },
-  );
-  await drive.click("button", title, { contains: true, first: true });
-  await drive.wait(marker, 120_000);
-  await drive.gone("Stop turn", 60_000);
 }
 
 async function journey(fixture, store, evidenceDir) {
@@ -461,7 +447,7 @@ async function journey(fixture, store, evidenceDir) {
     await macB.drive.wait(provenanceMarkCopy(DOING_AUTOMATION.name), 60_000);
     // Finish the first scripted turn before the sleep/wake schedule turn can
     // consume the next reply in this instance's ordered fake-provider queue.
-    await finishRunTurn(macA.drive, session, ARRIVAL_TURN_MARKER);
+    await finishRunTurn(macA.drive, DOING_AUTOMATION.name, ARRIVAL_TURN_MARKER);
     return {
       detail: `Run ${arrivalRun.id.slice(0, 8)} started on ${nameA}; shared Session ${arrivalRun.sessionId.slice(
         0,
@@ -606,7 +592,7 @@ async function journey(fixture, store, evidenceDir) {
     await macB.drive.gone(waitingForAsleepCopy(nameA), 60_000);
     // 'started' is not a finished model turn. Consume the second scripted reply
     // before creating the caller whose next reply must be the tool call.
-    await finishRunTurn(macA.drive, session, SCHEDULE_TURN_MARKER);
+    await finishRunTurn(macA.drive, SCHEDULE_AUTOMATION.name, SCHEDULE_TURN_MARKER);
     evidence.started = {
       runId: started.id,
       sessionId: started.sessionId,
