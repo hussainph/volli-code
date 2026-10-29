@@ -58,7 +58,7 @@ async function linkRunner(person: ConvexHttpClient, name: string) {
   return { runnerId, client };
 }
 
-async function world(minute = 17) {
+async function world(minute = 17, timeZone = "Europe/London") {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
   await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
@@ -79,7 +79,7 @@ async function world(minute = 17) {
   const automationId = randomUUID();
   const trigger = {
     kind: "schedule",
-    schedule: { preset: "hourly", minute, timeZone: "Europe/London" },
+    schedule: { preset: "hourly", minute, timeZone },
   };
   await person.mutation(api.automations.create, {
     commandId: randomUUID(),
@@ -104,7 +104,7 @@ const inspect = (automationId: string) =>
 describe("the Automation clock on the pinned local backend", () => {
   test("the acceptance hook coalesces two distinct past occurrences in one real mutation", async () => {
     const minute = (new Date().getUTCMinutes() + 59) % 60 || 59;
-    const w = await world(minute);
+    const w = await world(minute, "UTC");
     await w.armer.client.mutation(api.runners.reportState, { state: "asleep", reason: null });
     const latest = new Date();
     latest.setUTCMinutes(minute, 0, 0);
