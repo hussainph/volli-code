@@ -12,6 +12,7 @@ import {
 } from "../fixture/s3-boundary.ts";
 
 const CONFIG = {
+  endpoint: "http://127.0.0.1:9000",
   bucket: "fixture-history",
   accessKeyId: "fixture-access",
   secretAccessKey: "fixture-secret",
@@ -179,13 +180,14 @@ describe("independent fixture S3 boundary", () => {
   });
 
   test.each([
+    { endpoint: "http://127.0.0.1:9001" },
     { accessKeyId: "other-access" },
     { region: "us-east-1" },
     { bucket: "other-bucket" },
     { secretAccessKey: "other-secret" },
   ])("rejects a different boundary configuration: %j", (change) => {
     expect(() => verify(signedRequest("GET"), NOW, { ...CONFIG, ...change })).toThrow(
-      /credential|bucket|signature/u,
+      /S3 fixture configuration mismatch; check shared deployment VOLLI_S3_\*/u,
     );
   });
 

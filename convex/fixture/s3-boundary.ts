@@ -11,11 +11,15 @@ import type { IncomingMessage } from "node:http";
 type S3Request = Pick<IncomingMessage, "method" | "headers">;
 
 interface S3BoundaryConfig {
+  endpoint?: string;
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
   region: string;
 }
+
+const FIXTURE_MISMATCH =
+  "S3 fixture configuration mismatch; check shared deployment VOLLI_S3_* settings and overlapping fixtures";
 
 const PARAMETERS = [
   "X-Amz-Algorithm",
@@ -103,7 +107,10 @@ export function verifyS3ListRequest(
   assert.ok(Number.isInteger(maxKeys) && maxKeys >= 1 && maxKeys <= 1000, "Invalid max-keys");
   const prefix = params.get("prefix")!;
   assert.ok(prefix.length > 0, "A list names a prefix");
-  assert.ok(url.pathname === `/${encode(config.bucket)}`, "A list is of the bucket itself");
+  assert.ok(
+    url.pathname === `/${encode(config.bucket)}`,
+    `A list is of the bucket itself. ${FIXTURE_MISMATCH}`,
+  );
   assert.ok(
     params.get("X-Amz-SignedHeaders") === "host",
     "Wrong signed headers (a list signs host)",
@@ -121,7 +128,7 @@ function verifyObjectRequest(
 ): string {
   const signing = checkParameters(url, config, now, []);
   const prefix = `/${encode(config.bucket)}/`;
-  assert.ok(url.pathname.startsWith(prefix), "Wrong S3 bucket or path");
+  assert.ok(url.pathname.startsWith(prefix), `Wrong S3 bucket or path. ${FIXTURE_MISMATCH}`);
   const encodedKey = url.pathname.slice(prefix.length);
   const key = decodeURIComponent(encodedKey);
   assert.ok(
@@ -202,7 +209,7 @@ function checkParameters(
   const scope = `${day}/${config.region}/s3/aws4_request`;
   assert.ok(
     params.get("X-Amz-Credential") === `${config.accessKeyId}/${scope}`,
-    "Wrong signing credential or scope",
+    `Wrong signing credential or scope. ${FIXTURE_MISMATCH}`,
   );
   return { stamp, day, scope };
 }
@@ -216,7 +223,11 @@ function checkSignature(
   signedNames: string,
 ): void {
   const params = url.searchParams;
-  assert.ok(header(request, "host") === url.host, "Wrong signed host");
+  assert.ok(
+    header(request, "host") === url.host &&
+      (config.endpoint === undefined || new URL(config.endpoint).host === url.host),
+    `Wrong signed host. ${FIXTURE_MISMATCH}`,
+  );
   const query = [...params]
     .filter(([name]) => name !== "X-Amz-Signature")
     .map(([name, value]) => `${encode(name)}=${encode(value)}`)
@@ -246,6 +257,6 @@ function checkSignature(
   const signature = params.get("X-Amz-Signature")!;
   assert.ok(
     /^[0-9a-f]{64}$/u.test(signature) && timingSafeEqual(Buffer.from(signature, "hex"), expected),
-    "Invalid S3 signature (method, key and headers must match)",
+    `Invalid S3 signature (method, key and headers must match). ${FIXTURE_MISMATCH}`,
   );
 }
