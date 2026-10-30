@@ -75,7 +75,7 @@ test("install uses the selected tree, frozen graph, no lifecycle scripts; failur
     rmSync(tree, { recursive: true, force: true });
   }
 });
-test("prepare normalizes symlinked output paths; runner cannot reuse a stale passing report", () => {
+test("prepare normalizes paths; runner uses the tag's toolchain and rejects stale evidence", () => {
   const tree = fixture();
   try {
     const repo = resolve(tree, "repo"),
@@ -107,7 +107,7 @@ test("prepare normalizes symlinked output paths; runner cannot reuse a stale pas
     // handling execute through the real CLIs, without a backend or network.
     writeFileSync(
       resolve(bin, "vp"),
-      '#!/bin/sh\nif [ "$1" = install ]; then mkdir -p apps/desktop/node_modules/@volli; ln -s ../../../../convex apps/desktop/node_modules/@volli/convex; fi\n',
+      '#!/bin/sh\nif [ "$1" != install ]; then echo "inherited vp must not run tests" >&2; exit 99; fi\nmkdir -p apps/desktop/node_modules/@volli\nln -s ../../../../convex apps/desktop/node_modules/@volli/convex\n',
       { mode: 0o755 },
     );
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_STEP_SUMMARY: "" };
@@ -145,29 +145,58 @@ test("prepare normalizes symlinked output paths; runner cannot reuse a stale pas
         ],
       }),
     );
-    const run = spawnSync(
-      process.execPath,
-      [
-        fileURLToPath(new URL("./older-app-live.mjs", import.meta.url)),
-        "--manifest",
-        manifestPath,
-        "--report",
-        report,
-      ],
-      {
-        cwd: repo,
-        encoding: "utf8",
-        env: {
-          ...env,
-          VOLLI_CONVEX_URL: "http://127.0.0.1:1",
-          VOLLI_CONVEX_SITE_URL: "http://127.0.0.1:2",
-          VOLLI_CONVEX_TEST_PRIVATE_KEY: "fixture-only",
-          VOLLI_CONVEX_ADMIN_KEY: "fixture-only",
-        },
-      },
+    const vp = resolve(manifest.tree, "node_modules/.bin/vp");
+    mkdirSync(resolve(manifest.tree, "node_modules/.bin"), { recursive: true });
+    const invocation = resolve(tree, "invocation.json");
+    writeFileSync(
+      vp,
+      `#!${process.execPath}
+const { writeFileSync } = require("node:fs");
+writeFileSync(${JSON.stringify(invocation)}, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+writeFileSync(${JSON.stringify(report)}, ${JSON.stringify(readFileSync(report, "utf8"))});
+`,
+      { mode: 0o755 },
     );
-    assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+    const run = () =>
+      spawnSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL("./older-app-live.mjs", import.meta.url)),
+          "--manifest",
+          manifestPath,
+          "--report",
+          report,
+        ],
+        {
+          cwd: repo,
+          encoding: "utf8",
+          env: {
+            ...env,
+            VOLLI_CONVEX_URL: "http://127.0.0.1:1",
+            VOLLI_CONVEX_SITE_URL: "http://127.0.0.1:2",
+            VOLLI_CONVEX_TEST_PRIVATE_KEY: "fixture-only",
+            VOLLI_CONVEX_ADMIN_KEY: "fixture-only",
+          },
+        },
+      );
+    const passing = run();
+    assert.equal(passing.status, 0, `${passing.stdout}\n${passing.stderr}`);
+    const called = JSON.parse(readFileSync(invocation, "utf8"));
+    assert.equal(called.cwd, resolve(manifest.tree, "apps/desktop"));
+    assert.deepEqual(called.args.slice(0, 3), ["test", "run", suite.slice("apps/desktop/".length)]);
+    assert.equal(JSON.parse(readFileSync(report, "utf8")).verdict.ok, true);
+
+    // Leave the successful report in place but stop producing fresh evidence.
+    writeFileSync(vp, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const stale = run();
+    assert.equal(stale.status, 1, `${stale.stdout}\n${stale.stderr}`);
     assert.equal(JSON.parse(readFileSync(report, "utf8")).verdict.total, 0);
+
+    // A missing tag-local binary must not fall back to the inherited toolchain.
+    rmSync(vp);
+    const missing = run();
+    assert.equal(missing.status, 1, `${missing.stdout}\n${missing.stderr}`);
+    assert.match(missing.stderr, /the older build's own Vite\+ binary is missing/);
   } finally {
     rmSync(tree, { recursive: true, force: true });
   }

@@ -141,7 +141,11 @@ function main() {
   // A reused prepared tree must not reuse an earlier successful report if
   // this invocation fails before the reporter writes its own evidence.
   rmSync(reportPath, { force: true });
-  const run = spawnSync("vp", args, {
+  // PATH now contains the backend checkout's locked vp, which can run its own
+  // bundled Vitest even with cwd inside the tag. Invoke the tag's binary so
+  // the test toolchain, not just the suite sources, comes from its lockfile.
+  const vp = join(manifest.tree, "node_modules", ".bin", "vp");
+  const run = spawnSync(vp, args, {
     cwd: join(manifest.tree, "apps", "desktop"),
     stdio: "inherit",
     timeout: TIMEOUT_MS,
@@ -161,7 +165,7 @@ function main() {
       ELECTRON_OVERRIDE_DIST_PATH: join(manifest.tree, ".no-electron-binary"),
     },
   });
-  if (run.error?.code === "ENOENT") fail("vp is not on PATH: run this under the Vite+ toolchain");
+  if (run.error?.code === "ENOENT") fail(`the older build's own Vite+ binary is missing: ${vp}`);
   if (run.error) fail(`vp failed to start: ${run.error.message}`);
   if (run.status === null) {
     fail(`vp was killed (${run.signal ?? "timeout"}) after ${TIMEOUT_MS / 60_000} minutes`);

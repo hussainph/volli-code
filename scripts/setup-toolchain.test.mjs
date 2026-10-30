@@ -41,8 +41,19 @@ test("all Vite+ workflow sites use the shared locked bootstrap after checkout", 
   }
   // Keep an explicit inventory so removing an entire setup step cannot silently
   // pass a loop that checks only the sites it still discovers.
-  assert.equal(sites.length, 19, `bootstrap inventory changed:\n${sites.join("\n")}`);
+  assert.equal(sites.length, 20, `bootstrap inventory changed:\n${sites.join("\n")}`);
   assert.equal(deferredInstalls.length, 3, `deferred installs:\n${deferredInstalls.join("\n")}`);
+});
+
+test("older-app uses the shared bootstrap before materializing the release", () => {
+  const job = load(".github/workflows/ci-extended.yml").jobs["older-app-live"];
+  const setup = job.steps.find((entry) => entry.name === "Setup Vite+");
+  assert.ok(setup, "missing older-app toolchain setup");
+  assert.equal(setup.uses, "./.github/actions/setup-toolchain");
+  assert.deepEqual(setup.with, { cache: true, "run-install": true });
+  const prepare = job.steps.find((entry) => entry.id === "prepare");
+  assert.ok(prepare, "missing older-app materialization");
+  assert.ok(job.steps.indexOf(setup) < job.steps.indexOf(prepare));
 });
 
 test("Node and third-party actions are pinned; store caching is opt-in and lock-keyed", () => {
