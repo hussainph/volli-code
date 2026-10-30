@@ -52,6 +52,7 @@ export async function scopeDeploymentEnv(values: Record<string, string | null>) 
       throw new AggregateError(
         [error, restoreError],
         "Fixture deployment env setup failed and restoring previous settings failed",
+        { cause: restoreError },
       );
     }
     throw error;
