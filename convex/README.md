@@ -470,8 +470,8 @@ backend.client("user:alice", { claims: { email: "alice@example.com", name: "Alic
 The backend is shared by every file in a run, so each test signs in as fresh
 subjects rather than expecting an empty database. Backend files always run
 serially: quota resets and deployment settings cannot be isolated by a worker.
-`vite.backend.config.ts` pins `VITEST_MAX_WORKERS=1` too, because Vitest reads
-that ambient variable after config and CLI flags. Raising `--maxWorkers` does
+`vite.backend.config.ts` clamps any ambient `VITEST_MAX_WORKERS` to `1` too,
+because Vitest reads that variable after config and CLI flags. Raising `--maxWorkers` does
 not make this suite parallel.
 
 Files that need S3 start their own loopback server on a free port in `beforeAll`

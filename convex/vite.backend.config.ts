@@ -3,7 +3,9 @@ import { defineConfig } from "vite-plus";
 
 // Vitest re-reads this AFTER config/CLI resolution. An ambient Session budget
 // (even with --maxWorkers=1) must not parallelize one deployment's env and quotas.
-process.env["VITEST_MAX_WORKERS"] = "1";
+if (process.env["VITEST_MAX_WORKERS"] !== undefined) {
+  process.env["VITEST_MAX_WORKERS"] = "1";
+}
 
 // Integration tests against ONE real pinned local backend, started by the
 // global setup for the whole run and stopped after it. Files share that

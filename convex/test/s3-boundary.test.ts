@@ -180,13 +180,15 @@ describe("independent fixture S3 boundary", () => {
   });
 
   test.each([
-    { endpoint: "http://127.0.0.1:9001" },
-    { accessKeyId: "other-access" },
-    { region: "us-east-1" },
-    { bucket: "other-bucket" },
-    { secretAccessKey: "other-secret" },
-  ])("rejects a different boundary configuration: %j", (change) => {
-    expect(() => verify(signedRequest("GET"), NOW, { ...CONFIG, ...change })).toThrow(
+    [{ endpoint: "http://127.0.0.1:9001" }, /signed host/u],
+    [{ accessKeyId: "other-access" }, /credential/u],
+    [{ region: "us-east-1" }, /scope/u],
+    [{ bucket: "other-bucket" }, /bucket/u],
+    [{ secretAccessKey: "other-secret" }, /signature/u],
+  ] as const)("rejects a different boundary configuration: %j", (change, reason) => {
+    const request = () => verify(signedRequest("GET"), NOW, { ...CONFIG, ...change });
+    expect(request).toThrow(reason);
+    expect(request).toThrow(
       /S3 fixture configuration mismatch; check shared deployment VOLLI_S3_\*/u,
     );
   });

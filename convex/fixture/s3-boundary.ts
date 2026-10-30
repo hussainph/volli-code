@@ -113,7 +113,7 @@ export function verifyS3ListRequest(
   );
   assert.ok(
     params.get("X-Amz-SignedHeaders") === "host",
-    "Wrong signed headers (a list signs host)",
+    `Wrong signed headers (a list signs host). ${FIXTURE_MISMATCH}`,
   );
   checkSignature(request, url, config, signing, "host");
   return { prefix, continuationToken: params.get("continuation-token"), maxKeys };
@@ -145,7 +145,7 @@ function verifyObjectRequest(
         : "host";
   assert.ok(
     url.searchParams.get("X-Amz-SignedHeaders") === signedNames,
-    "Wrong signed headers (PUT must sign length and checksum; GET must sign host)",
+    `Wrong signed headers (PUT must sign length and checksum; GET must sign host). ${FIXTURE_MISMATCH}`,
   );
   if (request.method === "PUT") {
     const length = header(request, "content-length");
@@ -185,7 +185,7 @@ function checkParameters(
   assert.ok(
     params.size === PARAMETERS.length + extra.length &&
       PARAMETERS.every((name) => params.getAll(name).length === 1),
-    "Only the six SigV4 parameters are accepted, without duplicates",
+    `Only the six SigV4 parameters are accepted, without duplicates. ${FIXTURE_MISMATCH}`,
   );
   assert.ok(params.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256", "Wrong signing algorithm");
   const stamp = params.get("X-Amz-Date")!;

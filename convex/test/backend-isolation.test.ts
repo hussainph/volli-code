@@ -15,19 +15,29 @@ test.each([undefined, "1", "8"])(
       [
         "--input-type=module",
         "-e",
-        `import config from './vite.backend.config.ts';
-       console.log(JSON.stringify({ test: config.test, workers: process.env.VITEST_MAX_WORKERS }));`,
-        // CI and callers can supply a worker flag, but this suite's shared env
-        // is a correctness constraint rather than a tunable performance cap.
-        "--",
-        "--maxWorkers=8",
+        `import { createVitest } from 'vite-plus/test/node';
+         const ctx = await createVitest('test', {
+           config: './vite.backend.config.ts', watch: false, maxWorkers: 8,
+         });
+         try {
+           console.log(JSON.stringify({
+             test: { maxWorkers: ctx.config.maxWorkers, fileParallelism: ctx.config.fileParallelism },
+             workers: process.env.VITEST_MAX_WORKERS,
+           }));
+         } finally { await ctx.close(); }`,
+        // Resolve real Vitest options, including the CLI-equivalent override,
+        // without starting tests or the backend's global setup.
       ],
-      { cwd: fileURLToPath(new URL("..", import.meta.url)), env, encoding: "utf8" },
+      {
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+        env,
+        encoding: "utf8",
+        timeout: 15_000,
+      },
     );
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      test: { maxWorkers: 1, fileParallelism: false },
-      workers: "1",
-    });
+    const resolved = JSON.parse(result.stdout);
+    expect(resolved.test).toMatchObject({ maxWorkers: 1, fileParallelism: false });
+    expect(resolved.workers).toBe(workers === undefined ? undefined : "1");
   },
 );

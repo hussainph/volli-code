@@ -9,6 +9,8 @@ import { connectBackend } from "./testing.ts";
  * (including absent vs empty). Call in beforeAll and restore in afterAll, before
  * closing the server those settings point at. Not a lock: backend files MUST
  * remain serial, since scheduled actions also read this deployment's settings.
+ * Nested scopes must restore in LIFO order. A killed worker cannot restore;
+ * global teardown still stops and discards the throwaway backend.
  */
 export async function scopeDeploymentEnv(values: Record<string, string | null>) {
   const { url } = connectBackend();
@@ -44,7 +46,14 @@ export async function scopeDeploymentEnv(values: Record<string, string | null>) 
     await update(values);
   } catch (error) {
     // The update may have landed even when its acknowledgement was lost.
-    await update(previous);
+    try {
+      await update(previous);
+    } catch (restoreError) {
+      throw new AggregateError(
+        [error, restoreError],
+        "Fixture deployment env setup failed and restoring previous settings failed",
+      );
+    }
     throw error;
   }
   return { previous, restore: () => update(previous) };
