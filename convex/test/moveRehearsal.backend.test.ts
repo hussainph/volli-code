@@ -266,6 +266,17 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
       },
     );
     const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    // Phase timings in the CI log: which engine run (or the teardown) is slow.
+    console.info(
+      "move rehearsal phases (ms):",
+      report.runs
+        .map(
+          (run: { operation: string; kill: string | null; elapsedMs: number }) =>
+            `${run.operation}${run.kill ? `/kill-${run.kill}` : ""}=${run.elapsedMs}`,
+        )
+        .join(" "),
+      `total=${report.elapsedMs}`,
+    );
     expect(ok, JSON.stringify(report)).toBe(true);
     expect(report).toMatchObject({
       ok: true,
@@ -292,7 +303,13 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
     await expect(person.query(api.workspaces.get, { workspaceId })).rejects.toThrow();
   } finally {
     vi.unstubAllEnvs();
-    await new Promise<void>((done) => server.close(() => done()));
+    // A pooled client can leave a connection to this store open that never
+    // carries a request, and `close()` alone waits on it forever (VC-1023).
+    // Every rehearsal step and assertion has finished by now: drop them all.
+    await new Promise<void>((done) => {
+      server.close(() => done());
+      server.closeAllConnections();
+    });
     rmSync(root, { recursive: true, force: true });
     await fetch(`${backend.url}/api/update_environment_variables`, {
       method: "POST",
