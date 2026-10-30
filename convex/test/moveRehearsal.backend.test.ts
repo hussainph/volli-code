@@ -266,7 +266,8 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
       },
     );
     const report = JSON.parse(readFileSync(reportPath, "utf8"));
-    // Phase timings in the CI log: which engine run (or the teardown) is slow.
+    // Phase timings in the CI log. If these are short and the test still
+    // times out, the time went to teardown.
     console.info(
       "move rehearsal phases (ms):",
       report.runs
@@ -303,9 +304,11 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
     await expect(person.query(api.workspaces.get, { workspaceId })).rejects.toThrow();
   } finally {
     vi.unstubAllEnvs();
-    // A pooled client can leave a connection to this store open that never
-    // carries a request, and `close()` alone waits on it forever (VC-1023).
-    // Every rehearsal step and assertion has finished by now: drop them all.
+    // `close()` drops only idle connections. Node counts one that never sent
+    // a request as active, and `close()` also stops the headers-timeout sweep
+    // that would reap it, so a pooled client's spare connection to this store
+    // held teardown past the budget (VC-1023). Every rehearsal step and
+    // assertion has finished by now: drop them all.
     await new Promise<void>((done) => {
       server.close(() => done());
       server.closeAllConnections();
@@ -320,6 +323,7 @@ test("Move all on a synthetic copy verifies, resumes unchanged, rolls back and g
       body: JSON.stringify({
         changes: Object.keys(changes).map((name) => ({ name, value: null })),
       }),
+      signal: AbortSignal.timeout(30_000),
     });
   }
 }, 180_000);
