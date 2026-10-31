@@ -10,17 +10,19 @@ import Legal from "../../layouts/Legal.astro";
 >
   <p>
     This agreement is between you and Hussain Phalasiya, the operator of Volli in Ontario,
-    Canada ("Volli", "we"). It covers the invite-only Volli 0.3 cloud preview. By choosing to
-    continue with sign-in after being shown this agreement, you agree to it. If you do not
-    agree, do not join the preview. If you join for an organization, you must have its authority.
+    Canada ("Volli", "we"). It covers the invite-only Volli 0.3 cloud preview for software
+    development. By checking the agreement box and continuing with sign-in, you agree to it.
+    If you do not agree, do not join the preview. If you join for an organization, you must
+    have its authority.
   </p>
 
   <h2>A free, unfinished preview</h2>
   <p>
     We do not charge for this preview. There is no paid subscription or automatic conversion
     to one. Your model providers and other services may charge you under your own agreements.
-    We may change, suspend or end the preview or your access to it. An invitation is for you;
-    do not share sign-in credentials or bypass invitation or security controls.
+    Preview access is by invitation, including Workspace invitations sponsored by existing
+    preview users, subject to their invitation allowance. An invitation does not guarantee
+    continued access. Do not share sign-in credentials or bypass invitation or security controls.
   </p>
   <p>
     The preview is provided "as is" and "as available", without warranties to the extent the
@@ -31,8 +33,9 @@ import Legal from "../../layouts/Legal.astro";
 
   <h2>You direct the agents</h2>
   <p>
-    Agents can run commands, change or delete files, and send data to external services using
-    the access you give them. They can make mistakes or be misled by content they read.
+    Agents, including unattended Automations, can run commands, change or delete files,
+    and send data to external services using the access you give them. A worktree is not
+    a security sandbox. Agents can make mistakes or be misled by content they read.
     Choose their access carefully and review code, commands and other output before relying
     on it. You are responsible for the actions you authorize, the content you submit, and
     compliance with your model providers' terms. Do not use Volli unlawfully, harm others,
@@ -45,10 +48,11 @@ import Legal from "../../layouts/Legal.astro";
     model output; we assign to you any rights we have in that output. Other people's rights
     and model-provider terms may still apply. You permit us to store, process, transmit and
     display your content only to provide, secure and support the preview and comply with law.
-    We do not use it to train AI models.
+    We do not use it to train AI models. The model providers you choose handle requests
+    under their own terms, including any retention or training settings.
   </p>
   <p>
-    Signed-in Workspace data and Session history sync to our service providers, even when
+    Cloud Workspace data and Session history sync to our service providers, even when
     tools run on your Mac. History can contain code, command output and secrets. Workspace
     members may see shared work. Read the <a href={PREVIEW_PRIVACY_URL}>Privacy page</a> before
     submitting data. Agreement to these terms is not consent to optional telemetry.
@@ -56,10 +60,27 @@ import Legal from "../../layouts/Legal.astro";
 
   <h2>Stopping and changes</h2>
   <p>
-    You can stop using the preview at any time. For access, export or deletion requests,
-    contact us privately through your preview invitation. We will publish material changes
-    with a new agreement version and ask you to accept before continuing under that version.
-    These terms do not change the open-source licenses of released Volli code.
+    You can stop using the preview at any time. We may change, suspend or end the preview
+    or your access. Where practical, we will notify you at your account email before ending
+    the preview and help you obtain a copy of your data. We do not guarantee a notice period
+    or that data will remain available after an outage, reset, or security or legal suspension.
+    Keep independent backups rather than waiting for an end-of-preview notice.
+  </p>
+  <p>
+    For export or support help, email <a href="mailto:support@volli.app">support@volli.app</a>;
+    for access, correction or deletion requests, email
+    <a href="mailto:privacy@volli.app">privacy@volli.app</a>. There is no complete self-service
+    cloud export in this preview. If you moved a local project, open Settings → Volli Cloud →
+    Progress and local copies. Go back to local saves a readable cloud export before unlocking
+    the earlier local copy; it is not a live sync or a complete cloud backup. Removing the app
+    does not delete cloud data.
+    The <a href={PREVIEW_PRIVACY_URL}>Privacy page</a> explains deletion limitations.
+  </p>
+  <p>
+    We will publish material changes with a new agreement version and require explicit
+    acceptance before further cloud access. These terms do not change the open-source
+    licenses of released Volli code. Legal notices can be sent to
+    <a href="mailto:legal@volli.app">legal@volli.app</a>.
   </p>
 
   <h2>Your legal rights</h2>

@@ -28,8 +28,11 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
-// TODO: use #1014’s shared legal URLs and keep this checkbox as the only sign-in disclosure.
-import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
+import {
+  PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_URL,
+  PREVIEW_PRIVACY_URL,
+} from "@volli/shared";
 import type {
   AccountConnection,
   AccountGithubInstallation,
@@ -130,11 +133,11 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
           />
           <span>
             I agree to the{" "}
-            <a href="https://volli.app/legal/preview/" target="_blank" rel="noreferrer">
+            <a href={PREVIEW_AGREEMENT_URL} target="_blank" rel="noopener noreferrer">
               Preview Agreement
             </a>{" "}
             and acknowledge the{" "}
-            <a href="https://volli.app/legal/privacy/" target="_blank" rel="noreferrer">
+            <a href={PREVIEW_PRIVACY_URL} target="_blank" rel="noopener noreferrer">
               Privacy notice
             </a>
             .
@@ -152,12 +155,7 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
                 return;
               }
               act(
-                () =>
-                  commands.signIn(
-                    connection,
-                    code || undefined,
-                    PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
-                  ),
+                () => commands.signIn(connection, code || undefined, PREVIEW_AGREEMENT_VERSION),
                 "Sign-in",
               );
             }}

@@ -28,6 +28,7 @@ export * from "./follow-ups";
 export * from "./subagent-outcome";
 export * from "./positions";
 export * from "./preview-access";
+export { PREVIEW_AGREEMENT_VERSION } from "../preview-legal";
 export * from "./project-rules";
 export * from "./r2-keys";
 export * from "./s3-presign";

@@ -9,8 +9,10 @@ import Legal from "../../layouts/Legal.astro";
 >
   <p>
     This page covers the invite-only Volli 0.3 cloud preview and our website and docs.
-    Volli is operated by Hussain Phalasiya in Ontario, Canada. For privacy questions or
-    requests, reply privately through your preview invitation. Do not post personal data
+    Volli is operated by Hussain Phalasiya in Ontario, Canada. For privacy questions,
+    access, correction, export or deletion requests, email
+    <a href="mailto:privacy@volli.app">privacy@volli.app</a>. For support, email
+    <a href="mailto:support@volli.app">support@volli.app</a>. Do not post personal data
     or private code in a public issue.
   </p>
 
@@ -22,17 +24,19 @@ import Legal from "../../layouts/Legal.astro";
       time of your Preview Agreement acceptance.
     </li>
     <li>
-      <strong>Workspace data:</strong> Workspace and project details, membership, tickets,
-      comments, settings and Session history. History includes prompts, model responses,
-      tool calls and results, and agent logs; it can contain source code, file contents,
-      paths, personal information or secrets encountered by an agent.
+      <strong>Workspace data:</strong> Workspace and project details, membership, invitations
+      and sponsorship records, tickets, comments, Automations, settings, attachments and
+      Session history. History includes prompts, model responses, tool calls and results,
+      and agent logs; it can contain source code, file contents, paths, personal information
+      or secrets encountered by an agent. Moving a local project to the cloud also uploads
+      its exported records, history, logs and attachments through staging storage.
     </li>
     <li>
       <strong>Connections and stored credentials:</strong> API keys, secrets or integration
-      credentials you choose to store with Volli, and connected-account metadata. If you
-      connect GitHub, this includes profile, verified email, repository and installation
-      information, and authorization tokens. These are separate from subscription logins
-      kept on your machine.
+      credentials you choose to store as cloud secrets, and connected-account metadata.
+      Connecting a model on your Mac does not by itself upload its key. If you connect
+      GitHub, we store profile, verified email, repository and installation information,
+      and authorization tokens. These are separate from subscription logins kept on your machine.
     </li>
     <li>
       <strong>Service and support data:</strong> device and runner connection information,
@@ -50,65 +54,108 @@ import Legal from "../../layouts/Legal.astro";
   <h2>Local tools do not mean local history</h2>
   <p>
     In signed-out local mode, your board and Session history are stored on your device.
-    Signed-in preview Workspaces and their history sync through our cloud backend. An
+    Cloud Workspaces and their history sync through our cloud backend. Signing in alone
+    does not move existing local projects; a move is a separate action. An
     agent running on your Mac can put file contents and command output into that history.
     Treat a synced Session as sensitive as the material it reads. Avoid submitting secrets
     or sensitive or regulated personal data; do not assume redaction catches everything.
   </p>
   <p>
-    Model requests go to the model provider or gateway you choose, under your agreement
-    with it. When you use a backend-held API connection, Volli's gateway on Cloudflare
-    relays requests and responses, including prompts and code context. Subscription
-    sign-in credentials and keys kept only on your machine do not pass through that
-    gateway. MCP servers, web tools and other services you use can also receive the data
-    you or an agent sends them. They have their own privacy practices. Signed-out mode
-    does not stop those requests or app update checks.
+    In this preview, model requests go from your Mac to the model provider or gateway
+    you choose, under your agreement with it. They include prompts, code context and tool
+    results. The preview does not route model calls through a Volli-operated model gateway.
+    Subscription credentials are used only on the machine where you sign in to the provider.
+    Cloud history still stores prompts and responses even though the model call is direct.
+    MCP servers, web tools and other services you use can also receive the data you or an
+    agent sends them. They have their own privacy practices. Signed-out mode does not stop
+    those requests or app update checks.
   </p>
 
   <h2>Who can receive data</h2>
   <p>
-    Our preview subprocessors are <strong>Convex, Cloudflare and WorkOS</strong>. See
+    Our preview service providers are <strong>Convex, Cloudflare, WorkOS and Google Workspace</strong>.
+    Convex stores account, board and Session records; Cloudflare R2 holds uploaded history,
+    attachments and move staging; WorkOS handles sign-in; Google Workspace handles emails
+    you send us and our replies. See
     <a href="/legal/subprocessors/">their roles and the data they process</a>. Data may be
     processed outside Canada, including in the United States and on global networks,
     under different laws. We do not promise Canadian-only storage.
   </p>
   <p>
     Other Workspace members can see work shared with them; ticket work is shared by
-    default, and Workspace policies can broaden visibility. We may access data as needed
-    for support, service operation, security or legal requirements. We may disclose data
-    when the law requires it. No system can guarantee perfect security or confidentiality.
+    default. An ad-hoc Session starts private, but its owner can share it, and a Workspace
+    administrator can make all Sessions shared. Sharing a Session cannot be undone in the
+    preview and also shares its private subagents. Leaving a Workspace does not erase
+    contributions already stored in it. We may access data as needed for support, service
+    operation, security or legal requirements, and disclose data when the law requires it.
+  </p>
+
+  <h2>Security and credentials</h2>
+  <p>
+    Cloud connections use HTTPS/TLS. <a href="https://www.convex.dev/security">Convex</a>
+    and <a href="https://developers.cloudflare.com/r2/reference/data-security/">Cloudflare R2</a>
+    describe encryption in transit and at rest for the data they host. This is not
+    end-to-end encryption: our service and its providers can process readable content.
+    Cloud secrets are separately encrypted under service-held keys; ordinary environment
+    variables are not secret values. Subscription credentials saved by Volli stay in the
+    local sealed store, protected on macOS by a key wrapped through the OS keychain.
+    They are used locally to authenticate to your provider, not uploaded to Volli Cloud.
+    These protections do not prevent secrets appearing in prompts or tool output.
+  </p>
+  <p>
+    No system can guarantee perfect security or confidentiality. Report vulnerabilities
+    privately to <a href="mailto:security@volli.app">security@volli.app</a>.
   </p>
 
   <h2>Optional telemetry</h2>
   <p>
-    Optional crash reporting and product analytics remain off in this preview unless you
-    separately consent. Accepting the Preview Agreement does not opt you in. We will
-    update this notice and the provider list before introducing an optional telemetry
-    service. Operational records needed to run and secure the service are separate from
-    optional telemetry. A telemetry collector you configure yourself receives the events
-    you enable for it.
+    This preview has no Volli-operated product analytics or crash-reporting integration.
+    Accepting the Preview Agreement does not opt you into one. We will update this notice
+    and the provider list before introducing one, with any required notice or choice.
+    Operational records needed to run and secure the service are separate. Agent telemetry
+    is off until you enable it in Settings and supply a collector; that collector receives
+    the events you enable for it.
   </p>
 
   <h2>Retention and your choices</h2>
   <p>
-    We retain account and Workspace data to operate the preview unless it is deleted.
-    This is not a promise of permanent storage: preview data may be lost or reset.
-    Keep your own copies. Settings → Account offers account deletion with a 30-day
-    recovery period. You can also ask for access, correction, an export or deletion
-    privately through your invitation contact. We may need to verify your identity.
-    For shared Workspace content, we may need to involve its owner.
+    We retain account and Workspace data to operate the preview; there is no automatic
+    expiry for cloud project history. This is not a promise of permanent storage: preview
+    data may be lost or reset. Keep independent copies of work you cannot lose. Local
+    profile backups are not backups of your live cloud Workspace, and we do not guarantee
+    cloud backup frequency, recovery time or recoverability during this preview.
   </p>
   <p>
-    Account deletion does not promise that every backup or security record disappears
-    at the end of the recovery period. We may retain records for security or legal
-    obligations and do not promise a fixed backup purge deadline for this preview.
-    Depending on where you live, you may also have rights to object to or restrict
-    processing, withdraw consent, or complain to a privacy regulator. These rights are
-    not limited by this notice.
+    Settings → Account lets you request account deletion and cancel the request within
+    30 days. The request blocks normal cloud access, but the automatic account-data purge
+    is not implemented in this preview. The 30 days is a cancellation window, not a promise
+    to erase all data by day 30. A sole owner of a Workspace with other active members must
+    transfer ownership before requesting deletion. Archiving a project or ticket hides it;
+    it does not purge its history. There is no complete self-service cloud project or
+    Workspace deletion or export yet. Contact
+    <a href="mailto:privacy@volli.app">privacy@volli.app</a> for help with these requests.
+    We may need to verify your identity and involve a shared Workspace's owner.
   </p>
   <p>
-    We will publish an updated version here before materially changing these practices.
-    For questions, including how to stop using the preview or exercise your rights,
-    contact the person who sent your invitation privately.
+    Moving a project back to local does not delete its cloud copy. Cancelling an unfinished
+    move schedules removal of that move's imported rows and uploaded objects; failures can
+    delay cleanup. We have not verified automatic expiry of move-staging uploads and do
+    not promise a 7-day or 30-day removal deadline. Deleted material may also remain in
+    backups and service records; we do not promise a fixed backup purge deadline. We may
+    retain records for security or legal obligations.
+  </p>
+  <p>
+    Depending on where you live, you may have rights to access, correct, delete or receive
+    a portable copy of your data, object to or restrict processing, withdraw consent, or
+    complain to a privacy regulator. Contact us to exercise those rights; preview feature
+    limitations do not limit them. Uninstalling or deleting local app data does not delete
+    cloud data or copies held by your model providers and other services.
+  </p>
+  <p>
+    We will publish an updated version here before materially changing these practices
+    and require acceptance of the current Preview Agreement before further cloud access.
+    This preview is intended for software development, not for children's use. If you
+    believe a child has provided personal data, contact
+    <a href="mailto:privacy@volli.app">privacy@volli.app</a> so we can address it.
   </p>
 </Legal>

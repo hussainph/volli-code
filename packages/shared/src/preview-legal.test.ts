@@ -8,7 +8,7 @@ import {
 
 describe("preview legal contract", () => {
   it("pins the version recorded by sign-in to the published preview text", () => {
-    expect(PREVIEW_AGREEMENT_VERSION).toBe("preview-0.3-2026-10-25");
+    expect(PREVIEW_AGREEMENT_VERSION).toBe("preview-0.3-2026-10-31");
   });
 
   it.each([

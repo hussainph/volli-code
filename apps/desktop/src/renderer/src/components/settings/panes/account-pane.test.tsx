@@ -8,7 +8,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AccountGithubSnapshot, AccountSnapshot } from "@volli/shared";
 
-import { LOCAL_LAUNCH, PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
+import {
+  LOCAL_LAUNCH,
+  PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_URL,
+  PREVIEW_PRIVACY_URL,
+} from "@volli/shared";
 
 import { useExperimentsStore } from "@renderer/stores/experiments";
 import { adoptLaunch } from "@renderer/stores/launch";
@@ -163,7 +168,7 @@ describe("Settings → Account", () => {
     act(() => button("Continue with Google").click());
     expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
       connection: "google",
-      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      acceptedAgreementVersion: PREVIEW_AGREEMENT_VERSION,
     });
 
     tier.push({ ...SIGNED_OUT, state: "signing-in", signingInWith: "google" });
@@ -508,7 +513,7 @@ it("sends the optional preview invite code and leaves a waitlisted sign-in witho
   expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
     connection: "github",
     inviteCode: "preview-code-123456",
-    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    acceptedAgreementVersion: PREVIEW_AGREEMENT_VERSION,
   });
   tier.push({
     ...SIGNED_IN,
@@ -552,8 +557,16 @@ it("requires explicit agreement acceptance and links the legal pages before sign
   act(() => root.render(<AccountPane rpc={tier.rpc} />));
   tier.push(SIGNED_OUT);
   expect(button("Continue with GitHub").disabled).toBe(true);
-  expect(container.querySelector('a[href="https://volli.app/legal/preview/"]')).not.toBeNull();
-  expect(container.querySelector('a[href="https://volli.app/legal/privacy/"]')).not.toBeNull();
+  const links = container.querySelectorAll<HTMLAnchorElement>("[data-testid=account-sign-in] a");
+  expect([...links].map((link) => [link.textContent?.trim(), link.href])).toEqual([
+    ["Preview Agreement", PREVIEW_AGREEMENT_URL],
+    ["Privacy notice", PREVIEW_PRIVACY_URL],
+  ]);
+  for (const link of links) {
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener noreferrer");
+  }
+  expect(container.querySelectorAll('[aria-label="Accept Preview Agreement"]')).toHaveLength(1);
   acceptAgreement();
   expect(button("Continue with GitHub").disabled).toBe(false);
 });
