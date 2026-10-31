@@ -62,10 +62,34 @@ describe("volli-runner's command line", () => {
   });
 
   it("hands a stub whatever it was given", () => {
-    expect(parse("install", "--system", "--from", "/tmp/r")).toMatchObject({
+    const future = { ...COMMANDS[0]!, name: "future", stub: true as const, options: {} };
+    expect(parseRunnerArgv(["future", "--some-future-flag", "value"], [future])).toMatchObject({
       kind: "command",
-      command: { name: "install", stub: true },
-      input: { values: {}, positionals: ["--system", "--from", "/tmp/r"] },
+      command: { name: "future", stub: true },
+      input: { values: {}, positionals: ["--some-future-flag", "value"] },
+    });
+  });
+
+  it("parses the managed installation surface rather than forwarding it as stub argv", () => {
+    expect(
+      parse("install", "--system", "--from", "/tmp/r", "--no-start", "--no-link"),
+    ).toMatchObject({
+      kind: "command",
+      command: { name: "install" },
+      input: {
+        values: { system: true, from: "/tmp/r", "no-start": true, "no-link": true },
+        positionals: [],
+      },
+    });
+    expect(parse("uninstall", "--user", "--purge", "--yes")).toMatchObject({
+      kind: "command",
+      command: { name: "uninstall" },
+      input: { values: { user: true, purge: true, yes: true } },
+    });
+    expect(parse("doctor", "--json")).toMatchObject({
+      kind: "command",
+      command: { name: "doctor" },
+      input: { values: { json: true } },
     });
   });
 

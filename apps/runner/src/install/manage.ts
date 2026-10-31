@@ -12,6 +12,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { setGlobalProxyFromEnv } from "node:http";
 
 import type { CommandContext, CommandInput } from "../commands";
 import { LINK_FILE_NAME } from "../link/file-store";
@@ -44,11 +45,19 @@ export function asRunner(
   args: string[],
   inherit = false,
 ): void {
+  // Validate before starting Node: its startup proxy error may quote a password.
+  try {
+    setGlobalProxyFromEnv(context.env)();
+  } catch {
+    throw new Error("Invalid HTTP_PROXY/HTTPS_PROXY configuration. Fix the proxy URL and retry.");
+  }
   const cli = join(layout.root, "current/bin/volli-runner");
   const env = {
     ...context.env,
     HOME: layout.mode === "system" ? layout.dataDir : context.home,
     VOLLI_RUNNER_INSTALL_MODE: layout.mode,
+    // Link/revoke children start outside the unit, but need the same egress path.
+    NODE_USE_ENV_PROXY: "1",
   };
   mustRun(
     run,
@@ -275,7 +284,7 @@ export async function installRunner(
     context.out(
       ports.systemd
         ? `Start with: systemctl ${layout.mode === "user" ? "--user " : ""}start ${UNIT}\n`
-        : `Start with: ${layout.mode === "system" ? "sudo -u volli " : ""}env ${shellQuote(`HOME=${layout.mode === "system" ? layout.dataDir : context.home}`)} ${shellQuote(`VOLLI_RUNNER_INSTALL_MODE=${layout.mode}`)} ${shellQuote(`VOLLI_SECRET_KEY_FILE=${join(layout.configDir, "session-secrets.key")}`)} ${[cli, "run", ...paths].map(shellQuote).join(" ")}\n`,
+        : `Start with: ${layout.mode === "system" ? "sudo -u volli " : ""}env NODE_USE_ENV_PROXY=1 ${shellQuote(`HOME=${layout.mode === "system" ? layout.dataDir : context.home}`)} ${shellQuote(`VOLLI_RUNNER_INSTALL_MODE=${layout.mode}`)} ${shellQuote(`VOLLI_SECRET_KEY_FILE=${join(layout.configDir, "session-secrets.key")}`)} ${[cli, "run", ...paths].map(shellQuote).join(" ")}\n`,
     );
     return 0;
   }

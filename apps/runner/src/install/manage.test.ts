@@ -292,11 +292,24 @@ describe("install", () => {
       VOLLI_RUNNER_TOKEN: "vrt_secret",
       HOME: at.dataDir,
       VOLLI_RUNNER_INSTALL_MODE: "system",
+      NODE_USE_ENV_PROXY: "1",
     });
     expect(context.stdout()).toContain("sudo -u volli");
     expect(context.stdout()).not.toContain("vrt_secret");
     asRunner(at, context, child, ["status"]);
     expect(child.mock.calls.at(-1)?.[2]?.inherit).toBe(false);
+  });
+  it("validates proxy configuration without exposing a credential before spawning link/revoke", () => {
+    const child = vi.fn<RunTool>();
+    expect(() =>
+      asRunner(
+        layout(),
+        { ...context, env: { HTTPS_PROXY: "https://user:secret@not a host" } },
+        child,
+        ["link"],
+      ),
+    ).toThrow("Invalid HTTP_PROXY/HTTPS_PROXY");
+    expect(child).not.toHaveBeenCalled();
   });
   it("accepts only an existing service account with the dedicated home", async () => {
     const at = installLayout(input(), { ...context, uid: 0 }, root);

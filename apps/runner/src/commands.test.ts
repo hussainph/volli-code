@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { COMMANDS, EXIT_UNAVAILABLE } from "./commands";
+import { doctorCommand } from "./doctor/commands";
+import { installCommand, uninstallCommand } from "./install/commands";
 import { testContext } from "./testing/context";
 
 let root: string;
@@ -26,7 +28,7 @@ describe("the command registry", () => {
 
   it("answers a command this build does not have yet with EX_UNAVAILABLE", async () => {
     const stubs = COMMANDS.filter((entry) => entry.stub === true).map((entry) => entry.name);
-    expect(stubs).toEqual(["install", "uninstall", "run", "doctor", "logs", "git-credential"]);
+    expect(stubs).toEqual(["run", "logs", "git-credential"]);
     for (const name of stubs) {
       const context = testContext({ root });
       expect(await command(name).run({ values: {}, positionals: [] }, context)).toBe(
@@ -36,6 +38,12 @@ describe("the command registry", () => {
         `volli-runner: \`${name}\` is not available in this build yet.\n`,
       );
     }
+  });
+
+  it("routes install, uninstall and doctor to their production entries", () => {
+    expect(command("install")).toBe(installCommand);
+    expect(command("uninstall")).toBe(uninstallCommand);
+    expect(command("doctor")).toBe(doctorCommand);
   });
 
   it("prints the version", async () => {

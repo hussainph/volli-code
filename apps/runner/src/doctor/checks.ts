@@ -232,7 +232,7 @@ function linkCheck(link: LinkFacts, mode: RunnerPaths["mode"], paths: RunnerPath
       title,
       status: "warn",
       detail: "this box is not linked to a Volli account",
-      fix: "volli-runner link",
+      fix: "NODE_USE_ENV_PROXY=1 volli-runner link",
     };
   }
   // A link this run cannot open is usually a key the service account owns and
@@ -478,7 +478,7 @@ function deploymentUnknownCheck(): DoctorCheck {
     title: "deployment",
     status: "unknown",
     detail: "this build names no server and this box is not linked",
-    fix: "volli-runner link --server <url>",
+    fix: "NODE_USE_ENV_PROXY=1 volli-runner link --server <url>",
   };
 }
 

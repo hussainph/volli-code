@@ -201,7 +201,7 @@ describe("the deployment probed", () => {
     });
     expect(found(list, "network.deployment")).toMatchObject({
       status: "unknown",
-      fix: "volli-runner link --server <url>",
+      fix: "NODE_USE_ENV_PROXY=1 volli-runner link --server <url>",
     });
     expect(found(list, "clock").status).toBe("unknown");
   });
@@ -310,7 +310,10 @@ describe("the link", () => {
 
   it("warns an unlinked box, with the one command that links it", async () => {
     const list = await checks({ ports: { readLink: async () => ({ state: "unlinked" }) } });
-    expect(found(list, "link")).toMatchObject({ status: "warn", fix: "volli-runner link" });
+    expect(found(list, "link")).toMatchObject({
+      status: "warn",
+      fix: "NODE_USE_ENV_PROXY=1 volli-runner link",
+    });
   });
 
   it("never advises unlinking a link this run cannot open", async () => {
