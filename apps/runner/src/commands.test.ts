@@ -31,8 +31,6 @@ describe("the command registry", () => {
       "uninstall",
       "run",
       "doctor",
-      "login",
-      "logout",
       "update",
       "logs",
       "git-credential",
