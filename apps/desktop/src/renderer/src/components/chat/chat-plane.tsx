@@ -1331,7 +1331,9 @@ function ChatPlaneContent({
       revealedAttentionId: revealed?.attentionId ?? null,
       catalogState: localModelRecovery ? catalogState : "ready",
       catalogError: localModelRecovery ? catalogError : null,
-      sessionModel,
+      // A capability inventory can lag execution (or omit environment-backed
+      // credentials). Only the runner's Session attention can reject its model.
+      sessionModel: localModelRecovery ? sessionModel : null,
       signInProviders: localModelRecovery ? signInProviders : [],
       scheduledResume: projection?.scheduledResume ?? null,
       turnActive: projection?.turnActive ?? false,
