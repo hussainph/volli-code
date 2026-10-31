@@ -6,12 +6,10 @@
  * running the suite. Three rules hold for the live adapters, and they are the
  * reason this file exists rather than the checks reaching for `node:fs`:
  *
- * - **No credential leaves this file.** {@link readStoredCredentials} reads
- *   Pi's `auth.json` — the file pi-ai's own persistent store keeps, resolved
- *   by the same rule `piAuthFilePath` uses — and returns provider ids and
- *   kinds only, never a key, a token or an expiry. A file it cannot parse is
- *   `unreadable`, never quoted: V8's own `JSON.parse` message repeats the text
- *   it choked on, and here that text is a credential.
+ * - **No credential leaves this file.** {@link readStoredCredentials} asks
+ *   the runner's shared sealed-store metadata API and returns provider ids
+ *   and kinds only. An unreadable store stays unknown; no key or token is
+ *   returned and no exception containing a stored value is printed.
  * - **No message crosses the edge.** A failed probe becomes a status, an error
  *   code, or a boolean. A transport error's message can carry the box's
  *   `HTTPS_PROXY`, credentials and all, and a command's stderr can carry a
@@ -21,12 +19,12 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, statfsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { setGlobalProxyFromEnv } from "node:http";
-import { join } from "node:path";
 
 import { fileRunnerLinkStore } from "../link/file-store";
 import type { RunnerDeployment } from "../link/deployment";
+import { RunnerCredentialStore } from "../login/credential-store";
+import { runnerModelKeyPath, type RunnerModelAccessOptions } from "../login/model-access";
 
 /** One run of a program on the box: its exit status and stdout. Never its stderr. */
 export interface RunAnswer {
@@ -79,7 +77,7 @@ export interface DoctorPorts {
   /** Whether `path` exists (systemd's runtime directory). */
   exists(path: string): boolean;
   /** The providers Pi's sealed store holds, by id and kind — never a value. */
-  storedCredentials(agentDir: string): Promise<CredentialListing>;
+  storedCredentials(options: RunnerModelAccessOptions): Promise<CredentialListing>;
   /** This box's link, or that it has none, or that it could not be read. */
   readLink(configDir: string): Promise<LinkFacts>;
 }
@@ -89,9 +87,6 @@ const RUN_TIMEOUT_MS = 5_000;
 
 /** Long enough for a slow VPS, short enough that one dead host does not strand the run. */
 const REACH_TIMEOUT_MS = 5_000;
-
-/** Pi's file inside its agent directory. Its own name, read only. */
-const AUTH_FILE_NAME = "auth.json";
 
 export function liveRun(command: string, args: readonly string[]): RunAnswer {
   const answer = spawnSync(command, [...args], {
@@ -171,75 +166,30 @@ export async function liveReadLink(configDir: string): Promise<LinkFacts> {
   }
 }
 
-/**
- * Where this runner keeps Pi's profile, by the rule the daemon reads it with:
- * an explicit `PI_CODING_AGENT_DIR` (a `~` expanded against `HOME`), else
- * `<dataDir>/pi`. That directory is the one the daemon watches and the one
- * `volli-runner login` writes, so doctor looks where the agent will.
- */
-export function piAgentDir(
-  env: Readonly<Record<string, string | undefined>>,
-  dataDir: string,
-): string {
-  const configured = env["PI_CODING_AGENT_DIR"];
-  if (configured !== undefined && configured !== "") return expandTilde(configured, env["HOME"]);
-  return join(dataDir, "pi");
-}
-
-function expandTilde(path: string, home: string | undefined): string {
-  if (home === undefined) return path;
-  if (path === "~") return home;
-  return path.startsWith("~/") ? join(home, path.slice(2)) : path;
-}
-
-/**
- * The providers in `<agentDir>/auth.json`, and nothing else about it.
- *
- * The file's shape is pi-ai's `{ "<providerId>": Credential }`, so its keys are
- * the providers that hold something. A missing file is a box with nothing
- * signed in, which is a fact; any other failure — unreadable, malformed, a
- * newer shape — is `unreadable`, because the honest answer then is "cannot
- * tell" and the fix names `volli-runner login --status`, never a guess.
- */
-export async function readStoredCredentials(agentDir: string): Promise<CredentialListing> {
-  let text: string;
+/** Use exactly the sealed store and key resolver that login and the daemon share. */
+export async function readStoredCredentials(
+  options: RunnerModelAccessOptions,
+  uid = process.getuid!(),
+): Promise<CredentialListing> {
+  // Root must not create root-owned credential-operation locks in the service's
+  // data directory. `login --status` knows how to hand off to the service uid.
+  if (uid === 0) return { state: "unreadable" };
+  if (!existsSync(options.dataDir)) return { state: "listed", providers: [] };
   try {
-    text = await readFile(join(agentDir, AUTH_FILE_NAME), "utf8");
-  } catch (error) {
-    return missingFile(error) ? { state: "listed", providers: [] } : { state: "unreadable" };
-  }
-  const providers = providersOf(text);
-  return providers === null ? { state: "unreadable" } : { state: "listed", providers };
-}
-
-/** `readFile` rejects with an `Error`; its `code` is the whole answer. No message is read. */
-function missingFile(error: unknown): boolean {
-  return (error as { code?: unknown }).code === "ENOENT";
-}
-
-/** The parsed document reduced to ids and kinds. A value never leaves this function. */
-function providersOf(text: string): readonly StoredProvider[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
+    const store = new RunnerCredentialStore(options.dataDir, runnerModelKeyPath(options));
+    const rows = await store.list();
+    return {
+      state: "listed",
+      providers: rows
+        .map<StoredProvider>((row) => ({
+          providerId: row.providerId,
+          kind: row.type === "api_key" ? "api-key" : "subscription",
+        }))
+        .toSorted((left, right) => left.providerId.localeCompare(right.providerId)),
+    };
   } catch {
-    return null;
+    return { state: "unreadable" };
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  const providers: StoredProvider[] = [];
-  for (const [providerId, value] of Object.entries(parsed)) {
-    const kind = kindOf(value);
-    if (kind === null) return null;
-    providers.push({ providerId, kind });
-  }
-  return providers.toSorted((left, right) => left.providerId.localeCompare(right.providerId));
-}
-
-function kindOf(value: unknown): StoredProvider["kind"] | null {
-  if (typeof value !== "object" || value === null) return null;
-  const type = (value as { type?: unknown }).type;
-  if (type === "api_key") return "api-key";
-  return type === "oauth" ? "subscription" : null;
 }
 
 /** The live box: the programs on it, its network, its disk and Pi's store. */

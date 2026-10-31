@@ -30,7 +30,6 @@ import type { RunnerDeployment } from "../link/deployment";
 import { LINK_KEY_FILE_NAME } from "../link/file-store";
 import type { RunnerPaths } from "../shell/paths";
 import {
-  piAgentDir,
   type CredentialListing,
   type DoctorPorts,
   type LinkFacts,
@@ -133,7 +132,11 @@ export async function runChecks({
   const targets = networkTargets(deployment);
   const [answers, credentials] = await Promise.all([
     Promise.all(targets.map(async (target) => ({ target, answer: await ports.reach(target.url) }))),
-    ports.storedCredentials(piAgentDir(context.env, paths.dataDir)),
+    ports.storedCredentials({
+      dataDir: paths.dataDir,
+      configDir: paths.configDir,
+      env: context.env,
+    }),
   ]);
   const deploymentAnswer = answers.find(({ target }) => target.id === DEPLOYMENT_TARGET_ID)?.answer;
   return [

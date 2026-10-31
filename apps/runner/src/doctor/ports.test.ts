@@ -1,10 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import type { RunnerId } from "@volli/shared/cloud";
+import { CREDENTIAL_INVENTORY_FILE_NAME } from "@volli/host-core/secrets";
+import { RunnerCredentialStore } from "../login/credential-store";
+import { runnerModelKeyPath } from "../login/model-access";
 
 import { fileRunnerLinkStore } from "../link/file-store";
 import {
@@ -13,7 +16,6 @@ import {
   liveReadLink,
   liveReach,
   liveRun,
-  piAgentDir,
   reachWith,
   readStoredCredentials,
 } from "./ports";
@@ -178,92 +180,80 @@ describe("measuring the disk", () => {
   });
 });
 
-describe("where this runner keeps Pi's profile", () => {
-  it("uses <dataDir>/pi unless the environment names a directory", () => {
-    expect(piAgentDir({}, "/var/lib/volli-runner")).toBe(join("/var/lib/volli-runner", "pi"));
-    expect(piAgentDir({ PI_CODING_AGENT_DIR: "" }, "/var/lib/volli-runner")).toBe(
-      join("/var/lib/volli-runner", "pi"),
-    );
-    expect(piAgentDir({ PI_CODING_AGENT_DIR: "/srv/pi" }, "/var/lib/volli-runner")).toBe("/srv/pi");
+describe("listing the runner's sealed model credentials", () => {
+  const options = () => ({
+    dataDir: join(root, "data"),
+    configDir: join(root, "config"),
+    env: {} as Record<string, string>,
   });
-
-  it("expands a leading ~ against HOME, and leaves it alone when there is none", () => {
-    expect(
-      piAgentDir({ PI_CODING_AGENT_DIR: "~/pi", HOME: "/home/volli" }, "/var/lib/volli-runner"),
-    ).toBe(join("/home/volli", "pi"));
-    expect(piAgentDir({ PI_CODING_AGENT_DIR: "~", HOME: "/home/volli" }, "/data")).toBe(
-      "/home/volli",
-    );
-    expect(piAgentDir({ PI_CODING_AGENT_DIR: "~/pi" }, "/data")).toBe("~/pi");
-    expect(piAgentDir({ PI_CODING_AGENT_DIR: "/custom", HOME: "/home/volli" }, "/data")).toBe(
-      "/custom",
-    );
-  });
-});
-
-describe("listing what the box is signed in to", () => {
-  const agent = (): string => {
-    const dir = join(root, "agent");
-    mkdirSync(dir, { recursive: true });
-    return dir;
-  };
-  const stored = (text: string): void => {
-    writeFileSync(join(agent(), "auth.json"), text);
+  const prepare = () => {
+    const value = options();
+    mkdirSync(value.dataDir, { recursive: true, mode: 0o700 });
+    mkdirSync(value.configDir, { recursive: true, mode: 0o700 });
+    return value;
   };
 
-  it("reports a box with no store as signed in to nothing", async () => {
-    expect(await readStoredCredentials(join(root, "absent"))).toEqual({
-      state: "listed",
-      providers: [],
-    });
+  it("reports an absent or empty store without creating a key or reading ambient Pi files", async () => {
+    const value = options();
+    expect(await readStoredCredentials(value)).toEqual({ state: "listed", providers: [] });
+    expect(existsSync(value.dataDir)).toBe(false);
+    const empty = prepare();
+    expect(await readStoredCredentials(empty)).toEqual({ state: "listed", providers: [] });
+    expect(existsSync(runnerModelKeyPath(empty))).toBe(false);
   });
 
-  it("reports each provider's id and kind, and never the credential itself", async () => {
-    stored(
-      JSON.stringify({
-        openai: { type: "api_key", key: "sk-SECRET-VALUE" },
-        anthropic: { type: "oauth", access: "SECRET-TOKEN", refresh: "SECRET-REFRESH" },
-      }),
+  it("uses login's real sealed store and returns only provider metadata", async () => {
+    const value = prepare();
+    const store = new RunnerCredentialStore(value.dataDir, runnerModelKeyPath(value));
+    await store.modify("openai", async () => ({
+      type: "oauth",
+      access: "TEST-ONLY-access",
+      refresh: "TEST-ONLY-refresh",
+      expires: 100,
+    }));
+    await store.modify("anthropic", async () => ({ type: "api_key", key: "TEST-ONLY-api-key" }));
+    const legacy = join(root, "unrelated-pi");
+    mkdirSync(legacy);
+    writeFileSync(
+      join(legacy, "auth.json"),
+      JSON.stringify({ fake: { type: "api_key", key: "TEST-ONLY-decoy" } }),
     );
-    const listing = await readStoredCredentials(agent());
+    value.env.PI_CODING_AGENT_DIR = legacy;
+    const listing = await readStoredCredentials(value);
     expect(listing).toEqual({
       state: "listed",
       providers: [
-        { providerId: "anthropic", kind: "subscription" },
-        { providerId: "openai", kind: "api-key" },
+        { providerId: "anthropic", kind: "api-key" },
+        { providerId: "openai", kind: "subscription" },
       ],
     });
-    expect(JSON.stringify(listing)).not.toContain("SECRET");
+    expect(JSON.stringify(listing)).not.toContain("TEST-ONLY");
+    chmodSync(runnerModelKeyPath(value), 0o644);
+    expect(await readStoredCredentials(value)).toEqual({ state: "unreadable" });
   });
 
-  it("reports newer or malformed credential shapes as unreadable, never as absent", async () => {
-    for (const value of [{ type: "passkey" }, 5, null, []]) {
-      stored(JSON.stringify({ provider: value }));
-      expect(await readStoredCredentials(agent())).toEqual({ state: "unreadable" });
-    }
-    stored("{}");
-    expect(await readStoredCredentials(agent())).toEqual({ state: "listed", providers: [] });
+  it("uses the shared key override and reports corrupt stores or invalid paths as unknown", async () => {
+    const value = prepare();
+    value.env.VOLLI_SECRET_KEY_FILE = join(root, "override.key");
+    const store = new RunnerCredentialStore(value.dataDir, runnerModelKeyPath(value));
+    await store.modify("openai", async () => ({ type: "api_key", key: "TEST-ONLY-override" }));
+    expect(await readStoredCredentials(value)).toEqual({
+      state: "listed",
+      providers: [{ providerId: "openai", kind: "api-key" }],
+    });
+    writeFileSync(
+      join(value.dataDir, CREDENTIAL_INVENTORY_FILE_NAME),
+      "TEST-ONLY-corrupt-envelope",
+    );
+    expect(await readStoredCredentials(value)).toEqual({ state: "unreadable" });
+    value.env.VOLLI_SECRET_KEY_FILE = "relative-key";
+    expect(await readStoredCredentials(value)).toEqual({ state: "unreadable" });
   });
 
-  it("reports a store it cannot parse as unreadable, without quoting it", async () => {
-    stored('{"anthropic": {"type": "api_key", "key": "sk-SECRET-VALUE"');
-    const listing = await readStoredCredentials(agent());
-    expect(listing).toEqual({ state: "unreadable" });
-    expect(JSON.stringify(listing)).not.toContain("SECRET");
-  });
-
-  it("reports a document that is not a provider map as unreadable", async () => {
-    stored("null");
-    expect(await readStoredCredentials(agent())).toEqual({ state: "unreadable" });
-    stored("5");
-    expect(await readStoredCredentials(agent())).toEqual({ state: "unreadable" });
-    stored("[]");
-    expect(await readStoredCredentials(agent())).toEqual({ state: "unreadable" });
-  });
-
-  it("reports a store it cannot open as unreadable", async () => {
-    mkdirSync(join(agent(), "auth.json"), { recursive: true });
-    expect(await readStoredCredentials(agent())).toEqual({ state: "unreadable" });
+  it("does not create credential locks as root in the service uid's profile", async () => {
+    const value = options();
+    expect(await readStoredCredentials(value, 0)).toEqual({ state: "unreadable" });
+    expect(existsSync(value.dataDir)).toBe(false);
   });
 });
 
