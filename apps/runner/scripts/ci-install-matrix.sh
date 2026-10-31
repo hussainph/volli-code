@@ -40,8 +40,16 @@ for distro in ubuntu:20.04 ubuntu:22.04 ubuntu:24.04 debian:11 debian:12 fedora:
     docker build --build-arg "DISTRO=$distro" --build-arg "DOWNLOADER=$downloader" --tag "$image" - <<'DOCKERFILE'
 ARG DISTRO
 FROM ${DISTRO}
+ARG DISTRO
 ARG DOWNLOADER
-RUN if command -v apt-get >/dev/null; then \
+RUN if [ "$DISTRO" = debian:11 ]; then \
+      printf '%s\n' \
+        'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
+        'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
+        > /etc/apt/sources.list; \
+      rm -f /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && if command -v apt-get >/dev/null; then \
       apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates "$DOWNLOADER" tar gzip coreutils git passwd util-linux; \
     else dnf install -y --allowerasing ca-certificates "$DOWNLOADER" tar gzip coreutils git shadow-utils util-linux; fi \

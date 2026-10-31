@@ -506,6 +506,9 @@ test("runner builds both native architectures at the bullseye ABI baseline", () 
   );
   assert.match(dockerfile, /FROM debian:bullseye-slim/);
   assert.match(dockerfile, /sha256sum -c/);
+  assert.match(dockerfile, /archive\.debian\.org\/debian bullseye main/);
+  assert.match(dockerfile, /archive\.debian\.org\/debian-security bullseye-security main/);
+  assert.doesNotMatch(dockerfile, /trusted=yes|allow-unauthenticated|AllowInsecureRepositories/);
   assert.match(dockerfile, /amd64\) arch=x64; sha=[0-9a-f]{64}/);
   assert.match(dockerfile, /arm64\) arch=arm64; sha=[0-9a-f]{64}/);
   const packager = readFileSync(
@@ -520,6 +523,12 @@ test("runner builds both native architectures at the bullseye ABI baseline", () 
 test("runner assets are verified and attested, and gate every publishing path", () => {
   const assets = workflow.jobs["runner-assets"];
   assert.deepEqual(assets.needs, ["hostd-ref", "runner"]);
+  const nodeSetup = assets.steps.find((step) => step.name === "Setup pinned Node");
+  assert.equal(nodeSetup.uses, "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38");
+  assert.deepEqual(nodeSetup.with, {
+    "node-version-file": ".nvmrc",
+    "package-manager-cache": false,
+  });
   const download = assets.steps.findIndex((step) => step.with?.pattern === "runner-linux-*");
   const generate = assets.steps.findIndex(
     (step) => step.name === "Generate runner manifest and stamped installer",

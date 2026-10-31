@@ -4,7 +4,14 @@ FROM debian:bullseye-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d
 # Official Node release tarballs, pinned independently for each native runner.
 # Update these hashes together with .nvmrc (nodejs.org/dist/v24.22.1/SHASUMS256.txt).
 ARG TARGETARCH
-RUN apt-get update \
+# Bullseye's security pool moved after LTS ended. Use Debian's signed archive;
+# only the historical index expiry is disabled, never signature verification.
+RUN printf '%s\n' \
+        'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
+        'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
+        > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl xz-utils git openssh-client python3 make g++ binutils shellcheck \
     && rm -rf /var/lib/apt/lists/* \
