@@ -95,6 +95,10 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
   const [removing, setRemoving] = React.useState<Removing | null>(null);
   const [confirming, setConfirming] = React.useState(false);
   const [sheet, setSheet] = React.useState<"add" | "link" | "always-on" | null>(null);
+  const sheetOpener = React.useRef<HTMLButtonElement | null>(null);
+  const restoreFocus = React.useCallback(() => {
+    sheetOpener.current?.focus();
+  }, []);
   const { current } = props;
   const setup = React.useMemo(() => runnerSetup(current), [current]);
   const appVersion = useUpdateStore((state) => state.state?.currentVersion ?? null);
@@ -146,29 +150,54 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
           size="sm"
           variant="outline"
           disabled={installTarget === null}
-          onClick={() => setSheet("add")}
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("add");
+          }}
         >
           Add a runner
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => setSheet("link")}>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("link");
+          }}
+        >
           Link a runner
         </Button>
         <Button
           size="sm"
           variant="ghost"
           disabled={installTarget === null}
-          onClick={() => setSheet("always-on")}
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("always-on");
+          }}
         >
           Get an always-on runner
         </Button>
       </div>
       <RunnerAvailability />
-      {sheet === "link" ? <LinkRunnerSheet setup={setup} onClose={() => setSheet(null)} /> : null}
+      {sheet === "link" ? (
+        <LinkRunnerSheet setup={setup} restoreFocus={restoreFocus} onClose={() => setSheet(null)} />
+      ) : null}
       {sheet === "add" && installTarget !== null ? (
-        <AddRunnerSheet setup={setup} {...installTarget} onClose={() => setSheet(null)} />
+        <AddRunnerSheet
+          setup={setup}
+          {...installTarget}
+          restoreFocus={restoreFocus}
+          onClose={() => setSheet(null)}
+        />
       ) : null}
       {sheet === "always-on" && installTarget !== null ? (
-        <AlwaysOnRunnerSheet setup={setup} {...installTarget} onClose={() => setSheet(null)} />
+        <AlwaysOnRunnerSheet
+          setup={setup}
+          {...installTarget}
+          restoreFocus={restoreFocus}
+          onClose={() => setSheet(null)}
+        />
       ) : null}
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>

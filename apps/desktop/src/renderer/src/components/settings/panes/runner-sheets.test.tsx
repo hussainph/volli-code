@@ -2,6 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { toastError } from "@renderer/lib/toast";
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 import { AddRunnerSheet } from "./add-runner-sheet";
 import { AlwaysOnRunnerSheet } from "./always-on-runner-sheet";
 import { LinkRunnerSheet } from "./link-runner-sheet";
@@ -150,6 +152,56 @@ describe("Runner setup sheets", () => {
     expect(f.setup.create).toHaveBeenCalledTimes(2);
   });
 
+  it("allows dismissal while a create is pending and ignores its late completion", async () => {
+    const f = fixture();
+    let resolve!: (grant: typeof f.grant) => void;
+    f.setup.create.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    act(() => root.render(<AddRunnerSheet {...f.props} />));
+    await click("Create install command");
+    expect(document.body.textContent).toContain("Your request may still finish");
+    await click("Close");
+    expect(f.props.onClose).toHaveBeenCalledOnce();
+    act(() => root.render(null));
+    await act(async () => resolve(f.grant));
+    expect(f.setup.watch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a late failure after dismissal without echoing the token", async () => {
+    const f = fixture();
+    let reject!: (error: unknown) => void;
+    f.setup.create.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    act(() => root.render(<AddRunnerSheet {...f.props} />));
+    await click("Create install command");
+    act(() => root.render(null));
+    await act(async () => reject(new Error(f.grant.installToken)));
+    expect(toastError).toHaveBeenCalledWith(
+      "Couldn’t create the install command. Check your connection and try again.",
+    );
+  });
+
+  it("directs an expired sign-in to Account instead of a connection retry", async () => {
+    const f = fixture();
+    f.setup.create.mockRejectedValueOnce({
+      data: { code: "unauthenticated", message: f.grant.installToken },
+    });
+    act(() => root.render(<AddRunnerSheet {...f.props} />));
+    await click("Create install command");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Settings → Account and sign in again",
+    );
+    expect(document.body.textContent).not.toContain(f.grant.installToken);
+  });
+
   it("shows clipboard failure without leaking the token into the error", async () => {
     const f = fixture();
     Object.defineProperty(navigator, "clipboard", {
@@ -245,6 +297,26 @@ describe("Runner setup sheets", () => {
     await click("Approve runner");
     expect(document.body.textContent).toContain("no longer available");
     expect(button("Check code")).toBeTruthy();
+  });
+
+  it("allows closing during a decision and does not reopen on a late reply", async () => {
+    const f = fixture();
+    let resolve!: (answer: { ok: boolean }) => void;
+    f.setup.decide.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    act(() => root.render(<LinkRunnerSheet {...f.props} />));
+    await type("Runner code", "ABCD-EFGH");
+    await click("Check code");
+    await click("Approve runner");
+    await click("Close");
+    expect(f.props.onClose).toHaveBeenCalledOnce();
+    act(() => root.render(null));
+    await act(async () => resolve({ ok: true }));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("disables approval after expiry and lets the person enter another code", async () => {

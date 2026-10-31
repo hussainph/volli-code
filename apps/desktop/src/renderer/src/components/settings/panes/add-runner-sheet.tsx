@@ -8,14 +8,21 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@renderer/components/ui/dialog";
+import { toastError } from "@renderer/lib/toast";
 import { runnerInstallCommand } from "./runner-install-command";
-import type { InstallGrant, InstallStatus, RunnerSetup } from "./runner-setup";
+import {
+  runnerSetupFailure,
+  type InstallGrant,
+  type InstallStatus,
+  type RunnerSetup,
+} from "./runner-setup";
 
 export interface RunnerSheetProps {
   setup: RunnerSetup;
   appVersion: string;
   server: string | null;
   onClose(): void;
+  restoreFocus?(): void;
 }
 
 export function AddRunnerSheet(props: RunnerSheetProps) {
@@ -63,6 +70,7 @@ export function RunnerInstallSheet({
   appVersion,
   server,
   onClose,
+  restoreFocus,
   title,
   description,
   children,
@@ -122,9 +130,13 @@ export function RunnerInstallSheet({
       setStatus(null);
       setExpired(false);
       setGrant(next);
-    } catch {
-      if (mounted.current)
-        setError("Couldn’t create the install command. Check your connection and try again.");
+    } catch (failure) {
+      const message = runnerSetupFailure(
+        failure,
+        "Couldn’t create the install command. Check your connection and try again.",
+      );
+      if (mounted.current) setError(message);
+      else toastError(message);
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -139,8 +151,10 @@ export function RunnerInstallSheet({
         setGrant(null);
         setStatus(null);
       }
-    } catch {
-      if (mounted.current) setError("Couldn’t revoke the token. Try again.");
+    } catch (failure) {
+      const message = runnerSetupFailure(failure, "Couldn’t revoke the token. Try again.");
+      if (mounted.current) setError(message);
+      else toastError(message);
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -152,10 +166,18 @@ export function RunnerInstallSheet({
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !busy) onClose();
+        if (!open) onClose();
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto" showCloseButton={!busy}>
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto"
+        onCloseAutoFocus={(event) => {
+          if (restoreFocus) {
+            event.preventDefault();
+            restoreFocus();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -228,12 +250,17 @@ export function RunnerInstallSheet({
                   Create a fresh command
                 </Button>
               ) : null}
-              <Button variant="outline" size="sm" disabled={busy} onClick={onClose}>
+              <Button variant="outline" size="sm" onClick={onClose}>
                 Done
               </Button>
             </div>
           </>
         )}
+        {busy ? (
+          <p role="status" className="text-ui text-muted-foreground">
+            You can close this sheet. Your request may still finish.
+          </p>
+        ) : null}
         {error === null ? null : (
           <p role="alert" className="text-ui text-destructive">
             {error}

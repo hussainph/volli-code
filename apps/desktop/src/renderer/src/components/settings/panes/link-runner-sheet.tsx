@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Button } from "@renderer/components/ui/button";
+import { toastError } from "@renderer/lib/toast";
 import { Input } from "@renderer/components/ui/input";
 import {
   Dialog,
@@ -8,15 +9,30 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@renderer/components/ui/dialog";
-import type { LinkPreview, RunnerSetup } from "./runner-setup";
+import { runnerSetupFailure, type LinkPreview, type RunnerSetup } from "./runner-setup";
 
-export function LinkRunnerSheet({ setup, onClose }: { setup: RunnerSetup; onClose(): void }) {
+export function LinkRunnerSheet({
+  setup,
+  onClose,
+  restoreFocus,
+}: {
+  setup: RunnerSetup;
+  onClose(): void;
+  restoreFocus?(): void;
+}) {
   const [code, setCode] = React.useState("");
   const [preview, setPreview] = React.useState<Extract<LinkPreview, { ok: true }> | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [done, setDone] = React.useState<"approve" | "deny" | null>(null);
   const [expired, setExpired] = React.useState(false);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   React.useEffect(() => {
     if (preview === null) return;
     const timer = window.setTimeout(
@@ -30,6 +46,7 @@ export function LinkRunnerSheet({ setup, onClose }: { setup: RunnerSetup; onClos
     setError(null);
     try {
       const answer = await setup.preview(code.trim());
+      if (!mounted.current) return;
       if (answer.ok) {
         setExpired(false);
         setPreview(answer);
@@ -39,10 +56,15 @@ export function LinkRunnerSheet({ setup, onClose }: { setup: RunnerSetup; onClos
             ? "Too many attempts. Wait a minute before trying again."
             : "That code is invalid or expired. Get a new code from the runner.",
         );
-    } catch {
-      setError("Couldn’t check that code. Check your connection and try again.");
+    } catch (failure) {
+      const message = runnerSetupFailure(
+        failure,
+        "Couldn’t check that code. Check your connection and try again.",
+      );
+      if (mounted.current) setError(message);
+      else toastError(message);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
   const decide = async (decision: "approve" | "deny") => {
@@ -51,25 +73,38 @@ export function LinkRunnerSheet({ setup, onClose }: { setup: RunnerSetup; onClos
     setError(null);
     try {
       const answer = await setup.decide(preview.requestId, code.trim(), decision);
+      if (!mounted.current) return;
       if (answer.ok) setDone(decision);
       else {
         setPreview(null);
         setError("That request is no longer available. Get a new code from the runner.");
       }
-    } catch {
-      setError("Couldn’t save your decision. Check your connection and try again.");
+    } catch (failure) {
+      const message = runnerSetupFailure(
+        failure,
+        "Couldn’t save your decision. Check your connection and try again.",
+      );
+      if (mounted.current) setError(message);
+      else toastError(message);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !busy) onClose();
+        if (!open) onClose();
       }}
     >
-      <DialogContent showCloseButton={!busy}>
+      <DialogContent
+        onCloseAutoFocus={(event) => {
+          if (restoreFocus) {
+            event.preventDefault();
+            restoreFocus();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Link a runner</DialogTitle>
           <DialogDescription>
@@ -162,6 +197,11 @@ export function LinkRunnerSheet({ setup, onClose }: { setup: RunnerSetup; onClos
             </div>
           </>
         )}
+        {busy ? (
+          <p role="status" className="text-ui text-muted-foreground">
+            You can close this sheet. Your request may still finish.
+          </p>
+        ) : null}
         {error === null ? null : (
           <p role="alert" className="text-ui text-destructive">
             {error}

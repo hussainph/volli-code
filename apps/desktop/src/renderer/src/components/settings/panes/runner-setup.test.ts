@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { getFunctionName } from "convex/server";
 import { fakeCloud } from "@renderer/stores/cloud-board/fake-cloud.test-support";
-import { runnerSetup } from "./runner-setup";
+import { runnerSetup, runnerSetupFailure } from "./runner-setup";
+
+const failure = (code: string) => ({ data: { code, message: "vrt_private-token" } });
 
 describe("Runner setup transport", () => {
   it("uses the person client and generated references, never a runner credential", async () => {
@@ -41,6 +43,38 @@ describe("Runner setup transport", () => {
     });
     cloud.mutations[2]!.resolve({ ok: true });
     await decide;
+  });
+
+  it("carries the active Workspace as a hint, not a runner binding", async () => {
+    const cloud = fakeCloud();
+    const action = vi.fn(async (_reference: unknown, _args: unknown) => ({
+      installTokenId: "id",
+      installToken: "vrt_test",
+      expiresAt: 100,
+    }));
+    const setup = runnerSetup(
+      () => ({ ...cloud.session, client: { ...cloud.session.client, action: action as never } }),
+      () => "workspace-id",
+    );
+    await setup.create("");
+    expect(action.mock.calls[0]![1]).toEqual({
+      nameHint: null,
+      defaultWorkspaceId: "workspace-id",
+    });
+  });
+
+  it("maps authentication and permission failures to safe recovery without raw payloads", () => {
+    expect(runnerSetupFailure(failure("unauthenticated"), "fallback")).toContain("sign in again");
+    expect(runnerSetupFailure(failure("preview_agreement_required"), "fallback")).toContain(
+      "review your access",
+    );
+    expect(runnerSetupFailure(failure("forbidden"), "fallback")).toContain("Workspace access");
+    expect(runnerSetupFailure(failure("rate_limited"), "fallback")).toContain("Wait a minute");
+    expect(runnerSetupFailure(failure("invalid_request"), "fallback")).toContain(
+      "runner name or code",
+    );
+    expect(runnerSetupFailure(failure("unknown"), "fallback")).toBe("fallback");
+    expect(runnerSetupFailure(new Error("vrt_private-token"), "fallback")).toBe("fallback");
   });
 
   it("subscribes to token status, surfaces read errors and unsubscribes", () => {
