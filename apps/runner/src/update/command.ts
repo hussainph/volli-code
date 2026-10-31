@@ -16,7 +16,7 @@ import type { CommandContext, CommandInput, RunnerCommand } from "../commands";
 import { PATH_OPTIONS, pathsFor, stringOption } from "../shell/paths";
 import { applyUpdate, currentVersion, type ApplyPorts } from "./apply";
 import { readUpdateConfig, type UpdateConfig } from "./config";
-import { readUpdaterState, writeNowRequest } from "./files";
+import { readDaemonStatus, readUpdaterState, writeNowRequest } from "./files";
 import { defaultInstallRoot, RUNNER_UNIT, updateLayout, type UpdateLayout } from "./layout";
 import { isReleaseVersion } from "./manifest";
 import type { ProvenanceVerifier } from "./provenance";
@@ -67,10 +67,7 @@ async function apply(layout: UpdateLayout, context: CommandContext): Promise<num
     extract: deps.extract,
     probe: deps.probe,
     restart: () => deps.restart(layout.mode, RUNNER_UNIT),
-    readStatus: () => {
-      const status = context.statusProbes.read(layout.dataDir);
-      return status === "unreadable" ? null : status;
-    },
+    readStatus: () => readDaemonStatus(layout.dataDir),
     alive: (pid) => context.statusProbes.alive(pid),
     now: () => new Date(clock()),
     sleep: (ms) => context.sleep(ms),

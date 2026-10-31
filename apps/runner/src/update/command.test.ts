@@ -176,39 +176,24 @@ describe("update apply", () => {
     writeUpdaterState(layout.stateFile, { ...EMPTY_STATE, staged: "0.4.0" });
     writeUpdateRequest(layout.requestFile, { phase: "activate", version: "0.4.0", urgent: true });
     const restarts: string[] = [];
-    let pid = 1;
-    let reads = 0;
+    const statusFile = join(layout.dataDir, "runner-status.json");
     const ctx = testContext({
       root,
       env: { XDG_DATA_HOME: join(root, "share") },
       update: {
         restart: async (mode, unit) => {
           restarts.push(`${mode} ${unit}`);
-          pid += 1;
+          // A new process says "starting" first; the health check waits for "online".
+          writeFileSync(
+            statusFile,
+            JSON.stringify({ state: "starting", pid: 2, version: "0.4.0" }),
+          );
         },
       },
-      statusProbes: {
-        read: () =>
-          pid === 1
-            ? "unreadable"
-            : {
-                v: 1,
-                // A new process says "starting" first.
-                state: (reads += 1) === 1 ? "starting" : "online",
-                pid,
-                version: "0.4.0",
-                startedAt: "",
-                updatedAt: "",
-                dataDir: "",
-                socketPath: "",
-                link: null,
-                backend: null,
-                update: null,
-                credentials: null,
-              },
-        alive: () => true,
-        accepts: async () => true,
+      sleep: async () => {
+        writeFileSync(statusFile, JSON.stringify({ state: "online", pid: 2, version: "0.4.0" }));
       },
+      statusProbes: { read: () => null, alive: () => true, accepts: async () => true },
     });
     expect(await UPDATE_COMMAND.run(input({}, ["apply"]), ctx)).toBe(0);
     expect(JSON.parse(ctx.stdout())).toEqual({ kind: "applied", version: "0.4.0", from: "0.3.0" });

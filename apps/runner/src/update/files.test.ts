@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  readDaemonStatus,
   EMPTY_STATE,
   readNowRequest,
   readReported,
@@ -218,5 +219,34 @@ describe("the reported set", () => {
     writeFileSync(path(), JSON.stringify({ not: "a list" }));
     expect(readReported(path())).toEqual(new Set());
     expect(readFileSync(path(), "utf8")).toContain("not");
+  });
+});
+
+describe("the daemon's status, read by the applier", () => {
+  const path = () => join(root, "runner-status.json");
+
+  it("reads a status and nothing else", () => {
+    expect(readDaemonStatus(root)).toBeNull();
+    writeFileSync(path(), JSON.stringify({ state: "online", pid: 7, version: "0.4.0" }));
+    expect(readDaemonStatus(root)).toMatchObject({ state: "online", pid: 7 });
+    for (const value of [
+      "{",
+      "null",
+      '{"state":"online","pid":1.5,"version":"x"}',
+      '{"state":1}',
+      '{"state":"online","pid":1}',
+    ]) {
+      writeFileSync(path(), value);
+      expect(readDaemonStatus(root)).toBeNull();
+    }
+  });
+
+  it("never follows a link the daemon's account planted", () => {
+    writeFileSync(
+      join(root, "elsewhere"),
+      JSON.stringify({ state: "online", pid: 7, version: "0.4.0" }),
+    );
+    symlinkSync(join(root, "elsewhere"), path());
+    expect(readDaemonStatus(root)).toBeNull();
   });
 });

@@ -23,6 +23,9 @@ import {
   type RunnerUpdateReport,
 } from "@volli/shared/cloud";
 
+import { RUNNER } from "../shell/identity";
+import type { RunnerStatus } from "../shell/runner-status";
+import { statusFilePath } from "../shell/status";
 import { atomicWrite, durableWrite } from "../shell/write-file";
 import { isReleaseVersion } from "./manifest";
 
@@ -219,6 +222,32 @@ export function writeUpdaterState(path: string, state: UpdaterState): void {
     outcomes: state.outcomes.slice(-STATE_HISTORY),
   };
   durableWrite(path, `${JSON.stringify(bounded, null, 2)}\n`, 0o644);
+}
+
+// ── the daemon's status, as the applier reads it ────────────────────────────
+
+const MAX_STATUS_BYTES = 64 * 1024;
+
+/**
+ * The daemon's status file (`<dataDir>/runner-status.json`), read the way a
+ * root applier must read a file the `volli` account controls: never through a
+ * symlink, never a FIFO or a device, size-capped. Anything else reads as no
+ * status, which the health check treats as not online.
+ */
+export function readDaemonStatus(dataDir: string): RunnerStatus | null {
+  try {
+    const text = readSmallFile(statusFilePath(RUNNER, dataDir), MAX_STATUS_BYTES);
+    const row = text === null ? null : (JSON.parse(text) as Partial<RunnerStatus> | null);
+    return row !== null &&
+      typeof row === "object" &&
+      typeof row.state === "string" &&
+      Number.isSafeInteger(row.pid) &&
+      typeof row.version === "string"
+      ? (row as RunnerStatus)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── the daemon's own ────────────────────────────────────────────────────────

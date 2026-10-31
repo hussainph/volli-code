@@ -56,6 +56,7 @@ export function testContext(options: {
   buildDeployment?: CommandContext["buildDeployment"];
   now?: () => number;
   update?: Partial<UpdateDeps>;
+  sleep?: (ms: number) => Promise<void>;
 }): TestContext {
   let stdout = "";
   let stderr = "";
@@ -104,7 +105,7 @@ export function testContext(options: {
           }
         : options.buildDeployment,
     statusProbes: options.statusProbes ?? NOT_RUNNING,
-    sleep: () => Promise.resolve(),
+    sleep: options.sleep ?? (() => Promise.resolve()),
     update: { ...UNREACHABLE_UPDATE, ...options.update },
     ...(options.now === undefined ? {} : { now: options.now }),
     stdout: () => stdout,
