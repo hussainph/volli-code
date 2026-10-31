@@ -126,23 +126,26 @@ runner reports which providers it can serve, and the composer offers only
 those models for that runner.
 
 ```sh
-volli-runner login anthropic
+volli-runner login anthropic              # the provider's own sign-in, in the terminal
+volli-runner login anthropic --api-key    # paste an API key instead (not echoed)
+volli-runner login --status               # what this runner has stored
 volli-runner logout anthropic
 ```
 
-Run it with `sudo` on a system install: the sign-in belongs to the service
-account, and the command writes it there.
+Run these with `sudo` on a system install. Root never creates credentials, so
+the command switches to the `volli` service account and writes the sign-in
+there, where the runner reads it.
 
-`login` runs the provider's own sign-in flow in the terminal: it prints a URL
-to open, and a code to paste back. Over SSH, use the paste-the-code option, or
-forward the provider's callback port first — OpenAI's is 1455
-(`ssh -L 1455:127.0.0.1:1455 box`) — and open the URL on your Mac.
+`login` without `--api-key` runs the provider's own sign-in flow: it prints a
+URL to open and a code to paste back. Over SSH, follow its paste-code or
+redirect-URL prompt, or forward a port-1455 callback first
+(`ssh -L 1455:localhost:1455 box`) and open the URL on your Mac.
 
 Do not copy your Mac's `~/.pi/agent/auth.json` to the box: both machines would
 then refresh one grant and sign each other out. Make a separate sign-in on the
 box.
 
-An API key exported in the service's environment is not a sign-in. Only what
+An API key exported in the service's environment is not a sign-in: only what
 `volli-runner login` stores is reported, so sign in with the command even when
 the key is already on the box.
 
@@ -256,5 +259,5 @@ sudo systemctl start volli-runner
 | **Needs an update** | `volli-runner update`, or wait for an idle automatic update |
 | The runner vanished from Settings | It was removed there, which revokes it. Stop the service, `volli-runner unlink`, `volli-runner link`, start the service again |
 | `volli-runner status` exits 3 | Not serving: the output names the reason. `sudo journalctl -u volli-runner -n 50` has the last lines |
-| No model in the composer for this box | Sign in on the box: `volli-runner login <provider>` |
+| No model in the composer for this box | Sign in on the box: `volli-runner login --status` shows what it has stored, and `volli-runner login <provider>` adds one |
 | A Session's push failed | The box has no credential for that remote; see Git above |
