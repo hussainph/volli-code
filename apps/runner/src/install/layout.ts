@@ -55,9 +55,28 @@ export function unitQuote(value: string): string {
   return environmentQuote(value).replaceAll("%", "%%");
 }
 
-function environmentQuote(value: string): string {
+function validateUnitValue(value: string): void {
   if ([...value].some((char) => char < " " || char === "\u007f"))
     throw new Error("A unit value contains a control character.");
+}
+
+/** These scalar path settings do not unquote like ExecStart/ReadWritePaths. */
+export function unitPath(value: string): string {
+  validateUnitValue(value);
+  if (
+    !value.startsWith("/") ||
+    ['"', "'", "\\", "*", "?", "[", "]"].some((char) => value.includes(char)) ||
+    value.trimEnd() !== value
+  ) {
+    throw new Error(
+      "Managed service paths must be absolute, without quotes, backslashes, glob characters or trailing whitespace.",
+    );
+  }
+  return value.replaceAll("%", "%%");
+}
+
+function environmentQuote(value: string): string {
+  validateUnitValue(value);
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
@@ -85,12 +104,12 @@ export function serviceUnit(layout: InstallLayout, env: CommandContext["env"]): 
       : []),
     "UMask=0077",
     "Environment=VOLLI_RUNNER_SERVICE=1",
-    `WorkingDirectory=${unitQuote(layout.dataDir)}`,
+    `WorkingDirectory=${unitPath(layout.dataDir)}`,
     `Environment=${unitQuote(`HOME=${system ? layout.dataDir : (env["HOME"] ?? layout.dataDir)}`)}`,
     `Environment=${unitQuote(`VOLLI_RUNNER_INSTALL_MODE=${layout.mode}`)}`,
     `Environment=${unitQuote(`VOLLI_SECRET_KEY_FILE=${join(layout.configDir, "session-secrets.key")}`)}`,
     "Environment=NODE_USE_ENV_PROXY=1",
-    `EnvironmentFile=${unitQuote(`-${join(layout.root, "proxy.env")}`)}`,
+    `EnvironmentFile=-${unitPath(join(layout.root, "proxy.env"))}`,
     `ExecStart=:${unitQuote(join(layout.root, "current/bin/volli-runner"))} run --data-dir ${unitQuote(layout.dataDir)} --config-dir ${unitQuote(layout.configDir)}`,
     "KillSignal=SIGTERM",
     "TimeoutStopSec=45",

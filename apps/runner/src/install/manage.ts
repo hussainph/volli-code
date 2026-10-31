@@ -37,6 +37,15 @@ export function systemctl(layout: InstallLayout, args: string[]): string[] {
   return layout.mode === "user" ? ["--user", ...args] : args;
 }
 
+function validateProxy(env: CommandContext["env"]): void {
+  // Node's startup proxy error can quote a password. Refuse it before spawning.
+  try {
+    setGlobalProxyFromEnv(env)();
+  } catch {
+    throw new Error("Invalid HTTP_PROXY/HTTPS_PROXY configuration. Fix the proxy URL and retry.");
+  }
+}
+
 /** No shell, and no token on a process command line. System linking runs as the service account. */
 export function asRunner(
   layout: InstallLayout,
@@ -45,12 +54,7 @@ export function asRunner(
   args: string[],
   inherit = false,
 ): void {
-  // Validate before starting Node: its startup proxy error may quote a password.
-  try {
-    setGlobalProxyFromEnv(context.env)();
-  } catch {
-    throw new Error("Invalid HTTP_PROXY/HTTPS_PROXY configuration. Fix the proxy URL and retry.");
-  }
+  validateProxy(context.env);
   const cli = join(layout.root, "current/bin/volli-runner");
   const env = {
     ...context.env,
@@ -119,6 +123,7 @@ export async function installRunner(
 ): Promise<number> {
   if (ports.platform !== "linux")
     throw new Error("Managed runner installation requires Linux; use the Volli Mac app on macOS.");
+  validateProxy(context.env);
   const releaseOrigin = updateOrigin(context.env["VOLLI_RUNNER_RELEASE_BASE"], context.version);
   const channel = stringOption(input.values, "channel") ?? "stable";
   if (channel !== "stable" && channel !== "canary")

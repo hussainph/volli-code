@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { CommandInput } from "../commands";
 import type { RunnerStatus } from "../shell/runner-status";
 import { testContext } from "../testing/context";
-import { installLayout, proxyEnvironment, serviceUnit, unitQuote, UNIT } from "./layout";
+import { installLayout, proxyEnvironment, serviceUnit, unitPath, unitQuote, UNIT } from "./layout";
 import { asRunner, installRunner, systemctl, type InstallPorts } from "./manage";
 import type { RunTool } from "./tools";
 import { uninstallRunner } from "./uninstall";
@@ -154,6 +154,14 @@ describe("managed layout and units", () => {
       'HTTPS_PROXY="http://proxy/p%20"\nNO_PROXY="localhost"\n',
     );
     expect(unit).toContain("ExecStart=:");
+    expect(unit.split("\n")).toContain(`WorkingDirectory=${sys.dataDir}`);
+    expect(unit.split("\n")).toContain(`EnvironmentFile=-${sys.root}/proxy.env`);
+    expect(unitPath("/with space/100%")).toBe("/with space/100%%");
+    expect(() => unitPath("relative")).toThrow("must be absolute");
+    expect(() => unitPath("/trailing ")).toThrow("must be absolute");
+    expect(() => unitPath("/control\n")).toThrow("control character");
+    for (const char of ['"', "'", "\\", "*", "?", "[", "]"])
+      expect(() => unitPath(`/unsafe${char}path`)).toThrow("must be absolute");
     expect(unit).toContain("Environment=VOLLI_RUNNER_SERVICE=1");
     expect(serviceUnit(layout(), {})).toContain("Environment=VOLLI_RUNNER_SERVICE=1");
     const user = serviceUnit(layout(), {});
@@ -268,7 +276,7 @@ describe("install", () => {
   });
   it("keeps proxy passwords out of systemd properties and restarts on private proxy changes", async () => {
     await install();
-    context = { ...context, env: { HTTPS_PROXY: "http://user:secret@proxy.test/p%20" } };
+    context = { ...context, env: { HTTPS_PROXY: "http://user:secret%20@proxy.test" } };
     let reads = 0;
     context = {
       ...context,
@@ -282,7 +290,7 @@ describe("install", () => {
     expect(await install({ "no-start": false })).toBe(0);
     const at = layout();
     expect(readFileSync(join(at.root, "proxy.env"), "utf8")).toBe(
-      'HTTPS_PROXY="http://user:secret@proxy.test/p%20"\n',
+      'HTTPS_PROXY="http://user:secret%20@proxy.test"\n',
     );
     expect(lstatSync(join(at.root, "proxy.env")).mode & 0o777).toBe(0o600);
     expect(readFileSync(join(at.unitDir, UNIT), "utf8")).not.toContain("user:secret");
@@ -336,6 +344,12 @@ describe("install", () => {
       ),
     ).toThrow("Invalid HTTP_PROXY/HTTPS_PROXY");
     expect(child).not.toHaveBeenCalled();
+  });
+  it("refuses malformed proxies even for no-link installs before writing files", async () => {
+    context = { ...context, env: { HTTPS_PROXY: "https://user:secret@not a host" } };
+    await expect(install()).rejects.toThrow("Invalid HTTP_PROXY/HTTPS_PROXY");
+    expect(existsSync(layout().root)).toBe(false);
+    expect(existsSync(layout().dataDir)).toBe(false);
   });
   it("accepts only an existing service account with the dedicated home", async () => {
     const at = installLayout(input(), { ...context, uid: 0 }, root);
