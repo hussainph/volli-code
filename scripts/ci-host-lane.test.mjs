@@ -563,3 +563,70 @@ test("the older-app live lane runs the newest shipped build against THIS commit'
     "${{ needs.older-app-live.result }}",
   );
 });
+
+test("the BYO lanes gate on merged work: pending is a notice, present-but-broken is red", () => {
+  const presence = (job) => job.steps.find((step) => step.id === "present");
+  const gated = (job) =>
+    job.steps.filter((step) => step.if === "steps.present.outputs.present == 'true'");
+  const before = (job, step) => job.steps.indexOf(presence(job)) < job.steps.indexOf(step);
+
+  // Built per architecture on native runners, as release.yml builds it, and
+  // never with a baked deployment: a test artifact links only via --server.
+  const artifact = extended.jobs["byo-runner-artifact"];
+  assert.equal(artifact.if, "${{ !cancelled() }}");
+  assert.deepEqual(
+    artifact.strategy.matrix.include.map((entry) => [entry.arch, entry.runner]),
+    [
+      ["x64", "ubuntu-24.04"],
+      ["arm64", "ubuntu-24.04-arm"],
+    ],
+  );
+  const build = artifact.steps.find((step) => step.name === "Build, package and boot the runner");
+  assert.ok(gated(artifact).includes(build) && before(artifact, build));
+  assert.ok(
+    build.run.includes("ci-build-artifact.sh") && build.run.includes("ci-boot-artifact.sh"),
+  );
+  assert.doesNotMatch(JSON.stringify(artifact), /VOLLI_BUILD_CONVEX/u);
+  const upload = artifact.steps.find((step) => step.name === "Upload the runner artifact");
+  assert.equal(upload.with["if-no-files-found"], "error");
+
+  // The matrix takes both artifacts; bootstrap-only only while install is absent.
+  const matrix = extended.jobs["byo-install-matrix"];
+  assert.equal(matrix.needs, "byo-runner-artifact");
+  assert.equal(matrix.if, "${{ !cancelled() }}");
+  assert.match(presence(matrix).run, /ci-install-matrix\.sh/u);
+  assert.match(presence(matrix).run, /ci-build-artifact\.sh/u);
+  assert.match(presence(matrix).run, /mode=--bootstrap-only/u);
+  assert.match(presence(matrix).run, /-d apps\/runner\/src\/install/u);
+  const run = matrix.steps.find((step) => step.name === "Run the install.sh matrix");
+  assert.ok(gated(matrix).includes(run) && before(matrix, run));
+  assert.equal(run.env.MODE, "${{ steps.present.outputs.mode }}");
+
+  // The acceptance itself: after the artifact, never hiding a missing one.
+  const byo = extended.jobs["byo-runner"];
+  assert.equal(byo.needs, "byo-runner-artifact");
+  assert.equal(byo.if, "${{ !cancelled() }}");
+  assert.ok(byo.steps.every((step) => step["continue-on-error"] === undefined));
+  const download = byo.steps.find((step) => step.name === "Download the x64 runner artifact");
+  assert.ok(gated(byo).includes(download) && before(byo, download));
+  const acceptance = byo.steps.find((step) => step.name === "Run the BYO runner acceptance");
+  assert.equal(acceptance["working-directory"], "convex");
+  assert.ok(acceptance.run.includes("fixture/with-backend.ts --deploy"));
+  assert.ok(acceptance.run.includes("../apps/runner/e2e/acceptance.mjs"));
+  assert.equal(
+    byo.steps.find((step) => step.name.startsWith("Harness self-tests")).run,
+    "node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs",
+  );
+  assert.equal(byo.steps.at(-1).if, "always()");
+
+  // BYO-6's sheet rides the cloud-wake build; only its scrubbed report is kept.
+  const wake = extended.jobs["smoke-cloud-wake"];
+  const setup = wake.steps.find((step) => step.name.startsWith("Run the runner-setup acceptance"));
+  assert.deepEqual(Object.keys(setup.env), ["VOLLI_SMOKE_REPORT_DIR"]);
+  assert.match(setup.run, /if \[\[ ! -f "\$smoke" \]\]; then[\s\S]*exit 0/u);
+  assert.ok(wake.steps.at(-1).with.path.includes(setup.env.VOLLI_SMOKE_REPORT_DIR));
+
+  for (const job of ["byo-runner-artifact", "byo-install-matrix", "byo-runner"]) {
+    assert.ok(extended.jobs.summary.needs.includes(job), job);
+  }
+});

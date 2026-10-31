@@ -189,6 +189,8 @@ jobs:
   # and its clock are both SIMULATED (the power seam; the fixture backend's
   # guarded `testAutomations` hooks). Sharing this job's loopback-CSP build is
   # what makes the second journey cost the slot rather than a second build.
+  # A third journey shares it too: BYO-6's runner-setup sheet (VC-1039), one
+  # Mac and a SIMULATED Linux box on the real /runner/* wire.
   #
   # First in the same single-slot chain, for quick cloud wake feedback.
   # The rest tier and remote acceptance still run afterward, even if this
@@ -198,8 +200,9 @@ jobs:
     name: Smoke (cloud wake acceptance)
     if: ${{ !cancelled() }}
     runs-on: macos-15
-    # Two journeys in one slot: the wake path, then the Automation path.
-    timeout-minutes: 55
+    # Three journeys in one slot: the wake path, the Automation path, then
+    # the runner-setup sheet.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -265,9 +268,9 @@ jobs:
       # the step says so and passes: there is nothing of it to run yet.
       - name: Run the runner-setup acceptance (Linux box SIMULATED)
         if: ${{ !cancelled() }}
+        # Only the scrubbed report is uploaded: the smoke keeps its raw drive
+        # home and evidence private by itself.
         env:
-          VOLLI_DRIVE_HOME: ${{ runner.temp }}/runner-setup-drive
-          VOLLI_DRIVE_EVIDENCE: ${{ runner.temp }}/runner-setup-acceptance
           VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/runner-setup-acceptance
         run: |
           set -euo pipefail
@@ -521,13 +524,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # The runner's release artifact, built the way release.yml builds it
-  # (BYO-7: the bullseye ABI-baseline image, package, boot), once per
-  # architecture on a native runner. The install matrix and the BYO lane take
-  # it from here, so ci-extended proves the artifact a release would ship.
-  # The boot accepts the command-registry skeleton (ALLOW_SKELETON): this is
-  # a test lane, never a published feed. Until BYO-7's scripts are on the
-  # tree, the job says so and builds nothing.
+  # The runner's release artifact, built with release.yml's steps (BYO-7: the
+  # bullseye ABI-baseline image, package, boot), once per architecture on a
+  # native runner. The install matrix and the BYO lane take it from here. Two
+  # deliberate differences from a release: no deployment is baked in (no
+  # VOLLI_BUILD_CONVEX_*), so a test artifact links only where `--server`
+  # points it and can never reach a real deployment; and the boot accepts the
+  # command-registry skeleton (ALLOW_SKELETON), as a dry run does. Until
+  # BYO-7's scripts are on the tree, the job says so and builds nothing.
   byo-runner-artifact:
     name: BYO runner artifact (linux-${{ matrix.arch }})
     if: ${{ !cancelled() }}
@@ -597,7 +601,8 @@ jobs:
     needs: byo-runner-artifact
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Twelve image builds and 26 serial container runs.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -608,7 +613,9 @@ jobs:
       - name: Check the matrix is on this tree
         id: present
         run: |
-          if [[ -f apps/runner/scripts/ci-install-matrix.sh ]]; then
+          # The artifact job's own gate too: without packaging there is
+          # nothing to install, and that is pending, not a failure.
+          if [[ -f apps/runner/scripts/ci-install-matrix.sh && -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -641,10 +648,6 @@ jobs:
           MODE: ${{ steps.present.outputs.mode }}
         run: |
           set -euo pipefail
-          if ! ls "$RUNNER_TEMP"/runner-assets/volli-runner-*.tar.gz >/dev/null 2>&1; then
-            echo "::error title=No runner artifacts::byo-runner-artifact produced none; see its log"
-            exit 1
-          fi
           ls -l "$RUNNER_TEMP/runner-assets"
           # shellcheck disable=SC2086 # MODE is empty or one flag.
           bash apps/runner/scripts/ci-install-matrix.sh "$RUNNER_TEMP/runner-assets" $MODE
@@ -689,10 +692,20 @@ jobs:
       - name: Fetch and verify the pinned backend
         run: vp run --filter @volli/convex backend:fetch
 
-      # The x64 artifact the install leg serves from its local release, when
-      # this tree builds one (absent until BYO-7; the leg says so).
+      # The x64 artifact for the install leg's local release. Not on this
+      # tree yet (BYO-7) is a notice; on the tree but not built is red.
+      - name: Check the packaging is on this tree
+        id: present
+        run: |
+          if [[ -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Runner artifact pending::BYO-7 (VC-1040) packaging is not on this tree yet"
+          fi
+
       - name: Download the x64 runner artifact
-        continue-on-error: true
+        if: steps.present.outputs.present == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: byo-runner-linux-x64
