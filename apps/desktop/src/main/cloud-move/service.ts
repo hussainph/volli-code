@@ -52,6 +52,8 @@ export interface DesktopMovesService extends CloudMovesPort {
   /** No new quit gate: abort current work and leave its last durable boundary for the next launch. */
   dispose(): Promise<void>;
   signInLost(): void;
+  /** An active lane waits for its real person, never borrowing the last identity or token. */
+  waitForSignIn(signal: AbortSignal): Promise<boolean>;
 }
 const ABSENT_SIGN_IN_GRACE_MS = 2 * 60_000;
 const BEFORE_COMMIT = new Set<MoveRow["state"]>([
@@ -171,7 +173,8 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
   let controlAbort: AbortController | null = null;
   // The last person seen signed in. A sign-in that is briefly absent (restoring
   // after launch, a refresh, a sign-in that has not heard its viewer yet) is
-  // not a different person, so it never cancels a dry run or a control.
+  // not a different person: dry runs and controls survive it, and a running
+  // move gets the bounded grace below before a lost-sign-in pause.
   let accountOwner = personOf(options.account.snapshot())?.userId ?? null;
   let timer: ReturnType<typeof setInterval> | null = null;
   let absentSignInTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1021,6 +1024,29 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
           notify(); /* Each returning move keeps its own recovery action; continue the others. */
         }
       }
+    },
+    async waitForSignIn(signal) {
+      if (
+        active !== null &&
+        !signInLost &&
+        !disposed &&
+        currentPerson() === null &&
+        !signal.aborted
+      )
+        await new Promise<void>((resolve) => {
+          let off: (() => void) | undefined;
+          const changed = () => {
+            if (currentPerson() === null && !signal.aborted) return;
+            off?.();
+            signal.removeEventListener("abort", changed);
+            resolve();
+          };
+          off = options.account.subscribe(changed);
+          signal.addEventListener("abort", changed, { once: true });
+          // subscribe may replay synchronously; also close an abort racing setup.
+          changed();
+        });
+      return !disposed && !signInLost && !signal.aborted && currentPerson() !== null;
     },
     signInLost() {
       clearAbsentSignInTimer();

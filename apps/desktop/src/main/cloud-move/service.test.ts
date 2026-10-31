@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,8 @@ import {
 } from "./service";
 import { describeMove } from "./presentation";
 import type { PreparedLocalMoves } from "./preflight";
+import { moveSignIn } from "./sign-in";
+import { personMoveBackend } from "./backend";
 
 const PROJECT = "00000000-0000-4000-8000-000000000001";
 const WORKSPACE = "00000000-0000-4000-8000-000000000002";
@@ -71,7 +74,29 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
   let enabled = true;
   let account = signedIn;
   const listeners = new Set<(next: AccountSnapshot) => void>();
-  const identity = vi.fn(async () => ({ userId: USER, runnerId: RUNNER }));
+  const identity = vi.fn(async () =>
+    account.state === "signed-in" && account.account?.userId != null
+      ? { userId: account.account.userId, runnerId: RUNNER }
+      : null,
+  );
+  const token = vi.fn(async () => (account.state === "signed-in" ? "current-token" : null));
+  const accountPort = {
+    snapshot: () => account,
+    accessToken: token,
+    subscribe: (listener: (next: AccountSnapshot) => void) => {
+      listeners.add(listener);
+      listener(account);
+      return () => listeners.delete(listener);
+    },
+  };
+  const signals = new AsyncLocalStorage<AbortSignal>();
+  let service!: DesktopMovesService;
+  const signIn = moveSignIn({
+    account: accountPort,
+    identity: { current: identity },
+    signal: () => signals.getStore(),
+    waitForSignIn: (signal) => service.waitForSignIn(signal),
+  });
   const query = vi.fn(async () => [{ workspaceId: WORKSPACE, name: "Workspace", role: "owner" }]);
   let clock = 1;
   const ports: MoveEnginePorts = {
@@ -90,7 +115,7 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
       seedCursors: () => {},
     },
     backup: { write: nope },
-    identity: { current: identity },
+    identity: { current: signIn.current },
     liveWork: { busySessionIds: () => new Set() },
     realPath: { check: nope },
     exportProject: nope,
@@ -153,18 +178,12 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
   );
   const assertIdle = vi.fn();
   const releaseIdentity = vi.fn(async () => {});
-  const service = createDesktopMovesService({
+  service = createDesktopMovesService({
     enabled: () => enabled,
     engine,
     backend: ports.backend,
-    account: {
-      snapshot: () => account,
-      subscribe: (listener) => {
-        listeners.add(listener);
-        listener(account);
-        return () => listeners.delete(listener);
-      },
-    },
+    account: accountPort,
+    withSignal: (signal, work) => signals.run(signal, work),
     identity,
     describe: view,
     prepare,
@@ -192,7 +211,11 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
     service,
     engine,
     run,
+    ports,
     identity,
+    signIn,
+    token,
+    inLane: <T>(signal: AbortSignal, work: () => Promise<T>) => signals.run(signal, work),
     prepare,
     prepared,
     input,
@@ -756,7 +779,154 @@ async function heldMove(f: ReturnType<typeof setup>) {
   return { row, signal, release: () => release() };
 }
 
+function heldBackend(f: ReturnType<typeof setup>, signal: AbortSignal, status = 200) {
+  const request = vi.fn(async () =>
+    status === 401
+      ? new Response("unauthorized", { status })
+      : Response.json({ status: "success", value: "accepted" }),
+  );
+  const backend = personMoveBackend({
+    url: "https://example.invalid",
+    enabled: () => true,
+    accessToken: f.signIn.accessToken,
+    signal: () => signal,
+    onSignInLost: () => f.service.signInLost(),
+    fetch: request,
+  });
+  return {
+    request,
+    call: () => f.inLane(signal, () => backend.mutation("projectImports:begin", {})),
+  };
+}
+
 describe("a running move under a changing sign-in", () => {
+  it.each(["pending", "skipped"] as const)(
+    "waits through absence at a real engine identity boundary (profile step %s)",
+    async (profileStep) => {
+      const f = setup();
+      const row = f.enqueue();
+      f.engine.journal.setQueue(row.queueId, { profileStep });
+      let release!: () => void;
+      const backup = vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { path: "/backup", bytes: 10 };
+      });
+      f.ports.backup.write = backup;
+      const exporting = vi.fn(async () => {
+        throw new DOMException("Stop after the identity boundary", "AbortError");
+      });
+      f.ports.exportProject = exporting;
+      // Call the engine's original implementation, not the held-run stub.
+      f.run.mockRestore();
+      const engineRun = f.engine.run.bind(f.engine);
+      const run = vi.spyOn(f.engine, "run").mockImplementation(async (queueId) => {
+        f.engine.journal.setQueue(queueId, { state: "done" });
+        return { kind: "done" };
+      });
+      run.mockImplementationOnce(engineRun);
+      const waiting = vi.spyOn(f.service, "waitForSignIn");
+      await f.service.resume();
+      await vi.waitFor(() => expect(backup).toHaveBeenCalledOnce());
+      const reads = waiting.mock.calls.length;
+      f.publish(noViewerYet);
+      release();
+      await vi.waitFor(() => expect(waiting.mock.calls.length).toBeGreaterThan(reads));
+      expect(f.engine.journal.move(row.moveId)?.paused).toBeNull();
+      expect(exporting).not.toHaveBeenCalled();
+      expect(run).toHaveBeenCalledOnce();
+      expect(f.releaseIdentity).not.toHaveBeenCalled();
+      f.publish(signedIn);
+      await vi.waitFor(() => expect(exporting).toHaveBeenCalledOnce());
+    },
+  );
+
+  it("waits for a fresh token instead of treating a missing token during absence as sign-in loss", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    const http = heldBackend(f, held.signal);
+    f.publish(signedOut);
+    const call = http.call();
+    await Promise.resolve();
+    expect(f.token).not.toHaveBeenCalled();
+    expect(http.request).not.toHaveBeenCalled();
+    expect(held.signal.aborted).toBe(false);
+    f.publish(signedIn);
+    await expect(call).resolves.toBe("accepted");
+    expect(f.token).toHaveBeenCalledOnce();
+    held.release();
+  });
+
+  it("discards a token read across a blip and rereads after recovery", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    let release!: (value: string) => void;
+    f.token.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const http = heldBackend(f, held.signal);
+    const call = http.call();
+    await vi.waitFor(() => expect(f.token).toHaveBeenCalledOnce());
+    f.publish(signedOut);
+    release("old-token");
+    await Promise.resolve();
+    expect(http.request).not.toHaveBeenCalled();
+    f.publish(signedIn);
+    await expect(call).resolves.toBe("accepted");
+    expect(http.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer current-token" }),
+      }),
+    );
+    expect(f.token).toHaveBeenCalledTimes(2);
+    held.release();
+  });
+
+  it("cancels a waiting credential read on grace expiry without making a request", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    vi.useFakeTimers();
+    const http = heldBackend(f, held.signal);
+    f.publish(signedOut);
+    const call = http.call().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(await call).toMatchObject({ name: "AbortError" });
+    expect(f.engine.journal.move(held.row.moveId)?.paused).toBe("signed_out");
+    expect(f.token).not.toHaveBeenCalled();
+    expect(http.request).not.toHaveBeenCalled();
+  });
+
+  it.each(["different person", "explicit sign-out", "disposal"])(
+    "does not send a waiting request after %s",
+    async (interruption) => {
+      const f = setup();
+      const held = await heldMove(f);
+      const http = heldBackend(f, held.signal);
+      f.publish(signedOut);
+      const call = http.call().catch((error: unknown) => error);
+      if (interruption === "different person")
+        f.publish({ ...signedIn, account: { ...signedIn.account!, userId: "other" } });
+      else if (interruption === "explicit sign-out") f.service.signInLost();
+      else await f.service.dispose();
+      expect(await call).toMatchObject({ name: "AbortError" });
+      expect(f.token).not.toHaveBeenCalled();
+      expect(http.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still pauses immediately on an actual backend 401", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    const http = heldBackend(f, held.signal, 401);
+    await expect(http.call()).rejects.toMatchObject({ code: "move_signed_out" });
+    expect(held.signal.aborted).toBe(true);
+  });
+
   it("survives absent-person flaps and finishes without restarting the engine", async () => {
     const f = setup();
     const held = await heldMove(f);
