@@ -189,6 +189,8 @@ jobs:
   # and its clock are both SIMULATED (the power seam; the fixture backend's
   # guarded `testAutomations` hooks). Sharing this job's loopback-CSP build is
   # what makes the second journey cost the slot rather than a second build.
+  # A third journey shares it too: BYO-6's runner-setup sheet (VC-1039), one
+  # Mac and a SIMULATED Linux box on the real /runner/* wire.
   #
   # First in the same single-slot chain, for quick cloud wake feedback.
   # The rest tier and remote acceptance still run afterward, even if this
@@ -198,8 +200,9 @@ jobs:
     name: Smoke (cloud wake acceptance)
     if: ${{ !cancelled() }}
     runs-on: macos-15
-    # Two journeys in one slot: the wake path, then the Automation path.
-    timeout-minutes: 55
+    # Three journeys in one slot: the wake path, the Automation path, then
+    # the runner-setup sheet.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -258,6 +261,28 @@ jobs:
           node fixture/with-backend.ts --deploy --
           node ../apps/desktop/e2e/volli-drive/cloud-automation-acceptance-smoke.mjs
 
+      # BYO-6 (VC-1039): Settings → Runners → Add a runner on one Mac, against
+      # its own throwaway backend; a SIMULATED Linux box (a Node process on the
+      # real /runner/* wire, not a Volli build) spends the token, and the sheet
+      # reads "is online". Same build and slot. Until #1107 lands its script,
+      # the step says so and passes: there is nothing of it to run yet.
+      - name: Run the runner-setup acceptance (Linux box SIMULATED)
+        if: ${{ !cancelled() }}
+        # Only the scrubbed report is uploaded: the smoke keeps its raw drive
+        # home and evidence private by itself.
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/runner-setup-acceptance
+        run: |
+          set -euo pipefail
+          smoke=apps/desktop/e2e/volli-drive/runner-setup-acceptance-smoke.mjs
+          if [[ ! -f "$smoke" ]]; then
+            echo "::notice title=Runner-setup acceptance pending::$smoke is not on this tree yet (VC-1039)"
+            exit 0
+          fi
+          node --test apps/desktop/e2e/volli-drive/lib/runner-setup-evidence.test.mjs
+          cd convex
+          node fixture/with-backend.ts --deploy -- node "../$smoke"
+
       - name: Upload two-Mac cloud acceptance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -266,6 +291,7 @@ jobs:
           path: |
             ${{ runner.temp }}/cloud-wake-acceptance
             ${{ runner.temp }}/cloud-automation-acceptance
+            ${{ runner.temp }}/runner-setup-acceptance
           if-no-files-found: warn
           retention-days: 30
 
@@ -498,6 +524,134 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  # The runner's release artifact, built with release.yml's steps (BYO-7: the
+  # bullseye ABI-baseline image, package, boot), once per architecture on a
+  # native runner. The install matrix and the BYO lane take it from here. Two
+  # deliberate differences from a release: no deployment is baked in (no
+  # VOLLI_BUILD_CONVEX_*), so a test artifact links only where `--server`
+  # points it and can never reach a real deployment; and the boot accepts the
+  # command-registry skeleton (ALLOW_SKELETON), as a dry run does. Until
+  # BYO-7's scripts are on the tree, the job says so and builds nothing.
+  byo-runner-artifact:
+    name: BYO runner artifact (linux-${{ matrix.arch }})
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check the packaging is on this tree
+        id: present
+        run: |
+          if [[ -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Runner artifact pending::BYO-7 (VC-1040) packaging is not on this tree yet"
+          fi
+
+      - name: Build, package and boot the runner
+        if: steps.present.outputs.present == 'true'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker build --file .devcontainer/runner-build/Dockerfile --tag volli-runner-build .
+          mkdir -p "$RUNNER_TEMP/runner"
+          chmod 0777 "$RUNNER_TEMP/runner"
+          docker run --rm -e EXPECTED_ARCH="$ARCH" volli-runner-build sh -ec \
+            'test "$(node -p process.arch)" = "$EXPECTED_ARCH"'
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/runner:/out" volli-runner-build \
+            bash /src/apps/runner/scripts/ci-build-artifact.sh
+          docker run --rm -i -e ALLOW_SKELETON=true -v "$RUNNER_TEMP/runner:/out:ro" volli-runner-build \
+            bash -s < apps/runner/scripts/ci-boot-artifact.sh
+
+      - name: Upload the runner artifact
+        if: steps.present.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: byo-runner-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/runner/*.tar.gz
+            ${{ runner.temp }}/runner/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # install.sh across the supported distros (BYO-7's acceptance): both
+  # artifacts behind a loopback "release", Ubuntu 20.04/22.04/24.04, Debian
+  # 11/12 and Fedora 41, root and user, curl and wget; musl and old glibc
+  # refused in one line. Until BYO-10's `install` is on the tree the matrix
+  # runs `--bootstrap-only`: download, SHA-256 and the native/Code Mode probes
+  # are real, and only the skeleton's exact install stub is accepted after
+  # them. Never a claim of a service install.
+  byo-install-matrix:
+    name: BYO install.sh matrix
+    needs: byo-runner-artifact
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    # Twelve image builds and 26 serial container runs.
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check the matrix is on this tree
+        id: present
+        run: |
+          # The artifact job's own gate too: without packaging there is
+          # nothing to install, and that is pending, not a failure.
+          if [[ -f apps/runner/scripts/ci-install-matrix.sh && -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Install matrix pending::BYO-7 (VC-1040) ci-install-matrix.sh is not on this tree yet"
+          fi
+          if [[ -d apps/runner/src/install ]]; then
+            echo "mode=" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=--bootstrap-only" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pinned Node
+        if: steps.present.outputs.present == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Download both runner artifacts
+        if: steps.present.outputs.present == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: byo-runner-linux-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/runner-assets
+
+      - name: Run the install.sh matrix
+        if: steps.present.outputs.present == 'true'
+        env:
+          MODE: ${{ steps.present.outputs.mode }}
+        run: |
+          set -euo pipefail
+          ls -l "$RUNNER_TEMP/runner-assets"
+          # shellcheck disable=SC2086 # MODE is empty or one flag.
+          bash apps/runner/scripts/ci-install-matrix.sh "$RUNNER_TEMP/runner-assets" $MODE
+
   # BYO runner acceptance (VC-1043): a person's own Linux box, end to end,
   # against the pinned local backend: a seeded person, the fake GitHub
   # (scripts/fake-github: OAuth + REST for the backend, git smart HTTP that
@@ -509,6 +663,7 @@ jobs:
   # red (apps/runner/e2e/README.md). Linux, no macOS slot.
   byo-runner:
     name: BYO runner acceptance
+    needs: byo-runner-artifact
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -537,12 +692,32 @@ jobs:
       - name: Fetch and verify the pinned backend
         run: vp run --filter @volli/convex backend:fetch
 
+      # The x64 artifact for the install leg's local release. Not on this
+      # tree yet (BYO-7) is a notice; on the tree but not built is red.
+      - name: Check the packaging is on this tree
+        id: present
+        run: |
+          if [[ -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Runner artifact pending::BYO-7 (VC-1040) packaging is not on this tree yet"
+          fi
+
+      - name: Download the x64 runner artifact
+        if: steps.present.outputs.present == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: byo-runner-linux-x64
+          path: ${{ runner.temp }}/runner-assets
+
       - name: Harness self-tests (fake GitHub, release server, legs)
         run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs
 
       - name: Run the BYO runner acceptance
         env:
           VOLLI_BYO_EVIDENCE: ${{ runner.temp }}/byo-acceptance
+          VOLLI_BYO_RUNNER_ASSETS: ${{ runner.temp }}/runner-assets
         working-directory: convex
         run: >-
           node fixture/with-backend.ts --deploy --
@@ -573,6 +748,8 @@ jobs:
         move-app,
         backup-restore-rehearsal,
         older-app-live,
+        byo-runner-artifact,
+        byo-install-matrix,
         byo-runner,
       ]
     runs-on: ubuntu-24.04
@@ -589,6 +766,8 @@ jobs:
           MOVE_APP: ${{ needs.move-app.result }}
           BACKUP_RESTORE: ${{ needs.backup-restore-rehearsal.result }}
           OLDER_APP_LIVE: ${{ needs.older-app-live.result }}
+          BYO_RUNNER_ARTIFACT: ${{ needs.byo-runner-artifact.result }}
+          BYO_INSTALL_MATRIX: ${{ needs.byo-install-matrix.result }}
           BYO_RUNNER: ${{ needs.byo-runner.result }}
         run: |
           set -euo pipefail
@@ -615,5 +794,7 @@ jobs:
           report "Move to Volli Cloud (app path)" "$MOVE_APP"
           report "Backup restore rehearsal" "$BACKUP_RESTORE"
           report "Older app (live)" "$OLDER_APP_LIVE"
+          report "BYO runner artifact" "$BYO_RUNNER_ARTIFACT"
+          report "BYO install.sh matrix" "$BYO_INSTALL_MATRIX"
           report "BYO runner acceptance" "$BYO_RUNNER"
           exit "$status"

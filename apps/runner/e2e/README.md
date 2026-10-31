@@ -35,6 +35,12 @@ The harness's own unit tests are `node:test` files, run by the job's
 apps/runner/e2e/lib/*.test.mjs`. They are not Vitest files, so
 `apps/runner`'s Vitest config includes only `src/**/*.test.ts`; `ci.yml`'s Check + Build runs them too.
 
+In CI the job also receives the x64 runner artifact that
+`byo-runner-artifact` builds (`$VOLLI_BYO_RUNNER_ASSETS`, once BYO-7's
+packaging is on the tree), for the install leg to serve from its local
+release when that leg is wired. The artifact has no deployment baked in: it
+links only where `--server` points it.
+
 ## Doubles and setup
 
 None of these is the behaviour under test:
