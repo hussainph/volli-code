@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { api as cloudApi } from "@volli/convex/api";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -32,7 +33,7 @@ it("follows queued, starting, started and unavailable status without leaking the
     },
   }));
   fake.follow.mockImplementation((fn) => {
-    fn({ client: { watchQuery: watch } });
+    fn({ client: { watchQuery: watch }, api: cloudApi });
     return stop;
   });
   let answer: ReturnType<typeof useRunnerStartStatus>;

@@ -1,8 +1,7 @@
 import * as React from "react";
-import type { RunnerPickerAnswer } from "@volli/shared/cloud";
 import { DesktopIcon } from "@phosphor-icons/react/dist/csr/Desktop";
 import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
-import { makeFunctionReference } from "convex/server";
+import { runnerPickerApi } from "./runner-picker-api";
 
 import { cloudAccountScope, launchStore } from "@renderer/stores/launch";
 import { followCloudSession } from "@renderer/lib/cloud-client";
@@ -61,11 +60,6 @@ const subscribePreference = (listener: () => void) => {
   };
 };
 
-// The composer reads only the current person's runners, scoped to this project.
-const forComposer = makeFunctionReference<"query", { projectId: string }, RunnerPickerAnswer>(
-  "runnerPicker:forComposer",
-);
-
 export interface RunnerPickerState {
   runners: readonly ComposerRunner[];
   selected: ComposerRunner | null;
@@ -113,7 +107,9 @@ export function useRunnerPicker(
       off = undefined;
       setView(null);
       if (session === null) return;
-      const watch = session.client.watchQuery(forComposer, { projectId });
+      const watch = session.client.watchQuery(runnerPickerApi(session).runnerPicker.forComposer, {
+        projectId,
+      });
       const read = () => {
         try {
           const value = watch.localQueryResult();

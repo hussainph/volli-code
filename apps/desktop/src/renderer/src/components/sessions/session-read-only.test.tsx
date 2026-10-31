@@ -20,6 +20,32 @@ vi.mock("@renderer/lib/cloud-client", () => ({
       ? null
       : { client: { connectionState: () => ({ isWebSocketConnected: cloud.connected }) } },
 }));
+// This suite owns the connection gate. Runner discovery is already ready;
+// its subscription and unavailable-runner states have their own picker tests.
+vi.mock("@renderer/components/chat/runner-picker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@renderer/components/chat/runner-picker")>();
+  const runner = {
+    id: "mac",
+    name: "This Mac",
+    kind: "mac",
+    status: "online",
+    statusChangedAt: 1,
+    providers: [],
+    version: "1",
+    upgradeRequired: false,
+  };
+  return {
+    ...actual,
+    useRunnerPicker: () => ({
+      runners: [runner],
+      selected: runner,
+      thisMacId: "mac",
+      loading: false,
+      error: null,
+      choose: vi.fn(),
+    }),
+  };
+});
 vi.mock("@renderer/terminal/registry", () => ({
   disposeEngine: vi.fn(),
   getOrCreateEngine: vi.fn(),

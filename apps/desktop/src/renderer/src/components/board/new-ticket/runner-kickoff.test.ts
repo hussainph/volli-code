@@ -1,3 +1,4 @@
+import { api as cloudApi } from "@volli/convex/api";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_KICKOFF_MESSAGE, LOCAL_LAUNCH, type ModelSelection } from "@volli/shared";
 import { getFunctionName } from "convex/server";
@@ -69,6 +70,7 @@ beforeEach(() => {
   mutation = vi.fn(async () => ({ sessionId: "backend-session" }));
   vi.spyOn(cloudClient, "cloudSession").mockReturnValue({
     client: { mutation, connectionState: () => ({ isWebSocketConnected: true }) },
+    api: cloudApi,
   } as unknown as cloudClient.CloudSession);
 });
 afterEach(() => {

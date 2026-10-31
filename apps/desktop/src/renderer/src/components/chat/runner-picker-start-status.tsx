@@ -1,14 +1,11 @@
 import * as React from "react";
 import type { SessionStartStatus } from "@volli/shared/cloud";
-import { makeFunctionReference } from "convex/server";
+import { runnerPickerApi } from "./runner-picker-api";
 import { followCloudSession } from "@renderer/lib/cloud-client";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
 import { Button } from "@renderer/components/ui/button";
 
 export type RunnerStartStatus = SessionStartStatus;
-const statusQuery = makeFunctionReference<"query", { sessionId: string }, RunnerStartStatus | null>(
-  "sessionStarts:status",
-);
 
 export function useRunnerStartStatus(sessionId: string | undefined) {
   const [result, setResult] = React.useState<{
@@ -24,7 +21,9 @@ export function useRunnerStartStatus(sessionId: string | undefined) {
       off = undefined;
       setResult(null);
       if (session === null) return;
-      const watch = session.client.watchQuery(statusQuery, { sessionId });
+      const watch = session.client.watchQuery(runnerPickerApi(session).sessionStarts.status, {
+        sessionId,
+      });
       const read = () => {
         try {
           const status = watch.localQueryResult();

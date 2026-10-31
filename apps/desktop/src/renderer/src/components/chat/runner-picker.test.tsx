@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { api as cloudApi } from "@volli/convex/api";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -47,7 +48,7 @@ async function fixture(cloud = true) {
     },
   }));
   fake.follow.mockImplementation((fn) => {
-    fn({ client: { watchQuery } });
+    fn({ client: { watchQuery }, api: cloudApi });
     return offFollow;
   });
   let state: RunnerPickerState;

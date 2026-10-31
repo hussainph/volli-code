@@ -1,3 +1,4 @@
+import { api as cloudApi } from "@volli/convex/api";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getFunctionName } from "convex/server";
 import type { CloudSession } from "@renderer/lib/cloud-client";
@@ -32,6 +33,7 @@ const intent: RunnerStartIntent = {
 function session(mutation: ReturnType<typeof vi.fn>, connected = true): CloudSession {
   return {
     client: { mutation, connectionState: () => ({ isWebSocketConnected: connected }) },
+    api: cloudApi,
   } as unknown as CloudSession;
 }
 

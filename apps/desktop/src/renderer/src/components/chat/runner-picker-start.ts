@@ -1,9 +1,9 @@
 import { cloudMessageSubmit } from "@volli/shared";
-import type { SessionStartOnArgs, SessionStartOnResult } from "@volli/shared/cloud";
+import type { SessionStartOnArgs } from "@volli/shared/cloud";
 import { queuedWireMessage, type QueuedMessage } from "@volli/session-presentation";
 import { cloudAccountScope as runnerStartAccountScope } from "@renderer/stores/launch";
 export { cloudAccountScope as runnerStartAccountScope } from "@renderer/stores/launch";
-import { makeFunctionReference } from "convex/server";
+import { runnerPickerApi } from "./runner-picker-api";
 import { cloudSession, type CloudSession } from "@renderer/lib/cloud-client";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
 import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
@@ -45,10 +45,6 @@ export function runnerStartText(intent: RunnerStartIntent): string {
     return "";
   }
 }
-
-const startOn = makeFunctionReference<"mutation", RunnerStartIntent, SessionStartOnResult>(
-  "sessionStarts:startOn",
-);
 
 /** Freeze before sending. The Draft remains the pending surface until intake. */
 export async function submitRunnerDraft(
@@ -112,7 +108,10 @@ export async function startOnRunner(
     throw new Error(NOT_CONNECTED);
   }
   try {
-    const result = await session.client.mutation(startOn, intent);
+    const result = await session.client.mutation(
+      runnerPickerApi(session).sessionStarts.startOn,
+      intent,
+    );
     return result.sessionId;
   } catch (error) {
     throw new Error(cloudFailure(error).message, { cause: error });
