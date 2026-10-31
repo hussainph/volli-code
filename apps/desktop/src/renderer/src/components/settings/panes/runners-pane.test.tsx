@@ -275,6 +275,27 @@ describe("Settings → Runners", () => {
     );
   });
 
+  it("keeps a revoked runner's update controls disabled", async () => {
+    const tier = standIn();
+    act(() => root.render(<RunnersPane {...tier.props} />));
+    tier.list([
+      row({
+        id: "box",
+        name: "box",
+        status: "revoked",
+        statusReason: "credential_reuse",
+        autoUpdate: { enabled: true, channel: "stable", pinnedVersion: null },
+      }),
+    ]);
+    await menu("box", "Update now");
+    const controls = [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].filter(
+      (node) => ["Update now", "Automatic updates"].includes(node.textContent?.trim() ?? ""),
+    );
+    expect(controls).toHaveLength(2);
+    expect(controls.every((node) => node.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(tier.cloud.mutations).toHaveLength(0);
+  });
+
   it.each(["mac", "cloud", "future-kind"])(
     "does not offer Linux update controls for %s runners",
     async (kind) => {

@@ -1,8 +1,8 @@
 /**
  * Settings → Runners (VC-895): the person's runners, this Mac among them.
- * Each row is a name (renamed in place), its kind, and its status; this
- * Mac's row is marked. Remove is the one irreversible action, so it is the
- * one confirm.
+ * Each row shows its name, kind, status and reported version; this Mac is
+ * marked. Linux rows with update policy offer one-shot and automatic updates.
+ * Remove is the one irreversible action, so it is the one confirm.
  *
  * This Mac's own registration is main's (`use-runners.ts`): when it is
  * blocked (removed, or its registration failed) the pane shows why and the
@@ -25,6 +25,7 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import type { ThisMacRunnerSnapshot } from "@volli/shared";
+import { runnerPlaceAvailability } from "@volli/shared/cloud";
 
 import { Empty, Health, PrefSection, SectionAction } from "@renderer/components/settings/kit";
 import {
@@ -349,6 +350,7 @@ function RunnerItem({
   const [editing, setEditing] = React.useState(false);
   const [updating, setUpdating] = React.useState(false);
   const updatePending = React.useRef(false);
+  const updateDisabled = updating || runnerPlaceAvailability(runner).kind === "removed";
   const update = (run: () => Promise<unknown>, what: string) => {
     if (updatePending.current) return;
     updatePending.current = true;
@@ -406,7 +408,7 @@ function RunnerItem({
             {runner.kind === "linux" && runner.autoUpdate !== undefined ? (
               <>
                 <DropdownMenuItem
-                  disabled={updating || runner.status === "revoked"}
+                  disabled={updateDisabled}
                   onSelect={() =>
                     update(() => commands.updateNow(runner.id), `Couldn’t update ${runner.name}`)
                   }
@@ -416,7 +418,7 @@ function RunnerItem({
                 </DropdownMenuItem>
                 <DropdownMenuCheckboxItem
                   checked={runner.autoUpdate.enabled}
-                  disabled={updating || runner.status === "revoked"}
+                  disabled={updateDisabled}
                   onCheckedChange={(enabled) =>
                     update(
                       () => commands.setAutoUpdate(runner.id, enabled),
