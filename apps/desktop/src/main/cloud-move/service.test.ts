@@ -79,7 +79,9 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
       ? { userId: account.account.userId, runnerId: RUNNER }
       : null,
   );
-  const token = vi.fn(async () => (account.state === "signed-in" ? "current-token" : null));
+  const token = vi.fn(async (): Promise<string | null> =>
+    account.state === "signed-in" ? "current-token" : null,
+  );
   const accountPort = {
     snapshot: () => account,
     accessToken: token,
