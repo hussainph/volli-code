@@ -33,7 +33,7 @@ once every leg is wired, so it never reads green on a claim it did not test.
 The harness's own unit tests are `node:test` files, run by the job's
 "Harness self-tests" step: `node --test scripts/fake-github/*.test.mjs
 apps/runner/e2e/lib/*.test.mjs`. They are not Vitest files, so
-`apps/runner`'s Vitest config must exclude `e2e/**` (VC-1034 owns it).
+`apps/runner`'s Vitest config includes only `src/**/*.test.ts`; `ci.yml`'s Check + Build runs them too.
 
 ## Doubles and setup
 
