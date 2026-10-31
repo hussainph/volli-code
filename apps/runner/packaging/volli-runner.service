@@ -1,4 +1,4 @@
-# Default system template. `volli-runner install` renders paths and proxy env.
+# Packaged default system template; install renders an equivalent unit with paths and proxy env.
 # No socket activation: the daemon connects outbound and owns its local 0600 socket.
 [Unit]
 Description=Volli runner

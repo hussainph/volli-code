@@ -18,7 +18,7 @@ export const runTool: RunTool = (command, args, options = {}) => {
     stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
     env: options.env,
   });
-  return { status: result.status ?? 1, stdout: result.stdout ?? "" };
+  return { status: result.status ?? 127, stdout: result.stdout ?? "" };
 };
 
 /** Confirmation reads the controlling terminal, never the piped installer script. */

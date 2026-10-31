@@ -23,7 +23,7 @@ it("runs a real process through argv/env without a shell and reports only the ex
     { env: { TEST_VALUE: "from-env" } },
   );
   expect(result).toEqual({ status: 7, stdout: "from-env" });
-  expect(runTool("/does-not-exist", [])).toEqual({ status: 1, stdout: "" });
+  expect(runTool("/does-not-exist", [])).toEqual({ status: 127, stdout: "" });
   expect(runTool(process.execPath, ["-e", ""], { inherit: true })).toEqual({
     status: 0,
     stdout: "",

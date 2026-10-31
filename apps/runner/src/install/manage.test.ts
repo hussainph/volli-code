@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -529,7 +530,12 @@ describe("uninstall", () => {
     ports.confirmPurge = () => true;
     ports.run = (command, args) => {
       calls.push({ command, args });
-      return { status: 0, stdout: "different-home" };
+      if (command === "runuser" && args.includes("--purge")) {
+        for (const path of [at.dataDir, at.configDir])
+          for (const name of readdirSync(path))
+            rmSync(join(path, name), { recursive: true, force: true });
+      }
+      return { status: command === "pgrep" ? 1 : 0, stdout: "different-home" };
     };
     expect(
       await uninstallRunner(input({ purge: true }), context, { ...at, mode: "system" }, ports),
@@ -552,6 +558,33 @@ describe("uninstall", () => {
       uninstallRunner(input({ purge: true, yes: true }), context, { ...at, mode: "system" }, ports),
     ).rejects.toThrow("remaining processes");
     expect(existsSync(at.dataDir)).toBe(true);
+  });
+  it("keeps the privileged parent away from an agent-controlled lock symlink and fails closed without pgrep", async () => {
+    await install();
+    const at = layout();
+    const victim = join(root, "outside-lock");
+    writeFileSync(victim, "not a database");
+    symlinkSync(victim, join(at.dataDir, "runner.lock"));
+    const sys = { ...at, mode: "system" as const };
+    calls.length = 0;
+    expect(await uninstallRunner(input(), context, sys, ports)).toBe(0);
+    expect(readFileSync(victim, "utf8")).toBe("not a database");
+    expect(calls.some((call) => call.command === "chown")).toBe(false);
+    expect(
+      calls.some((call) => call.command === "runuser" && call.args.includes("--revoke-only")),
+    ).toBe(true);
+    ports.run = () => ({ status: 127, stdout: "" });
+    await expect(
+      uninstallRunner(input({ purge: true, yes: true }), context, sys, ports),
+    ).rejects.toThrow("Install procps");
+  });
+  it("warns about user-owned working copies before a user purge", async () => {
+    await install();
+    const at = layout();
+    mkdirSync(join(at.dataDir, "copy"));
+    writeFileSync(join(at.dataDir, "copy/.git"), "gitdir: elsewhere");
+    expect(await uninstallRunner(input({ purge: true, yes: true }), context, at, ports)).toBe(0);
+    expect(calls.some((call) => call.command === "git")).toBe(true);
   });
   it("does not remove an absent account or a user account", async () => {
     ports.systemd = false;

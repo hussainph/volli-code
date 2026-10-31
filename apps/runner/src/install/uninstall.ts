@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, rmdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { createCloudFunctionsClient, createRunnerTokenSource } from "@volli/host-core/cloud-runner";
@@ -19,6 +19,10 @@ export async function revokeRunner(
   context: CommandContext,
   request: typeof fetch = fetch,
 ): Promise<number> {
+  if (context.uid === 0)
+    throw new Error("The credential helper must run as the service user, never root.");
+  if (input.values.purge && !input.values.yes)
+    throw new Error("The purge helper requires confirmed --yes.");
   const paths = pathsFor(input.values, context);
   const lock = existsSync(paths.dataDir) ? acquireInstanceLock(RUNNER, paths.dataDir) : null;
   try {
@@ -46,6 +50,17 @@ export async function revokeRunner(
       );
     }
     await store.clear();
+    if (input.values.purge) {
+      lock?.release();
+      // Root never recursively traverses an agent-writable tree. The credential
+      // owner empties it; root may only rmdir the now-empty managed directories.
+      for (const path of [paths.dataDir, paths.configDir]) {
+        if (existsSync(path)) {
+          for (const name of readdirSync(path))
+            rmSync(join(path, name), { recursive: true, force: true });
+        }
+      }
+    }
     return 0;
   } finally {
     lock?.release();
@@ -97,7 +112,21 @@ export async function uninstallRunner(
   if (ports.systemd && existsSync(unit)) {
     mustRun(ports.run, "systemctl", systemctl(layout, ["disable", "--now", UNIT]));
   }
-  if (existsSync(join(layout.configDir, LINK_FILE_NAME))) {
+  if (layout.mode === "system" && input.values.purge) {
+    const processes = ports.run("pgrep", ["-u", "volli"]).status;
+    if (processes === 0)
+      throw new Error(
+        "Stop the remaining processes owned by volli, then rerun uninstall --purge. Data has not been purged.",
+      );
+    if (processes !== 1)
+      throw new Error(
+        "Could not check service processes. Install procps (pgrep), then rerun uninstall --purge.",
+      );
+  }
+  if (
+    existsSync(join(layout.configDir, LINK_FILE_NAME)) ||
+    (layout.mode === "system" && (existsSync(layout.dataDir) || existsSync(layout.configDir)))
+  ) {
     asRunner(
       layout,
       context,
@@ -109,12 +138,16 @@ export async function uninstallRunner(
         layout.dataDir,
         "--config-dir",
         layout.configDir,
+        ...(layout.mode === "system" && input.values.purge ? ["--purge", "--yes"] : []),
       ],
       true,
     );
   }
   // A foreground process is not stopped by systemctl: never delete beneath it.
-  const lock = existsSync(layout.dataDir) ? acquireInstanceLock(RUNNER, layout.dataDir) : null;
+  const lock =
+    layout.mode === "user" && existsSync(layout.dataDir)
+      ? acquireInstanceLock(RUNNER, layout.dataDir)
+      : null;
   try {
     for (const path of [unit, cli]) {
       // lstat also sees a dangling managed symlink after an interrupted uninstall.
@@ -132,26 +165,21 @@ export async function uninstallRunner(
     rmSync(layout.root, { recursive: true, force: true });
   } finally {
     lock?.release();
-    if (layout.mode === "system" && existsSync(join(layout.dataDir, "runner.lock"))) {
-      mustRun(ports.run, "chown", ["volli:volli", join(layout.dataDir, "runner.lock")]);
-    }
   }
   if (input.values.purge) {
     let removeAccount = false;
     if (layout.mode === "system" && ports.run("id", ["-u", "volli"]).status === 0) {
       const home = mustRun(ports.run, "getent", ["passwd", "volli"]).stdout.trim().split(":")[5];
       if (home === layout.dataDir) {
-        if (ports.run("pgrep", ["-u", "volli"]).status === 0) {
-          throw new Error(
-            "Stop the remaining processes owned by volli, then rerun uninstall --purge. Data has not been purged.",
-          );
-        }
         removeAccount = true;
       } else context.err("Kept the volli account: its home belongs to another installation.\n");
     }
     changed = existsSync(layout.dataDir) || existsSync(layout.configDir) || changed;
-    rmSync(layout.dataDir, { recursive: true, force: true });
-    rmSync(layout.configDir, { recursive: true, force: true });
+    for (const path of [layout.dataDir, layout.configDir]) {
+      if (layout.mode === "system") {
+        if (existsSync(path)) rmdirSync(path);
+      } else rmSync(path, { recursive: true, force: true });
+    }
     if (removeAccount) mustRun(ports.run, "userdel", ["volli"]);
   }
   context.out(`${JSON.stringify({ changed, keptData: !input.values.purge })}\n`);
