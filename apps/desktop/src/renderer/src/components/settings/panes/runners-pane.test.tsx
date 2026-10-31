@@ -112,12 +112,16 @@ const button = (label: string, scope: ParentNode = document): HTMLButtonElement 
 const runnerRow = (id: string): HTMLElement =>
   container.querySelector<HTMLElement>(`[data-testid="runner-${id}"]`)!;
 
-async function menu(name: string, item: string): Promise<void> {
+async function openMenu(name: string): Promise<void> {
   const trigger = container.querySelector<HTMLElement>(`[aria-label="More for ${name}"]`)!;
   await act(async () => {
     trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
   });
-  const found = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+}
+
+async function menu(name: string, item: string): Promise<void> {
+  await openMenu(name);
+  const found = [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find(
     (node) => node.textContent?.trim() === item,
   );
   if (found === undefined) throw new Error(`no menu item "${item}"`);
@@ -163,7 +167,7 @@ describe("Settings → Runners", () => {
     expect(container.querySelector('[data-testid="this-mac-blocked"]')).toBeNull();
   });
 
-  it("shows the backend’s update floor and version without offering unavailable update controls", () => {
+  it("shows the backend’s update floor and version without offering unavailable update controls", async () => {
     const tier = standIn();
     act(() => root.render(<RunnersPane {...tier.props} />));
     tier.push(ONLINE);
@@ -172,8 +176,123 @@ describe("Settings → Runners", () => {
     ]);
     expect(runnerRow("old-linux").textContent).toContain("Needs an update");
     expect(runnerRow("old-linux").textContent).toContain("Version 0.2.9");
-    expect(container.textContent).not.toContain("Update now");
+    await openMenu("old-linux");
+    expect(document.body.textContent).not.toContain("Update now");
+    expect(document.body.textContent).not.toContain("Automatic updates");
   });
+
+  it("requests a one-shot update without enabling automatic updates, and shows the backend's pin", async () => {
+    const tier = standIn();
+    const linux = row({
+      id: "box",
+      name: "box",
+      version: "0.3.0",
+      status: "upgrade_required",
+      autoUpdate: { enabled: false, channel: "stable", pinnedVersion: null },
+    });
+    act(() => root.render(<RunnersPane {...tier.props} />));
+    tier.list([linux]);
+    await menu("box", "Update now");
+    expect(tier.cloud.mutations.map(({ name, args }) => [name, args])).toEqual([
+      ["runners:updateNow", { runnerId: "box" }],
+    ]);
+    await openMenu("box");
+    expect(document.querySelector('[role="menuitemcheckbox"]')?.getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+    const policy = { enabled: false, channel: "stable", pinnedVersion: "0.3.1" };
+    await act(async () => tier.cloud.mutations[0]!.resolve({ autoUpdate: policy }));
+    tier.list([{ ...linux, autoUpdate: policy }]);
+    expect(runnerRow("box").textContent).toContain("Update to 0.3.1 requested");
+    expect(document.querySelector('[role="menuitemcheckbox"]')?.getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    tier.list([{ ...linux, version: "0.3.1", status: "online" }]);
+    expect(runnerRow("box").textContent).not.toContain("requested");
+  });
+
+  it("toggles automatic updates through the owner API without changing channel", async () => {
+    const tier = standIn();
+    const linux = row({
+      id: "box",
+      name: "box",
+      autoUpdate: { enabled: true, channel: "canary", pinnedVersion: null },
+    });
+    act(() => root.render(<RunnersPane {...tier.props} />));
+    tier.list([linux]);
+    await menu("box", "Automatic updates");
+    expect(tier.cloud.mutations[0]).toMatchObject({
+      name: "runners:setAutoUpdate",
+      args: { runnerId: "box", enabled: false },
+    });
+    const policy = { ...linux.autoUpdate!, enabled: false };
+    await act(async () => tier.cloud.mutations[0]!.resolve({ autoUpdate: policy }));
+    tier.list([{ ...linux, autoUpdate: policy }]);
+    await menu("box", "Automatic updates");
+    expect(tier.cloud.mutations[1]).toMatchObject({
+      name: "runners:setAutoUpdate",
+      args: { runnerId: "box", enabled: true },
+    });
+    await act(async () => tier.cloud.mutations[1]!.resolve({ autoUpdate: linux.autoUpdate }));
+  });
+
+  it("surfaces refused updates and policy writes, and refuses disconnected writes", async () => {
+    const tier = standIn();
+    const { toast } = await import("sonner");
+    const error = vi.spyOn(toast, "error");
+    act(() => root.render(<RunnersPane {...tier.props} />));
+    tier.list([
+      row({
+        id: "box",
+        name: "box",
+        autoUpdate: { enabled: true, channel: "stable", pinnedVersion: null },
+      }),
+    ]);
+    await menu("box", "Update now");
+    await act(async () =>
+      tier.cloud.mutations[0]!.reject(
+        refusal("release_unavailable", "No runner update is available yet."),
+      ),
+    );
+    expect(error).toHaveBeenCalledWith(
+      "Couldn’t update box: No runner update is available yet.",
+      expect.anything(),
+    );
+    await menu("box", "Automatic updates");
+    await act(async () =>
+      tier.cloud.mutations[1]!.reject(refusal("not_found", "Runner not found.")),
+    );
+    expect(error).toHaveBeenCalledWith(
+      "Couldn’t change automatic updates for box: Runner not found.",
+      expect.anything(),
+    );
+    tier.cloud.connected = false;
+    await menu("box", "Update now");
+    expect(tier.cloud.mutations).toHaveLength(2);
+    expect(error).toHaveBeenCalledWith(
+      "Couldn’t update box: Volli Cloud isn’t connected yet.",
+      expect.anything(),
+    );
+  });
+
+  it.each(["mac", "cloud", "future-kind"])(
+    "does not offer Linux update controls for %s runners",
+    async (kind) => {
+      const tier = standIn();
+      act(() => root.render(<RunnersPane {...tier.props} />));
+      tier.list([
+        row({
+          id: "box",
+          name: "box",
+          kind,
+          autoUpdate: { enabled: true, channel: "stable", pinnedVersion: null },
+        }),
+      ]);
+      await openMenu("box");
+      expect(document.body.textContent).not.toContain("Update now");
+      expect(document.body.textContent).not.toContain("Automatic updates");
+    },
+  );
 
   it("says quietly while this Mac is being added, and lets its own state speak when it can't reach Volli Cloud", () => {
     const tier = standIn();

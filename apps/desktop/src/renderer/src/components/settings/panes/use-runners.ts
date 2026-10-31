@@ -47,6 +47,12 @@ export interface RunnerRow {
   readonly statusChangedAt: number;
   /** Absent in older read projections; do not invent a version for them. */
   readonly version?: string;
+  /** Missing on older backends; their rows keep update policy read-only. */
+  readonly autoUpdate?: {
+    readonly enabled: boolean;
+    readonly channel: string;
+    readonly pinnedVersion: string | null;
+  };
 }
 
 export type Loaded<Value> =
@@ -62,6 +68,8 @@ export interface RunnerCommands {
   rename(runnerId: string, name: string): Promise<string>;
   /** Removes another of the person's runners. */
   remove(runnerId: string): Promise<unknown>;
+  updateNow(runnerId: string): Promise<unknown>;
+  setAutoUpdate(runnerId: string, enabled: boolean): Promise<unknown>;
   addThisMac(): Promise<unknown>;
   removeThisMac(): Promise<unknown>;
 }
@@ -95,6 +103,12 @@ function runnerCommands(rpc: RunnersRpc, current: () => CloudSession | null): Ru
       ).name,
     remove: (runnerId) =>
       write(current, ({ client, api }) => client.mutation(api.runners.remove, { runnerId })),
+    updateNow: (runnerId) =>
+      write(current, ({ client, api }) => client.mutation(api.runners.updateNow, { runnerId })),
+    setAutoUpdate: (runnerId, enabled) =>
+      write(current, ({ client, api }) =>
+        client.mutation(api.runners.setAutoUpdate, { runnerId, enabled }),
+      ),
     addThisMac: () => rpc.runners.addThisMac.mutate(),
     removeThisMac: () => rpc.runners.removeThisMac.mutate(),
   };

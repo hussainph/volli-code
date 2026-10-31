@@ -14,6 +14,8 @@
  * Shown only in a Volli Cloud launch: the category does not exist otherwise.
  */
 import * as React from "react";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
 import { CloudIcon } from "@phosphor-icons/react/dist/csr/Cloud";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
@@ -40,6 +42,7 @@ import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -344,6 +347,21 @@ function RunnerItem({
   onRemove: () => void;
 }) {
   const [editing, setEditing] = React.useState(false);
+  const [updating, setUpdating] = React.useState(false);
+  const updatePending = React.useRef(false);
+  const update = (run: () => Promise<unknown>, what: string) => {
+    if (updatePending.current) return;
+    updatePending.current = true;
+    setUpdating(true);
+    act(async () => {
+      try {
+        await run();
+      } finally {
+        updatePending.current = false;
+        setUpdating(false);
+      }
+    }, what);
+  };
   return (
     <ListRow
       data-testid={`runner-${runner.id}`}
@@ -366,7 +384,11 @@ function RunnerItem({
         )
       }
       primaryTrailing={thisMac ? <Badge variant="outline">This Mac</Badge> : undefined}
-      secondary={runner.version ? `Version ${runner.version}` : undefined}
+      secondary={
+        runner.version
+          ? `Version ${runner.version}${runner.autoUpdate?.pinnedVersion ? ` · Update to ${runner.autoUpdate.pinnedVersion} requested` : ""}`
+          : undefined
+      }
       trailing={<Health state={status.state}>{status.label}</Health>}
       actions={
         <DropdownMenu>
@@ -381,6 +403,33 @@ function RunnerItem({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {runner.kind === "linux" && runner.autoUpdate !== undefined ? (
+              <>
+                <DropdownMenuItem
+                  disabled={updating || runner.status === "revoked"}
+                  onSelect={() =>
+                    update(() => commands.updateNow(runner.id), `Couldn’t update ${runner.name}`)
+                  }
+                >
+                  <ArrowClockwiseIcon />
+                  Update now
+                </DropdownMenuItem>
+                <DropdownMenuCheckboxItem
+                  checked={runner.autoUpdate.enabled}
+                  disabled={updating || runner.status === "revoked"}
+                  onCheckedChange={(enabled) =>
+                    update(
+                      () => commands.setAutoUpdate(runner.id, enabled),
+                      `Couldn’t change automatic updates for ${runner.name}`,
+                    )
+                  }
+                >
+                  <ArrowsClockwiseIcon />
+                  Automatic updates
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
             <DropdownMenuItem onSelect={() => setEditing(true)}>
               <PencilSimpleIcon />
               Rename
