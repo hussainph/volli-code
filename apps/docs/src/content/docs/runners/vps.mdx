@@ -11,11 +11,12 @@ not sit between you and the provider — you make the server, paste one snippet,
 and the box turns itself into a runner.
 
 **Settings → Runners → Get an always-on runner** makes the snippet, with the
-provider, the name and a one-time token already in it.
+name and a one-time token already in it.
 
 <Aside type="note">
-  **Settings → Runners** appears in a Volli Cloud launch. A signed-out local
-  launch has no runners.
+  **Settings → Runners** appears in a Volli Cloud launch: signed in, with the
+  **Volli Cloud (unstable)** experimental flag on. A signed-out local launch
+  has no runners.
 </Aside>
 
 ## The server to make
@@ -28,14 +29,18 @@ provider, the name and a one-time token already in it.
 | Network | A public address, and no inbound rule: the runner makes outbound connections only |
 | User data / cloud-init | Where the snippet goes. Every provider below has one |
 
-The smallest shared instance is enough to start: the heavy part of a Session
-is the model call, which your model provider runs, not the box.
+A small shared instance is enough to begin with: the heavy part of a Session is
+the model call, which your model provider runs, not the box. Give it more CPU
+if Sessions on it will build and test large projects.
 
 ## Get the snippet
 
 1. In Volli, open **Settings → Runners → Get an always-on runner**.
-2. Pick the provider, and type the name you want to see in the composer.
-3. Select **Copy cloud-init**.
+2. Optionally type a **Runner name**; blank uses the box's own hostname.
+3. Select **Create install command**.
+4. Pick the **Provider** — Hetzner, DigitalOcean, or Other for any cloud-init
+   server. It changes the instructions beside the snippet, not the snippet.
+5. Select **Copy cloud-init**.
 
 The snippet is `#cloud-config` user data. It installs `curl`, downloads the
 installer for your app's version into a private temporary file, and runs it as
@@ -58,6 +63,11 @@ runcmd:
 
 The token expires an hour after the sheet made it, so create the server right
 away. A server started later fails to link and needs a fresh snippet.
+
+The snippet installs one package, `curl`, so the server needs your
+distribution's package mirror once. It does not install git: add `git` to the
+`packages` list, or install it afterwards, if the image has none and Sessions
+on this box will clone and push. Sessions need git 2.31 or newer.
 
 ## Hetzner
 
@@ -91,8 +101,9 @@ and its name appears in the composer's runner menu.
 
 Then:
 
-1. **Delete the user data at your provider.** It holds the token until you do.
-   The runner is linked by then and does not need it again.
+1. **Delete the user data at your provider** if it lets you. The token is
+   single-use and spent once the runner links, but user data stays readable to
+   the server's own metadata service until it is gone.
 2. **Run one Session on it.** Pick the box in the composer, start a small
    Session, and watch it finish. This proves cloning, the model sign-in and
    the push on a real box.
@@ -101,7 +112,7 @@ Then:
    the one command that fixes it.
 
 If the model list is empty for this runner, sign a provider in on the box:
-`volli-runner login anthropic --api-key`. See [Add a Linux
+`sudo volli-runner login <provider>`. See [Add a Linux
 runner](/runners/linux/#sign-in-a-model).
 
 ## Reboots, updates and SSH
@@ -124,7 +135,7 @@ sudo journalctl -u volli-runner -n 50
 sudo volli-runner status          # one JSON report, with the reason it is not serving
 ```
 
-The usual causes are a token that expired before the server booted, an image
-without `curl` or `wget`, and a server that cannot reach the deployment. The
-runner's status names which. To start over, delete the server and create it
-again with a fresh snippet.
+The usual causes are a token that expired before the server booted, a package
+install that failed (no route to the distribution's mirror), and a server that
+cannot reach the deployment. The runner's status names which. To start over,
+delete the server and create it again with a fresh snippet.

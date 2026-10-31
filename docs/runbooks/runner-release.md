@@ -5,8 +5,9 @@
 > GitHub Releases for the channel pointers that make runners update. There is
 > no separate download origin yet: `dl.volli.app` is not live, and every URL in
 > a published manifest is a GitHub release URL. Runner behavior itself is
-> [`apps/runner/README.md`](../../apps/runner/README.md); the installer's
-> contract is C3 in the BYO sprint plan (planning material, not in the repo).
+> [`apps/runner/README.md`](../../apps/runner/README.md), and the installer's
+> flags are the release contract the app's **Add a runner** sheet also uses
+> (`apps/runner/packaging/install.sh`, stamped on the way into the asset set).
 
 A runner release is a tarball per architecture, a manifest that describes them,
 a version-stamped installer, checksums, and a Sigstore provenance bundle — all
@@ -46,10 +47,13 @@ unknown field is schema drift, and a newer shape arrives as a new
 
 - **`minRunnerVersion` is the compatibility floor**, not a download gate: the
   oldest runner the backend still accepts. A runner below it is told it needs
-  an update and takes no new Sessions. It defaults to this release's own
-  version — which forces every older runner up — so pass a lower
-  `--min-runner-version` when a release must not move the floor. It is never
-  newer than the release's own version.
+  an update and takes no new Sessions. The generator defaults it to the
+  release's own version, and **the workflow calls the generator with
+  `--assets` only**, so every published release raises the floor to itself.
+  The override today is to pin the channel with the lower floor you want (see
+  [Hold or roll back a channel](#hold-or-roll-back-a-channel)); adding a
+  `min_runner_version` workflow input is the follow-up. It is never newer than
+  the release's own version.
 - **`minGlibc` is `2.31`**, the baseline the artifacts are built and probed
   against. Changing it is a schema change, not a per-release flag: the
   installer and the backend both compare against this one value.
@@ -80,7 +84,10 @@ Two jobs in `release.yml`:
 Both the desktop dry run and the publisher depend on `runner-assets`, so a
 runner asset failure blocks the whole release, including the desktop build.
 After a failure use **Re-run all jobs**, not "re-run failed jobs"
-(actions/download-artifact#486 reports cross-attempt 404s).
+(actions/download-artifact#486 reports cross-attempt 404s). A button-mode
+`prepare` is not idempotent and can bump the version again on a full rerun, so
+choose the retry or the version deliberately — the same rule as
+[the hostd runbook](hostd-release.md#workflow-and-safe-dry-run).
 
 ### Dry run a branch
 
@@ -179,19 +186,19 @@ the channel moved, then unpin if you pinned.
 
 ```sh
 gh release download v<version> --repo hussainph/volli-code -p 'volli-runner-*' -D runner-assets
-cd runner-assets && sha256sum -c volli-runner-SHA256SUMS
+cd runner-assets && shasum -a 256 -c volli-runner-SHA256SUMS   # sha256sum -c on Linux
 gh attestation verify volli-runner-<version>-linux-x64.tar.gz --repo hussainph/volli-code
 ```
 
-`gh attestation verify` checks the tarball's digest in the signed statement. A
-button-dispatched release's workflow identity ends in `@refs/heads/main`
-instead of `@refs/tags/v<version>`; use the identity of that release's run. With
-`cosign` and the bundle:
+`gh attestation verify` checks the tarball's digest in the signed statement.
+Check the identity the release was actually built from: a button-dispatched
+release signs as `@refs/heads/main`, and a release cut from a pushed tag signs
+as `@refs/tags/v<version>`. With `cosign` and the bundle:
 
 ```sh
 cosign verify-blob-attestation --type slsaprovenance1 \
   --bundle volli-runner-provenance.sigstore.json \
-  --certificate-identity 'https://github.com/hussainph/volli-code/.github/workflows/release.yml@refs/tags/v<version>' \
+  --certificate-identity 'https://github.com/hussainph/volli-code/.github/workflows/release.yml@refs/heads/main' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   volli-runner-<version>-linux-x64.tar.gz
 ```
