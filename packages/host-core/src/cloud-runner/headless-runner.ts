@@ -91,6 +91,7 @@ export interface HeadlessRunner {
 }
 
 export const HEADLESS_RUNNER_RETRY = { baseMs: 1_000, maxMs: 60_000 } as const;
+const PRESENCE_MUTATIONS = new Set<string>(Object.values(RUNNER_PRESENCE_FUNCTIONS));
 
 function unauthorized(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -298,8 +299,7 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const mutation = raw.mutate(name, args, callOptions);
-        if (!(Object.values(RUNNER_PRESENCE_FUNCTIONS) as string[]).includes(name))
-          return await mutation;
+        if (!PRESENCE_MUTATIONS.has(name)) return await mutation;
         return await Promise.race([
           mutation,
           new Promise<never>((_, reject) => {
