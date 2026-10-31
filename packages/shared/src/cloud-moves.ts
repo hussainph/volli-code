@@ -50,6 +50,38 @@ export interface CloudMovePreflight {
   exclusions: CloudMoveExclusion[];
 }
 
+/**
+ * What a running dry run is doing, in the order it does it. `snapshot` to
+ * `history` are the export's own steps; `checking` and `planning` are the
+ * dry run's checks around it; `sizing` is the profile-wide disk estimate.
+ */
+export const CLOUD_MOVE_PREFLIGHT_PHASES = [
+  "starting",
+  "checking",
+  "snapshot",
+  "reading",
+  "exporting",
+  "history",
+  "verifying",
+  "planning",
+  "sizing",
+] as const;
+export type CloudMovePreflightPhase = (typeof CLOUD_MOVE_PREFLIGHT_PHASES)[number];
+
+/** A running dry run's progress: names and counts only, never record content. */
+export interface CloudMovePreflightProgress {
+  phase: CloudMovePreflightPhase;
+  /** 1-based position of the project being checked; 0 before the first and while sizing. */
+  projectIndex: number;
+  projectCount: number;
+  projectName: string | null;
+  /** Work done of `total` inside this phase, when the phase can count it. */
+  done: number | null;
+  total: number | null;
+  unit: "records" | "files" | null;
+  startedAt: number;
+}
+
 export interface CloudMoveStartInput {
   preflightId: string;
   projectIds: string[];
@@ -164,4 +196,6 @@ export interface CloudMoveSnapshot {
   moves: CloudMoveStatus[];
   /** A missing dependency, sign-in or access problem. Null when new moves can be prepared. */
   unavailable: string | null;
+  /** The dry run running now, if any. */
+  preflight: CloudMovePreflightProgress | null;
 }

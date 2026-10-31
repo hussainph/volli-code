@@ -1,9 +1,18 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { migrationDocument, MigrationRowError } from "@volli/shared/cloud";
 import {
   writeMoveProfile,
@@ -392,4 +401,139 @@ it("exports the profile step alone: personal settings and unbound Automations, n
   expect(entries.length).toBeGreaterThan(0);
   expect(new Set(entries.map((entry) => entry.level))).toEqual(new Set(["personal"]));
   expect(entries.map((entry) => entry.name)).toContain("Everywhere");
+});
+
+describe("a dry run's export (VC-1029)", () => {
+  it("measures the history a copy carries, checking it the same way, and stages none of it", async () => {
+    const f = fixture(256);
+    const copy = await exportMigrationSnapshot(options(f));
+    const measured = await exportMigrationSnapshot({
+      ...options(f),
+      outDir: join(f.root, "measured"),
+      measureHistory: true,
+    });
+    const history = measured.manifest.historyMeasured!;
+    const copied = streamRecords(copy.outDir, copy.manifest, "transcriptArtifacts");
+    const slices = streamRecords(copy.outDir, copy.manifest, "piLogs");
+    expect(history).toEqual({
+      transcripts: copied.length,
+      transcriptBytes: copied.reduce(
+        (sum, record) => sum + Buffer.byteLength(record.canonicalJson as string),
+        0,
+      ),
+      piSlices: slices.length,
+      piLogBytes: slices.reduce((sum, record) => sum + (record.sourceBytes as number), 0),
+    });
+    expect(history.transcripts).toBe(256);
+    expect(copy.manifest.historyMeasured).toBeUndefined();
+    for (const name of ["transcriptArtifacts", "piLogs"])
+      expect(measured.manifest.streams.find((stream) => stream.name === name)).toMatchObject({
+        records: 0,
+        bytes: 0,
+        chunks: [],
+      });
+    expect(existsSync(join(measured.outDir, "streams", "transcriptArtifacts"))).toBe(false);
+    expect(measured.manifest.piLogFiles).toEqual(copy.manifest.piLogFiles);
+    await expect(verifyMigrationExport(measured.outDir)).resolves.toMatchObject({
+      manifest: { historyMeasured: history },
+    });
+  }, 60000);
+  it.each(["transcript", "pi"] as const)(
+    "refuses a %s fault while measuring, exactly as a copy does",
+    async (fault) => {
+      const f = fixture(3, fault);
+      await expect(
+        exportMigrationSnapshot({ ...options(f), measureHistory: true }),
+      ).rejects.toMatchObject({
+        code: "source_corrupt",
+        message: expect.stringMatching(new RegExp(fault === "pi" ? "Pi attachment" : fault)),
+      });
+    },
+  );
+  it("refuses a measured manifest that claims a different coverage", async () => {
+    const f = fixture(8);
+    const { outDir, manifest } = await exportMigrationSnapshot({
+      ...options(f),
+      measureHistory: true,
+    });
+    const tampered = {
+      ...manifest,
+      historyMeasured: { ...manifest.historyMeasured!, transcripts: 7 },
+    };
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(tampered));
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow("Transcript digest coverage");
+  });
+  it.each([
+    ["transcripts", { transcripts: 1.5 }, "carries no history"],
+    ["transcriptBytes", { transcriptBytes: -0.5 }, "carries no history"],
+    ["piSlices", { piSlices: Number.NaN }, "carries no history"],
+    ["piLogBytes", { piLogBytes: 2 ** 60 }, "carries no history"],
+    ["Pi coverage", { piLogBytes: 1 }, "Pi log coverage is incomplete"],
+  ] as const)("refuses a measured manifest with a forged %s", async (_name, forged, message) => {
+    const f = fixture(2);
+    const { outDir, manifest } = await exportMigrationSnapshot({
+      ...options(f),
+      measureHistory: true,
+    });
+    const tampered = { ...manifest, historyMeasured: { ...manifest.historyMeasured!, ...forged } };
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(tampered));
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow(message);
+  });
+  it("refuses a copy that claims to be a measure", async () => {
+    const f = fixture(2);
+    const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+    const tampered = {
+      ...manifest,
+      historyMeasured: { transcripts: 2, transcriptBytes: 1, piSlices: 1, piLogBytes: 1 },
+    };
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(tampered));
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow("carries no history");
+  });
+  it("takes one snapshot for several projects: later exports link it instead of copying", async () => {
+    const f = fixture();
+    const kept = join(f.root, "kept.db");
+    const first = await exportMigrationSnapshot({
+      ...options(f),
+      outDir: join(f.root, "first"),
+      measureHistory: true,
+      sharedSnapshot: { keepAt: kept },
+    });
+    // The kept file is the first export's own snapshot, linked rather than copied.
+    expect(statSync(kept).nlink).toBe(1);
+    const later = exportMigrationSnapshot({
+      ...options(f, [MOVE_IDS.project]),
+      outDir: join(f.root, "second"),
+      measureHistory: true,
+      sharedSnapshot: { from: kept },
+      onProgress: (progress) => {
+        if (progress.phase !== "verifying") return;
+        const staged = join(f.root, "second.partial", "snapshot.db");
+        expect(statSync(staged).ino).toBe(statSync(kept).ino);
+      },
+    });
+    const second = await later;
+    expect(second.manifest.snapshotAt).toBe(first.manifest.snapshotAt);
+    expect(second.manifest.projectIds).toEqual([MOVE_IDS.project]);
+    expect(readdirSync(join(f.root, "second"))).not.toContain("snapshot.db");
+    expect(existsSync(kept)).toBe(true);
+    await expect(
+      exportMigrationSnapshot({
+        ...options(f, [MOVE_IDS.project]),
+        outDir: join(f.root, "third"),
+        sharedSnapshot: { from: join(f.root, "missing.db") },
+      }),
+    ).rejects.toMatchObject({ code: "source_unreadable" });
+    // A kept snapshot of another database is never someone else's export.
+    const other = fixture();
+    await expect(
+      exportMigrationSnapshot({
+        ...options(other, [MOVE_IDS.project]),
+        outDir: join(other.root, "fourth"),
+        sharedSnapshot: { from: kept },
+      }),
+    ).rejects.toMatchObject({
+      code: "source_unreadable",
+      message: expect.stringMatching(/another/),
+    });
+  });
 });

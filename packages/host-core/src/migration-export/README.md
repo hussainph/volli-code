@@ -75,6 +75,26 @@ move-authorized transcript/Pi segment doors. It must not pass a source hash as a
 segment object's hash. The dry run stages and reads back source chunks only;
 it does not claim a Session is yet viewable through those segment doors.
 
+## Dry run
+
+A move's dry run (desktop `cloud-move/preflight.ts`) exports each project with
+two options a move never uses:
+
+- `measureHistory`: transcripts and Pi logs are read and checked exactly as a
+  copy reads them (digests, UTF-8, Pi layout, line bounds, stability), but only
+  counted. The manifest carries `historyMeasured` (artifact count, canonical
+  bytes, Pi slices, Pi bytes) and empty history streams; the verifier checks
+  that count against the transcript references and the Pi bytes against
+  `piLogFiles`. The move engine refuses such an export.
+- `sharedSnapshot`: the first export keeps its fresh snapshot (`keepAt`, a hard
+  link plus a sidecar with its time and source), and every later project's
+  export links that one (`from`) instead of copying the database again, so one
+  dry run checks every project against one instant.
+
+Transcript artifacts are read a bounded window ahead (they are one small file
+each), yielded and refused in row order. Exports report `historyRecords` read
+during `finalizing`.
+
 ## Import contract
 
 The move engine converts one selected project's export into exactly

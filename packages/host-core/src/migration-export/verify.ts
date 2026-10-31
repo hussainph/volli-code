@@ -189,14 +189,35 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
     records += streamRecords;
     bytes += streamBytes;
   }
-  if (
-    references.size !== artifacts.size ||
-    [...references].some(([key, digest]) => artifacts.get(key) !== digest)
-  )
-    fail("Transcript digest coverage is incomplete.");
-  if (expectedPiFiles.size !== piFiles.size) fail("Pi log coverage is incomplete.");
-  for (const state of piFiles.values())
-    if (state.through !== state.bytes) fail("Pi log coverage is incomplete.");
+  const measured = manifest.historyMeasured;
+  if (measured !== undefined) {
+    // A dry run's export read every artifact and Pi file and copied none: its
+    // coverage is the count it read, and its history streams stay empty.
+    if (
+      !Number.isSafeInteger(measured.transcripts) ||
+      !Number.isSafeInteger(measured.transcriptBytes) ||
+      !Number.isSafeInteger(measured.piSlices) ||
+      !Number.isSafeInteger(measured.piLogBytes) ||
+      artifacts.size !== 0 ||
+      piFiles.size !== 0
+    )
+      fail("A measured export carries no history.");
+    if (references.size !== measured.transcripts) fail("Transcript digest coverage is incomplete.");
+    const expectedPiBytes = [...expectedPiFiles.values()].reduce(
+      (sum, file) => sum + file.fileBytes,
+      0,
+    );
+    if (expectedPiBytes !== measured.piLogBytes) fail("Pi log coverage is incomplete.");
+  } else {
+    if (
+      references.size !== artifacts.size ||
+      [...references].some(([key, digest]) => artifacts.get(key) !== digest)
+    )
+      fail("Transcript digest coverage is incomplete.");
+    if (expectedPiFiles.size !== piFiles.size) fail("Pi log coverage is incomplete.");
+    for (const state of piFiles.values())
+      if (state.through !== state.bytes) fail("Pi log coverage is incomplete.");
+  }
   for (const file of await listStreamFiles(dir)) {
     if (!named.has(file)) fail(`${file} is not named by the manifest.`);
   }

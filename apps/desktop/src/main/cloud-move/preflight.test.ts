@@ -10,14 +10,29 @@
  * project's counts are what its export and plan actually carry, and a refusal
  * is one the exporter really raised.
  */
-import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createMoveEngine, type MoveEnginePorts } from "@volli/host-core/cloud-move";
 import { automaticBackupDiskRequirement } from "@volli/host-core/migration-export";
-import type { CloudMoveCounts, CloudMoveProject, SessionTranscriptDigest } from "@volli/shared";
+import type {
+  CloudMoveCounts,
+  CloudMovePreflightProgress,
+  CloudMoveProject,
+  SessionTranscriptDigest,
+} from "@volli/shared";
+import { createLogger } from "@volli/host-core/log";
 import {
   MOVE_IDS,
   writeMoveProfile,
@@ -460,6 +475,113 @@ describe("one project's refusal", () => {
     expect(project(answered, CAFE).counts).toMatchObject({ tickets: 1, sessions: 1 });
     expect(answered.summaries[CAFE]!.counts).toEqual(project(answered, CAFE).counts);
     // The refused project's half-written export is deleted with its scratch directory.
+    expect(scratchDirs(fixture)).toEqual([]);
+  });
+});
+
+/** Every line a logger was given, as the log file would hold it. */
+function recordingLog() {
+  const lines: Record<string, unknown>[] = [];
+  const log = createLogger({
+    component: "cloud-move",
+    level: "debug",
+    sink: { write: (record) => lines.push(record as unknown as Record<string, unknown>) },
+  });
+  return { log, lines };
+}
+
+describe("a dry run at scale (VC-1029)", () => {
+  /**
+   * The owner's profile: 878k events, ~580k transcript artifacts, 8 GB of Pi
+   * logs. A dry run must finish it in five minutes, so its cost may not grow
+   * with what a copy of the history would weigh: it takes one snapshot for
+   * every project, and checks the history without staging it. This profile is
+   * that shape scaled down (thousands of artifacts, two projects plus a
+   * removed one); its time bound is the owner's target scaled the same way,
+   * with ten times the slack, on a floor for worker start-up on a cold disk.
+   */
+  const ARTIFACTS = 4096;
+  const OWNER_ARTIFACTS = 582_366;
+  const BUDGET_MS = 30_000 + Math.ceil(((5 * 60_000 * ARTIFACTS) / OWNER_ARTIFACTS) * 10);
+
+  it("takes one snapshot, stages no history, logs every phase, and stays inside its scaled budget", async () => {
+    const fixture = setup({ artifacts: ARTIFACTS });
+    const { log, lines } = recordingLog();
+    const preflightRoot = join(fixture.workRoot, "preflight");
+    const staged: { phase: string; files: string[]; inodes: number[] }[] = [];
+    const seen: CloudMovePreflightProgress[] = [];
+    const startedAt = performance.now();
+    const answered = await fixture.run(
+      { projectIds: [ALPHA, CAFE] },
+      {
+        log,
+        onProgress: (progress) => {
+          seen.push(progress);
+          if (progress.phase !== "verifying" && progress.phase !== "planning") return;
+          // What the scratch holds once a project's export is published.
+          const files: string[] = [];
+          const walk = (directory: string) => {
+            for (const entry of readdirSync(directory, { withFileTypes: true })) {
+              const path = join(directory, entry.name);
+              if (entry.isDirectory()) walk(path);
+              else files.push(path.slice(preflightRoot.length));
+            }
+          };
+          walk(preflightRoot);
+          const kept = files.filter((file) => file.endsWith("/snapshot.db"));
+          staged.push({
+            phase: progress.phase,
+            files,
+            inodes: kept.map((file) => statSync(join(preflightRoot, file)).ino),
+          });
+        },
+      },
+    );
+    const elapsed = performance.now() - startedAt;
+
+    expect(answered.failures).toEqual({});
+    expect(project(answered, ALPHA).counts?.transcriptBytes).toBeGreaterThan(50 * 1024 * 1024);
+    // No history chunk is ever staged, and one snapshot file serves every project.
+    expect(staged.length).toBeGreaterThanOrEqual(4);
+    for (const moment of staged) {
+      expect(moment.files.filter((file) => /transcriptArtifacts|piLogs/.test(file))).toEqual([]);
+      expect(moment.inodes).toHaveLength(1);
+    }
+    // The same kept file from the first project to the last: never taken twice.
+    expect(new Set(staged.flatMap((moment) => moment.inodes)).size).toBe(1);
+    // The phases a person sees, in order, with counts while exporting.
+    expect([...new Set(seen.map((progress) => progress.phase))]).toEqual([
+      "checking",
+      "snapshot",
+      "reading",
+      "exporting",
+      "history",
+      "verifying",
+      "planning",
+      "sizing",
+    ]);
+    expect(seen.some((progress) => progress.phase === "history" && progress.done! > 0)).toBe(true);
+    expect(seen.every((progress) => progress.projectCount === 2)).toBe(true);
+    // Every phase's start is logged with its end and duration; no name, path or content.
+    const started = lines.filter((line) => line.msg === "dry run phase started");
+    const finished = lines.filter((line) => line.msg === "dry run phase finished");
+    expect(finished).toHaveLength(started.length);
+    for (const line of finished) expect(line.durationMs).toEqual(expect.any(Number));
+    expect(lines.at(-1)).toMatchObject({ msg: "dry run finished", outcome: "ok" });
+    const text = JSON.stringify(lines);
+    for (const secret of [fixture.root, "Alpha", "Caf", "日本語"])
+      expect(text).not.toContain(secret);
+    expect(scratchDirs(fixture)).toEqual([]);
+    expect(elapsed).toBeLessThan(BUDGET_MS);
+  }, 120_000);
+
+  it("sweeps the scratch a dry run cut short by a quit or a restart left behind", async () => {
+    const fixture = setup();
+    const abandoned = join(fixture.workRoot, "preflight", "6b0c4bde-0000-4000-8000-000000000001");
+    mkdirSync(join(abandoned, CAFE, "export.partial"), { recursive: true });
+    writeFileSync(join(abandoned, CAFE, "export.partial", "snapshot.db"), "left behind");
+    await fixture.run({ projectIds: [CAFE] });
+    expect(existsSync(abandoned)).toBe(false);
     expect(scratchDirs(fixture)).toEqual([]);
   });
 });

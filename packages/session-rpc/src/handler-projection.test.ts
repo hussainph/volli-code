@@ -17,6 +17,7 @@ import {
   HANDLER_PROJECTION_KEYS,
   HandlerRefusedError,
   CATALOG_HANDLER_KEYS,
+  OperationCancelledError,
   OperationUnavailableError,
   type HandlerCall,
   type Ticket,
@@ -417,6 +418,33 @@ describe("what a handler is told about the call", () => {
     const stream = await session.session.subscribe(SESSION);
     await expect(stream[Symbol.asyncIterator]().next()).rejects.toMatchObject({
       reason: "operation-unavailable",
+    });
+  });
+
+  it("answers a cancelled operation as operation-cancelled, never as unavailable", async () => {
+    await expect(
+      hostAnswer(() => {
+        throw new OperationCancelledError("The dry run was cancelled. Run it again.");
+      }),
+    ).rejects.toMatchObject({
+      code: "CLIENT_CLOSED_REQUEST",
+      reason: "operation-cancelled",
+      message: "The dry run was cancelled. Run it again.",
+    });
+    await expect(
+      hostAnswer(() => {
+        throw { [Symbol.for("@volli/operation-cancelled")]: true };
+      }),
+    ).rejects.toMatchObject({ reason: "operation-cancelled" });
+    const handlers = {
+      "settings.experiments": () => {
+        throw new OperationCancelledError("Cancelled");
+      },
+    } as never;
+    const { session } = routerCallers(handlers);
+    await expect(session.settings.experiments()).rejects.toMatchObject({
+      code: "CLIENT_CLOSED_REQUEST",
+      reason: "operation-cancelled",
     });
   });
 });
