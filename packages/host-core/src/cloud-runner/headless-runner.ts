@@ -22,8 +22,14 @@ import { convexBackendConnection, type ConvexClientModule } from "./convex-conne
 import { createMutationGate } from "./flow";
 import type { RunnerLinkStore } from "./link";
 import { createRunnerLinkClient, type RunnerFetch } from "./link-client";
-import { createRunnerPresence, runnerPresenceBackend, type RunnerPresence } from "./presence";
-import { createRunnerTokenSource } from "./token-source";
+import {
+  createRunnerPresence,
+  isRevokedError,
+  RUNNER_PRESENCE_FUNCTIONS,
+  runnerPresenceBackend,
+  type RunnerPresence,
+} from "./presence";
+import { createRunnerTokenSource, type RunnerLinkLoss } from "./token-source";
 
 export type HeadlessRunnerTarget = Pick<
   RunnerHeartbeatReply,
@@ -63,10 +69,10 @@ export interface HeadlessRunnerOptions {
   onChange?(snapshot: HeadlessRunnerSnapshot): void;
   /** The same sync hook as desktop's runnerConnector, over the one authenticated link. */
   sync?(connection: HeadlessRunnerConnection): CloudRunnerSyncConnection;
-  onLost?(reason: "revoked" | "unlinked"): void;
+  onLost?(reason: RunnerLinkLoss): void;
   bootId?: string;
   random?(): number;
-  /** Bounds a half-open WebSocket call (including heartbeat) before reconnecting. */
+  /** Bounds presence calls on a half-open socket; inbox/accept calls retain the link's retry semantics. */
   callTimeoutMs?: number;
 }
 
@@ -88,13 +94,8 @@ export const HEADLESS_RUNNER_RETRY = { baseMs: 1_000, maxMs: 60_000 } as const;
 
 function unauthorized(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
-  const fields = error as { status?: unknown; code?: unknown; data?: { code?: unknown } };
-  return (
-    fields.status === 401 ||
-    fields.code === "revoked" ||
-    fields.data?.code === "revoked" ||
-    fields.code === "invalid_credential"
-  );
+  const fields = error as { status?: unknown; code?: unknown };
+  return fields.status === 401 || isRevokedError(error) || fields.code === "invalid_credential";
 }
 
 export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRunner {
@@ -145,13 +146,13 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
     retry = null;
   }
 
-  function revoke(reason: "revoked" | "unlinked" = "revoked") {
+  function revoke(reason: RunnerLinkLoss = "revoked") {
     if (ended) return;
     ended = true;
     cancelRetry();
     offStatus?.();
     offCapabilities?.();
-    publish(reason);
+    publish(reason === "unlinked" ? "unlinked" : "revoked");
     const live = connection;
     if (live !== null) {
       // Close first: no stopped report, nor queued claims, may leave a revoked link.
@@ -159,8 +160,11 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
         .close()
         .catch(() => {})
         .then(async () => {
-          if (sync !== null) await sync.close();
-          else await live.presence.stop();
+          try {
+            await sync?.close();
+          } finally {
+            await live.presence.stop();
+          }
         })
         .catch(() => options.log.warn("Headless runner revoked-connection cleanup failed."));
     }
@@ -192,11 +196,14 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
   function unavailable(error: unknown) {
     if (ended) return;
     if (unauthorized(error)) return revoke();
+    if (!started) return;
     republishOnBeat = true;
     publishedCapabilities = null;
     publish("offline");
     options.log.warn("Headless runner could not reach the backend; reconnecting.");
-    if (!started) return;
+    // Transport outages belong to BackendLink. This timer covers initial
+    // HTTP exchange failures and a socket that reads up but cannot heartbeat.
+    if (connection !== null && connection.link.status.state !== "connected") return;
     schedule(async () => {
       if (connection === null) await open();
       else {
@@ -212,11 +219,7 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       fetch: options.convex.fetch,
     }),
     store: options.linkStore,
-    onLinkLost: (reason) => {
-      if (reason === "unlinked" && !ended) {
-        revoke("unlinked");
-      } else revoke();
-    },
+    onLinkLost: revoke,
   });
 
   async function token(request: { forceRefreshToken: boolean }) {
@@ -289,8 +292,11 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       if (name === "runnerJobs:claim" && !snapshot.canClaim) return [];
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        const mutation = raw.mutate(name, args, callOptions);
+        if (!(Object.values(RUNNER_PRESENCE_FUNCTIONS) as string[]).includes(name))
+          return await mutation;
         return await Promise.race([
-          raw.mutate(name, args, callOptions),
+          mutation,
           new Promise<never>((_, reject) => {
             timer = setTimeout(
               () => reject(new Error("Runner backend call timed out.")),
@@ -335,8 +341,10 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       capabilityPublishTail = next.catch(() => {});
       return next;
     };
+    let publishedState: string | null = null;
     const publishState: typeof backend.reportState = async (args) => {
       await backend.reportState(args);
+      publishedState = JSON.stringify(args);
       republishOnBeat = false;
     };
     const presence = createRunnerPresence({
@@ -350,7 +358,13 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
             await publishCapabilities({ report: await readCapabilities() });
             await publishState({ state: reportedState, reason: reportedReason });
           }
-          return backend.heartbeat(args);
+          const reply = await backend.heartbeat(args);
+          const desiredState = { state: reportedState, reason: reportedReason };
+          // setState() during the first beat only updates presence's local state.
+          // Finish publishing that latest intent before acknowledging online.
+          if (!ended && publishedState !== JSON.stringify(desiredState))
+            await publishState(desiredState);
+          return reply;
         },
       },
       bootId,
@@ -382,6 +396,9 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
     const startPresence = presence.start.bind(presence);
     let presenceStarting: Promise<void> | null = null;
     presence.start = () => (presenceStarting ??= startPresence());
+    const stopPresence = presence.stop.bind(presence);
+    let presenceStopping: Promise<void> | null = null;
+    presence.stop = () => (presenceStopping ??= stopPresence());
     connection = {
       link,
       presence,
@@ -392,6 +409,7 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
     sync = options.sync?.(connection) ?? null;
     offStatus = raw.onStatus((status) => {
       if (status.state !== "connected") {
+        cancelRetry();
         republishOnBeat = true;
         publishedCapabilities = null;
         publish("offline");
@@ -458,10 +476,16 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
         offCapabilities?.();
         publish("stopped");
         if (connection !== null) {
-          if (sync !== null) await sync.stop();
-          else {
-            await connection.presence.stop();
-            await connection.link.close();
+          // Sync may not have started yet, or its own shutdown may fail.
+          // The lifecycle still owns and must close these two resources.
+          try {
+            await sync?.stop();
+          } finally {
+            try {
+              await connection.presence.stop();
+            } finally {
+              await connection.link.close();
+            }
           }
         }
       })();

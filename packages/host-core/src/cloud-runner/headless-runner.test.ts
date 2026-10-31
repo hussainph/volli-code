@@ -728,6 +728,13 @@ describe("headless runner lifecycle", () => {
     const h = harness();
     h.fetch.mockRejectedValueOnce(new Error("network"));
     await expect(h.runner.token()).rejects.toThrow();
+    expect(h.runner.snapshot()).toEqual({
+      state: "unlinked",
+      runnerId: null,
+      name: null,
+      canClaim: false,
+    });
+    expect(h.onChange).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.fetch).toHaveBeenCalledOnce();
     expect(h.clients).toHaveLength(0);
@@ -813,6 +820,98 @@ describe("headless runner lifecycle", () => {
     await h.runner.start();
     await flush();
     expect(h.backend.mock.calls.filter(([name]) => name === "runners:heartbeat")).toHaveLength(1);
+    await h.runner.stop();
+  });
+
+  it("publishes a drain that arrives while the first heartbeat is in flight", async () => {
+    const h = harness();
+    let finish!: (value: unknown) => void;
+    h.backend.mockImplementation(async (name) =>
+      name === "runners:heartbeat"
+        ? new Promise((done) => {
+            finish = done;
+          })
+        : null,
+    );
+    const starting = h.runner.start();
+    await flush();
+    await h.runner.drain();
+    finish(reply);
+    await starting;
+    expect(h.backend).toHaveBeenLastCalledWith("runners:reportState", {
+      state: "draining",
+      reason: null,
+    });
+    expect(h.runner.snapshot().canClaim).toBe(false);
+    await h.runner.stop();
+  });
+
+  it("owns teardown when stop arrives before sync.start has run", async () => {
+    const sync = fakeSync();
+    const h = harness({ sync: () => sync });
+    let finish!: (value: unknown) => void;
+    h.backend
+      .mockImplementationOnce(async () => null)
+      .mockImplementationOnce(async () => null)
+      .mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            finish = done;
+          }),
+      );
+    const starting = h.runner.start();
+    await flush();
+    const stopping = h.runner.stop();
+    finish(reply);
+    await stopping;
+    await starting;
+    expect(sync.start).not.toHaveBeenCalled();
+    expect(sync.stop).toHaveBeenCalledOnce();
+    expect(h.clients[0]!.close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("closes presence and the socket even when sync.stop rejects", async () => {
+    const sync = fakeSync();
+    sync.stop.mockRejectedValueOnce(new Error("sync stop"));
+    const h = harness({ sync: () => sync });
+    await h.runner.start();
+    await expect(h.runner.stop()).rejects.toThrow("sync stop");
+    expect(h.clients[0]!.close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("leaves slow claims pending rather than abandoning their eventual lease reply", async () => {
+    const h = harness();
+    await h.runner.start();
+    let finish!: (value: unknown) => void;
+    h.backend.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    const claim = h.runner.connection!.link.call("runnerJobs:claim", {});
+    await vi.advanceTimersByTimeAsync(6_000);
+    finish([{ id: "claimed" }]);
+    await expect(claim).resolves.toEqual([{ id: "claimed" }]);
+    expect(h.runner.snapshot().state).toBe("online");
+    await h.runner.stop();
+  });
+
+  it("cancels logical retry once socket reconnects belong to the transport", async () => {
+    const h = harness();
+    await h.runner.start();
+    h.backend.mockRejectedValueOnce(new Error("heartbeat lost"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    h.clients[0]!.setConnected(false);
+    h.backend.mockRejectedValueOnce(new Error("still offline"));
+    await h.runner.connection!.presence.beatNow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.clients).toHaveLength(1);
+    h.clients[0]!.setConnected(true);
+    await flush();
+    expect(h.runner.snapshot().state).toBe("online");
     await h.runner.stop();
   });
 
