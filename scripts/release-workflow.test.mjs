@@ -11,6 +11,7 @@ import { parse } from "yaml";
 // without adding a runner to the desktop or Vitest test surfaces.
 import "./runner-install.test.mjs";
 import "./runner-release-manifest.test.mjs";
+import "./runner-native-build.test.mjs";
 
 const workflow = parse(
   readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),

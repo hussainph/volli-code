@@ -26,13 +26,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { rebuildSqlite } from "./rebuild-sqlite.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = resolve(HERE, "..");
 const ROOT = resolve(APP, "../..");
 
 /** The natives runner ships, and the platform package each one loads its binary from. */
 const NATIVES = {
-  "better-sqlite3": "better-sqlite3 (bundled N-API prebuild)",
+  "better-sqlite3": "better-sqlite3 (rebuilt from source on glibc 2.31, N-API)",
   "node-pty": "node-pty (compiled from source at deploy, N-API)",
   sharp: "sharp with @img/sharp-<platform> and @img/sharp-libvips-<platform>",
   "@vscode/ripgrep": "@vscode/ripgrep with @vscode/ripgrep-<platform>",
@@ -89,6 +91,9 @@ try {
     "--config.node-linker=hoisted",
     deployed,
   ]);
+  // Upstream's N-API prebuild requires a newer libc than this runner's floor.
+  // Rebuild in the isolated deploy, then replace the entry its loader prefers.
+  rebuildSqlite(realpathSync(join(deployed, "node_modules", "better-sqlite3")), process.arch);
   cpSync(join(deployed, "node_modules"), join(stage, "lib", "node_modules"), {
     recursive: true,
     verbatimSymlinks: true,
@@ -108,7 +113,7 @@ for (const native of ["better-sqlite3", "node-pty"]) {
   if (!existsSync(prebuilds)) continue;
   for (const entry of readdirSync(prebuilds)) {
     const [platform, arch] = entry.replace(/\.node$/, "").split("-");
-    const ours = platform.startsWith(process.platform) && arch === process.arch;
+    const ours = platform === process.platform && arch === process.arch;
     if (!ours) rmSync(join(prebuilds, entry), { recursive: true, force: true });
   }
 }
