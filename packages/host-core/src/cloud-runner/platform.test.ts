@@ -135,7 +135,13 @@ describe("the runner's platform", () => {
       },
       fakeProbe({ platform: () => "darwin" }),
     );
-    expect(parseRunnerCapabilityReport(report)).toEqual(report);
+    expect(parseRunnerCapabilityReport(report)).toEqual({
+      ...report,
+      capabilities: {
+        ...report.capabilities,
+        power: { source: "unknown", alwaysOn: false },
+      },
+    });
     expect(report.capabilities).toMatchObject({
       cpuCount: 8,
       memTotalMb: 16_384,
