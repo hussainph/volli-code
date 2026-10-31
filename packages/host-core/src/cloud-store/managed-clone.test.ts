@@ -5,7 +5,15 @@
  * ticket's worktree shares that one clone's objects.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -28,6 +36,7 @@ import {
   type ManagedCloneCredentials,
   type RunnerGit,
 } from "./managed-clone";
+import { managedCloneCredentials } from "./github-tokens";
 import { createRunnerPathRegistry } from "./paths";
 
 const PROJECT = "00000000-0000-4000-8000-000000000101";
@@ -203,6 +212,80 @@ describe("runner-managed clones", () => {
     expect(git(bare, ["count-objects", "-v"])).toMatch(/count: \d+/u);
   });
 
+  it("a ticket branch never tracks origin's default branch", async () => {
+    const { location } = fixture();
+    const { directory } = await location.prepare(sessionOn(TICKET_A));
+    expect(() => git(directory, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toThrow();
+  });
+
+  it("a refresh never drops a commit made in the main worktree, nor moves a dirty one", async () => {
+    const { location } = fixture();
+    const main = (await location.prepare(sessionOn(null))).directory;
+    writeFileSync(join(main, "local.txt"), "made on the box\n");
+    git(main, ["add", "."]);
+    git(main, ["commit", "--quiet", "-m", "box-only"]);
+    const boxOnly = git(main, ["rev-parse", "HEAD"]);
+    writeFileSync(join(seed, "README.md"), "v2\n");
+    git(seed, ["commit", "--quiet", "-am", "v2"]);
+    git(seed, ["push", "--quiet", "origin", "main"]);
+    await location.prepare(sessionOn(null));
+    expect(git(main, ["rev-parse", "HEAD"])).toBe(boxOnly);
+
+    git(main, ["checkout", "--quiet", "--detach", "refs/remotes/origin/main~1"]);
+    writeFileSync(join(main, "README.md"), "edited\n");
+    await location.prepare(sessionOn(null));
+    expect(git(main, ["rev-parse", "HEAD"])).toBe(git(seed, ["rev-parse", "HEAD~1"]));
+    git(main, ["checkout", "--quiet", "--", "README.md"]);
+    await location.prepare(sessionOn(null));
+    expect(git(main, ["rev-parse", "HEAD"])).toBe(git(seed, ["rev-parse", "HEAD"]));
+  });
+
+  it("recovers from a crashed first clone and an empty main worktree directory", async () => {
+    const { location } = fixture();
+    const repos = join(root, "data", "repos");
+    mkdirSync(join(repos, `.${REPO}.crashed.tmp.git`), { recursive: true });
+    await location.prepare(sessionOn(null));
+    expect(readdirSync(repos).toSorted()).toEqual([REPO, `${REPO}.git`].toSorted());
+    const main = join(repos, REPO);
+    git(join(repos, `${REPO}.git`), ["worktree", "remove", "--force", main]);
+    mkdirSync(main);
+    await location.prepare(sessionOn(null));
+    expect(existsSync(join(main, "README.md"))).toBe(true);
+    rmSync(main, { recursive: true, force: true });
+    mkdirSync(main);
+    writeFileSync(join(main, "someone-elses.txt"), "x");
+    await expect(location.prepare(sessionOn(null))).rejects.toThrow(/move it aside/u);
+  });
+
+  it("hands each grant's identity on through the token adapter", async () => {
+    const identities: unknown[] = [];
+    const identity = { name: "Dana Doe", email: "501+dana@users.noreply.github.com" };
+    const answers = [
+      {
+        ok: true as const,
+        grant: { token: "ghu_x", useUntil: 1, host: "git.example.test", login: "dana", identity },
+      },
+      {
+        ok: false as const,
+        error: { code: "github_not_connected" as const, message: "no", resetAt: null },
+      },
+    ];
+    const credentials = managedCloneCredentials({ get: async () => answers.shift()! }, (seen) =>
+      identities.push(seen),
+    );
+    const request = {
+      remoteUrl: REMOTE_URL,
+      projectRepoId: REPO,
+      claim: { kind: "session" as const, sessionId: SESSION as never },
+    };
+    expect(await credentials.forRemote(request)).toEqual({
+      host: "git.example.test",
+      token: "ghu_x",
+    });
+    expect(await credentials.forRemote(request)).toBeNull();
+    expect(identities).toEqual([identity]);
+  });
+
   it("a project Session works in the clone's main worktree", async () => {
     const { location } = fixture();
     const site = await location.prepare(sessionOn(null));
@@ -264,7 +347,8 @@ describe("runner-managed clones", () => {
       credentials: { forRemote: async () => ({ host: "github.com", token: "ghu_x" }) },
     });
     await elsewhere.location.prepare(sessionOn(TICKET_A));
-    expect(elsewhere.calls.find((call) => call.args[0] === "fetch")!.env).toEqual({});
+    const env = elsewhere.calls.find((call) => call.args[0] === "fetch")!.env;
+    expect(env).toEqual({ GIT_SSH_COMMAND: "ssh -o BatchMode=yes" });
   });
 
   it("an inbox job's materialization asks for the job's claim", async () => {

@@ -128,10 +128,17 @@ describe("the recorded remote", () => {
   test("a main checkout's origin becomes the folder repository's remote, normalized", async () => {
     const world = await runnerWorld({ repo: false });
     expect(await remote(world)).toBeNull();
-    await report(world, { remoteUrl: "https://alice:hunter2@git.example.com/acme/app.git" });
-    expect(await remote(world)).toBe("https://git.example.com/acme/app.git");
     // The deployment's GitHub host (GITHUB_WEB_URL) takes the canonical https form.
     await report(world, { remoteUrl: "git@github.test:acme/app.git" });
+    expect(await remote(world)).toBe("https://github.test/acme/app.git");
+    // The first remote stays: a member's fork origin re-points nobody's runner.
+    await world.memberRunner.mutation(api.projectCheckouts.report, {
+      projectId: world.projectId,
+      projectRepoId: world.projectRepoId,
+      kind: "main",
+      headBranch: "main",
+      remoteUrl: "https://github.test/bob/app-fork.git",
+    });
     expect(await remote(world)).toBe("https://github.test/acme/app.git");
     const rows = await world.t.run((ctx) => ctx.db.query("projectRepos").collect());
     expect(rows).toHaveLength(1);
@@ -144,20 +151,22 @@ describe("the recorded remote", () => {
     expect(context.primaryRepo.remoteUrl).toBe("https://github.test/acme/app.git");
   });
 
-  test("absent, null, unclonable and managed-clone remotes leave it as it was", async () => {
+  test("absent, null, unclonable and managed-clone remotes record nothing", async () => {
     const world = await runnerWorld();
-    await report(world, { remoteUrl: "ssh://git@git.example.com/acme/app.git" });
     for (const fields of [
       {},
       { remoteUrl: null },
       { remoteUrl: "/Users/alice/src/app.git" },
       { remoteUrl: "file:///srv/app.git" },
       { remoteUrl: "ext::sh -c id" },
+      { remoteUrl: "http://169.254.169.254/latest" },
       { kind: "managed_clone", remoteUrl: "https://elsewhere.example.com/x.git" },
     ]) {
       await report(world, fields);
-      expect(await remote(world)).toBe("ssh://git@git.example.com/acme/app.git");
+      expect(await remote(world)).toBeNull();
     }
+    await report(world, { remoteUrl: "https://alice:hunter2@git.example.com/acme/app.git" });
+    expect(await remote(world)).toBe("https://git.example.com/acme/app.git");
   });
 
   test("a GitHub repository's remote derives from its owner and name, never a report", async () => {

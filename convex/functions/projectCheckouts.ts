@@ -19,11 +19,13 @@ import { literals, nullable } from "./lib/validators";
  * Upserts by the calling runner and repository, including a folder project's first report.
  *
  * A `main` checkout's `remoteUrl` (its `origin`) becomes the folder
- * repository's remote, the one a runner with no folder clones. Last report
- * wins. A remote a box could not clone (a local path, an unknown transport)
- * is ignored rather than refused, so the rest of the report still lands; so
- * is any remote on a GitHub repository, whose remote derives from its owner
- * and name. `null` or absent leaves the recorded remote as it is.
+ * repository's remote, the one a runner with no folder clones, when none is
+ * recorded yet. The first one stays: a member whose checkout's origin is a
+ * fork must not re-point every member's runner. A remote a box could not
+ * clone (a local path, an unknown transport, a loopback host) is ignored
+ * rather than refused, so the rest of the report still lands; so is any
+ * remote on a GitHub repository, whose remote derives from its owner and
+ * name. `null` or absent changes nothing.
  */
 export const report = mutation({
   args: {
@@ -43,7 +45,7 @@ export const report = mutation({
       args.kind === "main" && repo.provider === "none" && typeof args.remoteUrl === "string"
         ? recordableRemoteUrl(args.remoteUrl)
         : null;
-    if (remoteUrl !== null && remoteUrl !== (repo.remoteUrl ?? null)) {
+    if (remoteUrl !== null && (repo.remoteUrl ?? null) === null) {
       const row = await ctx.db
         .query("projectRepos")
         .withIndex("by_uuid", (q) => q.eq("id", repo.id))

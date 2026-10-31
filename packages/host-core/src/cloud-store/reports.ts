@@ -73,7 +73,9 @@ function checkoutArgs(input: unknown): CheckoutReport {
     kind: input.kind,
     headBranch: gitValue(input.headBranch),
     headSha: gitValue(input.headSha),
-    // Absent on reports buffered by older builds; sent only when known.
+    // Absent on reports buffered by older builds; sent only when known. A
+    // backend older than `projectCheckouts.report`'s `remoteUrl` refuses it,
+    // so the backend deploys before an app that sends it.
     ...(typeof input.remoteUrl === "string" ? { remoteUrl: gitValue(input.remoteUrl) } : {}),
   };
 }

@@ -97,6 +97,15 @@ describe("normalizeGitRemoteUrl", () => {
       "https://[::1]/r",
       "https://%zz/r",
       "ftp://example.com/r",
+      "http://localhost:8080/x.git",
+      "https://LOCALHOST/x.git",
+      "https://dev.localhost/x.git",
+      "http://127.0.0.1/x.git",
+      "http://0.0.0.0/x.git",
+      "http://169.254.169.254/latest/meta-data",
+      "git@127.0.0.1:x.git",
+      "ssh://-oProxyCommand%3Did@example.com/p",
+      "-oProxyCommand=id@example.com:p",
       `https://example.com/${"a".repeat(1100)}`,
     ]) {
       expect(normalizeGitRemoteUrl(raw), raw).toBeNull();

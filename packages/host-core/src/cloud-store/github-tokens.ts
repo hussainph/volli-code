@@ -8,14 +8,17 @@
  * owner never connected GitHub does not ask on every git command. Nothing is
  * written to disk, and a refresh token never reaches the runner.
  */
+import type { ManagedCloneCredentials } from "./managed-clone";
 import {
   parseRunnerGithubTokenGrant,
   readRunnerGithubTokenError,
   RUNNER_GITHUB_TOKEN_PATH,
   runnerGithubTokenBody,
+  type RunnerGitIdentity,
   type RunnerGithubTokenError,
   type RunnerGithubTokenGrant,
   type RunnerGithubTokenRequest,
+  type ProjectRepoId,
 } from "@volli/shared/cloud";
 
 export type RunnerGithubTokenAnswer =
@@ -109,3 +112,23 @@ export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
 }
 
 export type RunnerGithubTokens = ReturnType<typeof createRunnerGithubTokens>;
+
+/**
+ * A managed clone's credentials over these tokens: its own fetch uses the
+ * owner's token for the claim it runs under, and each grant's identity is
+ * handed on, so a Session's commits take the owner's identity from its very
+ * first command, before any of its own git asks for a token.
+ */
+export function managedCloneCredentials(
+  tokens: Pick<RunnerGithubTokens, "get">,
+  onIdentity?: (identity: RunnerGitIdentity) => void,
+): ManagedCloneCredentials {
+  return {
+    async forRemote({ projectRepoId, claim }) {
+      const answer = await tokens.get({ claim, projectRepoId: projectRepoId as ProjectRepoId });
+      if (!answer.ok) return null;
+      onIdentity?.(answer.grant.identity);
+      return { host: answer.grant.host, token: answer.grant.token };
+    },
+  };
+}

@@ -55,7 +55,7 @@ import {
 import { internal } from "./_generated/api";
 import { httpAction, type ActionCtx } from "./_generated/server";
 import { mintGithubToken, type GithubMint } from "./githubTokens";
-import { githubRemoteHosts } from "./lib/runnerContext";
+import { githubRemoteHost } from "./lib/runnerContext";
 import { mintSecret, mintUserCode, runnerSigningKey, signRunnerToken } from "./lib/runnerSecrets";
 
 const STATUS_OF: Record<RunnerHttpErrorCode, number> = {
@@ -321,7 +321,9 @@ function knownRefusal(
 export const githubToken = httpAction(async (ctx, request) => {
   const body = await bodyOf(request, parseRunnerGithubTokenRequest);
   if (body instanceof Response) return body;
-  if ((await ctx.auth.getUserIdentity()) === null) {
+  // An expired or foreign token is as good as none: the runner refreshes and retries.
+  const identity = await ctx.auth.getUserIdentity().catch(() => null);
+  if (identity === null) {
     return githubTokenFailure("unauthenticated", "Send this runner's token as a Bearer token.");
   }
   let authorized: { ownerUserId: string; identity: { name: string; email: string } | null };
@@ -347,7 +349,7 @@ export const githubToken = httpAction(async (ctx, request) => {
   const grant: RunnerGithubTokenGrant = {
     token: mint.token,
     useUntil: mint.useUntil,
-    host: githubRemoteHosts()[0]!,
+    host: githubRemoteHost(),
     login: mint.login,
     identity: authorized.identity ?? {
       name: mint.login,

@@ -18,6 +18,12 @@
  *   answers `x-access-token` and the token only for the host the token is for.
  *   Anything else, including `github_not_connected`, is the empty answer, so
  *   git moves on to the box's own credentials or fails without a prompt.
+ *   The answer carries `password_expiry_utc`, so a box's own `store` or
+ *   `cache` helper (git 2.41 and later) never keeps the token; older git's
+ *   `store` helper would write it to `~/.git-credentials`.
+ * - **Why a socket of its own**, beside the agent socket: the helper speaks no
+ *   agent verb, and keeping it off the verb registry keeps the agent surface
+ *   unchanged. Same directory, same 0600, same account.
  *
  * Not a sandbox: the same account can read any Session's environment, so it
  * can read the token (VC-163's honest limit, `session-tokens.ts`). What the
@@ -65,6 +71,9 @@ export interface GitCredentialBrokerOptions {
 
 /** git's answer for one helper call: what the helper writes on stdout. */
 export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
+  // The deployment's GitHub host, once a grant has named it: a request for any
+  // other host is answered without asking the backend.
+  let githubHost: string | null = null;
   return {
     async answer(query: GitCredentialQuery): Promise<string> {
       if (query.action !== "get") return "";
@@ -78,6 +87,7 @@ export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
       if (!transportOk || host === undefined) return "";
       const asked = fields.get("username");
       if (asked !== undefined && asked !== GITHUB_TOKEN_USERNAME) return "";
+      if (githubHost !== null && githubHost !== host.toLowerCase()) return "";
       const projectRepoId = await options.repositoryOf(sessionId);
       if (projectRepoId === null) return "";
       const answer = await options.tokens.get({
@@ -85,10 +95,14 @@ export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
         projectRepoId: projectRepoId as ProjectRepoId,
       });
       if (!answer.ok) return "";
+      githubHost = answer.grant.host;
       options.onIdentity?.(answer.grant.identity);
       // The token is for the deployment's GitHub only.
       if (answer.grant.host !== host.toLowerCase()) return "";
-      return `username=${GITHUB_TOKEN_USERNAME}\npassword=${answer.grant.token}\n`;
+      // The expiry keeps a box's own `store`/`cache` helper (git ≥ 2.41) from
+      // saving a short-lived token that would later answer first, expired.
+      const expiry = Math.floor(answer.grant.useUntil / 1000);
+      return `username=${GITHUB_TOKEN_USERNAME}\npassword=${answer.grant.token}\npassword_expiry_utc=${expiry}\n`;
     },
   };
 }

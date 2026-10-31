@@ -44,7 +44,8 @@ export {
 } from "../cloud-store";
 // Git on a runner with no folder of the person's (BYO-8). Receiving wiring:
 // `volli-runner run` (apps/runner, the headless composition) passes
-// `createManagedClones({ root: <data>/repos, credentials })` to
+// `createManagedClones({ root: <data>/repos, credentials:
+// managedCloneCredentials(tokens, onIdentity) })` to
 // `createCloudProductStore({ managedClones })`, serves
 // `createGitCredentialBroker` with `serveGitCredentials` beside the agent
 // socket, and gives every Session command `runnerSessionGitEnv`; the
@@ -57,6 +58,7 @@ export {
 } from "../cloud-store/managed-clone";
 export {
   createRunnerGithubTokens,
+  managedCloneCredentials,
   type RunnerGithubTokenAnswer,
   type RunnerGithubTokens,
 } from "../cloud-store/github-tokens";

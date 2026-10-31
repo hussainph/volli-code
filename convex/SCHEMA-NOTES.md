@@ -379,9 +379,11 @@ Each was a decision made while turning the design into code.
 46. `projectRepos` gains optional `remoteUrl` (nullable; absent reads as
     unknown). It is set only on `provider: none` rows, from a `main`
     checkout's `projectCheckouts.report`, after `normalizeGitRemoteUrl`
-    (`@volli/shared/cloud`): network transports only, no userinfo secrets,
-    GitHub spellings in canonical `https` form. It is a URL, never a machine
-    path; a local-path origin is not recorded. GitHub rows never store one:
+    (`@volli/shared/cloud`): network transports only, no loopback or
+    link-local hosts, no userinfo secrets, GitHub spellings in canonical
+    `https` form. The first recorded remote stays, so a member's fork origin
+    never re-points everyone's runners. It is a URL, never a machine path; a
+    local-path origin is not recorded. GitHub rows never store one:
     `runnerContext` derives theirs from `owner`/`name` and `GITHUB_WEB_URL`.
 
 ## Rehearsal Workspace cleanup

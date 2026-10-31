@@ -10,7 +10,8 @@
  *   `ssh` URL its password;
  * - it accepts only network remotes git fetches over a transport (`https`,
  *   `http`, `ssh`, `git`, and scp-like `user@host:path`). A local path, a
- *   `file://` URL or git's `ext::` command transport is refused, because a
+ *   `file://` URL, git's `ext::` command transport, a loopback or link-local
+ *   host, and a user or host that reads as an option are refused, because a
  *   box clones whatever the backend names;
  * - a GitHub remote, in any of those spellings, becomes
  *   `https://<host>/<owner>/<repo>.git`, so a box can push with the GitHub
@@ -57,9 +58,13 @@ function unsafe(text: string): boolean {
   return /\s/u.test(text);
 }
 
+// A box cannot reach the person's own loopback, and must not be pointed at
+// its own (or its cloud's link-local metadata service) by a report.
+const LOCAL_HOST = /^(?:localhost|.*\.localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|169\.254(?:\.\d{1,3}){2})$/u;
+
 function canonicalHost(host: string): string | null {
   const lowered = host.toLowerCase();
-  return HOST.test(lowered) ? lowered : null;
+  return HOST.test(lowered) && !LOCAL_HOST.test(lowered) ? lowered : null;
 }
 
 function githubForm(host: string, path: string, githubHosts: readonly string[]): string | null {
@@ -107,12 +112,14 @@ export function normalizeGitRemoteUrl(
     const github = githubForm(host, path, githubHosts);
     if (github !== null) return github;
     // An https/http username is as often a token as a login: neither is kept.
+    // `-…` would reach ssh as an option (git refuses it too, since 2.14.1).
+    if (url.username.startsWith("-")) return null;
     const user = transport === "ssh" && url.username !== "" ? `${url.username}@` : "";
     return `${transport}://${user}${host}${path}`;
   }
   const scp = SCP_LIKE.exec(text);
   // `C:\…` and `C:/…` are Windows paths, not a host called `C`.
-  if (scp === null || scp[2]!.length === 1) return null;
+  if (scp === null || scp[2]!.length === 1 || scp[1]?.startsWith("-") === true) return null;
   const host = canonicalHost(scp[2]!);
   if (host === null) return null;
   const path = scp[3]!;

@@ -98,7 +98,9 @@ describe("a runner Session's git credentials", () => {
   it("answer the owner's token for the token's host, over a socket only this account opens", async () => {
     const { ask, fake, identities, socketPath } = await world();
     expect(statSync(socketPath).mode & 0o777).toBe(0o600);
-    expect(await ask(GITHUB)).toBe("username=x-access-token\npassword=ghu_box_token\n");
+    expect(await ask(GITHUB)).toBe(
+      `username=x-access-token\npassword=ghu_box_token\npassword_expiry_utc=${Math.floor(grant().useUntil / 1000)}\n`,
+    );
     expect(fake.calls).toEqual([
       {
         url: `${SITE}/runner/github-token`,
@@ -122,6 +124,10 @@ describe("a runner Session's git credentials", () => {
     expect(await ask("protocol=https\n")).toBe("");
     expect(await ask(GITHUB, undefined, "store")).toBe("");
     expect(await ask(GITHUB, undefined, "erase")).toBe("");
+    expect(fake.calls).toHaveLength(1);
+    // Once a grant has named GitHub's host, another host costs no backend call.
+    expect(await ask(GITHUB)).toContain("password=");
+    expect(await ask("protocol=https\nhost=bitbucket.org\n")).toBe("");
     expect(fake.calls).toHaveLength(1);
     const lenient = await world({ allowHttp: true });
     expect(await lenient.ask("protocol=http\nhost=github.com\n")).toContain("password=");

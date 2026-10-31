@@ -3005,6 +3005,20 @@
               "type": "string"
             },
             "optional": false
+          },
+          "remoteUrl": {
+            "fieldType": {
+              "type": "union",
+              "value": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "optional": true
           }
         }
       },

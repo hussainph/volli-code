@@ -175,20 +175,24 @@ export async function reportedRepo(
   return primary;
 }
 
-/** The deployment's GitHub web URL, as `lib/github/config.ts` reads it. */
+/**
+ * The deployment's GitHub web URL, as `lib/github/config.ts` reads it. Read
+ * here without the App's configuration: a remote derives even where no App
+ * is set up.
+ */
 function githubWebUrl(): string {
   const configured = (process.env.GITHUB_WEB_URL ?? "").trim().replace(/\/+$/u, "");
   return configured === "" ? "https://github.com" : configured;
 }
 
-/** The hosts whose remotes take GitHub's canonical https form on this deployment. */
-export function githubRemoteHosts(): string[] {
-  return [githubHostOf(githubWebUrl()) ?? DEFAULT_GITHUB_HOST];
+/** The host whose remotes take GitHub's canonical https form on this deployment. */
+export function githubRemoteHost(): string {
+  return githubHostOf(githubWebUrl()) ?? DEFAULT_GITHUB_HOST;
 }
 
 /** A reported `origin` as the backend records it, or `null` when a box could not clone it. */
 export function recordableRemoteUrl(raw: string): string | null {
-  return normalizeGitRemoteUrl(raw, githubRemoteHosts());
+  return normalizeGitRemoteUrl(raw, [githubRemoteHost()]);
 }
 
 /**
