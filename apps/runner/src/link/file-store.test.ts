@@ -1,6 +1,9 @@
 import {
+  closeSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -56,11 +59,16 @@ describe("the sealed runner link", () => {
       link: link(1),
       deployment: DEPLOYMENT,
     });
-    const file = join(configDir, LINK_FILE_NAME);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // One open file for both checks: its mode and its bytes are the same file's.
+    const file = openSync(join(configDir, LINK_FILE_NAME), "r");
+    try {
+      expect(fstatSync(file).mode & 0o777).toBe(0o600);
+      expect(readFileSync(file).includes("vrc_secret_1")).toBe(false);
+    } finally {
+      closeSync(file);
+    }
     expect(statSync(join(configDir, LINK_KEY_FILE_NAME)).mode & 0o777).toBe(0o600);
     expect(statSync(configDir).mode & 0o777).toBe(0o700);
-    expect(readFileSync(file).includes("vrc_secret_1")).toBe(false);
     expect(readdirSync(configDir).toSorted()).toEqual([LINK_FILE_NAME, LINK_KEY_FILE_NAME]);
   });
 
