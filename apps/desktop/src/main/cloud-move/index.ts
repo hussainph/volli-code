@@ -20,6 +20,7 @@ import { prepareLocalMoves } from "./preflight";
 import { createDesktopMovesService, type DesktopMovesService } from "./service";
 import { createMoveView, saveMovePreview } from "./view";
 import { createMoveRearm } from "./rearm";
+import { moveSignIn } from "./sign-in";
 
 async function savedBudget(root: string): Promise<number> {
   let raw: unknown;
@@ -70,10 +71,16 @@ export function createDesktopMoves(options: {
     ]);
     return fetch(input, { ...init, signal });
   };
+  const signIn = moveSignIn({
+    account: options.account,
+    identity: options.identity,
+    signal: () => signals.getStore(),
+    waitForSignIn: async (signal) => (await service?.waitForSignIn(signal)) ?? false,
+  });
   const backend = personMoveBackend({
     url: options.backendUrl,
     enabled: options.enabled,
-    accessToken: () => options.account.accessToken(),
+    accessToken: signIn.accessToken,
     onSignInLost: () => service?.signInLost(),
     signal: () => signals.getStore(),
     fetch: moveFetch,
@@ -102,7 +109,7 @@ export function createDesktopMoves(options: {
     backend,
     objects: presignedMoveObjects({ backend, fetch: moveFetch }),
     history,
-    identity: options.identity,
+    identity: { current: signIn.current },
     realPath: windowReadCheck({ backend, sleep: (ms, signal) => delay(ms, undefined, { signal }) }),
     liveWork: { busySessionIds: options.busySessionIds },
     backup: {

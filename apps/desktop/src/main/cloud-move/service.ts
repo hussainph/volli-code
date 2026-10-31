@@ -52,7 +52,10 @@ export interface DesktopMovesService extends CloudMovesPort {
   /** No new quit gate: abort current work and leave its last durable boundary for the next launch. */
   dispose(): Promise<void>;
   signInLost(): void;
+  /** Waits only for the active move's signal; false leaves other callers' sign-in rules unchanged. */
+  waitForSignIn(signal: AbortSignal): Promise<boolean>;
 }
+const ABSENT_SIGN_IN_GRACE_MS = 2 * 60_000;
 const BEFORE_COMMIT = new Set<MoveRow["state"]>([
   "queued",
   "frozen",
@@ -170,9 +173,15 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
   let controlAbort: AbortController | null = null;
   // The last person seen signed in. A sign-in that is briefly absent (restoring
   // after launch, a refresh, a sign-in that has not heard its viewer yet) is
-  // not a different person, so it never cancels a dry run or a control.
+  // not a different person: dry runs and controls survive it, and a running
+  // move gets the bounded grace below before a lost-sign-in pause.
   let accountOwner = personOf(options.account.snapshot())?.userId ?? null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let absentSignInTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearAbsentSignInTimer = () => {
+    if (absentSignInTimer !== null) clearTimeout(absentSignInTimer);
+    absentSignInTimer = null;
+  };
 
   const requireEnabled = () => {
     if (disposed || !options.enabled())
@@ -443,6 +452,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       } catch {
         contextError = "A move stopped. Open its progress to continue.";
       } finally {
+        clearAbsentSignInTimer();
         active = null;
         notify();
         pump();
@@ -969,8 +979,19 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         contextEpoch += 1;
         contextRead = null;
         const person = currentPerson();
-        if (active !== null && engine.journal.queue(active.queueId)?.userId !== person?.userId)
-          active.controller.abort();
+        if (person !== null) {
+          clearAbsentSignInTimer();
+          if (active !== null && engine.journal.queue(active.queueId)?.userId !== person.userId)
+            active.controller.abort();
+        } else if (active !== null && absentSignInTimer === null && !signInLost) {
+          // Snapshot absence is not sign-out intent. Let an in-flight step
+          // finish through a restore/viewer blip, but bound how long it may run.
+          absentSignInTimer = setTimeout(() => {
+            absentSignInTimer = null;
+            if (!disposed && currentPerson() === null) service.signInLost();
+          }, ABSENT_SIGN_IN_GRACE_MS);
+          absentSignInTimer.unref?.();
+        }
         const nextOwner = person?.userId ?? null;
         if (nextOwner !== null && accountOwner !== null && nextOwner !== accountOwner) {
           controlAbort?.abort();
@@ -1004,7 +1025,32 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         }
       }
     },
+    async waitForSignIn(signal) {
+      if (signal !== active?.controller.signal) return false;
+      if (
+        active !== null &&
+        !signInLost &&
+        !disposed &&
+        currentPerson() === null &&
+        !signal.aborted
+      )
+        await new Promise<void>((resolve) => {
+          let off: (() => void) | undefined;
+          const changed = () => {
+            if (currentPerson() === null && !signal.aborted) return;
+            off?.();
+            signal.removeEventListener("abort", changed);
+            resolve();
+          };
+          off = options.account.subscribe(changed);
+          signal.addEventListener("abort", changed, { once: true });
+          // subscribe may replay synchronously; also close an abort racing setup.
+          changed();
+        });
+      return true;
+    },
     signInLost() {
+      clearAbsentSignInTimer();
       signInLost = true;
       contextEpoch += 1;
       contextRead = null;
@@ -1024,6 +1070,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       controlAbort?.abort();
       for (const read of preflightReads) read.abort();
       if (timer !== null) clearInterval(timer);
+      clearAbsentSignInTimer();
       for (const handle of retryTimers.values()) clearTimeout(handle);
       retryTimers.clear();
       pending.clear();

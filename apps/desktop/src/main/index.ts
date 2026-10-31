@@ -1901,6 +1901,9 @@ const appStartup = app.whenReady().then(async () => {
         account,
         {
           launch: () => launch,
+          // Explicit intent stops a move immediately; account snapshots alone
+          // may temporarily have no person while the same sign-in recovers.
+          beforeSignOut: () => desktopMoves?.signInLost(),
           relaunch: () => {
             // Stable enrollment may restart before the launch grants cloud access.
             if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);

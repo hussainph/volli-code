@@ -53,6 +53,9 @@ describe("desktop main's account composition", () => {
     const relaunch = vi.fn();
     const reportUnsavedWrites = vi.fn();
     const saveSnapshot = vi.fn();
+    const beforeSignOut = vi.fn(() => {
+      expect(service.snapshot().state).toBe("signed-in");
+    });
     const port = accountPort(
       service,
       {
@@ -61,6 +64,7 @@ describe("desktop main's account composition", () => {
         reportUnsavedWrites,
         saveSnapshot,
         readSnapshot: () => "{}",
+        beforeSignOut,
       },
       github,
     );
@@ -93,7 +97,9 @@ describe("desktop main's account composition", () => {
       "no Volli Cloud backend",
     );
     await port.cancelSignIn();
+    expect(beforeSignOut).not.toHaveBeenCalled();
     await port.signOut();
+    expect(beforeSignOut).toHaveBeenCalledOnce();
     stop();
     expect(frames).toEqual(["signed-out", "signing-in", "signed-in", "signed-out"]);
     expect(marker.clear).toHaveBeenCalled();
