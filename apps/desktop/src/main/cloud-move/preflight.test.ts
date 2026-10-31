@@ -582,13 +582,15 @@ describe("a dry run at scale (VC-1029)", () => {
   it("stays flat on disk and inside the owner's per-artifact time as the history grows", async () => {
     const small = await dryRunAt(1024);
     const large = await dryRunAt(4096);
-    const history = (run: typeof small) => project(run.answered, ALPHA).counts!.transcriptBytes;
-    const peak = (run: typeof small) => Math.max(...run.staged.map((moment) => moment.bytes));
+    const [atSmall, atLarge] = [small, large].map((run) => ({
+      transcripts: project(run.answered, ALPHA).counts!.transcriptBytes,
+      scratch: Math.max(...run.staged.map((moment) => moment.bytes)),
+    }));
     // Four times the history (some 75 MiB more to copy), and the scratch grows
     // only by the extra events' own rows: under a tenth of what a copy would add.
-    const grown = history(large) - history(small);
+    const grown = atLarge!.transcripts - atSmall!.transcripts;
     expect(grown).toBeGreaterThan(75 * 1024 * 1024);
-    expect(peak(large) - peak(small)).toBeLessThan(grown / 10);
+    expect(atLarge!.scratch - atSmall!.scratch).toBeLessThan(grown / 10);
     expect((large.elapsed - small.elapsed) / (4096 - 1024)).toBeLessThan(PER_ARTIFACT_BUDGET_MS);
   }, 180_000);
 

@@ -330,7 +330,10 @@ function problemOf(error: unknown): { code: string; message: string } {
   if (code === "row_refused" || code === "row_unstorable")
     return { code, message: "A local record has an unsupported identifier or format." };
   // The export reads the dry run's one snapshot, so work settled since then still counts.
-  if (code === "source_corrupt" && /^pending runner work/.test(String((error as Error)?.message)))
+  if (
+    code === "source_corrupt" &&
+    String((error as Error)?.message).startsWith("pending runner work")
+  )
     return {
       code,
       message: "This project had unfinished work when the dry run began. Run it again.",

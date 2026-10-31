@@ -557,20 +557,21 @@ describe("a dry run's export (VC-1029)", () => {
   });
 });
 
-describe("reading transcript artifacts ahead (VC-1029)", () => {
-  /** The artifact file the fixture wrote for its i-th transcript reference. */
-  function artifactFile(f: ReturnType<typeof fixture>, i: number): string {
-    const db = new Database(f.dbPath, { readonly: true });
-    try {
-      const { payload } = db
-        .prepare("SELECT payload FROM session_events WHERE id = ?")
-        .get(`transcript:${i}`) as { payload: string };
-      const hex = (JSON.parse(payload) as { reference: { id: string } }).reference.id.slice(7);
-      return join(f.root, "session-transcripts", `${hex}.json${i % 2 ? ".gz" : ""}`);
-    } finally {
-      db.close();
-    }
+/** The artifact file the fixture wrote for its i-th transcript reference. */
+function artifactFile(f: ReturnType<typeof fixture>, i: number): string {
+  const db = new Database(f.dbPath, { readonly: true });
+  try {
+    const { payload } = db
+      .prepare("SELECT payload FROM session_events WHERE id = ?")
+      .get(`transcript:${i}`) as { payload: string };
+    const hex = (JSON.parse(payload) as { reference: { id: string } }).reference.id.slice(7);
+    return join(f.root, "session-transcripts", `${hex}.json${i % 2 ? ".gz" : ""}`);
+  } finally {
+    db.close();
   }
+}
+
+describe("reading transcript artifacts ahead (VC-1029)", () => {
   it.each([false, true])(
     "refuses the first missing artifact in row order, with later reads in flight (measuring: %s)",
     async (measureHistory) => {
