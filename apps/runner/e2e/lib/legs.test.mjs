@@ -106,6 +106,9 @@ test("the summary names every leg, escapes table cells and says which mode ran",
   assert.doesNotMatch(summary, /second line/u);
   assert.match(summary, /\| Session \| PENDING \| waiting on T-2 \|/u);
   assert.match(renderSummary([], { requireAll: true }), /Every leg must pass/u);
+  // A backslash before a pipe cannot unescape it and split the cell.
+  const tricky = renderSummary([{ title: "a\\|b", status: "failed", detail: "c:\\d" }]);
+  assert.match(tricky, /\| a\\\\\\\|b \| FAIL \| c:\\\\d \|/u);
 });
 
 test("redaction removes known secrets and every secret-shaped token", () => {

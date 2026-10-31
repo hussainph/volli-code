@@ -109,8 +109,10 @@ export function exitCodeFor(results, { requireAll = false } = {}) {
 
 const MARK = { passed: "PASS", failed: "FAIL", pending: "PENDING", blocked: "BLOCKED" };
 
+/** One Markdown table cell: backslashes first, so an escaped pipe stays escaped. */
 function cell(text) {
   return String(text)
+    .replace(/\\/gu, "\\\\")
     .replace(/\|/gu, "\\|")
     .replace(/\s*\n\s*/gu, " ")
     .slice(0, 400);
