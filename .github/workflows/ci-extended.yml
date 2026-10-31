@@ -422,6 +422,10 @@ jobs:
   # refuses any result without evidence — not one test, or a skipped one, is a
   # failure rather than a green. Both report the selected tag, its commit and
   # the suite list to the run's summary, and the JSON report is kept.
+  # VC-937: the exact canary.2 legal-version exception in live-exceptions.json
+  # requires an extra typed-refusal probe. A labelled current-consent fixture
+  # lets all frozen data-plane test bodies run unchanged; no failure is waived.
+  # It becomes inactive automatically when a tag newer than canary.2 ships.
   older-app-live:
     name: Older app (live)
     if: ${{ !cancelled() }}

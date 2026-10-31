@@ -11,7 +11,10 @@
  * test issuer key. This script then runs `vp test run` inside the older tree's
  * `apps/desktop`, so the suites, every module they import, the dependency tree
  * and the committed `convex/functions/_generated` API are that build's — only
- * the backend is this checkout's.
+ * the backend is this checkout's. The one documented VC-937 exception in
+ * live-exceptions.json adapts only a consent fixture constant, requires an
+ * additional typed-refusal probe, and expires as soon as a newer tag ships.
+ * Frozen data-plane test bodies, SDKs and generated APIs remain unchanged.
  *
  * That is the half a schema/function-API diff cannot prove: the build people
  * are actually running still signs in, still paints its board, still streams a
@@ -39,6 +42,9 @@ import {
   renderResult,
   resolveWorkers,
 } from "./harness.mjs";
+import { latestTag } from "./tags.mjs";
+import { installLegalFixture, selectLegalException } from "./legal-fixture.mjs";
+import { PREVIEW_AGREEMENT_VERSION } from "../../packages/shared/src/preview-legal.ts";
 
 /** What the fixture must have handed us; any one missing means the run proves nothing. */
 const FIXTURE_ENV = [
@@ -123,48 +129,77 @@ function main() {
     fail(`the older build's own dependencies are not usable: ${error.message}`);
   }
 
-  const filters = suites.map((suite) => {
-    const prefix = "apps/desktop/";
-    if (!suite.startsWith(prefix)) throw new Error(`${suite} is not under ${prefix}`);
-    return suite.slice(prefix.length);
-  });
-  const args = [
-    "test",
-    "run",
-    ...filters,
-    "--reporter=default",
-    "--reporter=json",
-    `--outputFile=${reportPath}`,
-    `--maxWorkers=${workers}`,
-  ];
-  console.log(`Older app ${manifest.tag}: vp ${args.join(" ")} (in ${manifest.tree}/apps/desktop)`);
-  // A reused prepared tree must not reuse an earlier successful report if
-  // this invocation fails before the reporter writes its own evidence.
-  rmSync(reportPath, { force: true });
-  // PATH now contains the backend checkout's locked vp, which can run its own
-  // bundled Vitest even with cwd inside the tag. Invoke the tag's binary so
-  // the test toolchain, not just the suite sources, comes from its lockfile.
-  const vp = join(manifest.tree, "node_modules", ".bin", "vp");
-  const run = spawnSync(vp, args, {
-    cwd: join(manifest.tree, "apps", "desktop"),
-    stdio: "inherit",
-    timeout: TIMEOUT_MS,
-    env: {
-      ...process.env,
-      // The lane's own guarantee, not the workflow's: these suites skip
-      // themselves when the fixture's environment is missing, and this is the
-      // lane that must never accept that as a pass.
-      VOLLI_CLOUD_BOARD_LIVE_REQUIRED: "1",
-      VOLLI_CLOUD_SESSION_LIVE_REQUIRED: "1",
-      // The desktop's main-project setup file imports `electron` after every
-      // test (through `broadcast.ts`), and the older tree was installed with
-      // lifecycle scripts off, so electron has no binary. Pointing its
-      // override somewhere empty keeps `require('electron')` a string instead
-      // of a ~100 MB download inside a test worker. These suites never launch
-      // Electron — no suite in this lane does.
-      ELECTRON_OVERRIDE_DIST_PATH: join(manifest.tree, ".no-electron-binary"),
+  const exception = selectLegalException(
+    JSON.parse(readFileSync(new URL("./live-exceptions.json", import.meta.url), "utf8")),
+    {
+      tag: manifest.tag,
+      commit: manifest.commit,
+      latestTag: latestTag(
+        execFileSync("git", ["tag", "--list", "v*"], { encoding: "utf8" }).split("\n"),
+      ),
+      currentVersion: PREVIEW_AGREEMENT_VERSION,
     },
-  });
+  );
+  const fixture = exception
+    ? installLegalFixture(manifest.tree, exception, process.env["VOLLI_CONVEX_URL"])
+    : null;
+  const selectedSuites = fixture === null ? suites : [...suites, fixture.suite];
+  const vp = join(manifest.tree, "node_modules", ".bin", "vp");
+  let run;
+  try {
+    if (exception) {
+      console.log(
+        `${exception.ticket}: ${exception.reason}; SIMULATED current-consent fixture only. ` +
+          `The additional live probe must refuse ${exception.fromVersion} with ${exception.refusalCode}. ` +
+          `Exception expires after ${exception.expiresAfterTag}.`,
+      );
+    }
+    const filters = selectedSuites.map((suite) => {
+      const prefix = "apps/desktop/";
+      if (!suite.startsWith(prefix)) throw new Error(`${suite} is not under ${prefix}`);
+      return suite.slice(prefix.length);
+    });
+    const args = [
+      "test",
+      "run",
+      ...filters,
+      "--reporter=default",
+      "--reporter=json",
+      `--outputFile=${reportPath}`,
+      `--maxWorkers=${workers}`,
+    ];
+    console.log(
+      `Older app ${manifest.tag}: vp ${args.join(" ")} (in ${manifest.tree}/apps/desktop)`,
+    );
+    // A reused prepared tree must not reuse an earlier successful report if
+    // this invocation fails before the reporter writes its own evidence.
+    rmSync(reportPath, { force: true });
+    // PATH now contains the backend checkout's locked vp, which can run its own
+    // bundled Vitest even with cwd inside the tag. Invoke the tag's binary so
+    // the test toolchain, not just the suite sources, comes from its lockfile.
+    run = spawnSync(vp, args, {
+      cwd: join(manifest.tree, "apps", "desktop"),
+      stdio: "inherit",
+      timeout: TIMEOUT_MS,
+      env: {
+        ...process.env,
+        // The lane's own guarantee, not the workflow's: these suites skip
+        // themselves when the fixture's environment is missing, and this is the
+        // lane that must never accept that as a pass.
+        VOLLI_CLOUD_BOARD_LIVE_REQUIRED: "1",
+        VOLLI_CLOUD_SESSION_LIVE_REQUIRED: "1",
+        // The desktop's main-project setup file imports `electron` after every
+        // test (through `broadcast.ts`), and the older tree was installed with
+        // lifecycle scripts off, so electron has no binary. Pointing its
+        // override somewhere empty keeps `require('electron')` a string instead
+        // of a ~100 MB download inside a test worker. These suites never launch
+        // Electron — no suite in this lane does.
+        ELECTRON_OVERRIDE_DIST_PATH: join(manifest.tree, ".no-electron-binary"),
+      },
+    });
+  } finally {
+    fixture?.restore();
+  }
   if (run.error?.code === "ENOENT") fail(`the older build's own Vite+ binary is missing: ${vp}`);
   if (run.error) fail(`vp failed to start: ${run.error.message}`);
   if (run.status === null) {
@@ -177,7 +212,7 @@ function main() {
   } catch (error) {
     if (error?.code !== "ENOENT") console.error(`could not read ${reportPath}: ${error.message}`);
   }
-  let verdict = evaluateReport(parsed, { tree: manifest.tree, suites });
+  let verdict = evaluateReport(parsed, { tree: manifest.tree, suites: selectedSuites });
   if (verdict.ok && run.status !== 0) {
     // The report can look clean while vitest exited non-zero (an unhandled
     // error after the last test, a rejected teardown): trust neither alone.
@@ -190,8 +225,9 @@ function main() {
     tree: manifest.tree,
     backend: process.env["VOLLI_CONVEX_URL"],
     head: headSha(),
-    suites,
+    suites: selectedSuites,
     absent,
+    legalException: exception,
     exit: run.status,
     verdict,
   };
@@ -200,7 +236,7 @@ function main() {
   const backend =
     `this checkout at \`${(report.head ?? "unknown").slice(0, 7)}\`, ` +
     "deployed to the pinned local backend";
-  appendStepSummary(renderResult(manifest, verdict, { backend }));
+  appendStepSummary(renderResult(manifest, verdict, { backend, legalException: exception }));
   console.log(
     `Older app ${manifest.tag} (${manifest.commit}): ${verdict.passed} passed, ` +
       `${verdict.failed} failed, ${verdict.pending} skipped — ${verdict.ok ? "PASS" : "FAIL"}`,
