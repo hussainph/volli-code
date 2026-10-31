@@ -1,0 +1,29 @@
+{
+  "name": "@volli/runner",
+  "version": "0.0.1",
+  "private": true,
+  "description": "volli-runner: the Volli runner for a Linux box, linked outbound to Volli Cloud. No Electron.",
+  "license": "Apache-2.0",
+  "bin": {
+    "volli-runner": "dist/runner.cjs"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "catalog:",
+    "@volli/agent-runtime": "workspace:*",
+    "@volli/host-core": "workspace:*",
+    "@volli/shared": "workspace:*",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

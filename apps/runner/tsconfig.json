@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src"],
+  "compilerOptions": {
+    "types": ["node"],
+    // host-core imports a few of its own modules by their `.ts` path (its
+    // read-only storage digest tool runs them under Node's type stripper).
+    "allowImportingTsExtensions": true
+  }
+}

@@ -421,7 +421,12 @@ function hostPackageDirectories(workspaceRoot) {
     { cwd: workspaceRoot },
   )
     .map((manifest) => dirname(manifest))
-    .filter((directory) => directory.startsWith("packages/") || directory === "apps/hostd")
+    .filter(
+      (directory) =>
+        directory.startsWith("packages/") ||
+        directory === "apps/hostd" ||
+        directory === "apps/runner",
+    )
     .toSorted();
 }
 
