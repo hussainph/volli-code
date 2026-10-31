@@ -70,7 +70,7 @@ async function fixture(t) {
     );
     writeFileSync(
       join(from, "bin/volli-runner"),
-      '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nprintf "%s" "$VOLLI_RUNNER_TOKEN" > "$TOKEN_RECORD"\nprintf "%s" "$VOLLI_SERVER" > "$SERVER_RECORD"\numask > "$UMASK_RECORD"\n',
+      '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nprintf "%s" "$VOLLI_RUNNER_TOKEN" > "$TOKEN_RECORD"\nprintf "%s" "$VOLLI_SERVER" > "$SERVER_RECORD"\nprintf "%s" "$VOLLI_RUNNER_RELEASE_BASE" > "$RELEASE_BASE_RECORD"\numask > "$UMASK_RECORD"\n',
       { mode: 0o755 },
     );
     for (const probeName of ["probe-natives.cjs", "probe-codemode.mjs"])
@@ -134,6 +134,7 @@ async function fixture(t) {
     RECORD: join(root, "record"),
     TOKEN_RECORD: join(root, "token"),
     SERVER_RECORD: join(root, "server"),
+    RELEASE_BASE_RECORD: join(root, "release-base"),
     UMASK_RECORD: join(root, "umask"),
     PROBE_RECORD: join(root, "probes"),
     VOLLI_RUNNER_TOKEN: "",
@@ -142,6 +143,7 @@ async function fixture(t) {
   return {
     root,
     tools,
+    base,
     env,
     requests,
     redirect: (mode) => {
@@ -198,6 +200,7 @@ test("POSIX installer downloads a release over HTTP, verifies and probes before 
   assert.equal(readFileSync(f.env.TOKEN_RECORD, "utf8"), "private-install-token");
   assert.equal(readFileSync(f.env.SERVER_RECORD, "utf8"), "https://deployment.convex.site");
   assert.match(readFileSync(f.env.UMASK_RECORD, "utf8"), /^0*22\n$/);
+  assert.equal(readFileSync(f.env.RELEASE_BASE_RECORD, "utf8"), f.base);
   assert.equal(readFileSync(f.env.PROBE_RECORD, "utf8").trim().split("\n").length, 2);
   assert.doesNotMatch(result.stdout + result.stderr + args.join(" "), /private-install-token/);
   assert.match(result.stderr, /authenticity trusts TLS/);
@@ -368,7 +371,14 @@ test("ABI gate walks every ELF and rejects a build requiring newer glibc", async
   const elfRoot = join(f.root, "elf");
   mkdirSync(elfRoot);
   writeFileSync(join(elfRoot, "native.so"), Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
-  f.tool("readelf", 'echo "Version needs section: Name: GLIBC_${TEST_REQUIRED_GLIBC:-2.31}"');
+  writeFileSync(join(elfRoot, "README.md"), "Not an ELF file; readelf must never see it.");
+  f.tool(
+    "readelf",
+    `test "$2" = /proc/self/fd/3 || exit 97
+header=$(dd bs=4 count=1 <&3 2>/dev/null | od -An -tx1 | tr -d ' \\n')
+test "$header" = 7f454c46 || exit 98
+echo "Version needs section: Name: GLIBC_\${TEST_REQUIRED_GLIBC:-2.31}"`,
+  );
   const oldPath = process.env.PATH;
   process.env.PATH = f.env.PATH;
   t.after(() => {
@@ -378,4 +388,14 @@ test("ABI gate walks every ELF and rejects a build requiring newer glibc", async
   assert.doesNotThrow(() => probe(elfRoot));
   process.env.TEST_REQUIRED_GLIBC = "2.32";
   assert.throws(() => probe(elfRoot), /needs GLIBC_2.32/);
+  process.env.TEST_REQUIRED_GLIBC = "2.31";
+  const mkfifo = systemTool("mkfifo");
+  if (mkfifo) {
+    const fifo = join(elfRoot, "unexpected-fifo");
+    execFileSync(mkfifo, [fifo]);
+    assert.throws(() => probe(elfRoot), /Unsupported artifact entry/);
+    rmSync(fifo);
+  }
+  symlinkSync(f.tools, join(elfRoot, "escape"));
+  assert.throws(() => probe(elfRoot), /Artifact symlink escapes root/);
 });

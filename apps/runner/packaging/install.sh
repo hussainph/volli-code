@@ -16,7 +16,9 @@ main() {
   name=
   server=${VOLLI_SERVER:-}
   fail() { printf 'volli-runner: %s\n' "$*" >&2; exit 1; }
-  need_value() { [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 needs a value"; }
+  need_value() {
+    if [ "$#" -lt 2 ] || [ -z "$2" ]; then fail "$1 needs a value"; fi
+  }
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --token) need_value "$@"; token=$2; shift 2 ;;
@@ -186,7 +188,8 @@ main() {
   "$from/bin/node" "$from/lib/probe-natives.cjs" || fail 'native modules cannot run on this machine'
   "$from/bin/node" "$from/lib/probe-codemode.mjs" || fail 'Code Mode cannot run on this machine'
   # Keep tokens out of the process argument list, including --token input.
-  export VOLLI_RUNNER_TOKEN="$token" VOLLI_SERVER="$server"
+  export VOLLI_RUNNER_TOKEN="$token" VOLLI_SERVER="$server" \
+    VOLLI_RUNNER_RELEASE_BASE="$release_base"
   set -- install "$mode" --from "$from" --channel "$channel"
   [ -z "$name" ] || set -- "$@" --name "$name"
   [ -z "$server" ] || set -- "$@" --server "$server"
