@@ -2,9 +2,9 @@
  * `volli-runner git-credential [--data-dir <dir>] <get|store|erase>`: Volli's
  * git credential helper on a runner box. Git runs it, never a person.
  *
- * A Session's commands install it as command-scope `credential.helper`
- * ({@link gitCredentialHelperCommand}, through host-core's
- * `runnerSessionGitEnv`), after every helper the box configures. Git appends
+ * A Session's commands install it as the GitHub host's only command-scope
+ * credential helper ({@link gitCredentialHelperCommand}, through host-core's
+ * `runnerSessionGitEnv`, which resets the box's helpers for that host). Git appends
  * the action and writes its request on stdin; this asks the running runner
  * over `<dataDir>/git-credential.sock` (0600), naming the Session by its
  * `VOLLI_SESSION` and `VOLLI_SESSION_TOKEN`, and prints the runner's answer:

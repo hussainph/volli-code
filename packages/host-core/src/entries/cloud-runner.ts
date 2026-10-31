@@ -49,7 +49,8 @@ export {
 // `createCloudProductStore({ managedClones })`, serves
 // `createGitCredentialBroker` with `serveGitCredentials` beside the agent
 // socket, and gives every Session command
-// `runnerSessionGitEnv(base, { helperCommand, github: tokens.github() })`; the
+// `runnerSessionGitEnv(base, { helperCommand, github: tokens.github() })`,
+// rebuilt for each command; the
 // `volli-runner git-credential` command is `askGitCredentialDaemon`.
 export {
   createManagedClones,

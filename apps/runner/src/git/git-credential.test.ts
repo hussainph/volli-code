@@ -36,7 +36,7 @@ async function runnerServing(dataDir: string) {
     verifySession: (token) => (token === "session-token" ? SESSION : null),
     repositoryOf: async () => REPO,
     tokens: {
-      github: () => null,
+      github: () => ({ state: "unknown" }),
       get: async (request) => {
         asked.push(request);
         return {

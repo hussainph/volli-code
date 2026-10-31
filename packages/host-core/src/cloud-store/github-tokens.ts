@@ -8,9 +8,10 @@
  * owner never connected GitHub does not ask on every git command. Nothing is
  * written to disk, and a refresh token never reaches the runner.
  *
- * {@link RunnerGithubTokens.github} is what the newest answer taught: the
- * token's host and the owner's commit identity, or `null` while the owner
- * has no usable connection. Session git environments are built from it
+ * {@link RunnerGithubTokens.github} is what the newest answer taught:
+ * `connected` (the token's host and the owner's commit identity),
+ * `disconnected` (no connection, or one needing a reconnect), or `unknown`
+ * before any answer. Session git environments are built from it
  * (`runnerSessionGitEnv`).
  */
 import type { ManagedCloneCredentials } from "./managed-clone";
@@ -26,12 +27,16 @@ import {
   type ProjectRepoId,
 } from "@volli/shared/cloud";
 
-/** The owner's GitHub as the newest grant named it. */
-export interface RunnerGithub {
-  /** The git host (with any port) the owner's token is for. */
-  host: string;
-  identity: RunnerGitIdentity;
-}
+/** The owner's GitHub as the newest answer described it. */
+export type RunnerGithub =
+  | {
+      state: "connected";
+      /** The git host (with any port) the owner's token is for. */
+      host: string;
+      identity: RunnerGitIdentity;
+    }
+  | { state: "disconnected" }
+  | { state: "unknown" };
 
 export type RunnerGithubTokenAnswer =
   | { ok: true; grant: RunnerGithubTokenGrant }
@@ -64,7 +69,7 @@ export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
   const url = `${options.siteUrl.replace(/\/+$/u, "")}${RUNNER_GITHUB_TOKEN_PATH}`;
   const cached = new Map<string, { answer: RunnerGithubTokenAnswer; until: number }>();
   const flights = new Map<string, Promise<RunnerGithubTokenAnswer>>();
-  let github: RunnerGithub | null = null;
+  let github: RunnerGithub = { state: "unknown" };
 
   async function ask(request: RunnerGithubTokenRequest): Promise<RunnerGithubTokenAnswer> {
     const token = await options.runnerToken();
@@ -108,12 +113,16 @@ export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
         .then((answer) => {
           if (answer.ok) {
             cached.set(key, { answer, until: answer.grant.useUntil });
-            github = { host: answer.grant.host, identity: answer.grant.identity };
+            github = {
+              state: "connected",
+              host: answer.grant.host,
+              identity: answer.grant.identity,
+            };
           } else if (answer.error.code === "github_not_connected") {
             cached.set(key, { answer, until: now() + GITHUB_NOT_CONNECTED_TTL_MS });
-            github = null;
+            github = { state: "disconnected" };
           } else if (answer.error.code === "github_needs_reconnect") {
-            github = null;
+            github = { state: "disconnected" };
           }
           return answer;
         })
@@ -121,8 +130,8 @@ export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
       flights.set(key, flight);
       return flight;
     },
-    /** The owner's GitHub as the newest answer named it, or `null` while there is no connection. */
-    github: (): RunnerGithub | null => github,
+    /** The owner's GitHub as the newest answer described it. */
+    github: (): RunnerGithub => github,
     /** Drops every cached answer for a Session or job (its attachment closed, its lease ended). */
     forget(id: string): void {
       for (const key of cached.keys()) {

@@ -3,15 +3,21 @@
  * (git's credential helper) asks the running runner, and the runner answers
  * with its owner's GitHub token for that Session.
  *
- * - **The environment** ({@link runnerSessionGitEnv}). While the runner holds
- *   its owner's GitHub token, a Session command's git asks ONLY Volli's helper
- *   for that GitHub host: command-scope `credential.<scheme>://<host>.helper`
- *   is reset to empty, then set to the helper, after every helper the box
- *   configures. So no box `store` or `cache` helper ever sees the token, on
- *   any git version, while other hosts keep the box's chain. Without a
- *   connection (`github_not_connected`), the box's chain is left whole for
- *   GitHub too, with Volli's helper after it. Git's terminal prompt is off,
- *   and the owner's commit identity is set once known.
+ * - **The environment** ({@link runnerSessionGitEnv}). Whenever Volli's
+ *   helper could answer, it is the ONLY helper git asks for the GitHub host:
+ *   command-scope `credential.<scheme>://<host>.helper` is reset to empty,
+ *   then set to Volli's helper. Command-scope configuration is read after
+ *   every configuration file, so this clears every helper the box configures
+ *   for that host (host- or path-scoped, with or without `useHttpPath`), and
+ *   no box `store`, `cache` or keyring helper sees the token, on get or on
+ *   approve. Other hosts keep the box's chain. That holds connected (the
+ *   token's host) and before any answer (`github.com`). Only when the owner is
+ *   known to be disconnected is the box's chain left whole, with no Volli
+ *   helper at all, so a connection made later cannot leak through it either;
+ *   the next materialization's token request learns it. Git's terminal prompt
+ *   is off, and the owner's commit identity is set when known. Command-scope
+ *   configuration needs git 2.31; older git ignores it, so the box's own
+ *   chain answers and no token is ever offered.
  * - **The helper → runner hop.** The helper sends git's request, the action,
  *   and the Session's `VOLLI_SESSION` / `VOLLI_SESSION_TOKEN` over a Unix
  *   socket only this account can open (0600, in the runner's runtime
@@ -22,21 +28,22 @@
  *   answers `x-access-token` and the token only for the host the token is for.
  *   Anything else, including `github_not_connected`, is the empty answer, so
  *   git moves on to the box's own credentials or fails without a prompt.
- *   The answer also carries `password_expiry_utc`, so a helper that does see
- *   it (git 2.41 and later) would not keep it.
+ *   The answer also carries `password_expiry_utc`, so a helper that did see
+ *   it (`store` on git 2.41 and later) would not keep it.
  * - **Why a socket of its own**, beside the agent socket: the helper speaks no
  *   agent verb, and keeping it off the verb registry keeps the agent surface
  *   unchanged. Same directory, same 0600, same account.
  *
  * Not a sandbox: the same account can read any Session's environment, so it
- * can read the token (VC-163's honest limit, `session-tokens.ts`). What the
- * Session token buys is that a string a model is told to export names no
- * other Session.
+ * can read the token (VC-163's honest limit, `session-tokens.ts`), and an
+ * agent that runs `git -c credential.helper=…` adds a helper after Volli's,
+ * which git then hands the token on approve. What the Session token buys is
+ * that a string a model is told to export names no other Session.
  */
 import { chmod, lstat, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 
-import type { ProjectRepoId, SessionId } from "@volli/shared/cloud";
+import { DEFAULT_GITHUB_HOST, type ProjectRepoId, type SessionId } from "@volli/shared/cloud";
 
 import { appendGitConfig, parseGitCredentialRequest } from "../host-sign-ins/git-credentials";
 import type { RunnerGithub, RunnerGithubTokens } from "./github-tokens";
@@ -87,7 +94,7 @@ export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
       if (asked !== undefined && asked !== GITHUB_TOKEN_USERNAME) return "";
       // Once a grant has named GitHub's host, any other host costs no backend call.
       const known = options.tokens.github();
-      if (known !== null && known.host !== host.toLowerCase()) return "";
+      if (known.state === "connected" && known.host !== host.toLowerCase()) return "";
       const projectRepoId = await options.repositoryOf(sessionId);
       if (projectRepoId === null) return "";
       const answer = await options.tokens.get({
@@ -255,31 +262,40 @@ export function askGitCredentialDaemon(input: {
 
 /**
  * The git part of a runner Session command's environment (see the module
- * comment): with the owner's GitHub known, the GitHub host's helper chain is
- * reset to Volli's helper alone; without it, Volli's helper is appended after
- * the box's. Git's terminal prompt is off either way, and the owner's commit
- * identity is set when known (unless `base` names one).
+ * comment): unless the owner is known to be disconnected, the GitHub host's
+ * helper chain is reset to Volli's helper alone (`http://` too, which the
+ * broker answers only when `allowHttp` is on); disconnected, the box's chain
+ * is left as it is. Git's terminal prompt is off either way, and the owner's
+ * commit identity is set when known (unless `base` names one). Rebuild it for
+ * every command: the state moves as answers arrive.
  */
 export function runnerSessionGitEnv(
   base: Readonly<Record<string, string>>,
-  input: { helperCommand: string; github: RunnerGithub | null },
+  input: { helperCommand: string; github: RunnerGithub },
 ): Record<string, string> {
+  const github = input.github;
+  const host =
+    github.state === "connected"
+      ? github.host
+      : github.state === "unknown"
+        ? DEFAULT_GITHUB_HOST
+        : null;
   const entries: [string, string][] =
-    input.github === null
-      ? [["credential.helper", input.helperCommand]]
+    host === null
+      ? []
       : ["https", "http"].flatMap((scheme): [string, string][] => {
-          const scope = `credential.${scheme}://${input.github!.host}.helper`;
+          const scope = `credential.${scheme}://${host}.helper`;
           return [
             [scope, ""],
             [scope, input.helperCommand],
           ];
         });
-  const env = appendGitConfig(base, entries);
+  const env = entries.length === 0 ? { ...base } : appendGitConfig(base, entries);
   env.GIT_TERMINAL_PROMPT = "0";
-  if (input.github !== null) {
+  if (github.state === "connected") {
     for (const role of ["AUTHOR", "COMMITTER"] as const) {
-      env[`GIT_${role}_NAME`] ??= input.github.identity.name;
-      env[`GIT_${role}_EMAIL`] ??= input.github.identity.email;
+      env[`GIT_${role}_NAME`] ??= github.identity.name;
+      env[`GIT_${role}_EMAIL`] ??= github.identity.email;
     }
   }
   return env;
