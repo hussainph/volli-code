@@ -342,8 +342,9 @@ export interface RunnerSummary {
   installMode: Doc<"runners">["installMode"];
   linkedVia: RunnerLinkMethod;
   linkedAt: number;
-  autoUpdate: Doc<"runners">["autoUpdate"];
-  update: unknown;
+  // Additive projections: older backends and N-1 clients may omit them.
+  autoUpdate?: Doc<"runners">["autoUpdate"];
+  update?: unknown;
 }
 
 function summary(runner: Doc<"runners">): RunnerSummary {
