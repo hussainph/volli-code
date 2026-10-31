@@ -83,6 +83,108 @@ describe("runner start Draft durability", () => {
     });
     expect(store.getState().drafts.draft?.provisional?.runnerStart).toBeUndefined();
   });
+  it.each([null, "high"])(
+    "round-trips a ticket start with model reasoning %s",
+    (reasoningLevel) => {
+      const disk = storage();
+      const store = createChatDraftsStore(disk);
+      store.getState().openProvisional("draft", input);
+      const request = {
+        ...intent,
+        ticketId: "ticket",
+        model: { providerId: "openai", modelId: "model", reasoningLevel },
+      };
+      store.getState().freezeRunnerStart("draft", { intent: request, accountScope: "account" });
+      expect(createChatDraftsStore(disk).getState().drafts.draft?.provisional?.runnerStart).toEqual(
+        { intent: request, accountScope: "account" },
+      );
+    },
+  );
+  it.each([
+    { intent: null, accountScope: "account" },
+    { intent, accountScope: 1 },
+    ...["clientRequestId", "runnerId", "projectId", "ticketId", "body"].map((key) => ({
+      intent: { ...intent, [key]: 1 },
+      accountScope: "account",
+    })),
+    ...[
+      undefined,
+      1,
+      { providerId: 1 },
+      { providerId: "p", modelId: 1 },
+      { providerId: "p", modelId: "m", reasoningLevel: 1 },
+    ].map((model) => ({ intent: { ...intent, model }, accountScope: "account" })),
+  ])("ignores an unreadable persisted request without losing the words: %j", (runnerStart) => {
+    const disk = storage();
+    disk.setItem(
+      "volli:chat-drafts",
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {
+            draft: {
+              text: "Keep my words",
+              attachments: [],
+              held: [],
+              touchedAt: 1,
+              provisional: { ...input, phase: "draft", runnerStart },
+            },
+          },
+        },
+      }),
+    );
+    const restored = createChatDraftsStore(disk).getState().drafts.draft!;
+    expect(restored.text).toBe("Keep my words");
+    expect(restored.provisional?.runnerStart).toBeUndefined();
+  });
+  it.each([
+    { id: 1, name: "Box" },
+    { id: "box", name: 1 },
+  ])("ignores an unreadable runner label: %j", (runnerChoice) => {
+    const disk = storage();
+    disk.setItem(
+      "volli:chat-drafts",
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {
+            draft: {
+              text: "Keep my words",
+              attachments: [],
+              held: [],
+              touchedAt: 1,
+              provisional: { ...input, phase: "draft", runnerChoice },
+            },
+          },
+        },
+      }),
+    );
+    expect(
+      createChatDraftsStore(disk).getState().drafts.draft?.provisional?.runnerChoice,
+    ).toBeUndefined();
+  });
+  it("refuses runner mutations outside an editable Draft and cannot redirect a frozen empty start", () => {
+    const store = createChatDraftsStore(storage());
+    const draft = store.getState;
+    draft().setDraft("ordinary", "text");
+    draft().openProvisional("created", input);
+    draft().markProvisionalSessionCreated("created");
+    draft().markProvisionalSessionCreated("created");
+    draft().markProvisionalSessionCreated("absent");
+    draft().openProvisional("empty", input);
+    for (const id of ["absent", "ordinary", "created"]) {
+      draft().setProvisionalRunner(id, { id: "box", name: "Box" });
+      draft().freezeRunnerStart(id, { intent, accountScope: "account" });
+      draft().acceptRunnerStart(id, "remote");
+      draft().resetRunnerStart(id, "changed", "new");
+      expect(draft().drafts[id]?.provisional?.runnerStart).toBeUndefined();
+    }
+    draft().acceptRunnerStart("empty", "remote");
+    draft().resetRunnerStart("empty", "changed", "new");
+    draft().freezeRunnerStart("empty", { intent, accountScope: "account" });
+    draft().setProvisionalRunner("empty", { id: "other", name: "Other" });
+    expect(draft().drafts.empty?.provisional?.runnerChoice).toBeUndefined();
+  });
   it("does not resurrect a closed Draft when a remote response arrives late", () => {
     const store = createChatDraftsStore(storage());
     store.getState().openProvisional("draft", input);

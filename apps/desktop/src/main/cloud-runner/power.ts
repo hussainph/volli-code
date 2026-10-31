@@ -20,6 +20,7 @@
  * mode's, unchanged.
  */
 import type { HostLiveWork } from "@volli/host-core/sessions";
+import type { RunnerPower } from "@volli/shared/cloud";
 
 export interface RunnerPowerBlocker {
   hold(): void;
@@ -84,7 +85,7 @@ export function holdWhileTurnsRun(
  * names it. `unknown` is an unread machine (no `powerMonitor` answer yet, or
  * a platform that cannot tell), never a guess at "probably AC".
  */
-export type RunnerPowerSource = "ac" | "battery" | "unknown";
+export type RunnerPowerSource = RunnerPower["source"];
 
 /**
  * The two facts the Keep-working switch decides with: the switch itself, and
@@ -103,15 +104,11 @@ export interface RunnerPowerFacts {
 export const NO_RUNNER_POWER_FACTS: RunnerPowerFacts = { enabled: false, source: "unknown" };
 
 /**
- * C1's `capabilities.power` (BYO-2 owns the shared type; this is its shape
- * until that lands, and the one line the report adds today). `alwaysOn` is
- * the person's Keep-working switch, which defaults on — not whether a hold is
- * currently in force, and never a promise about the wall.
+ * C1's `capabilities.power`. `alwaysOn` is the person's Keep-working switch,
+ * which defaults on — not whether a hold is currently in force, and never a
+ * promise about the wall.
  */
-export interface RunnerPowerCapability {
-  source: RunnerPowerSource;
-  alwaysOn: boolean;
-}
+export type RunnerPowerCapability = RunnerPower;
 
 export function runnerPowerCapability(facts: RunnerPowerFacts): RunnerPowerCapability {
   return { source: facts.source, alwaysOn: facts.enabled };

@@ -59,12 +59,7 @@ import { convexMacRunnerBackend } from "./backend";
 import { runnerConnector, type RunnerConnectionDeps } from "./connection";
 import { inventoryRunnerLinkStore, type RunnerLinkInventory } from "./identity-store";
 import { createMacRunner, type MacRunner, type MacRunnerAccount } from "./mac-runner";
-import {
-  NO_RUNNER_POWER_FACTS,
-  runnerPowerCapability,
-  type RunnerPowerCapability,
-  type RunnerPowerFacts,
-} from "./power";
+import { NO_RUNNER_POWER_FACTS, runnerPowerCapability, type RunnerPowerFacts } from "./power";
 import { runnerRecordStore, type RunnerRecordRow } from "./record";
 
 export { CLOUD_RUNNER_APP_STATE_KEY } from "./record";
@@ -277,13 +272,6 @@ export function thisMacCapabilities(
 }
 
 /**
- * C1's `capabilities.power` line until `RunnerCapabilities.power` merges
- * (BYO-2, VC-1036). Delete this intersection on the dependency rebase; the
- * backend ignores an additive field it does not know yet.
- */
-type RunnerCapabilitiesWithPower = RunnerCapabilities & { power: RunnerPowerCapability };
-
-/**
  * C1's `capabilities.power` line (VC-1037): where this Mac's power comes from
  * and whether the Keep-working switch is on. Never a promise about the wall:
  * `source` is the reading at report time.
@@ -292,7 +280,7 @@ function withRunnerPower(
   report: RunnerCapabilityReport,
   facts: RunnerPowerFacts,
 ): RunnerCapabilityReport {
-  const capabilities: RunnerCapabilitiesWithPower = {
+  const capabilities: RunnerCapabilities = {
     ...report.capabilities,
     power: runnerPowerCapability(facts),
   };
