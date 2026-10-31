@@ -107,10 +107,7 @@ export async function startOnRunner(
     throw new Error(NOT_CONNECTED);
   }
   try {
-    const result = await session.client.mutation(
-      session.api.sessionStarts.startOn,
-      intent,
-    );
+    const result = await session.client.mutation(session.api.sessionStarts.startOn, intent);
     return result.sessionId;
   } catch (error) {
     throw new Error(cloudFailure(error).message, { cause: error });
