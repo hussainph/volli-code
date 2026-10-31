@@ -18,20 +18,24 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-mkdir "$work/release"
-cp "$assets"/volli-runner-*.tar.gz "$assets"/volli-runner-*.tar.gz.sha256 "$work/release/"
+version=$(node -e 'console.log(require(process.argv[1]).version)' "$repo/package.json")
+release_dir="$work/release/releases/download/v$version"
+mkdir -p "$release_dir"
+cp "$assets"/volli-runner-*.tar.gz "$assets"/volli-runner-*.tar.gz.sha256 "$release_dir/"
+# Match the real download layout and the updater's containing-release origin.
 # --network host makes this same loopback origin reachable inside the containers.
 port="${RUNNER_INSTALL_TEST_PORT:-18765}"
-node "$repo/scripts/runner-release-manifest.mjs" --assets "$work/release" \
-  --release-base "http://127.0.0.1:$port"
+release_base="http://127.0.0.1:$port/releases/download/v$version"
+node "$repo/scripts/runner-release-manifest.mjs" --assets "$release_dir" \
+  --release-base "$release_base"
 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$work/release" >"$work/server.log" 2>&1 &
 server=$!
 for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:$port/volli-runner-manifest.json" >/dev/null; then break; fi
+  if curl -fsS "$release_base/volli-runner-manifest.json" >/dev/null; then break; fi
   kill -0 "$server" || { cat "$work/server.log"; exit 1; }
   sleep 0.1
 done
-curl -fsS "http://127.0.0.1:$port/volli-runner-manifest.json" >/dev/null
+curl -fsS "$release_base/volli-runner-manifest.json" >/dev/null
 # No shell expansion of a caller-controlled distro list. Each supported image is
 # explicit, and no image gets mounted host directories or a privileged runtime.
 for distro in ubuntu:20.04 ubuntu:22.04 ubuntu:24.04 debian:11 debian:12 fedora:41; do
@@ -58,13 +62,13 @@ RUN if [ "$DISTRO" = debian:11 ]; then \
 DOCKERFILE
     for mode in system user; do
       echo "=== install.sh: $distro / $mode / $downloader"
-      docker run --rm --network host -e TEST_MODE="$mode" -e TEST_PORT="$port" \
+      docker run --rm --network host -e TEST_MODE="$mode" -e TEST_RELEASE_BASE="$release_base" \
         -e TEST_DOWNLOADER="$downloader" -e TEST_BOOTSTRAP_ONLY="$bootstrap_only" "$image" sh -eu -c '
         if [ "$TEST_DOWNLOADER" = wget ]; then
           ! command -v curl >/dev/null || { echo "wget-only image unexpectedly has curl" >&2; exit 1; }
           fetch="wget -qO-"
         else fetch="curl -fsSL"; fi
-        command="$fetch http://127.0.0.1:$TEST_PORT/volli-runner-install.sh | sh -s -- --release-base http://127.0.0.1:$TEST_PORT --no-start --no-link"
+        command="$fetch $TEST_RELEASE_BASE/volli-runner-install.sh | sh -s -- --release-base $TEST_RELEASE_BASE --no-start --no-link"
         code=0
         if [ "$TEST_MODE" = system ]; then
           sh -eu -c "$command" > /tmp/install-result 2>&1 || code=$?
@@ -91,17 +95,17 @@ DOCKERFILE
 done
 # Real musl and pre-baseline glibc refusals. Match the diagnostic too: a failed
 # network download must not masquerade as an unsupported-platform success.
-docker run --rm --network host -e TEST_PORT="$port" alpine:3.21 sh -eu -c '
-  wget -qO /tmp/install.sh "http://127.0.0.1:$TEST_PORT/volli-runner-install.sh"
+docker run --rm --network host -e TEST_RELEASE_BASE="$release_base" alpine:3.21 sh -eu -c '
+  wget -qO /tmp/install.sh "$TEST_RELEASE_BASE/volli-runner-install.sh"
   if sh /tmp/install.sh > /tmp/result 2>&1; then cat /tmp/result; exit 1; fi
   cat /tmp/result
   grep -q "musl/non-glibc" /tmp/result
   test "$(wc -l < /tmp/result)" -eq 1
 '
-docker run --rm --network host -e TEST_PORT="$port" ubuntu:18.04 sh -eu -c '
+docker run --rm --network host -e TEST_RELEASE_BASE="$release_base" ubuntu:18.04 sh -eu -c '
   apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
-  curl -fsSL "http://127.0.0.1:$TEST_PORT/volli-runner-install.sh" -o /tmp/install.sh
-  if sh /tmp/install.sh --release-base "http://127.0.0.1:$TEST_PORT" > /tmp/result 2>&1; then cat /tmp/result; exit 1; fi
+  curl -fsSL "$TEST_RELEASE_BASE/volli-runner-install.sh" -o /tmp/install.sh
+  if sh /tmp/install.sh --release-base "$TEST_RELEASE_BASE" > /tmp/result 2>&1; then cat /tmp/result; exit 1; fi
   cat /tmp/result
   grep -q "glibc >= 2.31 is required" /tmp/result
 '
