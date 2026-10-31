@@ -41,7 +41,7 @@ test("all Vite+ workflow sites use the shared locked bootstrap after checkout", 
   }
   // Keep an explicit inventory so removing an entire setup step cannot silently
   // pass a loop that checks only the sites it still discovers.
-  assert.equal(sites.length, 20, `bootstrap inventory changed:\n${sites.join("\n")}`);
+  assert.equal(sites.length, 21, `bootstrap inventory changed:\n${sites.join("\n")}`);
   assert.equal(deferredInstalls.length, 3, `deferred installs:\n${deferredInstalls.join("\n")}`);
 });
 
