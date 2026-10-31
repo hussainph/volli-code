@@ -1,4 +1,7 @@
-/** A machine preference: main reads its acknowledged value at every quit. */
+/**
+ * "Keep this Mac working as a runner": a machine preference main reads at
+ * every quit and in the runner's alwaysOn/power report (VC-1037).
+ */
 import * as React from "react";
 import { LaptopIcon } from "@phosphor-icons/react/dist/csr/Laptop";
 import { RUNNER_RESIDENT_APP_STATE_KEY, runnerStaysAvailable } from "@volli/shared";
@@ -34,7 +37,7 @@ export function RunnerAvailability() {
   };
   return (
     <PrefSection title="This Mac" icon={LaptopIcon}>
-      <PrefRow label="Keep this Mac available when Volli is closed" htmlFor="runner-resident">
+      <PrefRow label="Keep this Mac working as a runner" htmlFor="runner-resident">
         <Switch
           id="runner-resident"
           checked={enabled}

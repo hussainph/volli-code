@@ -60,6 +60,7 @@ import {
 import { projectOfSession, rememberSessionProject } from "@renderer/lib/session-project";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
+import { cloudLaunchNow } from "@renderer/stores/launch";
 
 export interface CreateChatSessionInput {
   projectId: string;
@@ -797,6 +798,14 @@ export function createChatSessionsStore(
         for (const [sessionId, draft] of Object.entries(drafts)) {
           const provisional = draft.provisional;
           if (provisional === undefined) continue;
+          const launch = cloudLaunchNow();
+          const accountScope =
+            launch === null ? null : JSON.stringify([launch.backendUrl, launch.userId]);
+          if (
+            provisional.runnerStart !== undefined &&
+            provisional.runnerStart.accountScope !== accountScope
+          )
+            continue;
           // A removed project has no reachable surface and its durable removal
           // has already cascaded any partial Session row. Retire the stale Draft
           // rather than restoring an owner key no renderer can ever select.

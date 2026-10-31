@@ -27,6 +27,8 @@ import {
 import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { noteProjectTeam, useCloudTeamStore } from "@renderer/lib/cloud-team";
 import { ChatPlane } from "./chat-plane";
+import * as runnerPicker from "./runner-picker";
+import { getFunctionName } from "convex/server";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
@@ -410,6 +412,97 @@ it("keeps a new cloud chat's composer before any Session exists", async () => {
   const { container } = await mountPlane(true, false, true);
   expect(container.querySelector('textarea[aria-label="Message"]')).not.toBeNull();
   expect(container.textContent).not.toContain("Loading Session owner…");
+});
+
+it("picks another runner in the composer and sends its durable first-message request without local promotion", async () => {
+  adoptLaunch({ store: "cloud", userId: "owner", backendUrl: "https://example.convex.cloud" });
+  const requestId = "20000000-0000-4000-8000-000000000001";
+  useChatDraftsStore.getState().openProvisional(SESSION, {
+    projectId: PROJECT,
+    ticketId: null,
+    title: null,
+    operationId: requestId,
+  });
+  const mac = {
+    id: "mac",
+    name: "This Mac",
+    kind: "mac",
+    status: "online",
+    statusChangedAt: 1,
+    providers: [],
+    version: "1",
+    upgradeRequired: false,
+  };
+  const box = { ...mac, id: "box", name: "Build box", kind: "linux" };
+  vi.spyOn(runnerPicker, "useRunnerPicker").mockImplementation((_project, _enabled, pinned) => ({
+    runners: [mac, box],
+    selected: pinned === "box" ? box : mac,
+    thisMacId: "mac",
+    loading: false,
+    error: null,
+    choose: () => {},
+  }));
+  const mutation = vi.fn().mockResolvedValue({ sessionId: "remote-session" });
+  const client = {
+    mutation,
+    connectionState: () => ({ isWebSocketConnected: true }),
+    watchQuery: () => ({ localQueryResult: () => undefined, onUpdate: () => () => {} }),
+  };
+  const cloud = { client, api: cloudApi } as unknown as cloudClient.CloudSession;
+  vi.spyOn(cloudClient, "cloudSession").mockReturnValue(cloud);
+  vi.spyOn(cloudClient, "followCloudSession").mockImplementation((listener) => {
+    listener(cloud);
+    return () => {};
+  });
+  const bridge = refusingBridge() as typeof window.api;
+  const persisted = Promise.withResolvers<{ ok: true }>();
+  let writes = 0;
+  vi.stubGlobal(
+    "api",
+    new Proxy(bridge, {
+      get(target, key) {
+        if (key === "appState")
+          return { set: async () => (++writes === 1 ? persisted.promise : { ok: true }) };
+        return Reflect.get(target, key);
+      },
+    }),
+  );
+  const { container, store } = await mountPlane(true, false, true);
+  const localPromotion = vi.spyOn(store.getState(), "promoteChatSession");
+  const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Runner: This Mac"]')!;
+  await act(async () =>
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+  );
+  const option = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+    (node) => node.textContent?.includes("Build box"),
+  )!;
+  await act(async () => option.click());
+  typeDraft(message(container));
+  await act(async () => {
+    const send = container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!;
+    send.click();
+    // Same tick, before React paints the disabled state or storage acknowledges.
+    send.click();
+  });
+  expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toHaveLength(1);
+  expect(mutation).not.toHaveBeenCalled();
+  await act(async () => persisted.resolve({ ok: true }));
+  await vi.waitFor(() => expect(mutation).toHaveBeenCalledTimes(1));
+  expect(getFunctionName(mutation.mock.calls[0]![0])).toBe("sessionStarts:startOn");
+  expect(mutation.mock.calls[0]![1]).toMatchObject({
+    runnerId: "box",
+    clientRequestId: requestId,
+    projectId: PROJECT,
+    ticketId: null,
+  });
+  expect(JSON.parse(mutation.mock.calls[0]![1].body).parts).toEqual([
+    { type: "text", text: DRAFT },
+  ]);
+  expect(localPromotion).not.toHaveBeenCalled();
+  expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.runnerStart?.sessionId).toBe(
+    "remote-session",
+  );
+  expect(container.textContent).toContain("Sent — waiting for Build box");
 });
 
 it("keeps the known owner's composer while names load or fail", async () => {

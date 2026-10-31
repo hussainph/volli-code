@@ -166,6 +166,8 @@ export interface SessionComposerProps {
   /** A row action removed its focused control; hand focus to the persistent input. */
   onComposerFocusRequest?(): void;
   models: readonly ComposerModel[];
+  /** Runner selection is offered only before the Session's first send. */
+  runnerPicker?: React.ReactNode;
   /** The user's tier table, which gives the pill its Defaults view (VC-259). */
   tiers?: readonly ComposerTierRow[];
   selection: ComposerModelSelection;
@@ -383,6 +385,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   textareaRef,
   onComposerFocusRequest,
   models,
+  runnerPicker,
   tiers,
   selection,
   selectionProviderLabel,
@@ -728,6 +731,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 }
               />
             )}
+            {runnerPicker}
             {/* A peer of the model pill, not a property of it. Effort is the
                 per-task decision and model is the set-and-forget one, so the
                 volatile choice is the one that is readable without opening

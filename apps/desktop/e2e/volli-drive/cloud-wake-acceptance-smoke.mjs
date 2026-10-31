@@ -83,6 +83,7 @@ const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const FIRST = "Wake demo first message";
 const SECOND = "Wake demo second finished turn";
 const WHILE_ASLEEP = "Wake demo sent while asleep";
+const PICKED_RUNNER = "Runner picker starts on the other Mac";
 const reply = (text) => `fake-agent: ${text}`;
 const STEPS = [
   [1, "Sign in on Mac A and Mac B (Settings → Account, dev sign-in)"],
@@ -95,6 +96,7 @@ const STEPS = [
   [5, "SIMULATED sleep on Mac A: Mac B reads Waiting for <Mac A> — asleep since"],
   [6, "Mac B sends while Mac A sleeps: Sent — waiting for <Mac A>, no reply"],
   [7, "Mac A wakes: Running on <Mac A> again, the message runs, Mac B catches up"],
+  [8, "Mac B picks Mac A for a new chat; its first message runs on Mac A"],
 ];
 
 const results = [];
@@ -134,6 +136,18 @@ function driver(label, socket) {
     wait,
     gone,
     click,
+    async chooseRunner(name) {
+      await waitUntil(
+        `${label}: runner picker is ready`,
+        async () =>
+          controls((await snap()).text, "button", "Runner:", { contains: true }).some(
+            (row) => !row.includes("[disabled]"),
+          ),
+        { timeout: 30_000, interval: 200 },
+      );
+      await click("button", "Runner:", { contains: true, first: true });
+      await click("menuitemradio", name, { contains: true, first: true });
+    },
     async send(text) {
       await waitUntil(
         `${label}: the Message box is ready`,
@@ -297,6 +311,9 @@ async function journey(fixture, store) {
     await macA.wait(choose, 60_000);
     await macA.click("button", choose);
     await macA.gone(choose, 30_000);
+    // The always-on default can be either Mac. This existing journey explicitly
+    // needs A's local folder and pins it through the same picker a person uses.
+    await macA.chooseRunner(nameA);
     await macA.click("button", "New chat", { first: true });
     await macA.send(FIRST);
     await macA.wait(reply(FIRST), 60_000);
@@ -414,6 +431,27 @@ async function journey(fixture, store) {
         layout: instances.A.layout,
         expectedReplies: [reply(FIRST), reply(SECOND), reply(WHILE_ASLEEP)],
       }),
+    );
+  });
+
+  await step(8, async () => {
+    await macB.chooseRunner(nameA);
+    await macB.click("button", "New chat", { first: true });
+    await macB.send(PICKED_RUNNER);
+    await macB.wait(reply(PICKED_RUNNER), 90_000);
+    await macB.wait(`Running on ${nameA}`, 30_000);
+    await waitUntil(
+      "the picked runner owns the new Session",
+      async () => {
+        const rows = await projectSessions({
+          convexUrl: fixture.convexUrl,
+          token: token(),
+          projectId: project.projectId,
+        });
+        const started = rows.filter((row) => row.id !== sessionId);
+        return started.length === 1 && started[0].placeRunnerId === a.runnerId;
+      },
+      { timeout: 45_000, interval: 500 },
     );
   });
 

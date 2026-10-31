@@ -2,11 +2,20 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { EMPTY_MODEL_ACCESS_DEFAULTS, type ModelSelection } from "@volli/shared";
+import {
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  type ModelAccessSnapshot,
+  type ModelSelection,
+} from "@volli/shared";
+import type { ComposerRunner } from "@renderer/components/chat/runner-picker-model";
 import { useComposerRun, type ComposerRun } from "./composer-run";
 
 const access = vi.hoisted(() => ({
-  inspect: vi.fn(async () => ({ observedAt: 1, models: [], providers: [] })),
+  inspect: vi.fn(async (): Promise<ModelAccessSnapshot> => ({
+    observedAt: 1,
+    models: [],
+    providers: [],
+  })),
   hiddenModels: vi.fn(async () => []),
   defaults: vi.fn(),
   revision: 0,
@@ -19,8 +28,14 @@ const DEFAULT: ModelSelection = {
 };
 let root: Root | undefined;
 let run: ComposerRun;
-function Probe({ projectId = "p1" }: { projectId?: string }) {
-  run = useComposerRun(null, projectId);
+function Probe({
+  projectId = "p1",
+  runner,
+}: {
+  projectId?: string;
+  runner?: ComposerRunner | null;
+}) {
+  run = useComposerRun(null, projectId, runner);
   return null;
 }
 afterEach(async () => {
@@ -55,3 +70,52 @@ it.each([DEFAULT, { ...DEFAULT, reasoningLevel: "low" } as const])(
     expect(run.selection).toEqual(DEFAULT);
   },
 );
+
+it("filters cloud models and drops an unsupported pick when the runner changes", async () => {
+  access.inspect.mockResolvedValue({
+    observedAt: 1,
+    providers: [],
+    models: [
+      {
+        providerId: "anthropic",
+        modelId: "opus",
+        label: "Opus",
+        state: "available",
+        reasoningLevels: ["high"],
+        acceptsImageInput: true,
+      },
+      {
+        providerId: "openai",
+        modelId: "remote",
+        label: "Remote",
+        state: "authentication-required",
+        reasoningLevels: ["low"],
+        acceptsImageInput: true,
+      },
+    ],
+  });
+  await mount();
+  const runner: ComposerRunner = {
+    id: "runner",
+    name: "Linux",
+    kind: "linux",
+    status: "online",
+    statusChangedAt: 1,
+    providers: ["anthropic"],
+    version: "1",
+    upgradeRequired: false,
+  };
+  await act(async () => root!.render(<Probe runner={runner} />));
+  await act(async () => run.setSelection(DEFAULT));
+  expect(run.selection).toEqual(DEFAULT);
+  await act(async () =>
+    root!.render(<Probe runner={{ ...runner, id: "other", providers: ["openai"] }} />),
+  );
+  expect(run.models.map((model) => model.providerId)).toEqual(["openai"]);
+  expect(run.selection).toBeNull();
+  expect(run.explicit).toBe(false);
+  expect(run.tiers.filter((row) => row.state === "ready")).toEqual([]);
+  await act(async () => root!.render(<Probe runner={null} />));
+  expect(run.models).toEqual([]);
+  expect(run.selection).toBeNull();
+});

@@ -50,6 +50,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+import type { RunnerStartIntent } from "@renderer/components/chat/runner-picker-start";
 
 /** A draft never survives past this many most-recently-touched sessions. */
 export const MAX_DRAFTS = 50;
@@ -120,6 +121,10 @@ export interface ProvisionalChatDraft {
   skills?: readonly string[];
   title: string | null;
   model?: ModelSelection;
+  /** A person's cloud runner choice. Never silently reroute a held first message. */
+  runnerChoice?: { id: string; name: string };
+  /** Frozen before the remote mutation; retained until its Session is readable. */
+  runnerStart?: { intent: RunnerStartIntent; accountScope: string; sessionId?: string };
   /**
    * Set when {@link model} is only the configured default the composer froze
    * at Send (VC-432), not a model a person picked. Promotion then leaves the
@@ -188,6 +193,14 @@ export interface ChatDraftsState {
     model: ModelSelection,
     options?: { fromDefault?: boolean },
   ): void;
+  setProvisionalRunner(sessionId: string, runner: { id: string; name: string }): void;
+  freezeRunnerStart(
+    sessionId: string,
+    start: NonNullable<ProvisionalChatDraft["runnerStart"]>,
+  ): void;
+  acceptRunnerStart(sessionId: string, remoteSessionId: string): void;
+  /** Only after a confirmed terminal failure may a fresh request replace this one. */
+  resetRunnerStart(sessionId: string, text: string, operationId: string): void;
   /** Records that create landed, so a failed Blob transfer can resume honestly. */
   markProvisionalSessionCreated(sessionId: string): void;
   /** Replaces ownerless attachment views with the Session links promotion created. */
@@ -306,7 +319,10 @@ function quietDraftStorage(storage: StateStorage): StateStorage {
 /** True for a draft with nothing left in it — no text, no files, nothing held. */
 export function isEmptyChatDraft(draft: ChatDraft): boolean {
   return (
-    draft.text.trim().length === 0 && draft.attachments.length === 0 && draft.held.length === 0
+    draft.provisional?.runnerStart === undefined &&
+    draft.text.trim().length === 0 &&
+    draft.attachments.length === 0 &&
+    draft.held.length === 0
   );
 }
 
@@ -421,8 +437,48 @@ function readProvisionalChatDraft(value: unknown): ProvisionalChatDraft | undefi
     title,
     phase,
     ...(skills.length > 0 ? { skills } : {}),
+    ...(isPlainRecord(value.runnerChoice) &&
+    typeof value.runnerChoice.id === "string" &&
+    typeof value.runnerChoice.name === "string"
+      ? { runnerChoice: { id: value.runnerChoice.id, name: value.runnerChoice.name } }
+      : {}),
+    ...(readRunnerStart(value.runnerStart) === undefined
+      ? {}
+      : { runnerStart: readRunnerStart(value.runnerStart) }),
     ...(model === null ? {} : { model }),
     ...(model !== null && value.modelIsDefault === true ? { modelIsDefault: true as const } : {}),
+  };
+}
+
+function readRunnerStart(value: unknown): ProvisionalChatDraft["runnerStart"] {
+  if (
+    !isPlainRecord(value) ||
+    !isPlainRecord(value.intent) ||
+    typeof value.accountScope !== "string"
+  )
+    return undefined;
+  const row = value.intent;
+  if (
+    typeof row.clientRequestId !== "string" ||
+    typeof row.runnerId !== "string" ||
+    typeof row.projectId !== "string" ||
+    (row.ticketId !== null && typeof row.ticketId !== "string") ||
+    typeof row.body !== "string"
+  )
+    return undefined;
+  const model = row.model === null ? null : parseSessionModel(row.model);
+  if (row.model !== null && model === null) return undefined;
+  return {
+    accountScope: value.accountScope,
+    intent: {
+      clientRequestId: row.clientRequestId,
+      runnerId: row.runnerId,
+      projectId: row.projectId,
+      ticketId: row.ticketId,
+      body: row.body,
+      model,
+    },
+    ...(typeof value.sessionId === "string" ? { sessionId: value.sessionId } : {}),
   };
 }
 
@@ -582,6 +638,7 @@ export function createChatDraftsStore(storage?: StateStorage) {
               const draft = state.drafts[sessionId];
               if (
                 draft?.provisional?.phase !== "draft" ||
+                draft.provisional.runnerStart !== undefined ||
                 (draft.held.length > 0 && draft.provisional.model !== undefined)
               ) {
                 return {};
@@ -597,6 +654,77 @@ export function createChatDraftsStore(storage?: StateStorage) {
                       options?.fromDefault === true,
                     ),
                     touchedAt: Date.now(),
+                  },
+                },
+              };
+            }),
+          setProvisionalRunner: (sessionId, runnerChoice) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              if (
+                draft?.provisional?.phase !== "draft" ||
+                draft.held.length > 0 ||
+                draft.provisional.runnerStart !== undefined
+              )
+                return {};
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: { ...draft, provisional: { ...draft.provisional, runnerChoice } },
+                },
+              };
+            }),
+          freezeRunnerStart: (sessionId, runnerStart) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              if (
+                draft?.provisional?.phase !== "draft" ||
+                draft.provisional.runnerStart !== undefined
+              )
+                return {};
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: { ...draft, provisional: { ...draft.provisional, runnerStart } },
+                },
+              };
+            }),
+          acceptRunnerStart: (sessionId, remoteSessionId) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              const start = draft?.provisional?.runnerStart;
+              if (draft?.provisional === undefined || start === undefined) return {};
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: {
+                    ...draft,
+                    provisional: {
+                      ...draft.provisional,
+                      runnerStart: { ...start, sessionId: remoteSessionId },
+                    },
+                  },
+                },
+              };
+            }),
+          resetRunnerStart: (sessionId, text, operationId) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              if (draft?.provisional?.runnerStart === undefined) return {};
+              const {
+                runnerStart: _start,
+                model: _model,
+                modelIsDefault: _default,
+                ...provisional
+              } = draft.provisional;
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: {
+                    ...draft,
+                    text,
+                    held: [],
+                    provisional: { ...provisional, operationId },
                   },
                 },
               };

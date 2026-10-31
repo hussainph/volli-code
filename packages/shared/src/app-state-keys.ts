@@ -135,6 +135,11 @@ const EXACT = {
     reason:
       "The selected project (stores/projects.ts); with several hosts it is this client's choice.",
   },
+  "composer-runner-choices": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "The last explicit composer runner choice per account and project on this device.",
+  },
   "volli:chat-drafts": {
     placement: "client-local",
     owner: "VC-567",

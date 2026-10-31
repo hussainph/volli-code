@@ -28,6 +28,9 @@ import {
   type MonacoDocumentEditorHandle,
 } from "@renderer/components/editor/monaco-document-editor";
 import { startTicketChat } from "@renderer/components/sessions/session-create";
+import { useRunnerPicker } from "@renderer/components/chat/runner-picker";
+import { launchStore } from "@renderer/stores/launch";
+import { startRunnerKickoff } from "./runner-kickoff";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { cn } from "@renderer/lib/utils";
 import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
@@ -172,7 +175,13 @@ export function ComposerForm({
   // rung order main resolves — read per open, overridable for this ticket
   // alone (`composer-run.tsx`). Deliberately NOT part of the draft above — see
   // that module's header.
-  const run = useComposerRun(target.sessionModel ?? null, target.id);
+  const cloud = launchStore() === "cloud";
+  const runners = useRunnerPicker(target.id, launch.kind === "kickoff");
+  const run = useComposerRun(
+    target.sessionModel ?? null,
+    target.id,
+    cloud ? runners.selected : undefined,
+  );
 
   // Read on arrival and project changes: a composer can open without ever
   // visiting the board, or retarget to a project whose cache is still cold.
@@ -259,18 +268,33 @@ export function ComposerForm({
       // the opening turn, and its fallback title. The turn is a stock
       // instruction, so its queued metadata lets the model refine that fallback
       // without briefly naming the Session after the instruction itself.
-      startChat: (projectId, ticketId, chat) => startTicketChat(projectId, ticketId, chat),
+      startChat: (projectId, ticketId, chat) => {
+        if (!cloud) return startTicketChat(projectId, ticketId, chat);
+        // Never fall back to local creation while cloud runner discovery loads.
+        if (runners.selected === null) {
+          toast.error("Choose an available runner in Volli Cloud.");
+          return Promise.resolve(null);
+        }
+        return startRunnerKickoff(projectId, ticketId, chat, runners.selected);
+      },
       toastSuccess: (message) => toast.success(message),
       linkAttachments: async (ticketId) => {
         const pending = attachmentsRef.current;
         if (pending.length === 0) return;
         // A remote project's ticket keeps its attachments on its host (VC-711).
         if (refuseRemoteTicket(ticketId)) return;
-        const result = await window.api.attachments.linkDrafts({
-          ticketId,
-          blobs: pending.map((entry) => ({ blobHash: entry.blobHash, label: entry.label })),
-        });
-        if (!result.ok) toast.error(result.error);
+        try {
+          const result = await window.api.attachments.linkDrafts({
+            ticketId,
+            blobs: pending.map((entry) => ({ blobHash: entry.blobHash, label: entry.label })),
+          });
+          if (!result.ok) toast.error(result.error);
+        } catch (error) {
+          if (!cloud || launch.kind !== "kickoff") throw error;
+          // Creation already committed. A retry belongs on that ticket, not
+          // on a form that would create a second ticket.
+          toast.error(`Couldn't attach files: ${errorMessage(error)}`);
+        }
       },
       // The one Run call every other hand-run door uses, so this composer's
       // third commit lands, toasts and refuses exactly like a rail press.
@@ -284,7 +308,7 @@ export function ComposerForm({
         });
       },
     }),
-    [],
+    [cloud, runners.selected, launch.kind],
   );
 
   const resetForm = React.useCallback(() => {
@@ -317,6 +341,7 @@ export function ComposerForm({
 
   const handleKickoff = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
+    if (cloud && runners.selected === null) return;
     // Read-only (VC-576): the draft stays; the note above the footer says why.
     if (!guardWrite(target.id)) return;
     setSubmitting(true);
@@ -324,12 +349,12 @@ export function ComposerForm({
       const result = await runKickoff(
         currentFields(),
         deps,
-        !run.explicit || run.selection === null ? {} : { model: run.selection },
+        (!cloud && !run.explicit) || run.selection === null ? {} : { model: run.selection },
       );
       if (!result.created) return;
       clearDraft(); // the kickoff consumed the draft — next open starts blank
-      // Starting work leaves the underlying workspace alone. Create-more only
-      // decides whether the composer resets for another ticket or closes.
+      // Local kickoff leaves the workspace alone; cloud kickoff opens its
+      // pending Draft. Create-more only decides whether this form resets or closes.
       if (createMore) resetForm();
       else onClose();
     } catch (error) {
@@ -346,6 +371,8 @@ export function ComposerForm({
     createMore,
     run.explicit,
     run.selection,
+    cloud,
+    runners.selected,
     resetForm,
     onClose,
   ]);
@@ -532,6 +559,7 @@ export function ComposerForm({
           projectId={target.id}
           onAttachFiles={(picked) => void attachFiles(picked)}
           run={run}
+          runners={cloud ? runners : undefined}
           launch={launch}
           onLaunchChange={setLaunch}
           onCreate={() => void handleCreate()}
