@@ -31,7 +31,7 @@
  */
 
 import type { AutomationSchedule } from "@volli/shared";
-import { MIGRATION_PLACEHOLDERS } from "@volli/shared/cloud";
+import { MIGRATION_PLACEHOLDERS, PI_LOG_LINE_MAX_BYTES } from "@volli/shared/cloud";
 
 /** The manifest's format marker; a reader checks it before anything else. */
 export const MIGRATION_EXPORT_FORMAT = "volli.migration-export/1";
@@ -39,6 +39,23 @@ export const MIGRATION_EXPORT_FORMAT = "volli.migration-export/1";
 /** A single record may exceed the byte bound; otherwise all streams share these limits. */
 export const DEFAULT_CHUNK_MAX_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_CHUNK_MAX_RECORDS = 50_000;
+
+/**
+ * A Pi slice ends at the last complete line within this many bytes. One line
+ * longer than this is a slice of its own: an indivisible record, like one
+ * transcript artifact, up to {@link PI_MOVE_LINE_MAX_BYTES}.
+ */
+export const PI_SLICE_BYTES = 1024 * 1024;
+
+/**
+ * The longest Pi line (newline included) a move carries. The runner's spool
+ * uploads a line of up to `PI_LOG_LINE_MAX_BYTES` (one object), but it holds
+ * a line several times over while it redacts and compresses it, and a move
+ * stays within 500 MB of memory (`moveEngine.rss.matrix.test.ts`, measured
+ * with a line this long): half an object keeps that true. Real logs' longest
+ * lines (inline images, large tool outputs) are a fraction of it.
+ */
+export const PI_MOVE_LINE_MAX_BYTES = PI_LOG_LINE_MAX_BYTES / 2;
 
 /** The exporter and verifier share the promise that a move carries no queued work. */
 export const PENDING_RUNNER_FACTS = [

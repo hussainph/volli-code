@@ -38,6 +38,49 @@ describe("redactString", () => {
   test("a failing redactor fails closed", () => {
     expect(() => redactString("x", failingStepper)).toThrow(CredentialRedactionError);
   });
+
+  test("a string of several MiB goes through in pieces, a value across their seam included", () => {
+    const step = stepperFor({ TOKEN: "sk-live-123" });
+    const MiB = 1024 * 1024;
+    const pad = "p".repeat(MiB - 4);
+    const text = `${pad}sk-live-123${"q".repeat(2 * MiB)}sk-live-123`;
+    expect(redactString(text, step)).toBe(
+      `${pad}‹secret:TOKEN›${"q".repeat(2 * MiB)}‹secret:TOKEN›`,
+    );
+    const clean = "c".repeat(3 * MiB + 7);
+    expect(redactString(clean, step)).toBe(clean);
+  });
+
+  test("a long string is checked in pieces, and redacted whole only when a value is in it", () => {
+    const MiB = 1024 * 1024;
+    const pad = "p".repeat(MiB - 3);
+    // A value's first bytes end a piece but the value never completes: unchanged.
+    const near = `${pad}sk-nope${"q".repeat(MiB)}`;
+    expect(redactString(near, stepperFor({ TOKEN: "sk-live-123" }))).toBe(near);
+    const lone = `${pad}\ud800${"q".repeat(MiB)}`;
+    expect(redactString(lone, stepperFor({ TOKEN: "sk-live-123" }))).toBe(lone);
+    // Markers longer, as long as, and shorter than their values.
+    const longer = `${"q".repeat(MiB + 1)}sk-live-123`;
+    expect(redactString(longer, stepperFor({ T: "sk-live-123" }))).toBe(
+      `${"q".repeat(MiB + 1)}‹secret:T›`,
+    );
+    const sameSize = `${"q".repeat(MiB + 1)}ABCDEFGHIJKLMN`;
+    expect(redactString(sameSize, stepperFor({ X: "ABCDEFGHIJKLMN" }))).toBe(
+      `${"q".repeat(MiB + 1)}‹secret:X›`,
+    );
+    const prefix = new ExactValueByteRedactor([["[hidden]tail", "[hidden]"]]);
+    const shorter = `${"q".repeat(MiB + 1)}[hidden]tail`;
+    expect(redactString(shorter, (window, from, final) => prefix.step(window, from, final))).toBe(
+      `${"q".repeat(MiB + 1)}[hidden]`,
+    );
+  });
+
+  test("a value whose marker is its own prefix is still a change", () => {
+    const redactor = new ExactValueByteRedactor([["[hidden]tail", "[hidden]"]]);
+    const step: CredentialStreamStepper = (window, from, final) =>
+      redactor.step(window, from, final);
+    expect(redactString("a[hidden]tail", step)).toBe("a[hidden]");
+  });
 });
 
 describe("redactJsonValue", () => {

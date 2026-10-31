@@ -79,11 +79,20 @@ type Db = ReturnType<typeof openRawDb>;
  * included: the move stores every event hot, as JSON text, and spills
  * nothing.
  */
-export function writeMoveFixture(root: string, artifacts = 12) {
+export function writeMoveFixture(
+  root: string,
+  artifacts = 12,
+  piLongLineBytes = PI_FIXTURE_LONG_LINE_BYTES,
+) {
   // Transcript bodies (mixed plain and gzip) and a multi-slice Pi log on the
-  // moved project's busiest Session, so its history uploads too.
-  return writeMoveProfile(root, { artifacts, now: 1_790_000_000_000 });
+  // moved project's busiest Session, so its history uploads too. The Pi log
+  // holds one line longer than an export slice (VC-1030), as real logs with
+  // inline images and large tool outputs do.
+  return writeMoveProfile(root, { artifacts, now: 1_790_000_000_000, piLongLineBytes });
 }
+
+/** The fixture's long Pi line: twice an export slice. */
+export const PI_FIXTURE_LONG_LINE_BYTES = 2 * 1024 * 1024;
 
 export interface MoveWorld {
   t: Tester;
@@ -106,13 +115,27 @@ export interface MoveWorld {
   cleanup(): void;
 }
 
-export async function moveWorld(fixture: { artifacts?: number } = {}): Promise<MoveWorld> {
+export async function moveWorld(
+  fixture: {
+    artifacts?: number;
+    piLongLineBytes?: number;
+    /** Credential values the history redactor knows, as a person with stored keys has. */
+    secrets?: readonly string[];
+  } = {},
+): Promise<MoveWorld> {
+  const redactor = new ExactValueByteRedactor(
+    (fixture.secrets ?? []).map((value) => [value, "‹secret›"] as const),
+  );
   const t = setup();
   const alice = await signIn(t, "alice");
   const world = await t.run((ctx) => seedTestWorld(ctx, { ownerUserId: alice.userId, runners: 2 }));
   const runnerId = world.runnerIds[0]!;
   const root = mkdtempSync(join(tmpdir(), "volli-move-engine-"));
-  const profile = writeMoveFixture(join(root, "profile"), fixture.artifacts);
+  const profile = writeMoveFixture(
+    join(root, "profile"),
+    fixture.artifacts,
+    fixture.piLongLineBytes,
+  );
   const db = openRawDb(profile.dbPath);
   db.pragma("foreign_keys = ON");
   const objects = new S3StandIn().install();
@@ -194,7 +217,7 @@ export async function moveWorld(fixture: { artifacts?: number } = {}): Promise<M
             join(root, "profile", "session-transcripts"),
           ),
           redaction: {
-            step: (window, from, final) => new ExactValueByteRedactor([]).step(window, from, final),
+            step: (window, from, final) => redactor.step(window, from, final),
             complete: () => true,
           },
           piDirectory: join(root, "profile", "pi-sessions"),

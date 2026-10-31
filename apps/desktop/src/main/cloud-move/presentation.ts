@@ -95,6 +95,9 @@ const FAILURE_COPY: Readonly<Record<string, string>> = {
   export_source_unreadable: "This Mac's local data could not be read.",
   export_schema_unsupported: "This Mac's local data was written by a different Volli version.",
   export_source_corrupt: "This Mac's local data failed its integrity check.",
+  export_pi_log_too_large:
+    "A Session's Pi log has an entry too large to move, so this project stays on this Mac.",
+  export_pi_log_incomplete: "A Session's Pi log ends partway through an entry.",
   export_integrity: "The prepared copy did not match its own check.",
   export_io_failed: "This Mac's disk refused a file the move needed.",
   export_worker_failed: "Preparing the copy stopped without finishing.",

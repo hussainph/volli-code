@@ -247,7 +247,10 @@ function classify(error: unknown): MigrationExportError {
     return new MigrationExportError("disk_full", "The disk is full.", { cause: error });
   }
   if (error instanceof SourceCorruptError) {
-    return new MigrationExportError("source_corrupt", error.message, { cause: error });
+    return new MigrationExportError("source_corrupt", error.message, {
+      cause: error,
+      ...(error.sessionId === undefined ? {} : { sessionId: error.sessionId }),
+    });
   }
   const code = (error as { code?: unknown } | null)?.code;
   const message = error instanceof Error ? error.message : String(error);

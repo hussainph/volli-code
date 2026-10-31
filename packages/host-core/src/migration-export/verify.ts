@@ -8,16 +8,30 @@
  * line one JSON object, every stream's totals, and no stray file beside the
  * named ones. It does not re-derive records from a database; the manifest's
  * `source.tableRows` is what a verifier on the far side reconciles against.
+ *
+ * Chunks are read in blocks, never whole, and a Pi slice that is one long
+ * line is checked as it streams (`chunk-lines.ts`): memory stays bounded by
+ * the largest transcript artifact, not by the largest Pi line.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import {
+  PiRecordLine,
+  PiRecordLineError,
+  scanChunkLines,
+  wholeLine,
+  type LineSink,
+  type PiRecordBody,
+} from "./chunk-lines";
 import { MigrationExportError } from "./errors";
 import type { MigrationExportManifest } from "./exporter";
 import {
   MIGRATION_EXPORT_FORMAT,
   PENDING_RUNNER_FACTS,
   EXECUTABLE_MIGRATION_STREAMS,
+  PI_MOVE_LINE_MAX_BYTES,
+  PI_SLICE_BYTES,
 } from "./records";
 import { STREAM_DESTINATIONS, type StreamName } from "./sources";
 import { MANIFEST_FILE, listStreamFiles } from "./staging";
@@ -30,6 +44,44 @@ export interface MigrationExportVerification {
 
 function fail(message: string): never {
   throw new MigrationExportError("integrity_failed", message);
+}
+
+/** A Pi record's whole-line `base64`, measured; `null` when it is not canonical base64. */
+function decodedPiBody(base64: string): PiRecordBody | null {
+  const body = Buffer.from(base64, "base64");
+  if (body.toString("base64") !== base64) return null;
+  let newlines = 0;
+  for (let at = body.indexOf(0x0a); at !== -1; at = body.indexOf(0x0a, at + 1)) newlines += 1;
+  return {
+    bytes: body.length,
+    sha256: createHash("sha256").update(body).digest("hex"),
+    newlines,
+    lastByte: body.length === 0 ? -1 : body[body.length - 1]!,
+  };
+}
+
+/** One `piLogs` line, streamed; a line it cannot read is named the way a whole line's fault is. */
+function piRecordLine(
+  file: string,
+  index: number,
+  check: (index: number, value: unknown, body?: PiRecordBody) => void,
+  whole: (text: string) => void,
+): LineSink {
+  const line = new PiRecordLine((fields, body) => check(index, fields, body), whole);
+  const named = (step: () => void) => {
+    try {
+      step();
+    } catch (error) {
+      if (!(error instanceof PiRecordLineError)) throw error;
+      if (error.kind === "json") fail(`${file} line ${index} is not JSON.`);
+      if (error.kind === "record") fail(`${file} line ${index} is not a record.`);
+      fail("Pi log coverage or checksum mismatch.");
+    }
+  };
+  return {
+    piece: (bytes) => named(() => line.piece(bytes)),
+    end: () => named(() => line.end()),
+  };
 }
 
 /** Reads and checks a complete export at `dir`; throws `integrity_failed` naming the first fault. */
@@ -93,32 +145,10 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
       if (!new RegExp(`^streams/${stream.name}/[0-9]{6,}\\.ndjson$`).test(chunk.file))
         fail("Invalid chunk path.");
       named.add(chunk.file);
-      let content: Buffer;
-      try {
-        content = await readFile(join(dir, chunk.file));
-      } catch {
-        fail(`${chunk.file} is missing.`);
-      }
-      if (content.length !== chunk.bytes)
-        fail(`${chunk.file} is ${content.length} bytes, not ${chunk.bytes}.`);
-      if (createHash("sha256").update(content).digest("hex") !== chunk.sha256) {
-        fail(`${chunk.file} does not match its checksum.`);
-      }
-      const text = content.toString("utf8");
-      if (!text.endsWith("\n")) fail(`${chunk.file} ends mid-line.`);
-      const lines = text.slice(0, -1).split("\n");
-      if (lines.length !== chunk.records) {
-        fail(`${chunk.file} holds ${lines.length} records, not ${chunk.records}.`);
-      }
-      for (const [index, line] of lines.entries()) {
-        let value: unknown;
-        try {
-          value = JSON.parse(line);
-        } catch {
-          fail(`${chunk.file} line ${index + 1} is not JSON.`);
-        }
+      const where = join(dir, chunk.file);
+      const checkLine = (index: number, value: unknown, piBody?: PiRecordBody) => {
         if (value === null || typeof value !== "object" || Array.isArray(value)) {
-          fail(`${chunk.file} line ${index + 1} is not a record.`);
+          fail(`${chunk.file} line ${index} is not a record.`);
         }
         const row = value as Record<string, unknown>;
         const key = JSON.stringify([row.sessionId, row.sequence]);
@@ -151,7 +181,7 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
           const identity = JSON.stringify([row.sessionId, row.piFileId]);
           const state = piFiles.get(identity) ?? { through: 0, bytes: row.fileBytes as number };
           if (
-            typeof row.base64 !== "string" ||
+            (piBody === undefined && typeof row.base64 !== "string") ||
             !Number.isSafeInteger(row.fileBytes) ||
             (row.fileBytes as number) < 0
           )
@@ -164,22 +194,56 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
             (piFiles.has(identity) && state.through === state.bytes)
           )
             fail("Pi log coverage or checksum mismatch.");
-          const body = Buffer.from(row.base64, "base64");
+          const body = piBody ?? decodedPiBody(row.base64 as string);
           if (
-            body.toString("base64") !== row.base64 ||
+            body === null ||
             row.startOffset !== state.through ||
-            row.endOffset !== state.through + body.length ||
+            row.endOffset !== state.through + body.bytes ||
             row.fileBytes !== state.bytes ||
             (row.endOffset as number) > state.bytes ||
-            (body.length === 0 && state.bytes !== 0) ||
-            row.sourceBytes !== body.length ||
-            (body.length > 0 && body.at(-1) !== 0x0a) ||
-            createHash("sha256").update(body).digest("hex") !== row.sourceSha256
+            (body.bytes === 0 && state.bytes !== 0) ||
+            row.sourceBytes !== body.bytes ||
+            (body.bytes > 0 && body.lastByte !== 0x0a) ||
+            body.sha256 !== row.sourceSha256
           )
             fail("Pi log coverage or checksum mismatch.");
+          // A slice is complete lines within one slice's bound, or one longer
+          // line of its own, at most the longest line a move carries.
+          if (
+            body.bytes > PI_SLICE_BYTES &&
+            (body.newlines !== 1 || body.bytes > PI_MOVE_LINE_MAX_BYTES)
+          )
+            fail("Pi log slice is out of bounds.");
           piFiles.set(identity, { through: row.endOffset as number, bytes: state.bytes });
         }
+      };
+      const parsedLine = (index: number) => (text: string) => {
+        let value: unknown;
+        try {
+          value = JSON.parse(text);
+        } catch {
+          fail(`${chunk.file} line ${index} is not JSON.`);
+        }
+        checkLine(index, value);
+      };
+      let scanned: Awaited<ReturnType<typeof scanChunkLines>>;
+      try {
+        scanned = await scanChunkLines(where, (index) =>
+          stream.name === "piLogs"
+            ? piRecordLine(chunk.file, index, checkLine, parsedLine(index))
+            : wholeLine(parsedLine(index)),
+        );
+      } catch {
+        fail(`${chunk.file} is missing.`);
       }
+      if (scanned.bytes !== chunk.bytes)
+        fail(`${chunk.file} is ${scanned.bytes} bytes, not ${chunk.bytes}.`);
+      if (scanned.sha256 !== chunk.sha256) fail(`${chunk.file} does not match its checksum.`);
+      if (!scanned.endsWithNewline) fail(`${chunk.file} ends mid-line.`);
+      if (scanned.lines !== chunk.records) {
+        fail(`${chunk.file} holds ${scanned.lines} records, not ${chunk.records}.`);
+      }
+      if (scanned.fault !== null) throw scanned.fault;
       streamRecords += chunk.records;
       streamBytes += chunk.bytes;
     }

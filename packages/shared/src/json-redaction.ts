@@ -30,27 +30,80 @@ export interface RedactedJson<T> {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** One string, redacted whole: its own stream, pushed once and ended. */
+/**
+ * A string goes through its stream this many bytes at a time. The stream
+ * matches across pushes exactly as within one, and a step's working memory
+ * grows with the window it is given (several bytes per byte), so a string of
+ * tens of MiB (an inline image in a Pi log line) is never one window.
+ */
+const PUSH_BYTES = 1024 * 1024;
+
+/** One string, redacted whole: its own stream, pushed in pieces and ended. */
 export function redactString(text: string, step: CredentialStreamStepper): string {
   if (text.length === 0) return text;
+  // Nearly every long string holds no value: that is checked a piece at a
+  // time, never encoding it whole. One that does is redacted below.
+  if (text.length > PUSH_BYTES && unchanged(text, step)) return text;
   const input = encoder.encode(text);
   const stream = new CredentialRedactionStream(step);
-  const head = stream.push(input);
-  const tail = stream.end();
-  const out = new Uint8Array(head.length + tail.length);
-  out.set(head, 0);
-  out.set(tail, head.length);
+  // Output that so far repeats the input is not kept: `same` bytes of it.
+  let same = 0;
+  let parts: Uint8Array[] | null = null;
+  const take = (part: Uint8Array) => {
+    if (parts === null && repeats(input, same, part)) same += part.length;
+    else (parts ??= []).push(part);
+  };
+  for (let at = 0; at < input.length; at += PUSH_BYTES)
+    take(stream.push(input.subarray(at, at + PUSH_BYTES)));
+  take(stream.end());
   // Unchanged bytes keep the original string, so a lone surrogate (which
   // UTF-8 cannot carry) is never rewritten as U+FFFD by a no-op pass.
-  return sameBytes(input, out) ? text : decoder.decode(out);
+  if (parts === null && same === input.length) return text;
+  return decoder.decode(joined([input.subarray(0, same), ...(parts ?? [])]));
 }
 
-function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) return false;
+/**
+ * Whether redacting `text` would give back its own bytes, read a piece at a
+ * time: only the input the stream has not yet answered for is held (what a
+ * possible value's start makes it hold back).
+ */
+function unchanged(text: string, step: CredentialStreamStepper): boolean {
+  const stream = new CredentialRedactionStream(step);
+  const piece = new Uint8Array(PUSH_BYTES);
+  let unanswered: Uint8Array = new Uint8Array(0);
+  const answers = (part: Uint8Array) => {
+    if (!repeats(unanswered, 0, part)) return false;
+    unanswered = unanswered.subarray(part.length);
+    return true;
+  };
+  for (let read = 0; read < text.length;) {
+    const encoded = encoder.encodeInto(read === 0 ? text : text.slice(read), piece);
+    read += encoded.read;
+    // A copy: the stream may keep what it is given, and `piece` is reused.
+    const bytes = piece.slice(0, encoded.written);
+    unanswered = unanswered.length === 0 ? bytes : joined([unanswered, bytes]);
+    if (!answers(stream.push(bytes))) return false;
+  }
+  return answers(stream.end()) && unanswered.length === 0;
+}
+
+/** Whether `part` is exactly `bytes` from `at`. */
+function repeats(bytes: Uint8Array, at: number, part: Uint8Array): boolean {
+  if (at + part.length > bytes.length) return false;
+  for (let index = 0; index < part.length; index += 1) {
+    if (bytes[at + index] !== part[index]) return false;
   }
   return true;
+}
+
+function joined(parts: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
 }
 
 /**

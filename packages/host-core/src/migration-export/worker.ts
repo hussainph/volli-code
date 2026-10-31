@@ -56,7 +56,7 @@ export interface MigrationExportWorkerRequest {
 export type MigrationExportWorkerMessage =
   | { type: "progress"; progress: MigrationExportProgress }
   | { type: "done"; result: MigrationExportResult }
-  | { type: "failed"; code: MigrationExportErrorCode; message: string };
+  | { type: "failed"; code: MigrationExportErrorCode; message: string; sessionId?: string };
 
 export type MigrationExportParentMessage = { type: "cancel" };
 
@@ -129,7 +129,16 @@ function startMigrationExportWorker(
         settle(() => resolve(message.result));
       } else {
         const code = isErrorCode(message.code) ? message.code : "worker_failed";
-        settle(() => reject(new MigrationExportError(code, message.message)));
+        const sessionId = typeof message.sessionId === "string" ? message.sessionId : undefined;
+        settle(() =>
+          reject(
+            new MigrationExportError(
+              code,
+              message.message,
+              sessionId === undefined ? undefined : { sessionId },
+            ),
+          ),
+        );
       }
     });
     worker.on("error", (error) => {
@@ -175,7 +184,12 @@ export function serveMigrationExportWorker(
       (result) => post({ type: "done", result }),
       // `exportMigrationSnapshot` classifies every failure it throws.
       (error: MigrationExportError) =>
-        post({ type: "failed", code: error.code, message: error.message }),
+        post({
+          type: "failed",
+          code: error.code,
+          message: error.message,
+          ...(error.sessionId === undefined ? {} : { sessionId: error.sessionId }),
+        }),
     )
     .finally(() => {
       // Nothing else is coming; let the thread exit once the answer is delivered.
