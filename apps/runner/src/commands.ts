@@ -26,6 +26,7 @@ import type { RunnerHostFacts } from "@volli/shared/cloud";
 
 import { runLink, runUnlink } from "./link/commands";
 import type { RunnerDeployment } from "./link/deployment";
+import { loginCommand, logoutCommand } from "./login/commands";
 import { PATH_OPTIONS, PATH_USAGE, type RunnerPaths } from "./shell/paths";
 import type { RunnerStatus } from "./shell/runner-status";
 import type { StatusProbes } from "./shell/status";
@@ -123,8 +124,8 @@ export const COMMANDS: readonly RunnerCommand[] = [
     run: runStatus,
   },
   stub("doctor", "Check git, disk, network and model sign-ins, and print the fixes."),
-  stub("login", "Sign in to a model provider on this box.", "<provider>"),
-  stub("logout", "Sign out of a model provider on this box.", "<provider>"),
+  loginCommand,
+  logoutCommand,
   stub("update", "Update to the release Volli Cloud asks for."),
   stub("logs", "Show the runner's log.", "[-f]"),
   stub(

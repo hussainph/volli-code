@@ -69,6 +69,8 @@ export interface PiCredentialOptions {
    * packaged smoke run against an isolated profile instead of a developer's.
    */
   agentDir?: string;
+  /** Host-owned storage; absent keeps Pi's existing auth.json behavior. */
+  credentials?: CredentialStore;
 }
 
 /**
@@ -138,7 +140,7 @@ export function piOwnedModels(options: PiCredentialOptions = {}): Models {
  */
 export function piOwnedModelAccess(options: PiCredentialOptions = {}): PiModelAccess {
   registerBunOAuthFlows();
-  const credentials = new PiFileCredentialStore(piAuthFilePath(options));
+  const credentials = options.credentials ?? new PiFileCredentialStore(piAuthFilePath(options));
   // The store is what lets a refreshed catalog outlive this process: without
   // it pi falls back to `InMemoryModelsStore` and every fetched model dies at
   // restart. The wrapping is what makes "Refresh models" mean something — pi's
