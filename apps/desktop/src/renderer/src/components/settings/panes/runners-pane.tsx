@@ -347,7 +347,7 @@ function RunnerItem({
   return (
     <ListRow
       data-testid={`runner-${runner.id}`}
-      density="row"
+      density={runner.version ? "two-line" : "row"}
       leading={<KindGlyph kind={runner.kind} />}
       primary={
         editing ? (
