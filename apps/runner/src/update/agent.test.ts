@@ -14,7 +14,7 @@ import {
   TICK_MS,
   type UpdateAgentPorts,
 } from "./agent";
-import { applyUpdate, currentVersion, pointCurrentAt, type ApplyPorts } from "./apply";
+import { applyUpdate, currentRelease, pointCurrentAt, type ApplyPorts } from "./apply";
 import { manifestUrlFor, type UpdateConfig } from "./config";
 import {
   readReported,
@@ -126,6 +126,9 @@ function agent(h: Harness, options: { running?: string; supervised?: boolean } =
 
 const request = (): UpdateRequest | null => readUpdateRequest(layout.requestFile);
 
+const stagedRef = (version: string | null) =>
+  version === null ? null : { version, name: version };
+
 /** What the applier would have left after answering the current request. */
 function answer(patch: { staged?: string | null; failed?: string; bad?: string[] } = {}): void {
   const current = readUpdaterState(layout.stateFile);
@@ -145,7 +148,7 @@ function answer(patch: { staged?: string | null; failed?: string; bad?: string[]
         ];
   writeUpdaterState(layout.stateFile, {
     ...current,
-    staged: patch.staged === undefined ? current.staged : patch.staged,
+    staged: patch.staged === undefined ? current.staged : stagedRef(patch.staged),
     bad: patch.bad ?? current.bad,
     handled: [...current.handled, handled],
     outcomes: [...current.outcomes, ...outcomes],
@@ -331,7 +334,7 @@ describe("failures", () => {
     await b.onTarget(target());
     expect(b.status()).toMatchObject({
       phase: "failed",
-      detail: "0.4.0 failed (checksum); trying again later",
+      detail: "0.4.0 failed here recently; trying again later",
     });
     expect(request()!.id).toBe(id);
     next.clock += RETRY_AFTER_MS;
@@ -358,10 +361,28 @@ describe("failures", () => {
   it("logs a pass that throws and keeps going", async () => {
     const h = harness();
     h.drainError = new Error("socket closed");
-    writeUpdaterState(layout.stateFile, { ...EMPTY_STATE, staged: "0.4.0" });
+    writeUpdaterState(layout.stateFile, {
+      ...EMPTY_STATE,
+      staged: { version: "0.4.0", name: "0.4.0" },
+    });
     const a = agent(h);
     await a.onTarget(target());
     expect(h.logs).toContain("update pass failed");
+  });
+});
+
+describe("an activation in flight", () => {
+  it("waits for the applier to settle it, without draining or resuming", async () => {
+    writeUpdaterState(layout.stateFile, {
+      ...EMPTY_STATE,
+      activating: { version: "0.4.0", name: "0.4.0", fromTarget: "x", fromVersion: "0.3.5" },
+    });
+    const h = harness();
+    const a = agent(h);
+    await a.onTarget(target());
+    expect(a.status()).toMatchObject({ phase: "activating", detail: "0.4.0" });
+    expect(request()).toBeNull();
+    expect(h.calls).toEqual([]);
   });
 });
 
@@ -465,6 +486,14 @@ describe("the agent's schedule", () => {
   });
 });
 
+/** A release directory as the packager makes it. */
+function release(dir: string, version: string): void {
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  writeFileSync(join(dir, "bin", "node"), "");
+  writeFileSync(join(dir, "bin", "volli-runner"), "");
+  writeFileSync(join(dir, "MANIFEST.json"), JSON.stringify({ version }));
+}
+
 /**
  * The whole loop: the daemon's agent writes requests, "systemd" runs the
  * applier on each, and "a restart" is a new agent on the new `current`.
@@ -501,8 +530,9 @@ describe("updating end to end", () => {
     publish(documents, "0.4.0");
     publish(documents, "0.5.0");
     const broken = new Set(["0.5.0"]);
-    mkdirSync(join(layout.releasesDir, "0.3.5"), { recursive: true });
-    pointCurrentAt(layout, "0.3.5");
+    release(join(layout.releasesDir, "0.3.5"), "0.3.5");
+    pointCurrentAt(layout, join("releases", "0.3.5"));
+    const version = () => currentRelease(layout)!.version;
     let daemon: { version: string; pid: number; state: RunnerStatus["state"] } = {
       version: "0.3.5",
       pid: 1,
@@ -519,21 +549,18 @@ describe("updating end to end", () => {
       },
       provenance: null,
       extract: async (tarball, into) => {
-        const version = basename(tarball).replace(/^volli-runner-|-linux-x64\.tar\.gz$/gu, "");
-        const bin = join(into, `volli-runner-${version}-linux-x64`, "bin");
-        mkdirSync(bin, { recursive: true });
-        writeFileSync(join(bin, "node"), "");
-        writeFileSync(join(bin, "volli-runner"), "");
+        const named = basename(tarball).replace(/^volli-runner-|-linux-x64\.tar\.gz$/gu, "");
+        release(join(into, `volli-runner-${named}-linux-x64`), named);
       },
       probe: async () => {},
       restart: async () => {
-        const version = currentVersion(layout)!;
         daemon = {
-          version,
+          version: version(),
           pid: daemon.pid + 1,
-          state: broken.has(version) ? "starting" : "online",
+          state: broken.has(version()) ? "starting" : "online",
         };
       },
+      service: async () => ({ mainPid: daemon.pid, restarts: 0 }),
       readStatus: () => ({
         v: 1,
         state: daemon.state,
@@ -548,7 +575,6 @@ describe("updating end to end", () => {
         update: null,
         credentials: null,
       }),
-      alive: () => true,
       now: () => new Date(clock),
       sleep: async (ms) => {
         clock += ms;
@@ -572,7 +598,7 @@ describe("updating end to end", () => {
       return createUpdateAgent({
         layout,
         config: CONFIG,
-        running: currentVersion(layout)!,
+        running: version(),
         supervised: true,
         ports: h.ports,
       });
@@ -591,7 +617,7 @@ describe("updating end to end", () => {
     await systemd();
     await a.tick(); // urgent and idle: activates at once
     expect(await systemd()).toMatchObject({ kind: "rolled_back", version: "0.5.0", to: "0.4.0" });
-    expect(currentVersion(layout)).toBe("0.4.0");
+    expect(version()).toBe("0.4.0");
 
     a = boot();
     await a.onTarget(target("0.5.0", { minVersion: "0.5.0" }));

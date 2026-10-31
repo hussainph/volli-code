@@ -162,8 +162,9 @@ export function createUpdateAgent(options: UpdateAgentOptions): UpdateAgent {
 
   async function resumeIfDrained(): Promise<void> {
     if (!drained) return;
-    drained = false;
+    // Cleared only once claiming resumed: a failed resume is tried again next pass.
     await ports.resume();
+    drained = false;
   }
 
   /** The request this pass wrote was answered with a failure: try that release later. */
@@ -197,6 +198,11 @@ export function createUpdateAgent(options: UpdateAgentOptions): UpdateAgent {
       return;
     }
     await reportOutcomes(state);
+    if (state.activating !== null) {
+      // The applier is restarting this runner onto a release, or settling one.
+      setStatus("activating", state.activating.version);
+      return;
+    }
     const decision = decideUpdate({
       running: options.running,
       target,
@@ -222,7 +228,7 @@ export function createUpdateAgent(options: UpdateAgentOptions): UpdateAgent {
       const recorded = failure === undefined ? 0 : Date.parse(failure.at) + RETRY_AFTER_MS;
       if (now < Math.max(retryAfter.get(version) ?? 0, recorded || 0)) {
         if (status.phase !== "failed") {
-          setStatus("failed", `${version} failed (${failure?.reason}); trying again later`);
+          setStatus("failed", `${version} failed here recently; trying again later`);
         }
         return;
       }
@@ -230,7 +236,7 @@ export function createUpdateAgent(options: UpdateAgentOptions): UpdateAgent {
     }
     const answered = pending !== null && state.handled.includes(pending.requestId);
 
-    if (state.staged !== version) {
+    if (state.staged?.version !== version) {
       if (pending?.phase === "staging" && answered) {
         const failure = lastFailure(state, version);
         return giveUp(version, `staging ${version} failed: ${failure?.reason ?? "unknown"}`);

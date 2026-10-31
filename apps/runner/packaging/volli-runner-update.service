@@ -5,7 +5,7 @@
 Description=Apply a Volli runner update
 Documentation=https://github.com/hussainph/volli-code/blob/main/apps/runner/README.md
 Wants=network-online.target
-After=network-online.target
+After=network-online.target volli-runner.service
 
 [Service]
 Type=oneshot
@@ -19,7 +19,10 @@ UMask=0022
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
-ProtectSystem=full
+# Everything read-only but the install root: the releases, the updater's
+# state and its cache. The runner's data dir is only ever read.
+ProtectSystem=strict
+ReadWritePaths=/opt/volli-runner
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
@@ -27,3 +30,6 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

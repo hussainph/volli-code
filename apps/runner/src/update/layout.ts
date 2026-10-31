@@ -16,7 +16,7 @@
  * its agents (the `volli` account) can read it and never write it: only the
  * root update unit stages and activates there. The request lives in the
  * daemon's data dir because the daemon writes it, which is also why the
- * applier treats it as untrusted (`request.ts`). The updater's own state sits
+ * applier treats it as untrusted (`files.ts`). The updater's own state sits
  * in the install root for the opposite reason: the daemon only reads it.
  */
 import { isAbsolute, join } from "node:path";

@@ -46,6 +46,14 @@ describe("reading a small file", () => {
     expect(readSmallFile(join(root, "missing"), 10)).toBeNull();
   });
 
+  it("refuses a file another account owns, when asked who should", () => {
+    writeFileSync(join(root, "a"), "hello");
+    expect(readSmallFile(join(root, "a"), 10, process.getuid!())).toBe("hello");
+    expect(() => readSmallFile(join(root, "a"), 10, process.getuid!() + 1)).toThrow(
+      /not owned by the runner's account/u,
+    );
+  });
+
   it("refuses a symlink, a directory and an oversized file", () => {
     writeFileSync(join(root, "target"), "{}");
     symlinkSync(join(root, "target"), join(root, "link"));
@@ -128,7 +136,12 @@ describe("the updater state", () => {
 
   it("is empty until written, then durable and world-readable", () => {
     expect(readUpdaterState(path())).toEqual(EMPTY_STATE);
-    const state = { ...EMPTY_STATE, staged: "0.4.0", outcomes: [outcome("a")] };
+    const state = {
+      ...EMPTY_STATE,
+      staged: { version: "0.4.0", name: "0.4.0-abc" },
+      activating: { version: "0.4.1", name: "0.4.1", fromTarget: "/x", fromVersion: "0.4.0" },
+      outcomes: [outcome("a")],
+    };
     writeUpdaterState(path(), state);
     expect(statSync(path()).mode & 0o777).toBe(0o644);
     expect(readUpdaterState(path())).toEqual(state);

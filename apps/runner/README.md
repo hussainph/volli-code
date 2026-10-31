@@ -134,18 +134,26 @@ never updates itself, since nothing would restart it.
   because the releases are root's, and treats the request as untrusted; in a
   user install both are user units.
 - **Stage.** The manifest comes from `<releaseOrigin>v<version>/volli-runner-manifest.json`
-  and must be for that version; every URL in it must sit under the release
-  origin; the tarball's size and SHA-256 must match; and the release's
+  and must be for that version. Every URL in it must sit under the release
+  origin, and the tarball's size and SHA-256 must match. The release's
   Sigstore bundle must prove the manifest and tarball came from this
   repository's `release.yml` (`@refs/tags/v<version>` or `@refs/heads/main`),
   verified against Sigstore's public trust root (TUF, cached under the install
-  root). The tarball is extracted beside the releases and probed with its own
-  `bin/node` (`probe-natives.cjs`, `probe-codemode.mjs`).
+  root). The tarball is extracted beside the releases. It must carry a
+  `MANIFEST.json` for that version, and is probed with its own `bin/node`
+  (`probe-natives.cjs`, `probe-codemode.mjs`). It then becomes
+  `releases/<version>-<revision>`.
 - **Activate.** Once the daemon has drained, `current` moves to the new
-  release in one rename and the runner restarts. It must report `online` at
-  the new version from a new process within 2 minutes, or `current` moves
-  back, the runner restarts on the release before, and the release is
-  recorded as bad. Data is never rolled back.
+  release in one rename and the runner restarts. For 2 minutes the unit's
+  main process (systemd's `MainPID`) must end up reporting `online` at the new
+  version, and systemd must not restart it 3 times. Otherwise `current` moves
+  back to exactly the link it had, the runner restarts, and the release is
+  recorded as bad. A bad release is not tried again unless
+  `update --now --to <version>` names it. Data is never rolled back. An
+  activation a reboot interrupted is settled by the update unit's run at boot.
+- **Which version.** A release's version is its own `MANIFEST.json`'s, never
+  its directory name, so the installer's names and an absolute or relative
+  `current` all read the same.
 - **Reported.** Each outcome (`update_staged`, `update_applied`,
   `update_failed`, `rolled_back`) lands in the updater state and the daemon
   reports it to Volli once (`runnerUpdateReports.report`), where it becomes a

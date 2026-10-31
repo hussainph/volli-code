@@ -70,6 +70,8 @@ describe("the update config", () => {
   it("refuses a damaged one", () => {
     for (const value of [
       null,
+      [],
+      "x",
       { other: 1 },
       { releaseOrigin: 1 },
       { provenance: "none" },

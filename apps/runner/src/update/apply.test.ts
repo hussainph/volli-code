@@ -1,9 +1,10 @@
 /**
  * The applier against a real install root in a temporary directory, with the
- * network, `tar`, the probes, systemd and the daemon's status file faked.
+ * network, `tar`, the probes, systemd and the runner's process faked.
  */
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -20,24 +21,27 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { RunnerStatus } from "../shell/runner-status";
 import {
   applyUpdate,
-  currentVersion,
+  currentRelease,
   HEALTH_TIMEOUT_MS,
+  MAX_RESTARTS,
   pointCurrentAt,
   type ApplyPorts,
   type ApplyResult,
 } from "./apply";
 import {
+  EMPTY_STATE,
   readUpdaterState,
   writeNowRequest,
   writeUpdateRequest,
   writeUpdaterState,
-  EMPTY_STATE,
+  type UpdaterState,
 } from "./files";
 import { updateLayout, type UpdateLayout } from "./layout";
 import { MANIFEST_ASSET, tarballName, UpdateRefusal } from "./manifest";
 import type { ProvenanceSubject } from "./provenance";
 
 const ORIGIN = "https://releases.test/";
+const REV = "0123456789abcdef0123456789abcdef01234567";
 const manifestUrl = (version: string): string => `${ORIGIN}v${version}/${MANIFEST_ASSET}`;
 const sha = (value: string | Buffer): string => createHash("sha256").update(value).digest("hex");
 
@@ -47,22 +51,31 @@ let layout: UpdateLayout;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "runner-apply-"));
   layout = updateLayout("system", join(root, "opt"), join(root, "data"));
+  mkdirSync(layout.dataDir, { recursive: true });
 });
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function release(version: string): void {
-  const dir = join(layout.releasesDir, version, "bin");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "node"), "");
-  writeFileSync(join(dir, "volli-runner"), "");
+/** A release directory as the packager makes it. */
+function makeRelease(dir: string, version: string, revision: string | null = REV): void {
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  writeFileSync(join(dir, "bin", "node"), "");
+  writeFileSync(join(dir, "bin", "volli-runner"), "");
+  writeFileSync(
+    join(dir, "MANIFEST.json"),
+    JSON.stringify({ name: "volli-runner", version, ...(revision === null ? {} : { revision }) }),
+  );
 }
 
-function installed(version = "0.3.0"): void {
-  release(version);
-  pointCurrentAt(layout, version);
+/** The installer's layout: `releases/<version>-<rev>`, `current` relative or absolute. */
+function installed(version = "0.3.0", absolute = false): string {
+  const name = `${version}-install`;
+  makeRelease(join(layout.releasesDir, name), version);
+  const target = absolute ? join(layout.releasesDir, name) : join("releases", name);
+  pointCurrentAt(layout, target);
+  return target;
 }
 
 /** A published release: its manifest, tarball and bundle, by URL. */
@@ -112,39 +125,43 @@ const status = (patch: Partial<RunnerStatus>): RunnerStatus => ({
   ...patch,
 });
 
+/** How a release behaves once systemd starts it. */
+type Behaviour = "online" | "silent" | "crash-loop" | "impostor";
+
 interface Harness {
   ports: ApplyPorts;
   documents: Map<string, string>;
   verified: { bundle: string; version: string; subjects: readonly ProvenanceSubject[] }[];
   restarts: number;
   logs: string[];
-  /** What the status file says after `restarts` restarts. */
-  statusAfter: (restarts: number) => RunnerStatus | null;
+  /** The runner's status before any restart. */
+  before: RunnerStatus | null;
+  behaviour: (version: string) => Behaviour;
   extract: (into: string, version: string) => void;
-  probeError: Error | null;
+  probe: () => void;
   restartError: (restarts: number) => Error | null;
   provenanceError: Error | null;
-  dead: Set<number>;
+  serviceKnown: boolean;
 }
 
 function harness(options: { provenance?: boolean } = {}): Harness {
   let clock = 0;
+  let mainPid = 100;
+  let crashes = 0;
+  let running: string | null = null;
   const h: Harness = {
     documents: new Map(),
     verified: [],
     restarts: 0,
     logs: [],
-    statusAfter: () => status({ state: "draining" }),
-    extract: (into, version) => {
-      const dir = join(into, `volli-runner-${version}-linux-x64`, "bin");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "node"), "");
-      writeFileSync(join(dir, "volli-runner"), "");
-    },
-    probeError: null,
+    before: status({ state: "draining" }),
+    behaviour: () => "online",
+    extract: (into, version) =>
+      makeRelease(join(into, `volli-runner-${version}-linux-x64`), version),
+    probe: () => {},
     restartError: () => null,
     provenanceError: null,
-    dead: new Set(),
+    serviceKnown: true,
     ports: undefined as unknown as ApplyPorts,
   };
   const get = (url: string): string => {
@@ -170,19 +187,31 @@ function harness(options: { provenance?: boolean } = {}): Harness {
             },
           },
     extract: async (tarball, into) => {
-      const name = basename(tarball);
-      h.extract(into, name.replace(/^volli-runner-/u, "").replace(/-linux-x64\.tar\.gz$/u, ""));
+      h.extract(into, basename(tarball).replace(/^volli-runner-|-linux-x64\.tar\.gz$/gu, ""));
     },
-    probe: async () => {
-      if (h.probeError !== null) throw h.probeError;
-    },
+    probe: async () => h.probe(),
     restart: async () => {
       h.restarts += 1;
       const error = h.restartError(h.restarts);
       if (error !== null) throw error;
+      mainPid += 1;
+      running = currentRelease(layout)?.version ?? null;
     },
-    readStatus: () => h.statusAfter(h.restarts),
-    alive: (pid) => !h.dead.has(pid),
+    service: async () => {
+      if (!h.serviceKnown) return null;
+      if (running !== null && h.behaviour(running) === "crash-loop") crashes += 1;
+      return { mainPid, restarts: crashes };
+    },
+    readStatus: (owner) => {
+      expect(owner).toBe(process.getuid!());
+      if (running === null) return h.before;
+      const behaviour = h.behaviour(running);
+      if (behaviour === "silent")
+        return status({ state: "starting", pid: mainPid, version: running });
+      // An agent's forged file: online, but not the unit's main process.
+      if (behaviour === "impostor") return status({ pid: 1, version: running });
+      return status({ pid: mainPid, version: running });
+    },
     now: () => new Date(clock),
     sleep: async (ms) => {
       clock += ms;
@@ -204,7 +233,14 @@ function stageRequest(version: string, url = manifestUrl(version)) {
   });
 }
 
-const state = () => readUpdaterState(layout.stateFile);
+const activate = (urgent = false) =>
+  writeUpdateRequest(layout.requestFile, { phase: "activate", version: "0.4.0", urgent });
+
+const state = (): UpdaterState => readUpdaterState(layout.stateFile);
+const STAGED = `0.4.0-${REV.slice(0, 12)}`;
+
+const top = (into: string, version: string): string =>
+  join(into, `volli-runner-${version}-linux-x64`);
 
 describe("staging", () => {
   it("does nothing without a request, or with one it already handled", async () => {
@@ -217,15 +253,21 @@ describe("staging", () => {
     expect(await apply(h)).toEqual({ kind: "idle", why: "already handled" });
   });
 
-  it("downloads, verifies, probes and puts a release beside the current one", async () => {
+  it("does nothing without a data dir", async () => {
     installed();
+    rmSync(layout.dataDir, { recursive: true });
+    expect(await apply(harness())).toEqual({ kind: "idle", why: "no request" });
+  });
+
+  it("downloads, verifies, probes and puts a release beside the current one", async () => {
+    const target = installed();
     const h = harness();
     const manifest = publish(h.documents, "0.4.0");
     stageRequest("0.4.0");
     expect(await apply(h)).toEqual({ kind: "staged", version: "0.4.0" });
-    expect(existsSync(join(layout.releasesDir, "0.4.0", "bin", "volli-runner"))).toBe(true);
-    expect(readlinkSync(layout.currentLink)).toBe(join("releases", "0.3.0"));
-    expect(readdirSync(layout.releasesDir).toSorted()).toEqual(["0.3.0", "0.4.0"]);
+    expect(existsSync(join(layout.releasesDir, STAGED, "bin", "volli-runner"))).toBe(true);
+    expect(readlinkSync(layout.currentLink)).toBe(target);
+    expect(readdirSync(layout.releasesDir).toSorted()).toEqual(["0.3.0-install", STAGED]);
     expect(readdirSync(layout.cacheDir)).toEqual([]);
     expect(h.verified).toEqual([
       {
@@ -238,29 +280,43 @@ describe("staging", () => {
       },
     ]);
     const after = state();
-    expect(after.staged).toBe("0.4.0");
+    expect(after.staged).toEqual({ version: "0.4.0", name: STAGED });
     expect(after.outcomes.map((o) => [o.kind, o.version, o.fromVersion, o.reason])).toEqual([
       ["update_staged", "0.4.0", "0.3.0", null],
     ]);
   });
 
-  it("checks only the checksum when the install says sha-only", async () => {
-    installed();
+  it("names a release without a revision by its version", async () => {
+    installed("0.3.0", true);
     const h = harness({ provenance: false });
+    h.extract = (into, version) =>
+      makeRelease(join(into, `volli-runner-${version}-linux-x64`), version, null);
     publish(h.documents, "0.4.0");
     stageRequest("0.4.0");
     expect((await apply(h)).kind).toBe("staged");
+    expect(state().staged).toEqual({ version: "0.4.0", name: "0.4.0" });
     expect(h.verified).toEqual([]);
+  });
+
+  it("names a release with an odd revision by its version, too", async () => {
+    installed();
+    const h = harness();
+    h.extract = (into, version) =>
+      makeRelease(join(into, `volli-runner-${version}-linux-x64`), version, "unknown");
+    publish(h.documents, "0.4.0");
+    stageRequest("0.4.0");
+    expect((await apply(h)).kind).toBe("staged");
+    expect(state().staged?.name).toBe("0.4.0");
   });
 
   it("replaces a leftover of an earlier attempt", async () => {
     installed();
-    mkdirSync(join(layout.releasesDir, "0.4.0", "junk"), { recursive: true });
+    mkdirSync(join(layout.releasesDir, STAGED, "junk"), { recursive: true });
     const h = harness();
     publish(h.documents, "0.4.0");
     stageRequest("0.4.0");
     expect((await apply(h)).kind).toBe("staged");
-    expect(existsSync(join(layout.releasesDir, "0.4.0", "junk"))).toBe(false);
+    expect(existsSync(join(layout.releasesDir, STAGED, "junk"))).toBe(false);
   });
 
   async function refused(h: Harness, code: string): Promise<void> {
@@ -268,7 +324,9 @@ describe("staging", () => {
     expect(result).toMatchObject({ kind: "refused", code });
     const last = state().outcomes.at(-1);
     expect(last).toMatchObject({ kind: "update_failed", reason: code });
-    expect(readdirSync(layout.releasesDir).filter((entry) => entry !== "0.3.0")).toEqual([]);
+    expect(readdirSync(layout.releasesDir).filter((entry) => entry !== "0.3.0-install")).toEqual(
+      [],
+    );
   }
 
   it("refuses a forged request for a URL outside the release origin", async () => {
@@ -292,12 +350,31 @@ describe("staging", () => {
     await refused(h, "known_bad");
   });
 
-  it("refuses without an installed release", async () => {
+  it("tries a bad release again when the install's owner names it", async () => {
+    installed();
+    writeUpdaterState(layout.stateFile, { ...EMPTY_STATE, bad: ["0.4.0"] });
+    writeNowRequest(layout.nowFile, "0.4.1", new Date(0));
+    const h = harness();
+    publish(h.documents, "0.4.0");
+    stageRequest("0.4.0");
+    expect((await apply(h)).kind).toBe("refused");
+    writeNowRequest(layout.nowFile, "0.4.0", new Date(0));
+    stageRequest("0.4.0");
+    expect((await apply(h)).kind).toBe("staged");
+    writeFileSync(layout.nowFile, "{");
+    stageRequest("0.4.0");
+    expect((await apply(h)).kind).toBe("refused");
+  });
+
+  it("refuses without an installed release, recording nothing", async () => {
     const h = harness();
     stageRequest("0.4.0");
-    const result = await apply(h);
-    expect(result).toMatchObject({ kind: "refused", code: "not_installed" });
+    expect(await apply(h)).toMatchObject({ kind: "refused", code: "not_installed" });
     expect(existsSync(layout.stateFile)).toBe(false);
+    // A `current` whose release names no version is no install either.
+    mkdirSync(join(layout.releasesDir, "x"), { recursive: true });
+    pointCurrentAt(layout, join("releases", "x"));
+    expect(await apply(h)).toMatchObject({ kind: "refused", code: "not_installed" });
   });
 
   it("refuses a tarball that does not match its manifest", async () => {
@@ -320,30 +397,36 @@ describe("staging", () => {
     await refused(h, "provenance");
   });
 
-  it("refuses a tarball that is not a runner release", async () => {
+  it("refuses a tarball that is not this runner release", async () => {
     installed();
     const h = harness();
     publish(h.documents, "0.4.0");
-    h.extract = (into) => mkdirSync(join(into, "something-else"));
-    stageRequest("0.4.0");
-    await refused(h, "bad_tarball");
-    h.extract = (into, version) =>
-      mkdirSync(join(into, `volli-runner-${version}-linux-x64`, "bin"), { recursive: true });
-    stageRequest("0.4.0");
-    await refused(h, "bad_tarball");
-    h.extract = (into, version) => {
-      const bin = join(into, `volli-runner-${version}-linux-x64`, "bin");
-      mkdirSync(bin, { recursive: true });
-      writeFileSync(join(bin, "node"), "");
-    };
-    stageRequest("0.4.0");
-    await refused(h, "bad_tarball");
+    const cases: ((into: string, version: string) => void)[] = [
+      (into) => mkdirSync(join(into, "something-else")),
+      (into, version) => mkdirSync(join(top(into, version), "bin"), { recursive: true }),
+      (into, version) => {
+        makeRelease(top(into, version), version);
+        rmSync(join(top(into, version), "bin", "volli-runner"));
+      },
+      (into, version) => makeRelease(top(into, version), "0.3.9"),
+      (into, version) => {
+        makeRelease(top(into, version), version);
+        rmSync(join(top(into, version), "MANIFEST.json"));
+      },
+    ];
+    for (const extract of cases) {
+      h.extract = extract;
+      stageRequest("0.4.0");
+      await refused(h, "bad_tarball");
+    }
   });
 
   it("records a probe failure as a failed update", async () => {
     installed();
     const h = harness();
-    h.probeError = new Error("better-sqlite3 needs GLIBC_2.38");
+    h.probe = () => {
+      throw new Error("better-sqlite3 needs GLIBC_2.38");
+    };
     publish(h.documents, "0.4.0");
     stageRequest("0.4.0");
     expect(await apply(h)).toEqual({
@@ -358,41 +441,68 @@ describe("staging", () => {
     installed();
     mkdirSync(join(layout.dataDir, "update"), { recursive: true });
     writeFileSync(layout.requestFile, "{");
-    const h = harness();
-    expect(await apply(h)).toMatchObject({ kind: "refused", code: "bad_request" });
+    expect(await apply(harness())).toMatchObject({ kind: "refused", code: "bad_request" });
     expect(state()).toEqual(EMPTY_STATE);
+  });
+
+  it("goes on to a request the daemon wrote meanwhile", async () => {
+    installed();
+    const h = harness();
+    publish(h.documents, "0.4.0");
+    // The daemon drains and asks to activate while the stage is still running.
+    h.probe = () => void activate(true);
+    stageRequest("0.4.0");
+    expect(await apply(h)).toEqual({ kind: "applied", version: "0.4.0", from: "0.3.0" });
+  });
+
+  it("handles a bounded number of requests per run", async () => {
+    installed();
+    const h = harness();
+    publish(h.documents, "0.4.0");
+    h.probe = () => void stageRequest("0.4.0");
+    stageRequest("0.4.0");
+    expect((await apply(h)).kind).toBe("staged");
+    expect(state().handled).toHaveLength(4);
   });
 });
 
 describe("activating", () => {
-  async function staged(h: Harness): Promise<void> {
-    installed();
-    release("0.2.0");
+  async function staged(h: Harness): Promise<string> {
+    const target = installed();
+    makeRelease(join(layout.releasesDir, "0.2.0-old"), "0.2.0");
     publish(h.documents, "0.4.0");
     stageRequest("0.4.0");
     expect((await apply(h)).kind).toBe("staged");
+    return target;
   }
 
-  const activate = (urgent = false) =>
-    writeUpdateRequest(layout.requestFile, { phase: "activate", version: "0.4.0", urgent });
-
-  it("moves current, restarts, and keeps the new release once it is online", async () => {
+  it("moves current, restarts, and keeps the new release once it stays online", async () => {
     const h = harness();
     await staged(h);
-    writeNowRequest(layout.nowFile, null, new Date(0));
-    h.statusAfter = (restarts) =>
-      restarts === 0
-        ? status({ state: "draining", pid: 100 })
-        : status({ state: "online", pid: 200, version: "0.4.0" });
+    mkdirSync(join(layout.releasesDir, "notes"));
+    writeFileSync(join(layout.releasesDir, "0.1.0"), "a file");
+    writeNowRequest(layout.nowFile, "0.4.0", new Date(0));
+    writeUpdaterState(layout.stateFile, { ...state(), bad: ["0.4.0", "0.3.5"] });
     activate();
     expect(await apply(h)).toEqual({ kind: "applied", version: "0.4.0", from: "0.3.0" });
     expect(h.restarts).toBe(1);
-    expect(currentVersion(layout)).toBe("0.4.0");
-    // The rollback stays; older releases go.
-    expect(readdirSync(layout.releasesDir).toSorted()).toEqual(["0.3.0", "0.4.0"]);
+    expect(readlinkSync(layout.currentLink)).toBe(join("releases", STAGED));
+    expect(currentRelease(layout)?.version).toBe("0.4.0");
+    // The rollback stays; older releases go; what is not a release stays.
+    expect(readdirSync(layout.releasesDir).toSorted()).toEqual([
+      "0.1.0",
+      "0.3.0-install",
+      STAGED,
+      "notes",
+    ]);
     expect(existsSync(layout.nowFile)).toBe(false);
     const after = state();
-    expect(after).toMatchObject({ staged: null, previous: "0.3.0", bad: [] });
+    expect(after).toMatchObject({
+      staged: null,
+      activating: null,
+      previous: join("releases", "0.3.0-install"),
+      bad: ["0.3.5"],
+    });
     expect(after.outcomes.at(-1)).toMatchObject({
       kind: "update_applied",
       version: "0.4.0",
@@ -400,34 +510,32 @@ describe("activating", () => {
     });
   });
 
-  it("keeps stray files in the releases directory when pruning", async () => {
+  it("keeps a healthy release when cleaning up after it fails", async () => {
     const h = harness();
     await staged(h);
-    writeFileSync(join(layout.releasesDir, "0.1.0"), "a file");
-    mkdirSync(join(layout.releasesDir, "notes"));
-    h.statusAfter = (restarts) =>
-      restarts === 0 ? status({ state: "draining" }) : status({ pid: 200, version: "0.4.0" });
+    const old = join(layout.releasesDir, "0.2.0-old");
+    mkdirSync(join(old, "locked", "deep"), { recursive: true });
+    chmodSync(join(old, "locked"), 0o500);
     activate();
-    expect((await apply(h)).kind).toBe("applied");
-    expect(readdirSync(layout.releasesDir).toSorted()).toEqual([
-      "0.1.0",
-      "0.3.0",
-      "0.4.0",
-      "notes",
-    ]);
+    try {
+      expect((await apply(h)).kind).toBe("applied");
+    } finally {
+      chmodSync(join(old, "locked"), 0o700);
+    }
+    expect(h.logs.at(-1)).toMatch(/^cleaning up old releases failed/u);
+    expect(state().bad).toEqual([]);
   });
 
   it("waits for a draining runner unless the update is urgent", async () => {
     const h = harness();
     await staged(h);
-    h.statusAfter = (restarts) =>
-      restarts === 0 ? status({ state: "online" }) : status({ pid: 200, version: "0.4.0" });
+    h.before = status({ state: "online" });
     activate();
     expect(await apply(h)).toMatchObject({ kind: "refused", code: "not_draining" });
-    expect(currentVersion(layout)).toBe("0.3.0");
-    h.statusAfter = (restarts) => (restarts === 0 ? null : status({ pid: 200, version: "0.4.0" }));
+    h.before = null;
     activate();
     expect(await apply(h)).toMatchObject({ kind: "refused", code: "not_draining" });
+    expect(currentRelease(layout)?.version).toBe("0.3.0");
     activate(true);
     expect((await apply(h)).kind).toBe("applied");
   });
@@ -437,115 +545,177 @@ describe("activating", () => {
     const h = harness();
     activate();
     expect(await apply(h)).toMatchObject({ kind: "refused", code: "not_staged" });
-    writeUpdaterState(layout.stateFile, { ...state(), staged: "0.4.0" });
+    writeUpdaterState(layout.stateFile, { ...state(), staged: { version: "0.4.0", name: "gone" } });
     activate();
     expect(await apply(h)).toMatchObject({ kind: "refused", code: "not_staged" });
   });
 
-  it("rolls back a release that does not come online, and never stages it again", async () => {
-    const h = harness();
-    await staged(h);
-    // The new release crash-loops: the status file keeps the old process's
-    // last words, and then the old version's new process comes back.
-    h.statusAfter = (restarts) =>
-      restarts < 2
-        ? status({ state: "draining", pid: 100 })
-        : status({ state: "online", pid: 300, version: "0.3.0" });
-    activate();
-    expect(await apply(h)).toEqual({
-      kind: "rolled_back",
-      version: "0.4.0",
-      to: "0.3.0",
-      reason: "health_timeout",
-    });
-    expect(h.restarts).toBe(2);
-    expect(currentVersion(layout)).toBe("0.3.0");
+  async function rolledBack(h: Harness, reason: string, back: string | null = null) {
+    expect(await apply(h)).toEqual({ kind: "rolled_back", version: "0.4.0", to: "0.3.0", reason });
     const after = state();
     expect(after.bad).toEqual(["0.4.0"]);
+    expect(after.activating).toBeNull();
     expect(
       after.outcomes.slice(-2).map((o) => [o.kind, o.version, o.fromVersion, o.reason]),
     ).toEqual([
-      ["update_failed", "0.4.0", "0.3.0", "health_timeout"],
-      ["rolled_back", "0.3.0", "0.4.0", null],
+      ["update_failed", "0.4.0", "0.3.0", reason],
+      ["rolled_back", "0.3.0", "0.4.0", back],
     ]);
+  }
+
+  it("rolls back a release that never comes online, to exactly the link it had", async () => {
+    const h = harness();
+    const target = await staged(h);
+    h.behaviour = (version) => (version === "0.4.0" ? "silent" : "online");
+    activate();
+    await rolledBack(h, "health_timeout");
+    expect(h.restarts).toBe(2);
+    expect(readlinkSync(layout.currentLink)).toBe(target);
     stageRequest("0.4.0");
     expect(await apply(h)).toMatchObject({ kind: "refused", code: "known_bad" });
   });
 
-  it("does not take a stale or dead process for a healthy one", async () => {
+  it("restores an absolute current as the installer wrote it", async () => {
     const h = harness();
-    await staged(h);
-    h.dead.add(200);
-    h.statusAfter = (restarts) =>
-      restarts === 0
-        ? status({ state: "draining", pid: 100, version: "0.4.0" })
-        : restarts === 1
-          ? status({ state: "online", pid: 200, version: "0.4.0" })
-          : status({ state: "online", pid: 300, version: "0.3.0" });
-    activate();
+    const target = installed("0.3.0", true);
+    publish(h.documents, "0.4.0");
+    stageRequest("0.4.0");
+    await apply(h);
+    h.behaviour = (version) => (version === "0.4.0" ? "silent" : "online");
+    activate(true);
     expect((await apply(h)).kind).toBe("rolled_back");
+    expect(readlinkSync(layout.currentLink)).toBe(target);
   });
 
-  it("rolls back when the new release never writes a status at all", async () => {
+  it(`rolls back a release systemd restarts ${MAX_RESTARTS} times`, async () => {
     const h = harness();
     await staged(h);
-    h.statusAfter = (restarts) =>
-      restarts === 0
-        ? status({ state: "draining" })
-        : restarts === 1
-          ? null
-          : status({ pid: 300, version: "0.3.0" });
+    h.behaviour = (version) => (version === "0.4.0" ? "crash-loop" : "online");
     activate();
-    expect((await apply(h)).kind).toBe("rolled_back");
-    expect(state().outcomes.at(-1)).toMatchObject({ kind: "rolled_back", reason: null });
+    await rolledBack(h, "health_timeout");
   });
 
-  it("says so when the rollback does not come online either", async () => {
+  it("does not take a forged status for the unit's process", async () => {
     const h = harness();
     await staged(h);
-    h.statusAfter = () => status({ state: "draining", pid: 100 });
+    h.behaviour = (version) => (version === "0.4.0" ? "impostor" : "online");
     activate();
-    expect((await apply(h)).kind).toBe("rolled_back");
-    expect(state().outcomes.at(-1)).toMatchObject({
-      kind: "rolled_back",
-      reason: "unhealthy_after_rollback",
-    });
+    await rolledBack(h, "health_timeout");
   });
 
-  it("rolls back when the restart itself fails", async () => {
+  it("cannot call a release healthy without systemd's word", async () => {
+    const h = harness();
+    await staged(h);
+    h.serviceKnown = false;
+    activate();
+    await rolledBack(h, "health_timeout", "unhealthy_after_rollback");
+  });
+
+  it("rolls back when the restart itself fails, and says when the rollback's does too", async () => {
     const h = harness();
     await staged(h);
     h.restartError = () => new Error("Failed to restart volli-runner.service");
     activate();
-    expect(await apply(h)).toMatchObject({ kind: "rolled_back", reason: "restart_failed" });
-    expect(currentVersion(layout)).toBe("0.3.0");
-    expect(state().outcomes.at(-1)).toMatchObject({ reason: "unhealthy_after_rollback" });
+    await rolledBack(h, "restart_failed", "unhealthy_after_rollback");
+    expect(currentRelease(layout)?.version).toBe("0.3.0");
     expect(h.logs.filter((line) => line.startsWith("restarting on"))).toHaveLength(2);
   });
 
-  it("gives a new release the whole health window", async () => {
+  it(`watches a new release for the whole ${HEALTH_TIMEOUT_MS / 1000} s`, async () => {
     const h = harness();
     await staged(h);
-    let polls = 0;
-    h.statusAfter = (restarts) => {
-      if (restarts === 0) return status({ state: "draining" });
-      polls += 1;
-      return polls * 2_000 > HEALTH_TIMEOUT_MS - 4_000
-        ? status({ pid: 200, version: "0.4.0" })
-        : status({ state: "starting", pid: 200, version: "0.4.0" });
+    let calls = 0;
+    const service = h.ports.service;
+    h.ports = {
+      ...h.ports,
+      service: async () => {
+        calls += 1;
+        return service();
+      },
     };
     activate();
     expect((await apply(h)).kind).toBe("applied");
+    expect(calls).toBeGreaterThan(HEALTH_TIMEOUT_MS / 2_000);
+  });
+});
+
+describe("an interrupted activation", () => {
+  function interrupted(switched: boolean): string {
+    const target = installed();
+    makeRelease(join(layout.releasesDir, STAGED), "0.4.0");
+    writeUpdaterState(layout.stateFile, {
+      ...EMPTY_STATE,
+      activating: { version: "0.4.0", name: STAGED, fromTarget: target, fromVersion: "0.3.0" },
+    });
+    if (switched) pointCurrentAt(layout, join("releases", STAGED));
+    return target;
+  }
+
+  it("keeps a release that came up healthy", async () => {
+    interrupted(true);
+    const h = harness();
+    // The box rebooted onto the new release, which systemd started.
+    await h.ports.restart();
+    h.restarts = 0;
+    expect(await apply(h)).toEqual({ kind: "applied", version: "0.4.0", from: "0.3.0" });
+    expect(state().activating).toBeNull();
+    expect(h.restarts).toBe(0);
+  });
+
+  it("rolls back one that did not", async () => {
+    const target = interrupted(true);
+    const h = harness();
+    h.behaviour = (version) => (version === "0.4.0" ? "silent" : "online");
+    await h.ports.restart();
+    expect((await apply(h)).kind).toBe("rolled_back");
+    expect(readlinkSync(layout.currentLink)).toBe(target);
+  });
+
+  it("rolls back when it cannot read the runner's status at all", async () => {
+    interrupted(true);
+    rmSync(layout.dataDir, { recursive: true });
+    const h = harness();
+    await h.ports.restart();
+    expect((await apply(h)).kind).toBe("rolled_back");
+  });
+
+  it("puts current back when the switch never happened", async () => {
+    const target = interrupted(false);
+    const h = harness();
+    expect(await apply(h)).toMatchObject({ kind: "failed", code: "interrupted" });
+    expect(readlinkSync(layout.currentLink)).toBe(target);
+    expect(state()).toMatchObject({ activating: null });
+    expect(state().outcomes.at(-1)).toMatchObject({ kind: "update_failed", reason: "interrupted" });
+  });
+
+  it("then goes on to the request waiting", async () => {
+    interrupted(false);
+    const h = harness();
+    h.documents.clear();
+    publish(h.documents, "0.4.1");
+    writeUpdateRequest(layout.requestFile, {
+      phase: "stage",
+      version: "0.4.1",
+      manifestUrl: manifestUrl("0.4.1"),
+      urgent: false,
+    });
+    expect(await apply(h)).toEqual({ kind: "staged", version: "0.4.1" });
   });
 });
 
 describe("the current release", () => {
-  it("is read from the link, and none when it names no release", () => {
-    expect(currentVersion(layout)).toBeNull();
+  it("is read from the release's own manifest", () => {
+    expect(currentRelease(layout)).toBeNull();
     mkdirSync(layout.installRoot, { recursive: true });
     symlinkSync("somewhere/else", layout.currentLink);
-    expect(currentVersion(layout)).toBeNull();
-    installed("0.3.0");
-    expect(currentVersion(layout)).toBe("0.3.0");
+    expect(currentRelease(layout)).toBeNull();
+    const target = installed("0.3.0");
+    expect(currentRelease(layout)).toEqual({
+      version: "0.3.0",
+      name: "0.3.0-install",
+      target,
+    });
+    writeFileSync(join(layout.releasesDir, "0.3.0-install", "MANIFEST.json"), "{");
+    expect(currentRelease(layout)).toBeNull();
   });
 });

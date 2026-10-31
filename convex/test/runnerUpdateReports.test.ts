@@ -12,7 +12,7 @@ import {
 } from "@volli/shared/cloud";
 
 import { api } from "../functions/_generated/api";
-import { REPORT_DEDUP_WINDOW } from "../functions/runnerUpdateReports";
+import { REPORT_CLOCK_SKEW_MS, REPORT_DEDUP_WINDOW } from "../functions/runnerUpdateReports";
 import schema from "../functions/schema";
 import { enrollPreview } from "./preview-fixtures";
 
@@ -71,7 +71,7 @@ const REPORT = {
   version: "0.4.0",
   fromVersion: "0.3.0",
   reason: "health_timeout",
-  at: 2_000,
+  at: Date.now(),
 };
 
 describe("runner update reports", () => {
@@ -109,11 +109,11 @@ describe("runner update reports", () => {
       version: "0.3.0",
       fromVersion: "0.4.0",
       reason: null,
-      at: 3_000,
+      at: REPORT.at + 1_000,
     });
     await runner.mutation(api.runnerUpdateReports.report, REPORT);
     const { runner: row, events } = await stored(t, runnerId);
-    expect(row?.update).toMatchObject({ kind: "rolled_back", at: 3_000 });
+    expect(row?.update).toMatchObject({ kind: "rolled_back", at: REPORT.at + 1_000 });
     expect(events.map((event) => event.kind).toSorted()).toEqual(["rolled_back", "update_failed"]);
   });
 
@@ -145,12 +145,24 @@ describe("runner update reports", () => {
       { outcomeId: "x".repeat(101) },
       { version: "1".repeat(101) },
       { fromVersion: "1".repeat(101) },
+      { version: "0.4.0 <script>" },
       { at: Number.POSITIVE_INFINITY },
     ]) {
       await expect(
         runner.mutation(api.runnerUpdateReports.report, { ...REPORT, outcomeId: "c", ...bad }),
       ).rejects.toMatchObject({ data: expect.objectContaining({ code: "invalid_request" }) });
     }
+  });
+
+  test("does not let a runner's far-off clock pin the projection", async () => {
+    const t = setup();
+    const { runnerId, runner } = await linkedRunner(t);
+    await runner.mutation(api.runnerUpdateReports.report, {
+      ...REPORT,
+      at: REPORT.at + 10 * REPORT_CLOCK_SKEW_MS,
+    });
+    const at = ((await stored(t, runnerId)).runner!.update as { at: number }).at;
+    expect(at).toBeLessThan(REPORT.at + REPORT_CLOCK_SKEW_MS);
   });
 
   test("is a runner's call, never a person's", async () => {

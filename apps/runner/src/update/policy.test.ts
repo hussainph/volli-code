@@ -72,10 +72,14 @@ describe("the update policy", () => {
     expect(decide({ target: target({ minVersion: null }) }).kind).toBe("update");
   });
 
-  it("skips a release that failed here", () => {
+  it("skips a release that failed here, unless --now --to names it", () => {
     expect(decide({ bad: ["0.4.0"] })).toEqual({
       kind: "none",
       why: "release 0.4.0 failed here before",
+    });
+    expect(decide({ bad: ["0.4.0"], now: { v: 1, version: "0.4.0", at: "x" } })).toMatchObject({
+      kind: "update",
+      reason: "now",
     });
   });
 

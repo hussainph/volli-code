@@ -5,7 +5,9 @@
  * - `volli-runner-update.path` watches the daemon's request file;
  * - `volli-runner-update.service`, a oneshot, runs the **installed**
  *   release's `volli-runner update apply`, which stages, activates, checks
- *   health and rolls back (`apply.ts`).
+ *   health and rolls back (`apply.ts`). It also runs once at boot, after the
+ *   runner, to settle an activation a reboot interrupted. The installer
+ *   enables both.
  *
  * In system mode the service runs as root, because the releases are root's;
  * it treats the request as untrusted. In user mode both are user units and the
@@ -13,7 +15,7 @@
  * are the system rendering (a test keeps them equal), shipped in the release
  * tarball's `share/systemd/`.
  */
-import type { UpdateLayout } from "./layout";
+import { RUNNER_UNIT, type UpdateLayout } from "./layout";
 
 export const UPDATE_PATH_UNIT = "volli-runner-update.path";
 export const UPDATE_SERVICE_UNIT = "volli-runner-update.service";
@@ -67,7 +69,10 @@ UMask=0022
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
-ProtectSystem=full
+# Everything read-only but the install root: the releases, the updater's
+# state and its cache. The runner's data dir is only ever read.
+ProtectSystem=strict
+ReadWritePaths=${layout.installRoot.replace(/%/gu, "%%")}
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
@@ -85,13 +90,16 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 Description=Apply a Volli runner update
 Documentation=https://github.com/hussainph/volli-code/blob/main/apps/runner/README.md
 Wants=network-online.target
-After=network-online.target
+After=network-online.target ${RUNNER_UNIT}
 
 [Service]
 Type=oneshot
 ExecStart=${execStart}
 # A download, two probes, and two health checks of 2 minutes at most.
 TimeoutStartSec=45min
-${hardening}`;
+${hardening}
+[Install]
+WantedBy=${system ? "multi-user.target" : "default.target"}
+`;
   return { path, service };
 }

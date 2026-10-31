@@ -43,8 +43,11 @@ export function readUpdateConfig(layout: UpdateLayout): UpdateConfig {
   const path = updateConfigPath(layout);
   const text = readSmallFile(path, 4096);
   if (text === null) return DEFAULT_UPDATE_CONFIG;
-  const row = JSON.parse(text) as Record<string, unknown>;
-  const keys = row === null || typeof row !== "object" ? [] : Object.keys(row);
+  const row = JSON.parse(text) as Record<string, unknown> | null;
+  if (row === null || typeof row !== "object" || Array.isArray(row)) {
+    throw new Error(`${path} is not an update config this build reads.`);
+  }
+  const keys = Object.keys(row);
   if (
     keys.some((key) => key !== "releaseOrigin" && key !== "provenance") ||
     !(row.releaseOrigin === undefined || typeof row.releaseOrigin === "string") ||

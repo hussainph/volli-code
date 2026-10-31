@@ -14,7 +14,7 @@ import { join, resolve } from "node:path";
 
 import type { CommandContext, CommandInput, RunnerCommand } from "../commands";
 import { PATH_OPTIONS, pathsFor, stringOption } from "../shell/paths";
-import { applyUpdate, currentVersion, type ApplyPorts } from "./apply";
+import { applyUpdate, currentRelease, type ApplyPorts, type ServiceState } from "./apply";
 import { readUpdateConfig, type UpdateConfig } from "./config";
 import { readDaemonStatus, readUpdaterState, writeNowRequest } from "./files";
 import { defaultInstallRoot, RUNNER_UNIT, updateLayout, type UpdateLayout } from "./layout";
@@ -29,6 +29,7 @@ export interface UpdateDeps {
   extract: ApplyPorts["extract"];
   probe: ApplyPorts["probe"];
   restart(mode: UpdateLayout["mode"], unit: string): Promise<void>;
+  service(mode: UpdateLayout["mode"], unit: string): Promise<ServiceState | null>;
   provenance(cachePath: string): ProvenanceVerifier;
 }
 
@@ -67,8 +68,8 @@ async function apply(layout: UpdateLayout, context: CommandContext): Promise<num
     extract: deps.extract,
     probe: deps.probe,
     restart: () => deps.restart(layout.mode, RUNNER_UNIT),
-    readStatus: () => readDaemonStatus(layout.dataDir),
-    alive: (pid) => context.statusProbes.alive(pid),
+    service: () => deps.service(layout.mode, RUNNER_UNIT),
+    readStatus: (owner) => readDaemonStatus(layout.dataDir, owner),
     now: () => new Date(clock()),
     sleep: (ms) => context.sleep(ms),
     log: (line) => context.err(`volli-runner update: ${line}\n`),
@@ -91,8 +92,9 @@ function show(layout: UpdateLayout, context: CommandContext): number {
   const report = {
     version: context.version,
     installRoot: layout.installRoot,
-    current: currentVersion(layout),
-    staged: state.staged,
+    current: currentRelease(layout)?.version ?? null,
+    staged: state.staged?.version ?? null,
+    activating: state.activating?.version ?? null,
     previous: state.previous,
     bad: state.bad,
     lastOutcome: state.outcomes.at(-1) ?? null,
@@ -111,7 +113,7 @@ function now(input: CommandInput, layout: UpdateLayout, context: CommandContext)
     );
     return 2;
   }
-  if (currentVersion(layout) === null) {
+  if (currentRelease(layout) === null) {
     context.err(
       `volli-runner: no installed runner at ${layout.installRoot}; updates need a runner \`install\` put in place.\n`,
     );

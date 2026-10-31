@@ -37,9 +37,10 @@ export const STATE_HISTORY = 32;
 /**
  * Reads a small regular file through one descriptor that never follows a
  * final symlink and never blocks on a FIFO; `null` when it does not exist.
- * Anything else (a symlink, a directory, a device, an oversized file) throws.
+ * Anything else (a symlink, a directory, a device, an oversized file, or with
+ * `owner` a file another account owns) throws.
  */
-export function readSmallFile(path: string, maxBytes: number): string | null {
+export function readSmallFile(path: string, maxBytes: number, owner?: number): string | null {
   let fd: number;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -51,6 +52,11 @@ export function readSmallFile(path: string, maxBytes: number): string | null {
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw new Error(`${path} is not a regular file.`);
     if (stat.size > maxBytes) throw new Error(`${path} is larger than ${maxBytes} bytes.`);
+    // Root reading the daemon's files: a file someone else owns (a hard link
+    // to root's, or a file behind a swapped parent directory) is not one.
+    if (owner !== undefined && stat.uid !== owner) {
+      throw new Error(`${path} is not owned by the runner's account.`);
+    }
     return readFileSync(fd, "utf8");
   } finally {
     closeSync(fd);
@@ -80,8 +86,8 @@ export type UpdateRequest =
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** The request on disk, or `null`; throws on anything that is not exactly a request. */
-export function readUpdateRequest(path: string): UpdateRequest | null {
-  const text = readSmallFile(path, MAX_REQUEST_BYTES);
+export function readUpdateRequest(path: string, owner?: number): UpdateRequest | null {
+  const text = readSmallFile(path, MAX_REQUEST_BYTES, owner);
   if (text === null) return null;
   const value = JSON.parse(text) as unknown;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -154,11 +160,26 @@ export function outcomeReport(outcome: UpdateOutcome): RunnerUpdateReport {
   };
 }
 
+/** A release directory under `releases/` and the version its `MANIFEST.json` names. */
+export interface ReleaseRef {
+  readonly version: string;
+  readonly name: string;
+}
+
+/** An activation in flight: written before `current` moves, cleared once it is settled. */
+export interface Activation extends ReleaseRef {
+  /** `current`'s link target before the switch, restored exactly on rollback. */
+  readonly fromTarget: string;
+  readonly fromVersion: string;
+}
+
 export interface UpdaterState {
   readonly v: 1;
   /** The release staged under `releases/` and not yet activated. */
-  readonly staged: string | null;
-  /** The release `current` pointed to before the last activation: the rollback. */
+  readonly staged: ReleaseRef | null;
+  /** Set while an activation is unsettled, so a crash or reboot finishes or undoes it. */
+  readonly activating: Activation | null;
+  /** `current`'s link target before the last activation. */
   readonly previous: string | null;
   /** Releases that failed their health check here; never staged again. */
   readonly bad: readonly string[];
@@ -170,6 +191,7 @@ export interface UpdaterState {
 export const EMPTY_STATE: UpdaterState = {
   v: 1,
   staged: null,
+  activating: null,
   previous: null,
   bad: [],
   handled: [],
@@ -178,6 +200,23 @@ export const EMPTY_STATE: UpdaterState = {
 
 function strings(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isRelease(value: unknown): value is ReleaseRef {
+  const row = value as Partial<ReleaseRef> | null;
+  return (
+    typeof row === "object" &&
+    row !== null &&
+    typeof row.version === "string" &&
+    typeof row.name === "string"
+  );
+}
+
+function isActivation(value: unknown): value is Activation {
+  const row = value as Partial<Activation>;
+  return (
+    isRelease(value) && typeof row.fromTarget === "string" && typeof row.fromVersion === "string"
+  );
 }
 
 function isOutcome(value: unknown): value is UpdateOutcome {
@@ -202,7 +241,8 @@ export function readUpdaterState(path: string): UpdaterState {
     row === null ||
     typeof row !== "object" ||
     row.v !== 1 ||
-    !(row.staged === null || typeof row.staged === "string") ||
+    !(row.staged === null || isRelease(row.staged)) ||
+    !(row.activating === null || isActivation(row.activating)) ||
     !(row.previous === null || typeof row.previous === "string") ||
     !strings(row.bad) ||
     !strings(row.handled) ||
@@ -234,9 +274,9 @@ const MAX_STATUS_BYTES = 64 * 1024;
  * symlink, never a FIFO or a device, size-capped. Anything else reads as no
  * status, which the health check treats as not online.
  */
-export function readDaemonStatus(dataDir: string): RunnerStatus | null {
+export function readDaemonStatus(dataDir: string, owner?: number): RunnerStatus | null {
   try {
-    const text = readSmallFile(statusFilePath(RUNNER, dataDir), MAX_STATUS_BYTES);
+    const text = readSmallFile(statusFilePath(RUNNER, dataDir), MAX_STATUS_BYTES, owner);
     const row = text === null ? null : (JSON.parse(text) as Partial<RunnerStatus> | null);
     return row !== null &&
       typeof row === "object" &&

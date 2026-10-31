@@ -44,6 +44,7 @@ export const UNREACHABLE_UPDATE: UpdateDeps = {
   extract: unreachable("extract"),
   probe: unreachable("probe"),
   restart: unreachable("restart"),
+  service: unreachable("service"),
   provenance: () => ({ verify: unreachable("provenance") }),
 };
 

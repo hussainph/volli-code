@@ -22,6 +22,7 @@ import {
   liveFetchText,
   liveProbe,
   liveRestart,
+  liveService,
   runProgram,
 } from "./live";
 import { UpdateRefusal } from "./manifest";
@@ -91,7 +92,9 @@ describe("fetching", () => {
 
 describe("processes", () => {
   it("runs a program and names a failure with its stderr", async () => {
-    await expect(runProgram(process.execPath, ["-e", ""])).resolves.toBeUndefined();
+    await expect(runProgram(process.execPath, ["-e", "process.stdout.write('out')"])).resolves.toBe(
+      "out",
+    );
     await expect(
       runProgram(process.execPath, ["-e", "process.stderr.write('boom'); process.exit(3)"], {
         timeoutMs: 10_000,
@@ -150,5 +153,34 @@ describe("processes", () => {
       "restart volli-runner.service\n--user restart volli-runner.service\n",
     );
     await expect(liveRestart("system", "x", join(root, "missing"))).rejects.toThrow(/ENOENT/u);
+  });
+});
+
+describe("the runner's unit", () => {
+  it("reads MainPID and NRestarts from systemctl show, as the install's manager", async () => {
+    const systemctl = join(root, "systemctl");
+    const log = join(root, "calls");
+    writeFileSync(
+      systemctl,
+      `#!/bin/sh\necho "$@" >> "${log}"\nprintf 'NRestarts=2\\nMainPID=4321\\n'\n`,
+    );
+    chmodSync(systemctl, 0o755);
+    expect(await liveService("system", "volli-runner.service", systemctl)).toEqual({
+      mainPid: 4321,
+      restarts: 2,
+    });
+    expect(await liveService("user", "volli-runner.service", systemctl)).not.toBeNull();
+    expect(readFileSync(log, "utf8")).toBe(
+      "show -p MainPID -p NRestarts volli-runner.service\n" +
+        "--user show -p MainPID -p NRestarts volli-runner.service\n",
+    );
+  });
+
+  it("cannot say without systemctl, or without both fields", async () => {
+    expect(await liveService("system", "x", join(root, "missing"))).toBeNull();
+    const systemctl = join(root, "systemctl");
+    writeFileSync(systemctl, "#!/bin/sh\necho MainPID=1\n");
+    chmodSync(systemctl, 0o755);
+    expect(await liveService("system", "x", systemctl)).toBeNull();
   });
 });

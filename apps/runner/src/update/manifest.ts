@@ -8,7 +8,7 @@
  *   provenance: { bundleUrl } }
  * ```
  *
- * Strict on read, as the release script writes it (`scripts/runner-release-manifest.mjs`):
+ * Strict on read, as the release workflow's manifest script (BYO-7) writes it:
  * an unknown field is drift, never ignored. Every URL in it must sit under a
  * trusted release origin, so a manifest cannot send the updater elsewhere; the
  * origin is the installer's (`--release-origin`, in the root-owned unit), never

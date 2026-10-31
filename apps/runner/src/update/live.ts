@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
+import type { ServiceState } from "./apply";
 import { UpdateRefusal } from "./manifest";
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -73,26 +74,31 @@ export function liveDownload(fetcher: Fetch = fetch) {
   };
 }
 
-/** Runs a program to completion; its stderr's tail names a failure. */
+/** Runs a program to completion: its stdout's tail; its stderr's tail names a failure. */
 export function runProgram(
   program: string,
   args: readonly string[],
   options: { readonly timeoutMs: number; readonly cwd?: string } = { timeoutMs: PROBE_TIMEOUT_MS },
-): Promise<void> {
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       timeout: options.timeoutMs,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     });
+    let stdout = "";
     let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (text: string) => {
+      stdout = (stdout + text).slice(-64 * 1024);
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (text: string) => {
       stderr = (stderr + text).slice(-2000);
     });
     child.on("error", reject);
     child.on("close", (code, signal) => {
-      if (code === 0) resolve();
+      if (code === 0) resolve(stdout);
       else {
         const why = signal === null ? `exited ${code}` : `was killed (${signal})`;
         reject(new Error(`${program} ${why}${stderr.trim() === "" ? "" : `: ${stderr.trim()}`}`));
@@ -128,12 +134,37 @@ export async function liveProbe(release: string): Promise<void> {
 }
 
 /** `systemctl [--user] restart volli-runner.service`. */
-export function liveRestart(
+export async function liveRestart(
   mode: "system" | "user",
   unit: string,
   systemctl = "systemctl",
 ): Promise<void> {
-  return runProgram(systemctl, [...(mode === "user" ? ["--user"] : []), "restart", unit], {
+  await runProgram(systemctl, [...(mode === "user" ? ["--user"] : []), "restart", unit], {
     timeoutMs: 90_000,
   });
+}
+
+/** `systemctl show`'s MainPID and NRestarts for the runner's unit; `null` when it cannot say. */
+export async function liveService(
+  mode: "system" | "user",
+  unit: string,
+  systemctl = "systemctl",
+): Promise<ServiceState | null> {
+  let text: string;
+  try {
+    text = await runProgram(
+      systemctl,
+      [...(mode === "user" ? ["--user"] : []), "show", "-p", "MainPID", "-p", "NRestarts", unit],
+      { timeoutMs: 30_000 },
+    );
+  } catch {
+    return null;
+  }
+  const field = (name: string): number | null => {
+    const match = new RegExp(`^${name}=(\\d+)$`, "mu").exec(text);
+    return match === null ? null : Number(match[1]);
+  };
+  const mainPid = field("MainPID");
+  const restarts = field("NRestarts");
+  return mainPid === null || restarts === null ? null : { mainPid, restarts };
 }

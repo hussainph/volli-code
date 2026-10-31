@@ -34,9 +34,14 @@ const input = (values: CommandInput["values"] = {}, positionals: string[] = []):
   positionals,
 });
 
+function release(name: string, version = name): void {
+  mkdirSync(join(layout.releasesDir, name), { recursive: true });
+  writeFileSync(join(layout.releasesDir, name, "MANIFEST.json"), JSON.stringify({ version }));
+}
+
 function installed(version = "0.3.0"): void {
-  mkdirSync(join(layout.releasesDir, version), { recursive: true });
-  pointCurrentAt(layout, version);
+  release(version);
+  pointCurrentAt(layout, join("releases", version));
 }
 
 function context(update: Parameters<typeof testContext>[0]["update"] = {}) {
@@ -55,6 +60,7 @@ describe("update", () => {
       installRoot: layout.installRoot,
       current: "0.3.0",
       staged: null,
+      activating: null,
       previous: "0.2.0",
       bad: [],
       lastOutcome: null,
@@ -139,7 +145,7 @@ describe("update --now", () => {
 describe("update apply", () => {
   it("is idle without a request", async () => {
     installed();
-    const ctx = context();
+    const ctx = testContext({ root, env: { XDG_DATA_HOME: join(root, "share") } });
     expect(await UPDATE_COMMAND.run(input({}, ["apply"]), ctx)).toBe(0);
     expect(JSON.parse(ctx.stdout())).toEqual({ kind: "idle", why: "no request" });
   });
@@ -172,10 +178,15 @@ describe("update apply", () => {
 
   it("applies with the live context's ports", async () => {
     installed();
-    mkdirSync(join(layout.releasesDir, "0.4.0"));
-    writeUpdaterState(layout.stateFile, { ...EMPTY_STATE, staged: "0.4.0" });
+    release("0.4.0");
+    writeUpdaterState(layout.stateFile, {
+      ...EMPTY_STATE,
+      staged: { version: "0.4.0", name: "0.4.0" },
+    });
+    let clock = 0;
     writeUpdateRequest(layout.requestFile, { phase: "activate", version: "0.4.0", urgent: true });
     const restarts: string[] = [];
+    const services: string[] = [];
     const statusFile = join(layout.dataDir, "runner-status.json");
     const ctx = testContext({
       root,
@@ -189,8 +200,14 @@ describe("update apply", () => {
             JSON.stringify({ state: "starting", pid: 2, version: "0.4.0" }),
           );
         },
+        service: async (mode, unit) => {
+          services.push(`${mode} ${unit}`);
+          return { mainPid: 2, restarts: 0 };
+        },
       },
-      sleep: async () => {
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
         writeFileSync(statusFile, JSON.stringify({ state: "online", pid: 2, version: "0.4.0" }));
       },
       statusProbes: { read: () => null, alive: () => true, accepts: async () => true },
@@ -198,6 +215,7 @@ describe("update apply", () => {
     expect(await UPDATE_COMMAND.run(input({}, ["apply"]), ctx)).toBe(0);
     expect(JSON.parse(ctx.stdout())).toEqual({ kind: "applied", version: "0.4.0", from: "0.3.0" });
     expect(restarts).toEqual(["user volli-runner.service"]);
+    expect(services[0]).toBe("user volli-runner.service");
     expect(readFileSync(layout.stateFile, "utf8")).toContain("update_applied");
   });
 

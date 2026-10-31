@@ -16,7 +16,14 @@ import { BUILD_DEPLOYMENT } from "./link/deployment";
 import { RUNNER_LIVE_PROBES } from "./shell/runner-status";
 import { abortableSleep } from "./shell/sleep";
 import { RUNNER_VERSION } from "./shell/version";
-import { liveDownload, liveExtract, liveFetchText, liveProbe, liveRestart } from "./update/live";
+import {
+  liveDownload,
+  liveExtract,
+  liveFetchText,
+  liveProbe,
+  liveRestart,
+  liveService,
+} from "./update/live";
 import { sigstoreProvenance } from "./update/provenance";
 
 async function main(): Promise<number> {
@@ -61,6 +68,7 @@ async function main(): Promise<number> {
       extract: liveExtract,
       probe: liveProbe,
       restart: (mode, unit) => liveRestart(mode, unit),
+      service: (mode, unit) => liveService(mode, unit),
       provenance: (cachePath) => sigstoreProvenance({ cachePath }),
     },
   };

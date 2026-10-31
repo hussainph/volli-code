@@ -6,7 +6,7 @@
  * backend still accepts). In order:
  *
  * 1. A runner nothing supervises (a foreground `run`) never updates itself:
- *    nothing would restart it. `volli-runner update` says so.
+ *    nothing would restart it; its status's `update` says `unsupervised`.
  * 2. `volli-runner update --now [--to <v>]` asks for an update now.
  * 3. Below the floor, it updates to the target even with auto-update off:
  *    opting out never strands a runner Volli no longer accepts.
@@ -62,7 +62,7 @@ const newer = (version: string | null, than: string): version is string =>
 export function decideUpdate(inputs: PolicyInputs): UpdateDecision {
   if (!inputs.supervised) return { kind: "none", why: "unsupervised" };
   const pick = (version: string, reason: UpdateReason): UpdateDecision =>
-    inputs.bad.includes(version)
+    inputs.bad.includes(version) && inputs.now?.version !== version
       ? { kind: "none", why: `release ${version} failed here before` }
       : { kind: "update", version, reason, urgent: reason !== "target" };
   const { running, target } = inputs;
