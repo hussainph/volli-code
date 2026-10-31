@@ -23,12 +23,12 @@ export type MoveFault = "comment" | "transcript" | "pi" | "piTruncated" | "blob"
  * holding base64 text, the way an inline image or a large tool output sits
  * in a real Pi log. Deterministic, and about as compressible as real images.
  */
-export function longPiLine(bytes: number): string {
-  return Buffer.concat([...longPiLinePieces(bytes)]).toString("utf8");
+export function longPiLine(bytes: number, secret?: string): string {
+  return Buffer.concat([...longPiLinePieces(bytes, secret)]).toString("utf8");
 }
 
 /** {@link longPiLine}'s bytes in pieces of at most 64 KiB: a fixture never holds a long line whole. */
-export function* longPiLinePieces(bytes: number): Generator<Buffer> {
+export function* longPiLinePieces(bytes: number, secret?: string): Generator<Buffer> {
   const head = '{"type":"message","image":"';
   const tail = '"}\n';
   let fill = bytes - head.length - tail.length;
@@ -40,6 +40,11 @@ export function* longPiLinePieces(bytes: number): Generator<Buffer> {
   }
   const text = Buffer.from(block.toString("base64"));
   yield Buffer.from(head);
+  // A credential the redactor knows, first thing in the text: the line must change.
+  if (secret !== undefined) {
+    yield Buffer.from(secret);
+    fill -= Buffer.byteLength(secret);
+  }
   for (; fill > 0; fill -= text.length) yield text.subarray(0, Math.min(fill, text.length));
   yield Buffer.from(tail);
 }
@@ -56,6 +61,8 @@ export function writeMoveProfile(
     now?: number;
     /** One Pi line this long (newline included) in the middle of the moved Session's Pi log. */
     piLongLineBytes?: number;
+    /** A credential value written into that line. */
+    piLongLineSecret?: string;
   } = {},
 ) {
   const now = options.now ?? Date.now();
@@ -266,7 +273,7 @@ export function writeMoveProfile(
       const lines = `${JSON.stringify({ type: "message", text: "Pi continuity 🧭" })}\n`;
       writeFileSync(piFile, lines.repeat(15000));
       if (options.piLongLineBytes !== undefined)
-        for (const piece of longPiLinePieces(options.piLongLineBytes))
+        for (const piece of longPiLinePieces(options.piLongLineBytes, options.piLongLineSecret))
           appendFileSync(piFile, piece);
       appendFileSync(piFile, lines.repeat(15000));
       // Pi stopped partway through writing its last line.

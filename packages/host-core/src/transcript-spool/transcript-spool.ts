@@ -639,8 +639,8 @@ export class TranscriptSpool {
         }
         const line = Buffer.alloc(lineBytes);
         const read = await handle.read(line, 0, lineBytes, offset);
-        if (read.bytesRead !== lineBytes) throw new Error(`A Pi session file shrank: ${piFileId}`);
-        return line;
+        // Rewritten since its end was found: nothing is uploaded this pass.
+        return read.bytesRead === lineBytes && line[lineBytes - 1] === NEWLINE ? line : null;
       }
     } finally {
       await handle.close();
@@ -657,6 +657,8 @@ export class TranscriptSpool {
     let start = 0;
     while (start < source.length) {
       const end = source.indexOf(NEWLINE, start);
+      // `#completeLines` only answers whole lines; never loop on a range that is not.
+      if (end === -1) throw new Error("A Pi log range must end in a newline");
       const line = source.subarray(start, end);
       const redacted = this.#redactLine(line);
       if (redacted !== line) changed = true;

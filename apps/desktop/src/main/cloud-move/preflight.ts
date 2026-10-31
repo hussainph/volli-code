@@ -345,7 +345,11 @@ function problemOf(error: unknown): { code: string; message: string; sessionId?:
       "This Session’s Pi log ends partway through an entry, so its history can’t be copied whole.",
     );
   if (code === "source_corrupt" && sessionId !== undefined)
-    return named("This Session’s Pi log is missing or unreadable, so this project can’t move yet.");
+    return named(
+      String((error as Error)?.message).endsWith("changed during export")
+        ? "This Session’s Pi log changed while the dry run read it. Run the dry run again."
+        : "This Session’s Pi log is missing or unreadable, so this project can’t move yet.",
+    );
   if (code === "disk_full" || code === "ENOSPC")
     return { code: "disk_full", message: "Free disk space, then run the dry run again." };
   if (code === "row_refused" || code === "row_unstorable")

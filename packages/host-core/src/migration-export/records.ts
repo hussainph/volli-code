@@ -31,7 +31,7 @@
  */
 
 import type { AutomationSchedule } from "@volli/shared";
-import { MIGRATION_PLACEHOLDERS, PI_LOG_LINE_MAX_BYTES } from "@volli/shared/cloud";
+import { MIGRATION_PLACEHOLDERS } from "@volli/shared/cloud";
 
 /** The manifest's format marker; a reader checks it before anything else. */
 export const MIGRATION_EXPORT_FORMAT = "volli.migration-export/1";
@@ -49,13 +49,17 @@ export const PI_SLICE_BYTES = 1024 * 1024;
 
 /**
  * The longest Pi line (newline included) a move carries. The runner's spool
- * uploads a line of up to `PI_LOG_LINE_MAX_BYTES` (one object), but it holds
- * a line several times over while it redacts and compresses it, and a move
- * stays within 500 MB of memory (`moveEngine.rss.matrix.test.ts`, measured
- * with a line this long): half an object keeps that true. Real logs' longest
- * lines (inline images, large tool outputs) are a fraction of it.
+ * uploads a line of up to `PI_LOG_LINE_MAX_BYTES` (one object), but it
+ * redacts a JSON line in its decoded form: the line, its text, the parsed
+ * value and, when a credential is in it, the redacted text and its JSON are
+ * each held whole, about ten times the line at the peak with garbage not yet
+ * collected. A move stays within 500 MB of memory
+ * (`moveEngine.rss.matrix.test.ts`, measured with a line this long holding a
+ * known credential: 411–442 MiB; 24 MiB measured up to 536 MiB). The longest
+ * line in the owner's 4,778 logs is 19.2 MB. Raising this needs redaction that
+ * streams a long line rather than parsing it whole.
  */
-export const PI_MOVE_LINE_MAX_BYTES = PI_LOG_LINE_MAX_BYTES / 2;
+export const PI_MOVE_LINE_MAX_BYTES = 20 * 1024 * 1024;
 
 /** The exporter and verifier share the promise that a move carries no queued work. */
 export const PENDING_RUNNER_FACTS = [

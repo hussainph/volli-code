@@ -35,9 +35,14 @@ export interface ScannedChunk {
 const READ_BLOCK_BYTES = 1024 * 1024;
 const NEWLINE = 0x0a;
 
-/** Reads the chunk at `path`, feeding each line to a fresh sink from `sinkFor(lineNumber)`. */
+/**
+ * Reads the chunk at `path`, feeding each line to a fresh sink from
+ * `sinkFor(lineNumber)`. Stops one byte past `expectedBytes`: a longer file is
+ * already the wrong one, and is never read whole.
+ */
 export async function scanChunkLines(
   path: string,
+  expectedBytes: number,
   sinkFor: (lineNumber: number) => LineSink,
 ): Promise<ScannedChunk> {
   const handle = await open(path, "r");
@@ -58,7 +63,9 @@ export async function scanChunkLines(
   };
   try {
     for (;;) {
-      const { bytesRead } = await handle.read(block, 0, block.length, bytes);
+      const want = Math.min(block.length, expectedBytes + 1 - bytes);
+      if (want <= 0) break;
+      const { bytesRead } = await handle.read(block, 0, want, bytes);
       if (bytesRead === 0) break;
       const view = block.subarray(0, bytesRead);
       hash.update(view);

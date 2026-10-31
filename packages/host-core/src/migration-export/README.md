@@ -62,9 +62,9 @@ check actual runtime liveness before invoking this exporter.
   `startOffset`, `endOffset`, total `fileBytes`, `sourceBytes`, `sourceSha256` and
   `base64`. Ranges are contiguous from zero and end on complete JSONL lines: a
   range is the complete lines within 1 MiB (`PI_SLICE_BYTES`), or one longer
-  line alone, an indivisible record of up to 32 MiB (`PI_MOVE_LINE_MAX_BYTES`,
-  half of one stored object, so the runner's spool uploads it inside the move's
-  500 MB memory budget). A long line is read twice in pieces (measured and
+  line alone, an indivisible record of up to 20 MiB (`PI_MOVE_LINE_MAX_BYTES`:
+  what the runner's spool uploads inside the move's 500 MB memory budget even
+  when redaction changes it; one object could hold 64 MiB). A long line is read twice in pieces (measured and
   hashed, then base64-encoded straight into a chunk of its own, rehashed and
   refused if it changed), never held whole, and its record's bytes are exactly
   `JSON.stringify` of the record with `base64` last. A longer line refuses the
@@ -127,6 +127,6 @@ either path leaves no published export. `verifyMigrationExport` rechecks chunk
 hashes, sizes and counts **and** transcript digest coverage / Pi range coverage,
 reading chunks in blocks rather than whole: a Pi range longer than a couple of
 MiB is decoded and hashed as it streams (`chunk-lines.ts`), and a range over
-1 MiB must be exactly one line of at most 32 MiB.
+1 MiB must be exactly one line of at most 20 MiB.
 Bulk chunks honor the export's optional chunk byte/record limits (a single
 artifact or Pi slice is indivisible), otherwise they share the database streams' default of 8 MiB / 50k rows.

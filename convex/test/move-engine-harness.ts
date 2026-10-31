@@ -83,12 +83,18 @@ export function writeMoveFixture(
   root: string,
   artifacts = 12,
   piLongLineBytes = PI_FIXTURE_LONG_LINE_BYTES,
+  piLongLineSecret?: string,
 ) {
   // Transcript bodies (mixed plain and gzip) and a multi-slice Pi log on the
   // moved project's busiest Session, so its history uploads too. The Pi log
   // holds one line longer than an export slice (VC-1030), as real logs with
   // inline images and large tool outputs do.
-  return writeMoveProfile(root, { artifacts, now: 1_790_000_000_000, piLongLineBytes });
+  return writeMoveProfile(root, {
+    artifacts,
+    now: 1_790_000_000_000,
+    piLongLineBytes,
+    ...(piLongLineSecret === undefined ? {} : { piLongLineSecret }),
+  });
 }
 
 /** The fixture's long Pi line: twice an export slice. */
@@ -119,7 +125,10 @@ export async function moveWorld(
   fixture: {
     artifacts?: number;
     piLongLineBytes?: number;
-    /** Credential values the history redactor knows, as a person with stored keys has. */
+    /**
+     * Credential values the history redactor knows, as a person with stored
+     * keys has. The first is written into the long Pi line, so it is redacted.
+     */
     secrets?: readonly string[];
   } = {},
 ): Promise<MoveWorld> {
@@ -135,6 +144,7 @@ export async function moveWorld(
     join(root, "profile"),
     fixture.artifacts,
     fixture.piLongLineBytes,
+    fixture.secrets?.[0],
   );
   const db = openRawDb(profile.dbPath);
   db.pragma("foreign_keys = ON");

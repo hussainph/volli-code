@@ -228,7 +228,7 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
       };
       let scanned: Awaited<ReturnType<typeof scanChunkLines>>;
       try {
-        scanned = await scanChunkLines(where, (index) =>
+        scanned = await scanChunkLines(where, chunk.bytes, (index) =>
           stream.name === "piLogs"
             ? piRecordLine(chunk.file, index, checkLine, parsedLine(index))
             : wholeLine(parsedLine(index)),

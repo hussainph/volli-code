@@ -499,7 +499,7 @@ describe("Pi lines longer than a slice (VC-1030)", () => {
       "a line longer than a move carries",
       { piLongLineBytes: PI_MOVE_LINE_MAX_BYTES + 1 },
       "pi_log_too_large",
-      "This Session’s Pi log has an entry over 32 MiB, more than a move carries, so this project stays on this Mac. Other projects can still move.",
+      "This Session’s Pi log has an entry over 20 MiB, more than a move carries, so this project stays on this Mac. Other projects can still move.",
     ],
     [
       "a log that ends partway through a line",

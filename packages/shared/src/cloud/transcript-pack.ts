@@ -58,7 +58,7 @@ export const SESSION_OBJECT_MAX_BYTES = 64 * 1024 * 1024;
 /**
  * The longest Pi log line (its newline included, in source bytes) uploaded:
  * one line is never split, so it must fit one object. A runner stops a file
- * at a longer line, and a move refuses the project that holds one.
+ * at a longer line. A move carries less (host-core's `PI_MOVE_LINE_MAX_BYTES`).
  */
 export const PI_LOG_LINE_MAX_BYTES = SESSION_OBJECT_MAX_BYTES;
 

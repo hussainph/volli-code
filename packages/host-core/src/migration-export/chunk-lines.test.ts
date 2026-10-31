@@ -25,7 +25,7 @@ describe("scanChunkLines", () => {
     const path = join(root, "chunk.ndjson");
     writeFileSync(path, content);
     const lines: string[] = [];
-    const scanned = await scanChunkLines(path, (index) =>
+    const scanned = await scanChunkLines(path, Buffer.byteLength(content), (index) =>
       wholeLine((text) => {
         if (index === fail) throw new Error(`line ${index}`);
         lines.push(text);
@@ -46,6 +46,13 @@ describe("scanChunkLines", () => {
       fault: null,
     });
     expect(scanned.texts).toEqual(["a", "", long, "b"]);
+  });
+
+  it("stops one byte past what the file should hold", async () => {
+    const path = join(root, "long.ndjson");
+    writeFileSync(path, "x".repeat(3 * MiB));
+    const scanned = await scanChunkLines(path, MiB + 5, () => wholeLine(() => {}));
+    expect(scanned.bytes).toBe(MiB + 6);
   });
 
   it("says when the file ends mid-line, and when it is empty", async () => {

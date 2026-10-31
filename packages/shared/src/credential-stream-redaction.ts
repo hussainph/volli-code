@@ -99,9 +99,19 @@ function concat(parts: readonly Uint8Array[]): Uint8Array {
  * Exact-value matching for a fixed set of values, each with its replacement
  * marker. Build a new one when the set changes; stepping is pure.
  */
+/** Offsets of scratch a redactor keeps between steps: a 1 MiB push with its retained context. */
+const SCRATCH_KEPT = 4 * 1024 * 1024;
+
 export class ExactValueByteRedactor {
   readonly #values: readonly CompiledValue[];
   readonly #longest: number;
+  /**
+   * The per-offset scratch a step needs, kept for the next step: a long
+   * string streams through in many windows, and an array pair per window
+   * would leave eight bytes of garbage per byte redacted. Kept only up to
+   * {@link SCRATCH_KEPT}; a larger window gets arrays of its own.
+   */
+  #scratch: { lengths: Uint32Array; owner: Uint32Array } | null = null;
 
   /** Empty values are ignored: they can match nothing. */
   constructor(entries: Iterable<readonly [value: string, marker: string]>) {
@@ -115,6 +125,17 @@ export class ExactValueByteRedactor {
     this.#longest = Math.max(0, ...values.map((value) => value.bytes.length));
   }
 
+  /** Zeroed arrays of at least `length` (a step is synchronous, so one pair serves every step). */
+  #scratchFor(length: number): { lengths: Uint32Array; owner: Uint32Array } {
+    if (length > SCRATCH_KEPT)
+      return { lengths: new Uint32Array(length), owner: new Uint32Array(length) };
+    if (this.#scratch === null || this.#scratch.lengths.length < length)
+      this.#scratch = { lengths: new Uint32Array(length), owner: new Uint32Array(length) };
+    else this.#scratch.lengths.fill(0, 0, length);
+    // `owner` is only read where `lengths` is set, which sets it too.
+    return this.#scratch;
+  }
+
   /** See {@link CredentialStreamStepper}. */
   step(window: Uint8Array, from: number, final: boolean): CredentialStreamStep {
     const length = window.length;
@@ -125,8 +146,7 @@ export class ExactValueByteRedactor {
       return { bytes: window.subarray(from), consumed: length, context: 0 };
     }
     // The longest complete value starting at each offset, and which one it is.
-    const lengths = new Uint32Array(length);
-    const owner = new Uint32Array(length);
+    const { lengths, owner } = this.#scratchFor(length);
     // Bytes from `hold` on may still begin a value the next chunk completes.
     let hold = length;
     for (let index = 0; index < this.#values.length; index += 1) {

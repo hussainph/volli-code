@@ -41,9 +41,9 @@ const PUSH_BYTES = 1024 * 1024;
 /** One string, redacted whole: its own stream, pushed in pieces and ended. */
 export function redactString(text: string, step: CredentialStreamStepper): string {
   if (text.length === 0) return text;
-  // Nearly every long string holds no value: that is checked a piece at a
-  // time, never encoding it whole. One that does is redacted below.
-  if (text.length > PUSH_BYTES && unchanged(text, step)) return text;
+  // A long string is never encoded whole. Nearly every one holds no value,
+  // which is checked a piece at a time; one that does is redacted that way too.
+  if (text.length > PUSH_BYTES) return unchanged(text, step) ? text : redactedInPieces(text, step);
   const input = encoder.encode(text);
   const stream = new CredentialRedactionStream(step);
   // Output that so far repeats the input is not kept: `same` bytes of it.
@@ -60,6 +60,22 @@ export function redactString(text: string, step: CredentialStreamStepper): strin
   // UTF-8 cannot carry) is never rewritten as U+FFFD by a no-op pass.
   if (parts === null && same === input.length) return text;
   return decoder.decode(joined([input.subarray(0, same), ...(parts ?? [])]));
+}
+
+/** A long string redacted a piece at a time: only its redacted text is built whole. */
+function redactedInPieces(text: string, step: CredentialStreamStepper): string {
+  const stream = new CredentialRedactionStream(step);
+  const piece = new Uint8Array(PUSH_BYTES);
+  const out = new TextDecoder();
+  const parts: string[] = [];
+  for (let read = 0; read < text.length;) {
+    const encoded = encoder.encodeInto(read === 0 ? text : text.slice(read), piece);
+    read += encoded.read;
+    // The stream copies what it keeps, and its answer is decoded before `piece` is reused.
+    parts.push(out.decode(stream.push(piece.subarray(0, encoded.written)), { stream: true }));
+  }
+  parts.push(out.decode(stream.end()));
+  return parts.join("");
 }
 
 /**
