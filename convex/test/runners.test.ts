@@ -1756,6 +1756,8 @@ describe("Settings → Runners", () => {
       installMode: "system",
       linkedVia: "install_token",
       linkedAt: expect.any(Number),
+      autoUpdate: { enabled: true, channel: "stable", pinnedVersion: null },
+      update: null,
     });
     await expect(t.query(api.runners.list, {})).rejects.toThrow(code("unauthenticated"));
   });

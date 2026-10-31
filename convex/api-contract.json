@@ -4338,6 +4338,14 @@
       "kind": "query",
       "returns": null
     },
+    "runnerReleases:target": {
+      "args": {
+        "type": "object",
+        "value": {}
+      },
+      "kind": "query",
+      "returns": null
+    },
     "runners:createInstallToken": {
       "args": {
         "type": "object",
@@ -4689,6 +4697,66 @@
         "type": "object",
         "value": {
           "installTokenId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          }
+        }
+      },
+      "kind": "mutation",
+      "returns": null
+    },
+    "runners:setAutoUpdate": {
+      "args": {
+        "type": "object",
+        "value": {
+          "channel": {
+            "fieldType": {
+              "type": "union",
+              "value": [
+                {
+                  "type": "literal",
+                  "value": "canary"
+                },
+                {
+                  "type": "literal",
+                  "value": "stable"
+                }
+              ]
+            },
+            "optional": true
+          },
+          "enabled": {
+            "fieldType": {
+              "type": "boolean"
+            },
+            "optional": false
+          },
+          "runnerId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          }
+        }
+      },
+      "kind": "mutation",
+      "returns": null
+    },
+    "runners:unlinkSelf": {
+      "args": {
+        "type": "object",
+        "value": {}
+      },
+      "kind": "mutation",
+      "returns": null
+    },
+    "runners:updateNow": {
+      "args": {
+        "type": "object",
+        "value": {
+          "runnerId": {
             "fieldType": {
               "type": "string"
             },

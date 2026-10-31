@@ -231,6 +231,7 @@ export const PURGE_TABLES: Readonly<Record<TableNames, PurgeDisposition>> = {
   runnerLinkRateLimits: { kept: RUNNER },
   runnerEvents: { kept: RUNNER },
   releaseChannels: { kept: "the deployment's release feed" },
+  runnerReleaseFeeds: { kept: "the deployment's public release-page cache" },
   runnerLocalCredentials: { kept: RUNNER },
   runnerPrefs: { kept: RUNNER },
   workingCopies: "deleted",
