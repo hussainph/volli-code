@@ -80,6 +80,18 @@ function encoded(artifact: CloudMessageArtifact): CloudMessageBody {
   return { body, bytes: utf8ToBytes(body).length, reference: referenceOf(body) };
 }
 
+/**
+ * A message's visible text: its text parts, one per line. What a heuristic
+ * title and an automatic model choice read; files and data parts say nothing.
+ */
+export function cloudMessageText(message: Pick<CloudUiMessage, "parts">): string {
+  return message.parts
+    .flatMap((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+    )
+    .join("\n");
+}
+
 /** The artifact the runtime writes for a message sent as `commandId`. */
 export function cloudMessageArtifact(input: {
   sessionId: string;

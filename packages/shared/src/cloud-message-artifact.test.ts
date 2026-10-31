@@ -9,6 +9,7 @@ import {
   cloudInteractionResolve,
   cloudMessageArtifact,
   cloudMessageSubmit,
+  cloudMessageText,
   readCloudMessageBody,
 } from "./cloud-message-artifact";
 import { INLINE_ARTIFACT_MAX_BYTES } from "./cloud/transcript-pack";
@@ -133,4 +134,20 @@ describe("cloudInteractionResolve", () => {
       cloudInteractionResolve(answer).reference,
     );
   });
+});
+
+test("a message's visible text is its text parts, one per line", () => {
+  expect(
+    cloudMessageText({
+      parts: [
+        { type: "text", text: "Fix the test" },
+        { type: "file", url: "x" },
+        null,
+        "text",
+        { type: "text", text: 3 },
+        { type: "text", text: "on CI" },
+      ],
+    }),
+  ).toBe("Fix the test\non CI");
+  expect(cloudMessageText({ parts: [] })).toBe("");
 });
