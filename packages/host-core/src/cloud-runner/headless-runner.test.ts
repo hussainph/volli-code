@@ -352,20 +352,22 @@ describe("headless runner lifecycle", () => {
     },
   );
 
-  it.each([{ status: 401 }, { data: { code: "revoked" } }])(
-    "goes idle on an auth refusal %j",
-    async (error) => {
-      const h = harness();
-      h.backend.mockRejectedValueOnce(error);
-      await h.runner.start();
-      await flush();
-      expect(h.runner.snapshot().state).toBe("revoked");
-      expect(h.clients[0]!.close).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(h.clients).toHaveLength(1);
-      await h.runner.stop();
-    },
-  );
+  it.each([
+    { status: 401 },
+    { data: { code: "revoked" } },
+    { code: "revoked", data: {} },
+    { code: "invalid_credential" },
+  ])("goes idle on an auth refusal %j", async (error) => {
+    const h = harness();
+    h.backend.mockRejectedValueOnce(error);
+    await h.runner.start();
+    await flush();
+    expect(h.runner.snapshot().state).toBe("revoked");
+    expect(h.clients[0]!.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.clients).toHaveLength(1);
+    await h.runner.stop();
+  });
 
   it("treats even an unstructured HTTP 401 during token exchange as revoked", async () => {
     const h = harness();
@@ -912,6 +914,34 @@ describe("headless runner lifecycle", () => {
     h.clients[0]!.setConnected(true);
     await flush();
     expect(h.runner.snapshot().state).toBe("online");
+    await h.runner.stop();
+  });
+
+  it("does not restart presence if composition stops it in the pre-start microtask", async () => {
+    const h = harness({
+      sync: (parts) => {
+        const setState = parts.presence.setState.bind(parts.presence);
+        parts.presence.setState = async (...args) => {
+          await setState(...args);
+          void h.runner.stop();
+        };
+        return fakeSync();
+      },
+    });
+    await h.runner.start();
+    await h.runner.stop();
+    expect(h.backend).not.toHaveBeenCalled();
+    expect(h.clients[0]!.close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not restart a stopped presence even before the lifecycle itself stops", async () => {
+    const h = harness();
+    await h.runner.start();
+    await h.runner.connection!.presence.stop();
+    const before = h.backend.mock.calls.length;
+    await h.runner.connection!.presence.start();
+    expect(h.backend.mock.calls).toHaveLength(before);
     await h.runner.stop();
   });
 

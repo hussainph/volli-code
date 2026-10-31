@@ -95,7 +95,12 @@ export const HEADLESS_RUNNER_RETRY = { baseMs: 1_000, maxMs: 60_000 } as const;
 function unauthorized(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const fields = error as { status?: unknown; code?: unknown };
-  return fields.status === 401 || isRevokedError(error) || fields.code === "invalid_credential";
+  return (
+    fields.status === 401 ||
+    fields.code === "revoked" ||
+    isRevokedError(error) ||
+    fields.code === "invalid_credential"
+  );
 }
 
 export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRunner {
@@ -395,9 +400,12 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
     // Sync also calls start(); this identity owns exactly one initial beat.
     const startPresence = presence.start.bind(presence);
     let presenceStarting: Promise<void> | null = null;
-    presence.start = () => (presenceStarting ??= startPresence());
-    const stopPresence = presence.stop.bind(presence);
     let presenceStopping: Promise<void> | null = null;
+    presence.start = () => {
+      if (ended || presenceStopping !== null) return Promise.resolve();
+      return (presenceStarting ??= startPresence());
+    };
+    const stopPresence = presence.stop.bind(presence);
     presence.stop = () => (presenceStopping ??= stopPresence());
     connection = {
       link,
