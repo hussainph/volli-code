@@ -35,6 +35,7 @@ test("the cloud entry point exposes each module", () => {
     "extractGithubEvent",
     "sessionPlaceState",
     "runnerPlaceAvailability",
+    "composerDefaultRunnerId",
   ]) {
     expect(typeof (cloud as Record<string, unknown>)[name]).toBe("function");
   }
