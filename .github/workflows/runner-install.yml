@@ -1,0 +1,59 @@
+name: Runner install (systemd)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/runner-install.yml
+      - apps/runner/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/runner-install.yml
+      - apps/runner/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    name: Runner install (user + system; unlinked fixture)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VOLLI_CONCURRENCY_HINT: "2"
+      MAKEFLAGS: -j2
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cache: true
+          run-install: true
+
+      - name: Build the real runner CLI
+        run: vp run --filter @volli/runner build
+
+      - name: Stage the installer payload with a labelled unlinked runtime fixture
+        run: node apps/runner/src/install/ci/prepare.mjs "$RUNNER_TEMP/runner-install-payload"
+
+      - name: Verify user and system install under real systemd
+        run: bash apps/runner/src/install/ci/run.sh "$RUNNER_TEMP/runner-install-payload" "$RUNNER_TEMP/runner-install-evidence"
+
+      - name: Upload installer proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runner-install-systemd-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runner-install-evidence
+          if-no-files-found: warn
+          retention-days: 30

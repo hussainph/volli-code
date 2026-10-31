@@ -12,12 +12,18 @@ mkdir -p "$evidence"
 image=volli-installer-systemd:ci
 box=
 mode=
+capture_journal() {
+  local -a filters=(-u volli-runner.service)
+  if [ "$mode" = user ]; then filters=("_SYSTEMD_USER_UNIT=volli-runner.service" "_UID=2000"); fi
+  docker exec "$box" journalctl --no-pager -n 100 "${filters[@]}"
+}
 cleanup() {
   local code=$?
   trap - EXIT
   if [ -n "$box" ]; then
     docker logs "$box" >"$evidence/$mode-container.log" 2>&1 || true
-    docker exec "$box" journalctl --no-pager -u volli-runner.service -n 100 >"$evidence/$mode-journal.log" 2>&1 || true
+    capture_journal >"$evidence/$mode-journal.log" 2>&1 || true
+    docker exec "$box" journalctl --no-pager -b -n 150 >"$evidence/$mode-boot.log" 2>&1 || true
     docker rm --force "$box" >/dev/null 2>&1 || true
   fi
   exit "$code"
@@ -37,9 +43,10 @@ for mode in system user; do
   done
   case "$state" in running|degraded) ;; *) echo "systemd did not boot after $attempt checks: $state" >&2; exit 1 ;; esac
   docker exec "$box" bash /check/check-case.sh "$mode"
-  docker cp "$box:/tmp/install-result.json" "$evidence/$mode.json"
+  # Archive/cp cannot reliably read tmpfs mounts; stream the live file instead.
+  docker exec "$box" cat /tmp/install-result.json >"$evidence/$mode.json"
   docker logs "$box" >"$evidence/$mode-container.log" 2>&1 || true
-  docker exec "$box" journalctl --no-pager -u volli-runner.service -n 100 >"$evidence/$mode-journal.log" 2>&1 || true
+  capture_journal >"$evidence/$mode-journal.log" 2>&1 || true
   docker rm --force "$box" >/dev/null
   box=
 done
