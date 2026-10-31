@@ -10,7 +10,7 @@
  * The adaptation is restored after the run and expires with the next newer tag.
  */
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compareVersions, parseVersion } from "./tags.mjs";
 
@@ -164,8 +164,8 @@ export function installLegalFixture(tree, entry, backendUrl) {
     const after = `export const PREVIEW_ENROLLMENT_AGREEMENT_VERSION = ${JSON.stringify(entry.toVersion)};`;
     if (original.split(before).length !== 2)
       throw new Error("The exact frozen agreement declaration is missing or duplicated");
-    if (existsSync(probe)) throw new Error("Refusing to overwrite an existing consent probe");
     adapted = original.replace(before, after);
+    // Atomic exclusive creation is the only existence check; never check then write.
     writeFileSync(probe, generated, { flag: "wx" });
     wroteProbe = true;
     writeFileSync(path, adapted);

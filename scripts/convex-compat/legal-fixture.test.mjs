@@ -130,10 +130,7 @@ test("no adaptation can reach a cloud deployment or accept a changed module", ()
     assert.equal(existsSync(join(tree, ".legal-fixture.lock")), false);
     assert.equal(readFileSync(join(tree, modulePath), "utf8"), original);
     writeFileSync(join(tree, probePath), "someone else's file");
-    assert.throws(
-      () => installLegalFixture(tree, fixtureEntry, "http://localhost:3000"),
-      /overwrite/,
-    );
+    assert.throws(() => installLegalFixture(tree, fixtureEntry, "http://localhost:3000"), /EEXIST/);
     assert.equal(readFileSync(join(tree, probePath), "utf8"), "someone else's file");
     assert.equal(existsSync(join(tree, ".legal-fixture.lock")), false);
     rmSync(join(tree, probePath));
