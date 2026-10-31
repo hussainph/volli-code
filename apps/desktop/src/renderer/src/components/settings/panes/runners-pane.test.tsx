@@ -177,6 +177,7 @@ describe("Settings → Runners", () => {
     expect(runnerRow("old-linux").textContent).toContain("Needs an update");
     expect(runnerRow("old-linux").textContent).toContain("Version 0.2.9");
     await openMenu("old-linux");
+    expect(document.querySelector('[role="menu"]')?.textContent).toContain("Rename");
     expect(document.body.textContent).not.toContain("Update now");
     expect(document.body.textContent).not.toContain("Automatic updates");
   });
@@ -310,6 +311,7 @@ describe("Settings → Runners", () => {
         }),
       ]);
       await openMenu("box");
+      expect(document.querySelector('[role="menu"]')?.textContent).toContain("Rename");
       expect(document.body.textContent).not.toContain("Update now");
       expect(document.body.textContent).not.toContain("Automatic updates");
     },
