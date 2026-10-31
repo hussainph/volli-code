@@ -8,7 +8,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AccountGithubSnapshot, AccountSnapshot } from "@volli/shared";
 
-import { LOCAL_LAUNCH, PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
+import {
+  LOCAL_LAUNCH,
+  PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_URL,
+  PREVIEW_PRIVACY_URL,
+} from "@volli/shared";
 
 import { useExperimentsStore } from "@renderer/stores/experiments";
 import { adoptLaunch } from "@renderer/stores/launch";
@@ -163,7 +168,7 @@ describe("Settings → Account", () => {
     act(() => button("Continue with Google").click());
     expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
       connection: "google",
-      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      acceptedAgreementVersion: PREVIEW_AGREEMENT_VERSION,
     });
 
     tier.push({ ...SIGNED_OUT, state: "signing-in", signingInWith: "google" });
@@ -191,23 +196,41 @@ describe("Settings → Account", () => {
 
     act(() => button("Delete account…").click());
     expect(tier.rpc.account.requestDeletion.mutate).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Your account is deleted in 30 days.");
+    expect(document.body.textContent).toContain("You can cancel within 30 days");
+    expect(document.body.textContent).toContain("Automatic erasure is not available");
+    expect(document.body.textContent).toContain("privacy@volli.app");
+    expect(document.body.textContent).not.toContain("Your account is deleted in 30 days.");
     const confirm = [...document.querySelectorAll("[role=alertdialog] button")].find(
       (node) => node.textContent === "Delete account",
     ) as HTMLButtonElement;
     act(() => confirm.click());
     expect(tier.rpc.account.requestDeletion.mutate).toHaveBeenCalledOnce();
 
+    const cancellationDeadline = Date.now() + 86_400_000;
     tier.push({
       ...SIGNED_IN,
-      account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.UTC(2026, 10, 24) },
+      account: { ...SIGNED_IN.account!, deletionPurgeAfter: cancellationDeadline },
     });
-    expect(container.textContent).toContain("Scheduled");
+    expect(container.textContent).toContain("Cancel by");
+    expect(container.textContent).not.toContain("Scheduled");
     expect(container.textContent).toContain(
-      new Date(Date.UTC(2026, 10, 24)).getFullYear().toString(),
+      new Date(cancellationDeadline).getFullYear().toString(),
     );
     act(() => button("Restore account").click());
     expect(tier.rpc.account.cancelDeletion.mutate).toHaveBeenCalledOnce();
+  });
+
+  it("offers a privacy contact instead of restore after the cancellation window", () => {
+    const tier = standIn();
+    act(() => root.render(<AccountPane rpc={tier.rpc} />));
+    tier.push({
+      ...SIGNED_IN,
+      account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.now() - 1 },
+    });
+    expect(container.textContent).toContain("Cancellation window ended");
+    expect(container.textContent).toContain("privacy@volli.app");
+    expect(container.textContent).not.toContain("Restore account");
+    expect(tier.rpc.account.cancelDeletion.mutate).not.toHaveBeenCalled();
   });
 
   it("says when the backend is unreachable, and offers no deletion without one", async () => {
@@ -508,7 +531,7 @@ it("sends the optional preview invite code and leaves a waitlisted sign-in witho
   expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
     connection: "github",
     inviteCode: "preview-code-123456",
-    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    acceptedAgreementVersion: PREVIEW_AGREEMENT_VERSION,
   });
   tier.push({
     ...SIGNED_IN,
@@ -547,13 +570,27 @@ it("explains a short invite code before making an RPC call", () => {
   expect(tier.rpc.account.signIn.mutate).not.toHaveBeenCalled();
 });
 
-it("requires explicit agreement acceptance and links the legal pages before sign-in", () => {
+it("requires explicit 18+ agreement acceptance and links the legal pages before sign-in", () => {
   const tier = standIn();
   act(() => root.render(<AccountPane rpc={tier.rpc} />));
   tier.push(SIGNED_OUT);
   expect(button("Continue with GitHub").disabled).toBe(true);
-  expect(container.querySelector('a[href="https://volli.app/legal/preview/"]')).not.toBeNull();
-  expect(container.querySelector('a[href="https://volli.app/legal/privacy/"]')).not.toBeNull();
+  const links = container.querySelectorAll<HTMLAnchorElement>("[data-testid=account-sign-in] a");
+  expect([...links].map((link) => [link.textContent?.trim(), link.href])).toEqual([
+    ["Preview Agreement", PREVIEW_AGREEMENT_URL],
+    ["Privacy notice", PREVIEW_PRIVACY_URL],
+  ]);
+  for (const link of links) {
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener noreferrer");
+  }
+  expect(container.querySelectorAll('[aria-label="Accept Preview Agreement"]')).toHaveLength(1);
+  expect(container.querySelector("[data-testid=account-sign-in] label")?.textContent).toContain(
+    "I am at least 18 and agree to the",
+  );
+  expect(
+    container.querySelectorAll('[data-testid=account-sign-in] [role="checkbox"]'),
+  ).toHaveLength(1);
   acceptAgreement();
   expect(button("Continue with GitHub").disabled).toBe(false);
 });

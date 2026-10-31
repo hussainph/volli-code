@@ -388,18 +388,38 @@ describe("explicit preview agreement acceptance", () => {
     );
     await t.run((ctx) =>
       ctx.db.patch(user!._id, {
-        previewAgreementVersion: "old-version",
+        previewAgreementVersion: "preview-0.3-2026-10-25",
         previewAgreementAcceptedAt: 1,
       }),
     );
     expect((await client.mutation(api.accounts.ensureViewer, {})).previewAgreementAccepted).toBe(
       false,
     );
+    // A refresh must preserve the old receipt, not silently upgrade consent.
+    expect(await t.run((ctx) => ctx.db.get(user!._id))).toMatchObject({
+      previewAgreementVersion: "preview-0.3-2026-10-25",
+      previewAgreementAcceptedAt: 1,
+    });
+    await expect(client.query(api.workspaces.listMine, {})).rejects.toThrow(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: "preview_agreement_required" }),
+      }),
+    );
+    await expect(
+      client.mutation(api.accounts.ensureViewer, {
+        acceptedAgreementVersion: "preview-0.3-2026-10-25",
+      }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: "preview_agreement_required" }),
+      }),
+    );
     const accepted = await client.mutation(api.accounts.ensureViewer, {
       acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
     });
     expect(accepted.previewAgreementAccepted).toBe(true);
     const stored = await t.run((ctx) => ctx.db.get(user!._id));
+    expect(stored!.previewAgreementVersion).toBe(PREVIEW_ENROLLMENT_AGREEMENT_VERSION);
     expect(stored!.previewAgreementAcceptedAt).toBeGreaterThan(1);
   });
 });

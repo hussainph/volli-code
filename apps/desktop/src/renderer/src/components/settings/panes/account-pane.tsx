@@ -28,8 +28,11 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
-// TODO: use #1014’s shared legal URLs and keep this checkbox as the only sign-in disclosure.
-import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
+import {
+  PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_URL,
+  PREVIEW_PRIVACY_URL,
+} from "@volli/shared";
 import type {
   AccountConnection,
   AccountGithubInstallation,
@@ -59,6 +62,7 @@ import {
 import { toast } from "sonner";
 
 import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restart";
+import { useNow } from "@renderer/components/hosts/use-hosts";
 import { Checkbox } from "@renderer/components/ui/checkbox";
 import { Input } from "@renderer/components/ui/input";
 import { Button } from "@renderer/components/ui/button";
@@ -129,12 +133,12 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
             disabled={waiting}
           />
           <span>
-            I agree to the{" "}
-            <a href="https://volli.app/legal/preview/" target="_blank" rel="noreferrer">
+            I am at least 18 and agree to the{" "}
+            <a href={PREVIEW_AGREEMENT_URL} target="_blank" rel="noopener noreferrer">
               Preview Agreement
             </a>{" "}
             and acknowledge the{" "}
-            <a href="https://volli.app/legal/privacy/" target="_blank" rel="noreferrer">
+            <a href={PREVIEW_PRIVACY_URL} target="_blank" rel="noopener noreferrer">
               Privacy notice
             </a>
             .
@@ -152,12 +156,7 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
                 return;
               }
               act(
-                () =>
-                  commands.signIn(
-                    connection,
-                    code || undefined,
-                    PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
-                  ),
+                () => commands.signIn(connection, code || undefined, PREVIEW_AGREEMENT_VERSION),
                 "Sign-in",
               );
             }}
@@ -181,7 +180,7 @@ const CONNECTION = {
   { state: "ready" | "waiting" | "error"; label: string }
 >;
 
-function purgeDate(at: number): string {
+function cancellationDate(at: number): string {
   return new Date(at).toLocaleDateString(undefined, { dateStyle: "long" });
 }
 
@@ -368,6 +367,7 @@ function SignedIn({
 }) {
   const [confirming, setConfirming] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
+  const now = useNow(account.deletionPurgeAfter !== null, 30_000);
   const cloudLaunch = launchStore() === "cloud";
   const cloudEnabled = useExperimentsStore((state) => isExperimentOn(state.snapshot, "cloud"));
   return (
@@ -418,16 +418,24 @@ function SignedIn({
       {account.backend !== "none" ? (
         <PrefSection title="Deletion" icon={TrashIcon}>
           {account.deletionPurgeAfter !== null ? (
-            <PrefRow label="Scheduled">
-              <span className="text-ui">{purgeDate(account.deletionPurgeAfter)}</span>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => act(commands.cancelDeletion, "Restore")}
-              >
-                Restore account
-              </Button>
-            </PrefRow>
+            account.deletionPurgeAfter > now ? (
+              <PrefRow label="Cancel by">
+                <span className="text-ui">{cancellationDate(account.deletionPurgeAfter)}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => act(commands.cancelDeletion, "Restore")}
+                >
+                  Restore account
+                </Button>
+              </PrefRow>
+            ) : (
+              <PrefRow label="Request">
+                <span className="text-ui">
+                  Cancellation window ended. Email privacy@volli.app for help.
+                </span>
+              </PrefRow>
+            )
           ) : (
             <PrefRow label="Account">
               <Button
@@ -447,7 +455,9 @@ function SignedIn({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete your Volli account?</AlertDialogTitle>
             <AlertDialogDescription>
-              Your account is deleted in 30 days. Until then you can restore it here.
+              This blocks cloud access and disconnects GitHub and cloud devices. You can cancel
+              within 30 days, then reconnect them. Automatic erasure is not available in this
+              preview; email privacy@volli.app to complete deletion.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
