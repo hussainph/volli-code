@@ -14,6 +14,7 @@ import { parseRunnerArgv, usage, UsageError } from "./args";
 import { COMMANDS, type CommandContext } from "./commands";
 import { BUILD_DEPLOYMENT } from "./link/deployment";
 import { RUNNER_LIVE_PROBES } from "./shell/runner-status";
+import { readAll } from "./git/git-credential";
 import { abortableSleep } from "./shell/sleep";
 import { RUNNER_VERSION } from "./shell/version";
 import {
@@ -71,6 +72,7 @@ async function main(): Promise<number> {
       service: (mode, unit) => liveService(mode, unit),
       provenance: (cachePath) => sigstoreProvenance({ cachePath }),
     },
+    readStdin: () => readAll(process.stdin),
   };
   return parsed.command.run(parsed.input, context);
 }

@@ -27,7 +27,7 @@ import {
   type RunnerGithubTokenErrorCode,
 } from "@volli/shared/cloud";
 
-import type { Doc } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel.js";
 import { internalQuery, type QueryCtx } from "./_generated/server";
 import { requireRunner, type CallingRunner } from "./lib/runnerAuth";
 import { projectRepoOf, runnerProject } from "./lib/runnerContext";

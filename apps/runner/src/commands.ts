@@ -26,6 +26,7 @@ import type { RunnerHostFacts } from "@volli/shared/cloud";
 
 import { doctorCommand } from "./doctor/commands";
 import { installCommand, uninstallCommand } from "./install/commands";
+import { runGitCredential } from "./git/git-credential";
 import { runLink, runUnlink } from "./link/commands";
 import type { RunnerDeployment } from "./link/deployment";
 import { loginCommand, logoutCommand } from "./login/commands";
@@ -60,6 +61,8 @@ export interface CommandContext {
   sleep(ms: number): Promise<void>;
   /** What `update apply` downloads, verifies, extracts, probes and restarts with. */
   readonly update: UpdateDeps;
+  /** The whole of stdin, as UTF-8 (git's request to `git-credential`). */
+  readStdin(): Promise<string>;
   readonly now?: () => number;
 }
 
@@ -133,11 +136,14 @@ export const COMMANDS: readonly RunnerCommand[] = [
   logoutCommand,
   UPDATE_COMMAND,
   stub("logs", "Show the runner's log.", "[-f]"),
-  stub(
-    "git-credential",
-    "Volli's git credential helper, run by git; not for people.",
-    "<get|store|erase>",
-  ),
+  {
+    name: "git-credential",
+    summary: "Volli's git credential helper, run by git; not for people.",
+    usage: `${PATH_USAGE} <get|store|erase>`,
+    options: PATH_OPTIONS,
+    positionals: 1,
+    run: runGitCredential,
+  },
   {
     name: "version",
     summary: "Print this runner's version.",
