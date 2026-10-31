@@ -641,6 +641,10 @@ jobs:
           MODE: ${{ steps.present.outputs.mode }}
         run: |
           set -euo pipefail
+          if ! ls "$RUNNER_TEMP"/runner-assets/volli-runner-*.tar.gz >/dev/null 2>&1; then
+            echo "::error title=No runner artifacts::byo-runner-artifact produced none; see its log"
+            exit 1
+          fi
           ls -l "$RUNNER_TEMP/runner-assets"
           # shellcheck disable=SC2086 # MODE is empty or one flag.
           bash apps/runner/scripts/ci-install-matrix.sh "$RUNNER_TEMP/runner-assets" $MODE
