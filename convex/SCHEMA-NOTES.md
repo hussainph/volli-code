@@ -824,3 +824,46 @@ network and code/global buckets. Refilled rows are equivalent to absent rows;
 the hourly paged sweep deletes them using `by_full_at`. All three linking doors have
 a deployment-wide cap as well as a network cap, bounding device-code and
 limiter-metadata allocations across distinct networks.
+
+## Runner release feed and update policy
+
+`runnerReleaseFeeds` caches public GitHub Releases pages per repository: their
+ETags, the highest stable/prerelease candidates and whether another page exists.
+The poll is bounded to ten pages of 100 releases, runs every 15 minutes without
+a GitHub token, and validates selected manifests before advancing a channel.
+Semantic version precedence chooses the newest release; publication time breaks
+equal-version ties. A malformed manifest keeps that channel's last good pointer
+without blocking a valid update to the other channel. Failed API requests keep
+both pointers and cache unchanged. The cache is deployment metadata, retained
+when a project is purged.
+
+`releaseChannels.pinned` is optional (absent means feed-managed). The internal
+`runnerReleases.pin` mutation writes an operator override; `pinned: false`
+releases it for the next poll. Only deployment operators can call it. Select the
+intended deployment explicitly when using the Convex CLI; no release workflow
+or runner holds a deployment credential.
+
+`runners.pinnedManifestUrl` is optional and nullable, preserving the exact
+absolute URL when the owner calls `runners.updateNow`. That call pins the
+channel's current version without enabling automatic updates. The first
+heartbeat at or above the pinned version releases this one-shot intent, and a
+channel change releases it too. Older rows without the URL remain valid; the
+runner target query returns null rather than inventing a download origin for an
+old pin. Reissuing Update now records the current pointer and its URL.
+
+Heartbeat sets `upgrade_required` below the selected channel's minimum version
+and clears it on the first compliant beat (or when the selected channel has no
+floor). A stale pin cannot override the floor. The heartbeat's `targetVersion`
+is advisory; the updater applies enabled/idle/floor policy. `runnerJobs.claim`
+rechecks the floor independently, including before heartbeat or during reported
+update states; `sessions.accept`, lease renewal and completion remain available.
+`runnerReleases.target` is runner-authenticated and exposes the selected absolute
+manifest URL. Receiving-task wiring: the runner updater's `onTarget` callback
+reads it before staging, treats a pin as explicit intent even when auto-update
+is disabled, and never lets opt-out bypass the minimum floor.
+
+`runners.setAutoUpdate` and `updateNow` require the runner owner's person token;
+`unlinkSelf` requires the runner token and uses the same removed/revoked path as
+Settings Remove. `runners.list` additively exposes `autoUpdate` and the existing
+open `update` projection. The latter remains unknown to readers until they
+recognize a runner-reported update state; this change adds no writer for it.

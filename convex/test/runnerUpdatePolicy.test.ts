@@ -69,6 +69,8 @@ describe("runner update policy", () => {
         payload: { ticketId: parseId("ticket", w.ticketId), reason: "session_start" },
       }),
     );
+    // The claim fence does not rely on a heartbeat having observed the floor yet.
+    expect(await w.runner.mutation(api.runnerJobs.claim, { bootId: newId("runner") })).toEqual([]);
     expect(await beat(w)).toMatchObject({
       status: "upgrade_required",
       minVersion: "0.3.1",
@@ -96,7 +98,7 @@ describe("runner update policy", () => {
     expect(await beat(w)).toMatchObject({ status: "online" });
     expect(
       await w.runner.mutation(api.runnerJobs.claim, { bootId: newId("runner") }),
-    ).toMatchObject([{ id: jobId }]);
+    ).toMatchObject([{ job: { id: jobId } }]);
     await w.t.finishAllScheduledFunctions(vi.runAllTimers);
   });
 

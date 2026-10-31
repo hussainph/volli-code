@@ -31,7 +31,7 @@
  */
 
 import { ConvexError, v } from "convex/values";
-import { decodeCloudSessionIntent } from "@volli/shared";
+import { compareVersions, decodeCloudSessionIntent } from "@volli/shared";
 
 import {
   INVALID_JOB_RESULT,
@@ -144,10 +144,22 @@ async function lease(
 export const claim = mutation({
   args: { bootId: v.string(), max: v.optional(v.number()) },
   handler: async (ctx, { bootId, max }): Promise<ClaimedJob[]> => {
-    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
+    const { runnerId, ownerUserId, runner } = await requireRunnerForWrite(ctx);
     if (!isUuid(bootId)) {
       throw new ConvexError({ code: "invalid_request", message: "bootId is this boot's UUID." });
     }
+    // Fence new work even before the next heartbeat, or while a below-floor
+    // runner reports an updating/draining/degraded lifecycle state. Intake,
+    // renewal and completion stay available to drain work already in flight.
+    const release = await ctx.db
+      .query("releaseChannels")
+      .withIndex("by_channel", (q) => q.eq("channel", runner.autoUpdate.channel))
+      .unique();
+    if (
+      runner.status === "upgrade_required" ||
+      (release !== null && compareVersions(runner.version, release.minVersion) < 0)
+    )
+      return [];
     const limit = bounded(max, JOB_CLAIM_MAX, 1, JOB_CLAIM_MAX);
     const now = Date.now();
     const candidates: Doc<"runnerJobs">[] = [];

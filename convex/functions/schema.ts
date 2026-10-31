@@ -627,6 +627,8 @@ export default defineSchema({
     linkedAt: time,
     // Desktop registration retry key; absent on older rows and other link methods.
     desktopRegistrationId: v.optional(uuid),
+    // Exact URL of a one-shot Update-now pin; absent on older runners.
+    pinnedManifestUrl: v.optional(nullable(v.string())),
     autoUpdate: v.object({
       enabled: v.boolean(),
       channel: v.string(),
@@ -740,7 +742,25 @@ export default defineSchema({
     minVersion: v.string(),
     manifestUrl: v.string(),
     publishedAt: time,
+    // An operator override; absence means the public feed owns this pointer.
+    pinned: v.optional(v.boolean()),
   }).index("by_channel", ["channel"]),
+  // Public release-page metadata only; no credentials or project ownership.
+  runnerReleaseFeeds: defineTable({
+    repo: v.string(),
+    pages: v.array(
+      v.object({
+        etag: nullable(v.string()),
+        stable: nullable(
+          v.object({ version: v.string(), manifestUrl: v.string(), publishedAt: time }),
+        ),
+        canary: nullable(
+          v.object({ version: v.string(), manifestUrl: v.string(), publishedAt: time }),
+        ),
+        hasNext: v.boolean(),
+      }),
+    ),
+  }).index("by_repo", ["repo"]),
   // Availability only, never a value; replaced wholesale from each capabilities report.
   runnerLocalCredentials: defineTable({
     runnerId: uuid,
