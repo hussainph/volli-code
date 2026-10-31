@@ -57,6 +57,15 @@ export {
   type ConvexClientModule,
 } from "../cloud-runner/convex-connection";
 export {
+  createHeadlessRunner,
+  type HeadlessRunner,
+  type HeadlessRunnerConnection,
+  type HeadlessRunnerOptions,
+  type HeadlessRunnerPlatform,
+  type HeadlessRunnerSnapshot,
+  type HeadlessRunnerTarget,
+} from "../cloud-runner/headless-runner";
+export {
   type AcceptCall,
   type AcceptReply,
   createFactDrain,

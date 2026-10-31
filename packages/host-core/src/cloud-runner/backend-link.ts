@@ -16,7 +16,8 @@
  * inbox's renew and complete are idempotent; a lost `claim` leaves its jobs
  * leased to this boot until their lease runs out. {@link BackendLink.reconnectNow}
  * replaces the connection at once, up or not: after a sleep a half-open socket
- * can still read as connected for a minute.
+ * can still read as connected for a minute. Hosts can opt into another retry
+ * policy; omission preserves the desktop's cadence and five-second grace.
  *
  * The connection itself is a port ({@link BackendConnection}); the Convex
  * adapter is `convexBackendConnection` in `convex-connection.ts`, the only
@@ -70,6 +71,15 @@ export interface BackendLinkOptions {
   setTimer?(run: () => void, ms: number): unknown;
   clearTimer?(handle: unknown): void;
   random?(): number;
+  reconnect?: {
+    /** Exponential delay ceiling, from baseMs to maxMs, with equal jitter. */
+    baseMs: number;
+    maxMs: number;
+    /** Jitter's delay floor (default 0, preserving the desktop cadence). */
+    minMs?: number;
+    /** Give each connection this long to recover itself (default 5 s). */
+    graceMs?: number;
+  };
 }
 
 export interface BackendLink {
@@ -102,6 +112,9 @@ const sizeOf = (args: Record<string, unknown>) =>
 export function createBackendLink(options: BackendLinkOptions): BackendLink {
   const now = options.now ?? Date.now;
   const random = options.random ?? Math.random;
+  const reconnect = options.reconnect ?? LINK_RECONNECT;
+  const minDelay = options.reconnect?.minMs ?? 0;
+  const grace = options.reconnect?.graceMs ?? LINK_RECONNECT.maxMs;
   const setTimer =
     options.setTimer ??
     ((run: () => void, ms: number) => {
@@ -183,9 +196,9 @@ export function createBackendLink(options: BackendLinkOptions): BackendLink {
 
   function schedule() {
     if (timer !== null || closed) return;
-    const ceiling = Math.min(LINK_RECONNECT.maxMs, LINK_RECONNECT.baseMs * 2 ** attempt);
+    const ceiling = Math.min(reconnect.maxMs, reconnect.baseMs * 2 ** attempt);
     attempt += 1;
-    const delay = Math.round(ceiling / 2 + (random() * ceiling) / 2);
+    const delay = Math.max(minDelay, Math.round(ceiling / 2 + (random() * ceiling) / 2));
     timer = setTimer(check, delay);
   }
 
@@ -193,7 +206,7 @@ export function createBackendLink(options: BackendLinkOptions): BackendLink {
     timer = null;
     if (closed || connection.isConnected()) return;
     // A check runs only while down, and going down set `downSince`.
-    if (now() - downSince! >= LINK_RECONNECT.maxMs) {
+    if (now() - downSince! >= grace) {
       setStatus({ state: "offline", since: outageSince! });
       // The stock client's own backoff is past what we accept: start over.
       replace();

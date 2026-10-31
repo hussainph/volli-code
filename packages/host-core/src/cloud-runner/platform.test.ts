@@ -7,6 +7,7 @@ import { parseRunnerCapabilityReport } from "@volli/shared/cloud";
 const io = vi.hoisted(() => ({
   osRelease: null as string | null | undefined,
   git: undefined as { error: Error | null; stdout: string } | undefined,
+  docker: undefined as boolean | undefined,
 }));
 
 vi.mock("node:fs", async (importActual) => {
@@ -33,6 +34,12 @@ vi.mock("node:child_process", async (importActual) => {
       options: object,
       done: (e: Error | null, out: string) => void,
     ) => {
+      if (file === "docker" && io.docker !== undefined) {
+        expect(args).toEqual(["info", "--format", "{{.ServerVersion}}"]);
+        expect(options).toEqual({ timeout: 5_000 });
+        done(io.docker ? null : new Error("unavailable"), "");
+        return;
+      }
       if (io.git !== undefined) {
         done(io.git.error, io.git.stdout);
         return;
@@ -81,6 +88,7 @@ function fakeProbe(overrides: Partial<PlatformProbe> = {}): PlatformProbe {
 afterEach(() => {
   io.osRelease = undefined;
   io.git = undefined;
+  io.docker = undefined;
   vi.restoreAllMocks();
 });
 
@@ -165,6 +173,28 @@ describe("the runner's platform", () => {
     expect(headless.capabilities).toMatchObject({ git: null, terminals: "unavailable" });
   });
 
+  it("probes Docker unless overridden and carries explicit power", async () => {
+    const host = {
+      version: "0.3.0",
+      installMode: "user" as const,
+      terminals: false,
+      browser: { state: "unavailable" as const, reason: "not composed" },
+      maxConcurrentSessions: 2,
+      tools: [],
+      localCredentials: [],
+      power: { source: "ac" as const, alwaysOn: true },
+    };
+    const dockerAvailable = vi.fn(async () => true);
+    const probe = fakeProbe({ dockerAvailable });
+    const report = await probeRunnerCapabilities(host, probe);
+    expect(report.capabilities).toMatchObject({ docker: true, power: host.power });
+    expect(parseRunnerCapabilityReport(report)).toEqual(report);
+    expect(dockerAvailable).toHaveBeenCalledOnce();
+    await probeRunnerCapabilities({ ...host, docker: false }, probe);
+    expect(dockerAvailable).toHaveBeenCalledOnce();
+    expect((await probeRunnerCapabilities(host, fakeProbe())).capabilities.docker).toBe(false);
+  });
+
   it("measures load where the data lives", () => {
     const counts = { activeSessions: 2, activeTurns: 1, queueDepth: 0 };
     expect(readRunnerLoad(counts, "/data", fakeProbe())).toEqual({
@@ -209,6 +239,13 @@ describe("the Node probe", () => {
     expect(NODE_PLATFORM_PROBE.glibc()).toBeNull();
     vi.spyOn(report, "getReport").mockReturnValue({} as never);
     expect(NODE_PLATFORM_PROBE.glibc()).toBeNull();
+  });
+
+  it("checks Docker daemon access, including a missing or stopped daemon", async () => {
+    io.docker = true;
+    await expect(NODE_PLATFORM_PROBE.dockerAvailable!()).resolves.toBe(true);
+    io.docker = false;
+    await expect(NODE_PLATFORM_PROBE.dockerAvailable!()).resolves.toBe(false);
   });
 
   it("runs git, or reports it missing", async () => {
