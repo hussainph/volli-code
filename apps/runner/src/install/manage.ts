@@ -1,6 +1,10 @@
 import {
   chmodSync,
+  closeSync,
+  constants,
   cpSync,
+  fstatSync,
+  openSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -83,13 +87,21 @@ function ensureDirectory(path: string, mode: number, managed = true): boolean {
 }
 
 function replaceFile(path: string, text: string, mode: number): boolean {
-  if (
-    existsSync(path) &&
-    lstatSync(path).isFile() &&
-    readFileSync(path, "utf8") === text &&
-    (lstatSync(path).mode & 0o777) === mode
-  )
-    return false;
+  let same = false;
+  try {
+    // Inspect and read the same inode, never a pathname swapped after lstat.
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const stat = fstatSync(fd);
+      same = stat.isFile() && readFileSync(fd, "utf8") === text && (stat.mode & 0o777) === mode;
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ELOOP") throw error;
+  }
+  if (same) return false;
   atomicWrite(path, text, mode);
   return true;
 }

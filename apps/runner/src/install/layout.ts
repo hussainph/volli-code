@@ -94,8 +94,8 @@ export function serviceUnit(layout: InstallLayout, env: CommandContext["env"]): 
   return [
     "[Unit]",
     "Description=Volli runner",
-    "Wants=network-online.target",
-    "After=network-online.target",
+    // network-online.target is a system unit, not a user-manager target.
+    ...(system ? ["Wants=network-online.target", "After=network-online.target"] : []),
     "",
     "[Service]",
     "Type=simple",

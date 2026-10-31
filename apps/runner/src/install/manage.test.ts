@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import {
   chmodSync,
   existsSync,
@@ -22,6 +23,12 @@ import { installLayout, proxyEnvironment, serviceUnit, unitPath, unitQuote, UNIT
 import { asRunner, installRunner, systemctl, type InstallPorts } from "./manage";
 import type { RunTool } from "./tools";
 import { uninstallRunner } from "./uninstall";
+
+vi.mock("node:fs", async (original) => {
+  const real = await original<typeof fs>();
+  return { ...real, openSync: vi.fn(real.openSync) };
+});
+const realOpen = vi.mocked(fs.openSync).getMockImplementation()!;
 
 let root: string;
 let source: string;
@@ -49,6 +56,7 @@ function status(pid = 10, version = "9.9.9-test"): RunnerStatus {
 }
 
 beforeEach(() => {
+  vi.mocked(fs.openSync).mockImplementation(realOpen);
   root = mkdtempSync(join(tmpdir(), "runner-install-"));
   source = join(root, "unpacked");
   mkdirSync(join(source, "bin"), { recursive: true });
@@ -169,6 +177,7 @@ describe("managed layout and units", () => {
     expect(user).not.toContain("ProtectHome=yes");
     expect(user).not.toContain("PrivateTmp=yes");
     expect(user).not.toContain("ProtectSystem=");
+    expect(user).not.toContain("network-online.target");
     expect(unit).toContain(`ReadWritePaths="${sys.configDir}"`);
     expect(user).toContain("WantedBy=default.target");
     expect(systemctl(sys, ["start"])).toEqual(["start"]);
@@ -263,6 +272,33 @@ describe("install", () => {
     await install();
     expect(existsSync(file)).toBe(false);
     await install();
+  });
+  it("compares managed bytes through a no-follow descriptor and refuses unexpected read errors", async () => {
+    await install();
+    const at = layout();
+    const managed = join(at.root, "managed.json");
+    const outside = join(root, "outside-managed");
+    writeFileSync(outside, "not read or overwritten");
+    rmSync(managed);
+    symlinkSync(outside, managed);
+    await install();
+    expect(lstatSync(managed).isSymbolicLink()).toBe(false);
+    expect(readFileSync(outside, "utf8")).toBe("not read or overwritten");
+    chmodSync(join(at.root, "proxy.env"), 0o644);
+    await install();
+    expect(lstatSync(join(at.root, "proxy.env")).mode & 0o777).toBe(0o600);
+    vi.mocked(fs.openSync).mockImplementation((file, flags, mode) => {
+      if (file === managed) throw Object.assign(new Error("read denied"), { code: "EACCES" });
+      return realOpen(file, flags, mode);
+    });
+    await expect(install()).rejects.toMatchObject({ code: "EACCES" });
+  });
+  it("does not read a directory as a managed file", async () => {
+    await install();
+    const unit = join(layout().unitDir, UNIT);
+    rmSync(unit);
+    mkdirSync(unit);
+    await expect(install()).rejects.toThrow();
   });
   it("copies proxy settings without exposing them in JSON; no-systemd prints an unprivileged foreground command", async () => {
     context = testContext({ root, env: { HTTPS_PROXY: "https://secret@proxy" } });
