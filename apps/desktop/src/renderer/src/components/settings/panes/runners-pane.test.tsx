@@ -36,7 +36,7 @@ const row = (patch: Partial<RunnerRow> & Pick<RunnerRow, "id" | "name">): Runner
 });
 
 const ROWS: RunnerRow[] = [
-  row({ id: "runner-box", name: "box" }),
+  row({ id: "runner-box", name: "box", version: "0.3.0" }),
   row({ id: "runner-mac", name: "studio", kind: "mac" }),
   row({ id: "runner-old", name: "old", status: "revoked", statusReason: "credential_reuse" }),
   row({ id: "runner-new", name: "zeta", kind: "cloud", status: "hibernating" }),
@@ -157,9 +157,22 @@ describe("Settings → Runners", () => {
     expect(runnerRow("runner-mac").textContent).toContain("This Mac");
     expect(runnerRow("runner-mac").textContent).toContain("Online");
     expect(runnerRow("runner-box").textContent).not.toContain("This Mac");
+    expect(runnerRow("runner-box").textContent).toContain("Version 0.3.0");
     expect(runnerRow("runner-old").textContent).toContain("Used from two places");
     expect(runnerRow("runner-new").textContent).toContain("hibernating");
     expect(container.querySelector('[data-testid="this-mac-blocked"]')).toBeNull();
+  });
+
+  it("shows the backend’s update floor and version without offering unavailable update controls", () => {
+    const tier = standIn();
+    act(() => root.render(<RunnersPane {...tier.props} />));
+    tier.push(ONLINE);
+    tier.list([
+      row({ id: "old-linux", name: "old-linux", version: "0.2.9", status: "upgrade_required" }),
+    ]);
+    expect(runnerRow("old-linux").textContent).toContain("Needs an update");
+    expect(runnerRow("old-linux").textContent).toContain("Version 0.2.9");
+    expect(container.textContent).not.toContain("Update now");
   });
 
   it("says quietly while this Mac is being added, and lets its own state speak when it can't reach Volli Cloud", () => {

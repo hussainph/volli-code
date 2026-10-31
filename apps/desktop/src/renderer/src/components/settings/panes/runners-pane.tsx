@@ -366,6 +366,7 @@ function RunnerItem({
         )
       }
       primaryTrailing={thisMac ? <Badge variant="outline">This Mac</Badge> : undefined}
+      secondary={runner.version ? `Version ${runner.version}` : undefined}
       trailing={<Health state={status.state}>{status.label}</Health>}
       actions={
         <DropdownMenu>
