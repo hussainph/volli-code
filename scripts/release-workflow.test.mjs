@@ -562,3 +562,42 @@ test("runner assets are verified and attested, and gate every publishing path", 
       assert.match(action.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
   }
 });
+
+test("artifact gate accepts only the declared run stub; implemented run must boot", (t) => {
+  const script = readFileSync(
+    new URL("../apps/runner/scripts/ci-boot-artifact.sh", import.meta.url),
+    "utf8",
+  );
+  const start = script.indexOf("help_code=0\n");
+  const endMarker = 'test "$help_code" -eq 0\n';
+  const end = script.indexOf(endMarker, start);
+  assert.ok(start > 0 && end > start);
+  const skeletonGuard = script.slice(start, end + endMarker.length);
+  const root = versionFixture(t);
+  mkdirSync(join(root, "bin"));
+  writeFileSync(
+    join(root, "bin/volli-runner"),
+    '#!/bin/sh\nprintf "%s\\n" "$TEST_MESSAGE" >&2\nexit "$TEST_CODE"\n',
+    { mode: 0o755 },
+  );
+  for (const [code, message, skeleton, success] of [
+    ["69", "volli-runner: `run` is not available in this build yet.", true, true],
+    ["69", "arbitrary unavailable/crash", false, false],
+    ["1", "runtime failure", false, false],
+    ["0", "Usage: volli-runner run", false, true],
+  ]) {
+    const result = spawnSync("bash", ["-eu", "-c", `${skeletonGuard}\necho real-boot-required`], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        root,
+        log: join(root, "run.log"),
+        TEST_CODE: code,
+        TEST_MESSAGE: message,
+      },
+    });
+    assert.equal(result.status === 0, success, result.stdout + result.stderr);
+    assert.equal(result.stdout.includes("skeleton artifact"), skeleton);
+    assert.equal(result.stdout.includes("real-boot-required"), success && !skeleton);
+  }
+});

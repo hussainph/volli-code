@@ -3,7 +3,13 @@
 # containers as both uid modes. No backend, credentials or running daemon.
 # Caller supplies the runner release asset directory (both tarballs and their sidecars).
 set -euo pipefail
-assets="${1:?Usage: ci-install-matrix.sh <runner-assets-dir>}"
+assets="${1:?Usage: ci-install-matrix.sh <runner-assets-dir> [--bootstrap-only]}"
+bootstrap_only=false
+case "${2:-}" in
+  '') ;;
+  --bootstrap-only) bootstrap_only=true ;;
+  *) echo 'unknown matrix mode' >&2; exit 2 ;;
+esac
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
 work=$(mktemp -d)
 server=
@@ -45,18 +51,31 @@ DOCKERFILE
     for mode in system user; do
       echo "=== install.sh: $distro / $mode / $downloader"
       docker run --rm --network host -e TEST_MODE="$mode" -e TEST_PORT="$port" \
-        -e TEST_DOWNLOADER="$downloader" "$image" sh -eu -c '
+        -e TEST_DOWNLOADER="$downloader" -e TEST_BOOTSTRAP_ONLY="$bootstrap_only" "$image" sh -eu -c '
         if [ "$TEST_DOWNLOADER" = wget ]; then
           ! command -v curl >/dev/null || { echo "wget-only image unexpectedly has curl" >&2; exit 1; }
           fetch="wget -qO-"
         else fetch="curl -fsSL"; fi
         command="$fetch http://127.0.0.1:$TEST_PORT/volli-runner-install.sh | sh -s -- --release-base http://127.0.0.1:$TEST_PORT --no-start --no-link"
+        code=0
         if [ "$TEST_MODE" = system ]; then
-          sh -eu -c "$command"
-          /usr/local/bin/volli-runner version
+          sh -eu -c "$command" > /tmp/install-result 2>&1 || code=$?
         else
-          su - matrix-user -s /bin/sh -c "$command"
-          su - matrix-user -s /bin/sh -c '\''"$HOME/.local/bin/volli-runner" version'\''
+          su - matrix-user -s /bin/sh -c "$command" > /tmp/install-result 2>&1 || code=$?
+        fi
+        cat /tmp/install-result
+        if [ "$code" -eq 69 ] && [ "$TEST_BOOTSTRAP_ONLY" = true ]; then
+          # Initial artifacts carry the command-registry skeleton. The bootstrap
+          # must reach its exact install stub AFTER real native/Code Mode probes.
+          grep -Fxq "volli-runner: \`install\` is not available in this build yet." /tmp/install-result
+          grep -q "SHA-256 verified" /tmp/install-result
+          grep -q "\"ok\":true" /tmp/install-result
+          grep -q "Code Mode artifact proof" /tmp/install-result
+          echo "Bootstrap/probes passed; binary install is explicitly unavailable."
+        else
+          test "$code" -eq 0
+          if [ "$TEST_MODE" = system ]; then /usr/local/bin/volli-runner version
+          else su - matrix-user -s /bin/sh -c '\''"$HOME/.local/bin/volli-runner" version'\''; fi
         fi
       '
     done
@@ -78,4 +97,9 @@ docker run --rm --network host -e TEST_PORT="$port" ubuntu:18.04 sh -eu -c '
   cat /tmp/result
   grep -q "glibc >= 2.31 is required" /tmp/result
 '
-echo 'Install matrix passed: six supported distros, root and user, curl and wget; musl and old glibc refused.'
+if "$bootstrap_only"; then
+  echo 'Bootstrap-only matrix passed: six distros, root/user, curl/wget; full install is deferred where the binary declares its stub.'
+else
+  echo 'Install matrix passed: six supported distros, root/user, curl/wget.'
+fi
+echo 'Unsupported platforms: musl and old glibc refused.'
