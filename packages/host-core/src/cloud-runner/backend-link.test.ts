@@ -82,9 +82,12 @@ function manualClock() {
   let now = 0;
   const timers = new Map<number, { at: number; run: () => void }>();
   let next = 1;
+  const delays: number[] = [];
   return {
+    delays: () => [...delays],
     now: () => now,
     setTimer: (run: () => void, ms: number) => {
+      delays.push(ms);
       timers.set(next, { at: now + ms, run });
       return next++;
     },
@@ -168,6 +171,78 @@ describe("the backend link", () => {
     expect(statuses).toEqual(["connecting", "offline", "connected"]);
     expect(clock.pending()).toBe(0);
   });
+
+  it("preserves the desktop's default jitter, retry cadence and five-second per-connection grace", async () => {
+    const connections = fakeConnections();
+    connections.startDown();
+    const clock = manualClock();
+    const link = createBackendLink({
+      connect: connections.connect,
+      token,
+      gate: createMutationGate(),
+      ...clock,
+      random: () => 1,
+    });
+    expect(clock.delays()).toEqual([250]);
+    clock.advance(7_749);
+    expect(connections.made).toHaveLength(1);
+    expect(clock.delays()).toEqual([250, 500, 1_000, 2_000, 4_000]);
+    clock.advance(1);
+    expect(connections.made).toHaveLength(2);
+    expect(connections.made[0]!.closed).toBe(true);
+    expect(clock.delays()).toEqual([250, 500, 1_000, 2_000, 4_000, 5_000]);
+    clock.advance(4_999);
+    expect(connections.made).toHaveLength(2);
+    clock.advance(1);
+    expect(connections.made).toHaveLength(3);
+    await link.close();
+
+    const lowClock = manualClock();
+    const low = createBackendLink({
+      connect: connections.connect,
+      token,
+      gate: createMutationGate(),
+      ...lowClock,
+      random: () => 0,
+    });
+    expect(lowClock.delays()).toEqual([125]);
+    await low.close();
+  });
+
+  it.each([0, 1])(
+    "opts into one-to-sixty-second replacement backoff with jitter=%s, then resets on recovery",
+    async (random) => {
+      const connections = fakeConnections();
+      connections.startDown();
+      const clock = manualClock();
+      const link = createBackendLink({
+        connect: connections.connect,
+        token,
+        gate: createMutationGate(),
+        ...clock,
+        random: () => random,
+        reconnect: { baseMs: 1_000, maxMs: 60_000, minMs: 1_000, graceMs: 0 },
+      });
+      const delays =
+        random === 1
+          ? [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]
+          : [1_000, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+      for (const delay of delays) {
+        const before = connections.made.length;
+        clock.advance(delay - 1);
+        expect(connections.made).toHaveLength(before);
+        clock.advance(1);
+        expect(connections.made).toHaveLength(before + 1);
+        expect(connections.made.at(-2)!.closed).toBe(true);
+      }
+      expect(link.status).toEqual({ state: "offline", since: 0 });
+      connections.made.at(-1)!.setUp(true);
+      expect(clock.pending()).toBe(0);
+      connections.made.at(-1)!.setUp(false);
+      expect(clock.delays().at(-1)).toBe(1_000);
+      await link.close();
+    },
+  );
 
   it("a connection that comes back on its own is kept", () => {
     const connections = fakeConnections();

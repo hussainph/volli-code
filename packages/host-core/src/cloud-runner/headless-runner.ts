@@ -90,7 +90,13 @@ export interface HeadlessRunner {
   stop(): Promise<void>;
 }
 
-export const HEADLESS_RUNNER_RETRY = { baseMs: 1_000, maxMs: 60_000 } as const;
+export const HEADLESS_RUNNER_RETRY = {
+  baseMs: 1_000,
+  maxMs: 60_000,
+  minMs: 1_000,
+  // A daemon replaces an unreachable connection at each backoff attempt.
+  graceMs: 0,
+} as const;
 const PRESENCE_MUTATIONS = new Set<string>(Object.values(RUNNER_PRESENCE_FUNCTIONS));
 
 function unauthorized(error: unknown): boolean {

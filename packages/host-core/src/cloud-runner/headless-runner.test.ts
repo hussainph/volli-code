@@ -83,8 +83,9 @@ function harness(overrides: Partial<HeadlessRunnerOptions> = {}) {
     return name === "runners:heartbeat" ? reply : null;
   });
   const clients: FakeClient[] = [];
+  let newConnectionsOnline = true;
   class FakeClient implements ConvexClientLike {
-    connected = true;
+    connected = newConnectionsOnline;
     auth!: Parameters<ConvexClientLike["setAuth"]>[0];
     listener: ((state: { isWebSocketConnected: boolean }) => void) | null = null;
     close = vi.fn(async () => {
@@ -167,6 +168,9 @@ function harness(overrides: Partial<HeadlessRunnerOptions> = {}) {
     order,
     setIdentity: (next: RunnerLink | null) => {
       identity = next;
+    },
+    setNewConnectionsOnline: (online: boolean) => {
+      newConnectionsOnline = online;
     },
     setReport: (next: RunnerCapabilityReport) => {
       currentReport = next;
@@ -904,14 +908,15 @@ describe("headless runner lifecycle", () => {
   it("cancels logical retry once socket reconnects belong to the transport", async () => {
     const h = harness();
     await h.runner.start();
+    const logicalReconnect = vi.spyOn(h.runner.connection!.link, "reconnectNow");
     h.backend.mockRejectedValueOnce(new Error("heartbeat lost"));
     await vi.advanceTimersByTimeAsync(30_000);
     h.clients[0]!.setConnected(false);
     h.backend.mockRejectedValueOnce(new Error("still offline"));
     await h.runner.connection!.presence.beatNow();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(h.clients).toHaveLength(1);
-    h.clients[0]!.setConnected(true);
+    expect(h.clients).toHaveLength(2);
+    expect(logicalReconnect).not.toHaveBeenCalled();
     await flush();
     expect(h.runner.snapshot().state).toBe("online");
     await h.runner.stop();
@@ -942,6 +947,29 @@ describe("headless runner lifecycle", () => {
     const before = h.backend.mock.calls.length;
     await h.runner.connection!.presence.start();
     expect(h.backend.mock.calls).toHaveLength(before);
+    await h.runner.stop();
+  });
+
+  it("opts the real connection supervisor into one-to-sixty-second retries while offline", async () => {
+    const h = harness();
+    await h.runner.start();
+    h.setNewConnectionsOnline(false);
+    h.backend.mockImplementation(async (name) => {
+      if (!h.clients.at(-1)!.connected) return new Promise(() => {});
+      return name === "runners:heartbeat" ? reply : null;
+    });
+    h.clients[0]!.setConnected(false);
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]) {
+      const before = h.clients.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(h.clients).toHaveLength(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.clients).toHaveLength(before + 1);
+      expect(h.runner.snapshot().canClaim).toBe(false);
+    }
+    h.clients.at(-1)!.setConnected(true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.runner.snapshot()).toMatchObject({ state: "online", canClaim: true });
     await h.runner.stop();
   });
 
