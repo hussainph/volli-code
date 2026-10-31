@@ -217,7 +217,7 @@ async function main() {
   ) {
     throw new BoxFailure("token", "unexpected_response");
   }
-  // Persisted before use, the order a runner owes the backend's reuse detection.
+  // The rotated credential is held in memory before the JWT is used. This fake never restarts.
   emit({
     event: "token",
     generation: token.generation,

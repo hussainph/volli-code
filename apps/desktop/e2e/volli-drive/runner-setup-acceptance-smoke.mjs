@@ -32,8 +32,9 @@
  * `app.relaunch()`. Evidence is read from the person's own `runners.list`.
  *
  * The one-time token is never logged, never in a screenshot, and never in this
- * run's report. The driver's snapshot files are scrubbed after stop, even if
- * linking failed. The rotated refresh credential and runner JWT stay in the box.
+ * run's report. Raw driver evidence is quarantined outside the upload directory;
+ * only stopped, scrubbed instances are published there. Cancellation leaves raw
+ * evidence private. The rotated refresh credential and runner JWT stay in the box.
  * Screenshots are therefore taken only after the token is spent.
  *
  * CI ONLY, on a disposable macOS GitHub runner with the loopback CSP
@@ -49,7 +50,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -127,8 +128,11 @@ function driver(label, socket) {
       return (await snap()).text;
     },
     /** A screenshot only once no secret can be on screen (see the header). */
-    shot: async (name) =>
-      spent ? call("screenshot", { name }) : { skipped: "a token was on screen" },
+    shot: async (name) => {
+      if (!spent || /vrt_[A-Za-z0-9_-]+/u.test((await snap()).text))
+        return { skipped: "the sheet may still show an install token" };
+      return call("screenshot", { name });
+    },
   };
 }
 
@@ -230,6 +234,9 @@ function startBox({ installToken, siteUrl, convexUrl, version }) {
     },
   });
   box.child = child;
+  child.stdin.on("error", () => {
+    box.error = "the fake box closed its input";
+  });
   readLines(child.stdout, (event) => box.events.push(event), { json: true });
   readLines(child.stderr, (line) => box.lines.push(line));
   child.on("error", (error) => {
@@ -260,8 +267,13 @@ async function awaitBox(event, timeout = 60_000) {
 }
 
 /** The phase boundary: the harness has read `linked`, so the box may connect. */
-function releaseBox() {
-  box.child.stdin.write("go\n");
+async function releaseBox() {
+  if (box.exit !== null) throw new Error("the fake box exited before release");
+  await new Promise((resolveRelease, reject) => {
+    box.child.stdin.write("go\n", (error) =>
+      error ? reject(new Error("the fake box could not be released")) : resolveRelease(),
+    );
+  });
 }
 
 /** SIGTERM, then prove it stopped itself; a box that has to be killed is a problem. */
@@ -372,7 +384,7 @@ async function journey(fixture) {
   });
 
   await step(5, async () => {
-    releaseBox();
+    await releaseBox();
     const exchanged = await awaitBox("token");
     assert.equal(exchanged.rotated, true, "the refresh credential rotated");
     assert.ok(exchanged.expiresAt > exchanged.serverTime, "the token expires in the future");
@@ -428,23 +440,31 @@ if (
   process.platform !== "darwin" ||
   process.env.CI !== "true" ||
   process.env.GITHUB_ACTIONS !== "true" ||
-  process.env.RUNNER_OS !== "macOS"
+  process.env.RUNNER_OS !== "macOS" ||
+  process.env.RUNNER_ENVIRONMENT !== "github-hosted"
 )
   throw new Error("Runner setup acceptance runs only on disposable macOS GitHub CI runners");
 // This journey follows the sheet's token, not an object store: never consume
 // an ambient bucket origin (`cli launch --cloud` inherits this environment).
 delete process.env.VOLLI_CLOUD_STORAGE_ORIGIN;
 const fixture = cloudFixtureFromEnv();
-const reportDir =
-  process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".scratch", "runner-setup-acceptance");
+const reportDir = resolve(
+  process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".scratch", "runner-setup-acceptance"),
+);
 await fs.mkdir(reportDir, { recursive: true });
+// Raw snapshots never enter the upload directory, even if this process is cancelled.
+// A fresh registry also makes every entry in the cleanup sweep ours, not another run's.
+const privateHome = await fs.mkdtemp(join(dirname(reportDir), ".runner-setup-private-"));
+if (!relative(reportDir, privateHome).startsWith(".."))
+  throw new Error("Evidence quarantine must be outside the report directory");
+process.env.VOLLI_DRIVE_HOME = privateHome;
+process.env.VOLLI_DRIVE_EVIDENCE = join(privateHome, "evidence");
 let failed = false;
 const cleanup = {};
 const boxProblems = [];
 let boxEvidence = null;
-// What this drive home held before the journey: a launch that failed after it
-// reserved is stopped in the sweep below, because it never reached `instances`.
-const known = new Set((await createRegistry().list()).map((entry) => entry.id));
+// A failed launch may reserve an instance before it reports its id. The sweep
+// below uses only this run's private registry.
 try {
   assert.ok(fixture.adminKey, "the throwaway backend's admin key is required");
   await journey(fixture);
@@ -471,12 +491,20 @@ try {
     const problems = stopped.error
       ? [redactInstallTokens(stopped.error.message)]
       : cleanupProblems(manifest);
-    await scrubRunnerSetupEvidence(instance.evidence).catch(() => {
-      problems.push("Could not scrub install-token snapshots");
-    });
+    let published = null;
+    if (problems.length === 0) {
+      try {
+        await scrubRunnerSetupEvidence(instance.evidence);
+        published = join(reportDir, instance.id);
+        await fs.cp(instance.evidence, published, { recursive: true });
+      } catch {
+        problems.push("Evidence withheld: snapshot sanitization or publication failed");
+        published = null;
+      }
+    }
     cleanup[label] = {
       id: instance.id,
-      evidence: instance.evidence,
+      evidence: published,
       close: manifest?.electron?.close?.kind ?? null,
       problems,
     };
@@ -486,21 +514,29 @@ try {
   // stop anything this drive home gained that the journey never recorded.
   const recorded = new Set(Object.values(instances).map((instance) => instance.id));
   for (const entry of await createRegistry().list()) {
-    if (!entry.live || recorded.has(entry.id) || known.has(entry.id)) continue;
+    if (!entry.live || recorded.has(entry.id)) continue;
     const stopped = await exec(process.execPath, [cli, "stop", entry.id], {
       cwd: REPO,
       timeout: 120_000,
     }).catch((error) => ({ error }));
-    await scrubRunnerSetupEvidence(entry.evidence).catch(() => {
-      failed = true;
-    });
     cleanup[`unrecorded:${entry.id}`] = {
       id: entry.id,
-      evidence: entry.evidence,
+      evidence: null,
       close: null,
       problems: stopped.error ? [`stop failed: ${stopped.error.message}`] : [],
     };
     if (stopped.error) failed = true;
+  }
+  if (Object.values(cleanup).every((entry) => entry.problems.length === 0)) {
+    await fs.rm(privateHome, { recursive: true, force: true }).catch(() => {
+      failed = true;
+      cleanup.quarantine = {
+        id: null,
+        evidence: null,
+        close: null,
+        problems: ["Could not remove the private drive registry"],
+      };
+    });
   }
   if (boxProblems.length > 0) failed = true;
   const complete =
