@@ -71,6 +71,7 @@ import { projectImporting } from "./lib/auth";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
 import { noticeForClaim } from "./lib/watches";
 import { settleAutomationRunJob } from "./lib/automationRuns";
+import { dropUnbornStartBody } from "./lib/sessionStarts";
 
 /** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
 const LEASED_SCAN = 256;
@@ -525,6 +526,7 @@ export const sweep = internalMutation({
     let deleted = 0;
     for (const job of due) {
       if (isTerminalJobStatus(job.status)) {
+        await dropUnbornStartBody(ctx, job);
         await ctx.db.delete(job._id);
         deleted += 1;
       } else {

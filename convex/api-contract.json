@@ -4282,6 +4282,21 @@
       "kind": "query",
       "returns": null
     },
+    "runnerPicker:forComposer": {
+      "args": {
+        "type": "object",
+        "value": {
+          "projectId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          }
+        }
+      },
+      "kind": "query",
+      "returns": null
+    },
     "runnerRecovery:ticketSiblings": {
       "args": {
         "type": "object",
@@ -4892,6 +4907,137 @@
       "returns": null
     },
     "sessionMessages:pending": {
+      "args": {
+        "type": "object",
+        "value": {
+          "sessionId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          }
+        }
+      },
+      "kind": "query",
+      "returns": null
+    },
+    "sessionStarts:startContext": {
+      "args": {
+        "type": "object",
+        "value": {
+          "attempt": {
+            "fieldType": {
+              "type": "number"
+            },
+            "optional": false
+          },
+          "bootId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          },
+          "jobId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          }
+        }
+      },
+      "kind": "query",
+      "returns": null
+    },
+    "sessionStarts:startOn": {
+      "args": {
+        "type": "object",
+        "value": {
+          "body": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          },
+          "clientRequestId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          },
+          "model": {
+            "fieldType": {
+              "type": "union",
+              "value": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "value": {
+                    "modelId": {
+                      "fieldType": {
+                        "type": "string"
+                      },
+                      "optional": false
+                    },
+                    "providerId": {
+                      "fieldType": {
+                        "type": "string"
+                      },
+                      "optional": false
+                    },
+                    "reasoningLevel": {
+                      "fieldType": {
+                        "type": "union",
+                        "value": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    }
+                  }
+                }
+              ]
+            },
+            "optional": false
+          },
+          "projectId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          },
+          "runnerId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          },
+          "ticketId": {
+            "fieldType": {
+              "type": "union",
+              "value": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "optional": false
+          }
+        }
+      },
+      "kind": "mutation",
+      "returns": null
+    },
+    "sessionStarts:status": {
       "args": {
         "type": "object",
         "value": {

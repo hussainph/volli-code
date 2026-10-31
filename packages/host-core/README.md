@@ -263,6 +263,20 @@ capability report, alerts an unattended Run's owner through
 `attention.raiseFromRunner` (`cloud-store/automation-attention.ts`), and the
 agent's `automation_run` queues the Run in Volli Cloud
 (`cloud-agent/session-verbs.ts`).
+A person's Session started on any of their runners from another device
+(`sessionStarts.startOn`) arrives as a `session.start` job, executed by
+`cloud-store/session-start-jobs.ts` through the same recovered Session
+services: it re-checks the project and ticket against the lease-fenced
+`sessionStarts.startContext`, which also answers the staged first message
+(no runner holds the unborn Session's claim, so `transcripts.commandArtifact`
+cannot), writes that body to the runner's own artifact store, mints the
+Session under the backend's id and an operation id derived from the job (a
+crash resumes the same Session and first message), and delivers the first
+message under the job's command id. A pinned model the runner cannot serve
+refuses before anything exists, naming the provider, the runner and the
+composition's `signInHint`. The job is registered outside the owner gate the
+other `session.*` kinds cross (the gate refuses a Session not yet held here),
+and `session.start` joins `automation.run` in the capability report.
 `createHostAgentCommands` builds the socket verb door over the host's
 [handler map](#the-handler-map); `session-runtime/agents`
 owns the lazy tool door and watches. `createHostAgentSocket` composes the
