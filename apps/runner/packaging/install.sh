@@ -71,11 +71,11 @@ main() {
   if "$provenance"; then command -v gh >/dev/null 2>&1 || fail '--verify-provenance needs gh; install GitHub CLI and run gh auth login'; fi
   if command -v apt-get >/dev/null 2>&1; then git_fix='sudo apt-get update && sudo apt-get install -y git'
   elif command -v dnf >/dev/null 2>&1; then git_fix='sudo dnf install -y git'
-  else git_fix='install git >= 2.30 with your package manager'; fi
+  else git_fix='install git >= 2.31 with your package manager'; fi
   if ! command -v git >/dev/null 2>&1; then
-    printf 'Git is missing. Before running Sessions: %s\n' "$git_fix" >&2
-  elif ! git --version | awk '{ split($3,v,"."); exit !(v[1]>2 || (v[1]==2 && v[2]>=30)) }'; then
-    printf 'Git >= 2.30 is required for Sessions: %s\n' "$git_fix" >&2
+    printf 'Git >= 2.31 is missing. Before running Sessions: %s\n' "$git_fix" >&2
+  elif ! git --version | awk '{ split($3,v,"."); exit !(v[1]>2 || (v[1]==2 && v[2]>=31)) }'; then
+    printf '%s\n' 'Git >= 2.31 is required for Sessions. Install a newer Git from a trusted source, or use Ubuntu 22.04+ / Debian 12+.' >&2
   fi
   # Check the filesystem that will hold the installed release, not just /tmp.
   if [ "$mode" = --system ]; then disk_path=/opt; else disk_path=${HOME:?HOME is required}; fi

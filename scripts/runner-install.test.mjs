@@ -207,6 +207,15 @@ test("POSIX installer downloads a release over HTTP, verifies and probes before 
   assert.deepEqual(f.requests, ["/volli-runner-manifest.json", "/x64.tar.gz"]);
 });
 
+test("bootstrap warns about Git 2.30 without claiming the distro package upgrade fixes it", async (t) => {
+  const f = await fixture(t);
+  f.tool("git", 'echo "git version 2.30.2"');
+  const result = await f.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Git >= 2\.31 is required for Sessions/);
+  assert.match(result.stderr, /trusted source.*Ubuntu 22\.04\+ \/ Debian 12\+/);
+});
+
 function systemTool(name) {
   try {
     return execFileSync("sh", ["-c", 'command -v "$1"', "sh", name], { encoding: "utf8" }).trim();

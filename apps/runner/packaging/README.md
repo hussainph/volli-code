@@ -1,7 +1,8 @@
 # Volli runner artifact
 
 Self-contained Linux x64/arm64 build. Requires glibc 2.31 or newer; musl is
-unsupported. The Mac runner is the Volli desktop app. Chromium is not included.
+unsupported. Sessions also require Git 2.31 or newer on the box. The Mac runner
+is the Volli desktop app. Chromium is not included.
 
 `bin/volli-runner` and `bin/volli` use the shipped `bin/node`, not a system Node.
 The installer copies this entire directory to the release prefix before starting
@@ -33,6 +34,9 @@ release run. Both commands verify the tarball digest in the signed statement.
 version unless `--version` is given. `--release-base` overrides the containing
 release URL (for a mirror or a loopback test release). Target URLs in the manifest
 are absolute, so mirrors must regenerate the manifest with their own base URL.
+The bootstrap passes the selected containing release URL to the binary installer
+as `VOLLI_RUNNER_RELEASE_BASE`; the installer can persist its validated parent as
+the origin for future updates, including mirror and local-test releases.
 Without systemd, installation skips starting a service; use `volli-runner run`.
 
 The shell bootstrap hands a private `${TMPDIR:-/tmp}/volli-runner.*` staging
