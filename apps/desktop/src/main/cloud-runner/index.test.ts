@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { RunnerHostCapabilities } from "@volli/host-core/cloud-runner";
 import { NO_POWER_EVENTS } from "@volli/host-core/ports";
 import {
   LOCAL_LAUNCH,
@@ -7,6 +8,7 @@ import {
   THIS_MAC_RUNNER_OFF,
   type AccountSnapshot,
 } from "@volli/shared";
+import type { RunnerCapabilityReport } from "@volli/shared/cloud";
 
 import { tempInventory } from "../account/test-support";
 import { chooseProductStore } from "../cloud-launch";
@@ -15,13 +17,35 @@ import { runnerLinkPurpose } from "./identity-store";
 import {
   createDesktopMacRunner,
   runnerAccountPort,
+  runnerLocalCredentials,
   thisMacCapabilities,
+  thisMacReport,
   thisMacRunnerLaunch,
   type DesktopMacRunnerInput,
 } from "./index";
 import type { MacRunner } from "./mac-runner";
 
 const browser = () => ({ state: "available", backend: "electron" }) as const;
+
+/** The platform probe's answer, faked: a report test never runs `git --version`. */
+const probeReport = async (host: RunnerHostCapabilities): Promise<RunnerCapabilityReport> => ({
+  version: host.version,
+  platform: { os: "darwin", distro: null, kernel: null, arch: "arm64", glibc: null },
+  installMode: host.installMode,
+  capabilities: {
+    v: 1,
+    nodeVersion: "v24.0.0",
+    cpuCount: 8,
+    memTotalMb: 16_384,
+    git: { version: "2.43.0" },
+    docker: host.docker,
+    terminals: host.terminals ? "available" : "unavailable",
+    browser: host.browser,
+    maxConcurrentSessions: host.maxConcurrentSessions,
+    tools: host.tools,
+  },
+  localCredentials: host.localCredentials,
+});
 
 describe("what this Mac reports it can do", () => {
   it("names the job kinds its cloud store executes, so the backend routes them here", () => {
@@ -31,6 +55,77 @@ describe("what this Mac reports it can do", () => {
   });
   it("an executor-less composition names none: no Automation Run is routed to it", () => {
     expect(thisMacCapabilities({ appVersion: "0.3.0", browser }).tools).toEqual([]);
+  });
+
+  it("adds C1's power line: the switch as alwaysOn, the reading as source", async () => {
+    const report = await thisMacReport(
+      { appVersion: "0.3.0", browser, powerFacts: () => ({ enabled: true, source: "battery" }) },
+      probeReport,
+    );
+    expect(report.capabilities).toMatchObject({
+      power: { source: "battery", alwaysOn: true },
+      tools: [],
+    });
+    // Unwired, it claims nothing — never a guessed AC.
+    const unwired = await thisMacReport({ appVersion: "0.3.0", browser }, probeReport);
+    expect(unwired.capabilities).toMatchObject({ power: { source: "unknown", alwaysOn: false } });
+  });
+
+  it("reports this Mac's signed-in models as availability, never a value", async () => {
+    const report = await thisMacReport(
+      {
+        appVersion: "0.3.0",
+        browser,
+        credentials: async () => [
+          { providerId: "openai", type: "api_key" },
+          { providerId: "anthropic", type: "oauth" },
+        ],
+      },
+      probeReport,
+    );
+    expect(report.localCredentials).toEqual([
+      { providerId: "anthropic", kind: "subscription", expiresAt: null },
+      { providerId: "openai", kind: "api_key", expiresAt: null },
+    ]);
+  });
+
+  it("a credential read that fails reports none rather than failing the report", async () => {
+    const report = await thisMacReport(
+      {
+        appVersion: "0.3.0",
+        browser,
+        credentials: async () => {
+          throw new Error("the credential store is locked");
+        },
+      },
+      probeReport,
+    );
+    expect(report.localCredentials).toEqual([]);
+    expect(report.capabilities).toMatchObject({ power: { source: "unknown" } });
+  });
+});
+
+describe("the local-credential availability list", () => {
+  it("maps oauth to a subscription, drops unusable ids, dedupes, sorts and bounds", () => {
+    const entries = [
+      { providerId: "z", type: "api_key" as const },
+      { providerId: "a", type: "oauth" as const },
+      { providerId: "a", type: "api_key" as const },
+      { providerId: "", type: "api_key" as const },
+      { providerId: "x".repeat(256), type: "api_key" as const },
+    ];
+    expect(runnerLocalCredentials(entries)).toEqual([
+      { providerId: "a", kind: "subscription", expiresAt: null },
+      { providerId: "z", kind: "api_key", expiresAt: null },
+    ]);
+    const many = Array.from({ length: 70 }, (_, index) => ({
+      providerId: `p${String(index).padStart(2, "0")}`,
+      type: "api_key" as const,
+    }));
+    const bounded = runnerLocalCredentials(many);
+    expect(bounded).toHaveLength(64);
+    expect(bounded[0]?.providerId).toBe("p00");
+    expect(bounded.at(-1)?.providerId).toBe("p63");
   });
 });
 

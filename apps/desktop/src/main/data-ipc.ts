@@ -9,6 +9,8 @@ import {
   listMaterializableLinks,
   listMcpOperations,
   getAllAppState,
+  getAppState,
+  deleteAppState,
   setAppState,
   MIN_READER_VERSION_KEY,
   listAllLabels,
@@ -275,6 +277,19 @@ function ticketScope(db: Database.Database, ticketId: string): { projectId?: str
   return projectId === undefined ? {} : { projectId };
 }
 
+/**
+ * Puts back the value a main-side effect refused (VC-1037): the renderer's
+ * failed write and the row agree, including the "never written" case.
+ */
+function restoreAppState(
+  db: Database.Database,
+  key: Parameters<typeof getAppState>[1],
+  previous: string | undefined,
+): void {
+  if (previous === undefined) deleteAppState(db, key);
+  else setAppState(db, key, previous, Date.now());
+}
+
 function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
   const projects = listProjects(db);
   const appState = getAllAppState(db);
@@ -409,6 +424,13 @@ export function registerDataIpcHandlers(
     blobsRoot?: string;
     /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
     mcpSettings?: McpSettingsService;
+    /**
+     * A main-side effect a write has to apply before the renderer is told the
+     * value is durable (VC-1037): the Keep-working switch also owns this Mac's
+     * login item, which macOS can refuse. A refusal restores the previous
+     * value, so the switch and the stored preference never disagree.
+     */
+    onAppStateSet?: (key: string, value: string) => AppStateSetResult;
     /**
      * Where Pi keeps its sidecars and the tool output saved beside them
      * (VC-469). Archiving or deleting a ticket removes its Sessions' saved
@@ -1114,7 +1136,18 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "This app state key is owned by the database." };
       }
       assertRendererAppStateKey(key);
+      const previous = getAppState(db, key);
       setAppState(db, key, value, Date.now());
+      try {
+        const acknowledged = options.onAppStateSet?.(key, value);
+        if (acknowledged !== undefined && !acknowledged.ok) {
+          restoreAppState(db, key, previous);
+          return acknowledged;
+        }
+      } catch (error) {
+        restoreAppState(db, key, previous);
+        return { ok: false, error: errorMessage(error) };
+      }
       return { ok: true };
     },
 

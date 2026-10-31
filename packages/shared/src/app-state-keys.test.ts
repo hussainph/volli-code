@@ -97,6 +97,7 @@ describe("app_state key registry", () => {
       "volli:cloud-launch": "client-local stays",
       "volli:cloud-runner": "client-local stays",
       "volli:runner-resident": "client-local stays",
+      "composer-runner-choices": "client-local stays",
       "volli:runner-site:": "client-local stays",
       "volli:runner-report:": "client-local stays",
       "volli:runner-automation-run:": "client-local stays",

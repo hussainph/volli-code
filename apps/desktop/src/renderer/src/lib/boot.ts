@@ -44,6 +44,7 @@ import {
   followCloudWorkspace,
   useCloudWorkspaceStore,
 } from "@renderer/stores/cloud-board/workspace";
+import { followRunnerDraftTabs } from "@renderer/components/chat/runner-picker-restore";
 import { createCloudHostSource, useCloudLinkInputs } from "@renderer/stores/cloud-link";
 import {
   canWriteProject,
@@ -779,8 +780,9 @@ async function bootCloudLaunch(
     useProjectUiStore.persist.rehydrate(),
     useChatDraftsStore.persist.rehydrate(),
   ]);
-  // A provisional Draft belongs to one of this Mac's tickets or projects,
-  // none of which this launch shows: it is not reopened, and stays saved for
-  // the next local launch.
+  // Local and other-account Drafts stay saved but hidden. Pending cloud
+  // starts regain their Retry/status tab as their projects arrive below.
+  const stopRunnerDraftTabs = followRunnerDraftTabs();
+  window.addEventListener?.("pagehide", stopRunnerDraftTabs, { once: true });
   return { ok: true };
 }

@@ -38,12 +38,14 @@ import {
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   OperationUnavailableError,
   RUNNER_RESIDENT_APP_STATE_KEY,
+  runnerStaysAvailable,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
 import type { SessionEnvRepair } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type {
+  AppStateSetResult,
   BrowserTabStateEvent,
   BackgroundShellStateEvent,
   FirstPaintHint,
@@ -205,11 +207,21 @@ import { createCloudCheckoutPort, folderPicker, localProjectConfirmation } from 
 import {
   CLOUD_RUNNER_APP_STATE_KEY,
   createDesktopMacRunner,
+  createRunnerResidencyHold,
   holdWhileTurnsRun,
+  launchedIntoMenuBar,
   NO_POWER_BLOCKER,
   runnerAccountPort,
+  runnerLoginItemSettings,
+  runnerLoginItemState,
+  syncRunnerLoginItem,
   thisMacRunnerLaunch,
   type MacRunner,
+  type RunnerCredentialInfo,
+  type RunnerLoginItemPort,
+  type RunnerPowerFacts,
+  type RunnerPowerSource,
+  type RunnerResidencyHold,
 } from "./cloud-runner";
 import {
   CLOUD_LAUNCH_APP_STATE_KEY,
@@ -551,7 +563,17 @@ function confirmDiscardUnsaved(
   return choice === 0;
 }
 
-function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): BrowserWindow {
+/** How a window presents itself once its renderer has painted. */
+interface CreateWindowOptions {
+  /** `false` keeps the window hidden for a login launch that enters the menu bar. */
+  readonly revealOnReady?: boolean;
+}
+
+function createWindow(
+  ptyManager: PtyManager,
+  firstPaint: FirstPaintHint,
+  options: CreateWindowOptions = {},
+): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -605,6 +627,9 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   clearUnsavedDocumentsOnWindowClosed(mainWindow);
 
   mainWindow.on("ready-to-show", () => {
+    // A login launch comes up windowless (VC-1037): its renderer still has to
+    // boot (the hooks below run), but the person gets the menu bar, not a window.
+    if (options.revealOnReady === false) return;
     revealWindow(mainWindow, nativeWindowPolicy);
     // Accessory apps may still be activated programmatically. Once the smoke's
     // one compositor window exists and is visible, prohibit activation for the
@@ -1198,8 +1223,54 @@ const appStartup = app.whenReady().then(async () => {
   // connects without a window). A local launch, and every flag-off one,
   // composes nothing here.
   const runnerLaunch = thisMacRunnerLaunch(launch);
+  // The Keep-working switch's facts (VC-1037): the stored preference and the
+  // wall, read for every capability report and every residency recheck. A read
+  // that fails claims nothing rather than holding a Mac awake on a guess.
+  const thisMacPowerFacts = (): RunnerPowerFacts => {
+    try {
+      const source: RunnerPowerSource = powerMonitor.isOnBatteryPower() ? "battery" : "ac";
+      return {
+        enabled: runnerStaysAvailable(
+          liveHost === undefined
+            ? undefined
+            : getAppState(liveHost.database.db, RUNNER_RESIDENT_APP_STATE_KEY),
+        ),
+        source,
+      };
+    } catch {
+      return { enabled: false, source: "unknown" };
+    }
+  };
+  // The model credentials this Mac holds, as the report's availability list
+  // (VC-1037): provider ids and kinds, never a value. Lazy because the store
+  // is assigned after the runner is composed; a failed read reports none.
+  const readMacCredentials = async (): Promise<readonly RunnerCredentialInfo[]> => {
+    if (macCredentials === null) return [];
+    try {
+      return await macCredentials.list();
+    } catch (error) {
+      hostLogger("cloud-runner").warn("could not list this Mac's model credentials", { error });
+      return [];
+    }
+  };
+  // The login item behind the switch (VC-1037): macOS's own status is the
+  // truth, so a person's Login Items refusal is surfaced rather than written over.
+  const runnerLoginItem: RunnerLoginItemPort = {
+    read: () => runnerLoginItemState(app.getLoginItemSettings()),
+    apply: ({ openAtLogin }) => app.setLoginItemSettings({ openAtLogin }),
+  };
+  const runnerLoginItemFor = (preference: string | null | undefined) =>
+    runnerLoginItemSettings(
+      { cloud: launch.store === "cloud", platform: process.platform, packaged: app.isPackaged },
+      preference,
+    );
   // Bound once menu-bar mode exists below: its browser closes while resident.
   let residentMenuBar: { isResident(): boolean } | null = null;
+  // The Keep-working idle-sleep assertion and its power listeners (VC-1037),
+  // released at teardown. A blocker of its own: the turn hold and menu-bar
+  // mode's must be able to release without releasing this one.
+  let runnerResidency: RunnerResidencyHold | null = null;
+  let stopRunnerPowerWatch: (() => void) | null = null;
   // The cloud launch's turn-time power assertion, released at teardown.
   let releaseTurnPower: (() => void) | null = null;
   // Loaded only for a cloud launch: a local one never loads the Convex client.
@@ -1261,6 +1332,8 @@ const appStartup = app.whenReady().then(async () => {
                     setAppState(launchMarkerDb!, CLOUD_RUNNER_APP_STATE_KEY, value, Date.now()),
                 },
           power: powerMonitor,
+          powerFacts: thisMacPowerFacts,
+          credentials: readMacCredentials,
           liveWork: () => liveHost.liveWork.current(),
           dataDir: app.getPath("userData"),
           appVersion: app.getVersion(),
@@ -1286,6 +1359,21 @@ const appStartup = app.whenReady().then(async () => {
       host: liveHost !== undefined,
     });
   }
+  // The Keep-working switch's write is only acknowledged once its main-side
+  // effects applied (VC-1037): the login item first, because macOS can refuse
+  // it, then the residency hold and the capability report. Data IPC restores
+  // the previous value if this returns a failure.
+  const acknowledgeRunnerResident = (key: string, value: string): AppStateSetResult => {
+    if (key !== RUNNER_RESIDENT_APP_STATE_KEY) return { ok: true };
+    try {
+      syncRunnerLoginItem(runnerLoginItem, runnerLoginItemFor(value));
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+    runnerResidency?.refresh();
+    macRunner?.refreshCapabilities();
+    return { ok: true };
+  };
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionReadWatch = liveHost?.sessionReadWatch ?? null;
   // The ONE notification door (VC-295). Every native alert this process posts —
@@ -1556,6 +1644,7 @@ const appStartup = app.whenReady().then(async () => {
       accountGithub.dispose();
       account.dispose();
       releaseTurnPower?.();
+      stopRunnerPowerWatch?.();
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
     settleBackgroundWork: async () => {
@@ -2112,6 +2201,9 @@ const appStartup = app.whenReady().then(async () => {
   registerDataIpcHandlers(dbHandle, {
     ...recoveredSessionClientPorts(readyRuntimeServices),
     listOpenNativeBindings,
+    // The Keep-working switch owns a login item and the runner's residency
+    // (VC-1037): apply them before the renderer is told the write is durable.
+    onAppStateSet: acknowledgeRunnerResident,
     ...(liveHost === undefined
       ? {}
       : {
@@ -2452,8 +2544,8 @@ const appStartup = app.whenReady().then(async () => {
       clientStateFlush.acknowledge(args[0]);
     },
   );
-  const createOwnedWindow = (): BrowserWindow => {
-    const window = createWindow(ptyManager, currentFirstPaint());
+  const createOwnedWindow = (options: CreateWindowOptions = {}): BrowserWindow => {
+    const window = createWindow(ptyManager, currentFirstPaint(), options);
     // Browser Tabs are live machine resources, not durable documents. Once the
     // app window that can place them closes, keeping invisible remote pages
     // running would leave network/timers with no reachable owner.
@@ -2500,7 +2592,17 @@ const appStartup = app.whenReady().then(async () => {
   // the app alive), and the renderer collects the parked target as it
   // subscribes. Bound here because this is where the factory exists.
   notifications.bindWindowOpener(() => appWindows.openForNotification(runnerEdge.menuBar()));
-  const mainWindow = createOwnedWindow();
+  // A login launch comes up windowless (VC-1037): Electron's launch signal
+  // (`wasOpenedAtLogin`, restored from the launch Apple Event) or the explicit
+  // acceptance argument. A cloud launch may enter the menu bar; an ordinary
+  // manual launch always reveals its window as before.
+  const startInMenuBar = launchedIntoMenuBar({
+    cloud: launch.store === "cloud",
+    platform: process.platform,
+    argv: process.argv,
+    openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
+  });
+  const mainWindow = createOwnedWindow({ revealOnReady: !startInMenuBar });
   const transcriptRepackAbort = new AbortController();
   runnerEdge.bind({ repack: transcriptRepackAbort });
   mainWindow.webContents.once("did-finish-load", () => {
@@ -2631,7 +2733,14 @@ const appStartup = app.whenReady().then(async () => {
     mainWindow.webContents.once("did-finish-load", () => {
       liveHost.maintenance.start();
     });
-    app.on("browser-window-focus", () => liveHost.maintenance.triggerRetention());
+    app.on("browser-window-focus", () => {
+      liveHost.maintenance.triggerRetention();
+      // A model sign-in lands in Pi's credential store outside main's own
+      // doors (the `pi` CLI can write it too). The next focus re-reads the
+      // availability list, so the picker's providers appear without a relaunch
+      // (VC-1037); an unchanged report is not sent again.
+      macRunner?.refreshCapabilities();
+    });
   }
 
   // Auto-update (VC-24): packaged builds poll GitHub Releases ~30s after
@@ -2784,6 +2893,37 @@ const appStartup = app.whenReady().then(async () => {
     residentMenuBar = menuBar;
     macRunner.subscribe(() => menuBar.refresh());
     releaseTurnPower = holdWhileTurnsRun(liveHost.liveWork, electronMenuBarPower());
+    // Keep-working has its own idle-sleep assertion and its own power clock
+    // (VC-1037). A separate blocker instance: menu-bar mode's assertion and the
+    // turn hold must be able to release without releasing this one.
+    const residency = createRunnerResidencyHold(thisMacPowerFacts, electronMenuBarPower());
+    runnerResidency = residency;
+    const onPowerChanged = () => {
+      residency.refresh();
+      // C1's source changed; re-report rather than wait for the next connect.
+      macRunner.refreshCapabilities();
+    };
+    powerMonitor.on("on-ac", onPowerChanged);
+    powerMonitor.on("on-battery", onPowerChanged);
+    stopRunnerPowerWatch = () => {
+      powerMonitor.off("on-ac", onPowerChanged);
+      powerMonitor.off("on-battery", onPowerChanged);
+      residency.stop();
+      runnerResidency = null;
+    };
+  }
+  // The login item follows the same switch (VC-1037), only in a packaged Mac
+  // cloud launch. A refusal at boot is logged, never fatal: the runner still
+  // works for this launch, and the write that changes the switch reports it.
+  if (launch.store === "cloud" && liveHost !== undefined) {
+    try {
+      syncRunnerLoginItem(
+        runnerLoginItem,
+        runnerLoginItemFor(getAppState(liveHost.database.db, RUNNER_RESIDENT_APP_STATE_KEY)),
+      );
+    } catch (error) {
+      hostLogger("cloud-runner").warn("could not update the login item", { error });
+    }
   }
   // The quit path is whole from here: a dropped binding fails the launch.
   runnerEdge.assertBound();
@@ -3329,6 +3469,20 @@ const appStartup = app.whenReady().then(async () => {
     void installAgentToolsQuietly().catch((error: unknown) => {
       log.error("background agent-tools install failed", { error });
     });
+  }
+
+  // Boot is whole and the menu bar has its runner line (VC-1037): a login
+  // launch now enters it, taking the hidden first window through its draft
+  // flush. When the renderer is still loading, wait for it: its finish-load
+  // hooks (retention, login PATH, web sealing) belong to the resident host, and
+  // menu-bar entry flushes drafts before closing the window. An ordinary launch
+  // never gets here with `startInMenuBar`.
+  if (startInMenuBar) {
+    if (mainWindow.isDestroyed() || !mainWindow.webContents.isLoadingMainFrame()) {
+      menuBar.enter();
+    } else {
+      mainWindow.webContents.once("did-finish-load", () => menuBar.enter());
+    }
   }
 
   // An activation means a noted logout did not happen (VC-577), and with no
