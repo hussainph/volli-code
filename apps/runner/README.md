@@ -51,7 +51,7 @@ data dir, so a copied data dir or a backup does not carry the link.
   from Settings → Runners → Add a runner. One request, then the link is saved.
 - **Device code** (no token): the box prints a code to enter in Settings →
   Runners → Link a runner, and waits until it is approved, declined or
-  expired. Ctrl-C stops waiting.
+  expired. Ctrl-C stops waiting (exit 130).
 - **Server.** A release links to the Volli Cloud deployment it was built
   against (`VOLLI_BUILD_CONVEX_URL` / `VOLLI_BUILD_CONVEX_SITE_URL`, baked in
   by `vite.config.ts`). `--server <url>` (or `VOLLI_SERVER`) overrides it; a
@@ -59,10 +59,13 @@ data dir, so a copied data dir or a backup does not carry the link.
   `*.convex.site`, and any other server (a local backend) names it with
   `--site <url>` (or `VOLLI_SERVER_SITE`). A development build has none baked
   and links only with `--server`.
-- An already linked box is refused: `unlink` first.
+- `--name` names the runner for an install token; a device code's name is
+  chosen in Volli when it is approved.
+- An already linked box is refused: `unlink` first. The store also refuses to
+  replace one runner's link with another's, should two `link`s race.
 
 The link is `<configDir>/credential`, sealed (AES-256-GCM) under
-`<configDir>/session-secrets.key`, both mode 0600 in a 0700 directory
+`<configDir>/credential.key`, both mode 0600 (a config dir the first save creates is 0700)
 (`src/link/file-store.ts`). It holds the runner id, its name, the rotating
 refresh credential, its generation and the deployment it was linked to.
 Saves are durable (temp file, fsync, rename, fsync the directory) and refuse

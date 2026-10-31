@@ -3,11 +3,13 @@
  *
  * It holds the `runnerId`, its name, the rotating refresh credential, its
  * `generation`, and the deployment it was linked to, as versioned JSON sealed
- * (AES-256-GCM) under the key file beside it, `<configDir>/session-secrets.key`
+ * (AES-256-GCM) under the key file beside it, `<configDir>/credential.key`
  * (host-core's `fileSecretKey`: 32 random bytes, mode 0600, made on the first
  * save, refused when other users can read it). Both live in the config dir,
  * never the data dir, so a copied data dir or a backup does not carry the
- * link. Both files are mode 0600 and the directory 0700.
+ * link. Both files are mode 0600, and a config dir the first save creates is
+ * 0700 (an existing one keeps its mode; the key file's own check refuses a
+ * key other users can read).
  *
  * The rules host-core's `RunnerLinkStore` asks for:
  *
@@ -18,6 +20,9 @@
  *   `generation` is not newer is refused ({@link StaleRunnerLinkError}), so a
  *   stale writer cannot put back a credential the backend has rotated past.
  *   One token source per link per box is the daemon's instance lock's job.
+ * - **Never replaced.** A save for a different runner than the one stored is
+ *   refused too: two `link`s racing must not leave one live runner with no
+ *   credential on the box. Linking anew is `clear()` first (`unlink`).
  * - **Never guessed at.** A file this build cannot open (a missing or wrong
  *   key, a damaged file, a newer build's format) is an error that names it,
  *   never "not linked": linking again over it would orphan a live runner.
@@ -26,18 +31,22 @@
  * keeps the link from other users and from a copy of the file alone, not
  * from root or from anything running as the runner's own user.
  */
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { RunnerLink, RunnerLinkStore } from "@volli/host-core/cloud-runner";
-import { fileSecretKey, SECRET_KEY_FILE_NAME, type SecretKeyPort } from "@volli/host-core/secrets";
+import { SecretKeyUnavailableError } from "@volli/host-core/ports";
+import { fileSecretKey, type SecretKeyPort } from "@volli/host-core/secrets";
 import { readId, type RunnerId } from "@volli/shared/cloud";
 
 import { durableWrite } from "../shell/write-file";
 import type { RunnerDeployment } from "./deployment";
 
-/** The sealed link's file in the config dir. */
+/** The sealed link's file in the config dir. Durable: an installed box holds it by this name. */
 export const LINK_FILE_NAME = "credential";
+
+/** The key it is sealed under, beside it. Durable too, and never the data dir's secrets key. */
+export const LINK_KEY_FILE_NAME = "credential.key";
 
 const LINK_VERSION = 1;
 
@@ -85,7 +94,8 @@ export interface FileRunnerLinkStoreOptions {
 export function fileRunnerLinkStore(options: FileRunnerLinkStoreOptions): RunnerLinkFile {
   const { configDir } = options;
   const path = join(configDir, LINK_FILE_NAME);
-  const key = options.key ?? fileSecretKey({ path: join(configDir, SECRET_KEY_FILE_NAME) });
+  const keyPath = join(configDir, LINK_KEY_FILE_NAME);
+  const key = options.key ?? fileSecretKey({ path: keyPath });
 
   const read = async (): Promise<StoredRunnerLink | null> => {
     let sealed: Buffer;
@@ -102,7 +112,9 @@ export function fileRunnerLinkStore(options: FileRunnerLinkStoreOptions): Runner
       text = key.decryptString(sealed);
     } catch (error) {
       throw new UnreadableRunnerLinkError(
-        `The runner link ${path} could not be opened: ${(error as Error).message}`,
+        error instanceof SecretKeyUnavailableError
+          ? `The runner link ${path} could not be opened with its key ${keyPath} (${error.reason}).`
+          : `The runner link ${path} could not be opened: it is damaged.`,
       );
     }
     return parseStoredLink(text, path);
@@ -116,7 +128,13 @@ export function fileRunnerLinkStore(options: FileRunnerLinkStoreOptions): Runner
     async save(link) {
       const stored = await read();
       let deployment: RunnerDeployment | null | undefined = options.deployment;
-      if (stored !== null && stored.link.runnerId === link.runnerId) {
+      if (stored !== null) {
+        if (stored.link.runnerId !== link.runnerId) {
+          throw new StaleRunnerLinkError(
+            `This box is already linked as ${stored.link.name} (${stored.link.runnerId}); ` +
+              "forget that link before saving another.",
+          );
+        }
         if (link.generation <= stored.link.generation) {
           throw new StaleRunnerLinkError(
             `The runner link is at generation ${stored.link.generation}; ${link.generation} is not newer.`,
@@ -142,6 +160,18 @@ export function fileRunnerLinkStore(options: FileRunnerLinkStoreOptions): Runner
     },
     async clear() {
       rmSync(path, { force: true });
+      // Durable too: a crash after an unlink must not bring the link back.
+      let directory;
+      try {
+        directory = openSync(configDir, "r");
+      } catch {
+        return;
+      }
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
     },
   };
 }

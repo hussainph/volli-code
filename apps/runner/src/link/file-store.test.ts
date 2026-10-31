@@ -12,12 +12,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import type { RunnerLink } from "@volli/host-core/cloud-runner";
-import { fileSecretKey, SECRET_KEY_FILE_NAME } from "@volli/host-core/secrets";
+import { fileSecretKey } from "@volli/host-core/secrets";
 import type { RunnerId } from "@volli/shared/cloud";
 
 import {
   fileRunnerLinkStore,
   LINK_FILE_NAME,
+  LINK_KEY_FILE_NAME,
   StaleRunnerLinkError,
   UnreadableRunnerLinkError,
 } from "./file-store";
@@ -57,10 +58,10 @@ describe("the sealed runner link", () => {
     });
     const file = join(configDir, LINK_FILE_NAME);
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(statSync(join(configDir, SECRET_KEY_FILE_NAME)).mode & 0o777).toBe(0o600);
+    expect(statSync(join(configDir, LINK_KEY_FILE_NAME)).mode & 0o777).toBe(0o600);
     expect(statSync(configDir).mode & 0o777).toBe(0o700);
     expect(readFileSync(file).includes("vrc_secret_1")).toBe(false);
-    expect(readdirSync(configDir).toSorted()).toEqual([LINK_FILE_NAME, SECRET_KEY_FILE_NAME]);
+    expect(readdirSync(configDir).toSorted()).toEqual([LINK_FILE_NAME, LINK_KEY_FILE_NAME]);
   });
 
   it("takes a newer generation and keeps the deployment it was linked to", async () => {
@@ -79,12 +80,16 @@ describe("the sealed runner link", () => {
     expect(await store.load()).toEqual(link(3));
   });
 
-  it("replaces another runner's link, which needs a deployment", async () => {
-    await fileRunnerLinkStore({ configDir, deployment: DEPLOYMENT }).save(link(5));
-    await expect(fileRunnerLinkStore({ configDir }).save(link(1, OTHER_ID))).rejects.toThrow(
+  it("never replaces another runner's link, and a new one needs a deployment", async () => {
+    await expect(fileRunnerLinkStore({ configDir }).save(link(1))).rejects.toThrow(
       "needs the deployment",
     );
+    await fileRunnerLinkStore({ configDir, deployment: DEPLOYMENT }).save(link(5));
     const other = { url: "https://b.convex.cloud", siteUrl: "https://b.convex.site" };
+    await expect(
+      fileRunnerLinkStore({ configDir, deployment: other }).save(link(1, OTHER_ID)),
+    ).rejects.toThrow("already linked as hetzner-1");
+    await fileRunnerLinkStore({ configDir }).clear();
     await fileRunnerLinkStore({ configDir, deployment: other }).save(link(1, OTHER_ID));
     expect(await fileRunnerLinkStore({ configDir }).read()).toEqual({
       link: link(1, OTHER_ID),
@@ -92,7 +97,7 @@ describe("the sealed runner link", () => {
     });
   });
 
-  it("clears, and clearing nothing is harmless", async () => {
+  it("clears, and clearing nothing, even with no config dir, is harmless", async () => {
     const store = fileRunnerLinkStore({ configDir, deployment: DEPLOYMENT });
     await store.clear();
     await store.save(link(1));
@@ -103,15 +108,23 @@ describe("the sealed runner link", () => {
   describe("a file it cannot read is an error, never 'not linked'", () => {
     async function sealedWith(text: string): Promise<void> {
       await fileRunnerLinkStore({ configDir, deployment: DEPLOYMENT }).save(link(1));
-      const key = fileSecretKey({ path: join(configDir, SECRET_KEY_FILE_NAME) });
+      const key = fileSecretKey({ path: join(configDir, LINK_KEY_FILE_NAME) });
       writeFileSync(join(configDir, LINK_FILE_NAME), key.encryptString(text));
     }
 
     it("when its key is gone", async () => {
       await fileRunnerLinkStore({ configDir, deployment: DEPLOYMENT }).save(link(1));
-      rmSync(join(configDir, SECRET_KEY_FILE_NAME));
+      rmSync(join(configDir, LINK_KEY_FILE_NAME));
       await expect(fileRunnerLinkStore({ configDir }).load()).rejects.toThrow(
-        /could not be opened: .*missing/,
+        `could not be opened with its key ${join(configDir, LINK_KEY_FILE_NAME)} (missing).`,
+      );
+    });
+
+    it("when it is damaged", async () => {
+      await fileRunnerLinkStore({ configDir, deployment: DEPLOYMENT }).save(link(1));
+      writeFileSync(join(configDir, LINK_FILE_NAME), "garbage");
+      await expect(fileRunnerLinkStore({ configDir }).load()).rejects.toThrow(
+        "could not be opened: it is damaged.",
       );
     });
 

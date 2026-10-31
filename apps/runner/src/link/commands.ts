@@ -11,7 +11,10 @@
  * through host-core's `linkWithInstallToken` / `linkWithDeviceCode` against
  * the deployment `deployment.ts` resolves, and both save into the sealed file
  * (`file-store.ts`) with that deployment. A box that is already linked is
- * refused: `unlink` first, so a live runner is never orphaned by accident.
+ * refused: `unlink` first, so a live runner is never orphaned by accident
+ * (and the store itself refuses to replace one runner's link with
+ * another's, should two `link`s race). `--name` names the runner for an
+ * install token; a device code's name is chosen in Volli when it is approved.
  * It does not need the runner stopped: an unlinked runner holds no
  * credential to race.
  *
@@ -64,23 +67,42 @@ export async function describeLinkOnDisk(configDir: string): Promise<LinkOnDisk>
 
 export async function runLink(input: CommandInput, context: CommandContext): Promise<number> {
   const paths = pathsFor(input.values, context);
+  const flag = (name: string): string | undefined => stringOption(input.values, name)?.trim();
+  const usage = (message: string): number => {
+    context.err(`volli-runner: ${message}\n`);
+    return 2;
+  };
+  const token = flag("token") ?? nonEmpty(context.env["VOLLI_RUNNER_TOKEN"]);
+  const name = flag("name");
+  if (token === "") return usage("--token is empty.");
+  if (name === "") return usage("--name is empty.");
+  // A device code's name is the one the person picks in Volli when approving it.
+  if (name !== undefined && token === undefined) return usage("--name needs --token.");
   let deployment;
   try {
-    deployment = resolveDeployment({
-      server: stringOption(input.values, "server") ?? nonEmpty(context.env["VOLLI_SERVER"]),
-      site: stringOption(input.values, "site") ?? nonEmpty(context.env["VOLLI_SERVER_SITE"]),
-      baked: context.buildDeployment,
-    });
+    // The environment's site goes with the environment's server, never a flag's.
+    const server = flag("server");
+    deployment = resolveDeployment(
+      server === undefined
+        ? {
+            server: nonEmpty(context.env["VOLLI_SERVER"]),
+            site: flag("site") ?? nonEmpty(context.env["VOLLI_SERVER_SITE"]),
+            baked: context.buildDeployment,
+          }
+        : { server, site: flag("site"), baked: context.buildDeployment },
+    );
   } catch (error) {
-    context.err(`volli-runner: ${(error as Error).message}\n`);
-    return 2;
+    return usage((error as Error).message);
   }
   const store = fileRunnerLinkStore({ configDir: paths.configDir, deployment });
   let existing;
   try {
     existing = await store.read();
   } catch (error) {
-    context.err(`volli-runner: ${(error as Error).message}\n`);
+    context.err(
+      `volli-runner: ${(error as Error).message} ` +
+        "Run `volli-runner unlink` to forget it, then link again.\n",
+    );
     return 1;
   }
   if (existing !== null) {
@@ -93,7 +115,6 @@ export async function runLink(input: CommandInput, context: CommandContext): Pro
   }
   const client = context.linkClient(deployment.siteUrl);
   const host = context.hostFacts(paths.mode);
-  const token = stringOption(input.values, "token") ?? nonEmpty(context.env["VOLLI_RUNNER_TOKEN"]);
   try {
     if (token !== undefined) {
       const link = await linkWithInstallToken({
@@ -101,7 +122,7 @@ export async function runLink(input: CommandInput, context: CommandContext): Pro
         store,
         host,
         installToken: token,
-        name: stringOption(input.values, "name") ?? null,
+        name: name ?? null,
       });
       context.out(`Linked ${link.name} (${link.runnerId}) to ${deployment.url}.\n`);
       return 0;
@@ -124,7 +145,8 @@ export async function runLink(input: CommandInput, context: CommandContext): Pro
       return 0;
     }
     context.err(`volli-runner: ${DEVICE_OUTCOMES[outcome.status]}\n`);
-    return 1;
+    // An interrupt exits as one does in a shell: 128 + SIGINT.
+    return outcome.status === "cancelled" ? 130 : 1;
   } catch (error) {
     context.err(`volli-runner: could not link: ${linkFailure(error)}\n`);
     return 1;

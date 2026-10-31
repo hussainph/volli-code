@@ -36,10 +36,10 @@ export function parseRunnerArgv(
     return { kind: "command", command: find("version"), input: { values: {}, positionals: [] } };
   }
   const command = find(first);
+  if (rest.some((arg) => HELP.has(arg))) return { kind: "help", command };
   if (command.stub === true) {
     return { kind: "command", command, input: { values: {}, positionals: rest } };
   }
-  if (rest.some((arg) => HELP.has(arg))) return { kind: "help", command };
   let parsed;
   try {
     parsed = parseArgs({

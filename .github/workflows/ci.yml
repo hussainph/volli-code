@@ -467,16 +467,21 @@ jobs:
         run: vp run --filter @volli/desktop build
 
       # The runner's one-file bundle (apps/runner), then the bundle itself on
-      # this Linux runner: its version, and `status` on an empty box, which is
-      # not serving (exit 3). Its natives resolve from the workspace install.
+      # this Linux runner: its version; `status` on an empty box, which is not
+      # serving (exit 3); and `unlink` over a data directory, which takes the
+      # instance lock and so loads better-sqlite3 from the workspace install.
       - name: Build and probe the runner bundle
         run: |
           vp run --filter @volli/runner build
-          node apps/runner/dist/runner.cjs --version
+          runner=(node apps/runner/dist/runner.cjs)
+          box=(--data-dir "$RUNNER_TEMP/runner/data" --config-dir "$RUNNER_TEMP/runner/config")
+          "${runner[@]}" --version
           code=0
-          node apps/runner/dist/runner.cjs status \
-            --data-dir "$RUNNER_TEMP/runner/data" --config-dir "$RUNNER_TEMP/runner/config" || code=$?
+          "${runner[@]}" status "${box[@]}" || code=$?
           test "$code" -eq 3
+          mkdir -m 700 -p "$RUNNER_TEMP/runner/data"
+          "${runner[@]}" unlink "${box[@]}"
+          test -e "$RUNNER_TEMP/runner/data/runner.lock"
 
       - name: Build public sites
         run: |

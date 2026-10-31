@@ -85,6 +85,29 @@ describe("volli-runner link --token", () => {
     });
   });
 
+  it("pairs the environment's site only with the environment's server", async () => {
+    const context = testContext({
+      root,
+      buildDeployment: null,
+      env: { VOLLI_SERVER_SITE: "http://127.0.0.1:3211" },
+    });
+    expect(
+      await runLink(input({ token: "vrt_abc", server: "http://127.0.0.1:3210" }), context),
+    ).toBe(2);
+    expect(context.stderr()).toContain("pass --site <url> too");
+  });
+
+  it.each([
+    [{ token: " " }, "--token is empty."],
+    [{ token: "vrt_abc", name: "" }, "--name is empty."],
+    [{ name: "box" }, "--name needs --token."],
+  ])("refuses %o as a usage error", async (values, message) => {
+    const context = testContext({ root });
+    expect(await runLink(input(values), context)).toBe(2);
+    expect(context.stderr()).toBe(`volli-runner: ${message}\n`);
+    expect(context.requests).toEqual([]);
+  });
+
   it("is a usage error with no server to link to", async () => {
     const context = testContext({ root, buildDeployment: null, env: { VOLLI_SERVER: " " } });
     expect(await runLink(input({ token: "vrt_abc" }), context)).toBe(2);
@@ -104,7 +127,10 @@ describe("volli-runner link --token", () => {
     writeFileSync(join(configDir, LINK_FILE_NAME), "garbage");
     const unreadable = testContext({ root });
     expect(await runLink(input({ token: "vrt_def" }), unreadable)).toBe(1);
-    expect(unreadable.stderr()).toContain("could not be opened");
+    expect(unreadable.stderr()).toContain("could not be opened: it is damaged.");
+    expect(unreadable.stderr()).toContain(
+      "Run `volli-runner unlink` to forget it, then link again.",
+    );
     expect(await describeLinkOnDisk(configDir)).toMatchObject({ state: "unreadable" });
   });
 
@@ -192,7 +218,7 @@ describe("volli-runner link with a device code", () => {
     const interrupt = new AbortController();
     interrupt.abort();
     const context = testContext({ root, signal: interrupt.signal, routes: { linkStart: started } });
-    expect(await runLink(input(), context)).toBe(1);
+    expect(await runLink(input(), context)).toBe(130);
     expect(context.stderr()).toContain("linking was cancelled");
   });
 

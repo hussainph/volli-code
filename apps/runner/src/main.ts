@@ -14,6 +14,7 @@ import { parseRunnerArgv, usage, UsageError } from "./args";
 import { COMMANDS, type CommandContext } from "./commands";
 import { BUILD_DEPLOYMENT } from "./link/deployment";
 import { RUNNER_LIVE_PROBES } from "./shell/runner-status";
+import { abortableSleep } from "./shell/sleep";
 import { RUNNER_VERSION } from "./shell/version";
 
 async function main(): Promise<number> {
@@ -50,23 +51,13 @@ async function main(): Promise<number> {
     buildDeployment: BUILD_DEPLOYMENT,
     statusProbes: RUNNER_LIVE_PROBES,
     // The device code's wait ends early on an interrupt, so it stops at once.
-    sleep: (ms) =>
-      new Promise((done) => {
-        const timer = setTimeout(done, ms);
-        interrupt.signal.addEventListener("abort", () => {
-          clearTimeout(timer);
-          done();
-        });
-      }),
+    sleep: (ms) => abortableSleep(ms, interrupt.signal),
   };
   return parsed.command.run(parsed.input, context);
 }
 
 void main().then(
-  (code) => {
-    process.exitCode = code;
-    process.exit(code);
-  },
+  (code) => process.exit(code),
   (error: unknown) => {
     process.stderr.write(`volli-runner: ${(error as Error).message}\n`);
     process.exit(1);

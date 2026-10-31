@@ -24,6 +24,10 @@ describe("volli-runner's command line", () => {
 
   it("asks for one command's help", () => {
     expect(parse("help", "link")).toMatchObject({ kind: "help", command: { name: "link" } });
+    expect(parse("install", "--help")).toMatchObject({
+      kind: "help",
+      command: { name: "install" },
+    });
     expect(parse("status", "--data-dir", "/d", "-h")).toMatchObject({
       kind: "help",
       command: { name: "status" },
