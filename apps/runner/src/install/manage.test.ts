@@ -1,0 +1,485 @@
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+import type { CommandInput } from "../commands";
+import type { RunnerStatus } from "../shell/runner-status";
+import { testContext } from "../testing/context";
+import { installLayout, serviceUnit, unitQuote, UNIT } from "./layout";
+import { asRunner, installRunner, systemctl, type InstallPorts } from "./manage";
+import type { RunTool } from "./tools";
+import { uninstallRunner } from "./uninstall";
+
+let root: string;
+let source: string;
+let context: ReturnType<typeof testContext>;
+let calls: { command: string; args: string[] }[];
+let run: RunTool;
+let ports: InstallPorts;
+const input = (values: CommandInput["values"] = {}): CommandInput => ({ values, positionals: [] });
+
+function status(pid = 10, version = "9.9.9-test"): RunnerStatus {
+  return {
+    v: 1,
+    pid,
+    version,
+    state: "online",
+    dataDir: root,
+    socketPath: "/socket",
+    startedAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+    link: { runnerId: "runner-id" as never, name: "hetzner-1", server: "https://example.com" },
+    backend: null,
+    update: null,
+    credentials: null,
+  };
+}
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "runner-install-"));
+  source = join(root, "unpacked");
+  mkdirSync(join(source, "bin"), { recursive: true });
+  writeFileSync(join(source, "bin/node"), "node", { mode: 0o755 });
+  writeFileSync(join(source, "bin/volli-runner"), "runner", { mode: 0o755 });
+  writeFileSync(
+    join(source, "MANIFEST.json"),
+    JSON.stringify({
+      name: "volli-runner",
+      version: "9.9.9-test",
+      revision: "abc123",
+      target: "linux-x64",
+    }),
+  );
+  context = testContext({ root, env: { PATH: join(root, ".local/bin") } });
+  calls = [];
+  run = (command, args) => {
+    calls.push({ command, args });
+    return { status: 0, stdout: "yes\n" };
+  };
+  ports = {
+    run,
+    platform: "linux",
+    systemd: true,
+    systemInstallPresent: false,
+    ownRelease: source,
+    confirmPurge: () => false,
+  };
+});
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+function layout() {
+  return installLayout(input(), context);
+}
+async function install(values: CommandInput["values"] = {}) {
+  return installRunner(
+    input({ "no-link": true, "no-start": true, ...values }),
+    context,
+    layout(),
+    ports,
+  );
+}
+
+describe("managed layout and units", () => {
+  it("lays out system/default user/XDG modes without relative XDG paths", () => {
+    expect(layout()).toMatchObject({
+      mode: "user",
+      root: join(root, ".local/share/volli-runner"),
+      configDir: join(root, ".config/volli-runner"),
+    });
+    expect(
+      installLayout(input(), {
+        ...context,
+        env: {
+          XDG_DATA_HOME: "/xdg/data",
+          XDG_CONFIG_HOME: "/xdg/config",
+          XDG_STATE_HOME: "relative",
+        },
+      }),
+    ).toMatchObject({
+      root: "/xdg/data/volli-runner",
+      configDir: "/xdg/config/volli-runner",
+      dataDir: join(root, ".local/state/volli-runner"),
+    });
+    expect(installLayout(input(), { ...context, uid: 0 }, root)).toMatchObject({
+      mode: "system",
+      root: join(root, "opt/volli-runner"),
+      binDir: join(root, "usr/local/bin"),
+    });
+    expect(() => installLayout(input({ user: true, system: true }), context)).toThrow("not both");
+    expect(() => installLayout(input({ user: true }), { ...context, uid: 0 })).toThrow("root");
+    expect(() => installLayout(input({ system: true }), context)).toThrow("sudo");
+    expect(installLayout(input({ user: true }), context).mode).toBe("user");
+  });
+  it("escapes systemd specifiers, quotes and backslashes; rejects injection", () => {
+    expect(unitQuote('a%"\\b')).toBe('"a%%\\"\\\\b"');
+    expect(() => unitQuote("x\nUser=root")).toThrow("control character");
+    expect(() => unitQuote("\u007f")).toThrow("control character");
+    const sys = installLayout(input(), { ...context, uid: 0 }, root);
+    const unit = serviceUnit(sys, { HTTPS_PROXY: "http://proxy/p%20", NO_PROXY: "localhost" });
+    for (const line of [
+      "User=volli",
+      "ProtectHome=yes",
+      "Restart=always",
+      "TimeoutStopSec=45",
+      "CapabilityBoundingSet=",
+      "NODE_USE_ENV_PROXY=1",
+      "p%%20",
+      "WantedBy=multi-user.target",
+    ])
+      expect(unit).toContain(line);
+    expect(unit).not.toContain("Requires=");
+    const user = serviceUnit(layout(), {});
+    expect(user).not.toContain("User=volli");
+    expect(user).not.toContain("ProtectHome=yes");
+    expect(user).toContain("WantedBy=default.target");
+    expect(systemctl(sys, ["start"])).toEqual(["start"]);
+    expect(systemctl(layout(), ["start"])).toEqual(["--user", "start"]);
+    const shipped = readFileSync(
+      join(import.meta.dirname, "../../packaging/volli-runner.service"),
+      "utf8",
+    );
+    for (const line of [
+      "Restart=always",
+      "TimeoutStopSec=45",
+      "NoNewPrivileges=yes",
+      "ProtectHome=yes",
+      "CapabilityBoundingSet=",
+      "RestartPreventExitStatus=78",
+    ])
+      expect(shipped).toContain(line);
+    expect(shipped).not.toContain("Requires=");
+  });
+});
+
+describe("install", () => {
+  it("converges with private data/config, an immutable release and managed links", async () => {
+    expect(await install()).toBe(0);
+    const at = layout();
+    expect(lstatSync(at.dataDir).mode & 0o777).toBe(0o700);
+    expect(lstatSync(at.configDir).mode & 0o777).toBe(0o700);
+    expect(lstatSync(join(at.unitDir, UNIT)).mode & 0o777).toBe(0o600);
+    expect(readlinkSync(join(at.root, "current"))).toBe(
+      join(at.root, "releases/9.9.9-test-abc123"),
+    );
+    expect(readlinkSync(join(at.binDir, "volli-runner"))).toBe(
+      join(at.root, "current/bin/volli-runner"),
+    );
+    expect(JSON.parse(readFileSync(join(at.root, "managed.json"), "utf8")).channel).toBe("stable");
+    const second = testContext({ root, env: context.env as Record<string, string> });
+    await installRunner(input({ "no-link": true, "no-start": true }), second, at, ports);
+    expect(second.stdout()).toContain('"changed":false');
+    chmodSync(at.configDir, 0o755);
+    await install();
+    expect(lstatSync(at.configDir).mode & 0o777).toBe(0o700);
+  });
+  it("copies proxy settings without exposing them in JSON; no-systemd prints an unprivileged foreground command", async () => {
+    context = testContext({ root, env: { HTTPS_PROXY: "https://secret@proxy" } });
+    ports.systemd = false;
+    await install();
+    expect(context.stdout()).toContain("Start with:");
+    expect(context.stdout()).not.toContain("secret@proxy");
+    expect(context.stderr()).toContain("PATH");
+    expect(calls).toEqual([]);
+    expect(existsSync(join(layout().unitDir, UNIT))).toBe(false);
+  });
+  it("creates a system account, drops uid for linking, and never passes the token as argv", async () => {
+    context = { ...context, uid: 0 };
+    const at = installLayout(input(), context, root);
+    ports.systemd = false;
+    const child = vi.fn<RunTool>().mockReturnValue({ status: 0, stdout: "" });
+    ports.run = (command, args, options) => {
+      if (command === "id") return { status: 1, stdout: "" };
+      return child(command, args, options);
+    };
+    await installRunner(
+      input({
+        "no-start": true,
+        token: "vrt_secret",
+        name: "box",
+        server: "https://deployment.convex.cloud",
+        site: "https://deployment.convex.site",
+      }),
+      context,
+      at,
+      ports,
+    );
+    expect(child.mock.calls.some(([cmd]) => cmd === "useradd")).toBe(true);
+    const link = child.mock.calls.find(([cmd]) => cmd === "runuser")!;
+    expect(link[1]).toContain("link");
+    expect(link[1]).not.toContain("vrt_secret");
+    expect(link[2]?.env).toMatchObject({
+      VOLLI_RUNNER_TOKEN: "vrt_secret",
+      HOME: at.dataDir,
+      VOLLI_RUNNER_INSTALL_MODE: "system",
+    });
+    expect(context.stdout()).toContain("sudo -u volli");
+    expect(context.stdout()).not.toContain("vrt_secret");
+    asRunner(at, context, child, ["status"]);
+    expect(child.mock.calls.at(-1)?.[2]?.inherit).toBe(false);
+  });
+  it("accepts only an existing service account with the dedicated home", async () => {
+    const at = installLayout(input(), { ...context, uid: 0 }, root);
+    ports.run = (cmd) => ({
+      status: 0,
+      stdout: cmd === "getent" ? `volli:x:123:123::${at.dataDir}:/bin/bash` : "",
+    });
+    await installRunner(input({ "no-link": true, "no-start": true }), context, at, ports);
+    ports.run = () => ({ status: 0, stdout: "volli:x:123:123::/var/lib/volli-hostd:/bin/bash" });
+    await expect(installRunner(input(), context, at, ports)).rejects.toThrow(
+      "another installation",
+    );
+  });
+  it("uses the env token for user linking and never re-links an existing credential", async () => {
+    await install({ "no-link": false });
+    expect(calls.some((c) => c.args[0] === "link")).toBe(true);
+    writeFileSync(join(layout().configDir, "credential"), "sealed");
+    calls.length = 0;
+    await install({ "no-link": false });
+    expect(calls.some((c) => c.args[0] === "link")).toBe(false);
+  });
+  it("enables linger or prints its one recovery command", async () => {
+    ports.run = (cmd, args) => ({
+      status: args[0] === "enable-linger" ? 1 : 0,
+      stdout: cmd === "loginctl" ? "no" : "",
+    });
+    await install();
+    expect(context.stderr()).toContain("sudo loginctl enable-linger 1000");
+    ports.run = () => ({ status: 0, stdout: "no" });
+    await install();
+  });
+  it("requires a live online status at this version and a new pid after restart", async () => {
+    let reads = 0;
+    context = {
+      ...context,
+      statusProbes: {
+        read: () => status(reads++ === 0 ? 10 : 11),
+        alive: () => true,
+        accepts: async () => true,
+      },
+    };
+    expect(await install({ "no-start": false })).toBe(0);
+    expect(context.stdout()).toContain("hetzner-1 is online.\n");
+    expect(calls.some((c) => c.args.includes("restart"))).toBe(true);
+    calls.length = 0;
+    const second = testContext({
+      root,
+      env: context.env as Record<string, string>,
+      statusProbes: context.statusProbes,
+    });
+    await installRunner(input({ "no-link": true }), second, layout(), ports);
+    expect(second.stdout()).toContain('"changed":false');
+    expect(calls.some((c) => c.args.includes("restart"))).toBe(false);
+  });
+  it("recovers activation interrupted before restart and starts a stopped install", async () => {
+    await install();
+    let reads = 0;
+    context = {
+      ...context,
+      statusProbes: {
+        read: () => (reads++ === 0 ? status(10, "8.0.0") : { ...status(11), link: null }),
+        alive: () => true,
+        accepts: async () => true,
+      },
+    };
+    expect(await install({ "no-start": false })).toBe(0);
+    expect(context.stdout()).toContain("Runner is online.");
+    ports.run = (cmd, args) => ({
+      status: cmd === "systemctl" && args.includes("is-enabled") ? 1 : 0,
+      stdout: "yes",
+    });
+    let count = 0;
+    context = {
+      ...context,
+      statusProbes: {
+        read: () => (count++ === 0 ? null : status()),
+        alive: () => true,
+        accepts: async () => true,
+      },
+    };
+    expect(await install({ "no-start": false })).toBe(0);
+  });
+  it("times out rather than believing a stale/wrong-version status; aborts promptly", async () => {
+    expect(await install({ "no-start": false })).toBe(1);
+    expect(context.stderr()).toContain("no status file");
+    context = {
+      ...context,
+      statusProbes: {
+        read: () => status(10, "8.0.0"),
+        alive: () => true,
+        accepts: async () => true,
+      },
+    };
+    expect(await install({ "no-start": false })).toBe(1);
+    expect(context.stderr()).toContain("online");
+    context = {
+      ...context,
+      signal: AbortSignal.abort(),
+      statusProbes: { read: () => "unreadable", alive: () => true, accepts: async () => true },
+    };
+    expect(await install({ "no-start": false })).toBe(1);
+  });
+  it("refuses a different binary, platform, metadata or conflicting paths", async () => {
+    await expect(install({ channel: "nightly" })).rejects.toThrow("channel");
+    await expect(install({ version: "1.0.0" })).rejects.toThrow("requested release");
+    ports.platform = "darwin";
+    await expect(install()).rejects.toThrow("Linux");
+    ports.platform = "linux";
+    writeFileSync(join(source, "MANIFEST.json"), "{}");
+    await expect(install()).rejects.toThrow("Not this runner");
+  });
+  it("checks manifest target, revision, semver and regular entrypoints", async () => {
+    const manifest = {
+      name: "volli-runner",
+      version: "9.9.9-test",
+      revision: "abc123",
+      target: "linux-x64",
+    };
+    for (const bad of [
+      { ...manifest, target: undefined },
+      { ...manifest, revision: undefined },
+      { ...manifest, version: "bad" },
+      { ...manifest, name: "other" },
+    ]) {
+      writeFileSync(join(source, "MANIFEST.json"), JSON.stringify(bad));
+      await expect(install()).rejects.toThrow("Not this runner");
+    }
+    writeFileSync(join(source, "MANIFEST.json"), JSON.stringify(manifest));
+    rmSync(join(source, "bin/node"));
+    mkdirSync(join(source, "bin/node"));
+    await expect(install()).rejects.toThrow("regular bin/node");
+  });
+  it("refuses a user install beside a system service and reports a system journal on timeout", async () => {
+    ports.systemInstallPresent = true;
+    await expect(install()).rejects.toThrow("system runner is already installed");
+    const sysContext = { ...context, uid: 0 };
+    const at = installLayout(input(), sysContext, root);
+    ports.run = (cmd, args) => {
+      calls.push({ command: cmd, args });
+      return { status: 0, stdout: cmd === "getent" ? `volli:x:1:1::${at.dataDir}:/bin/bash` : "" };
+    };
+    expect(await installRunner(input({ "no-link": true }), sysContext, at, ports)).toBe(1);
+    expect(calls.find((c) => c.command === "journalctl")?.args).not.toContain("--user");
+  });
+  it("never overwrites an immutable release or an unrelated CLI", async () => {
+    await install();
+    writeFileSync(
+      join(source, "MANIFEST.json"),
+      readFileSync(join(source, "MANIFEST.json"), "utf8") + " ",
+    );
+    await expect(install()).rejects.toThrow("immutable release");
+    writeFileSync(
+      join(source, "MANIFEST.json"),
+      readFileSync(join(source, "MANIFEST.json"), "utf8").trim(),
+    );
+    const cli = join(layout().binDir, "volli-runner");
+    rmSync(cli);
+    writeFileSync(cli, "other");
+    await expect(install()).rejects.toThrow("not a managed symlink");
+    rmSync(cli);
+    symlinkSync("/other/missing", cli);
+    await expect(install()).rejects.toThrow("outside");
+  });
+  it("updates managed current symlinks and refuses symlink directories", async () => {
+    await install();
+    const manifest = JSON.parse(readFileSync(join(source, "MANIFEST.json"), "utf8"));
+    manifest.revision = "def456";
+    writeFileSync(join(source, "MANIFEST.json"), JSON.stringify(manifest));
+    await install({ from: source, channel: "canary" });
+    expect(readlinkSync(join(layout().root, "current"))).toContain("def456");
+    rmSync(layout().configDir, { recursive: true });
+    symlinkSync(source, layout().configDir);
+    await expect(install()).rejects.toThrow("not a symlink");
+  });
+});
+
+describe("uninstall", () => {
+  it("keeps data and encryption keys by default and is idempotent", async () => {
+    await install();
+    const at = layout();
+    writeFileSync(join(at.dataDir, "work"), "unpushed commit");
+    writeFileSync(join(at.configDir, "session-secrets.key"), "key");
+    writeFileSync(join(at.configDir, "credential"), "sealed");
+    writeFileSync(join(at.configDir, "credential.key"), "key");
+    expect(await uninstallRunner(input(), context, at, ports)).toBe(0);
+    expect(calls.some((c) => c.args.includes("--revoke-only"))).toBe(true);
+    expect(readFileSync(join(at.dataDir, "work"), "utf8")).toBe("unpushed commit");
+    expect(existsSync(join(at.configDir, "session-secrets.key"))).toBe(true);
+    expect(existsSync(join(at.configDir, "credential"))).toBe(false);
+    expect(existsSync(at.root)).toBe(false);
+    const second = testContext({ root });
+    await uninstallRunner(input(), second, at, ports);
+    expect(second.stdout()).toContain('"changed":false');
+  });
+  it("requires explicit purge consent; then removes data and the dedicated account", async () => {
+    await install();
+    const at = layout();
+    expect(await uninstallRunner(input({ purge: true }), context, at, ports)).toBe(2);
+    expect(existsSync(at.dataDir)).toBe(true);
+    await expect(
+      uninstallRunner(input({ purge: true, "keep-data": true }), context, at, ports),
+    ).rejects.toThrow("not both");
+    const sys = { ...at, mode: "system" as const };
+    ports.run = (cmd, args) => {
+      calls.push({ command: cmd, args });
+      return { status: 0, stdout: cmd === "getent" ? `volli:x:1:1::${at.dataDir}:/bin/bash` : "" };
+    };
+    expect(await uninstallRunner(input({ purge: true, yes: true }), context, sys, ports)).toBe(0);
+    expect(existsSync(at.dataDir)).toBe(false);
+    expect(calls.some((c) => c.command === "userdel")).toBe(true);
+  });
+  it("lists work at risk, accepts a tty confirmation, and keeps an account shared with another install", async () => {
+    await install();
+    const at = layout();
+    mkdirSync(join(at.dataDir, "copy"));
+    writeFileSync(join(at.dataDir, "copy/.git"), "gitdir: elsewhere");
+    ports.confirmPurge = () => true;
+    ports.run = () => ({ status: 0, stdout: "different-home" });
+    expect(
+      await uninstallRunner(input({ purge: true }), context, { ...at, mode: "system" }, ports),
+    ).toBe(0);
+    expect(context.stderr()).toContain("Uncommitted, unpushed or unverifiable work");
+    expect(context.stderr()).toContain("Kept the volli account");
+  });
+  it("does not remove an absent account or a user account", async () => {
+    ports.systemd = false;
+    ports.run = () => ({ status: 1, stdout: "" });
+    await uninstallRunner(
+      input({ purge: true, yes: true }),
+      context,
+      { ...layout(), mode: "system" },
+      ports,
+    );
+    await uninstallRunner(input({ purge: true, yes: true }), context, layout(), ports);
+  });
+  it("refuses a different CLI, a directory where the unit should be, or an unsupported platform", async () => {
+    await install();
+    const at = layout();
+    rmSync(join(at.binDir, "volli-runner"));
+    writeFileSync(join(at.binDir, "volli-runner"), "other");
+    await expect(uninstallRunner(input(), context, at, ports)).rejects.toThrow("not this install");
+    rmSync(join(at.binDir, "volli-runner"));
+    symlinkSync(source, join(at.binDir, "volli-runner"));
+    await expect(uninstallRunner(input(), context, at, ports)).rejects.toThrow("not this install");
+    rmSync(join(at.binDir, "volli-runner"));
+    rmSync(join(at.unitDir, UNIT));
+    mkdirSync(join(at.unitDir, UNIT));
+    await expect(uninstallRunner(input(), context, at, ports)).rejects.toThrow("unexpectedly");
+    ports.platform = "darwin";
+    await expect(uninstallRunner(input(), context, at, ports)).rejects.toThrow("Linux");
+  });
+});
