@@ -41,7 +41,8 @@ import Legal from "../../layouts/Legal.astro";
     <li>
       <strong>Service and support data:</strong> device and runner connection information,
       app version, sign-in and security records, service errors, and anything you choose
-      to send us for support. Website and service requests expose connection information
+      to send us for support. We store the last IP address seen for a runner's heartbeat
+      and credential use. Website and service requests expose connection information
       such as IP addresses and browser details to the providers handling them.
     </li>
   </ul>
@@ -77,16 +78,18 @@ import Legal from "../../layouts/Legal.astro";
   <p>
     Our preview service providers are <strong>Convex, Cloudflare, WorkOS and Google Workspace</strong>.
     Convex stores account, board and Session records; Cloudflare R2 holds uploaded history,
-    attachments and move staging; WorkOS handles sign-in; Google Workspace handles emails
-    you send us and our replies. See
+    attachments and move staging; WorkOS handles sign-in through the Google or GitHub
+    identity provider you choose. Those identity providers handle your sign-in under
+    their own terms. Google Workspace handles emails you send us and our replies. See
     <a href="/legal/subprocessors/">their roles and the data they process</a>. Data may be
     processed outside Canada, including in the United States and on global networks,
     under different laws. We do not promise Canadian-only storage.
   </p>
   <p>
-    Other Workspace members can see work shared with them; ticket work is shared by
-    default. Ad-hoc chats and Board Sessions start private, but their owner can share them, and a Workspace
-    administrator can make all Sessions shared. Sharing a Session cannot be undone in the
+    Every active Workspace member can see its projects, tickets, comments, labels and
+    board activity, except activity that would disclose a private Session. Ticket Sessions
+    are shared by default. Ad-hoc chats and Board Sessions start private, but their owner
+    can share them, and a Workspace administrator can make all Sessions shared. Sharing a Session cannot be undone in the
     preview and also shares its private subagents. Leaving a Workspace does not erase
     contributions already stored in it. We may access data as needed for support, service
     operation, security or legal requirements, and disclose data when the law requires it.
@@ -100,8 +103,9 @@ import Legal from "../../layouts/Legal.astro";
     end-to-end encryption: our service and its providers can process readable content.
     Cloud secrets are separately encrypted under service-held keys; ordinary environment
     variables are not secret values. Provider API keys and subscription credentials saved
-    by Pi stay in an owner-only local credential file, not encrypted by Volli. They are
-    used locally to authenticate to your provider, not uploaded to Volli Cloud. Your Volli
+    by Pi stay in an owner-only local credential file, not encrypted by Volli. Processes
+    running as your operating-system user, including agent commands, can read that file.
+    The credentials are used locally to authenticate to your provider, not uploaded to Volli Cloud. Your Volli
     account refresh token is separate: the desktop stores it in a sealed local store with
     a key wrapped through the macOS keychain. These protections do not prevent secrets
     appearing in prompts or tool output.
@@ -137,8 +141,8 @@ import Legal from "../../layouts/Legal.astro";
     transfer ownership before requesting deletion. Requesting deletion disconnects GitHub
     and revokes cloud device sessions; cancelling does not reconnect them. After the
     cancellation window ends, contact us for help; do not assume erasure has completed.
-    Archiving a project or ticket hides it;
-    it does not purge its history. There is no complete self-service cloud project or
+    Archiving removes a project or ticket from active app views, but is not a privacy
+    control or a purge of its history. There is no complete self-service cloud project or
     Workspace deletion or export yet. Contact
     <a href="mailto:privacy@volli.app">privacy@volli.app</a> for help with these requests.
     We may need to verify your identity and involve a shared Workspace's owner.
