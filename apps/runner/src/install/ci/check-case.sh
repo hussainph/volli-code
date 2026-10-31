@@ -6,7 +6,7 @@ mode=${1:?system or user}
 source_cli=/release/bin/volli-runner
 node=/release/bin/node
 unit=volli-runner.service
-proxy=http://fixture-user:fixture-password@127.0.0.1:9
+proxy=http://fixture-user:fixture-password%20@127.0.0.1:9
 if [ "$(cat /proc/1/comm)" != systemd ]; then echo 'PID1 is not systemd' >&2; exit 1; fi
 if "$source_cli" install --user --from /release --no-start --no-link >/tmp/root-user-refusal 2>&1; then
   echo 'install --user unexpectedly accepted root' >&2; exit 1
@@ -54,10 +54,10 @@ wait_status() {
       if "$node" -e '
         const fs = require("node:fs");
         const s = JSON.parse(fs.readFileSync("/tmp/current-status.json", "utf8"));
-        const [pid, mode] = process.argv.slice(1);
+        const [pid, mode, root] = process.argv.slice(1);
         const f = s.status?.fixture;
-        if (s.verdict !== "not-serving" || s.detail !== "unlinked" || s.status?.pid !== Number(pid) || f?.runtime !== "installer-only-unlinked" || f.uid === 0 || !f.service || !f.proxyConfigured || f.canWriteRelease !== (mode === "user")) process.exit(1);
-      ' "$pid" "$mode"; then return 0; fi
+        if (s.verdict !== "not-serving" || s.detail !== "unlinked" || s.status?.pid !== Number(pid) || f?.runtime !== "installer-only-unlinked" || f.uid === 0 || !f.service || f.installMode !== mode || !f.releaseRoot.startsWith(root + "/releases/") || !f.proxyConfigured || f.canWriteRelease !== (mode === "user")) process.exit(1);
+      ' "$pid" "$mode" "$root"; then return 0; fi
     fi
     sleep 1
   done

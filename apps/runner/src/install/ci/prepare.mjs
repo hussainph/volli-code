@@ -14,6 +14,8 @@ import { join, resolve } from "node:path";
 
 if (process.platform !== "linux")
   throw new Error("This payload is built only by the Linux CI lane.");
+// The payload is public code only; a user-mode install must be able to read it.
+process.umask(0o022);
 if (!process.argv[2]) throw new Error("usage: prepare.mjs <new-output-directory>");
 const out = resolve(process.argv[2]);
 const app = resolve(import.meta.dirname, "../../..");

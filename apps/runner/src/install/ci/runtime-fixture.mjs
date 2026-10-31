@@ -26,9 +26,8 @@ const dataDir = values["data-dir"];
 const configDir = values["config-dir"];
 if (!dataDir || !configDir || process.getuid() === 0)
   throw new Error("Fixture needs explicit paths and a nonroot service uid.");
-const version = JSON.parse(
-  readFileSync(resolve(import.meta.dirname, "../MANIFEST.json"), "utf8"),
-).version;
+const releaseRoot = resolve(import.meta.dirname, "..");
+const version = JSON.parse(readFileSync(join(releaseRoot, "MANIFEST.json"), "utf8")).version;
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const lock = new Database(join(dataDir, "runner.lock"));
 lock.pragma("busy_timeout = 0");
@@ -38,7 +37,7 @@ rmSync(socketPath, { force: true });
 const startedAt = new Date().toISOString();
 let canWriteRelease = true;
 try {
-  accessSync(resolve(import.meta.dirname, ".."), constants.W_OK);
+  accessSync(releaseRoot, constants.W_OK);
 } catch {
   canWriteRelease = false;
 }
@@ -62,10 +61,12 @@ const status = (state) => {
       credentials: null,
       fixture: {
         runtime: "installer-only-unlinked",
+        releaseRoot,
+        installMode: process.env.VOLLI_RUNNER_INSTALL_MODE,
         uid: process.getuid(),
         service: process.env.VOLLI_RUNNER_SERVICE === "1",
         proxyConfigured:
-          process.env.HTTPS_PROXY === "http://fixture-user:fixture-password@127.0.0.1:9",
+          process.env.HTTPS_PROXY === "http://fixture-user:fixture-password%20@127.0.0.1:9",
         canWriteRelease,
       },
     }),
