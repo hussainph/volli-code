@@ -3,8 +3,9 @@ name: CI extended
 # The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
 # smoke tier (every non-core, non-quarantined journey) and flag-on cloud
 # acceptance, plus the move engine's kill/resume matrix, the large-profile
-# backup restore rehearsal (both Linux) and the older-app live check (the
-# newest shipped build against this commit's backend, Linux). The smoke
+# backup restore rehearsal, the older-app live check (the newest shipped
+# build against this commit's backend) and the BYO runner acceptance (all
+# Linux). The smoke
 # lanes are macOS-only and long, and gating every PR on them held
 # all five of the account's concurrent macOS slots per PR run, so PRs queued
 # behind each other. Here they run:
@@ -497,6 +498,65 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  # BYO runner acceptance (VC-1043): a person's own Linux box, end to end,
+  # against the pinned local backend: a seeded person, the fake GitHub
+  # (scripts/fake-github: OAuth + REST for the backend, git smart HTTP that
+  # checks x-access-token), a local "GitHub release" file server, and a fresh
+  # Ubuntu 24.04 box booted under systemd in a privileged container on the
+  # host network. The harness leg proves that plumbing; the install leg
+  # reports PENDING (naming the merged work it waits on) and the legs built on
+  # it BLOCKED until the BYO sprint lands them. A leg that runs and fails is
+  # red (apps/runner/e2e/README.md). Linux, no macOS slot.
+  byo-runner:
+    name: BYO runner acceptance
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cache: true
+          run-install: true
+
+      - name: Place the backend cache outside the checkout
+        run: echo "VOLLI_CONVEX_BACKEND_CACHE=$RUNNER_TEMP/convex-local-backend" >> "$GITHUB_ENV"
+
+      - name: Restore the pinned Convex local backend
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/convex-local-backend
+          key: convex-local-backend-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('convex/fixture/backend.json') }}
+
+      - name: Fetch and verify the pinned backend
+        run: vp run --filter @volli/convex backend:fetch
+
+      - name: Harness self-tests (fake GitHub, release server, legs)
+        run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs
+
+      - name: Run the BYO runner acceptance
+        env:
+          VOLLI_BYO_EVIDENCE: ${{ runner.temp }}/byo-acceptance
+        working-directory: convex
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          node ../apps/runner/e2e/acceptance.mjs
+
+      - name: Upload BYO runner acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: byo-runner-acceptance-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/byo-acceptance
+          if-no-files-found: warn
+          retention-days: 30
+
   # One place to read the outcome, on the run page and in its summary. It
   # waits on every lane (`always()`, so a cancelled or failed lane is still
   # reported) and fails unless every lane succeeded — nothing here may skip.
@@ -513,6 +573,7 @@ jobs:
         move-app,
         backup-restore-rehearsal,
         older-app-live,
+        byo-runner,
       ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -528,6 +589,7 @@ jobs:
           MOVE_APP: ${{ needs.move-app.result }}
           BACKUP_RESTORE: ${{ needs.backup-restore-rehearsal.result }}
           OLDER_APP_LIVE: ${{ needs.older-app-live.result }}
+          BYO_RUNNER: ${{ needs.byo-runner.result }}
         run: |
           set -euo pipefail
           status=0
@@ -553,4 +615,5 @@ jobs:
           report "Move to Volli Cloud (app path)" "$MOVE_APP"
           report "Backup restore rehearsal" "$BACKUP_RESTORE"
           report "Older app (live)" "$OLDER_APP_LIVE"
+          report "BYO runner acceptance" "$BYO_RUNNER"
           exit "$status"

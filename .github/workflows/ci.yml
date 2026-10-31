@@ -359,6 +359,13 @@ jobs:
           apps/desktop/scripts/copy-hostd-manifest.test.mjs
           apps/desktop/scripts/check-packaged-e2e.test.mjs
 
+      # The BYO runner acceptance lane's harness (VC-1043): the fake GitHub,
+      # the release server and the leg runner. The lane itself runs in
+      # ci-extended.yml; its harness is checked here so a break is caught
+      # before merge, not as a red CI extended on main.
+      - name: Test the BYO acceptance harness
+        run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs
+
       - name: Check host Electron boundary and CI gate policy
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
