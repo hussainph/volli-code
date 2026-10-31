@@ -584,18 +584,57 @@ test("artifact gate accepts only the declared run stub; implemented run must boo
     "utf8",
   );
   const start = script.indexOf('if [[ "${ALLOW_SKELETON:-false}" != true ]]; then');
-  const endMarker = 'test "$help_code" -eq 0\n';
-  const end = script.indexOf(endMarker, start);
-  assert.ok(start > 0 && end > start);
-  const skeletonGuard = script.slice(start, end + endMarker.length);
+  assert.ok(start > 0);
+  const skeletonGuard = script.slice(start);
   const root = versionFixture(t);
   mkdirSync(join(root, "bin"));
+  // Simulated wiring: this process double tests the real shell guard. Like the
+  // actual registry, help always succeeds even while a command remains a stub.
+  // The release container runs the shipped binary, not this double.
   writeFileSync(
     join(root, "bin/volli-runner"),
-    '#!/bin/sh\nif [ "$1" = install ]; then exit "$TEST_INSTALL_CODE"; fi\nprintf "%s\\n" "$TEST_MESSAGE" >&2\nexit "$TEST_CODE"\n',
+    `#!/bin/sh
+if [ "\${2:-}" = --help ]; then echo Usage; exit 0; fi
+if [ "$1" = version ]; then
+  if [ "$TEST_INSTALL_BEHAVIOR" = wrong-version ]; then echo 0.0.0; else echo "$TEST_EXPECTED_VERSION"; fi
+  exit 0
+fi
+if [ "$1" = install ]; then
+  printf '%s\\n' "$@" "HOME=$HOME" "XDG_DATA_HOME=$XDG_DATA_HOME" "XDG_STATE_HOME=$XDG_STATE_HOME" "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" > "$TEST_INSTALL_RECORD"
+  [ "$#" -eq 6 ] && [ "$2" = --user ] && [ "$3" = --from ] && [ "$4" = "$root" ] && [ "$5" = --no-start ] && [ "$6" = --no-link ] || exit 97
+  [ "$TEST_INSTALL_CODE" = 0 ] || exit "$TEST_INSTALL_CODE"
+  [ "$TEST_INSTALL_BEHAVIOR" != noop ] || exit 0
+  release="$HOME/.local/share/volli-runner/releases/$TEST_EXPECTED_VERSION"
+  mkdir -p "$release/bin" "$HOME/.local/bin"
+  cp "$0" "$release/bin/volli-runner"
+  ln -s "$release" "$HOME/.local/share/volli-runner/current"
+  ln -s "$HOME/.local/share/volli-runner/current/bin/volli-runner" "$HOME/.local/bin/volli-runner"
+  exit 0
+fi
+[ "$1" = run ] && [ "$2" = --data-dir ] || exit 98
+if [ "$TEST_CODE" = live ]; then
+  trap 'exit 0' TERM
+  while :; do sleep 0.02; done
+fi
+printf '%s\\n' "$TEST_MESSAGE" >&2
+exit "$TEST_CODE"
+`,
     { mode: 0o755 },
   );
-  for (const [code, message, allowSkeleton, installCode, skeleton, success] of [
+  const cleanup = `trap 'if [[ -n "\${pid:-}" ]]; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" || true; fi' EXIT\n`;
+  const installHome = join(root, "install-home");
+  const installRecord = join(root, "install-record");
+  const runData = join(root, "run-data");
+  mkdirSync(runData);
+  for (const [
+    code,
+    message,
+    allowSkeleton,
+    installCode,
+    skeleton,
+    success,
+    installBehavior = "copy",
+  ] of [
     ["69", "volli-runner: `run` is not available in this build yet.", "true", "69", true, true],
     ["69", "volli-runner: `run` is not available in this build yet.", "false", "0", false, false],
     [
@@ -608,15 +647,28 @@ test("artifact gate accepts only the declared run stub; implemented run must boo
     ],
     ["69", "arbitrary unavailable/crash", "true", "0", false, false],
     ["1", "runtime failure", "true", "0", false, false],
-    ["0", "Usage: volli-runner run", "false", "69", false, false],
-    ["0", "Usage: volli-runner run", "false", "0", false, true],
+    ["0", "premature successful exit", "true", "0", false, false],
+    ["live", "", "false", "69", false, false],
+    ["live", "", "false", "0", false, true],
+    ["live", "", "false", "0", false, false, "noop"],
+    ["live", "", "false", "0", false, false, "wrong-version"],
   ]) {
-    const result = spawnSync("bash", ["-eu", "-c", `${skeletonGuard}\necho real-boot-required`], {
+    rmSync(installHome, { recursive: true, force: true });
+    rmSync(installRecord, { force: true });
+    mkdirSync(installHome);
+    const result = spawnSync("bash", ["-eu", "-c", `${cleanup}${skeletonGuard}`], {
       encoding: "utf8",
+      timeout: 15000,
       env: {
         ...process.env,
         root,
+        data: runData,
+        install_home: installHome,
+        expected_version: "1.2.3",
         log: join(root, "run.log"),
+        TEST_EXPECTED_VERSION: "1.2.3",
+        TEST_INSTALL_RECORD: installRecord,
+        TEST_INSTALL_BEHAVIOR: installBehavior,
         TEST_CODE: code,
         TEST_MESSAGE: message,
         TEST_INSTALL_CODE: installCode,
@@ -624,7 +676,21 @@ test("artifact gate accepts only the declared run stub; implemented run must boo
       },
     });
     assert.equal(result.status === 0, success, result.stdout + result.stderr);
+    if (allowSkeleton === "false") {
+      assert.deepEqual(readFileSync(installRecord, "utf8").trim().split("\n"), [
+        "install",
+        "--user",
+        "--from",
+        root,
+        "--no-start",
+        "--no-link",
+        `HOME=${installHome}`,
+        `XDG_DATA_HOME=${installHome}/.local/share`,
+        `XDG_STATE_HOME=${installHome}/.local/state`,
+        `XDG_CONFIG_HOME=${installHome}/.config`,
+      ]);
+    }
     assert.equal(result.stdout.includes("skeleton artifact"), skeleton);
-    assert.equal(result.stdout.includes("real-boot-required"), success && !skeleton);
+    assert.equal(result.stdout.includes("unlinked boot and SIGTERM passed"), success && !skeleton);
   }
 });
