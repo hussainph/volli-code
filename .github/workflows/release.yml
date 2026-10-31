@@ -549,6 +549,9 @@ jobs:
       - name: Package and boot runner
         env:
           ARCH: ${{ matrix.arch }}
+          # An unfinished command-registry build can prove packaging in a dry
+          # run, but must never reach a published runner release/channel feed.
+          ALLOW_SKELETON: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
           VOLLI_BUILD_CONVEX_URL: ${{ vars.VOLLI_BUILD_CONVEX_URL }}
           VOLLI_BUILD_CONVEX_SITE_URL: ${{ vars.VOLLI_BUILD_CONVEX_SITE_URL }}
         run: |
@@ -560,7 +563,7 @@ jobs:
           docker run --rm -e VOLLI_BUILD_CONVEX_URL -e VOLLI_BUILD_CONVEX_SITE_URL \
             -v "$PWD:/src:ro" -v "$RUNNER_TEMP/runner:/out" volli-runner-build \
             bash /src/apps/runner/scripts/ci-build-artifact.sh
-          docker run --rm -i -v "$RUNNER_TEMP/runner:/out:ro" volli-runner-build \
+          docker run --rm -i -e ALLOW_SKELETON="$ALLOW_SKELETON" -v "$RUNNER_TEMP/runner:/out:ro" volli-runner-build \
             bash -s < apps/runner/scripts/ci-boot-artifact.sh
       - name: Upload runner architecture assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

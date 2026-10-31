@@ -490,7 +490,12 @@ test("runner builds both native architectures at the bullseye ABI baseline", () 
   assert.match(commands, /ci-build-artifact\.sh/);
   assert.match(commands, /ci-boot-artifact\.sh/);
   assert.match(commands, /EXPECTED_ARCH/);
+  assert.match(commands, /-e ALLOW_SKELETON="\$ALLOW_SKELETON"/);
   const build = runner.steps.find((step) => step.name === "Package and boot runner");
+  assert.equal(
+    build.env.ALLOW_SKELETON,
+    "${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}",
+  );
   for (const name of ["VOLLI_BUILD_CONVEX_URL", "VOLLI_BUILD_CONVEX_SITE_URL"]) {
     assert.equal(build.env[name], `\u0024{{ vars.${name} }}`);
     assert.ok(build.run.includes(`-e ${name}`));
@@ -568,7 +573,7 @@ test("artifact gate accepts only the declared run stub; implemented run must boo
     new URL("../apps/runner/scripts/ci-boot-artifact.sh", import.meta.url),
     "utf8",
   );
-  const start = script.indexOf("help_code=0\n");
+  const start = script.indexOf('if [[ "${ALLOW_SKELETON:-false}" != true ]]; then');
   const endMarker = 'test "$help_code" -eq 0\n';
   const end = script.indexOf(endMarker, start);
   assert.ok(start > 0 && end > start);
@@ -577,14 +582,24 @@ test("artifact gate accepts only the declared run stub; implemented run must boo
   mkdirSync(join(root, "bin"));
   writeFileSync(
     join(root, "bin/volli-runner"),
-    '#!/bin/sh\nprintf "%s\\n" "$TEST_MESSAGE" >&2\nexit "$TEST_CODE"\n',
+    '#!/bin/sh\nif [ "$1" = install ]; then exit "$TEST_INSTALL_CODE"; fi\nprintf "%s\\n" "$TEST_MESSAGE" >&2\nexit "$TEST_CODE"\n',
     { mode: 0o755 },
   );
-  for (const [code, message, skeleton, success] of [
-    ["69", "volli-runner: `run` is not available in this build yet.", true, true],
-    ["69", "arbitrary unavailable/crash", false, false],
-    ["1", "runtime failure", false, false],
-    ["0", "Usage: volli-runner run", false, true],
+  for (const [code, message, allowSkeleton, installCode, skeleton, success] of [
+    ["69", "volli-runner: `run` is not available in this build yet.", "true", "69", true, true],
+    ["69", "volli-runner: `run` is not available in this build yet.", "false", "0", false, false],
+    [
+      "69",
+      "crash: volli-runner: `run` is not available in this build yet.",
+      "true",
+      "0",
+      false,
+      false,
+    ],
+    ["69", "arbitrary unavailable/crash", "true", "0", false, false],
+    ["1", "runtime failure", "true", "0", false, false],
+    ["0", "Usage: volli-runner run", "false", "69", false, false],
+    ["0", "Usage: volli-runner run", "false", "0", false, true],
   ]) {
     const result = spawnSync("bash", ["-eu", "-c", `${skeletonGuard}\necho real-boot-required`], {
       encoding: "utf8",
@@ -594,6 +609,8 @@ test("artifact gate accepts only the declared run stub; implemented run must boo
         log: join(root, "run.log"),
         TEST_CODE: code,
         TEST_MESSAGE: message,
+        TEST_INSTALL_CODE: installCode,
+        ALLOW_SKELETON: allowSkeleton,
       },
     });
     assert.equal(result.status === 0, success, result.stdout + result.stderr);

@@ -28,13 +28,23 @@ test "$("$root/bin/volli-runner" version)" = "$expected_version"
 status_code=0
 "$root/bin/volli-runner" status --data-dir "$data" || status_code=$?
 test "$status_code" -eq 3
+# A published runner must provide the binary installer too, even if its run
+# command landed first. Dry runs can prove the skeleton's packaging separately.
+if [[ "${ALLOW_SKELETON:-false}" != true ]]; then
+  "$root/bin/volli-runner" install --help >"$log" 2>&1 || {
+    cat "$log"
+    echo 'Cannot publish an unfinished runner: install is unavailable.' >&2
+    exit 1
+  }
+fi
 # The initial command-registry release intentionally ships a run stub. Prove
 # that exact boundary, not a generic exit69. Richer builds must pass the real
 # unlinked lifecycle below; a crash is never accepted as a skeleton.
 help_code=0
 "$root/bin/volli-runner" run --help >"$log" 2>&1 || help_code=$?
-if [[ "$help_code" -eq 69 ]] && grep -Fq 'volli-runner: `run` is not available in this build yet.' "$log"; then
+if [[ "$help_code" -eq 69 ]] && grep -Fxq 'volli-runner: `run` is not available in this build yet.' "$log"; then
   cat "$log"
+  [[ "${ALLOW_SKELETON:-false}" = true ]] || { echo 'Cannot publish an unfinished runner: run is still a stub.' >&2; exit 1; }
   echo 'Runner skeleton artifact: natives, Code Mode, version and unlinked status passed; run is explicitly unavailable.'
   exit 0
 fi
