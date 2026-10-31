@@ -1,6 +1,5 @@
 import * as React from "react";
 import type { SessionStartStatus } from "@volli/shared/cloud";
-import { runnerPickerApi } from "./runner-picker-api";
 import { followCloudSession } from "@renderer/lib/cloud-client";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
 import { Button } from "@renderer/components/ui/button";
@@ -21,7 +20,7 @@ export function useRunnerStartStatus(sessionId: string | undefined) {
       off = undefined;
       setResult(null);
       if (session === null) return;
-      const watch = session.client.watchQuery(runnerPickerApi(session).sessionStarts.status, {
+      const watch = session.client.watchQuery(session.api.sessionStarts.status, {
         sessionId,
       });
       const read = () => {

@@ -1,7 +1,6 @@
 import * as React from "react";
 import { DesktopIcon } from "@phosphor-icons/react/dist/csr/Desktop";
 import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
-import { runnerPickerApi } from "./runner-picker-api";
 
 import { cloudAccountScope, launchStore } from "@renderer/stores/launch";
 import { followCloudSession } from "@renderer/lib/cloud-client";
@@ -107,7 +106,7 @@ export function useRunnerPicker(
       off = undefined;
       setView(null);
       if (session === null) return;
-      const watch = session.client.watchQuery(runnerPickerApi(session).runnerPicker.forComposer, {
+      const watch = session.client.watchQuery(session.api.runnerPicker.forComposer, {
         projectId,
       });
       const read = () => {

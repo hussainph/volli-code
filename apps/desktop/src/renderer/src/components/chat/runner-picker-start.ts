@@ -3,7 +3,6 @@ import type { SessionStartOnArgs } from "@volli/shared/cloud";
 import { queuedWireMessage, type QueuedMessage } from "@volli/session-presentation";
 import { cloudAccountScope as runnerStartAccountScope } from "@renderer/stores/launch";
 export { cloudAccountScope as runnerStartAccountScope } from "@renderer/stores/launch";
-import { runnerPickerApi } from "./runner-picker-api";
 import { cloudSession, type CloudSession } from "@renderer/lib/cloud-client";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
 import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
@@ -109,7 +108,7 @@ export async function startOnRunner(
   }
   try {
     const result = await session.client.mutation(
-      runnerPickerApi(session).sessionStarts.startOn,
+      session.api.sessionStarts.startOn,
       intent,
     );
     return result.sessionId;
