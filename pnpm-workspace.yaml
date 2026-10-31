@@ -133,7 +133,8 @@ overrides:
   # and resolve whatever pnpm's hidden hoist holds — when a transitive range
   # (docs-site expressive-code) re-resolved to 4.4.3 beside the app's then-4.3.1,
   # incrementally-updated checkouts hoisted 4.4.3 and typecheck broke against
-  # @streamdown/code's shiki-3 types while fresh CI installs stayed green.
+  # @streamdown/code's then-shiki-3 types while fresh CI installs stayed green.
+  # The plugin moved to shiki 4 in 2.0; the deduplication rationale still applies.
   #
   # 4.4.3 was the deliberate retake (VC-211, taking over Dependabot #418).
   # The desktop app's shiki/@shikijs/{langs,monaco,themes} pins now move to

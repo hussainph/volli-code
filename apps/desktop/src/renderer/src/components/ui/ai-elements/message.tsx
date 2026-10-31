@@ -83,11 +83,12 @@ export type MessageResponseProps = Omit<
 /**
  * Shiki is a settle-time pipeline, not live-stream work (VC-357).
  *
- * Streamdown 2.6 already memoizes completed markdown blocks, so growing the last
- * block does not re-parse or re-highlight the closed blocks above it. The code
- * plugin still tokenizes the GROWING fence from the beginning on every update,
- * though, and each string is a cache miss by definition. A long open fence is
- * therefore quadratic work on the same frames where the reader is scrolling.
+ * Streamdown memoizes completed markdown blocks. Before @streamdown/code 2.0,
+ * the growing fence still tokenized from the beginning on every update, making
+ * a long open fence quadratic work on the frames where the reader is scrolling.
+ * Version 2.0 tokenizes incrementally and bounds its cache, but we retain the
+ * settle-only policy until live highlighting is remeasured on our transcript
+ * workload; the earlier performance measurements below are not a 2.0 benchmark.
  *
  * WHAT THIS COSTS, STATED PLAINLY. The plugin map is chosen once per render for
  * a whole message body, because that is the only seam Streamdown offers — there

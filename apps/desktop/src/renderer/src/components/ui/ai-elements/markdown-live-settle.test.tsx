@@ -8,7 +8,8 @@
  * renderer in a real document instead, and assert the consequences the ticket
  * promised: the code is still READABLE while live, the frame and its actions
  * are still there, Mermaid and prose are untouched, and the colour arrives when
- * the Turn settles.
+ * the Turn settles. Copy stays disabled until settle, then preserves the exact
+ * fenced source; highlighted tokens carry both light and dark theme colours.
  *
  * They also pin the part of the trade that is easy to under-state. Dropping the
  * plugin is a whole-body decision, so a fence that CLOSED while the Turn is
@@ -43,12 +44,15 @@ class AlwaysVisibleIntersectionObserver {
 
 /**
  * Shiki's mark, as Streamdown emits it: a per-token inline custom property.
+ * Match spans: the frame's <pre> also carries --shiki-dark for its base colour
+ * and is not evidence that any source tokens have actually been highlighted.
  * Its absence is what "plain code" means here — the `<pre><code>` frame and the
  * source text are present either way, which is the whole point of the fallback.
  */
-const TOKEN = '[style*="--shiki-dark"]';
+const TOKEN = 'span[style*="--shiki-dark"]';
 const CODE_BLOCK = '[data-streamdown="code-block"]';
 const ACTIONS = '[data-streamdown="code-block-actions"]';
+const COPY = '[data-streamdown="code-block-copy-button"]';
 const MERMAID = '[data-streamdown="mermaid-block"]';
 
 /** A fence that closed, followed by prose — the Turn is still being written. */
@@ -65,6 +69,7 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 /** jsdom lays nothing out, so it ships no `scrollTo`; the code block calls one. */
 const nativeScrollTo = HTMLElement.prototype.scrollTo;
+const nativeClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -83,6 +88,8 @@ afterEach(async () => {
   container?.remove();
   container = null;
   HTMLElement.prototype.scrollTo = nativeScrollTo;
+  if (nativeClipboard) Object.defineProperty(navigator, "clipboard", nativeClipboard);
+  else Reflect.deleteProperty(navigator, "clipboard");
   vi.unstubAllGlobals();
 });
 
@@ -123,8 +130,8 @@ describe("markdown while a Turn is open", () => {
     // Framed: Streamdown's own code block and its copy/download row survive.
     expect(query(CODE_BLOCK)).not.toBeNull();
     expect(query(ACTIONS)).not.toBeNull();
-    // Unhighlighted: the quadratic re-tokenisation of a growing fence is what
-    // the ticket removed.
+    // The settle-only policy remains deliberate even with an incremental
+    // highlighter: upgrading the plugin must not re-enable live tokenization.
     expect(query(TOKEN)).toBeNull();
   });
 
@@ -148,6 +155,32 @@ describe("markdown while a Turn is open", () => {
     expect(text()).toContain("export const closed = 1;");
     expect(text()).toContain("Still writing");
     expect(query(ACTIONS)).not.toBeNull();
+  }, 12_000);
+
+  it("copies the exact settled source and keeps copy disabled while streaming", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    // A fenced block's final newline is part of the source Streamdown copies.
+    const source = 'export const copied = "Volli";\nconsole.log(copied);\n';
+    const markdown = `\`\`\`ts\n${source}\`\`\``;
+    const copyButton = () => container?.querySelector<HTMLButtonElement>(COPY);
+
+    await draw(<MessageResponse isAnimating>{markdown}</MessageResponse>);
+    expect(copyButton()?.disabled).toBe(true);
+    await act(async () => copyButton()?.click());
+    expect(writeText).not.toHaveBeenCalled();
+
+    await draw(<MessageResponse>{markdown}</MessageResponse>);
+    await waitForTokens();
+    expect(copyButton()?.disabled).toBe(false);
+    await act(async () => copyButton()?.click());
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(source);
+    expect(text()).toContain("Copied");
+    // Dual-theme tokens must still carry both light and dark colours.
+    expect(query(TOKEN)?.getAttribute("style")).toContain("--sdm-c:");
   }, 12_000);
 
   it("keeps Mermaid drawing mid-stream", async () => {
