@@ -46,6 +46,7 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { compareVersions } from "@volli/shared";
 import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server";
 
 import {
@@ -97,6 +98,7 @@ import { hasLivePreviewAccess } from "./lib/previewAccess";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { mintSecret } from "./lib/runnerSecrets";
 import { nullable } from "./lib/validators";
+import { runnerTargetVersion } from "./lib/runnerUpdates";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
 type Writer = { db: GenericDatabaseWriter<DataModel> };
@@ -340,6 +342,8 @@ export interface RunnerSummary {
   installMode: Doc<"runners">["installMode"];
   linkedVia: RunnerLinkMethod;
   linkedAt: number;
+  autoUpdate: Doc<"runners">["autoUpdate"];
+  update: unknown;
 }
 
 function summary(runner: Doc<"runners">): RunnerSummary {
@@ -356,6 +360,8 @@ function summary(runner: Doc<"runners">): RunnerSummary {
     installMode: runner.installMode,
     linkedVia: runner.linkedVia,
     linkedAt: runner.linkedAt,
+    autoUpdate: runner.autoUpdate,
+    update: runner.update,
   };
 }
 
@@ -485,6 +491,58 @@ export const remove = mutation({
       await revokeRunner(ctx, runner, RUNNER_STATUS_REASONS.removed, { by: userId });
     }
     return null;
+  },
+});
+
+/** Owner intent, idempotent by value. Changing channel also releases an old pin. */
+export const setAutoUpdate = mutation({
+  args: {
+    runnerId: v.string(),
+    enabled: v.boolean(),
+    channel: v.optional(v.union(v.literal("stable"), v.literal("canary"))),
+  },
+  handler: async (ctx, args) => {
+    const { runner } = await requireOwnRunner(ctx, args.runnerId);
+    const channel = args.channel ?? runner.autoUpdate.channel;
+    const autoUpdate = {
+      enabled: args.enabled,
+      channel,
+      pinnedVersion: channel === runner.autoUpdate.channel ? runner.autoUpdate.pinnedVersion : null,
+    };
+    if (stableJson(autoUpdate) !== stableJson(runner.autoUpdate)) {
+      await ctx.db.patch(runner._id, { autoUpdate });
+    }
+    return { autoUpdate };
+  },
+});
+
+/** Pins the channel's current release even when automatic target updates are off.
+ * The runner-side updater consumes this explicit intent at its next heartbeat.
+ */
+export const updateNow = mutation({
+  args: { runnerId: v.string() },
+  handler: async (ctx, { runnerId }) => {
+    const { runner } = await requireOwnRunner(ctx, runnerId);
+    const release = await ctx.db
+      .query("releaseChannels")
+      .withIndex("by_channel", (q) => q.eq("channel", runner.autoUpdate.channel))
+      .unique();
+    if (release === null) {
+      throw new ConvexError({
+        code: "release_unavailable",
+        message: "No runner update is available yet.",
+      });
+    }
+    if (compareVersions(release.version, runner.version) < 0) {
+      throw new ConvexError({
+        code: "invalid_request",
+        message: "Runner updates cannot downgrade this version.",
+      });
+    }
+    const autoUpdate = { ...runner.autoUpdate, pinnedVersion: release.version };
+    if (stableJson(autoUpdate) !== stableJson(runner.autoUpdate))
+      await ctx.db.patch(runner._id, { autoUpdate });
+    return { autoUpdate };
   },
 });
 
@@ -1159,29 +1217,40 @@ export const heartbeat = mutation({
         lastIp: ip,
       });
     }
-    const status =
-      runner.status === "offline" || runner.status === "stopped" || runner.status === "asleep"
-        ? await setStatus(ctx, runner, "online", null)
-        : runner.status;
     const release = await ctx.db
       .query("releaseChannels")
       .withIndex("by_channel", (q) => q.eq("channel", runner.autoUpdate.channel))
       .unique();
+    const belowFloor = release !== null && compareVersions(runner.version, release.minVersion) < 0;
+    const status = belowFloor
+      ? await setStatus(ctx, runner, "upgrade_required", "minimum_version")
+      : runner.status === "offline" ||
+          runner.status === "stopped" ||
+          runner.status === "asleep" ||
+          (runner.status === "upgrade_required" && release !== null)
+        ? await setStatus(ctx, runner, "online", null)
+        : runner.status;
     return {
       serverTime: now,
       status,
-      targetVersion: runner.autoUpdate.pinnedVersion ?? release?.version ?? null,
+      targetVersion: runnerTargetVersion(runner.autoUpdate, release),
       minVersion: release?.minVersion ?? null,
       autoUpdate: runner.autoUpdate,
     };
   },
 });
 
-/**
- * A transition the runner reports itself: `draining`, `updating`,
- * `degraded(reason)`, `stopped`, `asleep` (a Mac going to sleep), back to
- * `online`.
- */
+/** Runner-authenticated unlink: the same revocation path as the owner's Remove. */
+export const unlinkSelf = mutation({
+  args: {},
+  handler: async (ctx): Promise<null> => {
+    const { runner } = await requireRunnerForWrite(ctx);
+    await revokeRunner(ctx, runner, RUNNER_STATUS_REASONS.removed, { by: runner.id });
+    return null;
+  },
+});
+
+/** A runner's lifecycle transition. Only a heartbeat at the floor clears the backend verdict. */
 export const reportState = mutation({
   args: {
     state: v.union(...RUNNER_REPORTED_STATES.map((state) => v.literal(state))),
