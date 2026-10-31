@@ -844,6 +844,43 @@ describe("a running move under a changing sign-in", () => {
     },
   );
 
+  it.each(["viewer pending", "restoring"])(
+    "keeps an actual Cancel control's raw token behavior while %s",
+    async (absence) => {
+      const f = setup();
+      const held = await heldMove(f);
+      let release!: (token: string) => void;
+      f.token.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      );
+      let controlSignal!: AbortSignal;
+      vi.spyOn(f.engine, "rollBack").mockImplementation(async (moveId, options) => {
+        controlSignal = options!.signal!;
+        f.publish(
+          absence === "viewer pending" ? noViewerYet : { ...signedOut, state: "restoring" },
+        );
+        expect(await f.signIn.accessToken()).toBe("fresh-token");
+        return f.toState(f.engine.journal.move(moveId)!, "rolled_back");
+      });
+      const cancelling = f.service.command({ moveId: held.row.moveId, action: "cancel" });
+      await vi.waitFor(() => expect(f.token).toHaveBeenCalledOnce());
+      expect(controlSignal.aborted).toBe(false);
+      release("fresh-token");
+      await cancelling;
+      f.publish(signedIn);
+    },
+  );
+
+  it("does not impose a stale move sign-in-loss flag on another scoped caller", async () => {
+    const f = setup();
+    f.service.signInLost();
+    const control = new AbortController();
+    await expect(f.inLane(control.signal, f.signIn.accessToken)).resolves.toBe("current-token");
+  });
+
   it("waits for a fresh token instead of treating a missing token during absence as sign-in loss", async () => {
     const f = setup();
     const held = await heldMove(f);
@@ -909,6 +946,7 @@ describe("a running move under a changing sign-in", () => {
       const f = setup();
       const held = await heldMove(f);
       const http = heldBackend(f, held.signal);
+      const lost = vi.spyOn(f.service, "signInLost");
       f.publish(signedOut);
       const call = http.call().catch((error: unknown) => error);
       if (interruption === "different person")
@@ -918,6 +956,7 @@ describe("a running move under a changing sign-in", () => {
       expect(await call).toMatchObject({ name: "AbortError" });
       expect(f.token).not.toHaveBeenCalled();
       expect(http.request).not.toHaveBeenCalled();
+      if (interruption === "different person") expect(lost).not.toHaveBeenCalled();
     },
   );
 

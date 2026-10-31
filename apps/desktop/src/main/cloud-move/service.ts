@@ -52,7 +52,7 @@ export interface DesktopMovesService extends CloudMovesPort {
   /** No new quit gate: abort current work and leave its last durable boundary for the next launch. */
   dispose(): Promise<void>;
   signInLost(): void;
-  /** An active lane waits for its real person, never borrowing the last identity or token. */
+  /** Waits only for the active move's signal; false leaves other callers' sign-in rules unchanged. */
   waitForSignIn(signal: AbortSignal): Promise<boolean>;
 }
 const ABSENT_SIGN_IN_GRACE_MS = 2 * 60_000;
@@ -1026,6 +1026,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       }
     },
     async waitForSignIn(signal) {
+      if (signal !== active?.controller.signal) return false;
       if (
         active !== null &&
         !signInLost &&
@@ -1046,7 +1047,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
           // subscribe may replay synchronously; also close an abort racing setup.
           changed();
         });
-      return !disposed && !signInLost && !signal.aborted && currentPerson() !== null;
+      return true;
     },
     signInLost() {
       clearAbsentSignInTimer();

@@ -21,13 +21,14 @@ export function moveSignIn(options: {
     current: () => Promise<T | null>,
   ): Promise<T | null> => {
     for (;;) {
-      if (signal !== undefined && !(await options.waitForSignIn(signal))) return null;
+      const activeMove = signal !== undefined && (await options.waitForSignIn(signal));
+      if (signal?.aborted) return null;
       const value = await current();
       if (signal?.aborted) return null;
       // Absence can begin during an async identity/token read, too. Discard
       // that result and read afresh after recovery, never reuse an old token.
       // Only an active lane has grace; context reads and new starts never wait.
-      if (signal === undefined || !absent()) return value;
+      if (!activeMove || !absent()) return value;
     }
   };
   return {
