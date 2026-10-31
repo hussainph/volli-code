@@ -94,6 +94,35 @@ export async function writeFileDurably(path: string, bytes: Buffer | string): Pr
   await rename(temp, path);
 }
 
+/**
+ * Writes `parts` to `path` durably as they arrive, the way {@link writeFileDurably}
+ * writes a whole buffer: a fsynced `.tmp`, then a rename. Answers what it wrote.
+ * A failure leaves only the `.tmp`, which recovery removes like any unjournaled file.
+ */
+export async function writeFileDurablyFrom(
+  path: string,
+  parts: AsyncIterable<Buffer>,
+): Promise<{ bytes: number; sha256: string }> {
+  await mkdir(dirname(path), { recursive: true });
+  const temp = `${path}.tmp`;
+  const hash = createHash("sha256");
+  let bytes = 0;
+  const handle = await open(temp, "w");
+  try {
+    for await (const part of parts) {
+      for (let at = 0; at < part.length;)
+        at += (await handle.write(part, at, part.length - at, bytes + at)).bytesWritten;
+      hash.update(part);
+      bytes += part.length;
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await rename(temp, path);
+  return { bytes, sha256: hash.digest("hex") };
+}
+
 /** Appends one line and fsyncs it. */
 export async function appendLineDurably(path: string, line: string): Promise<void> {
   const handle = await open(path, "a");

@@ -21,6 +21,9 @@ import { createCloudSessionOwner } from "../../packages/host-core/src/cloud-stor
 import { createHostSessionServices } from "../../packages/host-core/src/session-services";
 import { MigrationExportError } from "../../packages/host-core/src/migration-export/errors";
 import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-export/exporter";
+import { PI_LOG_SEGMENT_MAX_BYTES } from "@volli/shared/cloud";
+import { PI_MOVE_LINE_MAX_BYTES } from "../../packages/host-core/src/migration-export/records";
+import { SYNTHETIC_IDS } from "../../packages/host-core/src/migration-dry-run/test-support/synthetic-profile";
 import { api } from "../functions/_generated/api";
 import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
 import {
@@ -729,6 +732,45 @@ describe("problems with this Mac's own files", () => {
       state: "rolled_back",
       failure: { code: "local_file_unreadable" },
     });
+  });
+});
+
+const piFile = (w: MoveWorld) =>
+  join(w.root, "profile", "pi-sessions", "--move--", "move-fixture.jsonl");
+
+describe("Pi lines longer than a slice (VC-1030)", () => {
+  const MiB = 1024 * 1024;
+
+  test("moves a Pi line longer than one stored segment, whole, in a segment of its own", async () => {
+    const long = PI_LOG_SEGMENT_MAX_BYTES + MiB;
+    world = await moveWorld({ artifacts: 1, piLongLineBytes: long });
+    const { engine, queueId, moveId } = enqueue(world);
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    expect(engine.journal.move(moveId)).toMatchObject({ state: "checked", failure: null });
+    const segments = (await world.t.run((ctx) => ctx.db.query("piLogSegments").collect())).toSorted(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+    // Contiguous from the first byte to the last, the long line one segment exactly.
+    expect(segments[0]!.startOffset).toBe(0);
+    for (const [index, segment] of segments.entries())
+      if (index > 0) expect(segment.startOffset).toBe(segments[index - 1]!.endOffset);
+    expect(segments.at(-1)!.endOffset).toBe(readFileSync(piFile(world)).length);
+    expect(segments.filter((s) => s.endOffset - s.startOffset === long)).toHaveLength(1);
+  });
+
+  test("a Pi line longer than a move carries refuses the project by name, before anything is sent", async () => {
+    world = await moveWorld({ artifacts: 1, piLongLineBytes: PI_MOVE_LINE_MAX_BYTES + 1 });
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    expect(engine.journal.move(moveId)).toMatchObject({
+      failure: {
+        code: "export_pi_log_too_large",
+        step: "frozen",
+        detail: { sessionId: SYNTHETIC_IDS.hotSession },
+      },
+    });
+    expect(world.calls.get("projectImports:begin")).toBeUndefined();
+    expect(projectFreeze(world.db, world.projectId)).toBeNull();
   });
 });
 

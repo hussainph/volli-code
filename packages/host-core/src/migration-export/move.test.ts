@@ -15,12 +15,14 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { migrationDocument, MigrationRowError } from "@volli/shared/cloud";
 import {
+  longPiLine,
   writeMoveProfile,
   MOVE_IDS,
   type MoveFault,
 } from "../migration-dry-run/test-support/move-profile";
 import { SYNTHETIC_IDS as ids } from "../migration-dry-run/test-support/synthetic-profile";
 import { exportMigrationSnapshot, type MigrationExportManifest } from "./exporter";
+import { PI_MOVE_LINE_MAX_BYTES } from "./records";
 import { streamRecords } from "./test-support/export-files";
 import { verifyMigrationExport } from "./verify";
 import { createOrphanCleanupEngine } from "../worktree/cleanup-engine";
@@ -34,10 +36,15 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture(artifacts = 3, fault?: MoveFault) {
+function fixture(artifacts = 3, fault?: MoveFault, piLongLineBytes?: number) {
   const root = mkdtempSync(join(tmpdir(), "volli-move-export-"));
   roots.push(root);
-  const profile = writeMoveProfile(root, { artifacts, fault, now: 1_800_000_000_000 });
+  const profile = writeMoveProfile(root, {
+    artifacts,
+    fault,
+    now: 1_800_000_000_000,
+    ...(piLongLineBytes === undefined ? {} : { piLongLineBytes }),
+  });
   return { root, ...profile };
 }
 function options(f: ReturnType<typeof fixture>, projectIds?: string[]) {
@@ -601,5 +608,177 @@ describe("reading transcript artifacts ahead (VC-1029)", () => {
       }),
     ).rejects.toMatchObject({ code: "cancelled" });
     expect(existsSync(join(f.root, "export"))).toBe(false);
+  });
+});
+
+const piFileOf = (f: ReturnType<typeof fixture>) =>
+  join(f.root, "pi-sessions", "--move--", "move-fixture.jsonl");
+
+/** The Pi stream's chunks and records, and the file its slices rebuild. */
+function piSlices(outDir: string, manifest: MigrationExportManifest) {
+  const stream = manifest.streams.find((s) => s.name === "piLogs")!;
+  const records = streamRecords(outDir, manifest, "piLogs");
+  return {
+    stream,
+    records,
+    rebuilt: Buffer.concat(records.map((r) => Buffer.from(r.base64, "base64"))),
+  };
+}
+const line = (row: Record<string, unknown>) => `${JSON.stringify(row)}\n`;
+const flipped = (base64: string, at: number) =>
+  `${base64.slice(0, at)}${base64[at] === "A" ? "B" : "A"}${base64.slice(at + 1)}`;
+
+describe("Pi lines longer than a slice (VC-1030)", () => {
+  const MiB = 1024 * 1024;
+
+  it.each([
+    ["2 MiB", 2 * MiB],
+    ["19 MB", 19_000_000],
+  ])(
+    "carries a %s line whole as a slice of its own, and verifies it",
+    async (_name, bytes) => {
+      const f = fixture(3, undefined, bytes);
+      const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+      const { stream, records, rebuilt } = piSlices(outDir, manifest);
+      expect(rebuilt.equals(readFileSync(piFileOf(f)))).toBe(true);
+      const long = records.filter((r) => r.sourceBytes > MiB);
+      expect(long).toHaveLength(1);
+      expect(long[0]!.sourceBytes).toBe(bytes);
+      expect(Buffer.from(long[0]!.base64, "base64").toString()).toBe(longPiLine(bytes));
+      expect(long[0]!.sourceSha256).toBe(
+        createHash("sha256").update(longPiLine(bytes)).digest("hex"),
+      );
+      // Its own chunk, byte for byte what `JSON.stringify` writes for the record.
+      const chunk = stream.chunks.find((c) => readFileSync(join(outDir, c.file)).length > bytes)!;
+      expect(chunk.records).toBe(1);
+      expect(readFileSync(join(outDir, chunk.file), "utf8")).toBe(`${JSON.stringify(long[0])}\n`);
+      for (const record of records.filter((r) => r !== long[0]))
+        expect(record.sourceBytes).toBeLessThanOrEqual(MiB);
+      await expect(verifyMigrationExport(outDir)).resolves.toMatchObject({ manifest });
+      // A dry run measures the same file, slice for slice.
+      const measured = await exportMigrationSnapshot({
+        ...options(f),
+        outDir: join(f.root, "measured"),
+        measureHistory: true,
+      });
+      expect(measured.manifest.historyMeasured).toMatchObject({
+        piSlices: records.length,
+        piLogBytes: rebuilt.length,
+      });
+      await verifyMigrationExport(measured.outDir);
+    },
+    60_000,
+  );
+
+  it("carries a line of exactly the longest a move carries", async () => {
+    const f = fixture(1, undefined, PI_MOVE_LINE_MAX_BYTES);
+    const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+    const { stream } = piSlices(outDir, manifest);
+    expect(stream.chunks.some((c) => c.records === 1 && c.bytes > PI_MOVE_LINE_MAX_BYTES)).toBe(
+      true,
+    );
+    await verifyMigrationExport(outDir);
+  }, 120_000);
+
+  it.each([false, true])(
+    "refuses a line just over that, naming the Session (measuring: %s)",
+    async (measureHistory) => {
+      const f = fixture(1, undefined, PI_MOVE_LINE_MAX_BYTES + 1);
+      await expect(
+        exportMigrationSnapshot({ ...options(f), measureHistory }),
+      ).rejects.toMatchObject({
+        code: "pi_log_too_large",
+        sessionId: ids.hotSession,
+        message: expect.stringContaining(ids.hotSession),
+      });
+      expect(existsSync(join(f.root, "export"))).toBe(false);
+    },
+    120_000,
+  );
+
+  it.each([false, true])(
+    "still refuses a log that ends partway through a line (measuring: %s)",
+    async (measureHistory) => {
+      const f = fixture(1, "piTruncated", 2 * MiB);
+      await expect(
+        exportMigrationSnapshot({ ...options(f), measureHistory }),
+      ).rejects.toMatchObject({ code: "pi_log_incomplete", sessionId: ids.hotSession });
+    },
+  );
+
+  /** Rewrites the long line's chunk (and its checksum), so only the record's own checks can catch it. */
+  async function tamperedLong(edit: (row: Record<string, unknown>) => string) {
+    const f = fixture(1, undefined, 2 * MiB);
+    const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+    const stream = manifest.streams.find((s) => s.name === "piLogs")!;
+    const chunk = stream.chunks.find((c) => c.records === 1 && c.bytes > 2 * MiB)!;
+    const row = JSON.parse(readFileSync(join(outDir, chunk.file), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const bytes = Buffer.from(edit(row));
+    stream.bytes += bytes.length - chunk.bytes;
+    chunk.bytes = bytes.length;
+    chunk.sha256 = createHash("sha256").update(bytes).digest("hex");
+    writeFileSync(join(outDir, chunk.file), bytes);
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest));
+    return verifyMigrationExport(outDir);
+  }
+
+  it.each<[string, (row: Record<string, unknown>) => string, RegExp]>([
+    [
+      "a changed byte in the middle",
+      (row) =>
+        line({ ...row, base64: flipped(row.base64 as string, (row.base64 as string).length / 2) }),
+      /checksum mismatch/,
+    ],
+    ["a wrong source hash", (row) => line({ ...row, sourceSha256: "0".repeat(64) }), /mismatch/],
+    [
+      "a byte count that disagrees",
+      (row) => line({ ...row, sourceBytes: (row.sourceBytes as number) - 1 }),
+      /mismatch/,
+    ],
+    [
+      "a missing byte",
+      (row) => {
+        const body = Buffer.from(row.base64 as string, "base64");
+        return line({ ...row, base64: body.subarray(1).toString("base64") });
+      },
+      /mismatch/,
+    ],
+    [
+      "non-canonical base64",
+      (row) => line({ ...row, base64: `${row.base64 as string}=` }),
+      /mismatch/,
+    ],
+    [
+      "base64 that is not the last field",
+      (row) => {
+        const { base64, ...rest } = row;
+        return line({ base64, ...rest });
+      },
+      /not a record/,
+    ],
+    [
+      "fields that are not JSON",
+      (row) => line(row).replace('{"projectId":', '{"projectId":,'),
+      /not JSON/,
+    ],
+    ["something after the record", (row) => `${line(row).slice(0, -1)} \n`, /not a record/],
+    [
+      "two lines in one slice longer than a slice",
+      (row) => {
+        const body = Buffer.from(row.base64 as string, "base64");
+        body[MiB] = 0x0a;
+        return line({
+          ...row,
+          base64: body.toString("base64"),
+          sourceSha256: createHash("sha256").update(body).digest("hex"),
+        });
+      },
+      /out of bounds/,
+    ],
+  ])("refuses a long line's slice with %s", async (_name, edit, error) => {
+    await expect(tamperedLong(edit)).rejects.toThrow(error);
   });
 });

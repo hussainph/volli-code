@@ -60,8 +60,17 @@ check actual runtime liveness before invoking this exporter.
   several references share a digest. Missing/corrupt files are named refusals.
 - A Pi record names project, Session, attachment and the durable `piFileId`, plus
   `startOffset`, `endOffset`, total `fileBytes`, `sourceBytes`, `sourceSha256` and
-  `base64`. Ranges are contiguous from zero, bounded to 1 MiB, and end on complete
-  JSONL lines. Oversized/incomplete lines refuse export. Only this Mac's local Pi
+  `base64`. Ranges are contiguous from zero and end on complete JSONL lines: a
+  range is the complete lines within 1 MiB (`PI_SLICE_BYTES`), or one longer
+  line alone, an indivisible record of up to 20 MiB (`PI_MOVE_LINE_MAX_BYTES`:
+  what the runner's spool uploads inside the move's 500 MB memory budget even
+  when redaction changes it; one object could hold 64 MiB). A long line is read twice in pieces (measured and
+  hashed, then base64-encoded straight into a chunk of its own, rehashed and
+  refused if it changed), never held whole, and its record's bytes are exactly
+  `JSON.stringify` of the record with `base64` last. A longer line refuses the
+  export as `pi_log_too_large`, and a file that ends partway through a line as
+  `pi_log_incomplete`, both naming the Session (`sessionId`, carried across the
+  worker). Only this Mac's local Pi
   attachment layout is read, without following a file/directory symlink. Missing,
   changing or nonregular files are named refusals. `piLogFiles` pins the expected
   file set, so dropping an entire file's records also fails coverage. An empty
@@ -115,6 +124,9 @@ Bulk source chunks are rebuilt from the snapshot's references on each resume;
 interrupted bulk chunks are unjournaled and removed before rebuilding. Artifacts
 are content-addressed; Pi files must stay stable while read. Cancellation during
 either path leaves no published export. `verifyMigrationExport` rechecks chunk
-hashes, sizes and counts **and** transcript digest coverage / Pi range coverage.
+hashes, sizes and counts **and** transcript digest coverage / Pi range coverage,
+reading chunks in blocks rather than whole: a Pi range longer than a couple of
+MiB is decoded and hashed as it streams (`chunk-lines.ts`), and a range over
+1 MiB must be exactly one line of at most 20 MiB.
 Bulk chunks honor the export's optional chunk byte/record limits (a single
 artifact or Pi slice is indivisible), otherwise they share the database streams' default of 8 MiB / 50k rows.

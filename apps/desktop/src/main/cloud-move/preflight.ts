@@ -31,6 +31,7 @@ import {
   fileSha256,
   localProductRow,
   movePlan,
+  PI_MOVE_LINE_MAX_BYTES,
   runMigrationExportInWorker,
   type MeasuredHistory,
   type MigrationExportProgress,
@@ -321,10 +322,34 @@ function projectBlockers(options: MovePreflightOptions, projectId: string): Clou
   return blockers;
 }
 
-/** A source problem is named without forwarding an OS exception or quoting any record content. */
-function problemOf(error: unknown): { code: string; message: string } {
-  const raw = error as { code?: unknown } | null;
+/** The longest Pi line a move carries, as a person reads a size. */
+const PI_LINE_LIMIT = `${PI_MOVE_LINE_MAX_BYTES / (1024 * 1024)} MiB`;
+
+/**
+ * A source problem is named without forwarding an OS exception or quoting any
+ * record content. A problem that is one Session's names it (`sessionId`), so
+ * the dry run can open it.
+ */
+function problemOf(error: unknown): { code: string; message: string; sessionId?: string } {
+  const raw = error as { code?: unknown; sessionId?: unknown } | null;
   const code = typeof raw?.code === "string" ? raw.code : "unreadable";
+  const sessionId = typeof raw?.sessionId === "string" ? raw.sessionId : undefined;
+  const named = (message: string) =>
+    sessionId === undefined ? { code, message } : { code, message, sessionId };
+  if (code === "pi_log_too_large")
+    return named(
+      `This Session’s Pi log has an entry over ${PI_LINE_LIMIT}, more than a move carries, so this project stays on this Mac. Other projects can still move.`,
+    );
+  if (code === "pi_log_incomplete")
+    return named(
+      "This Session’s Pi log ends partway through an entry, so its history can’t be copied whole.",
+    );
+  if (code === "source_corrupt" && sessionId !== undefined)
+    return named(
+      String((error as Error)?.message).endsWith("changed during export")
+        ? "This Session’s Pi log changed while the dry run read it. Run the dry run again."
+        : "This Session’s Pi log is missing or unreadable, so this project can’t move yet.",
+    );
   if (code === "disk_full" || code === "ENOSPC")
     return { code: "disk_full", message: "Free disk space, then run the dry run again." };
   if (code === "row_refused" || code === "row_unstorable")
@@ -569,7 +594,11 @@ export async function prepareLocalMoves(
           const problem = problemOf(error);
           track.end(`refused:${problem.code}`);
           failures[project.id] = problem.code;
-          view.blockers.push({ message: problem.message });
+          view.blockers.push(
+            problem.sessionId === undefined
+              ? { message: problem.message }
+              : { message: problem.message, sessionId: problem.sessionId },
+          );
         } finally {
           await rm(workDir, { recursive: true, force: true, maxRetries: 3 });
           await rm(`${exportDir}.partial`, { recursive: true, force: true, maxRetries: 3 });

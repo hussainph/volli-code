@@ -170,6 +170,12 @@ export type Emit = <S extends StreamName>(stream: S, record: StreamRecords[S]) =
 /** A source row could not be mapped: the snapshot holds a fact this build cannot carry. */
 export class SourceCorruptError extends Error {
   override readonly name = "SourceCorruptError";
+  /** The Session whose local history is at fault, when the fault is one Session's. */
+  readonly sessionId: string | undefined;
+  constructor(message: string, options?: ErrorOptions & { sessionId?: string }) {
+    super(message, options);
+    this.sessionId = options?.sessionId;
+  }
 }
 
 /** Lookups every source may read, built once from the snapshot. */

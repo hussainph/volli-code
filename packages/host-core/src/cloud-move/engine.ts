@@ -555,7 +555,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
           if (error.code === "cancelled" || error.code === "in_progress") {
             throw new MovePausedError("paused");
           }
-          throw new MoveProblemError(`export_${error.code}`, error.message);
+          throw new MoveProblemError(
+            `export_${error.code}`,
+            error.message,
+            error.sessionId === undefined ? {} : { sessionId: error.sessionId },
+          );
         }
         throw error;
       }

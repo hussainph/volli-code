@@ -25,7 +25,10 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createMoveEngine, type MoveEnginePorts } from "@volli/host-core/cloud-move";
-import { automaticBackupDiskRequirement } from "@volli/host-core/migration-export";
+import {
+  automaticBackupDiskRequirement,
+  PI_MOVE_LINE_MAX_BYTES,
+} from "@volli/host-core/migration-export";
 import type {
   CloudMoveCounts,
   CloudMovePreflightProgress,
@@ -87,12 +90,15 @@ afterEach(() => {
   }
 });
 
-function setup(seed: { fault?: MoveFault; artifacts?: number } = {}): Fixture {
+function setup(
+  seed: { fault?: MoveFault; artifacts?: number; piLongLineBytes?: number } = {},
+): Fixture {
   const root = mkdtempSync(join(tmpdir(), "volli-move-preflight-"));
   const profile = writeMoveProfile(root, {
     artifacts: seed.artifacts ?? 2,
     now: 1_800_000_000_000,
     ...(seed.fault === undefined ? {} : { fault: seed.fault }),
+    ...(seed.piLongLineBytes === undefined ? {} : { piLongLineBytes: seed.piLongLineBytes }),
   });
   const db = new Database(profile.dbPath);
   const workRoot = join(root, "cloud-moves");
@@ -477,6 +483,48 @@ describe("one project's refusal", () => {
     // The refused project's half-written export is deleted with its scratch directory.
     expect(scratchDirs(fixture)).toEqual([]);
   });
+});
+
+describe("Pi lines longer than a slice (VC-1030)", () => {
+  it("passes a project whose Pi log holds a 19 MB line, counting every byte", async () => {
+    const fixture = setup({ piLongLineBytes: 19_000_000 });
+    const answered = await fixture.run({ projectIds: [ALPHA] });
+    expect(answered.failures).toEqual({});
+    expect(project(answered, ALPHA).blockers).toEqual([]);
+    expect(project(answered, ALPHA).counts!.piLogBytes).toBe(1_410_000 + 19_000_000);
+  });
+
+  it.each<[string, { fault?: MoveFault; piLongLineBytes?: number }, string, string]>([
+    [
+      "a line longer than a move carries",
+      { piLongLineBytes: PI_MOVE_LINE_MAX_BYTES + 1 },
+      "pi_log_too_large",
+      "This Session’s Pi log has an entry over 20 MiB, more than a move carries, so this project stays on this Mac. Other projects can still move.",
+    ],
+    [
+      "a log that ends partway through a line",
+      { fault: "piTruncated" },
+      "pi_log_incomplete",
+      "This Session’s Pi log ends partway through an entry, so its history can’t be copied whole.",
+    ],
+    [
+      "a missing log",
+      { fault: "pi" },
+      "source_corrupt",
+      "This Session’s Pi log is missing or unreadable, so this project can’t move yet.",
+    ],
+  ])(
+    "refuses %s in plain words, naming the Session",
+    async (_name, seed, code, message) => {
+      const fixture = setup(seed);
+      const answered = await fixture.run({ projectIds: [ALPHA, CAFE] });
+      expect(answered.failures).toEqual({ [ALPHA]: code });
+      expect(project(answered, ALPHA).blockers).toEqual([{ message, sessionId: ids.hotSession }]);
+      expect(JSON.stringify(project(answered, ALPHA))).not.toContain(fixture.root);
+      expect(project(answered, CAFE).blockers).toEqual([]);
+    },
+    60_000,
+  );
 });
 
 /** Every line a logger was given, as the log file would hold it. */

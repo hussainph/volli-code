@@ -1,10 +1,11 @@
 /** Bulk history carried by the export, not yet uploaded. MOVE-4 consumes these
  * canonical bodies / offset-pinned Pi bytes to produce the real tx/pi segments.
- * No machine path is in a record. Memory is bounded by one artifact or Pi slice.
+ * No machine path is in a record. Memory is bounded by one artifact or Pi slice;
+ * a Pi line longer than a slice is read and written in pieces, never whole.
  */
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type Database from "better-sqlite3";
 import type { TranscriptReference } from "@volli/shared";
@@ -12,12 +13,19 @@ import { blobFilePath } from "../blob-store";
 import { FileTranscriptArtifactStore } from "../session-runtime/transcript-artifacts";
 import { piFileIdOf } from "../transcript-spool/transcript-spool";
 import { STRUCTURED_ADAPTER_ID } from "../session-runtime/sessions";
+import { MigrationExportError } from "./errors";
 import { SourceCorruptError } from "./sources";
-import { DEFAULT_CHUNK_MAX_BYTES, DEFAULT_CHUNK_MAX_RECORDS } from "./records";
+import {
+  DEFAULT_CHUNK_MAX_BYTES,
+  DEFAULT_CHUNK_MAX_RECORDS,
+  PI_MOVE_LINE_MAX_BYTES,
+  PI_SLICE_BYTES,
+} from "./records";
 import {
   chunkFileName,
   hashFile,
   writeFileDurably,
+  writeFileDurablyFrom,
   type Checkpoint,
   type ChunkEntry,
 } from "./staging";
@@ -76,7 +84,9 @@ export interface MeasuredHistory {
   /** Pi log source bytes read and checked. */
   piLogBytes: number;
 }
-const PI_SLICE_BYTES = 1024 * 1024;
+/** A long line is read and encoded this many bytes at a time: a multiple of 3, so base64 pieces join. */
+const PI_LINE_PIECE_BYTES = 3 * 256 * 1024;
+const NEWLINE = 0x0a;
 const HISTORY_PROGRESS_EVERY = 256;
 /** Transcript artifacts read ahead of the one being yielded. Memory: this many artifacts. */
 const ARTIFACT_READ_AHEAD = 32;
@@ -155,10 +165,78 @@ async function* artifacts(
   }
 }
 
-async function* piLogs(
-  db: Database.Database,
-  options: FileStreamOptions,
-): AsyncGenerator<PiLogRecord> {
+/** One Pi slice as read: its record without the bytes, and its source bytes. */
+interface PiSlice {
+  record: Omit<PiLogRecord, "base64">;
+  /**
+   * The slice's bytes, or, for one line longer than a slice, a reader that
+   * streams them again in pieces (and refuses if they no longer hash to
+   * `record.sourceSha256`). Read before the next slice is asked for.
+   */
+  body: Buffer | { pieces(): AsyncGenerator<Buffer> };
+}
+
+/**
+ * The line at `offset`, longer than a slice, measured without holding it: its
+ * length (newline included) and source sha256. Refuses a line longer than
+ * {@link PI_MOVE_LINE_MAX_BYTES} and a file that ends partway through one.
+ */
+async function measureLongLine(
+  file: FileHandle,
+  offset: number,
+  fileBytes: number,
+  sessionId: string,
+  signal: AbortSignal | undefined,
+): Promise<{ bytes: number; sha256: string }> {
+  const hash = createHash("sha256");
+  const buffer = Buffer.alloc(PI_SLICE_BYTES);
+  let scanned = 0;
+  for (;;) {
+    signal?.throwIfAborted();
+    const window = Math.min(PI_SLICE_BYTES, fileBytes - offset - scanned);
+    if (window === 0)
+      throw new MigrationExportError(
+        "pi_log_incomplete",
+        `Session ${sessionId}'s Pi log ends partway through a line.`,
+        { sessionId },
+      );
+    const { bytesRead } = await file.read(buffer, 0, window, offset + scanned);
+    if (bytesRead !== window) throw new Error("Pi log changed during export");
+    const newline = buffer.subarray(0, window).indexOf(NEWLINE);
+    const taken = newline === -1 ? window : newline + 1;
+    if (scanned + taken > PI_MOVE_LINE_MAX_BYTES)
+      throw new MigrationExportError(
+        "pi_log_too_large",
+        `Session ${sessionId}'s Pi log has a line longer than ${PI_MOVE_LINE_MAX_BYTES} bytes.`,
+        { sessionId },
+      );
+    hash.update(buffer.subarray(0, taken));
+    scanned += taken;
+    if (newline !== -1) return { bytes: scanned, sha256: hash.digest("hex") };
+  }
+}
+
+/** The measured line at `offset` again, in pieces; refuses if it changed since it was measured. */
+async function* longLinePieces(
+  file: FileHandle,
+  offset: number,
+  line: { bytes: number; sha256: string },
+  signal: AbortSignal | undefined,
+): AsyncGenerator<Buffer> {
+  const hash = createHash("sha256");
+  for (let done = 0; done < line.bytes;) {
+    signal?.throwIfAborted();
+    const piece = Buffer.alloc(Math.min(PI_LINE_PIECE_BYTES, line.bytes - done));
+    const { bytesRead } = await file.read(piece, 0, piece.length, offset + done);
+    if (bytesRead !== piece.length) throw new Error("Pi log changed during export");
+    hash.update(piece);
+    done += piece.length;
+    yield piece;
+  }
+  if (hash.digest("hex") !== line.sha256) throw new Error("Pi log changed during export");
+}
+
+async function* piLogs(db: Database.Database, options: FileStreamOptions): AsyncGenerator<PiSlice> {
   const rows = db
     .prepare(`SELECT a.*,s.project_id FROM session_attachments a JOIN sessions s ON s.id=a.session_id
     WHERE a.native_detail IS NOT NULL ORDER BY a.session_id,a.id`)
@@ -218,30 +296,54 @@ async function* piLogs(
       try {
         const before = await file.stat();
         if (!before.isFile()) throw new Error("Pi log is not a regular file");
+        // Measuring checks the same layout, lines and stability, without the copy's encoding.
+        const measured = options.measureOnly === true;
+        const recordOf = (offset: number, bytes: number, sourceSha256: string) => ({
+          projectId: row.project_id,
+          sessionId: row.session_id,
+          attachmentId: row.id,
+          piFileId,
+          startOffset: offset,
+          endOffset: offset + bytes,
+          fileBytes: before.size,
+          sourceSha256: measured ? "" : sourceSha256,
+          sourceBytes: bytes,
+        });
         let offset = 0;
         do {
           options.signal?.throwIfAborted();
           const buffer = Buffer.alloc(Math.min(PI_SLICE_BYTES, before.size - offset));
           const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
           if (bytesRead !== buffer.length) throw new Error("Pi log changed during export");
-          const end = buffer.lastIndexOf(0x0a) + 1;
-          if (bytesRead > 0 && end === 0)
-            throw new Error("Pi log has an oversized or incomplete line");
+          const end = buffer.lastIndexOf(NEWLINE) + 1;
+          if (bytesRead > 0 && end === 0) {
+            // No newline within a slice: one line longer than a slice, its own slice.
+            const line = await measureLongLine(
+              file,
+              offset,
+              before.size,
+              row.session_id,
+              options.signal,
+            );
+            const start = offset;
+            yield {
+              record: recordOf(start, line.bytes, line.sha256),
+              body: {
+                async *pieces() {
+                  try {
+                    yield* longLinePieces(file, start, line, options.signal);
+                  } catch (error) {
+                    if (options.signal?.aborted) throw error;
+                    throw piSourceCorrupt(row.id, row.session_id, error);
+                  }
+                },
+              },
+            };
+            offset += line.bytes;
+            continue;
+          }
           const bytes = buffer.subarray(0, end);
-          // Measuring checks the same layout, lines and stability, without the copy's encoding.
-          const measured = options.measureOnly === true;
-          yield {
-            projectId: row.project_id,
-            sessionId: row.session_id,
-            attachmentId: row.id,
-            piFileId,
-            startOffset: offset,
-            endOffset: offset + bytes.length,
-            fileBytes: before.size,
-            sourceSha256: measured ? "" : sha(bytes),
-            sourceBytes: bytes.length,
-            base64: measured ? "" : bytes.toString("base64"),
-          };
+          yield { record: recordOf(offset, bytes.length, measured ? "" : sha(bytes)), body: bytes };
           offset += bytes.length;
         } while (offset < before.size);
         const after = await file.stat();
@@ -251,12 +353,17 @@ async function* piLogs(
         await file.close();
       }
     } catch (error) {
-      if (options.signal?.aborted) throw error;
-      throw new SourceCorruptError(
-        `Pi attachment ${row.id} missing or corrupt: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      if (options.signal?.aborted || error instanceof MigrationExportError) throw error;
+      throw piSourceCorrupt(row.id, row.session_id, error);
     }
   }
+}
+
+function piSourceCorrupt(attachmentId: string, sessionId: string, error: unknown) {
+  return new SourceCorruptError(
+    `Pi attachment ${attachmentId} missing or corrupt: ${error instanceof Error ? error.message : String(error)}`,
+    { sessionId },
+  );
 }
 
 /** Rebuilt from the frozen snapshot on resume; never mixed with earlier file
@@ -315,9 +422,10 @@ export async function exportFileStreams(
       lines = [];
       bytes = 0;
     };
-    for await (const record of records) {
+    for await (const item of records) {
       read += 1;
       if (read % HISTORY_PROGRESS_EVERY === 0) options.onRecords?.(read);
+      const record = "body" in item ? item.record : item;
       if ("piFileId" in record && record.startOffset === 0) {
         piLogFiles.push({
           sessionId: record.sessionId,
@@ -336,10 +444,28 @@ export async function exportFileStreams(
         }
         continue;
       }
-      const line = `${JSON.stringify(record)}\n`;
+      count++;
+      if ("body" in item && !Buffer.isBuffer(item.body)) {
+        // One line longer than a slice: a chunk of its own, written as it is
+        // read. Its bytes are exactly `JSON.stringify({...record, base64})`.
+        await flush();
+        const file = chunkFileName(name, chunks.length + 1);
+        const pieces = item.body.pieces();
+        const head = JSON.stringify(item.record);
+        const written = await writeFileDurablyFrom(
+          join(staging, file),
+          (async function* () {
+            yield Buffer.from(`${head.slice(0, -1)},"base64":"`);
+            for await (const piece of pieces) yield Buffer.from(piece.toString("base64"));
+            yield Buffer.from('"}\n');
+          })(),
+        );
+        chunks.push({ stream: name, file, records: 1, ...written });
+        continue;
+      }
+      const line = `${JSON.stringify("body" in item ? { ...item.record, base64: item.body.toString("base64") } : item)}\n`;
       lines.push(line);
       bytes += Buffer.byteLength(line);
-      count++;
       if (
         bytes >= (options.chunkMaxBytes ?? DEFAULT_CHUNK_MAX_BYTES) ||
         lines.length >= (options.chunkMaxRecords ?? DEFAULT_CHUNK_MAX_RECORDS)

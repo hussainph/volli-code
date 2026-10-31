@@ -1,6 +1,6 @@
 /** Move edge cases, opt-in so the small historical dry-run fixture stays cheap. */
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import Database from "better-sqlite3";
@@ -16,7 +16,38 @@ export const MOVE_IDS = {
   attachment: "7a1f0c2e-0000-4000-8000-000000000050",
   shadowAutomation: "7a1f0c2e-0000-4000-8000-000000000044",
 };
-export type MoveFault = "comment" | "transcript" | "pi" | "blob" | "nonUuid";
+export type MoveFault = "comment" | "transcript" | "pi" | "piTruncated" | "blob" | "nonUuid";
+
+/**
+ * One Pi log line of exactly `bytes` (its newline included): a JSON record
+ * holding base64 text, the way an inline image or a large tool output sits
+ * in a real Pi log. Deterministic, and about as compressible as real images.
+ */
+export function longPiLine(bytes: number, secret?: string): string {
+  return Buffer.concat([...longPiLinePieces(bytes, secret)]).toString("utf8");
+}
+
+/** {@link longPiLine}'s bytes in pieces of at most 64 KiB: a fixture never holds a long line whole. */
+export function* longPiLinePieces(bytes: number, secret?: string): Generator<Buffer> {
+  const head = '{"type":"message","image":"';
+  const tail = '"}\n';
+  let fill = bytes - head.length - tail.length;
+  if (fill < 0) throw new Error(`A Pi line needs at least ${head.length + tail.length} bytes`);
+  const block = Buffer.alloc(48 * 1024);
+  for (let at = 0, n = 0; at < block.length; n += 1) {
+    const digest = createHash("sha256").update(`pi-line-${n}`).digest();
+    at += digest.copy(block, at);
+  }
+  const text = Buffer.from(block.toString("base64"));
+  yield Buffer.from(head);
+  // A credential the redactor knows, first thing in the text: the line must change.
+  if (secret !== undefined) {
+    yield Buffer.from(secret);
+    fill -= Buffer.byteLength(secret);
+  }
+  for (; fill > 0; fill -= text.length) yield text.subarray(0, Math.min(fill, text.length));
+  yield Buffer.from(tail);
+}
 
 /** Default: >50 MiB of canonical transcript bodies, thousands of mixed plain /
  * gzip artifacts, one 105 KiB maximum. Tests can select a small count.
@@ -24,7 +55,15 @@ export type MoveFault = "comment" | "transcript" | "pi" | "blob" | "nonUuid";
  */
 export function writeMoveProfile(
   root: string,
-  options: { artifacts?: number; fault?: MoveFault; now?: number } = {},
+  options: {
+    artifacts?: number;
+    fault?: MoveFault;
+    now?: number;
+    /** One Pi line this long (newline included) in the middle of the moved Session's Pi log. */
+    piLongLineBytes?: number;
+    /** A credential value written into that line. */
+    piLongLineSecret?: string;
+  } = {},
 ) {
   const now = options.now ?? Date.now();
   const profile = writeSyntheticProfile(root, now);
@@ -230,11 +269,16 @@ export function writeMoveProfile(
     const piDir = join(root, "pi-sessions", "--move--");
     mkdirSync(piDir, { recursive: true });
     const piFile = join(piDir, "move-fixture.jsonl");
-    if (options.fault !== "pi")
-      writeFileSync(
-        piFile,
-        `${JSON.stringify({ type: "message", text: "Pi continuity 🧭" })}\n`.repeat(30000),
-      );
+    if (options.fault !== "pi") {
+      const lines = `${JSON.stringify({ type: "message", text: "Pi continuity 🧭" })}\n`;
+      writeFileSync(piFile, lines.repeat(15000));
+      if (options.piLongLineBytes !== undefined)
+        for (const piece of longPiLinePieces(options.piLongLineBytes, options.piLongLineSecret))
+          appendFileSync(piFile, piece);
+      appendFileSync(piFile, lines.repeat(15000));
+      // Pi stopped partway through writing its last line.
+      if (options.fault === "piTruncated") appendFileSync(piFile, '{"type":"message","te');
+    }
     insert("session_attachments", {
       id: MOVE_IDS.attachment,
       session_id: ids.hotSession,
