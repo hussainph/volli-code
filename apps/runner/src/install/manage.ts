@@ -19,7 +19,7 @@ import { LINK_FILE_NAME } from "../link/file-store";
 import { stringOption } from "../shell/paths";
 import { checkRunnerStatus } from "../shell/runner-status";
 import { atomicWrite } from "../shell/write-file";
-import { serviceUnit, UNIT, type InstallLayout } from "./layout";
+import { proxyEnvironment, serviceUnit, UNIT, type InstallLayout } from "./layout";
 import { mustRun, type RunTool } from "./tools";
 import { normalizeReleaseModes } from "./release";
 import { DEFAULT_RELEASE_ORIGIN, updateOrigin } from "./update-origin";
@@ -150,8 +150,9 @@ export async function installRunner(
     if (!lstatSync(join(source, file)).isFile())
       throw new Error(`Release is missing a regular ${file}.`);
   }
-  // Render before touching disk: even a bad proxy value must not leave a partial install.
+  // Render before touching disk: control characters must never enter a unit.
   const unit = serviceUnit(layout, { ...context.env, HOME: context.home });
+  const proxyEnv = proxyEnvironment(context.env);
   let changed = false;
   if (layout.mode === "system") {
     if (ports.run("id", ["-u", "volli"]).status !== 0) {
@@ -220,6 +221,8 @@ export async function installRunner(
     ) || changed;
   if (!(context.env["PATH"] ?? "").split(":").includes(layout.binDir))
     context.err(`Add ${layout.binDir} to PATH to run volli-runner.\n`);
+  const proxyChanged = replaceFile(join(layout.root, "proxy.env"), proxyEnv, 0o600);
+  changed = proxyChanged || changed;
   const managed = `${JSON.stringify({ version: context.version, release, channel, mode: layout.mode }, null, 2)}\n`;
   changed = replaceFile(join(layout.root, "managed.json"), managed, 0o644) || changed;
   if (releaseOrigin !== undefined) {
@@ -238,7 +241,7 @@ export async function installRunner(
   let unitChanged = false;
   if (ports.systemd) {
     changed = ensureDirectory(layout.unitDir, 0o755, false) || changed;
-    // Proxy URLs can contain a password; the unit is not world-readable.
+    // Proxy values live in root/user-private proxy.env, not public Environment=.
     unitChanged = replaceFile(join(layout.unitDir, UNIT), unit, 0o600);
     changed = unitChanged || changed;
     // Always reload: a prior install may have died just after writing its unit.
@@ -293,6 +296,7 @@ export async function installRunner(
   const restart =
     activated ||
     unitChanged ||
+    proxyChanged ||
     justLinked ||
     (before.status !== null && before.status.version !== context.version);
   const enabled = ports.run("systemctl", systemctl(layout, ["is-enabled", UNIT])).status === 0;

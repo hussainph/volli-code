@@ -52,17 +52,26 @@ export function installLayout(
 
 /** systemd interprets specifiers even inside quotes. Never interpolate raw input. */
 export function unitQuote(value: string): string {
+  return environmentQuote(value).replaceAll("%", "%%");
+}
+
+function environmentQuote(value: string): string {
   if ([...value].some((char) => char < " " || char === "\u007f"))
     throw new Error("A unit value contains a control character.");
-  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`;
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+/** Environment= is public over systemd's API. Proxy passwords belong in a private file. */
+export function proxyEnvironment(env: CommandContext["env"]): string {
+  return (
+    ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"]
+      .flatMap((key) => (env[key] === undefined ? [] : [`${key}=${environmentQuote(env[key]!)}`]))
+      .join("\n") + "\n"
+  );
 }
 
 export function serviceUnit(layout: InstallLayout, env: CommandContext["env"]): string {
   const system = layout.mode === "system";
-  const proxies = ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"]
-    .filter((key) => env[key] !== undefined)
-    .map((key) => `Environment=${unitQuote(`${key}=${env[key]}`)}`);
-  if (proxies.length > 0) proxies.push("Environment=NODE_USE_ENV_PROXY=1");
   return [
     "[Unit]",
     "Description=Volli runner",
@@ -80,7 +89,8 @@ export function serviceUnit(layout: InstallLayout, env: CommandContext["env"]): 
     `Environment=${unitQuote(`HOME=${system ? layout.dataDir : (env["HOME"] ?? layout.dataDir)}`)}`,
     `Environment=${unitQuote(`VOLLI_RUNNER_INSTALL_MODE=${layout.mode}`)}`,
     `Environment=${unitQuote(`VOLLI_SECRET_KEY_FILE=${join(layout.configDir, "session-secrets.key")}`)}`,
-    ...proxies,
+    "Environment=NODE_USE_ENV_PROXY=1",
+    `EnvironmentFile=${unitQuote(`-${join(layout.root, "proxy.env")}`)}`,
     `ExecStart=:${unitQuote(join(layout.root, "current/bin/volli-runner"))} run --data-dir ${unitQuote(layout.dataDir)} --config-dir ${unitQuote(layout.configDir)}`,
     "KillSignal=SIGTERM",
     "TimeoutStopSec=45",

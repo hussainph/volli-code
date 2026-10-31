@@ -10,7 +10,8 @@
  * `~/.config`; a relative one is ignored, as the XDG spec says. Root means a
  * system install: agents never run as root, so root's runner is the system
  * one. Its unprivileged service uid inherits `VOLLI_RUNNER_INSTALL_MODE=system`
- * and therefore uses those same system paths. The config dir holds the sealed link and its key and never goes into
+ * and therefore uses those same system paths. The config dir holds the sealed
+ * link and its key and never goes into
  * the data dir, so a copied data dir or a backup does not carry the link.
  * `--data-dir` and `--config-dir` override either.
  */

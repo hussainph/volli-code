@@ -17,6 +17,9 @@ WorkingDirectory=/var/lib/volli-runner
 Environment=HOME=/var/lib/volli-runner
 Environment=VOLLI_RUNNER_INSTALL_MODE=system
 Environment=VOLLI_SECRET_KEY_FILE=/etc/volli-runner/session-secrets.key
+Environment=NODE_USE_ENV_PROXY=1
+# Environment= properties are public; proxy credentials stay in this root-only file.
+EnvironmentFile=-/opt/volli-runner/proxy.env
 ExecStart=:/opt/volli-runner/current/bin/volli-runner run --data-dir /var/lib/volli-runner --config-dir /etc/volli-runner
 KillSignal=SIGTERM
 TimeoutStopSec=45

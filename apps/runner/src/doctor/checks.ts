@@ -144,7 +144,7 @@ export async function runChecks({
     diskCheck(paths, context.home, ports),
     systemdCheck(ports),
     lingerCheck(mode, context, ports),
-    ...(deployment === null ? [deploymentUnknownCheck()] : []),
+    ...(deployment === null ? [deploymentUnknownCheck(mode, paths)] : []),
     ...answers.map(({ target, answer }) => networkCheck(target, answer)),
     clockCheck(deploymentAnswer, context.now?.() ?? Date.now()),
     modelsCheck(credentials, context.env),
@@ -215,6 +215,22 @@ export function isSet(value: string | undefined): boolean {
   return value !== undefined && value !== "";
 }
 
+function quoteFixPath(path: string): string {
+  return `'${path.replaceAll("'", "'\\''")}'`;
+}
+
+/** A system link must be sealed by the credential owner, never by root. */
+function runnerFix(
+  command: "link" | "doctor",
+  mode: RunnerPaths["mode"],
+  paths: RunnerPaths,
+): string {
+  const cli = `volli-runner ${command} --data-dir ${quoteFixPath(paths.dataDir)} --config-dir ${quoteFixPath(paths.configDir)}`;
+  return mode === "system"
+    ? `sudo --preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy -u volli env VOLLI_RUNNER_INSTALL_MODE=system NODE_USE_ENV_PROXY=1 ${cli}`
+    : `NODE_USE_ENV_PROXY=1 ${cli}`;
+}
+
 function linkCheck(link: LinkFacts, mode: RunnerPaths["mode"], paths: RunnerPaths): DoctorCheck {
   const id = "link";
   const title = "link";
@@ -232,7 +248,7 @@ function linkCheck(link: LinkFacts, mode: RunnerPaths["mode"], paths: RunnerPath
       title,
       status: "warn",
       detail: "this box is not linked to a Volli account",
-      fix: "NODE_USE_ENV_PROXY=1 volli-runner link",
+      fix: runnerFix("link", mode, paths),
     };
   }
   // A link this run cannot open is usually a key the service account owns and
@@ -244,7 +260,7 @@ function linkCheck(link: LinkFacts, mode: RunnerPaths["mode"], paths: RunnerPath
     detail: `this box's link could not be opened: ${link.error}`,
     fix:
       mode === "system"
-        ? `sudo -u volli env VOLLI_RUNNER_INSTALL_MODE=system volli-runner doctor --data-dir ${paths.dataDir} --config-dir ${paths.configDir}`
+        ? runnerFix("doctor", mode, paths)
         : `Restore ${join(paths.configDir, LINK_KEY_FILE_NAME)} to this login's ownership, mode 0600, then run \`volli-runner doctor\` again`,
   };
 }
@@ -472,13 +488,13 @@ function networkTargets(deployment: RunnerDeployment | null): readonly NetworkTa
   return targets;
 }
 
-function deploymentUnknownCheck(): DoctorCheck {
+function deploymentUnknownCheck(mode: RunnerPaths["mode"], paths: RunnerPaths): DoctorCheck {
   return {
     id: DEPLOYMENT_TARGET_ID,
     title: "deployment",
     status: "unknown",
     detail: "this build names no server and this box is not linked",
-    fix: "NODE_USE_ENV_PROXY=1 volli-runner link --server <url>",
+    fix: `${runnerFix("link", mode, paths)} --server <url>`,
   };
 }
 

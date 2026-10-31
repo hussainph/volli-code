@@ -34,6 +34,8 @@ const PATHS: RunnerPaths = {
   configDir: "/box/.config/volli-runner",
 };
 
+const USER_LINK_FIX = `NODE_USE_ENV_PROXY=1 volli-runner link --data-dir '${PATHS.dataDir}' --config-dir '${PATHS.configDir}'`;
+
 interface Box {
   readonly ports?: Partial<DoctorPorts>;
   readonly env?: Record<string, string>;
@@ -201,7 +203,7 @@ describe("the deployment probed", () => {
     });
     expect(found(list, "network.deployment")).toMatchObject({
       status: "unknown",
-      fix: "NODE_USE_ENV_PROXY=1 volli-runner link --server <url>",
+      fix: `${USER_LINK_FIX} --server <url>`,
     });
     expect(found(list, "clock").status).toBe("unknown");
   });
@@ -312,7 +314,7 @@ describe("the link", () => {
     const list = await checks({ ports: { readLink: async () => ({ state: "unlinked" }) } });
     expect(found(list, "link")).toMatchObject({
       status: "warn",
-      fix: "NODE_USE_ENV_PROXY=1 volli-runner link",
+      fix: USER_LINK_FIX,
     });
   });
 
@@ -336,8 +338,11 @@ describe("the link", () => {
         configDir: "/etc/volli-runner",
       },
     });
-    expect(found(list, "link").fix).toBe(
-      "sudo -u volli env VOLLI_RUNNER_INSTALL_MODE=system volli-runner doctor --data-dir /var/lib/volli-runner --config-dir /etc/volli-runner",
+    expect(found(list, "link").fix).toContain(
+      "-u volli env VOLLI_RUNNER_INSTALL_MODE=system NODE_USE_ENV_PROXY=1 volli-runner doctor",
+    );
+    expect(found(list, "link").fix).toContain(
+      "--data-dir '/var/lib/volli-runner' --config-dir '/etc/volli-runner'",
     );
   });
 });
@@ -524,6 +529,33 @@ describe("linger", () => {
       paths: { mode: "system", dataDir: "/var/lib/volli-runner", configDir: "/etc/volli-runner" },
     });
     expect(found(list, "linger")).toMatchObject({ status: "info" });
+  });
+});
+
+describe("the system link recovery command", () => {
+  it("seals new links as the service owner and keeps explicit paths and proxies", async () => {
+    const paths = {
+      mode: "system" as const,
+      dataDir: "/var/lib/team's runner",
+      configDir: "/etc/volli-runner",
+    };
+    const list = await checks({
+      uid: 0,
+      env: {},
+      paths,
+      ports: { readLink: async () => ({ state: "unlinked" }) },
+      buildDeployment: null,
+    });
+    for (const id of ["link", "network.deployment"]) {
+      const fix = found(list, id).fix!;
+      expect(fix).toContain(
+        "sudo --preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy -u volli env VOLLI_RUNNER_INSTALL_MODE=system NODE_USE_ENV_PROXY=1 volli-runner link",
+      );
+      expect(fix).toContain(
+        "--data-dir '/var/lib/team'\\''s runner' --config-dir '/etc/volli-runner'",
+      );
+    }
+    expect(found(list, "network.deployment").fix).toMatch(/--server <url>$/);
   });
 });
 

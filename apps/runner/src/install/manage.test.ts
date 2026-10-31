@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { CommandInput } from "../commands";
 import type { RunnerStatus } from "../shell/runner-status";
 import { testContext } from "../testing/context";
-import { installLayout, serviceUnit, unitQuote, UNIT } from "./layout";
+import { installLayout, proxyEnvironment, serviceUnit, unitQuote, UNIT } from "./layout";
 import { asRunner, installRunner, systemctl, type InstallPorts } from "./manage";
 import type { RunTool } from "./tools";
 import { uninstallRunner } from "./uninstall";
@@ -145,11 +145,14 @@ describe("managed layout and units", () => {
       "TimeoutStopSec=45",
       "CapabilityBoundingSet=",
       "NODE_USE_ENV_PROXY=1",
-      "p%%20",
       "WantedBy=multi-user.target",
     ])
       expect(unit).toContain(line);
     expect(unit).not.toContain("Requires=");
+    expect(unit).not.toContain("http://proxy");
+    expect(proxyEnvironment({ HTTPS_PROXY: "http://proxy/p%20", NO_PROXY: "localhost" })).toBe(
+      'HTTPS_PROXY="http://proxy/p%20"\nNO_PROXY="localhost"\n',
+    );
     expect(unit).toContain("ExecStart=:");
     expect(unit).toContain("Environment=VOLLI_RUNNER_SERVICE=1");
     expect(serviceUnit(layout(), {})).toContain("Environment=VOLLI_RUNNER_SERVICE=1");
@@ -262,6 +265,29 @@ describe("install", () => {
     expect(context.stderr()).toContain("PATH");
     expect(calls).toEqual([]);
     expect(existsSync(join(layout().unitDir, UNIT))).toBe(false);
+  });
+  it("keeps proxy passwords out of systemd properties and restarts on private proxy changes", async () => {
+    await install();
+    context = { ...context, env: { HTTPS_PROXY: "http://user:secret@proxy.test/p%20" } };
+    let reads = 0;
+    context = {
+      ...context,
+      statusProbes: {
+        read: () => status(reads++ === 0 ? 10 : 11),
+        alive: () => true,
+        accepts: async () => true,
+      },
+    };
+    calls.length = 0;
+    expect(await install({ "no-start": false })).toBe(0);
+    const at = layout();
+    expect(readFileSync(join(at.root, "proxy.env"), "utf8")).toBe(
+      'HTTPS_PROXY="http://user:secret@proxy.test/p%20"\n',
+    );
+    expect(lstatSync(join(at.root, "proxy.env")).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(at.unitDir, UNIT), "utf8")).not.toContain("user:secret");
+    expect(calls.some((call) => call.args.includes("restart"))).toBe(true);
+    expect(context.stdout() + context.stderr()).not.toContain("user:secret");
   });
   it("creates a system account, drops uid for linking, and never passes the token as argv", async () => {
     context = { ...context, uid: 0 };
