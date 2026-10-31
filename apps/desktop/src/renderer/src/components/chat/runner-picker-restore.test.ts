@@ -65,6 +65,25 @@ it("restores pending current-account starts only when their project arrives, wit
   expect(useChatSessionsStore.getState().openTabs).toEqual({});
 });
 
+it("restores editable cloud Drafts, including a refused request reset for correction", () => {
+  adoptLaunch({ store: "cloud", backendUrl: "https://example.convex.cloud", userId: "person" });
+  useChatDraftsStore.setState({ drafts: {} });
+  useChatSessionsStore.setState({ openTabs: {} });
+  useProjectsStore.setState({ projects: [project] });
+  draft("refused");
+  useChatDraftsStore.getState().resetRunnerStart("refused", "Correct these words", "new-request");
+  useChatDraftsStore.getState().openProvisional("typed", {
+    projectId: "project",
+    ticketId: null,
+    operationId: "typed",
+    title: null,
+  });
+  useChatDraftsStore.getState().setDraft("typed", "Not sent yet");
+  stop = followRunnerDraftTabs();
+  expect(useChatSessionsStore.getState().openTabs.project).toEqual(["refused", "typed"]);
+  expect(useChatDraftsStore.getState().drafts.refused?.text).toBe("Correct these words");
+});
+
 it("local restoration never discards or opens a pending cloud request", () => {
   adoptLaunch(LOCAL_LAUNCH);
   useChatDraftsStore.setState({ drafts: {} });

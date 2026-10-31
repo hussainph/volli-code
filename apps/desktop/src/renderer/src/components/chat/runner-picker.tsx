@@ -4,7 +4,7 @@ import { DesktopIcon } from "@phosphor-icons/react/dist/csr/Desktop";
 import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
 import { makeFunctionReference } from "convex/server";
 
-import { cloudLaunchNow, launchStore } from "@renderer/stores/launch";
+import { cloudAccountScope, launchStore } from "@renderer/stores/launch";
 import { followCloudSession } from "@renderer/lib/cloud-client";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { appStateStorage, type SyncStateStorage } from "@renderer/lib/app-state-storage";
@@ -30,8 +30,7 @@ const storage: SyncStateStorage = appStateStorage;
 const preferenceKey = "composer-runner-choices";
 const listeners = new Set<() => void>();
 function preferenceScope(projectId: string): string {
-  const launch = cloudLaunchNow();
-  return JSON.stringify([launch?.backendUrl, launch?.userId, projectId]);
+  return JSON.stringify([cloudAccountScope(), projectId]);
 }
 function preferences(): Record<string, string> {
   try {

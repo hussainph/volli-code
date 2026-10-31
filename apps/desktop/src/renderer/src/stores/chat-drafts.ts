@@ -50,7 +50,8 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
-import type { RunnerStartIntent } from "@renderer/components/chat/runner-picker-start";
+import type { SessionStartOnArgs } from "@volli/shared/cloud";
+import { cloudAccountScope } from "@renderer/stores/launch";
 
 /** A draft never survives past this many most-recently-touched sessions. */
 export const MAX_DRAFTS = 50;
@@ -121,10 +122,12 @@ export interface ProvisionalChatDraft {
   skills?: readonly string[];
   title: string | null;
   model?: ModelSelection;
+  /** Cloud Draft ownership survives both a terminal refusal and an edit. */
+  accountScope?: string;
   /** A person's cloud runner choice. Never silently reroute a held first message. */
   runnerChoice?: { id: string; name: string };
   /** Frozen before the remote mutation; retained until its Session is readable. */
-  runnerStart?: { intent: RunnerStartIntent; accountScope: string; sessionId?: string };
+  runnerStart?: { intent: SessionStartOnArgs; accountScope: string; sessionId?: string };
   /**
    * Set when {@link model} is only the configured default the composer froze
    * at Send (VC-432), not a model a person picked. Promotion then leaves the
@@ -436,6 +439,7 @@ function readProvisionalChatDraft(value: unknown): ProvisionalChatDraft | undefi
     operationId,
     title,
     phase,
+    ...(typeof value.accountScope === "string" ? { accountScope: value.accountScope } : {}),
     ...(skills.length > 0 ? { skills } : {}),
     ...(isPlainRecord(value.runnerChoice) &&
     typeof value.runnerChoice.id === "string" &&
@@ -466,7 +470,7 @@ function readRunnerStart(value: unknown): ProvisionalChatDraft["runnerStart"] {
     typeof row.body !== "string"
   )
     return undefined;
-  let model: RunnerStartIntent["model"] = null;
+  let model: SessionStartOnArgs["model"] = null;
   if (row.model !== null) {
     const candidate = row.model;
     if (
@@ -619,12 +623,17 @@ export function createChatDraftsStore(storage?: StateStorage) {
             set((state) => {
               abandonedImports.delete(sessionId);
               if (state.drafts[sessionId]?.provisional !== undefined) return {};
+              const accountScope = cloudAccountScope();
               return {
                 drafts: {
                   ...state.drafts,
                   [sessionId]: {
                     ...draftFor(state.drafts, sessionId),
-                    provisional: { ...provisional, phase: "draft" },
+                    provisional: {
+                      ...provisional,
+                      ...(accountScope === null ? {} : { accountScope }),
+                      phase: "draft",
+                    },
                   },
                 },
               };
@@ -699,7 +708,14 @@ export function createChatDraftsStore(storage?: StateStorage) {
               return {
                 drafts: {
                   ...state.drafts,
-                  [sessionId]: { ...draft, provisional: { ...draft.provisional, runnerStart } },
+                  [sessionId]: {
+                    ...draft,
+                    provisional: {
+                      ...draft.provisional,
+                      accountScope: runnerStart.accountScope,
+                      runnerStart,
+                    },
+                  },
                 },
               };
             }),
@@ -738,7 +754,11 @@ export function createChatDraftsStore(storage?: StateStorage) {
                     ...draft,
                     text,
                     held: [],
-                    provisional: { ...provisional, operationId },
+                    provisional: {
+                      ...provisional,
+                      accountScope: draft.provisional.runnerStart.accountScope,
+                      operationId,
+                    },
                   },
                 },
               };

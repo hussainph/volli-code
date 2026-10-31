@@ -172,6 +172,7 @@ import {
 } from "@renderer/lib/cloud-session-read-only";
 import { CLOUD_ATTACHMENTS_UNAVAILABLE } from "@renderer/lib/cloud-session-transport";
 import { launchStore } from "@renderer/stores/launch";
+import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { RunnerPicker, useRunnerPicker } from "./runner-picker";
@@ -441,10 +442,14 @@ function ChatPlaneContent({
   // Session. The rest of the plane can render its empty projections unchanged;
   // the few operations that require durability branch explicitly below.
   const provisional = useChatDraftsStore((state) => state.drafts[sessionId]?.provisional);
+  const cloudLaunch = launchStore() === "cloud";
+  const placedRunnerId = useCloudPlacesStore(
+    (state) => (state.sessions[sessionId] ?? state.openedPlaces[sessionId])?.placeRunnerId ?? null,
+  );
   const runners = useRunnerPicker(
     projectId,
-    provisional !== undefined,
-    provisional?.runnerChoice?.id,
+    provisional !== undefined || placedRunnerId !== null,
+    provisional?.runnerChoice?.id ?? placedRunnerId ?? undefined,
   );
   const runnerStart = provisional?.runnerStart;
   const startStatus = useRunnerStartStatus(
@@ -607,7 +612,6 @@ function ChatPlaneContent({
   // other write, the draft kept in it. In a cloud launch the box is a send to
   // the Session's runner through Volli Cloud (VC-895), so the cloud link
   // decides, not the generic Session-write gate (which stays shut there).
-  const cloudLaunch = launchStore() === "cloud";
   const canWriteLocal = useCanWriteSession(projectId);
   const canSendCloud = useCanSendSession(projectId);
   const team = useSessionTeam(sessionId);
@@ -617,8 +621,12 @@ function ChatPlaneContent({
   // New-ticket composer asks the same question — see `offerableModels`.
   const pickerModels = React.useMemo(
     () =>
-      remoteRunner && runners.selected !== null ? modelsOnRunner(models, runners.selected) : models,
-    [models, remoteRunner, runners.selected],
+      cloudLaunch && provisional === undefined && runners.selected === null
+        ? NO_MODELS
+        : remoteRunner && runners.selected !== null
+          ? modelsOnRunner(models, runners.selected)
+          : models,
+    [cloudLaunch, models, provisional, remoteRunner, runners.selected],
   );
   const composerModels = React.useMemo(
     () => offerableModels(pickerModels, providers, hidden),
@@ -631,8 +639,11 @@ function ChatPlaneContent({
     [defaults, hidden, pickerModels, providers],
   );
   const sessionModel = React.useMemo(
-    () => sessionModelStanding(modelSelection, pickerModels, providers),
-    [modelSelection, pickerModels, providers],
+    () =>
+      cloudLaunch && provisional === undefined && runners.selected === null
+        ? null
+        : sessionModelStanding(modelSelection, pickerModels, providers),
+    [cloudLaunch, modelSelection, pickerModels, providers, provisional, runners.selected],
   );
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
@@ -749,7 +760,7 @@ function ChatPlaneContent({
         }
         if (runnerStart !== undefined || (cloudLaunch && remoteRunner)) {
           try {
-            const intent =
+            const startIntent =
               runnerStart?.intent ??
               runnerStartIntent(
                 {
@@ -761,7 +772,7 @@ function ChatPlaneContent({
                 },
                 message,
               );
-            return (await submitRunnerDraft(sessionId, intent)) ? "delivered" : "refused";
+            return (await submitRunnerDraft(sessionId, startIntent)) ? "delivered" : "refused";
           } catch (error) {
             toastError(errorMessage(error));
             return "refused";
@@ -1307,6 +1318,10 @@ function ChatPlaneContent({
         .map((provider) => ({ id: provider.id, label: provider.label })),
     [providers],
   );
+  // This Mac's empty/failed credential catalog cannot prescribe local sign-in
+  // for another runner. Its capabilities govern model standing; execution
+  // failures still come from the Session's own attention and transport.
+  const localModelRecovery = !cloudLaunch || runners.selected?.id === runners.thisMacId;
   const candidateBlocker = sessionBlocker(
     {
       sessionError: session.sessionError,
@@ -1314,10 +1329,10 @@ function ChatPlaneContent({
       // The failure a notification click named, so the row shows THAT problem
       // rather than whichever one happens to be newest (VC-295).
       revealedAttentionId: revealed?.attentionId ?? null,
-      catalogState,
-      catalogError,
+      catalogState: localModelRecovery ? catalogState : "ready",
+      catalogError: localModelRecovery ? catalogError : null,
       sessionModel,
-      signInProviders,
+      signInProviders: localModelRecovery ? signInProviders : [],
       scheduledResume: projection?.scheduledResume ?? null,
       turnActive: projection?.turnActive ?? false,
       liveExecutorId,

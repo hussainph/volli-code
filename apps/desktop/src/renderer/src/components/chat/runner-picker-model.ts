@@ -59,5 +59,5 @@ export function modelsOnRunner(
 ): ModelAccessModel[] {
   return models
     .filter((model) => runner.providers.includes(model.providerId))
-    .map((model) => ({ ...model, state: "available" }));
+    .map((model) => Object.assign({}, model, { state: "available" as const }));
 }

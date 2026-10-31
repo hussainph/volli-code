@@ -30,8 +30,8 @@ async function fixture(cloud = true) {
       siteUrl: "https://example.convex.site",
     });
   let value: ComposerRunners | undefined;
-  let update = () => {};
-  let mac = (_snapshot: ThisMacRunnerSnapshot) => {};
+  let update: () => void = vi.fn();
+  let mac: (snapshot: ThisMacRunnerSnapshot) => void = vi.fn();
   const offQuery = vi.fn();
   const offFollow = vi.fn();
   const unsubscribe = vi.fn();

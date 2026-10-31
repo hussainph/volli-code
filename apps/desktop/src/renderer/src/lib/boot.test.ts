@@ -1666,11 +1666,12 @@ describe("a cloud launch's boot (VC-889)", () => {
   });
 
   it("restores a pending cloud start after its project arrives, retaining another account's intent", async () => {
+    const touchedAt = Date.now();
     const pending = (accountScope: string) => ({
       text: "",
       attachments: [],
       held: [],
-      touchedAt: Date.now(),
+      touchedAt,
       provisional: {
         projectId: "cloud-project",
         ticketId: null,

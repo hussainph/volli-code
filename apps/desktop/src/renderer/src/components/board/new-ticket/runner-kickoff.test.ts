@@ -93,11 +93,8 @@ it("persists the chosen runner and held kickoff before C2, then opens its Draft"
   expect(provisional.runnerStart?.sessionId).toBe("backend-session");
   expect(landing.openChatTab).toHaveBeenCalledWith(ticketId, id);
   expect(landing.setProvisionalActive).toHaveBeenCalledWith(ticketId, id);
-  expect(landing.select).toHaveBeenCalledWith(projectId);
-  expect(landing.openTicketView).toHaveBeenCalledWith(projectId, ticketId, {
-    tabId: `chat:${id}`,
-    open: true,
-  });
+  expect(landing.select).not.toHaveBeenCalled();
+  expect(landing.openTicketView).not.toHaveBeenCalled();
   const [reference, args] = mutation.mock.calls[0]!;
   expect(getFunctionName(reference)).toBe("sessionStarts:startOn");
   expect(args).toEqual({

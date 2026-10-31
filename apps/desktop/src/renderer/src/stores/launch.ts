@@ -17,6 +17,11 @@ export function launchStore(): CloudLaunch["store"] {
   return launch.store;
 }
 
+/** Durable client Draft/preference ownership; never a Session or backend identity. */
+export function cloudAccountScope(): string | null {
+  return launch.store === "cloud" ? JSON.stringify([launch.backendUrl, launch.userId]) : null;
+}
+
 /** The cloud launch's facts (who, and which backend), or `null` in a local launch. */
 export function cloudLaunchNow(): Extract<CloudLaunch, { store: "cloud" }> | null {
   return launch.store === "cloud" ? launch : null;

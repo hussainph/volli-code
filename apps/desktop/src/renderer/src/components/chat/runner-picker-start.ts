@@ -1,7 +1,8 @@
 import { cloudMessageSubmit } from "@volli/shared";
 import type { SessionStartOnArgs, SessionStartOnResult } from "@volli/shared/cloud";
 import { queuedWireMessage, type QueuedMessage } from "@volli/session-presentation";
-import { cloudLaunchNow } from "@renderer/stores/launch";
+import { cloudAccountScope as runnerStartAccountScope } from "@renderer/stores/launch";
+export { cloudAccountScope as runnerStartAccountScope } from "@renderer/stores/launch";
 import { makeFunctionReference } from "convex/server";
 import { cloudSession, type CloudSession } from "@renderer/lib/cloud-client";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
@@ -11,11 +12,6 @@ import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-stat
 
 /** Persist this intent before submitting; a retry must keep its request id. */
 export type RunnerStartIntent = Pick<SessionStartOnArgs, keyof SessionStartOnArgs>;
-
-export function runnerStartAccountScope(): string | null {
-  const launch = cloudLaunchNow();
-  return launch === null ? null : JSON.stringify([launch.backendUrl, launch.userId]);
-}
 
 /** Text uses the same codec/size budget as an ordinary cloud message. */
 export function runnerStartIntent(

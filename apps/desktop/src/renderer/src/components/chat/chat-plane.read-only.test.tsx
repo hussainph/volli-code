@@ -3,7 +3,13 @@
 import { act } from "react";
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { LOCAL_LAUNCH, type RendererSessionInteraction } from "@volli/shared";
+import {
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  LOCAL_LAUNCH,
+  type RendererSessionInteraction,
+} from "@volli/shared";
+import * as modelAccess from "@renderer/lib/model-access-client";
+import * as hosts from "@renderer/components/hosts/use-remote-project";
 import { api as cloudApi } from "@volli/convex/api";
 import * as cloudClient from "@renderer/lib/cloud-client";
 import { adoptLaunch } from "@renderer/stores/launch";
@@ -503,6 +509,55 @@ it("picks another runner in the composer and sends its durable first-message req
     "remote-session",
   );
   expect(container.textContent).toContain("Sent — waiting for Build box");
+});
+
+it("keeps the actual runner's catalog subscription after a Session is durable", async () => {
+  cloudSecrets("this-mac");
+  vi.spyOn(hosts, "useRemoteHostName").mockReturnValue(null);
+  vi.spyOn(modelAccess, "useModelAccessClient").mockReturnValue({
+    revision: 0,
+    inspect: async () => ({
+      observedAt: 1,
+      providers: [],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "opus",
+          label: "Remote Opus",
+          state: "authentication-required",
+          reasoningLevels: ["high"],
+          acceptsImageInput: true,
+        },
+      ],
+    }),
+    defaults: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+    hiddenModels: async () => [],
+  } as unknown as NonNullable<ReturnType<typeof modelAccess.useModelAccessClient>>);
+  const runner = {
+    id: "r1",
+    name: "Build box",
+    kind: "linux",
+    status: "online",
+    statusChangedAt: 1,
+    providers: ["anthropic"],
+    version: "1",
+    upgradeRequired: false,
+  };
+  const picker = vi.spyOn(runnerPicker, "useRunnerPicker").mockReturnValue({
+    runners: [runner],
+    selected: runner,
+    thisMacId: "this-mac",
+    loading: false,
+    error: null,
+    choose: vi.fn(),
+  });
+  const { container } = await mountPlane();
+  expect(picker).toHaveBeenLastCalledWith(PROJECT, true, "r1");
+  expect(container.textContent).toContain("Remote Opus");
+  expect(container.textContent).not.toContain("No models configured");
+  expect(container.textContent).not.toContain("Sign-in required");
+  // Placement can no longer be edited, even though its model supply stays live.
+  expect(container.querySelector('[aria-label^="Runner:"]')).toBeNull();
 });
 
 it("keeps the known owner's composer while names load or fail", async () => {

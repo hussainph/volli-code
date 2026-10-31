@@ -4,14 +4,15 @@ import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { runnerStartAccountScope } from "./runner-picker-start";
 
-/** Cloud projects arrive after boot. Restore each pending start only once,
+/** Cloud projects arrive after boot. Restore each account-owned Draft once,
  * when its project is visible; never discard another account's saved intent. */
 export function followRunnerDraftTabs(): () => void {
   const scope = runnerStartAccountScope();
   if (scope === null) return () => {};
   const pending = Object.fromEntries(
     Object.entries(useChatDraftsStore.getState().drafts).filter(
-      ([, draft]) => draft.provisional?.runnerStart?.accountScope === scope,
+      ([, draft]) =>
+        (draft.provisional?.accountScope ?? draft.provisional?.runnerStart?.accountScope) === scope,
     ),
   );
   if (Object.keys(pending).length === 0) return () => {};

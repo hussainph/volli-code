@@ -21,7 +21,7 @@ afterEach(async () => {
 it("follows queued, starting, started and unavailable status without leaking the old subscription", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   let value: RunnerStartStatus | null | undefined;
-  let update = () => {};
+  let update: () => void = vi.fn();
   const off = vi.fn();
   const stop = vi.fn();
   const watch = vi.fn(() => ({

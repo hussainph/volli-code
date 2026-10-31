@@ -6,11 +6,8 @@ import {
   runnerStartIntent,
   submitRunnerDraft,
 } from "@renderer/components/chat/runner-picker-start";
-import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useProjectUiStore } from "@renderer/stores/project-ui";
-import { useProjectsStore } from "@renderer/stores/projects";
 import type { KickoffChat } from "./submit";
 
 /**
@@ -57,10 +54,8 @@ export async function startRunnerKickoff(
     drafts.freezeRunnerStart(sessionId, { intent, accountScope });
     useChatSessionsStore.getState().openChatTab(ticketId, sessionId);
     useChatSessionsStore.getState().setProvisionalActive(ticketId, sessionId);
-    useProjectsStore.getState().select(projectId);
-    useProjectUiStore
-      .getState()
-      .openTicketView(projectId, ticketId, { tabId: chatTabId(sessionId), open: true });
+    // Keep the current workspace in place. This recorded tab is reachable
+    // when the person explicitly opens the new ticket, including on failure.
     await submitRunnerDraft(sessionId);
   } catch (error) {
     toast.error(`Couldn't start chat: ${errorMessage(error)}`);

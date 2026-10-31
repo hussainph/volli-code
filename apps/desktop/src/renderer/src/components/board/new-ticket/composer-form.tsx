@@ -353,8 +353,8 @@ export function ComposerForm({
       );
       if (!result.created) return;
       clearDraft(); // the kickoff consumed the draft — next open starts blank
-      // Local kickoff leaves the workspace alone; cloud kickoff opens its
-      // pending Draft. Create-more only decides whether this form resets or closes.
+      // Kickoff leaves the workspace alone. Create-more only decides whether
+      // this form resets or closes; opening the new ticket is a separate action.
       if (createMore) resetForm();
       else onClose();
     } catch (error) {
