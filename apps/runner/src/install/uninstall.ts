@@ -86,9 +86,11 @@ export async function uninstallRunner(
   }
   const unit = join(layout.unitDir, UNIT);
   let changed =
+    cliStat !== undefined ||
     existsSync(layout.root) ||
     existsSync(unit) ||
-    existsSync(join(layout.configDir, LINK_FILE_NAME));
+    existsSync(join(layout.configDir, LINK_FILE_NAME)) ||
+    existsSync(join(layout.configDir, LINK_KEY_FILE_NAME));
   if (ports.systemd && existsSync(unit)) {
     mustRun(ports.run, "systemctl", systemctl(layout, ["disable", "--now", UNIT]));
   }

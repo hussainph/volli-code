@@ -63,6 +63,15 @@ it("routes install, uninstall, errors and the credential-owner subprocess withou
   expect(
     await runManagedCommand(
       "uninstall",
+      { values: { "data-dir": "/not-a-managed-layout" }, positionals: [] },
+      context,
+      ports,
+    ),
+  ).toBe(1);
+  expect(context.stderr()).toContain("installed layout");
+  expect(
+    await runManagedCommand(
+      "uninstall",
       {
         values: {
           "revoke-only": true,

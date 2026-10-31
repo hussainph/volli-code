@@ -31,6 +31,11 @@ export async function runManagedCommand(
   try {
     if (kind === "uninstall" && input.values["revoke-only"])
       return await revokeRunner(input, context);
+    if (input.values["data-dir"] !== undefined || input.values["config-dir"] !== undefined) {
+      throw new Error(
+        "Managed uninstall uses the installed layout, not --data-dir or --config-dir.",
+      );
+    }
     const layout = installLayout(input, context);
     return await (kind === "install"
       ? installRunner(input, context, layout, ports)

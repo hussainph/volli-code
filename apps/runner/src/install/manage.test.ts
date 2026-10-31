@@ -143,6 +143,7 @@ describe("managed layout and units", () => {
     ])
       expect(unit).toContain(line);
     expect(unit).not.toContain("Requires=");
+    expect(unit).toContain("ExecStart=:");
     const user = serviceUnit(layout(), {});
     expect(user).not.toContain("User=volli");
     expect(user).not.toContain("ProtectHome=yes");
@@ -326,6 +327,15 @@ describe("install", () => {
     };
     expect(await install({ "no-start": false })).toBe(1);
     expect(context.stderr()).toContain("online");
+    // Even at the requested version, an activation must not believe the old pid.
+    const manifest = JSON.parse(readFileSync(join(source, "MANIFEST.json"), "utf8"));
+    manifest.revision = "next-revision";
+    writeFileSync(join(source, "MANIFEST.json"), JSON.stringify(manifest));
+    context = {
+      ...context,
+      statusProbes: { read: () => status(), alive: () => true, accepts: async () => true },
+    };
+    expect(await install({ "no-start": false })).toBe(1);
     context = {
       ...context,
       signal: AbortSignal.abort(),
@@ -424,6 +434,18 @@ describe("uninstall", () => {
     const second = testContext({ root });
     await uninstallRunner(input(), second, at, ports);
     expect(second.stdout()).toContain('"changed":false');
+  });
+  it("cleans up an interrupted uninstall's dangling managed link and orphaned credential key", async () => {
+    const at = layout();
+    mkdirSync(at.binDir, { recursive: true });
+    mkdirSync(at.configDir, { recursive: true });
+    symlinkSync(join(at.root, "current/bin/volli-runner"), join(at.binDir, "volli-runner"));
+    await uninstallRunner(input(), context, at, ports);
+    expect(context.stdout()).toContain('"changed":true');
+    writeFileSync(join(at.configDir, "credential.key"), "orphaned");
+    const next = testContext({ root });
+    await uninstallRunner(input(), next, at, ports);
+    expect(next.stdout()).toContain('"changed":true');
   });
   it("requires explicit purge consent; then removes data and the dedicated account", async () => {
     await install();
