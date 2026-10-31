@@ -49,6 +49,7 @@ const signedIn: AccountSnapshot = {
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const work of cleanup.splice(0)) await work();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 const nope = async (): Promise<never> => {
@@ -729,6 +730,127 @@ const noViewerYet: AccountSnapshot = {
   account: { ...signedIn.account!, userId: null },
 };
 const signedOut: AccountSnapshot = { ...signedIn, state: "signed-out", account: null };
+
+/** Hold one engine run at a durable boundary; the next run can finish the queue. */
+async function heldMove(f: ReturnType<typeof setup>) {
+  const row = f.enqueue();
+  let release!: () => void;
+  let signal!: AbortSignal;
+  f.run.mockImplementationOnce(async (queueId, runningSignal) => {
+    signal = runningSignal!;
+    await new Promise<void>((resolve) => {
+      release = () => resolve();
+      if (signal.aborted) release();
+      else signal.addEventListener("abort", release, { once: true });
+    });
+    signal.removeEventListener("abort", release);
+    if (signal.aborted) {
+      f.engine.journal.patch(row.moveId, { paused: "paused" });
+      return { kind: "waiting", moveId: row.moveId, reason: "paused" };
+    }
+    f.engine.journal.setQueue(queueId, { state: "done" });
+    return { kind: "done" };
+  });
+  await f.service.resume();
+  await vi.waitFor(() => expect(f.run).toHaveBeenCalledOnce());
+  return { row, signal, release: () => release() };
+}
+
+describe("a running move under a changing sign-in", () => {
+  it("survives absent-person flaps and finishes without restarting the engine", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    vi.useFakeTimers();
+    for (const flap of [noViewerYet, signedOut, { ...signedOut, state: "restoring" as const }]) {
+      f.publish(flap);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(held.signal.aborted).toBe(false);
+      f.publish(signedIn);
+    }
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(held.signal.aborted).toBe(false);
+    held.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.engine.journal.queue(held.row.queueId)?.state).toBe("done");
+    expect(f.run).toHaveBeenCalledOnce();
+  });
+
+  it("aborts for a different real person and resumes only when the owner returns", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    f.publish(noViewerYet);
+    expect(held.signal.aborted).toBe(false);
+    f.publish({ ...signedIn, account: { ...signedIn.account!, userId: "other" } });
+    expect(held.signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(f.engine.journal.move(held.row.moveId)?.paused).toBe("paused"));
+    await f.service.resume();
+    expect(f.run).toHaveBeenCalledOnce();
+    f.publish(signedIn);
+    await vi.waitFor(() => expect(f.engine.journal.queue(held.row.queueId)?.state).toBe("done"));
+    expect(f.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("pauses immediately on the explicit sign-out/backend sign-in-loss path and resumes after sign-in", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    // The explicit account-port hook and backend 401 use the same stop path.
+    f.service.signInLost();
+    f.publish(signedOut);
+    expect(held.signal.aborted).toBe(true);
+    await vi.waitFor(() =>
+      expect(f.engine.journal.move(held.row.moveId)?.paused).toBe("signed_out"),
+    );
+    expect((await f.service.snapshot()).moves[0]?.message).toContain("Sign in");
+    await f.service.resume();
+    expect(f.run).toHaveBeenCalledOnce();
+    f.publish(signedIn);
+    await vi.waitFor(() => expect(f.engine.journal.queue(held.row.queueId)?.state).toBe("done"));
+    expect(f.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("pauses after two minutes continuously absent, without extending grace on another blip, and resumes", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    vi.useFakeTimers();
+    f.publish(noViewerYet);
+    await vi.advanceTimersByTimeAsync(60_000);
+    f.publish(signedOut);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(held.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(held.signal.aborted).toBe(true);
+    expect(f.engine.journal.move(held.row.moveId)?.paused).toBe("signed_out");
+    expect((await f.service.snapshot()).moves[0]?.message).toContain("Sign in");
+    f.publish(signedIn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.engine.journal.queue(held.row.queueId)?.state).toBe("done");
+    expect(f.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears absence grace when a run finishes, so it cannot stop later work", async () => {
+    const f = setup();
+    const held = await heldMove(f);
+    vi.useFakeTimers();
+    f.publish(noViewerYet);
+    held.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.engine.journal.queue(held.row.queueId)?.state).toBe("done");
+    const lost = vi.spyOn(f.service, "signInLost");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(lost).not.toHaveBeenCalled();
+  });
+
+  it("clears absence grace on disposal", async () => {
+    const f = setup();
+    await heldMove(f);
+    vi.useFakeTimers();
+    f.publish(noViewerYet);
+    await f.service.dispose();
+    const lost = vi.spyOn(f.service, "signInLost");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(lost).not.toHaveBeenCalled();
+  });
+});
 
 describe("a long dry run under a changing sign-in (VC-1029)", () => {
   it("survives a sign-in that is briefly absent, and still starts", async () => {

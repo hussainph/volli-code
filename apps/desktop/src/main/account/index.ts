@@ -100,6 +100,7 @@ export function accountPort(
     reportUnsavedWrites(count: number): void;
     saveSnapshot(text: string): void;
     readSnapshot(): string | null;
+    beforeSignOut?(): void;
   },
   github: GithubService,
 ): AccountPort {
@@ -109,7 +110,10 @@ export function accountPort(
     signIn: (connection, inviteCode, acceptedAgreementVersion) =>
       service.signIn(connection, inviteCode, acceptedAgreementVersion),
     cancelSignIn: () => service.cancelSignIn(),
-    signOut: () => service.signOut(),
+    signOut: () => {
+      launch.beforeSignOut?.();
+      return service.signOut();
+    },
     requestDeletion: () => service.requestDeletion(),
     cancelDeletion: () => service.cancelDeletion(),
     accessToken: (force) => service.windowToken(force),
