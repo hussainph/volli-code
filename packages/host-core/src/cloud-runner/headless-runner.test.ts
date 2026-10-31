@@ -498,7 +498,7 @@ describe("headless runner lifecycle", () => {
     await h.runner.stop();
   });
 
-  it("generates a boot id and uses lower-half jitter with default optional ports", async () => {
+  it("generates a boot id and keeps jitter at or above the one-second floor", async () => {
     const h = harness({
       bootId: undefined,
       random: undefined,
@@ -512,7 +512,7 @@ describe("headless runner lifecycle", () => {
     const runner = createHeadlessRunner({ ...h.options, random: () => 0 });
     h.fetch.mockRejectedValueOnce(new Error("network"));
     await runner.start();
-    await vi.advanceTimersByTimeAsync(499);
+    await vi.advanceTimersByTimeAsync(999);
     expect(h.clients).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.clients).toHaveLength(1);
@@ -721,6 +721,98 @@ describe("headless runner lifecycle", () => {
     await h.runner.start();
     expect(sync.close).toHaveBeenCalledOnce();
     expect(h.clients[0]!.listener).toBeNull();
+    await h.runner.stop();
+  });
+
+  it("does not start the lifecycle as a side effect of a failed pre-start token read", async () => {
+    const h = harness();
+    h.fetch.mockRejectedValueOnce(new Error("network"));
+    await expect(h.runner.token()).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.fetch).toHaveBeenCalledOnce();
+    expect(h.clients).toHaveLength(0);
+    await h.runner.start();
+    expect(h.clients).toHaveLength(1);
+    await h.runner.stop();
+  });
+
+  it("serializes retry opens with an initial link load still in flight", async () => {
+    const h = harness();
+    let finish!: (value: RunnerLink) => void;
+    vi.mocked(h.store.load).mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    const starting = h.runner.start();
+    h.fetch.mockRejectedValueOnce(new Error("network"));
+    await expect(h.runner.token()).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.store.load).toHaveBeenCalledTimes(2);
+    finish({ runnerId, name: "box", credential: "refresh-1", generation: 1 });
+    await starting;
+    await flush();
+    expect(h.clients).toHaveLength(1);
+    await h.runner.stop();
+  });
+
+  it("publishes a state chosen before connection instead of silently reverting to online", async () => {
+    const h = harness();
+    await h.runner.reportState("degraded", "no model login");
+    await h.runner.start();
+    expect(h.backend).toHaveBeenCalledWith("runners:reportState", {
+      state: "degraded",
+      reason: "no model login",
+    });
+    expect(h.runner.snapshot().canClaim).toBe(false);
+    await h.runner.stop();
+  });
+
+  it("carries a drain set while the first token is connecting into the initial presence", async () => {
+    const h = harness();
+    let finish!: (value: Response) => void;
+    h.fetch.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    const starting = h.runner.start();
+    await flush();
+    await h.runner.drain();
+    finish(
+      new Response(
+        JSON.stringify({
+          token: "runner.jwt",
+          serverTime: 1_000,
+          expiresAt: 901_000,
+          credential: "refresh-2",
+          generation: 2,
+        }),
+      ),
+    );
+    await starting;
+    expect(h.backend).toHaveBeenCalledWith("runners:reportState", {
+      state: "draining",
+      reason: null,
+    });
+    expect(h.runner.snapshot().canClaim).toBe(false);
+    await h.runner.stop();
+  });
+
+  it("starts presence only once when sync.start also starts it", async () => {
+    const h = harness({
+      sync: (parts) => ({
+        ...fakeSync(),
+        start: () => {
+          void parts.presence.start();
+        },
+      }),
+    });
+    await h.runner.start();
+    await flush();
+    expect(h.backend.mock.calls.filter(([name]) => name === "runners:heartbeat")).toHaveLength(1);
     await h.runner.stop();
   });
 

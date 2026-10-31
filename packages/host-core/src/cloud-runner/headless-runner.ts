@@ -108,7 +108,9 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
     canClaim: false,
   };
   let connection: HeadlessRunnerConnection | null = null;
+  let started = false;
   let starting: Promise<void> | null = null;
+  let opening: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
   let ended = false;
   let closing = Promise.resolve();
@@ -176,7 +178,10 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       HEADLESS_RUNNER_RETRY.maxMs,
       HEADLESS_RUNNER_RETRY.baseMs * 2 ** Math.min(attempt++, 16),
     );
-    const delay = Math.round(ceiling / 2 + (random() * ceiling) / 2);
+    const delay = Math.max(
+      HEADLESS_RUNNER_RETRY.baseMs,
+      Math.round(ceiling / 2 + (random() * ceiling) / 2),
+    );
     retry = setTimeout(() => {
       retry = null;
       void run().catch(unavailable);
@@ -191,6 +196,7 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
     publishedCapabilities = null;
     publish("offline");
     options.log.warn("Headless runner could not reach the backend; reconnecting.");
+    if (!started) return;
     schedule(async () => {
       if (connection === null) await open();
       else {
@@ -244,7 +250,14 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
     };
   }
 
-  async function open() {
+  function open(): Promise<void> {
+    opening ??= openOnce().finally(() => {
+      opening = null;
+    });
+    return opening;
+  }
+
+  async function openOnce() {
     if (ended) return;
     const identity = await options.linkStore.load();
     if (ended) return;
@@ -365,6 +378,10 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       onRevoked: revoke,
       onError: unavailable,
     });
+    // Sync also calls start(); this identity owns exactly one initial beat.
+    const startPresence = presence.start.bind(presence);
+    let presenceStarting: Promise<void> | null = null;
+    presence.start = () => (presenceStarting ??= startPresence());
     connection = {
       link,
       presence,
@@ -390,6 +407,7 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       await sync?.close();
       return;
     }
+    await presence.setState(reportedState, reportedReason);
     await presence.start();
     if (!ended) {
       sync?.start();
@@ -420,6 +438,7 @@ export function createHeadlessRunner(options: HeadlessRunnerOptions): HeadlessRu
       return connection;
     },
     start() {
+      started = true;
       starting ??= open().catch(unavailable);
       return starting;
     },
