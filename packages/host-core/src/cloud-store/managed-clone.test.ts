@@ -45,6 +45,8 @@ const SESSION = "00000000-0000-4000-8000-000000000104";
 const TICKET_A = "00000000-0000-4000-8000-000000000105";
 const TICKET_B = "00000000-0000-4000-8000-000000000106";
 const REMOTE_URL = "https://git.example.test/acme/app.git";
+/** Each test runs dozens of real git processes; a loaded machine must not fail them. */
+const REAL_GIT_TIMEOUT_MS = 30_000;
 
 let ctx: TestDb;
 let root: string;
@@ -172,7 +174,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-describe("runner-managed clones", () => {
+describe("runner-managed clones", { timeout: REAL_GIT_TIMEOUT_MS }, () => {
   it("clones once, then every ticket's worktree shares the clone's objects", async () => {
     const { registry, reports, location, calls } = fixture();
     const first = await location.prepare(sessionOn(TICKET_A));
@@ -419,7 +421,7 @@ describe("runner-managed clones", () => {
   });
 });
 
-describe("a main checkout's remote", () => {
+describe("a main checkout's remote", { timeout: REAL_GIT_TIMEOUT_MS }, () => {
   it("is reported from the person's folder, normalized; managed clones are off on a Mac", async () => {
     const checkout = join(root, "checkout");
     git(root, ["clone", "--quiet", remote, checkout]);

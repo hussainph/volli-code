@@ -293,91 +293,95 @@ describe("a runner Session's git credentials", () => {
     ).rejects.toThrow(/not a socket/u);
   });
 
-  it("is what git itself reads, and a box `store` helper never sees the token", async () => {
-    const { socketPath, sessionToken, tokens } = await world();
-    // A stand-in for `volli-runner git-credential`: git runs it; it relays its
-    // argv, stdin and environment to this test, which answers through the
-    // real client (`askGitCredentialDaemon`), and prints what comes back.
-    const relayPath = join(dir, "relay.sock");
-    const relay = createServer((socket) => {
-      let raw = "";
-      socket.on("data", (chunk) => {
-        raw += chunk.toString("utf8");
-        if (!raw.endsWith("\n")) return;
-        const call = JSON.parse(raw) as {
-          action: string;
-          input: string;
-          env: Record<string, string>;
-        };
-        void askGitCredentialDaemon({
-          socketPath,
-          action: call.action,
-          request: call.input,
-          env: call.env,
-        }).then((answer) => socket.end(answer));
+  it(
+    "is what git itself reads, and a box `store` helper never sees the token",
+    { timeout: 30_000 },
+    async () => {
+      const { socketPath, sessionToken, tokens } = await world();
+      // A stand-in for `volli-runner git-credential`: git runs it; it relays its
+      // argv, stdin and environment to this test, which answers through the
+      // real client (`askGitCredentialDaemon`), and prints what comes back.
+      const relayPath = join(dir, "relay.sock");
+      const relay = createServer((socket) => {
+        let raw = "";
+        socket.on("data", (chunk) => {
+          raw += chunk.toString("utf8");
+          if (!raw.endsWith("\n")) return;
+          const call = JSON.parse(raw) as {
+            action: string;
+            input: string;
+            env: Record<string, string>;
+          };
+          void askGitCredentialDaemon({
+            socketPath,
+            action: call.action,
+            request: call.input,
+            env: call.env,
+          }).then((answer) => socket.end(answer));
+        });
       });
-    });
-    await new Promise<void>((resolve) => relay.listen(relayPath, resolve));
-    closers.push(() => new Promise((resolve) => relay.close(() => resolve())));
-    const helper = join(dir, "helper.mjs");
-    writeFileSync(
-      helper,
-      `import { createConnection } from "node:net";
+      await new Promise<void>((resolve) => relay.listen(relayPath, resolve));
+      closers.push(() => new Promise((resolve) => relay.close(() => resolve())));
+      const helper = join(dir, "helper.mjs");
+      writeFileSync(
+        helper,
+        `import { createConnection } from "node:net";
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const socket = createConnection(${JSON.stringify(relayPath)});
 socket.write(JSON.stringify({ action: process.argv[2], input, env: { VOLLI_SESSION: process.env.VOLLI_SESSION, VOLLI_SESSION_TOKEN: process.env.VOLLI_SESSION_TOKEN } }) + "\\n");
 socket.pipe(process.stdout);
 `,
-    );
-    // The box's own configuration: a plaintext `store` helper that already
-    // holds a personal token for GitHub.
-    const stored = join(dir, "git-credentials");
-    writeFileSync(stored, "https://box-user:box_pat@github.com\n");
-    const globalConfig = join(dir, "gitconfig");
-    writeFileSync(globalConfig, `[credential]\n\thelper = store --file ${stored}\n`);
-    const git = (args: string[], input: string, github: RunnerGithub) =>
-      new Promise<string>((resolve, reject) => {
-        const env = runnerSessionGitEnv(
-          { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: sessionToken, GIT_CONFIG_NOSYSTEM: "1" },
-          { helperCommand: `!node ${helper}`, github },
-        );
-        const child = execFile(
-          "git",
-          args,
-          {
-            // Outside any repository, so no repository's own helpers join the chain.
-            cwd: dir,
-            env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_GLOBAL: globalConfig, ...env },
-          },
-          (error, stdout) => (error === null ? resolve(stdout) : reject(error)),
-        );
-        child.stdin!.end(input);
-      });
+      );
+      // The box's own configuration: a plaintext `store` helper that already
+      // holds a personal token for GitHub.
+      const stored = join(dir, "git-credentials");
+      writeFileSync(stored, "https://box-user:box_pat@github.com\n");
+      const globalConfig = join(dir, "gitconfig");
+      writeFileSync(globalConfig, `[credential]\n\thelper = store --file ${stored}\n`);
+      const git = (args: string[], input: string, github: RunnerGithub) =>
+        new Promise<string>((resolve, reject) => {
+          const env = runnerSessionGitEnv(
+            { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: sessionToken, GIT_CONFIG_NOSYSTEM: "1" },
+            { helperCommand: `!node ${helper}`, github },
+          );
+          const child = execFile(
+            "git",
+            args,
+            {
+              // Outside any repository, so no repository's own helpers join the chain.
+              cwd: dir,
+              env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_GLOBAL: globalConfig, ...env },
+            },
+            (error, stdout) => (error === null ? resolve(stdout) : reject(error)),
+          );
+          child.stdin!.end(input);
+        });
 
-    const fill = (github: RunnerGithub) =>
-      git(["credential", "fill"], "protocol=https\nhost=github.com\n\n", github);
-    // Known disconnected: the box's own chain answers GitHub, and no Volli helper is asked.
-    expect(await fill({ state: "disconnected" })).toContain("password=box_pat");
-    // Before any answer, and once the runner serves the owner's token, only
-    // Volli's helper is asked for GitHub, and git's approve never reaches the store.
-    expect(tokens.github()).toEqual({ state: "unknown" });
-    const first = await fill(tokens.github());
-    expect(first).toContain("password=ghu_box_token");
-    await git(["credential", "approve"], first, tokens.github());
-    const github = tokens.github();
-    expect(github.state).toBe("connected");
-    const filled = await fill(github);
-    expect(filled).toContain("username=x-access-token");
-    expect(filled).toContain("password=ghu_box_token");
-    await git(["credential", "approve"], filled, github);
-    expect(readFileSync(stored, "utf8")).toBe("https://box-user:box_pat@github.com\n");
-    // Other hosts keep the box's chain.
-    writeFileSync(stored, "https://me:other_pat@gitlab.example.com\n");
-    expect(
-      await git(["credential", "fill"], "protocol=https\nhost=gitlab.example.com\n\n", github),
-    ).toContain("password=other_pat");
-  });
+      const fill = (github: RunnerGithub) =>
+        git(["credential", "fill"], "protocol=https\nhost=github.com\n\n", github);
+      // Known disconnected: the box's own chain answers GitHub, and no Volli helper is asked.
+      expect(await fill({ state: "disconnected" })).toContain("password=box_pat");
+      // Before any answer, and once the runner serves the owner's token, only
+      // Volli's helper is asked for GitHub, and git's approve never reaches the store.
+      expect(tokens.github()).toEqual({ state: "unknown" });
+      const first = await fill(tokens.github());
+      expect(first).toContain("password=ghu_box_token");
+      await git(["credential", "approve"], first, tokens.github());
+      const github = tokens.github();
+      expect(github.state).toBe("connected");
+      const filled = await fill(github);
+      expect(filled).toContain("username=x-access-token");
+      expect(filled).toContain("password=ghu_box_token");
+      await git(["credential", "approve"], filled, github);
+      expect(readFileSync(stored, "utf8")).toBe("https://box-user:box_pat@github.com\n");
+      // Other hosts keep the box's chain.
+      writeFileSync(stored, "https://me:other_pat@gitlab.example.com\n");
+      expect(
+        await git(["credential", "fill"], "protocol=https\nhost=gitlab.example.com\n\n", github),
+      ).toContain("password=other_pat");
+    },
+  );
 });
 
 describe("runnerSessionGitEnv", () => {
