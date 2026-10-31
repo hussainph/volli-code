@@ -7,6 +7,11 @@ import test from "node:test";
 
 import { parse } from "yaml";
 
+// ci.yml invokes this release-contract entrypoint; keep the C3/C4 checks here
+// without adding a runner to the desktop or Vitest test surfaces.
+import "./runner-install.test.mjs";
+import "./runner-release-manifest.test.mjs";
+
 const workflow = parse(
   readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
 );
@@ -29,7 +34,11 @@ function enabled(job, { event, dryRun, results = {}, outputs = {}, cancelled = f
 
 test("dispatch defaults to dry run and can never enter tagging or desktop signing/publishing", () => {
   assert.equal(workflow.on.workflow_dispatch.inputs.dry_run.default, true);
-  const ctx = { event: "workflow_dispatch", dryRun: true, results: { "hostd-assets": "success" } };
+  const ctx = {
+    event: "workflow_dispatch",
+    dryRun: true,
+    results: { "hostd-assets": "success", "runner-assets": "success" },
+  };
   assert.equal(enabled("prepare", ctx), false);
   assert.equal(enabled("release", ctx), false);
   assert.equal(enabled("hostd-ref", ctx), true);
@@ -43,7 +52,11 @@ test("tag and manually dispatched releases require both architecture builds and 
     const ctx = {
       event,
       dryRun: false,
-      results: { prepare: event === "push" ? "skipped" : "success", "hostd-assets": "success" },
+      results: {
+        prepare: event === "push" ? "skipped" : "success",
+        "hostd-assets": "success",
+        "runner-assets": "success",
+      },
     };
     assert.equal(enabled("hostd-ref", ctx), true);
     assert.equal(enabled("release", ctx), true);
@@ -56,7 +69,7 @@ test("tag and manually dispatched releases require both architecture builds and 
     }
     assert.equal(enabled("release", { ...ctx, cancelled: true }), false);
   }
-  assert.deepEqual(workflow.jobs.release.needs, ["prepare", "hostd-assets"]);
+  assert.deepEqual(workflow.jobs.release.needs, ["prepare", "hostd-assets", "runner-assets"]);
   assert.deepEqual(workflow.jobs.hostd.strategy.matrix.include, [
     { arch: "x64", runner: "ubuntu-24.04" },
     { arch: "arm64", runner: "ubuntu-24.04-arm" },
@@ -182,7 +195,7 @@ test("failed preparation blocks hostd/release; dry builds have read-only content
   const ctx = {
     event: "workflow_dispatch",
     dryRun: false,
-    results: { prepare: "failure", "hostd-assets": "success" },
+    results: { prepare: "failure", "hostd-assets": "success", "runner-assets": "success" },
   };
   assert.equal(enabled("hostd-ref", ctx), false);
   assert.equal(enabled("release", ctx), false);
@@ -463,5 +476,89 @@ test("release guard requires a green ci.yml AND ci-extended.yml run on the exact
       env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CI: ci, EXTENDED: extended },
     });
     assert.equal(run.status === 0, green, `ci=${ci} extended=${extended}\n${run.stdout}`);
+  }
+});
+
+test("runner builds both native architectures at the bullseye ABI baseline", () => {
+  const runner = workflow.jobs.runner;
+  assert.deepEqual(runner.strategy.matrix.include, workflow.jobs.hostd.strategy.matrix.include);
+  assert.equal(runner.if, workflow.jobs.hostd.if);
+  assert.deepEqual(runner.needs, ["prepare", "hostd-ref"]);
+  assert.equal(runner.permissions.contents, "read");
+  const commands = runner.steps.map((step) => step.run ?? "").join("\n");
+  assert.match(commands, /runner-build\/Dockerfile/);
+  assert.match(commands, /ci-build-artifact\.sh/);
+  assert.match(commands, /ci-boot-artifact\.sh/);
+  assert.match(commands, /EXPECTED_ARCH/);
+  const build = runner.steps.find((step) => step.name === "Package and boot runner");
+  for (const name of ["VOLLI_BUILD_CONVEX_URL", "VOLLI_BUILD_CONVEX_SITE_URL"]) {
+    assert.equal(build.env[name], `\u0024{{ vars.${name} }}`);
+    assert.ok(build.run.includes(`-e ${name}`));
+  }
+  const dockerfile = readFileSync(
+    new URL("../.devcontainer/runner-build/Dockerfile", import.meta.url),
+    "utf8",
+  );
+  assert.match(dockerfile, /FROM debian:bullseye-slim/);
+  assert.match(dockerfile, /sha256sum -c/);
+  assert.match(dockerfile, /amd64\) arch=x64; sha=[0-9a-f]{64}/);
+  assert.match(dockerfile, /arm64\) arch=arm64; sha=[0-9a-f]{64}/);
+  const packager = readFileSync(
+    new URL("../apps/runner/scripts/package.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(packager, /probe-glibc.cjs/);
+  assert.match(packager, /probe-natives.cjs/);
+  assert.match(packager, /probe-codemode.mjs/);
+});
+
+test("runner assets are verified and attested, and gate every publishing path", () => {
+  const assets = workflow.jobs["runner-assets"];
+  assert.deepEqual(assets.needs, ["hostd-ref", "runner"]);
+  const download = assets.steps.findIndex((step) => step.with?.pattern === "runner-linux-*");
+  const generate = assets.steps.findIndex(
+    (step) => step.name === "Generate runner manifest and stamped installer",
+  );
+  const sign = assets.steps.findIndex((step) => step.id === "provenance");
+  assert.ok(download < generate && generate < sign);
+  assert.match(assets.steps[generate].run, /sha256sum -c volli-runner-SHA256SUMS/);
+  assert.equal(
+    assets.steps[sign].if,
+    "github.event_name != 'workflow_dispatch' || !inputs.dry_run",
+  );
+  for (const file of [
+    "*.tar.gz",
+    "volli-runner-manifest.json",
+    "volli-runner-install.sh",
+    "volli-runner-SHA256SUMS",
+  ]) {
+    assert.ok(assets.steps[sign].with["subject-path"].includes(file));
+  }
+  assert.match(
+    assets.steps.find((step) => step.name === "Collect runner signature bundle").run,
+    /volli-runner-provenance.sigstore.json/,
+  );
+  for (const job of ["release", "dry-run-desktop"]) {
+    assert.ok(workflow.jobs[job].needs.includes("runner-assets"));
+    assert.equal(
+      enabled(job, {
+        event: "workflow_dispatch",
+        dryRun: job !== "release",
+        results: { prepare: "success", "hostd-assets": "success", "runner-assets": "failure" },
+      }),
+      false,
+    );
+  }
+  const steps = workflow.jobs.release.steps;
+  const verify = steps.findIndex((step) => step.name === "Verify runner release asset set");
+  assert.ok(verify < steps.findIndex((step) => step.name === "Pre-create GitHub release"));
+  assert.match(steps[verify].run, /shasum -a 256 -c volli-runner-SHA256SUMS/);
+  assert.match(
+    steps.find((step) => step.name === "Publish artifacts to the release").run,
+    /files\+=\("\$\{runnerFiles\[@\]\}"\)/,
+  );
+  for (const job of ["runner", "runner-assets"]) {
+    for (const action of workflow.jobs[job].steps.filter((step) => step.uses))
+      assert.match(action.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
   }
 });
