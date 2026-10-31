@@ -18,9 +18,9 @@
  * only complete chunks, or chunk files no journal line names, which the next
  * run deletes. The journal is the only thing a resume trusts.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { MigrationExportError } from "./errors";
 import type { StreamName } from "./sources";
@@ -218,12 +218,25 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Creates the lock with its holder already written: the pid goes into a
+ * private file first, which is then linked into place (atomic, and refused
+ * with EEXIST when a lock is there). Opening the lock itself and writing
+ * after would let a second run read it empty in between, take it for a dead
+ * holder's and take it over, and both would export into one staging area.
+ */
 async function writeLock(path: string): Promise<void> {
-  const handle = await open(path, "wx");
+  const pending = `${path}.${process.pid}.${randomUUID()}`;
+  const handle = await open(pending, "wx");
   try {
     await handle.writeFile(`${process.pid}\n`);
   } finally {
     await handle.close();
+  }
+  try {
+    await link(pending, path);
+  } finally {
+    await rm(pending, { force: true });
   }
 }
 
