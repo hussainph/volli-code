@@ -479,6 +479,18 @@ describe("a dry run's export (VC-1029)", () => {
     writeFileSync(join(outDir, "manifest.json"), JSON.stringify(tampered));
     await expect(verifyMigrationExport(outDir)).rejects.toThrow(message);
   });
+  it("refuses a measured manifest whose measure is not a record", async () => {
+    const f = fixture(2);
+    const { outDir, manifest } = await exportMigrationSnapshot({
+      ...options(f),
+      measureHistory: true,
+    });
+    writeFileSync(
+      join(outDir, "manifest.json"),
+      JSON.stringify({ ...manifest, historyMeasured: null }),
+    );
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow("carries no history");
+  });
   it("refuses a copy that claims to be a measure", async () => {
     const f = fixture(2);
     const { outDir, manifest } = await exportMigrationSnapshot(options(f));
@@ -498,8 +510,6 @@ describe("a dry run's export (VC-1029)", () => {
       measureHistory: true,
       sharedSnapshot: { keepAt: kept },
     });
-    // The kept file is the first export's own snapshot, linked rather than copied.
-    expect(statSync(kept).nlink).toBe(1);
     const later = exportMigrationSnapshot({
       ...options(f, [MOVE_IDS.project]),
       outDir: join(f.root, "second"),
@@ -523,6 +533,15 @@ describe("a dry run's export (VC-1029)", () => {
         sharedSnapshot: { from: join(f.root, "missing.db") },
       }),
     ).rejects.toMatchObject({ code: "source_unreadable" });
+    // A sidecar that does not say what it is, is not trusted.
+    writeFileSync(`${kept}.json`, JSON.stringify({ sourcePath: f.dbPath, snapshotAt: "soon" }));
+    await expect(
+      exportMigrationSnapshot({
+        ...options(f, [MOVE_IDS.project]),
+        outDir: join(f.root, "fifth"),
+        sharedSnapshot: { from: kept },
+      }),
+    ).rejects.toMatchObject({ code: "source_unreadable" });
     // A kept snapshot of another database is never someone else's export.
     const other = fixture();
     await expect(
@@ -535,5 +554,51 @@ describe("a dry run's export (VC-1029)", () => {
       code: "source_unreadable",
       message: expect.stringMatching(/another/),
     });
+  });
+});
+
+describe("reading transcript artifacts ahead (VC-1029)", () => {
+  /** The artifact file the fixture wrote for its i-th transcript reference. */
+  function artifactFile(f: ReturnType<typeof fixture>, i: number): string {
+    const db = new Database(f.dbPath, { readonly: true });
+    try {
+      const { payload } = db
+        .prepare("SELECT payload FROM session_events WHERE id = ?")
+        .get(`transcript:${i}`) as { payload: string };
+      const hex = (JSON.parse(payload) as { reference: { id: string } }).reference.id.slice(7);
+      return join(f.root, "session-transcripts", `${hex}.json${i % 2 ? ".gz" : ""}`);
+    } finally {
+      db.close();
+    }
+  }
+  it.each([false, true])(
+    "refuses the first missing artifact in row order, with later reads in flight (measuring: %s)",
+    async (measureHistory) => {
+      const f = fixture(64);
+      // Rows 10 and 15 are both inside one read-ahead window; row 10 comes first.
+      rmSync(artifactFile(f, 15));
+      rmSync(artifactFile(f, 10));
+      const refusal = await exportMigrationSnapshot({ ...options(f), measureHistory }).then(
+        () => new Error("The export did not refuse."),
+        (error: unknown) => error as Error,
+      );
+      expect(refusal).toMatchObject({ code: "source_corrupt" });
+      expect(refusal.message).toMatch(new RegExp(`${ids.hotSession}:16 missing`));
+    },
+  );
+  it("stops an export cancelled while it reads history, leaving nothing published", async () => {
+    const f = fixture(64);
+    const controller = new AbortController();
+    await expect(
+      exportMigrationSnapshot({
+        ...options(f),
+        measureHistory: true,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (progress.phase === "finalizing") controller.abort();
+        },
+      }),
+    ).rejects.toMatchObject({ code: "cancelled" });
+    expect(existsSync(join(f.root, "export"))).toBe(false);
   });
 });

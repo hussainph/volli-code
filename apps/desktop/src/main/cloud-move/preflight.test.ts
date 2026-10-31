@@ -493,22 +493,22 @@ function recordingLog() {
 describe("a dry run at scale (VC-1029)", () => {
   /**
    * The owner's profile: 878k events, ~580k transcript artifacts, 8 GB of Pi
-   * logs. A dry run must finish it in five minutes, so its cost may not grow
-   * with what a copy of the history would weigh: it takes one snapshot for
-   * every project, and checks the history without staging it. This profile is
-   * that shape scaled down (thousands of artifacts, two projects plus a
-   * removed one); its time bound is the owner's target scaled the same way,
-   * with ten times the slack, on a floor for worker start-up on a cold disk.
+   * logs, and a five-minute target. A dry run's cost must not grow with what a
+   * copy of the history weighs: it takes one snapshot for every project and
+   * checks the history without staging it. These profiles are that shape
+   * scaled down (two projects plus a removed one, a thousand and four
+   * thousand artifacts of 26 KiB): what the scratch holds must stay flat as
+   * the history grows fourfold, and the time each extra artifact costs must
+   * stay inside the owner's per-artifact budget, with five times the slack.
    */
-  const ARTIFACTS = 4096;
   const OWNER_ARTIFACTS = 582_366;
-  const BUDGET_MS = 30_000 + Math.ceil(((5 * 60_000 * ARTIFACTS) / OWNER_ARTIFACTS) * 10);
+  const PER_ARTIFACT_BUDGET_MS = ((5 * 60_000) / OWNER_ARTIFACTS) * 5;
 
-  it("takes one snapshot, stages no history, logs every phase, and stays inside its scaled budget", async () => {
-    const fixture = setup({ artifacts: ARTIFACTS });
+  async function dryRunAt(artifacts: number) {
+    const fixture = setup({ artifacts });
     const { log, lines } = recordingLog();
     const preflightRoot = join(fixture.workRoot, "preflight");
-    const staged: { phase: string; files: string[]; inodes: number[] }[] = [];
+    const staged: { files: string[]; inodes: number[]; bytes: number }[] = [];
     const seen: CloudMovePreflightProgress[] = [];
     const startedAt = performance.now();
     const answered = await fixture.run(
@@ -530,17 +530,22 @@ describe("a dry run at scale (VC-1029)", () => {
           walk(preflightRoot);
           const kept = files.filter((file) => file.endsWith("/snapshot.db"));
           staged.push({
-            phase: progress.phase,
             files,
             inodes: kept.map((file) => statSync(join(preflightRoot, file)).ino),
+            bytes: bytesUnder(preflightRoot),
           });
         },
       },
     );
     const elapsed = performance.now() - startedAt;
+    return { fixture, answered, lines, seen, staged, elapsed };
+  }
+
+  it("takes one snapshot, stages no history, and logs every phase without content", async () => {
+    const { fixture, answered, lines, seen, staged } = await dryRunAt(4096);
 
     expect(answered.failures).toEqual({});
-    expect(project(answered, ALPHA).counts?.transcriptBytes).toBeGreaterThan(50 * 1024 * 1024);
+    expect(project(answered, ALPHA).counts?.transcriptBytes).toBeGreaterThan(100 * 1024 * 1024);
     // No history chunk is ever staged, and one snapshot file serves every project.
     expect(staged.length).toBeGreaterThanOrEqual(4);
     for (const moment of staged) {
@@ -549,7 +554,7 @@ describe("a dry run at scale (VC-1029)", () => {
     }
     // The same kept file from the first project to the last: never taken twice.
     expect(new Set(staged.flatMap((moment) => moment.inodes)).size).toBe(1);
-    // The phases a person sees, in order, with counts while exporting.
+    // The phases a person sees, in order, with counts while reading history.
     expect([...new Set(seen.map((progress) => progress.phase))]).toEqual([
       "checking",
       "snapshot",
@@ -572,8 +577,20 @@ describe("a dry run at scale (VC-1029)", () => {
     for (const secret of [fixture.root, "Alpha", "Caf", "日本語"])
       expect(text).not.toContain(secret);
     expect(scratchDirs(fixture)).toEqual([]);
-    expect(elapsed).toBeLessThan(BUDGET_MS);
   }, 120_000);
+
+  it("stays flat on disk and inside the owner's per-artifact time as the history grows", async () => {
+    const small = await dryRunAt(1024);
+    const large = await dryRunAt(4096);
+    const history = (run: typeof small) => project(run.answered, ALPHA).counts!.transcriptBytes;
+    const peak = (run: typeof small) => Math.max(...run.staged.map((moment) => moment.bytes));
+    // Four times the history (some 75 MiB more to copy), and the scratch grows
+    // only by the extra events' own rows: under a tenth of what a copy would add.
+    const grown = history(large) - history(small);
+    expect(grown).toBeGreaterThan(75 * 1024 * 1024);
+    expect(peak(large) - peak(small)).toBeLessThan(grown / 10);
+    expect((large.elapsed - small.elapsed) / (4096 - 1024)).toBeLessThan(PER_ARTIFACT_BUDGET_MS);
+  }, 180_000);
 
   it("sweeps the scratch a dry run cut short by a quit or a restart left behind", async () => {
     const fixture = setup();

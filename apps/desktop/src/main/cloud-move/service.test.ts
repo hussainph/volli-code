@@ -773,6 +773,25 @@ describe("a long dry run under a changing sign-in (VC-1029)", () => {
     expect(isOperationUnavailable(error)).toBe(false);
     expect(error).toMatchObject({ message: "The dry run was cancelled. Run it again." });
   });
+  it("keeps reading when a backend call loses the sign-in; start waits for it to come back", async () => {
+    const f = setup();
+    const held = heldDryRun(f);
+    const reading = f.service.preflight(f.input);
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+    f.service.signInLost();
+    expect(held.signals[0]!.aborted).toBe(false);
+    held.release();
+    await expect(reading).resolves.toMatchObject({ id: "preview" });
+  });
+  it("never lets the next person start a dry run finished while signed out after someone else", async () => {
+    const f = setup();
+    f.service.startWatching();
+    f.publish(signedOut);
+    await f.service.preflight({ ...f.input, workspaceId: null });
+    f.publish({ ...signedIn, account: { ...signedIn.account!, userId: "other" } });
+    await expect(start(f.service)).rejects.toThrow("fresh dry run");
+    await expect(f.service.report("preview")).rejects.toThrow();
+  });
   it("joins a repeated dry run for the same selection instead of queueing a second", async () => {
     const f = setup();
     const held = heldDryRun(f);

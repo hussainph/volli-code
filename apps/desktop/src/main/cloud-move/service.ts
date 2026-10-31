@@ -80,6 +80,10 @@ const REPORT_ONLY_FAILURES = new Set([
   "preview_agreement_required",
 ]);
 
+/** A dry run is its person's, or anyone's when it ran before anyone signed in on this launch. */
+function ownsDryRun(owner: string | null, person: string | null): boolean {
+  return owner === null || owner === person;
+}
 function personOf(snapshot: AccountSnapshot) {
   const account = snapshot.state === "signed-in" ? snapshot.account : null;
   return account?.userId == null
@@ -556,10 +560,15 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         throw new OperationUnavailableError(
           "Wait for the running move to finish, then run the dry run again.",
         );
-      return await controlled(async (signal) => {
-        const lifetime = AbortSignal.any([signal, read.signal]);
+      // Only `read` stops a dry run: a different person, a newer selection, a
+      // command or the app's end abort it. The lane's own signal is also
+      // aborted by a lost sign-in, which a local read does not need.
+      return await controlled(async () => {
+        const lifetime = read.signal;
         lifetime.throwIfAborted();
-        const startedBy = currentPerson()?.userId ?? null;
+        // Signed out now, it still belongs to whoever was last signed in on
+        // this Mac; only a launch nobody has signed in to leaves it unowned.
+        const startedBy = currentPerson()?.userId ?? accountOwner;
         const value = await options.prepare(input, lifetime, onProgress);
         lifetime.throwIfAborted();
         // Bound to whoever is signed in now, or was when it started: a sign-in
@@ -640,14 +649,8 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
               "Check your Volli Cloud sign-in before starting a move.",
             );
           // The Workspace is checked below, for this start: a dry run does not depend on it.
-          if (
-            entry === undefined ||
-            person === null ||
-            (entry.owner !== null && entry.owner !== person.userId)
-          )
-            throw new OperationUnavailableError(
-              "Run a fresh dry run for this account and Workspace.",
-            );
+          if (entry === undefined || person === null || !ownsDryRun(entry.owner, person.userId))
+            throw new OperationUnavailableError("Run a fresh dry run for this account.");
           const intent = JSON.stringify([
             input.workspaceId,
             input.projectIds.toSorted(),
@@ -928,7 +931,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     async report(id) {
       requireEnabled();
       const preview = prepared.get(id);
-      if (preview !== undefined && preview.owner === (currentPerson()?.userId ?? null))
+      if (preview !== undefined && ownsDryRun(preview.owner, currentPerson()?.userId ?? null))
         return JSON.stringify(
           {
             kind: "dry-run",
@@ -1005,7 +1008,8 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       signInLost = true;
       contextEpoch += 1;
       contextRead = null;
-      for (const read of preflightReads) read.abort();
+      // A dry run reads only this Mac and calls no backend: a lost sign-in
+      // stops what needs one, and `start` refuses until the person is back.
       active?.controller.abort();
       controlAbort?.abort();
       for (const id of retryTimers.keys()) cancelRetry(id);

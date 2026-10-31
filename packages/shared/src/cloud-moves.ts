@@ -36,6 +36,10 @@ export interface CloudMoveProject {
 export interface CloudMovePreflightInput {
   /** Omitted for Move all. Removed projects are excluded unless explicitly requested. */
   projectIds?: string[];
+  /**
+   * Checked when given, but the dry run does not depend on it: it reads only
+   * this Mac's projects, and `start` checks the Workspace it is given.
+   */
   workspaceId: string | null;
   includeRemoved: boolean;
 }
@@ -52,11 +56,11 @@ export interface CloudMovePreflight {
 
 /**
  * What a running dry run is doing, in the order it does it. `snapshot` to
- * `history` are the export's own steps; `checking` and `planning` are the
- * dry run's checks around it; `sizing` is the profile-wide disk estimate.
+ * `history` are the export's own steps; `checking`, `verifying` and
+ * `planning` are the dry run's checks around it; `sizing` is the
+ * profile-wide disk estimate.
  */
 export const CLOUD_MOVE_PREFLIGHT_PHASES = [
-  "starting",
   "checking",
   "snapshot",
   "reading",

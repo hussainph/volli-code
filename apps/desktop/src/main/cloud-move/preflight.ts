@@ -148,7 +148,7 @@ function preflightTracker(options: MovePreflightOptions, dryRunId: string, proje
   const now = options.now ?? Date.now;
   const startedAt = now();
   let current: CloudMovePreflightProgress = {
-    phase: "starting",
+    phase: "checking",
     projectIndex: 0,
     projectCount,
     projectName: null,
@@ -223,7 +223,7 @@ async function fileBytes(path: string): Promise<number> {
 }
 /** How many `stat`s one directory walk keeps in flight: a store holds hundreds of thousands of files. */
 const STAT_BATCH = 64;
-async function treeBytes(path: string): Promise<number> {
+async function treeBytes(path: string, signal: AbortSignal): Promise<number> {
   let directory;
   try {
     directory = await opendir(path);
@@ -238,8 +238,9 @@ async function treeBytes(path: string): Promise<number> {
     batch = [];
   };
   for await (const entry of directory) {
+    signal.throwIfAborted();
     const child = join(path, entry.name);
-    if (entry.isDirectory()) bytes += await treeBytes(child);
+    if (entry.isDirectory()) bytes += await treeBytes(child, signal);
     else if (entry.isFile()) batch.push(fileBytes(child));
     if (batch.length >= STAT_BATCH) await settle();
   }
@@ -328,6 +329,12 @@ function problemOf(error: unknown): { code: string; message: string } {
     return { code: "disk_full", message: "Free disk space, then run the dry run again." };
   if (code === "row_refused" || code === "row_unstorable")
     return { code, message: "A local record has an unsupported identifier or format." };
+  // The export reads the dry run's one snapshot, so work settled since then still counts.
+  if (code === "source_corrupt" && /^pending runner work/.test(String((error as Error)?.message)))
+    return {
+      code,
+      message: "This project had unfinished work when the dry run began. Run it again.",
+    };
   if (code === "source_corrupt")
     return { code, message: "A local record is inconsistent, so this project cannot move yet." };
   if (code === "integrity_failed")
@@ -638,21 +645,21 @@ export async function prepareLocalMoves(
     const [database, wal, blobs, transcripts] = await Promise.all([
       fileBytes(options.profilePath),
       fileBytes(`${options.profilePath}-wal`),
-      treeBytes(options.stores.blobsDir),
-      treeBytes(options.stores.transcriptsDir),
+      treeBytes(options.stores.blobsDir, signal),
+      treeBytes(options.stores.transcriptsDir, signal),
     ]);
     return { databaseBytes: database + wal, artifactBytes: blobs + transcripts };
   }
 }
 
 /**
- * What the move's export will write for the history a dry run only measured:
- * canonical JSON quoted inside a record (escaping budgeted at half again),
- * Pi bytes as base64, and each record's own fields.
+ * An upper bound on what the move's export writes for the history a dry run
+ * only measured: canonical JSON quoted inside a record (JSON escaping at most
+ * doubles a byte), Pi bytes as base64, and each record's own fields.
  */
 function historyCopyBytes(measured: MeasuredHistory): number {
   return (
-    Math.ceil(measured.transcriptBytes * 1.5) +
+    measured.transcriptBytes * 2 +
     Math.ceil((measured.piLogBytes * 4) / 3) +
     (measured.transcripts + measured.piSlices) * HISTORY_RECORD_OVERHEAD_BYTES
   );

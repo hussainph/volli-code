@@ -194,6 +194,8 @@ export async function verifyMigrationExport(dir: string): Promise<MigrationExpor
     // A dry run's export read every artifact and Pi file and copied none: its
     // coverage is the count it read, and its history streams stay empty.
     if (
+      typeof measured !== "object" ||
+      measured === null ||
       !Number.isSafeInteger(measured.transcripts) ||
       !Number.isSafeInteger(measured.transcriptBytes) ||
       !Number.isSafeInteger(measured.piSlices) ||

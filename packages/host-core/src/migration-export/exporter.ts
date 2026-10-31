@@ -643,7 +643,13 @@ async function reuseSnapshot(
       cause: error,
     });
   }
-  if (kept.sourcePath !== resolve(options.sourcePath) || !existsSync(from))
+  if (
+    typeof kept?.sourcePath !== "string" ||
+    !Number.isSafeInteger(kept.snapshotAt) ||
+    !Number.isSafeInteger(kept.schemaVersion) ||
+    kept.sourcePath !== resolve(options.sourcePath) ||
+    !existsSync(from)
+  )
     throw new MigrationExportError(
       "source_unreadable",
       "The shared snapshot is of another source.",

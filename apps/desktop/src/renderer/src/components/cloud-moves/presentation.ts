@@ -40,7 +40,6 @@ export function moveTime(seconds: number | null): string {
 }
 
 export const PREFLIGHT_PHASE_LABELS: Record<CloudMovePreflightPhase, string> = {
-  starting: "Starting",
   checking: "Checking for unfinished work",
   snapshot: "Taking a snapshot",
   reading: "Reading the project",
