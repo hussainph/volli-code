@@ -92,6 +92,9 @@ src/
   testing/          test support only (never imported by production code)
 dev-bin/volli       the `volli` CLI launcher a source-booted runner puts on
                     its Sessions' PATH
+e2e/                the BYO runner acceptance lane (ci-extended): a real
+                    systemd box, a fake GitHub, a local release
+                    (`e2e/README.md`). `node:test` files, outside Vitest
 ```
 
 ### Adding a command

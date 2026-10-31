@@ -56,6 +56,9 @@ export default defineConfig({
     ...SHARED_MACHINE_TEST_WORKERS,
     // Plain Node: the runner runs on a Linux box, never in Electron.
     environment: "node",
+    // The runner's own tests only: `e2e/` is the BYO acceptance lane's
+    // harness, `node:test` files that ci-extended runs under plain Node.
+    include: ["src/**/*.test.ts"],
     coverage: {
       // `main.ts` is the process shell (argv, signals, exit codes, the live
       // ports); everything it calls is gated here.
