@@ -38,6 +38,7 @@ const CAPABILITIES: RunnerCapabilities = {
   memTotalMb: 16_384,
   git: { version: "2.43.0" },
   docker: true,
+  power: { source: "unknown", alwaysOn: false },
   terminals: "available",
   browser: { state: "available", backend: "chromium" },
   maxConcurrentSessions: 4,
@@ -123,8 +124,20 @@ describe("capability reports", () => {
     expect(parseRunnerCapabilities({ ...CAPABILITIES, git: undefined }).git).toBeNull();
   });
 
+  test("power is optional for older runners and round-trips all sources", () => {
+    const { power: _power, ...old } = CAPABILITIES;
+    expect(parseRunnerCapabilities(old).power).toEqual({ source: "unknown", alwaysOn: false });
+    for (const source of ["ac", "battery", "unknown"] as const) {
+      const power = { source, alwaysOn: true };
+      expect(parseRunnerCapabilities({ ...old, power }).power).toEqual(power);
+    }
+  });
+
   test.each([
     ["a non-object", null],
+    ["a null power", { ...CAPABILITIES, power: null }],
+    ["an invalid power source", { ...CAPABILITIES, power: { source: "solar", alwaysOn: true } }],
+    ["a non-boolean alwaysOn", { ...CAPABILITIES, power: { source: "ac", alwaysOn: 1 } }],
     ["a list", []],
     ["another version", { ...CAPABILITIES, v: 2 }],
     ["a non-boolean docker", { ...CAPABILITIES, docker: "yes" }],
