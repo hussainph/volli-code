@@ -31,6 +31,7 @@ import { PATH_OPTIONS, PATH_USAGE, type RunnerPaths } from "./shell/paths";
 import type { RunnerStatus } from "./shell/runner-status";
 import type { StatusProbes } from "./shell/status";
 import { runStatus } from "./shell/status-command";
+import { UPDATE_COMMAND, type UpdateDeps } from "./update/command";
 
 /** sysexits' `EX_UNAVAILABLE`: the command exists, and this build does not have it yet. */
 export const EXIT_UNAVAILABLE = 69;
@@ -55,6 +56,8 @@ export interface CommandContext {
   readonly statusProbes: StatusProbes<RunnerStatus>;
   /** The device code's wait between polls; it ends early when `signal` aborts. */
   sleep(ms: number): Promise<void>;
+  /** What `update apply` downloads, verifies, extracts, probes and restarts with. */
+  readonly update: UpdateDeps;
   readonly now?: () => number;
 }
 
@@ -126,7 +129,7 @@ export const COMMANDS: readonly RunnerCommand[] = [
   stub("doctor", "Check git, disk, network and model sign-ins, and print the fixes."),
   loginCommand,
   logoutCommand,
-  stub("update", "Update to the release Volli Cloud asks for."),
+  UPDATE_COMMAND,
   stub("logs", "Show the runner's log.", "[-f]"),
   stub(
     "git-credential",

@@ -16,6 +16,8 @@ import { BUILD_DEPLOYMENT } from "./link/deployment";
 import { RUNNER_LIVE_PROBES } from "./shell/runner-status";
 import { abortableSleep } from "./shell/sleep";
 import { RUNNER_VERSION } from "./shell/version";
+import { liveDownload, liveExtract, liveFetchText, liveProbe, liveRestart } from "./update/live";
+import { sigstoreProvenance } from "./update/provenance";
 
 async function main(): Promise<number> {
   let parsed;
@@ -52,6 +54,15 @@ async function main(): Promise<number> {
     statusProbes: RUNNER_LIVE_PROBES,
     // The device code's wait ends early on an interrupt, so it stops at once.
     sleep: (ms) => abortableSleep(ms, interrupt.signal),
+    update: {
+      arch: process.arch,
+      fetchText: liveFetchText(),
+      download: liveDownload(),
+      extract: liveExtract,
+      probe: liveProbe,
+      restart: (mode, unit) => liveRestart(mode, unit),
+      provenance: (cachePath) => sigstoreProvenance({ cachePath }),
+    },
   };
   return parsed.command.run(parsed.input, context);
 }

@@ -1,0 +1,29 @@
+# Applies a Volli runner update: stage, activate, health check, rollback.
+# Written by `volli-runner install`; see apps/runner/README.md ("Updates").
+
+[Unit]
+Description=Apply a Volli runner update
+Documentation=https://github.com/hussainph/volli-code/blob/main/apps/runner/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/volli-runner/current/bin/volli-runner update apply --install-root /opt/volli-runner --data-dir /var/lib/volli-runner
+# A download, two probes, and two health checks of 2 minutes at most.
+TimeoutStartSec=45min
+# Root, because the releases are root's: the runner (as volli, like its
+# agents) can ask for an update and never install one. The request is
+# untrusted; only a release whose signed provenance verifies is installed.
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

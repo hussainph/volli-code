@@ -7,6 +7,7 @@ import { createRunnerLinkClient } from "@volli/host-core/cloud-runner";
 import { RUNNER_HTTP_PATHS, type RunnerHostFacts } from "@volli/shared/cloud";
 
 import type { CommandContext } from "../commands";
+import type { UpdateDeps } from "../update/command";
 import type { RunnerStatus } from "../shell/runner-status";
 import type { StatusProbes } from "../shell/status";
 
@@ -31,6 +32,21 @@ export const NOT_RUNNING: StatusProbes<RunnerStatus> = {
   accepts: () => Promise.resolve(false),
 };
 
+const unreachable = (what: string) => (): never => {
+  throw new Error(`the test reached ${what}`);
+};
+
+/** An update with no network, no processes and no restarts; a test supplies what it uses. */
+export const UNREACHABLE_UPDATE: UpdateDeps = {
+  arch: "x64",
+  fetchText: unreachable("fetchText"),
+  download: unreachable("download"),
+  extract: unreachable("extract"),
+  probe: unreachable("probe"),
+  restart: unreachable("restart"),
+  provenance: () => ({ verify: unreachable("provenance") }),
+};
+
 export function testContext(options: {
   root: string;
   routes?: Partial<Record<keyof typeof RUNNER_HTTP_PATHS, Route>>;
@@ -39,6 +55,7 @@ export function testContext(options: {
   statusProbes?: StatusProbes<RunnerStatus>;
   buildDeployment?: CommandContext["buildDeployment"];
   now?: () => number;
+  update?: Partial<UpdateDeps>;
 }): TestContext {
   let stdout = "";
   let stderr = "";
@@ -88,6 +105,7 @@ export function testContext(options: {
         : options.buildDeployment,
     statusProbes: options.statusProbes ?? NOT_RUNNING,
     sleep: () => Promise.resolve(),
+    update: { ...UNREACHABLE_UPDATE, ...options.update },
     ...(options.now === undefined ? {} : { now: options.now }),
     stdout: () => stdout,
     stderr: () => stderr,
