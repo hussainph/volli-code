@@ -21,7 +21,7 @@
  * The kinds no ticket has typed yet stay opaque JSON objects.
  */
 
-import { REASONING_LEVELS, type ModelSelection } from "../model-selection";
+import { REASONING_LEVELS, type ModelSelection, type ReasoningLevel } from "../model-selection";
 import { AUTOMATION_RUN_ATTENDANCE } from "../automation-policy";
 import type { AutomationRunAttendance } from "../automation";
 import { AUTOMATION_INSTRUCTIONS_MAX_CHARS } from "./automations";
@@ -48,6 +48,7 @@ import {
   isDerivedId,
   isUuid,
   type AutomationId,
+  type ProjectId,
   type SessionId,
   type TicketId,
   type UserId,
@@ -140,6 +141,46 @@ export interface SessionDelegatePayload {
   title: string | null;
   /** The model the child runs on; `null` takes the runner's default for a subagent. */
   model: JobModelChoice | null;
+}
+
+/**
+ * Start a person's Session on one of their runners (C2): a Session started
+ * from a client on a runner that may not be the machine the person is typing
+ * on. The job's `sessionId` is the Session to be born, minted by the backend
+ * (`sessionStarts.startOn`); nothing exists on the runner until it executes
+ * the job, and the backend first hears of the Session from its first accepted
+ * fact, which claims it for that runner.
+ *
+ * The first message travels by reference, as `sessions.command` stages a
+ * body: the backend staged its canonical transcript artifact under the
+ * Session and `firstMessage.commandId` (which is also the job's id and
+ * command id, so `sessions.receipt` follows the first message like any other).
+ * The runner reads it back under its lease (`sessionStarts.startContext`).
+ */
+export const SESSION_START_FORMAT = "volli.session-start.v1";
+
+export interface SessionStartJobPayload {
+  format: typeof SESSION_START_FORMAT;
+  projectId: ProjectId;
+  /** The ticket a Ticket Session works; `null` opens a Board Session. */
+  ticketId: TicketId | null;
+  /** A heuristic title from the first message; `null` lets the runner choose. */
+  title: string | null;
+  firstMessage: {
+    /** The first message's command id: the job's id and the message's transcript attempt. */
+    commandId: string;
+    /** The staged body's reference (`sha256:<hex>` as id and digest). */
+    body: JobArtifactReference;
+  };
+  /** A pinned model; `null` takes the runner's default for a new Session. */
+  model: SessionStartModel | null;
+}
+
+/** A model pinned for a started Session: a provider's model, and a level it must run at, or its default. */
+export interface SessionStartModel {
+  providerId: string;
+  modelId: string;
+  reasoningLevel: ReasoningLevel | null;
 }
 
 /** A transcript artifact reference, as `TranscriptReference` in the Session ledger. */
@@ -281,7 +322,7 @@ export type JobPayloadObject = { readonly [field: string]: unknown };
 
 /** Kind-specific payloads. Opaque kinds are typed by the ticket that owns them. */
 export interface JobPayloads {
-  "session.start": JobPayloadObject;
+  "session.start": SessionStartJobPayload;
   "session.command": SessionCommandJobPayload | SessionInterruptJobPayload;
   "session.followUp": SessionFollowUpJobPayload;
   "session.notice": SessionNoticeJobPayload;
@@ -543,11 +584,46 @@ function parseTyped(kind: JobKind, r: Reader): JobPayloads[JobKind] {
     case "session.notice":
       return parseSessionNotice(r);
     case "session.start":
+      return parseSessionStart(r);
     case "session.release":
     case "workingCopy.refresh":
     case "environment.run":
       return r.row;
   }
+}
+
+function parseSessionStart(r: Reader): SessionStartJobPayload {
+  r.only("format", "projectId", "ticketId", "title", "firstMessage", "model");
+  r.oneOf("format", [SESSION_START_FORMAT]);
+  return {
+    format: SESSION_START_FORMAT,
+    projectId: r.uuid<ProjectId>("projectId"),
+    ticketId: r.nullableUuid<TicketId>("ticketId"),
+    title: r.nullableText("title", JOB_TITLE_MAX_CHARS),
+    firstMessage: r.nested("firstMessage", (m) => {
+      m.only("commandId", "body");
+      return {
+        commandId: m.uuid("commandId"),
+        body: m.nested("body", (b) => {
+          b.only("id", "mediaType", "digest");
+          return {
+            id: b.derived("id"),
+            mediaType: b.nullableText("mediaType", 200),
+            digest: b.nullableText("digest", 200),
+          };
+        }),
+      };
+    }),
+    model: r.nullableNested("model", (m) => {
+      m.only("providerId", "modelId", "reasoningLevel");
+      return {
+        providerId: m.text("providerId", 200),
+        modelId: m.text("modelId", 200),
+        reasoningLevel:
+          m.row.reasoningLevel === null ? null : m.oneOf("reasoningLevel", REASONING_LEVELS),
+      };
+    }),
+  };
 }
 
 function parseSessionCommand(r: Reader): SessionCommandJobPayload | SessionInterruptJobPayload {
