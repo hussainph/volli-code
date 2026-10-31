@@ -192,10 +192,12 @@ sudo journalctl -u volli-runner -f     # the runner's log, as it happens
 A user install uses the user unit: `systemctl --user status volli-runner` and
 `journalctl --user -u volli-runner -f`, without `sudo`.
 
-`doctor` checks git, disk, systemd, the deployment, the git hosts, the model
-providers you signed in, and the browser that a runner does not install. A
-failure names the exact fix; nothing on the box needs to be guessed at. On a
-system install, run it with `sudo` so it reads the runner's own directories.
+`doctor` checks the link, the platform and glibc, git, disk, systemd and
+lingering, the clock, the deployment, github.com, the model providers you
+signed in, and the browser it does not install. Every failure names the one
+command that fixes it, and `--json` prints the same report for a script. It
+exits 0 when no check failed and 1 when one did. On a system install, run it
+with `sudo` so it reads the runner's own directories.
 
 In the app, the runner's row shows its state and the version it reports. From
 the composer, pick it for a new Session, or let Volli choose it: an online
@@ -208,8 +210,11 @@ the box is idle, it stages the release, verifies it, drains, and restarts on
 the new one; if it does not come back online, it rolls back and reports what
 happened, so a bad release cannot strand a box.
 
-- **Manual.** `volli-runner update` applies the release the deployment asks
-  for, now.
+- **Manual.** `volli-runner update` prints what this box runs, what is staged
+  and the last outcome. `volli-runner update --now` asks the running runner to
+  update now: it stages the release, waits up to 30 minutes for the box to be
+  idle, and restarts. `--to <version>` picks the version. A system install
+  writes the install root, so `--now` needs `sudo`.
 - **Needs an update.** A runner below the oldest version the deployment
   accepts shows **Needs an update** in **Settings → Runners** and in the
   composer, and takes no new Sessions until it updates. An update cannot be
