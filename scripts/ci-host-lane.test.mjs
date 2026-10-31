@@ -564,12 +564,13 @@ test("the older-app live lane runs the newest shipped build against THIS commit'
   );
 });
 
-test("the BYO lanes gate on merged work: pending is a notice, present-but-broken is red", () => {
-  const presence = (job) => job.steps.find((step) => step.id === "present");
-  const gated = (job) =>
-    job.steps.filter((step) => step.if === "steps.present.outputs.present == 'true'");
-  const before = (job, step) => job.steps.indexOf(presence(job)) < job.steps.indexOf(step);
+/** A BYO lane's "is that ticket's work on this tree" step, and the steps it gates. */
+const presence = (job) => job.steps.find((step) => step.id === "present");
+const gated = (job) =>
+  job.steps.filter((step) => step.if === "steps.present.outputs.present == 'true'");
+const before = (job, step) => job.steps.indexOf(presence(job)) < job.steps.indexOf(step);
 
+test("the BYO lanes gate on merged work: pending is a notice, present-but-broken is red", () => {
   // Built per architecture on native runners, as release.yml builds it, and
   // never with a baked deployment: a test artifact links only via --server.
   const artifact = extended.jobs["byo-runner-artifact"];
