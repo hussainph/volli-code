@@ -66,7 +66,9 @@ function failure(code: RunnerGithubTokenError["code"], message: string): RunnerG
 export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const now = options.now ?? Date.now;
-  const url = `${options.siteUrl.replace(/\/+$/u, "")}${RUNNER_GITHUB_TOKEN_PATH}`;
+  let site = options.siteUrl;
+  while (site.endsWith("/")) site = site.slice(0, -1);
+  const url = `${site}${RUNNER_GITHUB_TOKEN_PATH}`;
   const cached = new Map<string, { answer: RunnerGithubTokenAnswer; until: number }>();
   const flights = new Map<string, Promise<RunnerGithubTokenAnswer>>();
   let github: RunnerGithub = { state: "unknown" };

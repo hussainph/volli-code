@@ -181,7 +181,8 @@ export async function reportedRepo(
  * is set up.
  */
 function githubWebUrl(): string {
-  const configured = (process.env.GITHUB_WEB_URL ?? "").trim().replace(/\/+$/u, "");
+  let configured = (process.env.GITHUB_WEB_URL ?? "").trim();
+  while (configured.endsWith("/")) configured = configured.slice(0, -1);
   return configured === "" ? "https://github.com" : configured;
 }
 

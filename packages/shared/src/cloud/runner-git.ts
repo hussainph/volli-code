@@ -60,7 +60,8 @@ function unsafe(text: string): boolean {
 
 // A box cannot reach the person's own loopback, and must not be pointed at
 // its own (or its cloud's link-local metadata service) by a report.
-const LOCAL_HOST = /^(?:localhost|.*\.localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|169\.254(?:\.\d{1,3}){2})$/u;
+const LOCAL_HOST =
+  /^(?:localhost|.*\.localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|169\.254(?:\.\d{1,3}){2})$/u;
 
 function canonicalHost(host: string): string | null {
   const lowered = host.toLowerCase();
