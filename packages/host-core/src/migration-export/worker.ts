@@ -49,6 +49,8 @@ export interface MigrationExportWorkerRequest {
   integrityCheck?: boolean;
   chunkMaxBytes?: number;
   chunkMaxRecords?: number;
+  measureHistory?: boolean;
+  sharedSnapshot?: { keepAt: string } | { from: string };
 }
 
 export type MigrationExportWorkerMessage =

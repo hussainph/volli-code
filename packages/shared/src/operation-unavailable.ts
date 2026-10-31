@@ -37,3 +37,36 @@ export function isOperationUnavailable(value: unknown): value is OperationUnavai
     (value as Partial<OperationUnavailable>)[OPERATION_UNAVAILABLE] === true
   );
 }
+
+/**
+ * The brand an operation stopped before it answered carries: a person or a
+ * newer request cancelled it, so nothing failed and there is nothing to fix
+ * but asking again. A router answers `CLIENT_CLOSED_REQUEST` /
+ * `operation-cancelled`, never `operation-unavailable`, so a support log does
+ * not read a cancel as a missing feature.
+ */
+export const OPERATION_CANCELLED: unique symbol = Symbol.for("@volli/operation-cancelled");
+
+/** An operation that was cancelled before it answered. */
+export interface OperationCancelled {
+  readonly [OPERATION_CANCELLED]: true;
+}
+
+/** The error a handler throws for {@link OperationCancelled}; the message is the client's. */
+export class OperationCancelledError extends Error implements OperationCancelled {
+  readonly [OPERATION_CANCELLED] = true as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "OperationCancelledError";
+  }
+}
+
+/** Whether a thrown value is an {@link OperationCancelled}. */
+export function isOperationCancelled(value: unknown): value is OperationCancelled {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as Partial<OperationCancelled>)[OPERATION_CANCELLED] === true
+  );
+}

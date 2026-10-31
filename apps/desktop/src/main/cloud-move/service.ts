@@ -4,12 +4,14 @@ import type {
   CloudMoveAction,
   CloudMoveAutomationRearm,
   CloudMoveCommand,
+  CloudMovePreflight,
   CloudMovePreflightInput,
+  CloudMovePreflightProgress,
   CloudMoveSnapshot,
   CloudMoveStartInput,
   CloudMoveStatus,
 } from "@volli/shared";
-import { OperationUnavailableError } from "@volli/shared";
+import { OperationCancelledError, OperationUnavailableError } from "@volli/shared";
 import {
   MOVE_STATES,
   type MoveBackend,
@@ -27,7 +29,11 @@ export interface MoveDesktopOptions {
   backend: Pick<MoveBackend, "query">;
   account: Pick<import("../account/service").AccountService, "snapshot" | "subscribe">;
   identity(signal?: AbortSignal): Promise<{ userId: string; runnerId: string } | null>;
-  prepare(input: CloudMovePreflightInput, signal: AbortSignal): Promise<PreparedLocalMoves>;
+  prepare(
+    input: CloudMovePreflightInput,
+    signal: AbortSignal,
+    onProgress?: (progress: CloudMovePreflightProgress) => void,
+  ): Promise<PreparedLocalMoves>;
   /** UI facts from the journal, checked report and canonical plan; never raw exceptions. */
   describe(move: MoveRow, queue: QueueRow): Promise<Omit<CloudMoveStatus, "actions">>;
   remember(move: MoveRow, summary: PreviewSummary | undefined): Promise<void>;
@@ -66,12 +72,18 @@ const AFTER_COMMIT = new Set<MoveRow["state"]>([
   "returning",
 ]);
 const SETTLED = new Set<MoveRow["state"]>(["rolled_back", "returned", "superseded"]);
+/** How often a running dry run's counts reach the window; a phase change goes at once. */
+const PROGRESS_NOTIFY_MS = 500;
 const REPORT_ONLY_FAILURES = new Set([
   "already_migrated",
   "preview_waitlisted",
   "preview_agreement_required",
 ]);
 
+/** A dry run is its person's, or anyone's when it ran before anyone signed in on this launch. */
+function ownsDryRun(owner: string | null, person: string | null): boolean {
+  return owner === null || owner === person;
+}
 function personOf(snapshot: AccountSnapshot) {
   const account = snapshot.state === "signed-in" ? snapshot.account : null;
   return account?.userId == null
@@ -130,6 +142,18 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
   >();
   const pending = new Set<string>();
   const preflightReads = new Set<AbortController>();
+  /**
+   * The person's dry run, while it runs. A second call for the same selection
+   * joins it (a reopened sheet, a re-rendered window), and one for another
+   * selection replaces it: one person, one sheet, one dry run.
+   */
+  let dryRun: {
+    key: string;
+    read: AbortController;
+    answer: Promise<CloudMovePreflight>;
+    progress: CloudMovePreflightProgress | null;
+  } | null = null;
+  let progressNotifiedAt = 0;
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let revision = 0;
   let disposed = false;
@@ -144,6 +168,9 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
   let controlLane = Promise.resolve();
   let controlling = 0;
   let controlAbort: AbortController | null = null;
+  // The last person seen signed in. A sign-in that is briefly absent (restoring
+  // after launch, a refresh, a sign-in that has not heard its viewer yet) is
+  // not a different person, so it never cancels a dry run or a control.
   let accountOwner = personOf(options.account.snapshot())?.userId ?? null;
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -508,10 +535,59 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       account,
       workspaces,
       moves,
+      preflight: dryRun?.progress ?? null,
       unavailable:
         unavailable(options.account.snapshot()) ??
         (signInLost ? "Sign in as the person who started this move." : contextError),
     };
+  };
+
+  const runPreflight = async (
+    input: CloudMovePreflightInput,
+    read: AbortController,
+    onProgress: (progress: CloudMovePreflightProgress) => void,
+  ): Promise<CloudMovePreflight> => {
+    preflightReads.add(read);
+    try {
+      await refreshContext();
+      if (
+        input.workspaceId !== null &&
+        !workspaces.some((item) => item.id === input.workspaceId && item.canMove)
+      )
+        throw new OperationUnavailableError("Choose a Workspace you can manage.");
+      // A read-only dry run must never pause a different project's active move.
+      if (active !== null)
+        throw new OperationUnavailableError(
+          "Wait for the running move to finish, then run the dry run again.",
+        );
+      // Only `read` stops a dry run: a different person, a newer selection, a
+      // command or the app's end abort it. The lane's own signal is also
+      // aborted by a lost sign-in, which a local read does not need.
+      return await controlled(async () => {
+        const lifetime = read.signal;
+        lifetime.throwIfAborted();
+        // Signed out now, it still belongs to whoever was last signed in on
+        // this Mac; only a launch nobody has signed in to leaves it unowned.
+        const startedBy = currentPerson()?.userId ?? accountOwner;
+        const value = await options.prepare(input, lifetime, onProgress);
+        lifetime.throwIfAborted();
+        // Bound to whoever is signed in now, or was when it started: a sign-in
+        // that finished meanwhile adopts it, a different person never does.
+        const now = currentPerson()?.userId ?? null;
+        if (startedBy !== null && now !== null && now !== startedBy)
+          throw new OperationUnavailableError("The sign-in changed. Run the dry run again.");
+        prepared.set(value.preflight.id, { owner: now ?? startedBy, value });
+        while (prepared.size > 4) prepared.delete(prepared.keys().next().value!);
+        return value.preflight;
+      });
+    } catch (error) {
+      if (error instanceof OperationUnavailableError) throw error;
+      if ((error as { name?: unknown } | null)?.name === "AbortError")
+        throw new OperationCancelledError("The dry run was cancelled. Run it again.");
+      throw new OperationUnavailableError("Couldn’t check these projects. Run the dry run again.");
+    } finally {
+      preflightReads.delete(read);
+    }
   };
 
   const service: DesktopMovesService = {
@@ -529,41 +605,38 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     },
     async preflight(input) {
       requireEnabled();
+      // A dry run reads only this Mac's projects: it depends on the selection,
+      // never on the Workspace or the sign-in, which `start` checks for itself.
+      const key = JSON.stringify([
+        input.projectIds === undefined ? null : [...new Set(input.projectIds)].toSorted(),
+        input.includeRemoved,
+      ]);
+      if (dryRun !== null && dryRun.key === key && !dryRun.read.signal.aborted)
+        return dryRun.answer;
+      dryRun?.read.abort();
       const read = new AbortController();
-      preflightReads.add(read);
+      const run: NonNullable<typeof dryRun> = {
+        key,
+        read,
+        progress: null,
+        answer: runPreflight(input, read, (progress) => {
+          if (dryRun !== run) return;
+          const phaseChanged = run.progress?.phase !== progress.phase;
+          run.progress = progress;
+          const at = Date.now();
+          if (!phaseChanged && at - progressNotifiedAt < PROGRESS_NOTIFY_MS) return;
+          progressNotifiedAt = at;
+          notify();
+        }),
+      };
+      dryRun = run;
       try {
-        await refreshContext();
-        if (
-          input.workspaceId !== null &&
-          !workspaces.some((item) => item.id === input.workspaceId && item.canMove)
-        )
-          throw new OperationUnavailableError("Choose a Workspace you can manage.");
-        // A read-only dry run must never pause a different project's active move.
-        if (active !== null)
-          throw new OperationUnavailableError(
-            "Wait for the running move to finish, then run the dry run again.",
-          );
-        return await controlled(async (signal) => {
-          const lifetime = AbortSignal.any([signal, read.signal]);
-          lifetime.throwIfAborted();
-          const owner = currentPerson()?.userId ?? null;
-          const value = await options.prepare(input, lifetime);
-          lifetime.throwIfAborted();
-          if ((currentPerson()?.userId ?? null) !== owner)
-            throw new OperationUnavailableError("The sign-in changed. Run the dry run again.");
-          prepared.set(value.preflight.id, { owner, value });
-          while (prepared.size > 4) prepared.delete(prepared.keys().next().value!);
-          return value.preflight;
-        });
-      } catch (error) {
-        if (error instanceof OperationUnavailableError) throw error;
-        if ((error as { name?: unknown } | null)?.name === "AbortError")
-          throw new OperationUnavailableError("The dry run was cancelled. Run it again.");
-        throw new OperationUnavailableError(
-          "Couldn’t check these projects. Run the dry run again.",
-        );
+        return await run.answer;
       } finally {
-        preflightReads.delete(read);
+        if (dryRun === run) {
+          dryRun = null;
+          notify();
+        }
       }
     },
     async start(input: CloudMoveStartInput) {
@@ -575,15 +648,9 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
             throw new OperationUnavailableError(
               "Check your Volli Cloud sign-in before starting a move.",
             );
-          if (
-            entry === undefined ||
-            person === null ||
-            entry.owner !== person.userId ||
-            entry.value.input.workspaceId !== input.workspaceId
-          )
-            throw new OperationUnavailableError(
-              "Run a fresh dry run for this account and Workspace.",
-            );
+          // The Workspace is checked below, for this start: a dry run does not depend on it.
+          if (entry === undefined || person === null || !ownsDryRun(entry.owner, person.userId))
+            throw new OperationUnavailableError("Run a fresh dry run for this account.");
           const intent = JSON.stringify([
             input.workspaceId,
             input.projectIds.toSorted(),
@@ -864,7 +931,7 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
     async report(id) {
       requireEnabled();
       const preview = prepared.get(id);
-      if (preview !== undefined && preview.owner === (currentPerson()?.userId ?? null))
+      if (preview !== undefined && ownsDryRun(preview.owner, currentPerson()?.userId ?? null))
         return JSON.stringify(
           {
             kind: "dry-run",
@@ -905,11 +972,11 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
         if (active !== null && engine.journal.queue(active.queueId)?.userId !== person?.userId)
           active.controller.abort();
         const nextOwner = person?.userId ?? null;
-        if (nextOwner !== accountOwner) {
+        if (nextOwner !== null && accountOwner !== null && nextOwner !== accountOwner) {
           controlAbort?.abort();
           for (const read of preflightReads) read.abort();
         }
-        accountOwner = nextOwner;
+        if (nextOwner !== null) accountOwner = nextOwner;
         void refreshContext()
           .then(() => service.resume())
           .then(notify)
@@ -941,7 +1008,8 @@ export function createDesktopMovesService(options: MoveDesktopOptions): DesktopM
       signInLost = true;
       contextEpoch += 1;
       contextRead = null;
-      for (const read of preflightReads) read.abort();
+      // A dry run reads only this Mac and calls no backend: a lost sign-in
+      // stops what needs one, and `start` refuses until the person is back.
       active?.controller.abort();
       controlAbort?.abort();
       for (const id of retryTimers.keys()) cancelRetry(id);

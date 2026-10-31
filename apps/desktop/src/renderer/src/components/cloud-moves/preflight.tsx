@@ -17,7 +17,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useUiStore } from "@renderer/stores/ui";
 import { toastError } from "@renderer/lib/toast";
-import { moveTime } from "./presentation";
+import { moveTime, preflightProgressLabel } from "./presentation";
 
 export function MovePreflight({
   api,
@@ -40,12 +40,16 @@ export function MovePreflight({
   const [starting, setStarting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [run, setRun] = React.useState(0);
-  // Sign-in can finish with this sheet open. A target change invalidates the dry run immediately.
   const target =
     snapshot.workspaces.find((item) => item.id === workspaceId && item.canMove)?.id ??
     snapshot.workspaces.find((item) => item.canMove)?.id ??
     null;
-  const scope = JSON.stringify([target, includeRemoved, snapshot.account?.userId ?? null, run]);
+  // A dry run reads only this Mac's projects, so only the selection and an
+  // explicit re-run start another. The Workspace and the sign-in are `start`'s
+  // to check: a sign-in finishing, a token refresh or the Workspace list
+  // reloading while a long dry run runs must never send it back to the start.
+  const selection = projectIds === undefined ? null : JSON.stringify(projectIds);
+  const scope = JSON.stringify([selection, includeRemoved, run]);
   React.useEffect(() => {
     let active = true;
     setReading(true);
@@ -53,8 +57,8 @@ export function MovePreflight({
     setError(null);
     void api
       .preflight({
-        ...(projectIds === undefined ? {} : { projectIds }),
-        workspaceId: target,
+        ...(selection === null ? {} : { projectIds: JSON.parse(selection) as string[] }),
+        workspaceId: null,
         includeRemoved,
       })
       .then((next) => {
@@ -77,7 +81,7 @@ export function MovePreflight({
     return () => {
       active = false;
     };
-  }, [api, projectIds, target, includeRemoved, scope]);
+  }, [api, selection, includeRemoved, scope]);
 
   const projects = preflight?.projects.filter((item) => selected.has(item.id)) ?? [];
   const totalEstimate = projects.some((item) => item.estimateSeconds === null)
@@ -151,9 +155,12 @@ export function MovePreflight({
           </label>
         ) : null}
         {reading ? (
-          <p role="status">
-            Checking projects… The snapshot finishes even if you close this sheet.
-          </p>
+          <div role="status" className="flex flex-col gap-1">
+            <p>Checking projects… The dry run finishes even if you close this sheet.</p>
+            {snapshot.preflight !== null ? (
+              <p className="text-muted-foreground">{preflightProgressLabel(snapshot.preflight)}</p>
+            ) : null}
+          </div>
         ) : null}
         {error !== null ? <p role="alert">{error}</p> : null}
         {preflight !== null && !reading ? (

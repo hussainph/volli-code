@@ -160,6 +160,14 @@ export class MoveProblemError extends Error {
   }
 }
 
+/** A dry run's measuring export carries no history (`historyMeasured`): it is never a move's. */
+export function refuseDryRunExport(
+  manifest: Pick<MigrationExportManifest, "historyMeasured">,
+): void {
+  if (manifest.historyMeasured !== undefined)
+    throw new MoveProblemError("export_integrity", "A dry run's export cannot be moved.");
+}
+
 /** A step that found the move must start over under a new move id. */
 class MoveAgainError extends Error {
   constructor(
@@ -556,6 +564,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     const verified = await verifyMigrationExport(dir).catch((error: unknown) => {
       throw new MoveProblemError("export_integrity", (error as Error).message);
     });
+    refuseDryRunExport(verified.manifest);
     const { sha256 } = await fileSha256(join(dir, MANIFEST_FILE));
     return journal.advance(move.moveId, "frozen", "exported", {
       journal: { exportId: verified.manifest.exportId, exportManifestSha256: sha256 },

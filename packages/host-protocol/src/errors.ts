@@ -70,6 +70,8 @@ export const HOST_ERROR_REASON_CODES = {
   /** Client-side: a HOST answer failed its public operation output schema. */
   "response-invalid": "BAD_GATEWAY",
   "operation-unavailable": "NOT_IMPLEMENTED",
+  /** The operation was cancelled before it answered (a person, or a newer request). Ask again. */
+  "operation-cancelled": "CLIENT_CLOSED_REQUEST",
   /**
    * Sign-ins (VC-702). No such flow on this connection: a flow another
    * connection owns answers exactly as an absent one.

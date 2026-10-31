@@ -36,8 +36,8 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { isMainThread } from "node:worker_threads";
-import { existsSync } from "node:fs";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { constants as fsConstants, existsSync } from "node:fs";
+import { copyFile, link, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { withProfileMaintenance } from "../backup/profile-maintenance";
@@ -83,7 +83,7 @@ import {
 } from "./staging";
 import { MIGRATION_TABLE_DECISIONS, type MigrationTableDecision } from "./tables";
 import { verifyMigrationExport } from "./verify";
-import { exportFileStreams, type PiLogFileCoverage } from "./file-streams";
+import { exportFileStreams, type MeasuredHistory, type PiLogFileCoverage } from "./file-streams";
 import {
   crossProjectReferences,
   prefixClashes,
@@ -120,6 +120,8 @@ export interface MigrationExportProgress {
   rowsTotal: number;
   /** Chunk bytes durably written, resumed chunks included. */
   bytesWritten: number;
+  /** Transcript artifacts and Pi log slices read so far, during `finalizing`. */
+  historyRecords: number;
   /** This run continued an earlier one. */
   resumed: boolean;
 }
@@ -149,6 +151,27 @@ export interface MigrationExportOptions extends ExportSelection {
   pathExists?: (path: string) => boolean;
   /** The home directory redacted from git output in board events. Default `os.homedir()`. */
   homeDir?: string;
+  /**
+   * A dry run's export: transcripts and Pi logs are read and checked exactly
+   * as a copy reads them, but only measured (`manifest.historyMeasured`), so a
+   * dry run never stages the whole history on disk. Such an export carries no
+   * history and is never a move's: the move engine refuses one.
+   */
+  measureHistory?: boolean;
+  /**
+   * One snapshot for several exports (a dry run over many projects): the
+   * first export also links its fresh snapshot at `keepAt`, later ones link
+   * the kept one in `from` instead of copying the database again. The kept
+   * file is only ever opened read-only.
+   */
+  sharedSnapshot?: { keepAt: string } | { from: string };
+}
+
+/** The sidecar beside a kept snapshot: the facts a later export takes from it. */
+interface KeptSnapshot {
+  sourcePath: string;
+  snapshotAt: number;
+  schemaVersion: number;
 }
 
 /** Facts the importer's preflight reads. Counts, not a verdict. */
@@ -191,6 +214,8 @@ export interface MigrationExportManifest {
   crossProjectReferences: CrossProjectReference[];
   prefixClashes: PrefixClash[];
   piLogFiles: PiLogFileCoverage[];
+  /** Present only on a dry run's export (`measureHistory`): its history streams are empty. */
+  historyMeasured?: MeasuredHistory;
   tables: readonly MigrationTableDecision[];
   sources: Array<{ id: string; rows: number }>;
   streams: Array<{
@@ -380,16 +405,18 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
 
     reporter.report({ phase: "finalizing", source: null }, true);
     assertComplete(checkpoints, counts);
-    const { checkpoints: fileCheckpoints, piLogFiles } = await exportFileStreams(
-      snapshot,
-      staging,
-      {
-        ...fileRoots(options),
-        signal: options.signal,
-        chunkMaxBytes: options.chunkMaxBytes,
-        chunkMaxRecords: options.chunkMaxRecords,
-      },
-    );
+    const {
+      checkpoints: fileCheckpoints,
+      piLogFiles,
+      measured,
+    } = await exportFileStreams(snapshot, staging, {
+      ...fileRoots(options),
+      signal: options.signal,
+      chunkMaxBytes: options.chunkMaxBytes,
+      chunkMaxRecords: options.chunkMaxRecords,
+      measureOnly: options.measureHistory === true,
+      onRecords: (historyRecords) => reporter.report({ phase: "finalizing", historyRecords }),
+    });
     const manifest = buildManifest(
       snapshot,
       state,
@@ -398,6 +425,7 @@ async function runLocked(options: MigrationExportOptions): Promise<MigrationExpo
       now(),
       piLogFiles,
     );
+    if (measured !== null) manifest.historyMeasured = measured;
     reporter.add({
       bytesWritten: fileCheckpoints.reduce(
         (n, c) => n + c.chunks.reduce((s, x) => s + x.bytes, 0),
@@ -432,6 +460,8 @@ function resumeIdentity(options: MigrationExportOptions): string {
         fileRoots(options),
         options.homeDir ?? null,
         MAPPER_VERSION,
+        // A measuring export never resumes as a copy, nor a copy as a measure.
+        ...(options.measureHistory === true ? ["measure-history"] : []),
       ]),
     )
     .digest("hex");
@@ -512,6 +542,8 @@ async function takeSnapshot(
   throwIfAborted(options.signal);
 
   const target = join(staging, `${SNAPSHOT_FILE}.tmp`);
+  const shared = options.sharedSnapshot;
+  if (shared !== undefined && "from" in shared) return reuseSnapshot(options, shared.from, staging);
   let source: Database.Database;
   try {
     source = new Database(options.sourcePath, { readonly: true, fileMustExist: true });
@@ -569,6 +601,69 @@ async function takeSnapshot(
     appVersion: options.appVersion,
     snapshotAt,
     schemaVersion,
+    selection: resumeIdentity(options),
+    profileStep: selectsProfile(options),
+  };
+  await writeFileDurably(join(staging, STATE_FILE), `${JSON.stringify(state)}\n`);
+  await syncDirectory(staging);
+  if (shared !== undefined && "keepAt" in shared) {
+    await rm(shared.keepAt, { force: true });
+    await linkOrCopy(join(staging, SNAPSHOT_FILE), shared.keepAt);
+    const kept: KeptSnapshot = { sourcePath: state.sourcePath, snapshotAt, schemaVersion };
+    await writeFile(`${shared.keepAt}.json`, JSON.stringify(kept), { mode: 0o600 });
+  }
+  return state;
+}
+
+/** A hard link where the volume allows one (no bytes copied), else a clone or a copy. */
+async function linkOrCopy(from: string, to: string): Promise<void> {
+  try {
+    await link(from, to);
+  } catch {
+    /* v8 ignore next -- a link fails only across volumes or where links are unsupported; the copy holds the same bytes. */
+    await copyFile(from, to, fsConstants.COPYFILE_FICLONE);
+  }
+}
+
+/**
+ * Stages an earlier export's kept snapshot (`sharedSnapshot.from`) as this
+ * export's own: it was taken and integrity-checked from this same source by
+ * that export, so it is linked rather than copied, and keeps its own time.
+ */
+async function reuseSnapshot(
+  options: MigrationExportOptions,
+  from: string,
+  staging: string,
+): Promise<StagingState> {
+  let kept: KeptSnapshot;
+  try {
+    kept = JSON.parse(await readFile(`${from}.json`, "utf8")) as KeptSnapshot;
+  } catch (error) {
+    throw new MigrationExportError("source_unreadable", "The shared snapshot is unreadable.", {
+      cause: error,
+    });
+  }
+  if (
+    typeof kept?.sourcePath !== "string" ||
+    !Number.isSafeInteger(kept.snapshotAt) ||
+    !Number.isSafeInteger(kept.schemaVersion) ||
+    kept.sourcePath !== resolve(options.sourcePath) ||
+    !existsSync(from)
+  )
+    throw new MigrationExportError(
+      "source_unreadable",
+      "The shared snapshot is of another source.",
+    );
+  assertSchema(kept.schemaVersion);
+  await linkOrCopy(from, join(staging, SNAPSHOT_FILE));
+  const state: StagingState = {
+    format: MIGRATION_EXPORT_FORMAT,
+    mapperVersion: MAPPER_VERSION,
+    exportId: randomUUID(),
+    sourcePath: kept.sourcePath,
+    appVersion: options.appVersion,
+    snapshotAt: kept.snapshotAt,
+    schemaVersion: kept.schemaVersion,
     selection: resumeIdentity(options),
     profileStep: selectsProfile(options),
   };
@@ -844,6 +939,7 @@ function progressReporter(onProgress: MigrationExportOptions["onProgress"]) {
     rowsDone: 0,
     rowsTotal: 0,
     bytesWritten: 0,
+    historyRecords: 0,
     resumed: false,
   };
   let lastAt = 0;

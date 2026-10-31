@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createMoveEngine, type MoveEnginePorts, type MoveRow } from "@volli/host-core/cloud-move";
 import { insertProject, openVolliDb } from "@volli/host-core/db";
-import type { AccountSnapshot, CloudMovePreflightInput, CloudMoveStatus } from "@volli/shared";
+import {
+  isOperationCancelled,
+  isOperationUnavailable,
+  type AccountSnapshot,
+  type CloudMovePreflightInput,
+  type CloudMovePreflightProgress,
+  type CloudMoveStatus,
+} from "@volli/shared";
 import {
   createDesktopMovesService,
   type DesktopMovesService,
@@ -136,8 +143,12 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
       exclusions: [],
     },
   });
-  const prepare = vi.fn(async (input: CloudMovePreflightInput, _signal: AbortSignal) =>
-    prepared(input),
+  const prepare = vi.fn(
+    async (
+      input: CloudMovePreflightInput,
+      _signal: AbortSignal,
+      _onProgress?: (progress: CloudMovePreflightProgress) => void,
+    ) => prepared(input),
   );
   const assertIdle = vi.fn();
   const releaseIdentity = vi.fn(async () => {});
@@ -437,7 +448,7 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     expect(f.identity).not.toHaveBeenCalled();
     expect(f.run).not.toHaveBeenCalled();
   });
-  it("binds a dry run to person and Workspace, starts once and rejects changed replay", async () => {
+  it("binds a dry run to its person, starts once into a Workspace and rejects changed replay", async () => {
     const f = setup();
     await f.service.preflight(f.input);
     await start(f.service);
@@ -689,5 +700,149 @@ describe("desktop move coordinator over the real SQLite journal", () => {
     await expect(f.service.command({ moveId: row.moveId, action: "cancel" })).rejects.toThrow(
       "belongs",
     );
+  });
+});
+
+/** A dry run that waits until the test lets it finish, and says when it was aborted. */
+function heldDryRun(f: ReturnType<typeof setup>) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const signals: AbortSignal[] = [];
+  const progress: ((value: CloudMovePreflightProgress) => void)[] = [];
+  f.prepare.mockImplementation(async (input, signal, onProgress) => {
+    signals.push(signal);
+    if (onProgress !== undefined) progress.push(onProgress);
+    await new Promise<void>((resolve, reject) => {
+      void released.then(resolve);
+      signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), {
+        once: true,
+      });
+    });
+    return f.prepared(input);
+  });
+  return { release: () => release(), signals, progress };
+}
+const noViewerYet: AccountSnapshot = {
+  ...signedIn,
+  account: { ...signedIn.account!, userId: null },
+};
+const signedOut: AccountSnapshot = { ...signedIn, state: "signed-out", account: null };
+
+describe("a long dry run under a changing sign-in (VC-1029)", () => {
+  it("survives a sign-in that is briefly absent, and still starts", async () => {
+    const f = setup();
+    f.service.startWatching();
+    const held = heldDryRun(f);
+    const reading = f.service.preflight(f.input);
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+    // A restore, a refresh or a viewer not yet heard: the same person comes back.
+    for (const flap of [noViewerYet, signedOut, signedIn, noViewerYet, signedIn]) f.publish(flap);
+    expect(held.signals[0]!.aborted).toBe(false);
+    held.release();
+    await expect(reading).resolves.toMatchObject({ id: "preview" });
+    expect(f.prepare).toHaveBeenCalledOnce();
+    await start(f.service);
+    expect(f.engine.journal.movesIn(["queued"])).toHaveLength(1);
+  });
+  it("is adopted by a sign-in that finishes while it runs", async () => {
+    const f = setup();
+    f.publish(signedOut);
+    f.service.startWatching();
+    const held = heldDryRun(f);
+    const reading = f.service.preflight({ ...f.input, workspaceId: null });
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+    f.publish(noViewerYet);
+    f.publish(signedIn);
+    held.release();
+    await expect(reading).resolves.toMatchObject({ id: "preview" });
+    await start(f.service);
+    expect(f.engine.journal.movesIn(["queued"])).toHaveLength(1);
+  });
+  it("stops for a different person, as a cancel rather than an unavailable operation", async () => {
+    const f = setup();
+    f.service.startWatching();
+    heldDryRun(f);
+    const reading = f.service.preflight(f.input).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+    f.publish(signedOut);
+    f.publish({ ...signedIn, account: { ...signedIn.account!, userId: "other" } });
+    const error = await reading;
+    expect(isOperationCancelled(error)).toBe(true);
+    expect(isOperationUnavailable(error)).toBe(false);
+    expect(error).toMatchObject({ message: "The dry run was cancelled. Run it again." });
+  });
+  it("keeps reading when a backend call loses the sign-in; start waits for it to come back", async () => {
+    const f = setup();
+    const held = heldDryRun(f);
+    const reading = f.service.preflight(f.input);
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+    f.service.signInLost();
+    expect(held.signals[0]!.aborted).toBe(false);
+    held.release();
+    await expect(reading).resolves.toMatchObject({ id: "preview" });
+  });
+  it("never lets the next person start a dry run finished while signed out after someone else", async () => {
+    const f = setup();
+    f.service.startWatching();
+    f.publish(signedOut);
+    await f.service.preflight({ ...f.input, workspaceId: null });
+    f.publish({ ...signedIn, account: { ...signedIn.account!, userId: "other" } });
+    await expect(start(f.service)).rejects.toThrow("fresh dry run");
+    await expect(f.service.report("preview")).rejects.toThrow();
+  });
+  it("joins a repeated dry run for the same selection instead of queueing a second", async () => {
+    const f = setup();
+    const held = heldDryRun(f);
+    const first = f.service.preflight(f.input);
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+    // A remounted sheet asks again, for any Workspace: the same dry run answers.
+    const again = f.service.preflight({ ...f.input, workspaceId: null });
+    held.release();
+    expect(await again).toBe(await first);
+    expect(f.prepare).toHaveBeenCalledOnce();
+  });
+  it("replaces a running dry run when the selection changes", async () => {
+    const f = setup();
+    const held = heldDryRun(f);
+    const first = f.service.preflight(f.input).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledOnce());
+    const second = f.service.preflight({ ...f.input, includeRemoved: true });
+    expect(isOperationCancelled(await first)).toBe(true);
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalledTimes(2));
+    held.release();
+    await expect(second).resolves.toMatchObject({ id: "preview" });
+  });
+  it("publishes the running dry run's phase and counts, and clears them when it ends", async () => {
+    const f = setup();
+    const changed = vi.fn();
+    f.service.onChanged(changed, () => {});
+    const held = heldDryRun(f);
+    const reading = f.service.preflight(f.input);
+    await vi.waitFor(() => expect(held.progress).toHaveLength(1));
+    expect((await f.service.snapshot()).preflight).toBeNull();
+    const step: CloudMovePreflightProgress = {
+      phase: "exporting",
+      projectIndex: 2,
+      projectCount: 8,
+      projectName: "Project",
+      done: 400,
+      total: 1000,
+      unit: "records",
+      startedAt: 1,
+    };
+    changed.mockClear();
+    held.progress[0]!(step);
+    expect(changed).toHaveBeenCalledOnce();
+    expect((await f.service.snapshot()).preflight).toEqual(step);
+    // Counts inside one phase are throttled; a phase change is not.
+    held.progress[0]!({ ...step, done: 401 });
+    expect(changed).toHaveBeenCalledOnce();
+    held.progress[0]!({ ...step, phase: "history", done: null, total: null, unit: null });
+    expect(changed).toHaveBeenCalledTimes(2);
+    held.release();
+    await reading;
+    expect((await f.service.snapshot()).preflight).toBeNull();
   });
 });

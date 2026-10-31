@@ -153,9 +153,10 @@ export function createDesktopMoves(options: {
     backend: { query: (path, args) => signals.run(undefined, () => backend.query(path, args)) },
     account: options.account,
     identity: options.identity.current,
-    prepare: (input, signal) =>
+    prepare: (input, signal, onProgress) =>
       prepareLocalMoves(
         {
+          ...(onProgress === undefined ? {} : { onProgress }),
           db,
           profilePath: host.dbPath,
           workRoot,
