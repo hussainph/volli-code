@@ -71,7 +71,7 @@ function fixture(t, { version = "1.2.3", template = installerTemplate } = {}) {
   return { root, assets, names };
 }
 
-// The C4 manifest, filled in independently of the generator: digests and sizes
+// The runner release manifest, filled in independently of the generator: digests and sizes
 // come from the bytes on disk, not from the module under test.
 function expectedManifest({
   version,
@@ -134,7 +134,7 @@ test("the public release base is the tag URL for this repository", () => {
 });
 
 for (const version of ["1.2.3", "1.2.3-canary.42", "1.2.3-beta.1"]) {
-  test(`generates the exact C4 manifest for ${version}`, async (t) => {
+  test(`generates the exact runner release manifest for ${version}`, async (t) => {
     const { root, assets, names } = fixture(t, { version });
     const manifest = await generateRunnerReleaseManifest(assets, { root });
     assert.deepEqual(manifest, expectedManifest({ version, assets, names }));
@@ -425,8 +425,8 @@ test("rejects a missing assets folder", async (t) => {
   );
 });
 
-// The validator is the updater's read path: a published file is normalized, and
-// anything this build would misread is refused with the field named.
+// The build-time validator normalizes generated inputs before publication;
+// the bootstrap installer independently validates the downloaded manifest.
 function publishedManifest(version = "1.2.3") {
   const base = defaultReleaseBase(version);
   return {

@@ -2,7 +2,7 @@
 /**
  * The runner's release asset set: the two Linux tarballs, the stamped
  * installer, one manifest that describes them, and the checksums that cover
- * the set. The installer and the updater read that manifest; it is C4:
+ * the set. The installer and the updater read that manifest; its format is:
  *
  *   {
  *     schemaVersion: 1, version, releaseTag, minRunnerVersion,

@@ -10,5 +10,5 @@ cd "$repo"
 pnpm --filter volli-code --filter './packages/*' --filter './apps/runner' \
   install --frozen-lockfile
 shellcheck -s sh apps/runner/packaging/install.sh
-shellcheck apps/runner/scripts/ci-build-artifact.sh apps/runner/scripts/ci-boot-artifact.sh
+shellcheck apps/runner/scripts/ci-build-artifact.sh apps/runner/scripts/ci-boot-artifact.sh apps/runner/scripts/ci-install-matrix.sh
 node apps/runner/scripts/package.mjs --out /out

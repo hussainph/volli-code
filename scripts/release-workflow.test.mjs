@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { parse } from "yaml";
 
-// ci.yml invokes this release-contract entrypoint; keep the C3/C4 checks here
+// ci.yml invokes this release-contract entrypoint; keep the installer/manifest checks here
 // without adding a runner to the desktop or Vitest test surfaces.
 import "./runner-install.test.mjs";
 import "./runner-release-manifest.test.mjs";

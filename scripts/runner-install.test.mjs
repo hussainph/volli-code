@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  symlinkSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -62,7 +70,7 @@ async function fixture(t) {
     );
     writeFileSync(
       join(from, "bin/volli-runner"),
-      '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nprintf "%s" "$VOLLI_RUNNER_TOKEN" > "$TOKEN_RECORD"\nprintf "%s" "$VOLLI_SERVER" > "$SERVER_RECORD"\n',
+      '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nprintf "%s" "$VOLLI_RUNNER_TOKEN" > "$TOKEN_RECORD"\nprintf "%s" "$VOLLI_SERVER" > "$SERVER_RECORD"\numask > "$UMASK_RECORD"\n',
       { mode: 0o755 },
     );
     for (const probeName of ["probe-natives.cjs", "probe-codemode.mjs"])
@@ -73,13 +81,28 @@ async function fixture(t) {
   }
   let manifest;
   let corrupt = false;
+  let redirect;
   const requests = [];
   const server = createServer((req, res) => {
     requests.push(req.url);
-    if (req.url === "/volli-runner-manifest.json")
+    if (redirect && !req.url.startsWith("/redirected/")) {
+      const destination = `/redirected${req.url}`;
+      const location = {
+        absolute: `http://127.0.0.1:${server.address().port}${destination}`,
+        root: destination,
+        relative: destination.slice(1),
+        insecure: "http://insecure.invalid/runner",
+        loop: req.url,
+      }[redirect];
+      res.writeHead(302, { Location: location });
+      res.end();
+      return;
+    }
+    const path = req.url.replace(/^\/redirected/, "");
+    if (path === "/volli-runner-manifest.json")
       res.end(typeof manifest === "string" ? manifest : JSON.stringify(manifest));
-    else if (req.url === "/x64.tar.gz" || req.url === "/arm64.tar.gz")
-      res.end(corrupt ? Buffer.from("corrupted") : archives[req.url.slice(1, -7)]);
+    else if (path === "/x64.tar.gz" || path === "/arm64.tar.gz")
+      res.end(corrupt ? Buffer.from("corrupted") : archives[path.slice(1, -7)]);
     else {
       res.writeHead(404);
       res.end();
@@ -111,14 +134,19 @@ async function fixture(t) {
     RECORD: join(root, "record"),
     TOKEN_RECORD: join(root, "token"),
     SERVER_RECORD: join(root, "server"),
+    UMASK_RECORD: join(root, "umask"),
     PROBE_RECORD: join(root, "probes"),
     VOLLI_RUNNER_TOKEN: "",
     VOLLI_SERVER: "",
   };
   return {
     root,
+    tools,
     env,
     requests,
+    redirect: (mode) => {
+      redirect = mode;
+    },
     tool,
     get manifest() {
       return manifest;
@@ -169,10 +197,67 @@ test("POSIX installer downloads a release over HTTP, verifies and probes before 
   ]);
   assert.equal(readFileSync(f.env.TOKEN_RECORD, "utf8"), "private-install-token");
   assert.equal(readFileSync(f.env.SERVER_RECORD, "utf8"), "https://deployment.convex.site");
+  assert.match(readFileSync(f.env.UMASK_RECORD, "utf8"), /^0*22\n$/);
   assert.equal(readFileSync(f.env.PROBE_RECORD, "utf8").trim().split("\n").length, 2);
   assert.doesNotMatch(result.stdout + result.stderr + args.join(" "), /private-install-token/);
   assert.match(result.stderr, /authenticity trusts TLS/);
   assert.deepEqual(f.requests, ["/volli-runner-manifest.json", "/x64.tar.gz"]);
+});
+
+function systemTool(name) {
+  try {
+    return execFileSync("sh", ["-c", 'command -v "$1"', "sh", name], { encoding: "utf8" }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+test("wget-only downloads follow safe 302 redirects and reject insecure/looping redirects", async (t) => {
+  if (!systemTool("wget")) {
+    assert.ok(!process.env.CI, "CI must have wget to verify the supported fallback");
+    t.skip("wget is unavailable locally; CI and the distro matrix exercise this path");
+    return;
+  }
+  for (const mode of ["absolute", "root", "relative", "insecure", "loop"]) {
+    await t.test(mode, async (subtest) => {
+      const f = await fixture(subtest);
+      f.redirect(mode);
+      for (const name of [
+        "sh",
+        "wget",
+        "awk",
+        "tar",
+        "gzip",
+        "mktemp",
+        "wc",
+        "sed",
+        "rm",
+        "dirname",
+        "sha256sum",
+        "shasum",
+      ]) {
+        const command = systemTool(name);
+        if (command) symlinkSync(command, join(f.tools, name));
+      }
+      // No curl in PATH: this must execute the actual wget fallback, not curl.
+      const result = await f.run([], { PATH: f.tools });
+      if (["insecure", "loop"].includes(mode)) {
+        assert.equal(result.status, 1, result.stdout + result.stderr);
+        assert.equal(f.installed(), false);
+        assert.match(result.stderr, mode === "insecure" ? /HTTPS/ : /manifest download failed/);
+        assert.equal(f.requests.length, mode === "loop" ? 10 : 1);
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(f.installed(), true);
+        assert.deepEqual(f.requests, [
+          "/volli-runner-manifest.json",
+          "/redirected/volli-runner-manifest.json",
+          "/x64.tar.gz",
+          "/redirected/x64.tar.gz",
+        ]);
+      }
+    });
+  }
 });
 
 test("root defaults to system, arm64 and environment credentials are supported", async (t) => {

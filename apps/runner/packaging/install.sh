@@ -129,7 +129,7 @@ main() {
   }
   fetch "$release_base/volli-runner-manifest.json" "$temp/manifest.json" || fail 'manifest download failed'
   [ "$(wc -c < "$temp/manifest.json")" -le 65536 ] || fail 'manifest is too large'
-  # Strict dependency-free parser for the ASCII C4 manifest. No eval, jq, Python
+  # Strict dependency-free parser for the ASCII runner release manifest. No eval, jq, Python
   # or system Node is needed. Escaped strings are refused rather than misread.
   LC_ALL=C awk -v arch="$arch" -v version="$version" '
     function bad() { exit 1 }
@@ -194,6 +194,9 @@ main() {
   if "$no_link"; then set -- "$@" --no-link; fi
   # install copies --from to its permanent release before starting the service.
   # The binary owns this handoff; staging contains no secrets and lives in /tmp.
+  # The service account must be able to read root-owned release code and units;
+  # install sets explicit 0700/0600 modes on its data and credentials instead.
+  umask 022
   exec "$from/bin/volli-runner" "$@"
 }
 # Last line is deliberate: a partial curl download never begins installation.

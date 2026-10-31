@@ -34,3 +34,8 @@ version unless `--version` is given. `--release-base` overrides the containing
 release URL (for a mirror or a loopback test release). Target URLs in the manifest
 are absolute, so mirrors must regenerate the manifest with their own base URL.
 Without systemd, installation skips starting a service; use `volli-runner run`.
+
+The shell bootstrap hands a private `${TMPDIR:-/tmp}/volli-runner.*` staging
+directory to the binary installer. It is removed on download/probe errors, but
+retained after a successful or failed handoff. Once no installation is running,
+that staging directory can be deleted; the installed release does not use it.
