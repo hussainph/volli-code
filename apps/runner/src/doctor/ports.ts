@@ -22,6 +22,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, statfsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { setGlobalProxyFromEnv } from "node:http";
 import { join } from "node:path";
 
 import { fileRunnerLinkStore } from "../link/file-store";
@@ -67,6 +68,8 @@ export type LinkFacts =
 
 /** Everything `doctor` asks of the box. A test replaces all of it. */
 export interface DoctorPorts {
+  /** Node 24 proxy support for this command, restored after all parallel probes settle. */
+  configureProxy(env: Readonly<Record<string, string | undefined>>): () => void;
   /** Runs a program: name and argv, never a shell, never a credential in argv. */
   run(command: string, args: readonly string[]): RunAnswer;
   /** One HTTPS GET, to answer "can this box reach that host at all?". */
@@ -241,6 +244,7 @@ function kindOf(value: unknown): StoredProvider["kind"] | null {
 
 /** The live box: the programs on it, its network, its disk and Pi's store. */
 export const LIVE_DOCTOR_PORTS: DoctorPorts = {
+  configureProxy: setGlobalProxyFromEnv,
   run: liveRun,
   reach: liveReach,
   freeBytes: liveFreeBytes,

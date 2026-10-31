@@ -244,7 +244,7 @@ function linkCheck(link: LinkFacts, mode: RunnerPaths["mode"], paths: RunnerPath
     detail: `this box's link could not be opened: ${link.error}`,
     fix:
       mode === "system"
-        ? `sudo -u volli volli-runner doctor --data-dir ${paths.dataDir} --config-dir ${paths.configDir}`
+        ? `sudo -u volli env VOLLI_RUNNER_INSTALL_MODE=system volli-runner doctor --data-dir ${paths.dataDir} --config-dir ${paths.configDir}`
         : `Restore ${join(paths.configDir, LINK_KEY_FILE_NAME)} to this login's ownership, mode 0600, then run \`volli-runner doctor\` again`,
   };
 }
@@ -377,7 +377,7 @@ function systemdCheck(ports: DoctorPorts): DoctorCheck {
       title: "systemd",
       status: "warn",
       detail: "systemd is not running on this box",
-      fix: "Run the runner in the foreground under your own supervisor: `volli-runner run` (install needs systemd).",
+      fix: "Run the runner in the foreground under your own supervisor: `volli-runner run`.",
     };
   }
   return { id: "systemd", title: "systemd", status: "ok", detail: "systemd is running" };
@@ -413,7 +413,7 @@ function lingerCheck(
     return {
       id,
       title,
-      status: "fail",
+      status: "warn",
       detail: `${login}'s user services stop at logout`,
       fix: `sudo loginctl enable-linger ${login}`,
     };
@@ -438,6 +438,12 @@ interface NetworkTarget {
 function networkTargets(deployment: RunnerDeployment | null): readonly NetworkTarget[] {
   const targets: NetworkTarget[] = [];
   if (deployment !== null) {
+    targets.push({
+      id: "network.backend",
+      url: deployment.url,
+      severity: "fail",
+      fix: `Allow outbound HTTPS to ${hostOf(deployment.url)} (port 443) from this box.`,
+    });
     targets.push({
       id: DEPLOYMENT_TARGET_ID,
       url: deployment.siteUrl,
@@ -548,9 +554,17 @@ function modelsCheck(listing: CredentialListing, env: CommandContext["env"]): Do
   const ambient = AMBIENT_KEY_PROVIDERS.filter(
     ([name, providerId]) =>
       isSet(env[name]) && !listing.providers.some((provider) => provider.providerId === providerId),
-  ).map(([, providerId]) => `${providerId} (API key in this shell)`);
-  const signedIn = [...stored, ...ambient];
-  if (signedIn.length === 0) {
+  ).map(([, providerId]) => providerId);
+  if (ambient.length > 0) {
+    return {
+      id,
+      title,
+      status: "warn",
+      detail: `${stored.length > 0 ? `stored: ${stored.join(", ")}; ` : ""}API keys in this shell only: ${ambient.join(", ")}. The service does not inherit them.`,
+      fix: `volli-runner login ${ambient[0]}`,
+    };
+  }
+  if (stored.length === 0) {
     return {
       id,
       title,
@@ -559,7 +573,7 @@ function modelsCheck(listing: CredentialListing, env: CommandContext["env"]): Do
       fix: "volli-runner login <provider>",
     };
   }
-  return { id, title, status: "ok", detail: `signed in: ${signedIn.join(", ")}` };
+  return { id, title, status: "ok", detail: `signed in: ${stored.join(", ")}` };
 }
 
 function browserCheck(): DoctorCheck {
@@ -568,7 +582,7 @@ function browserCheck(): DoctorCheck {
     title: "Chromium",
     status: "info",
     detail:
-      "not installed, by design: this runner serves Sessions without an agent browser, " +
+      "not bundled, by design: this runner serves Sessions without an agent browser, " +
       "so nothing on the box needs Chromium or an AppArmor profile for it",
   };
 }

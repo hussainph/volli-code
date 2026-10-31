@@ -46,6 +46,7 @@ interface Box {
 /** A linked box that meets every requirement, with one thing replaced per test. */
 function ports(overrides: Partial<DoctorPorts> = {}): DoctorPorts {
   return {
+    configureProxy: () => () => {},
     run: (command) => {
       if (command === "git") return { status: 0, stdout: "git version 2.43.0\n" };
       if (command === "loginctl") return { status: 0, stdout: "yes\n" };
@@ -119,6 +120,7 @@ describe("a box that meets every requirement", () => {
       "disk",
       "systemd",
       "linger",
+      "network.backend",
       "network.deployment",
       "network.github.com",
       "network.anthropic",
@@ -130,6 +132,7 @@ describe("a box that meets every requirement", () => {
       "browser",
     ]);
     expect(list.map((check) => check.status)).toEqual([
+      "ok",
       "ok",
       "ok",
       "ok",
@@ -176,7 +179,8 @@ describe("the deployment probed", () => {
         },
       },
     });
-    expect(seen[0]).toBe(DEPLOYMENT.siteUrl);
+    expect(seen).toContain(DEPLOYMENT.siteUrl);
+    expect(seen).toContain(DEPLOYMENT.url);
     expect(seen).toContain("https://github.com");
     expect(seen).toContain("https://api.anthropic.com");
   });
@@ -330,7 +334,7 @@ describe("the link", () => {
       },
     });
     expect(found(list, "link").fix).toBe(
-      "sudo -u volli volli-runner doctor --data-dir /var/lib/volli-runner --config-dir /etc/volli-runner",
+      "sudo -u volli env VOLLI_RUNNER_INSTALL_MODE=system volli-runner doctor --data-dir /var/lib/volli-runner --config-dir /etc/volli-runner",
     );
   });
 });
@@ -481,7 +485,7 @@ describe("linger", () => {
     );
   });
 
-  it("fails when it does not, with the one command that turns it on", async () => {
+  it("warns when it does not, with the one command that turns it on", async () => {
     const list = await checks({
       ports: {
         run: (command) =>
@@ -491,7 +495,7 @@ describe("linger", () => {
       },
     });
     expect(found(list, "linger")).toMatchObject({
-      status: "fail",
+      status: "warn",
       fix: "sudo loginctl enable-linger volli",
     });
   });
@@ -544,14 +548,27 @@ describe("model logins", () => {
       env: { USER: "volli", ANTHROPIC_API_KEY: "sk-secret", OPENROUTER_API_KEY: "or-secret" },
     });
     const models = found(list, "models");
-    expect(models.status).toBe("ok");
+    expect(models.status).toBe("warn");
     expect(models.detail).toBe(
-      "signed in: anthropic (subscription), openrouter (API key in this shell)",
+      "stored: anthropic (subscription); API keys in this shell only: openrouter. The service does not inherit them.",
     );
+    expect(models.fix).toBe("volli-runner login openrouter");
     expect(JSON.stringify(list)).not.toContain("sk-secret");
     expect(JSON.stringify(list)).not.toContain("or-secret");
   });
 
+  it("does not call a shell-only API key a service login", async () => {
+    const list = await checks({
+      env: { OPENAI_API_KEY: "shell-only-secret" },
+      ports: { storedCredentials: async () => ({ state: "listed", providers: [] }) },
+    });
+    expect(found(list, "models")).toMatchObject({
+      status: "warn",
+      fix: "volli-runner login openai",
+    });
+    expect(found(list, "models").detail).toContain("this shell only");
+    expect(JSON.stringify(list)).not.toContain("shell-only-secret");
+  });
   it("warns a box signed in to nothing, and names the login command", async () => {
     const list = await checks({
       env: { USER: "volli", OPENAI_API_KEY: "" },

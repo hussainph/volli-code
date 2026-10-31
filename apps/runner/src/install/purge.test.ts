@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -10,7 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
+import * as purge from "./purge";
 
 import { testContext } from "../testing/context";
 import { revokeRunner } from "./uninstall";
@@ -27,6 +29,7 @@ it("the unprivileged purge helper empties only owned contents and leaves empty d
     writeFileSync(join(configDir, "session-secrets.key"), "key");
     writeFileSync(outside, "not deleted");
     symlinkSync(outside, join(dataDir, "work/link"));
+    chmodSync(join(dataDir, "work"), 0o555);
     const context = testContext({ root });
     const values = { "data-dir": dataDir, "config-dir": configDir, purge: true, yes: true };
     expect(await revokeRunner({ values, positionals: [] }, context)).toBe(0);
@@ -44,6 +47,35 @@ it("the unprivileged purge helper empties only owned contents and leaves empty d
     rmSync(configDir, { recursive: true });
     expect(await revokeRunner({ values, positionals: [] }, context)).toBe(0);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("gives a recoverable fix if an owned tree still cannot be purged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "runner-purge-refusal-"));
+  const mock = vi.spyOn(purge, "purgeOwnedTree").mockImplementationOnce(() => {
+    throw new Error("EACCES");
+  });
+  try {
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir);
+    writeFileSync(join(dataDir, "work"), "kept");
+    await expect(
+      revokeRunner(
+        {
+          values: {
+            "data-dir": dataDir,
+            "config-dir": join(root, "config"),
+            purge: true,
+            yes: true,
+          },
+          positionals: [],
+        },
+        testContext({ root }),
+      ),
+    ).rejects.toThrow("Restore this service user's write access");
+  } finally {
+    mock.mockRestore();
     rmSync(root, { recursive: true, force: true });
   }
 });

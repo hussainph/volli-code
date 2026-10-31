@@ -40,13 +40,26 @@ export async function runDoctor(
   context: CommandContext,
   ports: DoctorPorts,
 ): Promise<number> {
-  const paths = pathsFor(input.values, context);
-  // The unit states its mode; a nonroot service account still runs a system install.
-  const host = context.hostFacts(installModeOf(context.env, paths.mode));
-  const checks = await runChecks({ host, context, paths, ports });
-  const report = doctorReport(host, checks);
-  context.out(
-    input.values["json"] === true ? `${JSON.stringify(report, null, 2)}\n` : renderDoctor(report),
-  );
-  return report.counts.fail > 0 ? 1 : 0;
+  let restoreProxy: () => void;
+  try {
+    restoreProxy = ports.configureProxy(context.env);
+  } catch {
+    context.err(
+      "Invalid proxy configuration. Set HTTP_PROXY/HTTPS_PROXY to a valid proxy URL, then run doctor again.\n",
+    );
+    return 1;
+  }
+  try {
+    const paths = pathsFor(input.values, context);
+    // The unit states its mode; a nonroot service account still runs a system install.
+    const host = context.hostFacts(installModeOf(context.env, paths.mode));
+    const checks = await runChecks({ host, context, paths, ports });
+    const report = doctorReport(host, checks);
+    context.out(
+      input.values["json"] === true ? `${JSON.stringify(report, null, 2)}\n` : renderDoctor(report),
+    );
+    return report.counts.fail > 0 ? 1 : 0;
+  } finally {
+    restoreProxy();
+  }
 }

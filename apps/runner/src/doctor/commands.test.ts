@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { CommandInput } from "../commands";
 import { testContext } from "../testing/context";
@@ -11,6 +11,7 @@ const DEPLOYMENT = { url: "https://a.convex.cloud", siteUrl: "https://a.convex.s
 
 function ports(overrides: Partial<DoctorPorts> = {}): DoctorPorts {
   return {
+    configureProxy: () => () => {},
     run: (command) =>
       command === "git"
         ? { status: 0, stdout: "git version 2.43.0\n" }
@@ -42,6 +43,30 @@ const input = (values: Record<string, string | boolean> = {}): CommandInput => (
 });
 
 describe("volli-runner doctor", () => {
+  it("never leaks invalid proxy values and restores the dispatcher even on a failed probe", async () => {
+    const output = context();
+    const invalid = doctorCommandWith(
+      ports({
+        configureProxy: () => {
+          throw new Error("secret-proxy-password");
+        },
+      }),
+    );
+    expect(await invalid.run(input(), output)).toBe(1);
+    expect(output.stderr()).toContain("Invalid proxy configuration");
+    expect(output.stderr()).not.toContain("secret-proxy-password");
+    const restore = vi.fn();
+    const failed = doctorCommandWith(
+      ports({
+        configureProxy: () => restore,
+        readLink: async () => {
+          throw new Error("probe");
+        },
+      }),
+    );
+    await expect(failed.run(input(), context())).rejects.toThrow("probe");
+    expect(restore).toHaveBeenCalledOnce();
+  });
   it("is the registry row the command table lists", () => {
     expect(doctorCommand.name).toBe("doctor");
     expect(doctorCommand.usage).toContain("--json");

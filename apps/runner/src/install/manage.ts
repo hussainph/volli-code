@@ -21,6 +21,7 @@ import { atomicWrite } from "../shell/write-file";
 import { serviceUnit, UNIT, type InstallLayout } from "./layout";
 import { mustRun, type RunTool } from "./tools";
 import { normalizeReleaseModes } from "./release";
+import { DEFAULT_RELEASE_ORIGIN, updateOrigin } from "./update-origin";
 
 export interface InstallPorts {
   run: RunTool;
@@ -109,6 +110,7 @@ export async function installRunner(
 ): Promise<number> {
   if (ports.platform !== "linux")
     throw new Error("Managed runner installation requires Linux; use the Volli Mac app on macOS.");
+  const releaseOrigin = updateOrigin(context.env["VOLLI_RUNNER_RELEASE_BASE"], context.version);
   const channel = stringOption(input.values, "channel") ?? "stable";
   if (channel !== "stable" && channel !== "canary")
     throw new Error("--channel must be stable or canary.");
@@ -211,6 +213,19 @@ export async function installRunner(
     context.err(`Add ${layout.binDir} to PATH to run volli-runner.\n`);
   const managed = `${JSON.stringify({ version: context.version, release, channel, mode: layout.mode }, null, 2)}\n`;
   changed = replaceFile(join(layout.root, "managed.json"), managed, 0o644) || changed;
+  if (releaseOrigin !== undefined) {
+    const updateFile = join(layout.root, "update.json");
+    if (releaseOrigin === DEFAULT_RELEASE_ORIGIN) {
+      if (existsSync(updateFile)) {
+        rmSync(updateFile);
+        changed = true;
+      }
+    } else {
+      changed =
+        replaceFile(updateFile, `${JSON.stringify({ releaseOrigin }, null, 2)}\n`, 0o644) ||
+        changed;
+    }
+  }
   let unitChanged = false;
   if (ports.systemd) {
     changed = ensureDirectory(layout.unitDir, 0o755, false) || changed;

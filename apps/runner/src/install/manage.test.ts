@@ -228,6 +228,31 @@ describe("install", () => {
     await install();
     expect(lstatSync(release).mode & 0o777).toBe(0o755);
   });
+  it("persists only a validated nondefault bootstrap release origin and preserves manual config", async () => {
+    context = {
+      ...context,
+      env: { VOLLI_RUNNER_RELEASE_BASE: "http://127.0.0.1:8080/prefix/v9.9.9-test" },
+    };
+    await install();
+    const file = join(layout().root, "update.json");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      releaseOrigin: "http://127.0.0.1:8080/prefix/",
+    });
+    await install();
+    context = { ...context, env: {} };
+    await install();
+    expect(existsSync(file)).toBe(true);
+    context = {
+      ...context,
+      env: {
+        VOLLI_RUNNER_RELEASE_BASE:
+          "https://github.com/hussainph/volli-code/releases/download/v9.9.9-test",
+      },
+    };
+    await install();
+    expect(existsSync(file)).toBe(false);
+    await install();
+  });
   it("copies proxy settings without exposing them in JSON; no-systemd prints an unprivileged foreground command", async () => {
     context = testContext({ root, env: { HTTPS_PROXY: "https://secret@proxy" } });
     ports.systemd = false;
@@ -573,7 +598,7 @@ describe("uninstall", () => {
     expect(
       calls.some((call) => call.command === "runuser" && call.args.includes("--revoke-only")),
     ).toBe(true);
-    ports.run = () => ({ status: 127, stdout: "" });
+    ports.run = (command) => ({ status: command === "id" ? 0 : 127, stdout: "" });
     await expect(
       uninstallRunner(input({ purge: true, yes: true }), context, sys, ports),
     ).rejects.toThrow("Install procps");
@@ -585,6 +610,45 @@ describe("uninstall", () => {
     writeFileSync(join(at.dataDir, "copy/.git"), "gitdir: elsewhere");
     expect(await uninstallRunner(input({ purge: true, yes: true }), context, at, ports)).toBe(0);
     expect(calls.some((call) => call.command === "git")).toBe(true);
+  });
+  it("allows keep-data removal without a service account but refuses an unsafe purge", async () => {
+    await install();
+    const at = layout();
+    writeFileSync(join(at.configDir, "credential"), "sealed");
+    ports.run = (command, args) => {
+      calls.push({ command, args });
+      return { status: command === "id" ? 1 : 0, stdout: "" };
+    };
+    const sys = { ...at, mode: "system" as const };
+    await expect(
+      uninstallRunner(input({ purge: true, yes: true }), context, sys, ports),
+    ).rejects.toThrow("account is missing");
+    expect(existsSync(at.dataDir)).toBe(true);
+    calls.length = 0;
+    expect(await uninstallRunner(input(), context, sys, ports)).toBe(0);
+    expect(context.stderr()).toContain("remote unlink was skipped");
+    expect(calls.some((call) => call.command === "runuser")).toBe(false);
+  });
+  it("names managed directories left nonempty rather than recursively deleting them as root", async () => {
+    await install();
+    const at = layout();
+    writeFileSync(join(at.dataDir, "unemptied"), "kept");
+    ports.run = (command) => ({
+      status: command === "pgrep" ? 1 : 0,
+      stdout: "other-account-home",
+    });
+    await expect(
+      uninstallRunner(input({ purge: true, yes: true }), context, { ...at, mode: "system" }, ports),
+    ).rejects.toThrow("Managed directory was not emptied");
+    expect(readFileSync(join(at.dataDir, "unemptied"), "utf8")).toBe("kept");
+  });
+  it("runs the owner helper for a config-only system installation", async () => {
+    const at = { ...layout(), mode: "system" as const };
+    mkdirSync(at.configDir, { recursive: true });
+    expect(await uninstallRunner(input(), context, at, ports)).toBe(0);
+    expect(
+      calls.some((call) => call.command === "runuser" && call.args.includes("--revoke-only")),
+    ).toBe(true);
   });
   it("does not remove an absent account or a user account", async () => {
     ports.systemd = false;

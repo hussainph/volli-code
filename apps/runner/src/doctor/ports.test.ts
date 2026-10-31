@@ -301,6 +301,7 @@ describe("reading the link on disk", () => {
 
 it("gives the checks the live box", () => {
   expect(Object.keys(LIVE_DOCTOR_PORTS).toSorted()).toEqual([
+    "configureProxy",
     "exists",
     "freeBytes",
     "reach",

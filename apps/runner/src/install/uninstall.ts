@@ -12,6 +12,7 @@ import { UNIT, type InstallLayout } from "./layout";
 import { asRunner, systemctl, type InstallPorts } from "./manage";
 import { mustRun } from "./tools";
 import { workAtRisk } from "./work";
+import { purgeOwnedTree } from "./purge";
 
 /** Child-process seam: runs under the credential owner's uid, after the service stops. */
 export async function revokeRunner(
@@ -56,8 +57,13 @@ export async function revokeRunner(
       // owner empties it; root may only rmdir the now-empty managed directories.
       for (const path of [paths.dataDir, paths.configDir]) {
         if (existsSync(path)) {
-          for (const name of readdirSync(path))
-            rmSync(join(path, name), { recursive: true, force: true });
+          try {
+            for (const name of readdirSync(path)) purgeOwnedTree(join(path, name));
+          } catch {
+            throw new Error(
+              `Could not purge ${path}. Restore this service user's write access to the remaining contents, then rerun uninstall --purge.`,
+            );
+          }
         }
       }
     }
@@ -112,7 +118,19 @@ export async function uninstallRunner(
   if (ports.systemd && existsSync(unit)) {
     mustRun(ports.run, "systemctl", systemctl(layout, ["disable", "--now", UNIT]));
   }
-  if (layout.mode === "system" && input.values.purge) {
+  const hasServiceAccount =
+    layout.mode === "system" && ports.run("id", ["-u", "volli"]).status === 0;
+  if (
+    layout.mode === "system" &&
+    !hasServiceAccount &&
+    input.values.purge &&
+    (existsSync(layout.dataDir) || existsSync(layout.configDir))
+  ) {
+    throw new Error(
+      `The volli account is missing. Restore it with the data directory's original uid, then rerun uninstall --purge. Data is kept at ${layout.dataDir}.`,
+    );
+  }
+  if (hasServiceAccount && input.values.purge) {
     const processes = ports.run("pgrep", ["-u", "volli"]).status;
     if (processes === 0)
       throw new Error(
@@ -124,8 +142,8 @@ export async function uninstallRunner(
       );
   }
   if (
-    existsSync(join(layout.configDir, LINK_FILE_NAME)) ||
-    (layout.mode === "system" && (existsSync(layout.dataDir) || existsSync(layout.configDir)))
+    (layout.mode === "user" && existsSync(join(layout.configDir, LINK_FILE_NAME))) ||
+    (hasServiceAccount && (existsSync(layout.dataDir) || existsSync(layout.configDir)))
   ) {
     asRunner(
       layout,
@@ -141,6 +159,15 @@ export async function uninstallRunner(
         ...(layout.mode === "system" && input.values.purge ? ["--purge", "--yes"] : []),
       ],
       true,
+    );
+  }
+  if (
+    layout.mode === "system" &&
+    !hasServiceAccount &&
+    existsSync(join(layout.configDir, LINK_FILE_NAME))
+  ) {
+    context.err(
+      "The service account is missing; remote unlink was skipped. Remove this runner in Volli → Settings → Runners.\n",
     );
   }
   // A foreground process is not stopped by systemctl: never delete beneath it.
@@ -168,7 +195,7 @@ export async function uninstallRunner(
   }
   if (input.values.purge) {
     let removeAccount = false;
-    if (layout.mode === "system" && ports.run("id", ["-u", "volli"]).status === 0) {
+    if (hasServiceAccount) {
       const home = mustRun(ports.run, "getent", ["passwd", "volli"]).stdout.trim().split(":")[5];
       if (home === layout.dataDir) {
         removeAccount = true;
@@ -177,8 +204,16 @@ export async function uninstallRunner(
     changed = existsSync(layout.dataDir) || existsSync(layout.configDir) || changed;
     for (const path of [layout.dataDir, layout.configDir]) {
       if (layout.mode === "system") {
-        if (existsSync(path)) rmdirSync(path);
-      } else rmSync(path, { recursive: true, force: true });
+        if (existsSync(path)) {
+          try {
+            rmdirSync(path);
+          } catch {
+            throw new Error(
+              `Managed directory was not emptied: ${path}. Restore the service user's write access and rerun uninstall --purge.`,
+            );
+          }
+        }
+      } else if (existsSync(path)) purgeOwnedTree(path);
     }
     if (removeAccount) mustRun(ports.run, "userdel", ["volli"]);
   }
