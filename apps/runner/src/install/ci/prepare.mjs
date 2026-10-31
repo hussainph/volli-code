@@ -48,17 +48,7 @@ copyFileSync(
   join(import.meta.dirname, "runtime-fixture.mjs"),
   join(release, "lib/install-runtime-fixture.mjs"),
 );
-writeFileSync(
-  join(release, "bin/volli-runner"),
-  `#!/bin/sh
-set -eu
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-if [ "\${1-}" = run ]; then
-  exec "$HERE/node" "$HERE/../lib/install-runtime-fixture.mjs" "$@"
-fi
-exec "$HERE/node" "$HERE/../lib/runner/runner.cjs" "$@"
-`,
-);
+copyFileSync(join(import.meta.dirname, "wrapper.sh"), join(release, "bin/volli-runner"));
 for (const file of ["node", "volli-runner"]) chmodSync(join(release, "bin", file), 0o755);
 const version = JSON.parse(readFileSync(join(repository, "package.json"), "utf8")).version;
 writeFileSync(

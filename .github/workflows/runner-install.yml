@@ -43,6 +43,9 @@ jobs:
       - name: Build the real runner CLI
         run: vp run --filter @volli/runner build
 
+      - name: Test the fixture launcher through installed symlinks
+        run: node --test --test-concurrency="$VOLLI_CONCURRENCY_HINT" apps/runner/src/install/ci/wrapper.test.mjs
+
       - name: Stage the installer payload with a labelled unlinked runtime fixture
         run: node apps/runner/src/install/ci/prepare.mjs "$RUNNER_TEMP/runner-install-payload"
 
