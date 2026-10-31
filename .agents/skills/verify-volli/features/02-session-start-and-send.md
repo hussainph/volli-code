@@ -39,6 +39,27 @@ volli-drive screenshot vd-xxxx --name ticket-chat
 - The ticket screen has **two** `New chat` buttons: one in the strip and one in the rail's Sessions panel (e2e/lib/smoke-kit.mjs:1561-1584). Either starts a chat. Prefer the one next to tablist `Ticket tabs`.
 - `Message` stays disabled until the composer is ready. If `type` is refused, `wait` and re-snapshot.
 
+## Failed tool disclosure
+Verified live (VC-970, `vd-de6e23`): a project chat sent through the composer, with
+only the model HTTP boundary scripted to call the real `bash` tool
+(`printf 'diagnostic line %s\\n' {1..80} >&2; exit 2`). The isolated instance used
+`--model env` with the loopback fake provider's Azure environment, not real credentials.
+
+- The failed bundle opens to a compact row with a failure glyph and **Show details**;
+  diagnostics do not appear beneath the closed row.
+- Click **Show details**: the command and stored error appear in monospace output
+  frames. **Hide details** removes them again. This is a layout fix; the runtime's
+  existing diagnostic shortening is unchanged.
+- Host reads: `session peek` records `[bash]` between the user message and final
+  reply; SQL records one `turn.started`, one `turn.completed`, and two
+  `transcript.referenced` events. Doctor reported zero keychain violations.
+- Evidence: snapshots 7–9 and screenshots `failed-collapsed`, `failed-expanded`,
+  `failed-recollapsed`; snapshots 15–16 and `failed-light-collapsed` /
+  `failed-light-expanded` cover light appearance after returning from Settings.
+  All are in that instance's evidence directory. Failed Code Mode
+  pictures retaining their error text are covered by the real-codec renderer test,
+  not this live path.
+
 ## Idle reattach with existing history
 Mapped follow-up path (not covered by the first-send live proof):
 1. Open an existing Ticket or Project chat that has a completed turn and no live executor. Keep its previous user/assistant messages visible.
