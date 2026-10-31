@@ -45,6 +45,8 @@ export interface RunnerRow {
   readonly status: string;
   readonly statusReason: string | null;
   readonly statusChangedAt: number;
+  /** Absent in older read projections; do not invent a version for them. */
+  readonly version?: string;
 }
 
 export type Loaded<Value> =

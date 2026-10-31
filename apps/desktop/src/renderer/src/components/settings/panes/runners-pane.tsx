@@ -48,7 +48,17 @@ import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { toastError } from "@renderer/lib/toast";
 
+import { cloudLaunchNow } from "@renderer/stores/launch";
+import { useUpdateStore } from "@renderer/stores/update";
+import { AddRunnerSheet } from "./add-runner-sheet";
+import { AlwaysOnRunnerSheet } from "./always-on-runner-sheet";
+import { LinkRunnerSheet } from "./link-runner-sheet";
+import { runnerSetup } from "./runner-setup";
+import { runnerInstallTarget } from "./runner-install-target";
 import { RunnerAvailability } from "./runner-availability";
+
+// Public build metadata only; no deployment credential reaches the renderer.
+declare const VOLLI_RUNNER_INSTALL_SITE_URL: string | null;
 import {
   runnerStatus,
   thisMacRecovery,
@@ -84,6 +94,24 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
   const { thisMac, runners, commands, retry } = useRunners(props);
   const [removing, setRemoving] = React.useState<Removing | null>(null);
   const [confirming, setConfirming] = React.useState(false);
+  const [sheet, setSheet] = React.useState<"add" | "link" | "always-on" | null>(null);
+  const sheetOpener = React.useRef<HTMLButtonElement | null>(null);
+  const restoreFocus = React.useCallback(() => {
+    sheetOpener.current?.focus();
+  }, []);
+  const { current } = props;
+  const setup = React.useMemo(() => runnerSetup(current), [current]);
+  const appVersion = useUpdateStore((state) => state.state?.currentVersion ?? null);
+  const launch = cloudLaunchNow();
+  const siteUrl = launch?.siteUrl ?? null;
+  const packagedSite =
+    typeof VOLLI_RUNNER_INSTALL_SITE_URL === "undefined" ? null : VOLLI_RUNNER_INSTALL_SITE_URL;
+  const installTarget = runnerInstallTarget({
+    appVersion,
+    siteUrl,
+    packagedSiteUrl: packagedSite,
+    deployment: launch?.deployment,
+  });
   const snapshot = thisMac.kind === "ready" ? thisMac.value : null;
 
   const failed = runners.kind === "failed" || thisMac.kind === "failed";
@@ -117,7 +145,60 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
           </>
         )}
       </PrefSection>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={installTarget === null}
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("add");
+          }}
+        >
+          Add a runner
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("link");
+          }}
+        >
+          Link a runner
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={installTarget === null}
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("always-on");
+          }}
+        >
+          Get an always-on runner
+        </Button>
+      </div>
       <RunnerAvailability />
+      {sheet === "link" ? (
+        <LinkRunnerSheet setup={setup} restoreFocus={restoreFocus} onClose={() => setSheet(null)} />
+      ) : null}
+      {sheet === "add" && installTarget !== null ? (
+        <AddRunnerSheet
+          setup={setup}
+          {...installTarget}
+          restoreFocus={restoreFocus}
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
+      {sheet === "always-on" && installTarget !== null ? (
+        <AlwaysOnRunnerSheet
+          setup={setup}
+          {...installTarget}
+          restoreFocus={restoreFocus}
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -266,7 +347,7 @@ function RunnerItem({
   return (
     <ListRow
       data-testid={`runner-${runner.id}`}
-      density="row"
+      density={runner.version ? "two-line" : "row"}
       leading={<KindGlyph kind={runner.kind} />}
       primary={
         editing ? (
@@ -285,6 +366,7 @@ function RunnerItem({
         )
       }
       primaryTrailing={thisMac ? <Badge variant="outline">This Mac</Badge> : undefined}
+      secondary={runner.version ? `Version ${runner.version}` : undefined}
       trailing={<Health state={status.state}>{status.label}</Health>}
       actions={
         <DropdownMenu>
