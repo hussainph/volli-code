@@ -466,6 +466,23 @@ jobs:
       - name: Build desktop pipeline
         run: vp run --filter @volli/desktop build
 
+      # The runner's one-file bundle (apps/runner), then the bundle itself on
+      # this Linux runner: its version; `status` on an empty box, which is not
+      # serving (exit 3); and `unlink` over a data directory, which takes the
+      # instance lock and so loads better-sqlite3 from the workspace install.
+      - name: Build and probe the runner bundle
+        run: |
+          vp run --filter @volli/runner build
+          runner=(node apps/runner/dist/runner.cjs)
+          box=(--data-dir "$RUNNER_TEMP/runner/data" --config-dir "$RUNNER_TEMP/runner/config")
+          "${runner[@]}" --version
+          code=0
+          "${runner[@]}" status "${box[@]}" || code=$?
+          test "$code" -eq 3
+          mkdir -m 700 -p "$RUNNER_TEMP/runner/data"
+          "${runner[@]}" unlink "${box[@]}"
+          test -e "$RUNNER_TEMP/runner/data/runner.lock"
+
       - name: Build public sites
         run: |
           vp run --filter @volli/website build
@@ -642,9 +659,9 @@ jobs:
   # in this job. And `--filter` cannot be combined with `-r`. A new package
   # under apps/ or packages/ is picked up with no edit here; one without a
   # `test:coverage` script is skipped, as `-r` skipped apps/docs.
-  # This IS the Linux host lane: plain Node/Vitest, not Electron. Today it
-  # covers session-engine, session-rpc, agent-runtime, shared and host-core.
-  # Future host-protocol and apps/hostd suites join with test:coverage.
+  # This IS the Linux host lane: plain Node/Vitest, not Electron. It covers
+  # every package with a `test:coverage` script, apps/hostd and apps/runner
+  # among them.
   # Native host builds must stay Node-ABI (see docs/development/host-linux.md).
   test-packages:
     name: Test (packages)

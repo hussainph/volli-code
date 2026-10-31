@@ -1,0 +1,8 @@
+#!/bin/sh
+# The `volli` a source-booted runner puts first on its Sessions' PATH: the
+# workspace's CLI bundle, under the `node` on PATH. The artifact ships its
+# own bin/volli beside its own Node instead. Build the bundle first:
+#   pnpm --filter @volli/runner --filter @volli/cli run build
+# apps/runner/src/shell/runtime-paths.ts; README.md, "Running from source".
+here=$(dirname "$(readlink -f "$0")")
+exec node "$here/../../../packages/cli/dist/volli.cjs" "$@"

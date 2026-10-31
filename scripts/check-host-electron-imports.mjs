@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Keep Electron out of workspace packages, the Linux host app, convex/ and
- * the model gateway Worker.
+ * Keep Electron out of workspace packages, the Linux host app, the runner,
+ * convex/ and the model gateway Worker.
  *
- *   node scripts/check-host-electron-imports.mjs             # gate packages/*, apps/hostd, convex/ and apps/gateway
+ *   node scripts/check-host-electron-imports.mjs             # gate packages/*, apps/hostd, apps/runner, convex/ and apps/gateway
  *   node scripts/check-host-electron-imports.mjs --self-test # scanner + failing CLI fixture
  *   node scripts/check-host-electron-imports.mjs --report    # inventory main-process reachability
  *
@@ -122,6 +122,8 @@ function enumerateGuardFiles(repoRoot) {
     // The headless host (VC-562). Required: deleting or moving it must fail
     // the guard rather than silently shrink what it checks.
     ...sourceFilesBelow(repoRoot, "apps/hostd"),
+    // The runner (`volli-runner`), hostd's successor on a Linux box. Required too.
+    ...sourceFilesBelow(repoRoot, "apps/runner"),
     // The Convex backend (VC-882): its functions run on Convex and its test
     // fixture under plain Node, so neither may reach Electron. Required too.
     ...sourceFilesBelow(repoRoot, "convex"),
@@ -130,7 +132,7 @@ function enumerateGuardFiles(repoRoot) {
   ];
   const unique = [...new Set(files)].toSorted();
   if (unique.length === 0)
-    fail("no source files found under packages/, apps/hostd, convex/ or apps/gateway");
+    fail("no source files found under packages/, apps/hostd, apps/runner, convex/ or apps/gateway");
   return unique;
 }
 
@@ -890,6 +892,7 @@ function selfTest() {
     "apps/desktop/src/main/worktree-runtime.ts",
     "convex/functions/leak.ts",
     "apps/gateway/src/leak.ts",
+    "apps/runner/src/leak.ts",
   ]) {
     if (!cliOutput.includes(expected)) failures.push(`fixture CLI output omitted ${expected}`);
   }
