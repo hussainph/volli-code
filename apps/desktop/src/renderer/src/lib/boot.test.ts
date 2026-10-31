@@ -1665,6 +1665,66 @@ describe("a cloud launch's boot (VC-889)", () => {
     expect(useCloudWorkspaceStore.getState().localProjects).toBe(2);
   });
 
+  it("restores a pending cloud start after its project arrives, retaining another account's intent", async () => {
+    const pending = (accountScope: string) => ({
+      text: "",
+      attachments: [],
+      held: [],
+      touchedAt: Date.now(),
+      provisional: {
+        projectId: "cloud-project",
+        ticketId: null,
+        title: null,
+        operationId: "request",
+        phase: "draft",
+        runnerStart: {
+          accountScope,
+          intent: {
+            clientRequestId: "request",
+            projectId: "cloud-project",
+            ticketId: null,
+            runnerId: "box",
+            body: "{}",
+            model: null,
+          },
+        },
+      },
+    });
+    useChatSessionsStore.setState({ openTabs: {} });
+    const gateway = fakeGateway({
+      bootstrap: vi.fn(async () => ({
+        ok: true as const,
+        data: payload({
+          appState: {
+            [CHAT_DRAFTS_APP_STATE_KEY]: JSON.stringify({
+              version: 1,
+              state: {
+                drafts: {
+                  mine: pending(JSON.stringify([CLOUD.backendUrl, CLOUD.userId])),
+                  other: pending("other-account"),
+                },
+              },
+            }),
+          },
+        }),
+      })),
+    });
+    await boot(
+      gateway,
+      fakeStorage(),
+      async () => true,
+      async () => CLOUD,
+    );
+    expect(useChatSessionsStore.getState().openTabs).toEqual({});
+    useProjectsStore.setState({ projects: [workspace("cloud-project")] });
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ "cloud-project": ["mine"] });
+    expect(useChatDraftsStore.getState().drafts.other).toBeDefined();
+    const cleanup = vi
+      .mocked(window.addEventListener)
+      .mock.calls.find(([event]) => event === "pagehide")![1] as () => void;
+    cleanup();
+  });
+
   it("opens a Workspace joined at sign-in instead of the last selection", async () => {
     const withSaved = fakeGateway({
       bootstrap: vi.fn(async () => ({ ok: true as const, data: payload({ appState: saved }) })),

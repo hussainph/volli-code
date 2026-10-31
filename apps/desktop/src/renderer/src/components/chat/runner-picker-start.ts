@@ -1,4 +1,5 @@
-import { cloudMessageSubmit, type ModelSelection } from "@volli/shared";
+import { cloudMessageSubmit } from "@volli/shared";
+import type { SessionStartOnArgs, SessionStartOnResult } from "@volli/shared/cloud";
 import { queuedWireMessage, type QueuedMessage } from "@volli/session-presentation";
 import { cloudLaunchNow } from "@renderer/stores/launch";
 import { makeFunctionReference } from "convex/server";
@@ -9,14 +10,7 @@ import { CHAT_DRAFTS_APP_STATE_KEY, useChatDraftsStore } from "@renderer/stores/
 import { appStateStorage, flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 
 /** Persist this intent before submitting; a retry must keep its request id. */
-export type RunnerStartIntent = {
-  clientRequestId: string;
-  runnerId: string;
-  projectId: string;
-  ticketId: string | null;
-  body: string;
-  model: ModelSelection | null;
-};
+export type RunnerStartIntent = Pick<SessionStartOnArgs, keyof SessionStartOnArgs>;
 
 export function runnerStartAccountScope(): string | null {
   const launch = cloudLaunchNow();
@@ -56,7 +50,7 @@ export function runnerStartText(intent: RunnerStartIntent): string {
   }
 }
 
-const startOn = makeFunctionReference<"mutation", RunnerStartIntent, { sessionId: string }>(
+const startOn = makeFunctionReference<"mutation", RunnerStartIntent, SessionStartOnResult>(
   "sessionStarts:startOn",
 );
 

@@ -14,6 +14,7 @@ export function followRunnerDraftTabs(): () => void {
       ([, draft]) => draft.provisional?.runnerStart?.accountScope === scope,
     ),
   );
+  if (Object.keys(pending).length === 0) return () => {};
   const restore = () => {
     if (runnerStartAccountScope() !== scope) return;
     const projects = new Set(useProjectsStore.getState().projects.map(({ id }) => id));

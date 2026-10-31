@@ -466,8 +466,22 @@ function readRunnerStart(value: unknown): ProvisionalChatDraft["runnerStart"] {
     typeof row.body !== "string"
   )
     return undefined;
-  const model = row.model === null ? null : parseSessionModel(row.model);
-  if (row.model !== null && model === null) return undefined;
+  let model: RunnerStartIntent["model"] = null;
+  if (row.model !== null) {
+    const candidate = row.model;
+    if (
+      !isPlainRecord(candidate) ||
+      typeof candidate.providerId !== "string" ||
+      typeof candidate.modelId !== "string" ||
+      (candidate.reasoningLevel !== null && typeof candidate.reasoningLevel !== "string")
+    )
+      return undefined;
+    model = {
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+      reasoningLevel: candidate.reasoningLevel,
+    };
+  }
   return {
     accountScope: value.accountScope,
     intent: {

@@ -1,16 +1,12 @@
 import type { ModelAccessModel } from "@volli/shared";
+import type { RunnerPickerRow, RunnerPower } from "@volli/shared/cloud";
 
 /** The person's composer projection; presence vocabulary stays open on read. */
-export interface ComposerRunner {
+export interface ComposerRunner extends Omit<RunnerPickerRow, "id" | "kind" | "status" | "power"> {
   id: string;
-  name: string;
   kind: string;
   status: string;
-  statusChangedAt: number;
-  power?: { source: "ac" | "battery" | "unknown"; alwaysOn: boolean };
-  providers: string[];
-  version: string;
-  upgradeRequired: boolean;
+  power?: RunnerPower;
 }
 
 export interface ComposerRunners {

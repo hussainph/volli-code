@@ -1,21 +1,11 @@
 import * as React from "react";
+import type { SessionStartStatus } from "@volli/shared/cloud";
 import { makeFunctionReference } from "convex/server";
 import { followCloudSession } from "@renderer/lib/cloud-client";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
 import { Button } from "@renderer/components/ui/button";
 
-export interface RunnerStartStatus {
-  sessionId: string;
-  state: "queued" | "starting" | "started" | "failed";
-  runner: {
-    id: string;
-    name: string;
-    kind: string;
-    status: string;
-    statusChangedAt: number;
-  } | null;
-  failure: { code: string; detail: string } | null;
-}
+export type RunnerStartStatus = SessionStartStatus;
 const statusQuery = makeFunctionReference<"query", { sessionId: string }, RunnerStartStatus | null>(
   "sessionStarts:status",
 );

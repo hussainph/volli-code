@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { RunnerPickerAnswer } from "@volli/shared/cloud";
 import { DesktopIcon } from "@phosphor-icons/react/dist/csr/Desktop";
 import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
 import { makeFunctionReference } from "convex/server";
@@ -62,7 +63,7 @@ const subscribePreference = (listener: () => void) => {
 };
 
 // The composer reads only the current person's runners, scoped to this project.
-const forComposer = makeFunctionReference<"query", { projectId: string }, ComposerRunners>(
+const forComposer = makeFunctionReference<"query", { projectId: string }, RunnerPickerAnswer>(
   "runnerPicker:forComposer",
 );
 
