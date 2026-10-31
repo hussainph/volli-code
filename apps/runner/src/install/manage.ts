@@ -14,11 +14,13 @@ import {
 import { dirname, join, resolve } from "node:path";
 
 import type { CommandContext, CommandInput } from "../commands";
+import { LINK_FILE_NAME } from "../link/file-store";
 import { stringOption } from "../shell/paths";
 import { checkRunnerStatus } from "../shell/runner-status";
 import { atomicWrite } from "../shell/write-file";
 import { serviceUnit, UNIT, type InstallLayout } from "./layout";
 import { mustRun, type RunTool } from "./tools";
+import { normalizeReleaseModes } from "./release";
 
 export interface InstallPorts {
   run: RunTool;
@@ -55,11 +57,11 @@ export function asRunner(
   );
 }
 
-function ensureDirectory(path: string, mode: number): boolean {
+function ensureDirectory(path: string, mode: number, managed = true): boolean {
   if (existsSync(path)) {
     if (!lstatSync(path).isDirectory())
       throw new Error(`${path} must be a directory, not a symlink.`);
-    if ((lstatSync(path).mode & 0o777) === mode) return false;
+    if (!managed || (lstatSync(path).mode & 0o777) === mode) return false;
   }
   mkdirSync(path, { recursive: true, mode });
   chmodSync(path, mode);
@@ -80,17 +82,7 @@ function replaceFile(path: string, text: string, mode: number): boolean {
 
 /** Refuse someone else's executable rather than silently replacing it. */
 function replaceLink(path: string, target: string, allowedRoot: string): boolean {
-  if (
-    existsSync(path) ||
-    (() => {
-      try {
-        lstatSync(path);
-        return true;
-      } catch {
-        return false;
-      }
-    })()
-  ) {
+  if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) {
     if (!lstatSync(path).isSymbolicLink())
       throw new Error(`${path} already exists and is not a managed symlink.`);
     const old = readlinkSync(path);
@@ -181,9 +173,10 @@ export async function installRunner(
     // Only these directories, never recursive chown of working copies or operator files.
     mustRun(ports.run, "chown", ["volli:volli", layout.dataDir, layout.configDir]);
   }
-  for (const path of [layout.root, join(layout.root, "releases"), layout.binDir]) {
+  for (const path of [layout.root, join(layout.root, "releases")]) {
     changed = ensureDirectory(path, 0o755) || changed;
   }
+  changed = ensureDirectory(layout.binDir, 0o755, false) || changed;
   const release = join(layout.root, "releases", `${manifest.version}-${manifest.revision}`);
   if (existsSync(release)) {
     if (
@@ -198,12 +191,14 @@ export async function installRunner(
     const stage = `${release}.${process.pid}.tmp`;
     try {
       cpSync(source, stage, { recursive: true, verbatimSymlinks: true });
+      normalizeReleaseModes(stage);
       renameSync(stage, release);
     } finally {
       rmSync(stage, { recursive: true, force: true });
     }
     changed = true;
   }
+  changed = normalizeReleaseModes(release) || changed;
   const activated = replaceLink(join(layout.root, "current"), release, layout.root);
   changed = activated || changed;
   changed =
@@ -218,7 +213,7 @@ export async function installRunner(
   changed = replaceFile(join(layout.root, "managed.json"), managed, 0o644) || changed;
   let unitChanged = false;
   if (ports.systemd) {
-    changed = ensureDirectory(layout.unitDir, 0o755) || changed;
+    changed = ensureDirectory(layout.unitDir, 0o755, false) || changed;
     // Proxy URLs can contain a password; the unit is not world-readable.
     unitChanged = replaceFile(join(layout.unitDir, UNIT), unit, 0o600);
     changed = unitChanged || changed;
@@ -243,7 +238,8 @@ export async function installRunner(
     }
   }
   const paths = ["--data-dir", layout.dataDir, "--config-dir", layout.configDir];
-  if (!input.values["no-link"] && !existsSync(join(layout.configDir, "credential"))) {
+  let justLinked = false;
+  if (!input.values["no-link"] && !existsSync(join(layout.configDir, LINK_FILE_NAME))) {
     const args = ["link", ...paths];
     for (const name of ["name", "server", "site"]) {
       const value = stringOption(input.values, name);
@@ -255,6 +251,7 @@ export async function installRunner(
         ? context
         : { ...context, env: { ...context.env, VOLLI_RUNNER_TOKEN: token } };
     asRunner(layout, linkContext, ports.run, args, true);
+    justLinked = true;
     changed = true;
   }
   if (input.values["no-start"] || !ports.systemd) {
@@ -272,6 +269,7 @@ export async function installRunner(
   const restart =
     activated ||
     unitChanged ||
+    justLinked ||
     (before.status !== null && before.status.version !== context.version);
   const enabled = ports.run("systemctl", systemctl(layout, ["is-enabled", UNIT])).status === 0;
   if (!enabled) changed = true;
@@ -294,8 +292,9 @@ export async function installRunner(
     await context.sleep(1000);
   }
   const last = await checkRunnerStatus(layout.dataDir, context.statusProbes);
+  const state = last.status?.state;
   context.err(
-    `Runner did not come online at ${context.version}: ${last.detail ?? last.status!.state}. Last 20 journal lines:\n`,
+    `Runner did not come online at ${context.version}: ${last.detail ?? state}. Last 20 journal lines:\n`,
   );
   ports.run(
     "journalctl",

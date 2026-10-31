@@ -12,6 +12,7 @@ Group=volli
 StateDirectory=volli-runner
 StateDirectoryMode=0700
 UMask=0077
+Environment=VOLLI_RUNNER_SERVICE=1
 WorkingDirectory=/var/lib/volli-runner
 Environment=HOME=/var/lib/volli-runner
 Environment=VOLLI_RUNNER_INSTALL_MODE=system
@@ -26,6 +27,8 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=full
+# Credential rotation and the secrets key are written by the service uid.
+ReadWritePaths=/etc/volli-runner
 ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes

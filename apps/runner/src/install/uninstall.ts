@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readlinkSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { createRunnerTokenSource } from "@volli/host-core/cloud-runner";
+import { createCloudFunctionsClient, createRunnerTokenSource } from "@volli/host-core/cloud-runner";
 
 import type { CommandContext, CommandInput } from "../commands";
 import { fileRunnerLinkStore, LINK_FILE_NAME, LINK_KEY_FILE_NAME } from "../link/file-store";
@@ -32,14 +32,12 @@ export async function revokeRunner(
         });
         const token = await source.token();
         if (token !== null) {
-          const response = await request(`${stored.deployment.url}/api/mutation`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ path: "runners:unlinkSelf", args: {}, format: "json" }),
-            signal: AbortSignal.timeout(15_000),
+          const backend = createCloudFunctionsClient({
+            url: stored.deployment.url,
+            fetch: request,
+            timeoutMs: 15_000,
           });
-          const body = (await response.json()) as { status?: string };
-          if (!response.ok || body.status !== "success") throw new Error("unlink failed");
+          await backend.call("mutation", "runners:unlinkSelf", {}, token);
         }
       }
     } catch {
@@ -64,7 +62,12 @@ export async function uninstallRunner(
     throw new Error("Choose --keep-data or --purge, not both.");
   if (ports.platform !== "linux") throw new Error("Managed uninstall requires Linux.");
   if (input.values.purge) {
-    for (const path of workAtRisk(layout.dataDir, ports.run))
+    // Working copies are agent-controlled. Never interpret their git config as root.
+    const probeGit: typeof ports.run = (command, args) =>
+      layout.mode === "system"
+        ? ports.run("runuser", ["-u", "volli", "--", command, ...args])
+        : ports.run(command, args);
+    for (const path of workAtRisk(layout.dataDir, probeGit))
       context.err(`Uncommitted, unpushed or unverifiable work: ${path}\n`);
     const warning = `Permanently delete working copies, local model logins and secrets under ${layout.dataDir} and ${layout.configDir}?`;
     if (!input.values.yes && !ports.confirmPurge(warning)) {
@@ -134,14 +137,22 @@ export async function uninstallRunner(
     }
   }
   if (input.values.purge) {
+    let removeAccount = false;
+    if (layout.mode === "system" && ports.run("id", ["-u", "volli"]).status === 0) {
+      const home = mustRun(ports.run, "getent", ["passwd", "volli"]).stdout.trim().split(":")[5];
+      if (home === layout.dataDir) {
+        if (ports.run("pgrep", ["-u", "volli"]).status === 0) {
+          throw new Error(
+            "Stop the remaining processes owned by volli, then rerun uninstall --purge. Data has not been purged.",
+          );
+        }
+        removeAccount = true;
+      } else context.err("Kept the volli account: its home belongs to another installation.\n");
+    }
     changed = existsSync(layout.dataDir) || existsSync(layout.configDir) || changed;
     rmSync(layout.dataDir, { recursive: true, force: true });
     rmSync(layout.configDir, { recursive: true, force: true });
-    if (layout.mode === "system" && ports.run("id", ["-u", "volli"]).status === 0) {
-      const home = mustRun(ports.run, "getent", ["passwd", "volli"]).stdout.trim().split(":")[5];
-      if (home === layout.dataDir) mustRun(ports.run, "userdel", ["volli"]);
-      else context.err("Kept the volli account: its home belongs to another installation.\n");
-    }
+    if (removeAccount) mustRun(ports.run, "userdel", ["volli"]);
   }
   context.out(`${JSON.stringify({ changed, keptData: !input.values.purge })}\n`);
   if (!input.values.purge)

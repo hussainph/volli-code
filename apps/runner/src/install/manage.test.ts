@@ -94,6 +94,12 @@ async function install(values: CommandInput["values"] = {}) {
   );
 }
 
+const directives = (text: string) =>
+  text
+    .split("\n")
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .map((line) => line.replaceAll('"', ""));
+
 describe("managed layout and units", () => {
   it("lays out system/default user/XDG modes without relative XDG paths", () => {
     expect(layout()).toMatchObject({
@@ -144,9 +150,14 @@ describe("managed layout and units", () => {
       expect(unit).toContain(line);
     expect(unit).not.toContain("Requires=");
     expect(unit).toContain("ExecStart=:");
+    expect(unit).toContain("Environment=VOLLI_RUNNER_SERVICE=1");
+    expect(serviceUnit(layout(), {})).toContain("Environment=VOLLI_RUNNER_SERVICE=1");
     const user = serviceUnit(layout(), {});
     expect(user).not.toContain("User=volli");
     expect(user).not.toContain("ProtectHome=yes");
+    expect(user).not.toContain("PrivateTmp=yes");
+    expect(user).not.toContain("ProtectSystem=");
+    expect(unit).toContain(`ReadWritePaths="${sys.configDir}"`);
     expect(user).toContain("WantedBy=default.target");
     expect(systemctl(sys, ["start"])).toEqual(["start"]);
     expect(systemctl(layout(), ["start"])).toEqual(["--user", "start"]);
@@ -164,6 +175,8 @@ describe("managed layout and units", () => {
     ])
       expect(shipped).toContain(line);
     expect(shipped).not.toContain("Requires=");
+    const defaults = installLayout(input(), { ...context, uid: 0 });
+    expect(directives(shipped)).toEqual(directives(serviceUnit(defaults, {})));
   });
 });
 
@@ -187,6 +200,32 @@ describe("install", () => {
     chmodSync(at.configDir, 0o755);
     await install();
     expect(lstatSync(at.configDir).mode & 0o777).toBe(0o700);
+  });
+  it("makes release code readable despite umask077, without loosening shared directories or symlink targets", async () => {
+    const at = layout();
+    mkdirSync(at.binDir, { recursive: true, mode: 0o700 });
+    mkdirSync(at.unitDir, { recursive: true, mode: 0o700 });
+    const outside = join(root, "private-target");
+    writeFileSync(outside, "untouched", { mode: 0o600 });
+    symlinkSync(outside, join(source, "link"));
+    chmodSync(join(source, "bin/node"), 0o700);
+    const previous = process.umask(0o077);
+    try {
+      await install();
+    } finally {
+      process.umask(previous);
+    }
+    const release = readlinkSync(join(at.root, "current"));
+    expect(lstatSync(release).mode & 0o777).toBe(0o755);
+    expect(lstatSync(join(release, "bin")).mode & 0o777).toBe(0o755);
+    expect(lstatSync(join(release, "bin/node")).mode & 0o777).toBe(0o755);
+    expect(lstatSync(join(release, "MANIFEST.json")).mode & 0o777).toBe(0o644);
+    expect(lstatSync(outside).mode & 0o777).toBe(0o600);
+    expect(lstatSync(at.binDir).mode & 0o777).toBe(0o700);
+    expect(lstatSync(at.unitDir).mode & 0o777).toBe(0o700);
+    chmodSync(release, 0o700);
+    await install();
+    expect(lstatSync(release).mode & 0o777).toBe(0o755);
   });
   it("copies proxy settings without exposing them in JSON; no-systemd prints an unprivileged foreground command", async () => {
     context = testContext({ root, env: { HTTPS_PROXY: "https://secret@proxy" } });
@@ -285,6 +324,21 @@ describe("install", () => {
     await installRunner(input({ "no-link": true }), second, layout(), ports);
     expect(second.stdout()).toContain('"changed":false');
     expect(calls.some((c) => c.args.includes("restart"))).toBe(false);
+  });
+  it("restarts a previously unlinked process after linking even when the unit and release are unchanged", async () => {
+    await install();
+    let reads = 0;
+    context = {
+      ...context,
+      statusProbes: {
+        read: () => status(reads++ === 0 ? 10 : 11),
+        alive: () => true,
+        accepts: async () => true,
+      },
+    };
+    calls.length = 0;
+    expect(await install({ "no-link": false, "no-start": false })).toBe(0);
+    expect(calls.some((call) => call.args.includes("restart"))).toBe(true);
   });
   it("recovers activation interrupted before restart and starts a stopped install", async () => {
     await install();
@@ -458,7 +512,10 @@ describe("uninstall", () => {
     const sys = { ...at, mode: "system" as const };
     ports.run = (cmd, args) => {
       calls.push({ command: cmd, args });
-      return { status: 0, stdout: cmd === "getent" ? `volli:x:1:1::${at.dataDir}:/bin/bash` : "" };
+      return {
+        status: cmd === "pgrep" ? 1 : 0,
+        stdout: cmd === "getent" ? `volli:x:1:1::${at.dataDir}:/bin/bash` : "",
+      };
     };
     expect(await uninstallRunner(input({ purge: true, yes: true }), context, sys, ports)).toBe(0);
     expect(existsSync(at.dataDir)).toBe(false);
@@ -470,12 +527,31 @@ describe("uninstall", () => {
     mkdirSync(join(at.dataDir, "copy"));
     writeFileSync(join(at.dataDir, "copy/.git"), "gitdir: elsewhere");
     ports.confirmPurge = () => true;
-    ports.run = () => ({ status: 0, stdout: "different-home" });
+    ports.run = (command, args) => {
+      calls.push({ command, args });
+      return { status: 0, stdout: "different-home" };
+    };
     expect(
       await uninstallRunner(input({ purge: true }), context, { ...at, mode: "system" }, ports),
     ).toBe(0);
     expect(context.stderr()).toContain("Uncommitted, unpushed or unverifiable work");
     expect(context.stderr()).toContain("Kept the volli account");
+    expect(calls.some((call) => call.command === "git")).toBe(false);
+    expect(calls.some((call) => call.command === "runuser" && call.args.includes("git"))).toBe(
+      true,
+    );
+  });
+  it("refuses to purge data while another service-user process remains alive", async () => {
+    await install();
+    const at = layout();
+    ports.run = (cmd) => ({
+      status: 0,
+      stdout: cmd === "getent" ? `volli:x:1:1::${at.dataDir}:/bin/bash` : "",
+    });
+    await expect(
+      uninstallRunner(input({ purge: true, yes: true }), context, { ...at, mode: "system" }, ports),
+    ).rejects.toThrow("remaining processes");
+    expect(existsSync(at.dataDir)).toBe(true);
   });
   it("does not remove an absent account or a user account", async () => {
     ports.systemd = false;

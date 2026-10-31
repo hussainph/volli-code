@@ -107,7 +107,9 @@ it("handles unlinked, already-revoked, offline, unreadable and failed HTTP respo
     const request: typeof fetch = async () => {
       if (failure === "offline") throw new Error("network down");
       return new Response(
-        JSON.stringify({ status: failure === "mutation" ? "error" : "success" }),
+        JSON.stringify({
+          status: failure === "mutation" || failure === "http" ? "error" : "success",
+        }),
         { status: failure === "http" ? 500 : 200 },
       );
     };
