@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -35,6 +36,7 @@ import {
   isInstanceId,
   newInstanceId,
   readOnlySql,
+  readSnapshot,
   snapshotRefs,
   supervisorEnv,
 } from "./core.mjs";
@@ -176,6 +178,230 @@ describe("findInSnapshot", () => {
 
   it("lists the refs a snapshot minted", () => {
     assert.deepEqual([...snapshotRefs(tree)], ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "f2e8"]);
+  });
+});
+
+describe("snapshot capture readiness", () => {
+  const ready = '- button "Host: This Mac" [ref=f2e8]';
+
+  function fakeCapturePage(trees) {
+    let clock = 0;
+    const calls = [];
+    const pauses = [];
+    const empty = [];
+    const page = {
+      url: () => "volli-app://bundle/index.html",
+      ariaSnapshot: async (options) => {
+        calls.push(options);
+        return trees[Math.min(calls.length - 1, trees.length - 1)];
+      },
+    };
+    const options = {
+      now: () => clock,
+      pause: async (ms) => {
+        pauses.push(ms);
+        clock += ms;
+      },
+      onEmpty: (text, timing) => {
+        const path = join(dir, `empty-${timing.attempt}.txt`);
+        writeFileSync(path, text);
+        empty.push({ text, path, ...timing });
+      },
+    };
+    return { page, options, calls, pauses, empty, advance: (ms) => (clock += ms) };
+  }
+
+  it("returns an already rendered tree immediately, preserving depth and refs", async () => {
+    const { page, options, calls, pauses, empty } = fakeCapturePage([ready]);
+    const result = await readSnapshot(page, { ...options, depth: "3" });
+    assert.deepEqual(result, { text: ready, attempts: 1, emptyAttempts: 0, ms: 0 });
+    assert.deepEqual(calls, [{ mode: "ai", depth: 3, timeout: 10_000 }]);
+    assert.deepEqual([...snapshotRefs(result.text)], ["f2e8"]);
+    assert.deepEqual(pauses, []);
+    assert.deepEqual(empty, []);
+  });
+
+  it("retains empty and whitespace captures with timing before publishing the first non-empty tree", async () => {
+    const { page, options, empty, calls } = fakeCapturePage(["", " \n", ready]);
+    const result = await readSnapshot(page, options);
+    assert.deepEqual(result, { text: ready, attempts: 3, emptyAttempts: 2, ms: 400 });
+    assert.deepEqual(
+      empty.map(({ path: _path, ...entry }) => entry),
+      [
+        { text: "", attempt: 1, ms: 0 },
+        { text: " \n", attempt: 2, ms: 200 },
+      ],
+    );
+    assert.deepEqual(
+      empty.map(({ path }) => readFileSync(path, "utf8")),
+      ["", " \n"],
+    );
+    assert.deepEqual(
+      calls.map(({ timeout }) => timeout),
+      [10_000, 9800, 9600],
+    );
+  });
+
+  it("fails distinctly when the renderer remains empty, within one deadline", async () => {
+    const { page, options, calls, pauses, empty } = fakeCapturePage([""]);
+    await assert.rejects(
+      readSnapshot(page, { ...options, timeout: 450 }),
+      /empty snapshot: .*450ms \(3 captures, 3 empty\); volli-app:\/\/bundle\/index.html/u,
+    );
+    assert.deepEqual(
+      calls.map(({ timeout }) => timeout),
+      [450, 250, 50],
+    );
+    assert.deepEqual(pauses, [200, 200, 50]);
+    assert.equal(empty.length, 3);
+  });
+
+  it("does not retry non-empty trees to hide a missing journey control or boot error", async () => {
+    for (const tree of ['- alert "Bootstrap failed"', '- button "Settings" [ref=e1]']) {
+      const { page, options, calls } = fakeCapturePage([tree, ready]);
+      assert.equal((await readSnapshot(page, options)).text, tree);
+      assert.equal(calls.length, 1);
+    }
+  });
+
+  it("waits for text under the caller's original budget and returns exactly the matching capture", async () => {
+    const { page, options, calls } = fakeCapturePage(["", '- button "Settings" [ref=e1]', ready]);
+    const result = await readSnapshot(page, { ...options, waitForText: "HOST:", timeout: 500 });
+    assert.equal(result.text, ready);
+    assert.equal(result.ms, 400);
+    assert.deepEqual(
+      calls.map(({ timeout }) => timeout),
+      [500, 300, 100],
+    );
+  });
+
+  it("never treats an empty tree as gone, including a later empty capture", async () => {
+    const { page, options } = fakeCapturePage(["", '- button "Stop turn" [ref=e1]', "\n", ready]);
+    const result = await readSnapshot(page, { ...options, waitForText: "stop TURN", gone: true });
+    assert.equal(result.text, ready);
+    assert.deepEqual(result, { text: ready, attempts: 4, emptyAttempts: 2, ms: 600 });
+  });
+
+  it("reports persistent emptiness distinctly even for wait --gone", async () => {
+    const { page, options } = fakeCapturePage([""]);
+    await assert.rejects(
+      readSnapshot(page, { ...options, waitForText: "Stop turn", gone: true, timeout: 250 }),
+      /empty snapshot:/u,
+    );
+  });
+
+  it("keeps semantic wait failures bounded when the tree is non-empty", async () => {
+    for (const gone of [false, true]) {
+      const { page, options } = fakeCapturePage([ready]);
+      await assert.rejects(
+        readSnapshot(page, {
+          ...options,
+          waitForText: gone ? "Host:" : "Missing",
+          gone,
+          timeout: 250,
+        }),
+        new RegExp(
+          `timed out waiting for .* to ${gone ? "disappear" : "appear"} within 250ms`,
+          "u",
+        ),
+      );
+    }
+  });
+
+  it("does not accept a capture that completes beyond the deadline", async () => {
+    const { page, options, advance } = fakeCapturePage([ready]);
+    const capture = page.ariaSnapshot;
+    page.ariaSnapshot = async (args) => {
+      advance(501);
+      return capture(args);
+    };
+    await assert.rejects(readSnapshot(page, { ...options, timeout: 500 }), /timed out waiting/u);
+  });
+
+  it("classifies a final Playwright timeout by the last empty observation without renewing the budget", async () => {
+    const { page, options, calls, advance } = fakeCapturePage([""]);
+    const capture = page.ariaSnapshot;
+    const failure = Object.assign(new Error("page.ariaSnapshot: Timeout 50ms exceeded"), {
+      name: "TimeoutError",
+    });
+    page.ariaSnapshot = async (args) => {
+      const tree = await capture(args);
+      if (calls.length === 2) {
+        advance(args.timeout);
+        throw failure;
+      }
+      return tree;
+    };
+    await assert.rejects(readSnapshot(page, { ...options, timeout: 250 }), (error) => {
+      assert.match(error.message, /^empty snapshot:/u);
+      assert.equal(error.cause, failure);
+      return true;
+    });
+    assert.deepEqual(
+      calls.map(({ timeout }) => timeout),
+      [250, 50],
+    );
+  });
+
+  it("keeps the semantic wait diagnostic when the final capture times out", async () => {
+    for (const gone of [false, true]) {
+      const { page, options, calls, advance } = fakeCapturePage([ready]);
+      const capture = page.ariaSnapshot;
+      const failure = Object.assign(new Error("page.ariaSnapshot: Timeout 50ms exceeded"), {
+        name: "TimeoutError",
+      });
+      page.ariaSnapshot = async (args) => {
+        const tree = await capture(args);
+        if (calls.length === 2) {
+          advance(args.timeout);
+          throw failure;
+        }
+        return tree;
+      };
+      await assert.rejects(
+        readSnapshot(page, {
+          ...options,
+          waitForText: gone ? "Host:" : "Missing",
+          gone,
+          timeout: 250,
+        }),
+        (error) => {
+          assert.match(error.message, /timed out waiting for/u);
+          assert.equal(error.cause, failure);
+          return true;
+        },
+      );
+      assert.deepEqual(
+        calls.map(({ timeout }) => timeout),
+        [250, 50],
+      );
+    }
+  });
+
+  it("distinguishes a capture timeout before any tree was observed from observed emptiness", async () => {
+    const { page, options, pauses } = fakeCapturePage([ready]);
+    const failure = Object.assign(new Error("page.ariaSnapshot: Timeout 250ms exceeded"), {
+      name: "TimeoutError",
+    });
+    page.ariaSnapshot = async () => {
+      throw failure;
+    };
+    await assert.rejects(readSnapshot(page, { ...options, timeout: 250 }), (error) => {
+      assert.match(error.message, /^snapshot readiness timeout: no aria tree captured/u);
+      assert.equal(error.cause, failure);
+      return true;
+    });
+    assert.deepEqual(pauses, []);
+  });
+
+  it("propagates capture failures rather than retrying a closed or broken window", async () => {
+    const { page, options, pauses } = fakeCapturePage([ready]);
+    const failure = new Error("Target page has been closed");
+    page.ariaSnapshot = async () => {
+      throw failure;
+    };
+    await assert.rejects(readSnapshot(page, options), (error) => error === failure);
+    assert.deepEqual(pauses, []);
   });
 });
 
