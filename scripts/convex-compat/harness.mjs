@@ -203,6 +203,18 @@ export function renderResult(manifest, verdict, meta = {}) {
   for (const suite of verdict.suites) {
     lines.push(`| \`${suite.file}\` | ${suite.passed} | ${suite.failed} | ${suite.pending} |`);
   }
+  if (meta.legalException) {
+    const entry = meta.legalException;
+    lines.push(
+      "",
+      `### ${entry.ticket}: explicit enrollment contract exception`,
+      "",
+      `${entry.reason}. Applies only to \`${entry.tag}\`; expires automatically after \`${entry.expiresAfterTag}\`.`,
+      `The mandatory additional live probe requires a typed \`${entry.refusalCode}\` for \`${entry.fromVersion}\`.`,
+      `**SIMULATED current-consent precondition:** the prepared tree's agreement constant is temporarily \`${entry.toVersion}\` so every unchanged data-plane test body still runs.`,
+      "This is not evidence that the older app can enroll with text it never showed. No failed or skipped test is excused. The prepared constant is restored after the run.",
+    );
+  }
   return `${lines.join("\n")}\n`;
 }
 

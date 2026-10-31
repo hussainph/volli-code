@@ -1028,6 +1028,28 @@ it("retries a transient backend failure with the same in-memory invite code", as
   expect(service.previewUserId()).toBe(VIEWER.userId);
 });
 
+it("shows the typed outdated-agreement message without granting cloud access", async () => {
+  const marker = { write: vi.fn(), clear: vi.fn() };
+  const message = "Update Volli to accept the current Preview Agreement.";
+  const { service } = harness({
+    marker,
+    backend: backendStandIn({
+      ensureViewer: async () => {
+        throw new BackendRefusedError(message, "preview_agreement_required");
+      },
+    }),
+  });
+  await service.signIn("github", undefined, "preview-0.3-2026-10-25");
+  await service.settled();
+  expect(service.snapshot()).toMatchObject({
+    state: "signed-in",
+    account: { backend: "refused", userId: null },
+    failure: message,
+  });
+  expect(service.previewUserId()).toBeNull();
+  expect(marker.write).not.toHaveBeenCalled();
+});
+
 it("sends explicit current-version acceptance only for enrollment, never for restored token refresh", async () => {
   const temp = tempInventory();
   cleanups.push(temp.dispose);

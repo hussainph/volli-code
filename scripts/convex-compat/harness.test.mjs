@@ -264,6 +264,59 @@ test("caps workers at the Session's parallelism budget, never above the lane's o
   assert.equal(resolveWorkers(0, {}), 1);
 });
 
+test("a legal exception requires the added probe and never excuses a failed or skipped test", () => {
+  const probe = "apps/desktop/src/main/legal-consent.exception.live.test.ts";
+  const selected = [...manifest.suites, probe];
+  const result = (file, status = "passed") => ({
+    name: `${manifest.tree}/${file}`,
+    status,
+    assertionResults: [{ status }],
+  });
+  const report = reportWith(
+    { numTotalTests: 3, numPassedTests: 3 },
+    selected.map((file) => result(file)),
+  );
+  const expected = { tree: manifest.tree, suites: selected };
+  const verdict = evaluateReport(report, expected);
+  assert.equal(verdict.ok, true);
+  assert.equal(
+    evaluateReport({ ...report, testResults: report.testResults.slice(0, -1) }, expected).ok,
+    false,
+  );
+  for (const file of selected) {
+    assert.equal(
+      evaluateReport(
+        {
+          ...report,
+          success: false,
+          numFailedTests: 1,
+          numPassedTests: 2,
+          testResults: selected.map((one) => result(one, one === file ? "failed" : "passed")),
+        },
+        expected,
+      ).ok,
+      false,
+    );
+  }
+  assert.equal(evaluateReport({ ...report, numPendingTests: 1 }, expected).ok, false);
+  const entry = JSON.parse(
+    readFileSync(new URL("./live-exceptions.json", import.meta.url), "utf8"),
+  )[0];
+  const markdown = renderResult(manifest, verdict, { legalException: entry });
+  for (const value of [
+    entry.ticket,
+    entry.reason,
+    entry.expiresAfterTag,
+    entry.fromVersion,
+    entry.toVersion,
+    entry.refusalCode,
+  ]) {
+    assert.ok(markdown.includes(value), value);
+  }
+  assert.match(markdown, /SIMULATED current-consent/);
+  assert.match(markdown, /not evidence that the older app can enroll/);
+});
+
 test("a step summary is written where Actions points, and nowhere else", () => {
   const { dir, close } = scratch();
   const previousSummary = process.env.GITHUB_STEP_SUMMARY;

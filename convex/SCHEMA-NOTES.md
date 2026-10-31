@@ -744,15 +744,21 @@ receipt; missing, stale or incomplete receipts are never auto-backfilled.
 Waitlisted accounts do not record acceptance. Every Workspace create/accept
 requires the current receipt as well as invitation. Account replies include
 `previewAgreementAccepted`; missing/unknown acceptance fails the desktop gate
-closed and offers sign-out/reacceptance. The temporary enrollment version
-constant has a one-line TODO to switch to the legal pages' shared constant
-once that change lands. Waitlisted people must accept again after invitation;
-no receipt is stored before they are invited. Only the current receipt is
-kept on the person row. Legal text still requires owner approval before the
-preview ships.
+closed and offers sign-out/reacceptance. The site's notice bundle (agreement,
+privacy and subprocessors) and desktop use `PREVIEW_AGREEMENT_VERSION` from
+`@volli/shared`; the backend's `PREVIEW_ENROLLMENT_AGREEMENT_VERSION` is an alias
+of that same value, not an independent version. The published date and version
+share one source. A material notice change bumps the version and requires
+existing people, including test accounts, to update and explicitly reaccept;
+no receipt is auto-backfilled. Waitlisted people must accept again after
+invitation; no receipt is stored before they are invited. Only the current
+receipt is kept on the person row. Publish approved pages before enabling their
+version in the backend and desktop. Legal text still requires owner approval
+before the preview ships.
 
-Deploy the backend before a desktop that sends the new optional agreement
-argument: an older backend rejects unknown arguments. Older canaries cannot
+Deploy the backend before a desktop that sends a new agreement version or
+optional agreement argument: an older backend rejects an unknown version or
+argument. Older canaries cannot
 submit agreement acceptance, so they must update before setting up, creating
 or accepting Workspaces. A stale submitted agreement version explicitly asks
 the person to update Volli; sign-out alone cannot update a compiled version.

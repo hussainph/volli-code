@@ -26,6 +26,7 @@ export * from "./handler-keys";
 export * from "./desktop-entries";
 export * from "./environment-recipe";
 export * from "./account";
+export * from "./preview-legal";
 export * from "./this-mac-runner";
 export * from "./cloud-checkout";
 export * from "./runner-preferences";
