@@ -1,5 +1,5 @@
 import { compareVersions } from "@volli/shared";
-import type { Doc } from "../_generated/dataModel";
+import type { Doc } from "../_generated/dataModel.js";
 import { literals } from "./validators";
 
 /** Supported owner-selected channels; stored strings stay open for older readers. */
