@@ -20,7 +20,10 @@
 import { randomUUID } from "node:crypto";
 
 import { mintTestToken } from "../../../../convex/fixture/jwt.ts";
-import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "../../../../packages/shared/src/cloud/preview-access.ts";
+// `preview-legal.ts` has no imports of its own, so plain Node loads it (the
+// cloud barrel re-exports it under extensionless paths Node cannot resolve).
+// It is the version `PREVIEW_ENROLLMENT_AGREEMENT_VERSION` aliases.
+import { PREVIEW_AGREEMENT_VERSION } from "../../../../packages/shared/src/preview-legal.ts";
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
@@ -149,7 +152,7 @@ export async function seedPerson(fixture, { subject, email, name, project }, fet
   const { userId } = await person.mutation("accounts:ensureViewer", {});
   await admin.mutation("previewAccess:set", { kind: "user", value: userId, enabled: true });
   await person.mutation("accounts:ensureViewer", {
-    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    acceptedAgreementVersion: PREVIEW_AGREEMENT_VERSION,
   });
   const workspaces = await person.query("workspaces:listMine", {});
   if (!Array.isArray(workspaces) || workspaces.length === 0) {

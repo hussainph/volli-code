@@ -4,8 +4,8 @@
  * end, against the pinned local backend. ci-extended's `BYO runner
  * acceptance` job runs it on a disposable Ubuntu runner:
  *
- *   node convex/fixture/with-backend.ts --deploy -- \
- *     node apps/runner/e2e/acceptance.mjs [--require-all] [--host-shell]
+ *   cd convex && node fixture/with-backend.ts --deploy -- \
+ *     node ../apps/runner/e2e/acceptance.mjs [--require-all] [--host-shell]
  *
  * The legs (see `lib/legs.mjs` for how each reports):
  *
@@ -222,6 +222,16 @@ async function harness(context, log) {
     "an unauthenticated clone is refused",
     `! ${BOX_GIT} clone --quiet ${github.origin}/${WORLD.repo.owner}/${WORLD.repo.name}.git ${work}-refused`,
   );
+  // Refused by the fake GitHub's token gate, not by an unreachable server.
+  assert.ok(
+    github.requests.some(
+      (entry) =>
+        entry.repo === `${WORLD.repo.owner}/${WORLD.repo.name}` &&
+        entry.credential === "none" &&
+        entry.status === 401,
+    ),
+    "the fake GitHub answered the credential-less clone with a 401",
+  );
   await onBox(
     context,
     "a token clones, commits and pushes",
@@ -349,20 +359,16 @@ async function main(argv) {
   if (useHostShell)
     log("HOST SHELL: box commands run on this machine, not in a box (debugging only)");
 
-  const fixture = fixtureFromEnv();
-  const secrets = [fixture.adminKey, fixture.privateKeyPem];
-  const context = {
-    fixture,
-    secrets,
-    boxCommands: [],
-    redact: (text) => redact(text, secrets),
-  };
-  const github = await startFakeGithub();
-  const release = await startReleaseServer();
-  context.github = github;
-  context.release = release;
+  const secrets = [];
+  const context = { secrets, boxCommands: [], redact: (text) => redact(text, secrets) };
   let results = [];
   try {
+    const fixture = fixtureFromEnv();
+    context.fixture = fixture;
+    secrets.push(fixture.adminKey, fixture.privateKeyPem);
+    context.github = await startFakeGithub();
+    secrets.push(context.github.privateKeyPem, context.github.app.clientSecret);
+    context.release = await startReleaseServer();
     if (useHostShell) {
       context.box = hostShell();
     } else {
@@ -401,14 +407,16 @@ async function main(argv) {
       // Redacted again here: a secret learned after a command ran (the link
       // grant's credential) must not survive in what that command printed.
       boxCommands: JSON.parse(redact(JSON.stringify(context.boxCommands), secrets)),
-      fakeGithubRequests: github.requests,
-      releaseRequests: release.requests,
+      fakeGithubRequests: JSON.parse(
+        redact(JSON.stringify(context.github?.requests ?? []), secrets),
+      ),
+      releaseRequests: JSON.parse(redact(JSON.stringify(context.release?.requests ?? []), secrets)),
       boxJournal: redact(journal, secrets),
     };
     writeFileSync(join(evidenceDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
     await context.box?.stop();
-    await github.close();
-    await release.close();
+    await context.github?.close();
+    await context.release?.close();
   }
   const summary = renderSummary(
     results.map((result) => ({ ...result, detail: redact(result.detail, secrets) })),

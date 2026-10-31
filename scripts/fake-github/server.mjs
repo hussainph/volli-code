@@ -398,12 +398,17 @@ export class FakeGithub {
     } catch {
       return false;
     }
-    const signed = verify(
-      "sha256",
-      Buffer.from(`${head}.${payload}`),
-      this.publicKey,
-      Buffer.from(signature, "base64url"),
-    );
+    let signed;
+    try {
+      signed = verify(
+        "sha256",
+        Buffer.from(`${head}.${payload}`),
+        this.publicKey,
+        Buffer.from(signature, "base64url"),
+      );
+    } catch {
+      return false;
+    }
     const now = Math.floor(Date.now() / 1000);
     const issuer = String(claims.iss);
     return (

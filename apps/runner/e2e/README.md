@@ -3,7 +3,7 @@
 The end-to-end lane for a person's own Linux box (VC-1043): install, a Session,
 a push, an update and a rollback, against the pinned local backend. It runs in
 `ci-extended.yml` as **BYO runner acceptance** (Linux, no macOS slot) on every
-main push, nightly and on dispatch.
+main push, nightly, on dispatch, and on a PR that changes `ci-extended.yml`.
 
 ```sh
 # CI runs exactly this, from convex/ (needs Docker and a Linux host network):
@@ -29,6 +29,11 @@ merged, or the leg is not wired yet; the summary names the files and tickets)
 or `BLOCKED` (a leg it builds on did not pass). A failure is always red.
 `--require-all` also makes `PENDING` and `BLOCKED` red; the lane turns it on
 once every leg is wired, so it never reads green on a claim it did not test.
+
+The harness's own unit tests are `node:test` files, run by the job's
+"Harness self-tests" step: `node --test scripts/fake-github/*.test.mjs
+apps/runner/e2e/lib/*.test.mjs`. They are not Vitest files, so
+`apps/runner`'s Vitest config must exclude `e2e/**` (VC-1034 owns it).
 
 ## Doubles and setup
 

@@ -503,10 +503,10 @@ jobs:
   # (scripts/fake-github: OAuth + REST for the backend, git smart HTTP that
   # checks x-access-token), a local "GitHub release" file server, and a fresh
   # Ubuntu 24.04 box booted under systemd in a privileged container on the
-  # host network. The harness leg proves that plumbing; the install, Session,
-  # update and rollback legs report PENDING (with the merged work they wait
-  # on) until the BYO sprint lands them, and turn red if they run and fail
-  # (apps/runner/e2e/README.md). Linux, no macOS slot.
+  # host network. The harness leg proves that plumbing; the install leg
+  # reports PENDING (naming the merged work it waits on) and the legs built on
+  # it BLOCKED until the BYO sprint lands them. A leg that runs and fails is
+  # red (apps/runner/e2e/README.md). Linux, no macOS slot.
   byo-runner:
     name: BYO runner acceptance
     if: ${{ !cancelled() }}

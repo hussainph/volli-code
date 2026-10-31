@@ -105,7 +105,8 @@ export async function startBox({ name, image = BOX_IMAGE, hostname, bootTimeoutM
     },
     /** The last lines of a unit's journal (or the whole boot), for evidence. */
     async journal(unit, lines = 80) {
-      const scope = unit ? `-u ${unit}` : "-b";
+      if (unit && !/^[A-Za-z0-9@._-]+$/u.test(unit)) throw new Error(`not a unit name: ${unit}`);
+      const scope = unit ? `-u '${unit}'` : "-b";
       return (await boxRun(name, `journalctl --no-pager -n ${lines} ${scope} 2>&1 || true`)).stdout;
     },
     async stop() {
