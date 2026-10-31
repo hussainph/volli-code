@@ -621,6 +621,40 @@ describe("activating", () => {
     expect(h.logs.filter((line) => line.startsWith("restarting on"))).toHaveLength(2);
   });
 
+  it("forgets an owner's --to once that release fails again", async () => {
+    const h = harness();
+    await staged(h);
+    writeNowRequest(layout.nowFile, "0.4.0", new Date(0));
+    h.behaviour = (version) => (version === "0.4.0" ? "silent" : "online");
+    activate();
+    expect((await apply(h)).kind).toBe("rolled_back");
+    expect(existsSync(layout.nowFile)).toBe(false);
+  });
+
+  it("keeps an owner's --to for another release through a rollback", async () => {
+    const h = harness();
+    await staged(h);
+    writeNowRequest(layout.nowFile, "0.5.0", new Date(0));
+    h.behaviour = (version) => (version === "0.4.0" ? "silent" : "online");
+    activate();
+    expect((await apply(h)).kind).toBe("rolled_back");
+    expect(existsSync(layout.nowFile)).toBe(true);
+  });
+
+  it("does not hold one failed systemctl show against a healthy release", async () => {
+    const h = harness();
+    await staged(h);
+    let calls = 0;
+    const service = h.ports.service;
+    h.ports = {
+      ...h.ports,
+      // The baseline and every third poll fail; the last one answers.
+      service: async () => ((calls += 1) === 1 || calls % 3 === 0 ? null : service()),
+    };
+    activate();
+    expect((await apply(h)).kind).toBe("applied");
+  });
+
   it(`watches a new release for the whole ${HEALTH_TIMEOUT_MS / 1000} s`, async () => {
     const h = harness();
     await staged(h);
@@ -645,7 +679,13 @@ describe("an interrupted activation", () => {
     makeRelease(join(layout.releasesDir, STAGED), "0.4.0");
     writeUpdaterState(layout.stateFile, {
       ...EMPTY_STATE,
-      activating: { version: "0.4.0", name: STAGED, fromTarget: target, fromVersion: "0.3.0" },
+      activating: {
+        version: "0.4.0",
+        name: STAGED,
+        fromTarget: target,
+        fromVersion: "0.3.0",
+        at: "1970-01-01T00:00:00.000Z",
+      },
     });
     if (switched) pointCurrentAt(layout, join("releases", STAGED));
     return target;
@@ -677,6 +717,40 @@ describe("an interrupted activation", () => {
     const h = harness();
     await h.ports.restart();
     expect((await apply(h)).kind).toBe("rolled_back");
+  });
+
+  it("restarts a release the switch reached but the restart never did", async () => {
+    for (const before of [status({ state: "stopped" }), null]) {
+      interrupted(true);
+      const h = harness();
+      h.before = before;
+      expect(await apply(h)).toEqual({ kind: "applied", version: "0.4.0", from: "0.3.0" });
+      expect(h.restarts).toBe(1);
+      rmSync(layout.installRoot, { recursive: true });
+    }
+  });
+
+  it("restarts onto the old release when a cut-short rollback left the new one running", async () => {
+    const target = interrupted(false);
+    const h = harness();
+    h.before = status({ version: "0.4.0" });
+    expect(await apply(h)).toMatchObject({ kind: "failed", code: "interrupted" });
+    expect(h.restarts).toBe(1);
+    expect(readlinkSync(layout.currentLink)).toBe(target);
+  });
+
+  it("settles when the daemon wakes it, and says what the settling did", async () => {
+    interrupted(true);
+    const h = harness();
+    writeUpdateRequest(layout.requestFile, { phase: "settle", version: "0.4.0", urgent: true });
+    expect((await apply(h)).kind).toBe("applied");
+    const request = writeUpdateRequest(layout.requestFile, {
+      phase: "settle",
+      version: "0.4.0",
+      urgent: true,
+    });
+    expect(await apply(h)).toEqual({ kind: "idle", why: "settled" });
+    expect(state().handled).toContain(request.id);
   });
 
   it("puts current back when the switch never happened", async () => {

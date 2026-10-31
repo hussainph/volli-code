@@ -59,6 +59,12 @@ export const TICK_MS = 15_000;
 export const NOW_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 /** A request the applier has not answered in this long is written again. */
 export const REQUEST_STALE_MS = 30 * 60 * 1000;
+/**
+ * An activation settles in about five minutes (a restart, the health window,
+ * perhaps a rollback). One still open after this is one the applier died in:
+ * the agent wakes it to settle it.
+ */
+export const ACTIVATION_STALE_MS = 15 * 60 * 1000;
 
 export interface UpdateAgentPorts {
   /** Stop claiming new work and report `draining`. */
@@ -122,6 +128,7 @@ export function createUpdateAgent(options: UpdateAgentOptions): UpdateAgent {
   let target: UpdateTarget | null = null;
   let pending: Pending | null = null;
   let drained = false;
+  let settleAskedAt = 0;
   const retryAfter = new Map<string, number>();
   let status: RunnerUpdateStatus = {
     targetVersion: null,
@@ -201,6 +208,18 @@ export function createUpdateAgent(options: UpdateAgentOptions): UpdateAgent {
     if (state.activating !== null) {
       // The applier is restarting this runner onto a release, or settling one.
       setStatus("activating", state.activating.version);
+      const since = Math.max(Date.parse(state.activating.at) || 0, settleAskedAt);
+      if (ports.now() - since >= ACTIVATION_STALE_MS) {
+        ports.log("waking the updater to settle an activation", {
+          version: state.activating.version,
+        });
+        writeUpdateRequest(layout.requestFile, {
+          phase: "settle",
+          version: state.activating.version,
+          urgent: true,
+        });
+        settleAskedAt = ports.now();
+      }
       return;
     }
     const decision = decideUpdate({

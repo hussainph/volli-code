@@ -139,7 +139,13 @@ describe("the updater state", () => {
     const state = {
       ...EMPTY_STATE,
       staged: { version: "0.4.0", name: "0.4.0-abc" },
-      activating: { version: "0.4.1", name: "0.4.1", fromTarget: "/x", fromVersion: "0.4.0" },
+      activating: {
+        version: "0.4.1",
+        name: "0.4.1",
+        fromTarget: "/x",
+        fromVersion: "0.4.0",
+        at: "x",
+      },
       outcomes: [outcome("a")],
     };
     writeUpdaterState(path(), state);

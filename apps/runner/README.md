@@ -150,7 +150,8 @@ never updates itself, since nothing would restart it.
   back to exactly the link it had, the runner restarts, and the release is
   recorded as bad. A bad release is not tried again unless
   `update --now --to <version>` names it. Data is never rolled back. An
-  activation a reboot interrupted is settled by the update unit's run at boot.
+  activation left unsettled (a reboot, a killed run) is settled by the update
+  unit's run at boot, or when the runner wakes it after 15 minutes.
 - **Which version.** A release's version is its own `MANIFEST.json`'s, never
   its directory name, so the installer's names and an absolute or relative
   `current` all read the same.

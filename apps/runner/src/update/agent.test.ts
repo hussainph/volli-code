@@ -8,6 +8,7 @@ import type { RunnerUpdateReport } from "@volli/shared/cloud";
 
 import type { RunnerStatus } from "../shell/runner-status";
 import {
+  ACTIVATION_STALE_MS,
   createUpdateAgent,
   NOW_REQUEST_TTL_MS,
   REQUEST_STALE_MS,
@@ -375,7 +376,13 @@ describe("an activation in flight", () => {
   it("waits for the applier to settle it, without draining or resuming", async () => {
     writeUpdaterState(layout.stateFile, {
       ...EMPTY_STATE,
-      activating: { version: "0.4.0", name: "0.4.0", fromTarget: "x", fromVersion: "0.3.5" },
+      activating: {
+        version: "0.4.0",
+        name: "0.4.0",
+        fromTarget: "x",
+        fromVersion: "0.3.5",
+        at: "2026-11-01T00:00:00.000Z",
+      },
     });
     const h = harness();
     const a = agent(h);
@@ -383,6 +390,51 @@ describe("an activation in flight", () => {
     expect(a.status()).toMatchObject({ phase: "activating", detail: "0.4.0" });
     expect(request()).toBeNull();
     expect(h.calls).toEqual([]);
+  });
+});
+
+describe("an activation the applier left open", () => {
+  it("wakes the applier to settle it, once per stale period", async () => {
+    writeUpdaterState(layout.stateFile, {
+      ...EMPTY_STATE,
+      activating: {
+        version: "0.4.0",
+        name: "0.4.0",
+        fromTarget: "x",
+        fromVersion: "0.3.5",
+        at: "2026-11-01T00:00:00.000Z",
+      },
+    });
+    const h = harness();
+    const a = agent(h);
+    h.clock += ACTIVATION_STALE_MS - 1;
+    await a.tick();
+    expect(request()).toBeNull();
+    h.clock += 1;
+    await a.tick();
+    const first = request();
+    expect(first).toMatchObject({ phase: "settle", version: "0.4.0", urgent: true });
+    await a.tick();
+    expect(request()!.id).toBe(first!.id);
+    h.clock += ACTIVATION_STALE_MS;
+    await a.tick();
+    expect(request()!.id).not.toBe(first!.id);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("treats an unreadable start time as long ago", async () => {
+    writeUpdaterState(layout.stateFile, {
+      ...EMPTY_STATE,
+      activating: {
+        version: "0.4.0",
+        name: "0.4.0",
+        fromTarget: "x",
+        fromVersion: "0.3.5",
+        at: "?",
+      },
+    });
+    await agent(harness()).tick();
+    expect(request()).toMatchObject({ phase: "settle" });
   });
 });
 

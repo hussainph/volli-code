@@ -72,7 +72,7 @@ ProtectHome=yes
 # Everything read-only but the install root: the releases, the updater's
 # state and its cache. The runner's data dir is only ever read.
 ProtectSystem=strict
-ReadWritePaths=${layout.installRoot.replace(/%/gu, "%%")}
+ReadWritePaths=${word(layout.installRoot)}
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
@@ -89,8 +89,13 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 [Unit]
 Description=Apply a Volli runner update
 Documentation=https://github.com/hussainph/volli-code/blob/main/apps/runner/README.md
+# Its boot run must not hold up boot: no default dependencies, so the target
+# that wants it does not wait for it. The runner's own unit wants the network.
+DefaultDependencies=no
 Wants=network-online.target
-After=network-online.target ${RUNNER_UNIT}
+After=sysinit.target basic.target network-online.target ${RUNNER_UNIT}
+Conflicts=shutdown.target
+Before=shutdown.target
 
 [Service]
 Type=oneshot

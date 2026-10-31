@@ -65,7 +65,10 @@ export function readSmallFile(path: string, maxBytes: number, owner?: number): s
 
 // ── the request ─────────────────────────────────────────────────────────────
 
-/** Stage a release (download, verify, probe), or activate the staged one. */
+/**
+ * Stage a release (download, verify, probe), activate the staged one, or
+ * `settle`: only wake the applier to finish an activation it left unsettled.
+ */
 export type UpdateRequest =
   | {
       readonly v: 1;
@@ -79,6 +82,13 @@ export type UpdateRequest =
       readonly v: 1;
       readonly id: string;
       readonly phase: "activate";
+      readonly version: string;
+      readonly urgent: boolean;
+    }
+  | {
+      readonly v: 1;
+      readonly id: string;
+      readonly phase: "settle";
       readonly version: string;
       readonly urgent: boolean;
     };
@@ -109,7 +119,11 @@ export function readUpdateRequest(path: string, owner?: number): UpdateRequest |
   ) {
     return row as unknown as UpdateRequest;
   }
-  if (common && row.phase === "activate" && keys === "id,phase,urgent,v,version") {
+  if (
+    common &&
+    (row.phase === "activate" || row.phase === "settle") &&
+    keys === "id,phase,urgent,v,version"
+  ) {
     return row as unknown as UpdateRequest;
   }
   throw new Error("The update request does not match its schema.");
@@ -123,7 +137,7 @@ type RequestBody<Phase extends UpdateRequest["phase"]> = Omit<
 /** The daemon's side: a fresh request, replacing any before it. */
 export function writeUpdateRequest(
   path: string,
-  request: RequestBody<"stage"> | RequestBody<"activate">,
+  request: RequestBody<"stage"> | RequestBody<"activate"> | RequestBody<"settle">,
 ): UpdateRequest {
   const written = { v: 1, id: randomUUID(), ...request } as UpdateRequest;
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -171,6 +185,8 @@ export interface Activation extends ReleaseRef {
   /** `current`'s link target before the switch, restored exactly on rollback. */
   readonly fromTarget: string;
   readonly fromVersion: string;
+  /** When it began, ISO 8601: the daemon wakes the applier for one left too long. */
+  readonly at: string;
 }
 
 export interface UpdaterState {
@@ -215,7 +231,10 @@ function isRelease(value: unknown): value is ReleaseRef {
 function isActivation(value: unknown): value is Activation {
   const row = value as Partial<Activation>;
   return (
-    isRelease(value) && typeof row.fromTarget === "string" && typeof row.fromVersion === "string"
+    isRelease(value) &&
+    typeof row.fromTarget === "string" &&
+    typeof row.fromVersion === "string" &&
+    typeof row.at === "string"
   );
 }
 

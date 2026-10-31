@@ -4,8 +4,13 @@
 [Unit]
 Description=Apply a Volli runner update
 Documentation=https://github.com/hussainph/volli-code/blob/main/apps/runner/README.md
+# Its boot run must not hold up boot: no default dependencies, so the target
+# that wants it does not wait for it. The runner's own unit wants the network.
+DefaultDependencies=no
 Wants=network-online.target
-After=network-online.target volli-runner.service
+After=sysinit.target basic.target network-online.target volli-runner.service
+Conflicts=shutdown.target
+Before=shutdown.target
 
 [Service]
 Type=oneshot

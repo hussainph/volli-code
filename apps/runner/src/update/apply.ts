@@ -40,12 +40,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   readdirSync,
   readlinkSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -317,23 +317,33 @@ class Run {
   async healthy(version: string): Promise<boolean> {
     const deadline =
       this.ports.now().getTime() + (this.options.healthTimeoutMs ?? HEALTH_TIMEOUT_MS);
-    const before = await this.ports.service();
+    // systemd's answer can fail once under load; only its last word counts.
+    let baseline = (await this.ports.service())?.restarts ?? null;
     for (;;) {
       const service = await this.ports.service();
-      if (service === null || before === null) return false;
-      if (service.restarts - before.restarts >= MAX_RESTARTS) return false;
+      if (service !== null) {
+        baseline ??= service.restarts;
+        if (service.restarts - baseline >= MAX_RESTARTS) return false;
+      }
       if (this.ports.now().getTime() >= deadline) {
         const status = this.owner === null ? null : this.ports.readStatus(this.owner);
         return (
+          service !== null &&
           status !== null &&
           status.state === "online" &&
           status.version === version &&
           service.mainPid > 0 &&
+          // Not a status file the previous process left behind.
           status.pid === service.mainPid
         );
       }
       await this.ports.sleep(HEALTH_POLL_MS);
     }
+  }
+
+  /** The version the runner's status file names, if this run believes it. */
+  statusVersion(): string | null {
+    return this.owner === null ? null : (this.ports.readStatus(this.owner)?.version ?? null);
   }
 
   /** Restarts and waits for `version`; a failed restart is an unhealthy one. */
@@ -353,6 +363,7 @@ class Run {
       request,
       {
         activating: null,
+        previous: activation.fromTarget,
         bad: this.state.bad.filter((version) => version !== activation.version),
       },
       this.outcome("update_applied", activation.version, activation.fromVersion, null),
@@ -377,6 +388,8 @@ class Run {
     this.ports.log(`${version} did not stay online (${reason}); rolling back to ${fromVersion}`);
     pointCurrentAt(this.layout, activation.fromTarget);
     this.save({ bad: [...new Set([...this.state.bad, version])] });
+    // An owner's `--to` this release just failed is answered: no retrying it for a day.
+    if (this.ownerNamed(version)) rmSync(this.layout.nowFile, { force: true });
     const back = await this.restartInto(fromVersion);
     this.record(
       request,
@@ -413,9 +426,10 @@ class Run {
       name: staged.name,
       fromTarget: running.target,
       fromVersion: running.version,
+      at: this.ports.now().toISOString(),
     };
     // Written before the switch, so a crash after it is finished or undone.
-    this.save({ staged: null, activating: activation, previous: running.target });
+    this.save({ staged: null, activating: activation });
     this.ports.log(`activating ${version} (was ${running.version})`);
     pointCurrentAt(layout, join("releases", staged.name));
     const result = await this.restartInto(version);
@@ -427,9 +441,13 @@ class Run {
   /** An activation a killed run left unsettled: finish its health check, or undo it. */
   async recover(activation: Activation): Promise<ApplyResult> {
     this.ports.log(`settling an interrupted activation of ${activation.version}`);
-    const current = currentRelease(this.layout);
-    if (current?.name !== activation.name) {
+    if (currentRelease(this.layout)?.name !== activation.name) {
+      // The switch never happened, or a rollback was cut short: make sure the
+      // runner runs what `current` names again.
       pointCurrentAt(this.layout, activation.fromTarget);
+      if (this.statusVersion() !== activation.fromVersion) {
+        await this.restartInto(activation.fromVersion);
+      }
       this.record(
         null,
         { activating: null },
@@ -441,9 +459,14 @@ class Run {
         message: `The activation of ${activation.version} was interrupted.`,
       };
     }
-    return (await this.healthy(activation.version))
+    // Switched, but perhaps never restarted: give the release its real try.
+    const result =
+      this.statusVersion() === activation.version
+        ? { healthy: await this.healthy(activation.version), reason: "health_timeout" }
+        : await this.restartInto(activation.version);
+    return result.healthy
       ? this.keep(null, activation)
-      : this.rollBack(null, activation, "health_timeout");
+      : this.rollBack(null, activation, result.reason);
   }
 
   /** Keeps `keep` (the new release and its rollback) and drops older releases. */
@@ -457,6 +480,11 @@ class Run {
 
   /** One request, refused or failed into an `update_failed` outcome. */
   async handle(request: UpdateRequest, running: CurrentRelease): Promise<ApplyResult> {
+    if (request.phase === "settle") {
+      // Only a wake-up: any unsettled activation was settled before this.
+      this.record(request, {});
+      return { kind: "idle", why: "settled" };
+    }
     try {
       if (compareVersions(request.version, running.version) <= 0) {
         throw new UpdateRefusal(
@@ -500,7 +528,8 @@ class Run {
 /** The data dir's owner: the account whose request and status files are believed. */
 function dataDirOwner(layout: UpdateLayout): number | null {
   try {
-    return lstatSync(layout.dataDir).uid;
+    // The data dir's path is root's to choose; a link the operator made is fine.
+    return statSync(layout.dataDir).uid;
   } catch {
     return null;
   }
@@ -528,7 +557,9 @@ export async function applyUpdate(ports: ApplyPorts, options: ApplyOptions): Pro
     }
     if (request === null) return result;
     if (run.state.handled.includes(request.id)) {
-      return result.kind === "idle" ? { kind: "idle", why: "already handled" } : result;
+      return handled === 0 && result.kind === "idle"
+        ? { kind: "idle", why: "already handled" }
+        : result;
     }
     const running = currentRelease(options.layout);
     if (running === null) {
@@ -537,7 +568,9 @@ export async function applyUpdate(ports: ApplyPorts, options: ApplyOptions): Pro
       ports.log(message);
       return { kind: "refused", code: "not_installed", message };
     }
-    result = await run.handle(request, running);
+    const answer = await run.handle(request, running);
+    // A settle request only woke this run: report what the settling did.
+    if (answer.kind !== "idle" || result.kind === "idle") result = answer;
   }
   return result;
 }
