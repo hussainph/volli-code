@@ -196,23 +196,41 @@ describe("Settings → Account", () => {
 
     act(() => button("Delete account…").click());
     expect(tier.rpc.account.requestDeletion.mutate).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Your account is deleted in 30 days.");
+    expect(document.body.textContent).toContain("You can cancel within 30 days");
+    expect(document.body.textContent).toContain("Automatic erasure is not available");
+    expect(document.body.textContent).toContain("privacy@volli.app");
+    expect(document.body.textContent).not.toContain("Your account is deleted in 30 days.");
     const confirm = [...document.querySelectorAll("[role=alertdialog] button")].find(
       (node) => node.textContent === "Delete account",
     ) as HTMLButtonElement;
     act(() => confirm.click());
     expect(tier.rpc.account.requestDeletion.mutate).toHaveBeenCalledOnce();
 
+    const cancellationDeadline = Date.now() + 86_400_000;
     tier.push({
       ...SIGNED_IN,
-      account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.UTC(2026, 10, 24) },
+      account: { ...SIGNED_IN.account!, deletionPurgeAfter: cancellationDeadline },
     });
-    expect(container.textContent).toContain("Scheduled");
+    expect(container.textContent).toContain("Cancel by");
+    expect(container.textContent).not.toContain("Scheduled");
     expect(container.textContent).toContain(
-      new Date(Date.UTC(2026, 10, 24)).getFullYear().toString(),
+      new Date(cancellationDeadline).getFullYear().toString(),
     );
     act(() => button("Restore account").click());
     expect(tier.rpc.account.cancelDeletion.mutate).toHaveBeenCalledOnce();
+  });
+
+  it("offers a privacy contact instead of restore after the cancellation window", () => {
+    const tier = standIn();
+    act(() => root.render(<AccountPane rpc={tier.rpc} />));
+    tier.push({
+      ...SIGNED_IN,
+      account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.now() - 1 },
+    });
+    expect(container.textContent).toContain("Cancellation window ended");
+    expect(container.textContent).toContain("privacy@volli.app");
+    expect(container.textContent).not.toContain("Restore account");
+    expect(tier.rpc.account.cancelDeletion.mutate).not.toHaveBeenCalled();
   });
 
   it("says when the backend is unreachable, and offers no deletion without one", async () => {

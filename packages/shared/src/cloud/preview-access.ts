@@ -4,7 +4,7 @@ export type PreviewAccess = "granted" | "waitlisted";
 export const PREVIEW_WAITLIST_MESSAGE =
   "Volli Cloud is invite-only. You're on the waitlist; your local projects are unchanged.";
 
-// Compatibility name for existing callers; the published text is the single authority.
+// The backend enrollment name aliases the public notice bundle, never a second version.
 export { PREVIEW_AGREEMENT_VERSION as PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "../preview-legal";
 export const PREVIEW_AGREEMENT_REQUIRED_MESSAGE =
   "Sign out and accept the current Preview Agreement to continue.";

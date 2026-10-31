@@ -2,6 +2,7 @@
 import {
   PREVIEW_AGREEMENT_URL,
   PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_UPDATED_AT,
   PREVIEW_PRIVACY_URL,
 } from "@volli/shared";
 import Base from "./Base.astro";
@@ -13,6 +14,12 @@ interface Props {
 }
 
 const { title, description, path } = Astro.props;
+const updatedLabel = new Date(PREVIEW_AGREEMENT_UPDATED_AT).toLocaleDateString("en-US", {
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
 ---
 
 <Base title={`${title} — Volli`} description={description} path={path}>
@@ -20,7 +27,7 @@ const { title, description, path } = Astro.props;
     <article aria-labelledby="legal-title">
       <h1 id="legal-title">{title}</h1>
       <p class="legal-version">
-        Version {PREVIEW_AGREEMENT_VERSION} · Updated <time datetime="2026-10-31">October 31, 2026</time>
+        Version {PREVIEW_AGREEMENT_VERSION} · Updated <time datetime={PREVIEW_AGREEMENT_UPDATED_AT}>{updatedLabel}</time>
       </p>
       <nav aria-label="Preview legal pages">
         <a

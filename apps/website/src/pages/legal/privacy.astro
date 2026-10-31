@@ -61,14 +61,16 @@ import Legal from "../../layouts/Legal.astro";
     or sensitive or regulated personal data; do not assume redaction catches everything.
   </p>
   <p>
-    In this preview, model requests go from your Mac to the model provider or gateway
+    In this preview, model requests go from the machine running the agent to the model provider or gateway
     you choose, under your agreement with it. They include prompts, code context and tool
     results. The preview does not route model calls through a Volli-operated model gateway.
     Subscription credentials are used only on the machine where you sign in to the provider.
     Cloud history still stores prompts and responses even though the model call is direct.
     MCP servers, web tools and other services you use can also receive the data you or an
     agent sends them. They have their own privacy practices. Signed-out mode does not stop
-    those requests or app update checks.
+    those requests or app update checks. Our download page requests release information
+    from GitHub in your browser, and app update checks and downloads contact GitHub Releases.
+    GitHub receives connection information for these requests under its own privacy practices.
   </p>
 
   <h2>Who can receive data</h2>
@@ -83,7 +85,7 @@ import Legal from "../../layouts/Legal.astro";
   </p>
   <p>
     Other Workspace members can see work shared with them; ticket work is shared by
-    default. An ad-hoc Session starts private, but its owner can share it, and a Workspace
+    default. Ad-hoc chats and Board Sessions start private, but their owner can share them, and a Workspace
     administrator can make all Sessions shared. Sharing a Session cannot be undone in the
     preview and also shares its private subagents. Leaving a Workspace does not erase
     contributions already stored in it. We may access data as needed for support, service
@@ -97,10 +99,12 @@ import Legal from "../../layouts/Legal.astro";
     describe encryption in transit and at rest for the data they host. This is not
     end-to-end encryption: our service and its providers can process readable content.
     Cloud secrets are separately encrypted under service-held keys; ordinary environment
-    variables are not secret values. Subscription credentials saved by Volli stay in the
-    local sealed store, protected on macOS by a key wrapped through the OS keychain.
-    They are used locally to authenticate to your provider, not uploaded to Volli Cloud.
-    These protections do not prevent secrets appearing in prompts or tool output.
+    variables are not secret values. Provider API keys and subscription credentials saved
+    by Pi stay in an owner-only local credential file, not encrypted by Volli. They are
+    used locally to authenticate to your provider, not uploaded to Volli Cloud. Your Volli
+    account refresh token is separate: the desktop stores it in a sealed local store with
+    a key wrapped through the macOS keychain. These protections do not prevent secrets
+    appearing in prompts or tool output.
   </p>
   <p>
     No system can guarantee perfect security or confidentiality. Report vulnerabilities
@@ -130,7 +134,10 @@ import Legal from "../../layouts/Legal.astro";
     30 days. The request blocks normal cloud access, but the automatic account-data purge
     is not implemented in this preview. The 30 days is a cancellation window, not a promise
     to erase all data by day 30. A sole owner of a Workspace with other active members must
-    transfer ownership before requesting deletion. Archiving a project or ticket hides it;
+    transfer ownership before requesting deletion. Requesting deletion disconnects GitHub
+    and revokes cloud device sessions; cancelling does not reconnect them. After the
+    cancellation window ends, contact us for help; do not assume erasure has completed.
+    Archiving a project or ticket hides it;
     it does not purge its history. There is no complete self-service cloud project or
     Workspace deletion or export yet. Contact
     <a href="mailto:privacy@volli.app">privacy@volli.app</a> for help with these requests.

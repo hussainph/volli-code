@@ -409,7 +409,11 @@ describe("explicit preview agreement acceptance", () => {
       client.mutation(api.accounts.ensureViewer, {
         acceptedAgreementVersion: "preview-0.3-2026-10-25",
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: "preview_agreement_required" }),
+      }),
+    );
     const accepted = await client.mutation(api.accounts.ensureViewer, {
       acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
     });

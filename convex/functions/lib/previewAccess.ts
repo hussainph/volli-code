@@ -5,7 +5,7 @@
  */
 import {
   PREVIEW_WAITLIST_MESSAGE,
-  PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
   PREVIEW_AGREEMENT_REQUIRED_MESSAGE,
   type PreviewAccess,
   type UserId,
@@ -67,7 +67,7 @@ export async function previewAccess(ctx: Reader, viewer: Viewer): Promise<Previe
 /** A recorded explicit current-version acceptance, never inferred from an auth refresh. */
 export function hasPreviewAgreement(user: Doc<"users">): boolean {
   return (
-    user.previewAgreementVersion === PREVIEW_AGREEMENT_VERSION &&
+    user.previewAgreementVersion === PREVIEW_ENROLLMENT_AGREEMENT_VERSION &&
     typeof user.previewAgreementAcceptedAt === "number"
   );
 }
@@ -95,7 +95,7 @@ export async function recordPreviewAgreement(
 ): Promise<Viewer> {
   if (version === undefined) return viewer;
   if ((await previewAccess(ctx, viewer)) !== "granted") return viewer;
-  if (version !== PREVIEW_AGREEMENT_VERSION) {
+  if (version !== PREVIEW_ENROLLMENT_AGREEMENT_VERSION) {
     throw agreementRequired("Update Volli to accept the current Preview Agreement.");
   }
   if (hasPreviewAgreement(viewer.user)) return viewer;
