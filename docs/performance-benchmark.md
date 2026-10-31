@@ -92,8 +92,8 @@ clock together are the recipe; the same pair rebuilds the same bytes. A frozen
 base date used to put every Session past the sidebar's seven-day Previous bound,
 so both bands measured empty (VC-415).
 
-Sessions are scheduled into the sidebar's bands explicitly, at the owner
-profile's ratios (14 Active, 141 Previous of 1,198 in `real`), against the
+Sessions are scheduled into the sidebar's bands explicitly, using the fixed
+Active/Previous distribution in `apps/desktop/e2e/bench/performance/fixture.mjs`, against the
 windows in `src/renderer/src/components/sidebar/session-band-windows.ts`, which
 the generator loads rather than copies. The newest Sessions went quiet inside
 the Active window and carry unread receipts, which keeps them in Active for the

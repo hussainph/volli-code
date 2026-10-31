@@ -15,10 +15,10 @@
  * `FALLBACK_PROFILE` when that file is absent, and always prints which one it
  * used.
  *
- * The committed profile is a machine-read latency baseline (VC-245), not a run report.
- * Network latency varies between runs, so comparisons must use the same
- * profile. Re-running the probe changes the input: regenerate the associated
- * tables in the same run, or use the original baseline for both arms.
+ * Measured profiles are local, gitignored evidence. Network latency varies
+ * between runs, so comparisons must use the same profile. Re-running the probe
+ * changes the input: regenerate associated tables in the same run, or keep one
+ * local baseline for both arms. Never commit machine or transcript measurements.
  */
 
 import { execFile } from "node:child_process";
@@ -109,9 +109,8 @@ async function main(): Promise<void> {
     // stand in for that, so it is declared and swept rather than faked.
     browser: 900,
     sessionStart,
-    // Measured, but by the transcript audit rather than here: 130,600ms mean
-    // over 241 real `ticket.await` calls. Nothing in this package can park on
-    // another Session, so the probe carries the audit's number forward.
+    // Fixed input for the synthetic long-wait workload, not measured by this
+    // probe. Historical ticket.await parking is not a current product contract.
     ticketAwait: 130_600,
     // Assumed, not measured. Measuring it costs a real provider call.
     provider: 1_400,
@@ -127,7 +126,7 @@ async function main(): Promise<void> {
       network: `${networkNote}: HTTPS GET + full body read, rotating five public pages`,
       browser: "ASSUMED: needs the app's live browser; swept in the sensitivity table",
       sessionStart: "measured: open + write 2KB + fsync + close",
-      ticketAwait: "measured by the transcript audit: 130,600ms mean over 241 real calls",
+      ticketAwait: "fixed input: synthetic historical long-wait workload, not measured here",
       provider: "ASSUMED: one paid round trip; swept in the sensitivity table",
     },
     profile,

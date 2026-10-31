@@ -526,7 +526,7 @@ export function homeCheckoutGlance(input: {
  * How many trailing segments of a working copy path the rail's card shows.
  *
  * Two, because that is what tells the two working copies apart: a main checkout ends
- * `…/code/volli-code` and a worktree ends `…/volli-code-f3732f45/VC-81-auto-title`,
+ * `…/code/volli-code` and a worktree ends `…/project-01234567/DEMO-1-example`,
  * and the segment above the last is what says which kind of place this is.
  */
 const WORKING_COPY_PATH_SEGMENTS = 2;
@@ -535,7 +535,7 @@ const WORKING_COPY_PATH_SEGMENTS = 2;
  * A working copy path shortened from the FRONT.
  *
  * `truncate` cuts the end, which on a path is precisely the part worth reading:
- * `/Users/phalasiya/Desktop/cod…` names the person and hides the project. Every
+ * `/Users/example/Desktop/cod…` names the person and hides the project. Every
  * path this card shows starts with the same home prefix and differs at its
  * tail, so the tail is what it shows — with the whole path one hover away.
  */

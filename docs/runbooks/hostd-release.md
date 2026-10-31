@@ -1,5 +1,10 @@
 # Hostd release manifest
 
+> **Superseded host architecture; active packaging reference.** This runbook
+> maintains the hostd artifacts still built by the release workflow. It does not
+> define the current cloud backend or Runner deployment; see
+> [Workspace authority and offline](../BOUNDARIES.md#workspace-authority-and-offline).
+
 Hostd and desktop pin the root `package.json` version. Root and desktop versions
 must match, including the canary suffix (`X.Y.Z-canary.N`); the release tag is
 `v<version>`.

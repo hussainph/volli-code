@@ -17,8 +17,10 @@ Two corollaries that settle recurring questions:
   host's SQLite is a private materialization of the ledger it owns, behind the
   host's API, not a sync surface. Under Volli Cloud, clients and runners call
   backend functions; a runner's SQLite holds machine state, not board truth.
-  The local `volli.db` is never synced: a one-way migration exports it into the
-  backend with ids preserved, then signed-out mode retires.
+  The local `volli.db` is never synced. The target local mode runs the same
+  backend functions on an embedded Convex deployment; cloud mode uses the
+  hosted deployment. Moving a project between deployments is an explicit
+  export/import with ids preserved, not database-file sync or forced sign-in.
 - **`@volli/shared` carries domain vocabulary, not transport.** The Electron
   channel catalog and its runtime validators are desktop-owned: the transport
   contract belongs to whoever owns the transport. A non-desktop client or a
@@ -186,11 +188,20 @@ fact in the buffer is pending, not truth; the backend accepts it and assigns
 final order. A client (desktop window, web, phone, CLI) reads projections and
 sends commands; it buffers nothing durable of its own.
 
-**Offline.** Signed in and offline, the board is a read-only cache, and Sessions
-on this Mac keep running while their facts wait in the Retry buffer. Signed out,
-the local SQLite mode keeps fully working; from 0.3 GA it is frozen (no new
-features) until it is retired after migration; an embedded local backend may bring offline work
-back later with the same functions.
+**Offline and Volli Local.** Signed in and offline, the board is a read-only
+cache, and Sessions on this Mac keep running while their facts wait in the Retry
+buffer. Signed-out local mode is permanent, free and requires no account. Today
+it uses SQLite and receives bug fixes only. The target **Volli Local** runs the
+same `convex/` functions and schema on an embedded, loopback-only backend on the
+Mac, fully offline; that backend is planned, not bundled today. Board and Session
+features are written once for both deployments, and the runner is the same.
+The target includes importing existing SQLite data on-device, not uploading it.
+It requires a locally issued identity, local membership bootstrap and local key
+provisioning; no account does not mean unauthenticated backend calls. Those
+deployment pieces are not implemented yet, and shared identity checks are not
+bypassed. Moving a project to the cloud or back is optional, via export/import between deployments;
+local mode is never retired in favor of required cloud migration. Sharing, teams,
+other devices and cloud runners require cloud mode.
 
 **The window's own client (VC-889).** In a cloud launch the desktop window
 reads and writes its board with its own Convex client; main never proxies
@@ -257,6 +268,8 @@ relay, never shared by replaying filesystem paths on the viewing device. In the
 backend model, machine paths live on per-runner Working copy records, not on
 board rows.
 
-**Transition.** Today the desktop and `hostd` are still SQLite authorities over
-the host protocol; that path is superseded and frozen behind the `cloud` flag
-until it is deleted. Don't extend it.
+**Transition.** A signed-out desktop launch still uses its local SQLite
+authority; a cloud launch uses Convex. The older `hostd` authority and remote
+host-protocol path are superseded and maintenance-only until their code is
+deleted. Do not extend them or treat their runbooks as the cloud architecture.
+The signed-out product stays supported while its backend implementation changes.
