@@ -6,7 +6,7 @@
  */
 import { execFile } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -70,12 +70,10 @@ async function world(options: { answer?: (body: unknown) => Response; allowHttp?
     runnerToken: async () => "runner-jwt",
     fetch: fake.fetch,
   });
-  const identities: unknown[] = [];
   const broker = createGitCredentialBroker({
     verifySession: (token) => sessions.verify(token),
     repositoryOf: async (sessionId) => (sessionId === SESSION ? REPO : null),
     tokens,
-    onIdentity: (identity) => identities.push(identity),
     ...(options.allowHttp === undefined ? {} : { allowHttp: options.allowHttp }),
   });
   const socketPath = join(dir, "git-credential.sock");
@@ -89,14 +87,15 @@ async function world(options: { answer?: (body: unknown) => Response; allowHttp?
     },
     action = "get",
   ) => askGitCredentialDaemon({ socketPath, action, request, env });
-  return { ask, fake, identities, socketPath, sessionToken, sessions };
+  return { ask, fake, tokens, socketPath, sessionToken, sessions };
 }
 
 const GITHUB = "protocol=https\nhost=github.com\npath=acme/app.git\n\n";
 
 describe("a runner Session's git credentials", () => {
   it("answer the owner's token for the token's host, over a socket only this account opens", async () => {
-    const { ask, fake, identities, socketPath } = await world();
+    const { ask, fake, tokens, socketPath } = await world();
+    expect(tokens.github()).toBeNull();
     expect(statSync(socketPath).mode & 0o777).toBe(0o600);
     expect(await ask(GITHUB)).toBe(
       `username=x-access-token\npassword=ghu_box_token\npassword_expiry_utc=${Math.floor(grant().useUntil / 1000)}\n`,
@@ -108,7 +107,7 @@ describe("a runner Session's git credentials", () => {
         auth: "Bearer runner-jwt",
       },
     ]);
-    expect(identities).toEqual([grant().identity]);
+    expect(tokens.github()).toEqual({ host: "github.com", identity: grant().identity });
     // Cached until its useUntil: the second git command asks nobody.
     expect(await ask("protocol=https\nhost=GitHub.com\nusername=x-access-token\n")).toContain(
       "password=ghu_box_token",
@@ -261,8 +260,8 @@ describe("a runner Session's git credentials", () => {
     ).rejects.toThrow(/not a socket/u);
   });
 
-  it("is what git itself reads, through a real helper command", async () => {
-    const { socketPath, sessionToken } = await world();
+  it("is what git itself reads, and a box `store` helper never sees the token", async () => {
+    const { socketPath, sessionToken, tokens, ask } = await world();
     // A stand-in for `volli-runner git-credential`: git runs it; it relays its
     // argv, stdin and environment to this test, which answers through the
     // real client (`askGitCredentialDaemon`), and prints what comes back.
@@ -298,45 +297,86 @@ socket.write(JSON.stringify({ action: process.argv[2], input, env: { VOLLI_SESSI
 socket.pipe(process.stdout);
 `,
     );
-    const env = runnerSessionGitEnv(
-      { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: sessionToken, GIT_CONFIG_NOSYSTEM: "1" },
-      { helperCommand: `!node ${helper}`, identity: null },
-    );
-    const out = await new Promise<string>((resolve, reject) => {
-      const child = execFile(
-        "git",
-        ["credential", "fill"],
-        { env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_GLOBAL: "/dev/null", ...env } },
-        (error, stdout) => (error === null ? resolve(stdout) : reject(error)),
-      );
-      child.stdin!.end("protocol=https\nhost=github.com\n\n");
-    });
-    expect(out).toContain("username=x-access-token");
-    expect(out).toContain("password=ghu_box_token");
+    // The box's own configuration: a plaintext `store` helper that already
+    // holds a personal token for GitHub.
+    const stored = join(dir, "git-credentials");
+    writeFileSync(stored, "https://box-user:box_pat@github.com\n");
+    const globalConfig = join(dir, "gitconfig");
+    writeFileSync(globalConfig, `[credential]\n\thelper = store --file ${stored}\n`);
+    const git = (args: string[], input: string, github: ReturnType<typeof tokens.github>) =>
+      new Promise<string>((resolve, reject) => {
+        const env = runnerSessionGitEnv(
+          { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: sessionToken, GIT_CONFIG_NOSYSTEM: "1" },
+          { helperCommand: `!node ${helper}`, github },
+        );
+        const child = execFile(
+          "git",
+          args,
+          {
+            // Outside any repository, so no repository's own helpers join the chain.
+            cwd: dir,
+            env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_GLOBAL: globalConfig, ...env },
+          },
+          (error, stdout) => (error === null ? resolve(stdout) : reject(error)),
+        );
+        child.stdin!.end(input);
+      });
+
+    // Not connected (yet): the box's own chain answers GitHub, as before.
+    expect(
+      await git(["credential", "fill"], "protocol=https\nhost=github.com\n\n", null),
+    ).toContain("password=box_pat");
+    // Once the runner serves the owner's token, only Volli's helper is asked
+    // for GitHub, and git's approve never reaches the store.
+    await ask(GITHUB);
+    const github = tokens.github();
+    expect(github).not.toBeNull();
+    const filled = await git(["credential", "fill"], "protocol=https\nhost=github.com\n\n", github);
+    expect(filled).toContain("username=x-access-token");
+    expect(filled).toContain("password=ghu_box_token");
+    await git(["credential", "approve"], filled, github);
+    expect(readFileSync(stored, "utf8")).toBe("https://box-user:box_pat@github.com\n");
+    // Other hosts keep the box's chain.
+    writeFileSync(stored, "https://me:other_pat@gitlab.example.com\n");
+    expect(
+      await git(["credential", "fill"], "protocol=https\nhost=gitlab.example.com\n\n", github),
+    ).toContain("password=other_pat");
   });
 });
 
 describe("runnerSessionGitEnv", () => {
-  it("appends the helper after the box's own, turns prompts off and sets the owner's identity", () => {
+  it("resets GitHub's helper chain to Volli's alone while the token is served", () => {
+    const github = { host: "github.com", identity: grant().identity };
     const env = runnerSessionGitEnv(
       { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "a.b", GIT_CONFIG_VALUE_0: "c" },
-      { helperCommand: "!volli-runner git-credential", identity: grant().identity },
+      { helperCommand: "!volli-runner git-credential", github },
     );
     expect(env).toMatchObject({
-      GIT_CONFIG_COUNT: "2",
-      GIT_CONFIG_KEY_1: "credential.helper",
-      GIT_CONFIG_VALUE_1: "!volli-runner git-credential",
+      GIT_CONFIG_COUNT: "5",
+      GIT_CONFIG_KEY_0: "a.b",
+      GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
+      GIT_CONFIG_VALUE_1: "",
+      GIT_CONFIG_KEY_2: "credential.https://github.com.helper",
+      GIT_CONFIG_VALUE_2: "!volli-runner git-credential",
+      GIT_CONFIG_KEY_3: "credential.http://github.com.helper",
+      GIT_CONFIG_VALUE_3: "",
       GIT_TERMINAL_PROMPT: "0",
       GIT_AUTHOR_NAME: "Dana Doe",
       GIT_COMMITTER_EMAIL: "501+dana@users.noreply.github.com",
     });
-    const own = runnerSessionGitEnv(
-      { GIT_AUTHOR_NAME: "Box Owner" },
-      { helperCommand: "!h", identity: grant().identity },
-    );
-    expect(own.GIT_AUTHOR_NAME).toBe("Box Owner");
-    expect(runnerSessionGitEnv({}, { helperCommand: "!h", identity: null })).not.toHaveProperty(
-      "GIT_AUTHOR_NAME",
-    );
+    expect(
+      runnerSessionGitEnv({ GIT_AUTHOR_NAME: "Box Owner" }, { helperCommand: "!h", github })
+        .GIT_AUTHOR_NAME,
+    ).toBe("Box Owner");
+  });
+
+  it("without a connection, appends Volli's helper after the box's chain", () => {
+    const env = runnerSessionGitEnv({}, { helperCommand: "!h", github: null });
+    expect(env).toEqual({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "!h",
+      GIT_TERMINAL_PROMPT: "0",
+    });
   });
 });

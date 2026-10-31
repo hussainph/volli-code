@@ -45,10 +45,11 @@ export {
 // Git on a runner with no folder of the person's (BYO-8). Receiving wiring:
 // `volli-runner run` (apps/runner, the headless composition) passes
 // `createManagedClones({ root: <data>/repos, credentials:
-// managedCloneCredentials(tokens, onIdentity) })` to
+// managedCloneCredentials(tokens) })` to
 // `createCloudProductStore({ managedClones })`, serves
 // `createGitCredentialBroker` with `serveGitCredentials` beside the agent
-// socket, and gives every Session command `runnerSessionGitEnv`; the
+// socket, and gives every Session command
+// `runnerSessionGitEnv(base, { helperCommand, github: tokens.github() })`; the
 // `volli-runner git-credential` command is `askGitCredentialDaemon`.
 export {
   createManagedClones,
@@ -59,6 +60,7 @@ export {
 export {
   createRunnerGithubTokens,
   managedCloneCredentials,
+  type RunnerGithub,
   type RunnerGithubTokenAnswer,
   type RunnerGithubTokens,
 } from "../cloud-store/github-tokens";

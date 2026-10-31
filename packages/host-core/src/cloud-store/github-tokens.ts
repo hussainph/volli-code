@@ -7,6 +7,11 @@
  * request. `github_not_connected` is remembered for a minute, so a box whose
  * owner never connected GitHub does not ask on every git command. Nothing is
  * written to disk, and a refresh token never reaches the runner.
+ *
+ * {@link RunnerGithubTokens.github} is what the newest answer taught: the
+ * token's host and the owner's commit identity, or `null` while the owner
+ * has no usable connection. Session git environments are built from it
+ * (`runnerSessionGitEnv`).
  */
 import type { ManagedCloneCredentials } from "./managed-clone";
 import {
@@ -20,6 +25,13 @@ import {
   type RunnerGithubTokenRequest,
   type ProjectRepoId,
 } from "@volli/shared/cloud";
+
+/** The owner's GitHub as the newest grant named it. */
+export interface RunnerGithub {
+  /** The git host (with any port) the owner's token is for. */
+  host: string;
+  identity: RunnerGitIdentity;
+}
 
 export type RunnerGithubTokenAnswer =
   | { ok: true; grant: RunnerGithubTokenGrant }
@@ -52,6 +64,7 @@ export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
   const url = `${options.siteUrl.replace(/\/+$/u, "")}${RUNNER_GITHUB_TOKEN_PATH}`;
   const cached = new Map<string, { answer: RunnerGithubTokenAnswer; until: number }>();
   const flights = new Map<string, Promise<RunnerGithubTokenAnswer>>();
+  let github: RunnerGithub | null = null;
 
   async function ask(request: RunnerGithubTokenRequest): Promise<RunnerGithubTokenAnswer> {
     const token = await options.runnerToken();
@@ -93,15 +106,23 @@ export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
       if (existing !== undefined) return existing;
       const flight = ask(request)
         .then((answer) => {
-          if (answer.ok) cached.set(key, { answer, until: answer.grant.useUntil });
-          else if (answer.error.code === "github_not_connected")
+          if (answer.ok) {
+            cached.set(key, { answer, until: answer.grant.useUntil });
+            github = { host: answer.grant.host, identity: answer.grant.identity };
+          } else if (answer.error.code === "github_not_connected") {
             cached.set(key, { answer, until: now() + GITHUB_NOT_CONNECTED_TTL_MS });
+            github = null;
+          } else if (answer.error.code === "github_needs_reconnect") {
+            github = null;
+          }
           return answer;
         })
         .finally(() => flights.delete(key));
       flights.set(key, flight);
       return flight;
     },
+    /** The owner's GitHub as the newest answer named it, or `null` while there is no connection. */
+    github: (): RunnerGithub | null => github,
     /** Drops every cached answer for a Session or job (its attachment closed, its lease ended). */
     forget(id: string): void {
       for (const key of cached.keys()) {
@@ -115,20 +136,17 @@ export type RunnerGithubTokens = ReturnType<typeof createRunnerGithubTokens>;
 
 /**
  * A managed clone's credentials over these tokens: its own fetch uses the
- * owner's token for the claim it runs under, and each grant's identity is
- * handed on, so a Session's commits take the owner's identity from its very
- * first command, before any of its own git asks for a token.
+ * owner's token for the claim it runs under. A grant here also teaches
+ * {@link RunnerGithubTokens.github}, so a Session's commits take the owner's
+ * identity from its very first command.
  */
 export function managedCloneCredentials(
   tokens: Pick<RunnerGithubTokens, "get">,
-  onIdentity?: (identity: RunnerGitIdentity) => void,
 ): ManagedCloneCredentials {
   return {
     async forRemote({ projectRepoId, claim }) {
       const answer = await tokens.get({ claim, projectRepoId: projectRepoId as ProjectRepoId });
-      if (!answer.ok) return null;
-      onIdentity?.(answer.grant.identity);
-      return { host: answer.grant.host, token: answer.grant.token };
+      return answer.ok ? { host: answer.grant.host, token: answer.grant.token } : null;
     },
   };
 }

@@ -3,11 +3,15 @@
  * (git's credential helper) asks the running runner, and the runner answers
  * with its owner's GitHub token for that Session.
  *
- * - **The environment.** Every Session command gets Volli's helper as
- *   command-scope `credential.helper`, appended after the box's own helpers
- *   (git asks them in order, so a user install's `gh auth setup-git` or SSH
- *   setup still answers first), git's terminal prompt off, and the owner's
- *   commit identity ({@link runnerSessionGitEnv}).
+ * - **The environment** ({@link runnerSessionGitEnv}). While the runner holds
+ *   its owner's GitHub token, a Session command's git asks ONLY Volli's helper
+ *   for that GitHub host: command-scope `credential.<scheme>://<host>.helper`
+ *   is reset to empty, then set to the helper, after every helper the box
+ *   configures. So no box `store` or `cache` helper ever sees the token, on
+ *   any git version, while other hosts keep the box's chain. Without a
+ *   connection (`github_not_connected`), the box's chain is left whole for
+ *   GitHub too, with Volli's helper after it. Git's terminal prompt is off,
+ *   and the owner's commit identity is set once known.
  * - **The helper → runner hop.** The helper sends git's request, the action,
  *   and the Session's `VOLLI_SESSION` / `VOLLI_SESSION_TOKEN` over a Unix
  *   socket only this account can open (0600, in the runner's runtime
@@ -18,9 +22,8 @@
  *   answers `x-access-token` and the token only for the host the token is for.
  *   Anything else, including `github_not_connected`, is the empty answer, so
  *   git moves on to the box's own credentials or fails without a prompt.
- *   The answer carries `password_expiry_utc`, so a box's own `store` or
- *   `cache` helper (git 2.41 and later) never keeps the token; older git's
- *   `store` helper would write it to `~/.git-credentials`.
+ *   The answer also carries `password_expiry_utc`, so a helper that does see
+ *   it (git 2.41 and later) would not keep it.
  * - **Why a socket of its own**, beside the agent socket: the helper speaks no
  *   agent verb, and keeping it off the verb registry keeps the agent surface
  *   unchanged. Same directory, same 0600, same account.
@@ -33,10 +36,10 @@
 import { chmod, lstat, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 
-import type { ProjectRepoId, RunnerGitIdentity, SessionId } from "@volli/shared/cloud";
+import type { ProjectRepoId, SessionId } from "@volli/shared/cloud";
 
 import { appendGitConfig, parseGitCredentialRequest } from "../host-sign-ins/git-credentials";
-import type { RunnerGithubTokens } from "./github-tokens";
+import type { RunnerGithub, RunnerGithubTokens } from "./github-tokens";
 
 /** The user git sends GitHub with an App user token. */
 export const GITHUB_TOKEN_USERNAME = "x-access-token";
@@ -59,9 +62,7 @@ export interface GitCredentialBrokerOptions {
   verifySession(token: string | undefined): string | null;
   /** The repository a Session works in (its location's primary repository), or `null`. */
   repositoryOf(sessionId: string): Promise<string | null>;
-  tokens: Pick<RunnerGithubTokens, "get">;
-  /** Each grant's identity, for {@link runnerSessionGitEnv} on later commands. */
-  onIdentity?(identity: RunnerGitIdentity): void;
+  tokens: Pick<RunnerGithubTokens, "get" | "github">;
   /**
    * Answer plain-`http` requests too. Off: a token is sent over TLS only. A
    * local fake GitHub (an acceptance lane's `git http-backend`) turns it on.
@@ -71,9 +72,6 @@ export interface GitCredentialBrokerOptions {
 
 /** git's answer for one helper call: what the helper writes on stdout. */
 export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
-  // The deployment's GitHub host, once a grant has named it: a request for any
-  // other host is answered without asking the backend.
-  let githubHost: string | null = null;
   return {
     async answer(query: GitCredentialQuery): Promise<string> {
       if (query.action !== "get") return "";
@@ -87,7 +85,9 @@ export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
       if (!transportOk || host === undefined) return "";
       const asked = fields.get("username");
       if (asked !== undefined && asked !== GITHUB_TOKEN_USERNAME) return "";
-      if (githubHost !== null && githubHost !== host.toLowerCase()) return "";
+      // Once a grant has named GitHub's host, any other host costs no backend call.
+      const known = options.tokens.github();
+      if (known !== null && known.host !== host.toLowerCase()) return "";
       const projectRepoId = await options.repositoryOf(sessionId);
       if (projectRepoId === null) return "";
       const answer = await options.tokens.get({
@@ -95,8 +95,6 @@ export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
         projectRepoId: projectRepoId as ProjectRepoId,
       });
       if (!answer.ok) return "";
-      githubHost = answer.grant.host;
-      options.onIdentity?.(answer.grant.identity);
       // The token is for the deployment's GitHub only.
       if (answer.grant.host !== host.toLowerCase()) return "";
       // The expiry keeps a box's own `store`/`cache` helper (git ≥ 2.41) from
@@ -256,20 +254,32 @@ export function askGitCredentialDaemon(input: {
 }
 
 /**
- * The git part of a runner Session command's environment: Volli's helper
- * appended after every helper the box configures, git's terminal prompt off,
- * and, once known, the owner's commit identity (unless `base` names one).
+ * The git part of a runner Session command's environment (see the module
+ * comment): with the owner's GitHub known, the GitHub host's helper chain is
+ * reset to Volli's helper alone; without it, Volli's helper is appended after
+ * the box's. Git's terminal prompt is off either way, and the owner's commit
+ * identity is set when known (unless `base` names one).
  */
 export function runnerSessionGitEnv(
   base: Readonly<Record<string, string>>,
-  input: { helperCommand: string; identity: RunnerGitIdentity | null },
+  input: { helperCommand: string; github: RunnerGithub | null },
 ): Record<string, string> {
-  const env = appendGitConfig(base, [["credential.helper", input.helperCommand]]);
+  const entries: [string, string][] =
+    input.github === null
+      ? [["credential.helper", input.helperCommand]]
+      : ["https", "http"].flatMap((scheme): [string, string][] => {
+          const scope = `credential.${scheme}://${input.github!.host}.helper`;
+          return [
+            [scope, ""],
+            [scope, input.helperCommand],
+          ];
+        });
+  const env = appendGitConfig(base, entries);
   env.GIT_TERMINAL_PROMPT = "0";
-  if (input.identity !== null) {
+  if (input.github !== null) {
     for (const role of ["AUTHOR", "COMMITTER"] as const) {
-      env[`GIT_${role}_NAME`] ??= input.identity.name;
-      env[`GIT_${role}_EMAIL`] ??= input.identity.email;
+      env[`GIT_${role}_NAME`] ??= input.github.identity.name;
+      env[`GIT_${role}_EMAIL`] ??= input.github.identity.email;
     }
   }
   return env;

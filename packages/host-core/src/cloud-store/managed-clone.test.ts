@@ -257,8 +257,7 @@ describe("runner-managed clones", () => {
     await expect(location.prepare(sessionOn(null))).rejects.toThrow(/move it aside/u);
   });
 
-  it("hands each grant's identity on through the token adapter", async () => {
-    const identities: unknown[] = [];
+  it("authenticates through the token adapter, and a refusal sends nothing", async () => {
     const identity = { name: "Dana Doe", email: "501+dana@users.noreply.github.com" };
     const answers = [
       {
@@ -270,9 +269,7 @@ describe("runner-managed clones", () => {
         error: { code: "github_not_connected" as const, message: "no", resetAt: null },
       },
     ];
-    const credentials = managedCloneCredentials({ get: async () => answers.shift()! }, (seen) =>
-      identities.push(seen),
-    );
+    const credentials = managedCloneCredentials({ get: async () => answers.shift()! });
     const request = {
       remoteUrl: REMOTE_URL,
       projectRepoId: REPO,
@@ -283,7 +280,6 @@ describe("runner-managed clones", () => {
       token: "ghu_x",
     });
     expect(await credentials.forRemote(request)).toBeNull();
-    expect(identities).toEqual([identity]);
   });
 
   it("a project Session works in the clone's main worktree", async () => {
