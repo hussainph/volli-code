@@ -6,10 +6,25 @@ import { parseId } from "@volli/shared/cloud";
 import { mutation, query } from "./_generated/server";
 import { publicRow } from "./lib/board";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
-import { checkGitMetadata, primaryRepo, reportedRepo, runnerProject } from "./lib/runnerContext";
+import {
+  checkGitMetadata,
+  primaryRepo,
+  recordableRemoteUrl,
+  reportedRepo,
+  runnerProject,
+} from "./lib/runnerContext";
 import { literals, nullable } from "./lib/validators";
 
-/** Upserts by the calling runner and repository, including a folder project's first report. */
+/**
+ * Upserts by the calling runner and repository, including a folder project's first report.
+ *
+ * A `main` checkout's `remoteUrl` (its `origin`) becomes the folder
+ * repository's remote, the one a runner with no folder clones. Last report
+ * wins. A remote a box could not clone (a local path, an unknown transport)
+ * is ignored rather than refused, so the rest of the report still lands; so
+ * is any remote on a GitHub repository, whose remote derives from its owner
+ * and name. `null` or absent leaves the recorded remote as it is.
+ */
 export const report = mutation({
   args: {
     projectId: v.string(),
@@ -17,12 +32,24 @@ export const report = mutation({
     kind: literals(["main", "managed_clone"]),
     headBranch: nullable(v.string()),
     headSha: v.optional(nullable(v.string())),
+    remoteUrl: v.optional(nullable(v.string())),
   },
   handler: async (ctx, args) => {
     const caller = await requireRunnerForWrite(ctx);
     const project = await runnerProject(ctx, caller, args.projectId);
-    await reportedRepo(ctx, project, args.projectRepoId);
+    const repo = await reportedRepo(ctx, project, args.projectRepoId);
     checkGitMetadata([args.headBranch, args.headSha]);
+    const remoteUrl =
+      args.kind === "main" && repo.provider === "none" && typeof args.remoteUrl === "string"
+        ? recordableRemoteUrl(args.remoteUrl)
+        : null;
+    if (remoteUrl !== null && remoteUrl !== (repo.remoteUrl ?? null)) {
+      const row = await ctx.db
+        .query("projectRepos")
+        .withIndex("by_uuid", (q) => q.eq("id", repo.id))
+        .unique();
+      await ctx.db.patch(row!._id, { remoteUrl });
+    }
     const existing = await ctx.db
       .query("projectCheckouts")
       .withIndex("by_runner_repo", (q) =>

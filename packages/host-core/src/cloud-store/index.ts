@@ -96,6 +96,12 @@ export function createCloudProductStore(options: {
   prepareEnvironment?: CloudSessionLocationOptions["prepareEnvironment"];
   environmentRecipes?: () => boolean;
   /**
+   * Runner-managed clones (`managed-clone.ts`), for a runner with no folder of
+   * the person's (`volli-runner run`). Absent (the Mac) keeps "Choose the
+   * folder for <project> on this Mac".
+   */
+  managedClones?: CloudSessionLocationOptions["managedClones"];
+  /**
    * Specialized follow-up executor override; the default and notice executor
    * are composed here behind the same owner gate.
    */
@@ -358,6 +364,7 @@ export function createCloudProductStore(options: {
       ...(options.environmentRecipes === undefined
         ? {}
         : { environmentRecipes: options.environmentRecipes }),
+      ...(options.managedClones === undefined ? {} : { managedClones: options.managedClones }),
       prepareEnvironment: async (input) => {
         if (prepareEnvironment === undefined) {
           if (input.outcome.setupPending)

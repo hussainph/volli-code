@@ -36,6 +36,7 @@ export * from "./session-start";
 export * from "./stream-chunks";
 export * from "./runners";
 export * from "./runner-updates";
+export * from "./runner-git";
 export * from "./secrets";
 export * from "./session-state";
 export * from "./ticket-key";

@@ -376,6 +376,13 @@ Each was a decision made while turning the design into code.
     `by_user_session` needs the reader). `PURGE_TABLES` in
     `lib/projectPurge.ts` names every table; a new table states whether a
     purge deletes it.
+46. `projectRepos` gains optional `remoteUrl` (nullable; absent reads as
+    unknown). It is set only on `provider: none` rows, from a `main`
+    checkout's `projectCheckouts.report`, after `normalizeGitRemoteUrl`
+    (`@volli/shared/cloud`): network transports only, no userinfo secrets,
+    GitHub spellings in canonical `https` form. It is a URL, never a machine
+    path; a local-path origin is not recorded. GitHub rows never store one:
+    `runnerContext` derives theirs from `owner`/`name` and `GITHUB_WEB_URL`.
 
 ## Rehearsal Workspace cleanup
 

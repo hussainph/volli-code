@@ -67,6 +67,9 @@ const ANONYMOUS_HTTP_ROUTES: Record<string, string> = {
   "POST /runner/link/poll": "poll secret",
   // Exchanges the rotated refresh credential (with reuse detection) for a runner token.
   "POST /runner/token": "refresh credential",
+  // Answers nothing anonymous: it requires the runner's own token as a Bearer
+  // token, then a Session or leased job that runner holds (runnerGithub.ts).
+  "POST /runner/github-token": "runner token",
   // GitHub's OAuth return: a confirm page only for a live connect flow's one-time state.
   "GET /github/oauth/callback": "connect flow state",
   // The confirm form: the live connect flow's one-time state plus GitHub's code.

@@ -73,6 +73,8 @@ function checkoutArgs(input: unknown): CheckoutReport {
     kind: input.kind,
     headBranch: gitValue(input.headBranch),
     headSha: gitValue(input.headSha),
+    // Absent on reports buffered by older builds; sent only when known.
+    ...(typeof input.remoteUrl === "string" ? { remoteUrl: gitValue(input.remoteUrl) } : {}),
   };
 }
 function copyArgs(input: unknown): CloudWorkingCopyReport {

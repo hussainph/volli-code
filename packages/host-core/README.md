@@ -597,6 +597,21 @@ local adapter supplies SQLite reads and event publication, while the core owns
 the same git/reconcile/copy sequence. `reclaimExplicit` keeps its dirty, busy,
 Keep, git-lock and unpushed-work checks without requiring a board row.
 
+### Git on a runner with no folder of the person's
+
+`cloud-store/managed-clone.ts` gives such a runner (`volli-runner run` passes
+`managedClones` to `createCloudProductStore`) one clone per repository: a bare
+`<root>/<repoId>.git` holding only origin's refs, plus a detached main worktree
+`<root>/<repoId>` that the registry records as a `managed_clone` checkout and
+ticket worktrees are added from. The remote is `primaryRepo.remoteUrl` from
+`runnerContext.forSession`; the person's own checkouts report theirs
+(`location.ts`, `readCheckoutRemote`). The runner's own fetch carries the
+owner's GitHub token in command-scope `http.<origin>.extraHeader`
+(`github-tokens.ts` over `POST /runner/github-token`). A Session's git asks
+the runner over a 0600 Unix socket through `volli-runner git-credential`
+(`git-credential-broker.ts`), which answers only for the token's host and
+only for the Session its `VOLLI_SESSION_TOKEN` proves.
+
 `cloud-store/index.ts` now composes the cloud arm of `RunnerProductStore` over
 these ports. Desktop main supplies the Mac runner's existing link/presence and
 per-boot UUID; another runner can compose the same Electron-free store.
