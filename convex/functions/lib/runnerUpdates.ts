@@ -1,7 +1,12 @@
 import { compareVersions } from "@volli/shared";
 import type { Doc } from "../_generated/dataModel";
+import { literals } from "./validators";
 
-/** Neither an opt-out nor a stale explicit pin overrides the compatibility floor. */
+/** Supported owner-selected channels; stored strings stay open for older readers. */
+export const runnerUpdateChannel = literals(["stable", "canary"] as const);
+
+/** Advisory target, not a directive: the updater applies enabled/idle/floor policy.
+ * A stale explicit pin cannot override the compatibility floor. */
 export function runnerTargetVersion(
   autoUpdate: Doc<"runners">["autoUpdate"],
   release: Doc<"releaseChannels"> | null,

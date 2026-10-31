@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { AGENT_TOKEN_ISSUER, newId } from "@volli/shared/cloud";
+import { AGENT_TOKEN_ISSUER, newId, parseId } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import { enqueueJob } from "../functions/lib/jobs";
@@ -62,10 +62,11 @@ describe("runner update policy", () => {
         ticketId: w.ticketId,
         sessionId: null,
         runnerId: w.runnerId,
-        ownerUserId: w.alice.userId,
+        createdBy: { kind: "person", userId: parseId("user", w.alice.userId), via: "desktop" },
+        onBehalfOf: w.alice.userId,
         kind: "workingCopy.materialize",
-        priority: "interactive",
-        payload: { ticketId: w.ticketId, projectRepoId: w.projectRepoId },
+        priority: "normal",
+        payload: { ticketId: parseId("ticket", w.ticketId), reason: "session_start" },
       }),
     );
     expect(await beat(w)).toMatchObject({
@@ -89,9 +90,7 @@ describe("runner update policy", () => {
     // A lifecycle report must not let an outdated runner resume claims.
     await w.runner.mutation(api.runners.reportState, { state: "degraded", reason: "test" });
     expect(await w.runner.mutation(api.runnerJobs.claim, { bootId: newId("runner") })).toEqual([]);
-    await patch(w, { version: "0.3.1" });
     // Re-establish the verdict after the lifecycle report, then clear it on update.
-    await patch(w, { version: "0.3.0" });
     await beat(w);
     await patch(w, { version: "0.3.1" });
     expect(await beat(w)).toMatchObject({ status: "online" });
@@ -132,6 +131,12 @@ describe("runner update policy", () => {
     // The feed moving again does not silently move an explicit runner pin.
     await pointer(w, "0.5.0", "0.3.0");
     expect(await beat(w)).toMatchObject({ targetVersion: "0.4.0" });
+    expect(await w.runner.query(api.runnerReleases.target, {})).toMatchObject({
+      targetVersion: "0.4.0",
+      minVersion: "0.3.0",
+      manifestUrl:
+        "https://github.com/hussainph/volli-code/releases/download/v0.4.0/volli-runner-manifest.json",
+    });
     expect(await w.alice.as.query(api.runners.list, {})).toContainEqual(
       expect.objectContaining({
         id: w.runnerId,
@@ -144,6 +149,49 @@ describe("runner update policy", () => {
     ).toEqual({
       autoUpdate: { enabled: false, channel: "canary", pinnedVersion: null },
     });
+  });
+
+  test("a completed Update-now pin is released on heartbeat without enabling auto-update", async () => {
+    const w = await runnerWorld();
+    await pointer(w, "0.4.0", "0.3.0");
+    await w.alice.as.mutation(api.runners.setAutoUpdate, { runnerId: w.runnerId, enabled: false });
+    await w.alice.as.mutation(api.runners.updateNow, { runnerId: w.runnerId });
+    await pointer(w, "0.5.0", "0.3.0");
+    await patch(w, { version: "0.4.0" });
+    expect(await beat(w)).toMatchObject({
+      targetVersion: "0.5.0",
+      autoUpdate: { enabled: false, pinnedVersion: null },
+    });
+    expect((await row(w))?.pinnedManifestUrl).toBeNull();
+  });
+
+  test("a pin preserves its absolute manifest URL after the download origin or channel changes", async () => {
+    const w = await runnerWorld();
+    await w.t.mutation(internal.runnerReleases.pin, {
+      channel: "stable",
+      version: "0.4.0",
+      minVersion: "0.3.0",
+      manifestUrl: "https://dl.volli.app/runner/0.4.0/manifest.json",
+      publishedAt: 1,
+    });
+    await w.alice.as.mutation(api.runners.updateNow, { runnerId: w.runnerId });
+    await pointer(w, "0.5.0", "0.3.0");
+    expect(await w.runner.query(api.runnerReleases.target, {})).toMatchObject({
+      targetVersion: "0.4.0",
+      manifestUrl: "https://dl.volli.app/runner/0.4.0/manifest.json",
+    });
+  });
+
+  test("changing to a channel without a floor clears the previous floor verdict", async () => {
+    const w = await runnerWorld();
+    await pointer(w);
+    expect(await beat(w)).toMatchObject({ status: "upgrade_required" });
+    await w.alice.as.mutation(api.runners.setAutoUpdate, {
+      runnerId: w.runnerId,
+      enabled: true,
+      channel: "canary",
+    });
+    expect(await beat(w)).toMatchObject({ status: "online", minVersion: null });
   });
 
   test("only the owner can change settings or request an update; runner and Agent identities are not people", async () => {

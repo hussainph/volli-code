@@ -180,19 +180,28 @@ describe("public runner release feed", () => {
     { targets: [] },
     { provenance: { bundleUrl: "http://insecure.test/bundle" } },
   ])(
-    "malformed manifest never partially advances channels or saves its ETag: %j",
+    "a malformed canary manifest retains that pointer without blocking stable: %j",
     async (change) => {
       const t = setup();
       fakeFetch([[release("0.3.0"), release("0.4.0-canary.1")]], {
         "0.4.0-canary.1": { ...manifest("0.4.0-canary.1"), ...change },
       });
-      await expect(t.action(internal.runnerReleases.poll, {})).rejects.toThrow();
-      expect(await channels(t)).toEqual([]);
-      expect(
-        await t.query(internal.runnerReleases.cache, { repo: "hussainph/volli-code" }),
-      ).toEqual([]);
+      await t.action(internal.runnerReleases.poll, {});
+      expect(await channels(t)).toMatchObject([{ channel: "stable", version: "0.3.0" }]);
     },
   );
+
+  test("a poll with no usable manifest leaves pointers and cache untouched", async () => {
+    const t = setup();
+    fakeFetch([[release("0.3.0")]], { "0.3.0": { ...manifest("0.3.0"), schemaVersion: 2 } });
+    await expect(t.action(internal.runnerReleases.poll, {})).rejects.toThrow(
+      "No selected runner release",
+    );
+    expect(await channels(t)).toEqual([]);
+    expect(await t.query(internal.runnerReleases.cache, { repo: "hussainph/volli-code" })).toEqual(
+      [],
+    );
+  });
 
   test("an operator pin survives polling and can explicitly resume the feed", async () => {
     const t = setup();

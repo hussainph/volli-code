@@ -98,7 +98,7 @@ import { hasLivePreviewAccess } from "./lib/previewAccess";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { mintSecret } from "./lib/runnerSecrets";
 import { nullable } from "./lib/validators";
-import { runnerTargetVersion } from "./lib/runnerUpdates";
+import { runnerTargetVersion, runnerUpdateChannel } from "./lib/runnerUpdates";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
 type Writer = { db: GenericDatabaseWriter<DataModel> };
@@ -499,7 +499,7 @@ export const setAutoUpdate = mutation({
   args: {
     runnerId: v.string(),
     enabled: v.boolean(),
-    channel: v.optional(v.union(v.literal("stable"), v.literal("canary"))),
+    channel: v.optional(runnerUpdateChannel),
   },
   handler: async (ctx, args) => {
     const { runner } = await requireOwnRunner(ctx, args.runnerId);
@@ -510,7 +510,10 @@ export const setAutoUpdate = mutation({
       pinnedVersion: channel === runner.autoUpdate.channel ? runner.autoUpdate.pinnedVersion : null,
     };
     if (stableJson(autoUpdate) !== stableJson(runner.autoUpdate)) {
-      await ctx.db.patch(runner._id, { autoUpdate });
+      await ctx.db.patch(runner._id, {
+        autoUpdate,
+        ...(channel === runner.autoUpdate.channel ? {} : { pinnedManifestUrl: null }),
+      });
     }
     return { autoUpdate };
   },
@@ -540,8 +543,11 @@ export const updateNow = mutation({
       });
     }
     const autoUpdate = { ...runner.autoUpdate, pinnedVersion: release.version };
-    if (stableJson(autoUpdate) !== stableJson(runner.autoUpdate))
-      await ctx.db.patch(runner._id, { autoUpdate });
+    if (
+      stableJson(autoUpdate) !== stableJson(runner.autoUpdate) ||
+      runner.pinnedManifestUrl !== release.manifestUrl
+    )
+      await ctx.db.patch(runner._id, { autoUpdate, pinnedManifestUrl: release.manifestUrl });
     return { autoUpdate };
   },
 });
@@ -1221,21 +1227,30 @@ export const heartbeat = mutation({
       .query("releaseChannels")
       .withIndex("by_channel", (q) => q.eq("channel", runner.autoUpdate.channel))
       .unique();
+    let autoUpdate = runner.autoUpdate;
+    if (
+      autoUpdate.pinnedVersion !== null &&
+      compareVersions(runner.version, autoUpdate.pinnedVersion) >= 0
+    ) {
+      // Update now is one-shot intent, not a permanent opt-out from future releases.
+      autoUpdate = { ...autoUpdate, pinnedVersion: null };
+      await ctx.db.patch(runner._id, { autoUpdate, pinnedManifestUrl: null });
+    }
     const belowFloor = release !== null && compareVersions(runner.version, release.minVersion) < 0;
     const status = belowFloor
       ? await setStatus(ctx, runner, "upgrade_required", "minimum_version")
       : runner.status === "offline" ||
           runner.status === "stopped" ||
           runner.status === "asleep" ||
-          (runner.status === "upgrade_required" && release !== null)
+          runner.status === "upgrade_required"
         ? await setStatus(ctx, runner, "online", null)
         : runner.status;
     return {
       serverTime: now,
       status,
-      targetVersion: runnerTargetVersion(runner.autoUpdate, release),
+      targetVersion: runnerTargetVersion(autoUpdate, release),
       minVersion: release?.minVersion ?? null,
-      autoUpdate: runner.autoUpdate,
+      autoUpdate,
     };
   },
 });
@@ -1250,7 +1265,8 @@ export const unlinkSelf = mutation({
   },
 });
 
-/** A runner's lifecycle transition. Only a heartbeat at the floor clears the backend verdict. */
+/** A runner's lifecycle transition. Claims independently recheck the floor,
+ * including while a runner reports draining/updating/degraded during an update. */
 export const reportState = mutation({
   args: {
     state: v.union(...RUNNER_REPORTED_STATES.map((state) => v.literal(state))),

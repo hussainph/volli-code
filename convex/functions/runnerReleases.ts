@@ -14,9 +14,14 @@ import {
 } from "./_generated/server";
 import { nullable } from "./lib/validators";
 import { requireRunner } from "./lib/runnerAuth";
-import { runnerTargetVersion } from "./lib/runnerUpdates";
+import { runnerTargetVersion, runnerUpdateChannel } from "./lib/runnerUpdates";
 
-const channel = v.union(v.literal("stable"), v.literal("canary"));
+function releaseRepo(): string {
+  const repo = process.env.RUNNER_RELEASE_REPO ?? "hussainph/volli-code";
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo))
+    throw new Error("Invalid RUNNER_RELEASE_REPO.");
+  return repo;
+}
 const releaseCandidate = v.object({
   version: v.string(),
   manifestUrl: v.string(),
@@ -61,7 +66,7 @@ export const target = query({
           ? null
           : version === release?.version
             ? release.manifestUrl
-            : `https://github.com/${process.env.RUNNER_RELEASE_REPO ?? "hussainph/volli-code"}/releases/download/v${version}/volli-runner-manifest.json`,
+            : (runner.pinnedManifestUrl ?? null),
       autoUpdate: runner.autoUpdate,
     };
   },
@@ -202,8 +207,8 @@ export const cache = internalQuery({
     )?.pages ?? [],
 });
 
-/** Commit only after every page and selected manifest validated. A failed poll
- * retains both pointers and cache, so a retry cannot mistake a failed fetch for 304 success.
+/** Commit validated channel pointers only. An invalid channel keeps its last
+ * good pointer; every poll re-reads manifests, including after a cached 304 page.
  */
 export const apply = internalMutation({
   args: {
@@ -233,9 +238,7 @@ export const apply = internalMutation({
 export const poll = internalAction({
   args: {},
   handler: async (ctx): Promise<null> => {
-    const repo = process.env.RUNNER_RELEASE_REPO ?? "hussainph/volli-code";
-    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo))
-      throw new Error("Invalid RUNNER_RELEASE_REPO.");
+    const repo = releaseRepo();
     const cached = await ctx.runQuery(internal.runnerReleases.cache, { repo });
     const pages: CachedPage[] = [];
     let stable: Release | null = null;
@@ -269,9 +272,21 @@ export const poll = internalAction({
       if (index === MAX_PAGES - 1) throw new Error("Runner release feed exceeds page budget.");
     }
     const canary = newer(stable, prerelease);
-    const stablePointer = stable === null ? null : await manifest(stable);
-    const canaryPointer =
-      canary === null ? null : canary === stable ? stablePointer : await manifest(canary);
+    // Channels fail independently: a broken prerelease must not hold back a
+    // valid stable release. Never replace a pointer with an invalid manifest.
+    const readManifest = async (candidate: Release | null): Promise<Pointer | null> => {
+      if (candidate === null) return null;
+      try {
+        return await manifest(candidate);
+      } catch {
+        console.warn("runner_release_manifest_failed", { version: candidate.version });
+        return null;
+      }
+    };
+    const stablePointer = await readManifest(stable);
+    const canaryPointer = canary === stable ? stablePointer : await readManifest(canary);
+    if ((stable !== null || canary !== null) && stablePointer === null && canaryPointer === null)
+      throw new Error("No selected runner release has a valid manifest.");
     await ctx.runMutation(internal.runnerReleases.apply, {
       repo,
       pages,
@@ -284,7 +299,7 @@ export const poll = internalAction({
 
 /** Deployment-operator override. `pinned:false` resumes the feed on its next poll. */
 export const pin = internalMutation({
-  args: { channel, ...pointer.fields, pinned: v.optional(v.boolean()) },
+  args: { channel: runnerUpdateChannel, ...pointer.fields, pinned: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<null> => {
     if (
       !validVersion(args.version) ||
