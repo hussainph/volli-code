@@ -827,8 +827,10 @@ describe("bounded host catalog", () => {
     const service = fakeGit(f, "exec sleep 60", { testOnly: { rowTimeoutMs: 30 } });
     const spawn = processes.spawn;
     const spawned = Promise.withResolvers<ReturnType<typeof spawn>>();
+    const childClosed = Promise.withResolvers<void>();
     vi.spyOn(processes, "spawn").mockImplementationOnce((...args) => {
       const child = spawn(...args);
+      child.once("close", () => childClosed.resolve());
       spawned.resolve(child);
       return child;
     });
@@ -840,8 +842,9 @@ describe("bounded host catalog", () => {
       expect(child.signalCode).toBeNull();
       await vi.advanceTimersByTimeAsync(30);
       expect(await listing).toEqual({ workspaces: [], omitted: 1 });
-      // Let the child reach its own timeout rather than changing it to shutdown.
+      // Git settles on close, after exit; let its timeout settle before shutdown.
       await vi.waitFor(() => expect(child.signalCode).not.toBeNull());
+      await childClosed.promise;
       await service.close();
     } finally {
       vi.useRealTimers();
