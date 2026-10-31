@@ -133,7 +133,7 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
             disabled={waiting}
           />
           <span>
-            I agree to the{" "}
+            I am at least 18 and agree to the{" "}
             <a href={PREVIEW_AGREEMENT_URL} target="_blank" rel="noopener noreferrer">
               Preview Agreement
             </a>{" "}

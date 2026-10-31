@@ -570,7 +570,7 @@ it("explains a short invite code before making an RPC call", () => {
   expect(tier.rpc.account.signIn.mutate).not.toHaveBeenCalled();
 });
 
-it("requires explicit agreement acceptance and links the legal pages before sign-in", () => {
+it("requires explicit 18+ agreement acceptance and links the legal pages before sign-in", () => {
   const tier = standIn();
   act(() => root.render(<AccountPane rpc={tier.rpc} />));
   tier.push(SIGNED_OUT);
@@ -585,6 +585,12 @@ it("requires explicit agreement acceptance and links the legal pages before sign
     expect(link.rel).toBe("noopener noreferrer");
   }
   expect(container.querySelectorAll('[aria-label="Accept Preview Agreement"]')).toHaveLength(1);
+  expect(container.querySelector("[data-testid=account-sign-in] label")?.textContent).toContain(
+    "I am at least 18 and agree to the",
+  );
+  expect(
+    container.querySelectorAll('[data-testid=account-sign-in] [role="checkbox"]'),
+  ).toHaveLength(1);
   acceptAgreement();
   expect(button("Continue with GitHub").disabled).toBe(false);
 });
