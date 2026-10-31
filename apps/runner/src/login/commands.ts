@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { userInfo } from "node:os";
 import { piSignIn, providerSignInMethods, type PiModelAccess } from "@volli/agent-runtime";
 import { ModelAccessSignInService } from "@volli/host-core/session-runtime";
 
@@ -10,6 +11,7 @@ import { renderLogin, type LoginTerminal } from "./renderer";
 import { loginTerminal } from "./terminal";
 
 export interface LoginPorts {
+  isServiceUser(): boolean;
   models(paths: RunnerPaths, context: CommandContext): PiModelAccess;
   terminal(context: CommandContext): LoginTerminal;
   asServiceUser(
@@ -21,6 +23,7 @@ export interface LoginPorts {
 }
 
 const LIVE: LoginPorts = {
+  isServiceUser: () => userInfo().username === "volli",
   models: (paths, context) => runnerModelAccess({ ...paths, env: context.env }),
   terminal: (context) => loginTerminal(context.err),
   asServiceUser,
@@ -61,11 +64,9 @@ export async function runModelCommand(
   }
   const paths = pathsFor(input.values, {
     ...context,
-    // The installed service account's home is fixed by the system layout.
-    // Direct `sudo -u volli` invocations do not inherit systemd's environment.
+    // Read the real uid's account, not $HOME (sudo may preserve the caller's).
     uid:
-      context.env["VOLLI_RUNNER_INSTALL_MODE"] === "system" ||
-      context.home === "/var/lib/volli-runner"
+      context.env["VOLLI_RUNNER_INSTALL_MODE"] === "system" || ports.isServiceUser()
         ? 0
         : context.uid,
   });

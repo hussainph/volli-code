@@ -39,6 +39,7 @@ function fixture() {
   const access = runnerModelAccess({ ...paths, env: {} });
   const input = new PassThrough();
   const ports: LoginPorts = {
+    isServiceUser: () => false,
     models: () => access,
     terminal: () => bufferedTerminal(input, false, context.err, () => input.pause()),
     asServiceUser: vi.fn(() => 0),
@@ -171,13 +172,14 @@ describe("runner login/logout commands", () => {
     expect(models).toHaveBeenCalledWith({ ...f.paths, mode: "system" }, context);
   });
 
-  it("finds the system store when invoked directly as the service user", async () => {
+  it("finds the system store for the service uid even when sudo preserves the caller's HOME", async () => {
     const f = fixture();
     const models = vi.fn(f.ports.models);
-    const context = { ...f.context, home: "/var/lib/volli-runner" };
+    const context = { ...f.context, home: "/home/caller" };
     expect(
       await runModelCommand("login", commandInput(undefined, { status: true }), context, {
         ...f.ports,
+        isServiceUser: () => true,
         models,
       }),
     ).toBe(0);
