@@ -1,24 +1,21 @@
-import { openSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
-import { ReadStream } from "node:tty";
 import type { ModelAccessSignInPrompt } from "@volli/shared";
 
 import type { LoginTerminal } from "./renderer";
 
-/** Reads a pipe, or /dev/tty (never the shell's argument list or environment). */
+/** Reads a pipe or the inherited tty descriptor, including after runuser. */
 export function loginTerminal(write: (text: string) => void): LoginTerminal {
   let reader: ReturnType<typeof bufferedTerminal> | undefined;
   return {
     write,
-    read: (prompt, signal) => {
+    read: async (prompt, signal) => {
       if (reader === undefined) {
-        const piped = !process.stdin.isTTY;
-        const input = piped ? process.stdin : new ReadStream(openSync("/dev/tty", "r+"));
-        reader = bufferedTerminal(input, !piped, write, () => {
-          if (!piped) input.destroy();
-          else input.pause();
-        });
+        // Reopening /dev/tty can be denied after switching to the service
+        // uid; its inherited descriptor remains readable. Readline disables
+        // echo with raw mode, then restores it on close. Do not close fd 0.
+        const input = process.stdin;
+        reader = bufferedTerminal(input, input.isTTY === true, write, () => input.pause());
       }
       return reader.read(prompt, signal);
     },

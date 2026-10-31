@@ -43,9 +43,7 @@ export class RunnerCredentialStore implements Store {
         const snapshot = this.#inventory.snapshot("pi-provider");
         assertAvailable(snapshot.status);
         return snapshot.records.map((record) => {
-          const credential = this.#read(record.selector["provider"]!);
-          if (credential === undefined)
-            throw new Error("Runner model credentials changed while reading.");
+          const credential = this.#readListed(record.selector["provider"]!);
           return { providerId: record.selector["provider"]!, type: credential.type };
         });
       }, options?.signal),
@@ -55,11 +53,12 @@ export class RunnerCredentialStore implements Store {
     this.#operations.with(async () => {
       const current = await retryInventory(() => this.#read(providerId), options?.signal);
       const next = await fn(current);
-      options?.signal?.throwIfAborted();
       if (next === undefined) return current;
+      // A refresh may have rotated the provider's token already. Persist its
+      // replacement even if the caller cancelled while the provider worked.
       await retryInventory(
         () => this.#inventory.put("pi-provider", { provider: providerId }, { ...next }),
-        options?.signal,
+        undefined,
       );
       return next;
     });
@@ -77,9 +76,15 @@ export class RunnerCredentialStore implements Store {
     assertAvailable(snapshot.status);
     if (!snapshot.records.some((record) => record.selector["provider"] === providerId))
       return undefined;
+    return this.#readListed(providerId);
+  }
+
+  #readListed(providerId: string): Credential {
     const record = this.#inventory.get("pi-provider", { provider: providerId });
-    assertAvailable(this.#inventory.status());
-    if (record === null) throw new Error("Runner model credentials changed while reading.");
+    if (record === null) {
+      assertAvailable(this.#inventory.status());
+      throw new Error("Runner model credentials changed while reading.");
+    }
     // The inventory validates the object-valued family; Pi owns its contents.
     const value = record.value as Record<string, unknown>;
     if (value["type"] !== "api_key" && value["type"] !== "oauth") {

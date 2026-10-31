@@ -70,7 +70,11 @@ describe("terminal sign-in conversation", () => {
     const secret = "http://localhost:1455/auth/callback?code=secret-code";
     const result = renderLogin(
       pi(async (steps) => {
-        steps.say({ kind: "auth-url", url: "https://example.com/oauth", instructions: "Sign in" });
+        steps.say({
+          kind: "auth-url",
+          url: "https://example.com/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback",
+          instructions: "Sign in",
+        });
         expect(await steps.ask(prompt(steps), undefined)).toBe(secret);
       }),
       "openai",

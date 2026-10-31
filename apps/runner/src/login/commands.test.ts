@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { PassThrough } from "node:stream";
 import { piHostCredentials } from "@volli/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -11,9 +13,9 @@ import {
   loginCommand,
   logoutCommand,
   runModelCommand,
-  runnerDeviceId,
   type LoginPorts,
 } from "./commands";
+import { runnerDeviceId } from "./device-id";
 import { runnerModelAccess, runnerModelKeyPath } from "./model-access";
 import { bufferedTerminal } from "./terminal";
 
@@ -169,6 +171,22 @@ describe("runner login/logout commands", () => {
     expect(models).toHaveBeenCalledWith({ ...f.paths, mode: "system" }, context);
   });
 
+  it("finds the system store when invoked directly as the service user", async () => {
+    const f = fixture();
+    const models = vi.fn(f.ports.models);
+    const context = { ...f.context, home: "/var/lib/volli-runner" };
+    expect(
+      await runModelCommand("login", commandInput(undefined, { status: true }), context, {
+        ...f.ports,
+        models,
+      }),
+    ).toBe(0);
+    expect(models).toHaveBeenCalledWith(
+      { mode: "system", dataDir: "/var/lib/volli-runner", configDir: "/etc/volli-runner" },
+      context,
+    );
+  });
+
   it("withholds setup and sign-out exceptions", async () => {
     const f = fixture();
     expect(
@@ -207,6 +225,67 @@ describe("runner login/logout commands", () => {
       ),
     ).toBe(0);
     expect(login).toHaveBeenCalledOnce();
+  });
+
+  it("drives the paste-code selection through Pi's prompt codec and the sign-in service", async () => {
+    const f = fixture();
+    vi.spyOn(f.access.models, "login").mockImplementation(async (_id, _type, interaction) => {
+      expect(
+        await interaction.prompt({
+          type: "select",
+          message: "Login method",
+          options: [{ id: "copy_code", label: "Copy code login (headless)" }],
+        }),
+      ).toBe("copy_code");
+      interaction.notify({
+        type: "auth_url",
+        url: "https://example.com/oauth",
+        instructions: "Copy the code",
+      });
+      expect(await interaction.prompt({ type: "manual_code", message: "Paste the code" })).toBe(
+        "TEST-only-code",
+      );
+      return { type: "oauth", access: "TEST-access", refresh: "TEST-refresh", expires: 123 };
+    });
+    const run = runModelCommand("login", commandInput("anthropic"), f.context, f.ports);
+    f.input.end("copy_code\nTEST-only-code\n");
+    expect(await run).toBe(0);
+    expect(f.context.stderr()).not.toContain("TEST-only-code");
+    expect(f.context.stderr()).not.toContain("ssh -L");
+  });
+
+  it("withdraws a pasted URL when a real loopback callback wins through Pi's codec", async () => {
+    const f = fixture();
+    const callback = Promise.withResolvers<string>();
+    const server = createServer((request, response) => {
+      callback.resolve(new URL(request.url!, "http://localhost").searchParams.get("code")!);
+      response.end("Signed in");
+    });
+    await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/callback?code=TEST-callback-code`;
+    vi.spyOn(f.access.models, "login").mockImplementation(async (_id, _type, interaction) => {
+      const withdrawal = new AbortController();
+      interaction.notify({
+        type: "auth_url",
+        url: "https://example.com/authorize",
+        instructions: "Approve in browser",
+      });
+      const pasted = interaction
+        .prompt({ type: "manual_code", message: "Paste redirect URL", signal: withdrawal.signal })
+        .catch(() => "withdrawn");
+      expect(await (await fetch(url)).text()).toBe("Signed in");
+      expect(await callback.promise).toBe("TEST-callback-code");
+      withdrawal.abort();
+      expect(await pasted).toBe("withdrawn");
+      return { type: "oauth", access: "TEST-access", refresh: "TEST-refresh", expires: 123 };
+    });
+    try {
+      expect(await runModelCommand("login", commandInput("anthropic"), f.context, f.ports)).toBe(0);
+      expect(f.context.stderr()).not.toContain("TEST-callback-code");
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((closed) => server.close(() => closed()));
+    }
   });
 
   it("falls back to the API key flow for API-only providers", async () => {
@@ -257,6 +336,9 @@ describe("runner model profile", () => {
     expect(runnerDeviceId(f.paths.dataDir)).toBe(runnerDeviceId(f.paths.dataDir));
     writeFileSync(join(f.paths.dataDir, "model-device-id"), "invalid");
     expect(() => runnerDeviceId(f.paths.dataDir)).toThrow("Invalid model device id");
+    rmSync(join(f.paths.dataDir, "model-device-id"));
+    mkdirSync(join(f.paths.dataDir, "model-device-id"));
+    expect(() => runnerDeviceId(f.paths.dataDir)).toThrow();
     expect(() => runnerDeviceId(join(f.root, "missing"))).toThrow();
   });
   it("re-execs as volli with the original pipe/tty and explicit service paths, never a key argument", () => {
@@ -277,6 +359,7 @@ describe("runner model profile", () => {
         "volli",
         "--",
         "VOLLI_RUNNER_INSTALL_MODE=system",
+        `VOLLI_SECRET_KEY_FILE=${join(f.paths.configDir, "session-secrets.key")}`,
         "--api-key",
         "--status",
         "--data-dir",
@@ -295,7 +378,10 @@ describe("runner model profile", () => {
   it("uses the service key override and refuses relative key paths", () => {
     const f = fixture();
     expect(runnerModelKeyPath({ ...f.paths, env: {} })).toBe(
-      join(f.paths.dataDir, "session-secrets.key"),
+      join(f.paths.configDir, "session-secrets.key"),
+    );
+    expect(runnerModelKeyPath({ ...f.paths, env: { VOLLI_SECRET_KEY_FILE: "" } })).toBe(
+      join(f.paths.configDir, "session-secrets.key"),
     );
     expect(runnerModelKeyPath({ ...f.paths, env: { VOLLI_SECRET_KEY_FILE: "/service/key" } })).toBe(
       "/service/key",

@@ -1,12 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { piSignIn, providerSignInMethods, type PiModelAccess } from "@volli/agent-runtime";
 import { ModelAccessSignInService } from "@volli/host-core/session-runtime";
 
 import type { CommandContext, CommandInput, RunnerCommand } from "../commands";
 import { PATH_OPTIONS, PATH_USAGE, pathsFor, type RunnerPaths } from "../shell/paths";
+import { runnerDeviceId } from "./device-id";
 import { runnerModelAccess, runnerModelKeyPath } from "./model-access";
 import { renderLogin, type LoginTerminal } from "./renderer";
 import { loginTerminal } from "./terminal";
@@ -53,16 +51,23 @@ export async function runModelCommand(
   ports: LoginPorts = LIVE,
 ): Promise<number> {
   const providerId = input.positionals[0];
-  if (
-    (command === "logout" && providerId === undefined) ||
-    (input.values["status"] === true && input.values["api-key"] === true)
-  ) {
-    context.err("Specify a provider for logout; --status cannot be combined with --api-key.\n");
+  if (command === "logout" && providerId === undefined) {
+    context.err("Specify a provider: volli-runner logout <provider>.\n");
+    return 2;
+  }
+  if (input.values["status"] === true && input.values["api-key"] === true) {
+    context.err("--status cannot be combined with --api-key.\n");
     return 2;
   }
   const paths = pathsFor(input.values, {
     ...context,
-    uid: context.env["VOLLI_RUNNER_INSTALL_MODE"] === "system" ? 0 : context.uid,
+    // The installed service account's home is fixed by the system layout.
+    // Direct `sudo -u volli` invocations do not inherit systemd's environment.
+    uid:
+      context.env["VOLLI_RUNNER_INSTALL_MODE"] === "system" ||
+      context.home === "/var/lib/volli-runner"
+        ? 0
+        : context.uid,
   });
   // Root must never create root-owned credentials or run a provider flow.
   if (context.uid === 0) return ports.asServiceUser(command, input, paths, context);
@@ -151,17 +156,4 @@ export function asServiceUser(
       "Could not switch to the volli service user. Run login as that user with the service's data/config directories.\n",
     );
   return child.status ?? 1;
-}
-
-export function runnerDeviceId(dataDir: string): string {
-  const path = join(dataDir, "model-device-id");
-  try {
-    writeFileSync(path, randomUUID(), { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  const id = readFileSync(path, "utf8");
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))
-    throw new Error("Invalid model device id.");
-  return id;
 }

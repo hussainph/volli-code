@@ -103,7 +103,10 @@ function renderEvent(event: ModelAccessSignInEvent): string {
       return (
         `Open this URL in your browser:\n${event.url}\n` +
         `${event.instructions === null ? "" : `${event.instructions}\n`}` +
-        "On SSH, paste the final redirect URL when asked. For a port-1455 callback, connect with ssh -L 1455:localhost:1455 <box>.\n"
+        "On SSH, follow the provider's paste-code or redirect-URL prompt.\n" +
+        (event.url.includes("1455")
+          ? "For a port-1455 callback, connect with ssh -L 1455:localhost:1455 <box>.\n"
+          : "")
       );
     case "device-code":
       return `Open ${event.verificationUri} and enter code ${event.userCode}.\n`;

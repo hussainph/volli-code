@@ -24,7 +24,12 @@ export function runnerModelAccess(options: RunnerModelAccessOptions): PiModelAcc
 }
 
 export function runnerModelKeyPath(options: RunnerModelAccessOptions): string {
-  // Same rule as openHeadlessSecrets: the service unit overrides this to
-  // <configDir>/session-secrets.key; foreground runs default to <dataDir>.
-  return secretKeyFilePath(options.dataDir, options.env);
+  // Match the installed unit even when login is run from an ordinary shell
+  // (sudo/runuser do not inherit the unit's environment). The daemon uses
+  // this same path for its model store; explicit operator overrides win.
+  return secretKeyFilePath(options.dataDir, {
+    ...options.env,
+    VOLLI_SECRET_KEY_FILE:
+      options.env["VOLLI_SECRET_KEY_FILE"] || join(options.configDir, "session-secrets.key"),
+  });
 }

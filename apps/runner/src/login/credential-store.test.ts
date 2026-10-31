@@ -157,7 +157,7 @@ describe("runner sealed Pi credential store", () => {
     snapshot.mockRestore();
   });
 
-  it("honors aborted storage operations, including abort during a refresh", async () => {
+  it("honors aborts before work but persists an already-issued refresh result", async () => {
     const f = fixture();
     const abort = new AbortController();
     abort.abort();
@@ -176,7 +176,7 @@ describe("runner sealed Pi credential store", () => {
         },
         { signal: during.signal },
       ),
-    ).rejects.toThrow();
-    expect(await f.store.read("a")).toBeUndefined();
+    ).resolves.toEqual(key);
+    expect(await f.store.read("a")).toEqual(key);
   });
 });
