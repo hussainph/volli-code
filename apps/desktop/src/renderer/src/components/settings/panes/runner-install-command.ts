@@ -183,7 +183,7 @@ export function runnerInstallCommand(options: RunnerInstallOptions): string {
 }
 
 /**
- * The `#cloud-config` user-data for an always-on server: curl from the distro
+ * The `#cloud-config` user-data for an always-on server: curl and git from the distro
  * (an always-on image need not carry it), then the pinned script downloaded
  * into a private temporary file and removed again. Root's `runcmd` needs no
  * sudo, and the token is the installer's environment rather than one of its
@@ -206,6 +206,7 @@ export function runnerCloudInit(options: RunnerCloudInitOptions): string {
     "package_update: true",
     "packages:",
     "  - curl",
+    "  - git",
     "runcmd:",
     "  - |",
     "    set -eu",
