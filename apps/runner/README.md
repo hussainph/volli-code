@@ -22,7 +22,7 @@ rely on the command table now.
 | `run`                                                                    | _not yet._ Serve in the foreground.                                                                                      |
 | `status`                                                                 | One JSON report: the daemon's status file and liveness, and the link on disk. Exit 0 serving, 1 refusing, 3 not serving. |
 | `doctor`                                                                 | _not yet._ Check git, disk, network and model sign-ins.                                                                  |
-| `login <provider>` / `logout <provider>`                                 | _not yet._ Model sign-in on this box.                                                                                    |
+| `login [provider] [--api-key] [--status]` / `logout <provider>`          | Store, list or remove this runner's model sign-ins (below).                                                              |
 | `update`                                                                 | _not yet._ Update to the release Volli Cloud asks for.                                                                   |
 | `logs [-f]`                                                              | _not yet._ The runner's log.                                                                                             |
 | `git-credential <get\|store\|erase>`                                     | _not yet._ Volli's git credential helper, run by git.                                                                    |
@@ -72,6 +72,47 @@ Saves are durable (temp file, fsync, rename, fsync the directory) and refuse
 a generation that is not newer than the stored one, so a stale writer cannot
 roll the credential back. A link file this build cannot open is an error that
 names it, never "not linked".
+
+### Model sign-ins
+
+```sh
+volli-runner login                          # list provider ids and sign-in methods
+volli-runner login anthropic                # provider subscription/browser flow
+volli-runner login anthropic --api-key      # hidden API-key prompt
+volli-runner login --status                 # stored sign-ins, never their values
+volli-runner logout anthropic               # remove this runner's stored sign-in
+```
+
+`--api-key` is a switch, not a key argument. Input is read without echo or
+terminal history from the inherited terminal, or as lines on standard input
+when piped. Never put a key in shell arguments or an environment variable for
+this command. OAuth flows print the provider's device code, browser URL or
+paste-code prompt. Follow its instructions; a loopback callback withdraws the
+paste prompt if it wins. Port-1455 browser flows also print the
+`ssh -L 1455:localhost:1455 <box>` forwarding tip. Ctrl-C cancels sign-in.
+
+For a system installation, use `sudo volli-runner login ...`: the command
+runs as the `volli` service account before opening credentials. A direct
+invocation as that account also uses the system data/config directories,
+even if sudo preserves the caller's `HOME`. All commands above accept the
+usual `--data-dir` and `--config-dir` overrides.
+
+The runner keeps Pi's opaque provider credentials in
+`<dataDir>/host-credentials.enc`, sealed under
+`<configDir>/session-secrets.key` (both owner-only). An explicit absolute
+`VOLLI_SECRET_KEY_FILE` overrides that key path. The CLI never reads or
+changes the person's `~/.pi/agent/auth.json`. Changes merge under the
+inventory's credential lock; `pi-credentials.lock` also serializes Pi
+refresh/login/logout across processes. The non-secret `model-device-id`
+(and its lock file) supplies a stable installation id to Pi OAuth.
+
+`--status` reports stored credentials, not a successful provider validation.
+Logout removes only the stored credential; ambient provider credentials
+remain unchanged. The daemon must compose `runnerModelAccess` from
+`src/login/model-access.ts`, use its `runnerModelKeyPath` for other secret
+stores too, and refresh its credential-availability report after changes.
+Every store read reloads disk under the lock; no plaintext Pi auth file or
+backend call is needed by login/logout.
 
 ## Layout
 
