@@ -566,17 +566,20 @@ async function sessionLeg(context, log) {
     model: provider.pin,
   });
   log(`Session ${started.sessionId} started on ${context.runner.name}`);
-  // A start the runner refused or failed says so in its status: report that
-  // rather than wait out the clock.
+  // A start that failed for good says so in its status: report that rather
+  // than wait out the clock.
   const sha = await waitFor(
     `${AGENT_BRANCH} on the fake GitHub`,
     async () => {
       const pushed = github.refs(WORLD.repo.owner, WORLD.repo.name)[`refs/heads/${AGENT_BRANCH}`];
       if (pushed) return pushed;
       const start = await person.query("sessionStarts:status", { sessionId: started.sessionId });
-      if (start?.failure) {
-        throw new StartFailed(`the start ${start.state}: ${JSON.stringify(start.failure)}`);
+      const failure = start?.failure ? JSON.stringify(start.failure) : null;
+      if (failure !== null && start.state === "failed") {
+        throw new StartFailed(`the start failed: ${failure}`);
       }
+      // A retried start keeps its last failure: the timeout names it.
+      if (failure !== null) throw new Error(`the start is ${start.state} after ${failure}`);
       return null;
     },
     { timeoutMs: 5 * 60_000, intervalMs: 1_000, fatal: (error) => error instanceof StartFailed },
