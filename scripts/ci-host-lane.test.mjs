@@ -608,7 +608,7 @@ test("the BYO lanes gate on merged work: pending is a notice, present-but-broken
   assert.equal(byo.needs, "byo-runner-artifact");
   assert.equal(byo.if, "${{ !cancelled() }}");
   assert.ok(byo.steps.every((step) => step["continue-on-error"] === undefined));
-  const download = byo.steps.find((step) => step.name === "Download the x64 runner artifact");
+  const download = byo.steps.find((step) => step.name === "Download both runner artifacts");
   assert.ok(gated(byo).includes(download) && before(byo, download));
   const acceptance = byo.steps.find((step) => step.name === "Run the BYO runner acceptance");
   assert.equal(acceptance["working-directory"], "convex");
