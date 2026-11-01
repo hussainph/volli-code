@@ -134,7 +134,7 @@ On the box:
 ```sh
 cloud-init status --long          # did the user data run, and did it fail
 sudo journalctl -u volli-runner -n 50
-sudo volli-runner status          # one JSON report, with the reason it is not serving
+sudo -u volli env VOLLI_RUNNER_INSTALL_MODE=system volli-runner status   # why it is not serving
 ```
 
 The usual causes are a token that expired before the server booted, a package

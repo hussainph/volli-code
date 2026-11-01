@@ -242,10 +242,12 @@ the new one; if it does not come back online, it rolls back and reports what
 happened, so a bad release cannot strand a box.
 
 - **From the app.** A Linux runner's row in **Settings → Runners** shows the
-  version it runs and has **Update now** and **Automatic updates**. Update now
-  asks the box to take the release the deployment names; Automatic updates
-  turns the idle update off for that runner. The floor still wins: a runner
-  below the oldest accepted version cannot decline its way past it.
+  version it runs, and the row's menu carries **Update now** and an
+  **Automatic updates** checkbox beside **Rename** and **Remove…**. Update now
+  asks the box to take the release the deployment names, and the row then
+  reads `Update to <version> requested`; Automatic updates turns the idle
+  update off for that runner. The floor still wins: a runner below the oldest
+  accepted version cannot decline its way past it.
 - **Manual.** `volli-runner update` prints what this box runs, what is staged
   and the last outcome. `volli-runner update --now` asks the running runner to
   update now: it stages the release, waits up to 30 minutes for the box to be

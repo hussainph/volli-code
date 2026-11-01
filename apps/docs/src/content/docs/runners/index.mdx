@@ -79,7 +79,9 @@ Sessions.
   `volli` CLI inside the Session.
 - It clones and fetches from your project's remote. For a project moved to
   Volli Cloud, the runner clones the recorded remote into its own data
-  directory.
+  directory. A project with no remote on record cannot be cloned there at all:
+  its Session stops with "Volli doesn't know where to clone … from yet", so
+  connect the project's GitHub repository (or open the folder on a Mac) first.
 - It reports facts, transcript chunks and attention states to Volli Cloud.
 
 A Linux runner does not install a browser. **Browser Tabs are a Mac feature**;
