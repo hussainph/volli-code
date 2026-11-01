@@ -434,12 +434,10 @@ export class FakeGithub {
   }
 
   #bearer(request) {
-    const header = String(request.headers.authorization ?? "");
-    return header.startsWith("Bearer ")
-      ? header.slice(7)
-      : header.startsWith("token ")
-        ? header.slice(6)
-        : "";
+    const match = /^(?:bearer|token)\s+(\S+)$/iu.exec(
+      String(request.headers.authorization ?? "").trim(),
+    );
+    return match === null ? "" : match[1];
   }
 
   #appJwtValid(request) {
@@ -493,9 +491,10 @@ export class FakeGithub {
    * (for the request log): `user:<login>`, `installation:<id>` or `null`.
    */
   gitCredentialFor(authorization, owner, name) {
-    const header = String(authorization ?? "");
-    if (!header.startsWith("Basic ")) return null;
-    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
+    // Auth schemes are case-insensitive (RFC 9110 §11.1), as GitHub reads them.
+    const match = /^basic\s+(\S+)$/iu.exec(String(authorization ?? "").trim());
+    if (match === null) return null;
+    const decoded = Buffer.from(match[1], "base64").toString("utf8");
     const colon = decoded.indexOf(":");
     if (colon === -1 || decoded.slice(0, colon) !== GIT_USER) return null;
     const token = decoded.slice(colon + 1);

@@ -477,6 +477,40 @@ export function agentScript(turn) {
   };
 }
 
+/**
+ * `"<digest>"` of the transcript body holding {@link AGENT_REPLY}, once the
+ * accepted history has a `turn.completed` and a `transcript.referenced` whose
+ * staged body (read as the person reads it, `sessionTranscript.artifacts`)
+ * says it; `null` before then.
+ */
+async function replyInTranscript(person, sessionId) {
+  const events = [];
+  for (let after = 0; ;) {
+    const page = await person.query("sessions:history", { sessionId, afterSequence: after });
+    events.push(...page.events);
+    if (!page.hasMore || page.events.length === 0) break;
+    after = page.events.at(-1).sequence;
+  }
+  if (!events.some((event) => event.kind === "turn.completed")) return null;
+  const digests = [
+    ...new Set(
+      events
+        .filter((event) => event.kind === "transcript.referenced" && event.event !== null)
+        .flatMap((event) => event.event.match(/sha256:[0-9a-f]{64}/gu) ?? []),
+    ),
+  ].slice(-64);
+  if (digests.length === 0) return null;
+  const bodies = await person.query("sessionTranscript:artifacts", { sessionId, digests });
+  const found = bodies.find(
+    (body) => body.status === "inline" && String(body.body).includes(AGENT_REPLY),
+  );
+  if (found) return found.digest;
+  // Retried until the deadline; the timeout then names what was there instead.
+  throw new Error(
+    `turn completed; no inline body says the reply among ${JSON.stringify(bodies.map((body) => [body.digest.slice(0, 15), body.status]))}`,
+  );
+}
+
 /** A user message's JSON text, as the composer sends one (`sessionStarts.startOn`'s `body`). */
 function userMessage(text) {
   return JSON.stringify({ id: randomUUID(), role: "user", parts: [{ type: "text", text }] });
@@ -601,12 +635,11 @@ async function sessionLeg(context, log) {
     ),
     "pushed with the owner's GitHub user token",
   );
-  await waitFor(
-    "the agent's reply in the Session's history",
-    async () => {
-      const page = await person.query("sessions:history", { sessionId: started.sessionId });
-      return JSON.stringify(page).includes(AGENT_REPLY) ? page : null;
-    },
+  // The turn completed in the accepted history, and its reply is a
+  // transcript body the history references (events carry digests, not text).
+  const reply = await waitFor(
+    "the agent's completed turn and its reply in the Session's transcript",
+    () => replyInTranscript(person, started.sessionId),
     { timeoutMs: 2 * 60_000, intervalMs: 1_000 },
   );
   const status = await person.query("sessionStarts:status", { sessionId: started.sessionId });
@@ -614,6 +647,7 @@ async function sessionLeg(context, log) {
     assert.equal(status.runner?.id, context.runner.id);
     assert.notEqual(status.state, "failed", JSON.stringify(status.failure ?? null));
   }
+  log(`reply read back from ${reply}`);
   return `Session on ${context.runner.name} pushed ${sha.slice(0, 12)} to ${WORLD.repo.owner}/${WORLD.repo.name} (${commit.author})`;
 }
 
