@@ -4346,6 +4346,85 @@
       "kind": "query",
       "returns": null
     },
+    "runnerUpdateReports:report": {
+      "args": {
+        "type": "object",
+        "value": {
+          "at": {
+            "fieldType": {
+              "type": "number"
+            },
+            "optional": false
+          },
+          "fromVersion": {
+            "fieldType": {
+              "type": "union",
+              "value": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "optional": false
+          },
+          "kind": {
+            "fieldType": {
+              "type": "union",
+              "value": [
+                {
+                  "type": "literal",
+                  "value": "rolled_back"
+                },
+                {
+                  "type": "literal",
+                  "value": "update_applied"
+                },
+                {
+                  "type": "literal",
+                  "value": "update_failed"
+                },
+                {
+                  "type": "literal",
+                  "value": "update_staged"
+                }
+              ]
+            },
+            "optional": false
+          },
+          "outcomeId": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          },
+          "reason": {
+            "fieldType": {
+              "type": "union",
+              "value": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "optional": false
+          },
+          "version": {
+            "fieldType": {
+              "type": "string"
+            },
+            "optional": false
+          }
+        }
+      },
+      "kind": "mutation",
+      "returns": null
+    },
     "runners:createInstallToken": {
       "args": {
         "type": "object",

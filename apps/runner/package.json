@@ -15,6 +15,10 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
+    "@sigstore/bundle": "^5.0.0",
+    "@sigstore/protobuf-specs": "^0.5.2",
+    "@sigstore/tuf": "^5.0.0",
+    "@sigstore/verify": "^4.1.2",
     "better-sqlite3": "^13.0.3",
     "jsdom": "^30.1.3"
   },

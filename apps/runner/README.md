@@ -23,7 +23,7 @@ rely on the command table now.
 | `status`                                                                 | One JSON report: the daemon's status file and liveness, and the link on disk. Exit 0 serving, 1 refusing, 3 not serving. |
 | `doctor`                                                                 | _not yet._ Check git, disk, network and model sign-ins.                                                                  |
 | `login [provider] [--api-key] [--status]` / `logout <provider>`          | Store, list or remove this runner's model sign-ins (below).                                                              |
-| `update`                                                                 | _not yet._ Update to the release Volli Cloud asks for.                                                                   |
+| `update [--now] [--to <version>]` / `update apply`                       | Show the update state; ask the runner to update now; `apply` is the update unit's entry (below).                         |
 | `logs [-f]`                                                              | _not yet._ The runner's log.                                                                                             |
 | `git-credential <get\|store\|erase>`                                     | _not yet._ Volli's git credential helper, run by git.                                                                    |
 | `version` (`--version`, `-v`)                                            | Print the version.                                                                                                       |
@@ -114,6 +114,64 @@ stores too, and refresh its credential-availability report after changes.
 Every store read reloads disk under the lock; no plaintext Pi auth file or
 backend call is needed by login/logout.
 
+## Updates
+
+A runner under systemd keeps itself current (n3 §9); a foreground `run`
+never updates itself, since nothing would restart it.
+
+- **When.** Each heartbeat names a target (the runner's pin, else its
+  channel's release) and a floor. With auto-update on, the runner updates to
+  a newer target at an idle moment (no turn for a minute, waiting up to 6 h,
+  then trying again an hour later). Below the floor, for Settings' **Update
+  now** (a pin) and for `volli-runner update --now [--to <version>]`, it
+  updates even with auto-update off and waits at most 30 minutes for running
+  turns. Never a downgrade, never a release that already failed here.
+- **Who.** The daemon decides and drains; it never installs. It writes a
+  request (`<dataDir>/update/request.json`), which
+  `volli-runner-update.path` turns into a run of
+  `volli-runner-update.service`: the **installed** release's
+  `volli-runner update apply`. In a system install that unit runs as root,
+  because the releases are root's, and treats the request as untrusted; in a
+  user install both are user units.
+- **Stage.** The manifest comes from `<releaseOrigin>v<version>/volli-runner-manifest.json`
+  and must be for that version. Every URL in it must sit under the release
+  origin, and the tarball's size and SHA-256 must match. The release's
+  Sigstore bundle must prove the manifest and tarball came from this
+  repository's `release.yml` (`@refs/tags/v<version>` or `@refs/heads/main`),
+  verified against Sigstore's public trust root (TUF, cached under the install
+  root). The tarball is extracted beside the releases. It must carry a
+  `MANIFEST.json` for that version, and is probed with its own `bin/node`
+  (`probe-natives.cjs`, `probe-codemode.mjs`). It then becomes
+  `releases/<version>-<revision>`.
+- **Activate.** Once the daemon has drained, `current` moves to the new
+  release in one rename and the runner restarts. For 2 minutes the unit's
+  main process (systemd's `MainPID`) must end up reporting `online` at the new
+  version, and systemd must not restart it 3 times. Otherwise `current` moves
+  back to exactly the link it had, the runner restarts, and the release is
+  recorded as bad. A bad release is not tried again unless
+  `update --now --to <version>` names it. Data is never rolled back. An
+  activation left unsettled (a reboot, a killed run) is settled by the update
+  unit's run at boot, or when the runner wakes it after 15 minutes.
+- **Which version.** A release's version is its own `MANIFEST.json`'s, never
+  its directory name, so the installer's names and an absolute or relative
+  `current` all read the same.
+- **Reported.** Each outcome (`update_staged`, `update_applied`,
+  `update_failed`, `rolled_back`) lands in the updater state and the daemon
+  reports it to Volli once (`runnerUpdateReports.report`), where it becomes a
+  runner event and the runner's update state in Settings.
+
+| File                                    | Whose                     | What                                              |
+| --------------------------------------- | ------------------------- | ------------------------------------------------- |
+| `<installRoot>/releases/<v>`, `current` | the applier (root/system) | the releases, and the one that runs               |
+| `<installRoot>/update-state.json`       | the applier               | staged, previous, bad releases, outcomes          |
+| `<installRoot>/update.json`             | the installer             | `releaseOrigin`, `provenance` (`sha-only`: tests) |
+| `<installRoot>/update-now.json`         | `update --now` (sudo)     | update now                                        |
+| `<dataDir>/update/request.json`         | the daemon                | stage or activate one version (untrusted)         |
+| `<dataDir>/update/reported.json`        | the daemon                | outcomes Volli has heard                          |
+
+The install root is `/opt/volli-runner` (system) or
+`$XDG_DATA_HOME/volli-runner` (user); `update` takes `--install-root`.
+
 ## Layout
 
 ```
@@ -123,6 +181,9 @@ src/
   commands.ts       the command registry, its context, and the stubs
   link/             deployment (baked + --server), the sealed link file,
                     link and unlink
+  update/           auto-update: policy, the daemon's agent, the applier
+                    (stage, verify, activate, health, rollback), the update
+                    units, and `update`
   shell/            the process shell, copied from apps/hostd and
                     parameterized by the daemon's identity (identity.ts):
                     boot errors, the instance lock, data-dir checks, logs,
@@ -136,6 +197,8 @@ dev-bin/volli       the `volli` CLI launcher a source-booted runner puts on
 e2e/                the BYO runner acceptance lane (ci-extended): a real
                     systemd box, a fake GitHub, a local release
                     (`e2e/README.md`). `node:test` files, outside Vitest
+packaging/          volli-runner-update.{path,service}: the system rendering
+                    of `src/update/units.ts`
 ```
 
 ### Adding a command
@@ -165,8 +228,8 @@ node apps/runner/dist/runner.cjs --help
 vp test run                                  # from apps/runner
 ```
 
-The bundle is one CommonJS file with every `@volli` package inside; the
-natives under `dependencies` (better-sqlite3) stay external and resolve from
-`node_modules`. CI builds it on Linux and runs `status` against an empty box
+The bundle is one CommonJS file with every `@volli` package inside; what is
+under `dependencies` (the natives, and the Sigstore verifier, which loads only
+when an update verifies) stays external and resolves from `node_modules`. CI builds it on Linux and runs `status` against an empty box
 (exit 3) in `Check + Build`; `Test (packages)` runs its suite at 100%
 coverage.

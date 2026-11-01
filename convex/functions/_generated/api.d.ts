@@ -90,6 +90,7 @@ import type * as runnerLinkRateLimit from "../runnerLinkRateLimit.js";
 import type * as runnerPicker from "../runnerPicker.js";
 import type * as runnerRecovery from "../runnerRecovery.js";
 import type * as runnerReleases from "../runnerReleases.js";
+import type * as runnerUpdateReports from "../runnerUpdateReports.js";
 import type * as runners from "../runners.js";
 import type * as secretKeys from "../secretKeys.js";
 import type * as secrets from "../secrets.js";
@@ -198,6 +199,7 @@ declare const fullApi: ApiFromModules<{
   runnerPicker: typeof runnerPicker;
   runnerRecovery: typeof runnerRecovery;
   runnerReleases: typeof runnerReleases;
+  runnerUpdateReports: typeof runnerUpdateReports;
   runners: typeof runners;
   secretKeys: typeof secretKeys;
   secrets: typeof secrets;

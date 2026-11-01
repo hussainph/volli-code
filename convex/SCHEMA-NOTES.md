@@ -866,4 +866,15 @@ is disabled, and never lets opt-out bypass the minimum floor.
 `unlinkSelf` requires the runner token and uses the same removed/revoked path as
 Settings Remove. `runners.list` additively exposes `autoUpdate` and the existing
 open `update` projection. The latter remains unknown to readers until they
-recognize a runner-reported update state; this change adds no writer for it.
+recognize a runner-reported update state.
+
+`runnerUpdateReports.report` is that projection's one writer. The runner's
+update agent sends each outcome its updater recorded
+(`update_staged`, `update_applied`, `update_failed`, `rolled_back`; the
+vocabulary is `@volli/shared/cloud` `runner-updates.ts`), runner-token only and
+idempotent by `outcomeId` over the runner's last 100 events. Each report is a
+`runnerEvents` row of that kind; the newest by the runner's clock (clamped to
+within a day of the server's) becomes `runners.update` =
+`{ kind, version, fromVersion, reason, at }`. Retries arriving out of order
+never replace a newer projection. It decides nothing about claiming: the
+version floor does.
