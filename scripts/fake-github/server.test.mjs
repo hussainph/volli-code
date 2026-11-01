@@ -148,6 +148,9 @@ test("the REST endpoints answer the user, the App and the installation", async (
     [70],
   );
   assert.equal((await api("/user")).status, 401);
+  // Schemes are case-insensitive, as on GitHub.
+  assert.equal((await api("/user", { headers: { authorization: `bearer ${user}` } })).status, 200);
+  assert.equal((await api("/user", { headers: { authorization: `token ${user}` } })).status, 200);
 
   const now = Math.floor(Date.now() / 1000);
   const head = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
@@ -245,6 +248,11 @@ test("git clones and pushes only with x-access-token and a token that reaches th
     const target = join(scratch, `refused-${randomBytes(3).toString("hex")}`);
     await assert.rejects(exec("git", ["clone", "--quiet", url, target], { env: gitEnv }));
   };
+  // An extraHeader in any case of the scheme, as git and GitHub accept it.
+  const basic = Buffer.from(`x-access-token:${dana}`).toString("base64");
+  assert.equal(github.gitCredentialFor(`basic ${basic}`, "dana", "demo"), "user:dana");
+  assert.equal(github.gitCredentialFor(`BASIC ${basic}`, "dana", "demo"), "user:dana");
+  assert.equal(github.gitCredentialFor(`Bearer ${basic}`, "dana", "demo"), null);
   await refused(`${github.origin}/dana/demo.git`);
   await refused(remote(dana, "dana"));
   await refused(remote("ghu_not_a_token"));
