@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
-import { assetSetVersion, startReleaseServer } from "./release-server.mjs";
+import { assetSetVersion, ReleaseServer, startReleaseServer } from "./release-server.mjs";
 
 let release;
 const scratch = mkdtempSync(join(tmpdir(), "byo-release-"));
@@ -94,4 +94,29 @@ test("an asset set's version comes from both tarballs, which must agree", () => 
     /one version/u,
   );
   assert.throws(() => assetSetVersion([]), /found: none/u);
+});
+
+test("mounted on another server, it answers only its own repository's release paths", async () => {
+  const mounted = new ReleaseServer().mountedAt("https://github.byo.test:4443/");
+  mounted.publish("v1.0.0", { "a.json": Buffer.from("{}") });
+  assert.equal(
+    mounted.downloadBase("v1.0.0"),
+    "https://github.byo.test:4443/hussainph/volli-code/releases/download/v1.0.0",
+  );
+  assert.equal(mounted.serves("/hussainph/volli-code/releases/download/v1.0.0/a.json"), true);
+  assert.equal(mounted.serves("/api/v3/repos/hussainph/volli-code/releases"), true);
+  assert.equal(mounted.serves("/hussainph/volli-code.git/info/refs"), false);
+  assert.equal(mounted.serves("/someone/else/releases/download/v1.0.0/a.json"), false);
+  const sent = {};
+  const response = {
+    writeHead: (status, headers) => Object.assign(sent, { status, headers }),
+    end: (body) => (sent.body = String(body)),
+  };
+  const request = { method: "GET", url: "/hussainph/volli-code/releases/download/v1.0.0/a.json" };
+  assert.equal(mounted.handle(request, response), true);
+  assert.deepEqual([sent.status, sent.body], [200, "{}"]);
+  assert.equal(
+    mounted.handle({ method: "GET", url: "/byo-person/demo.git/info/refs" }, response),
+    false,
+  );
 });

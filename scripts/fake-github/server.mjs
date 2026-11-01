@@ -205,6 +205,8 @@ export class FakeGithub {
   #counter = 0;
   #server = null;
   #protocols = [];
+  /** Other servers' handlers, tried first: `(request, response) => handled`. */
+  #mounts = [];
   #ownsGitRoot = false;
 
   #tls = null;
@@ -693,7 +695,17 @@ export class FakeGithub {
     response.end(payload);
   }
 
+  /**
+   * Serve another handler's paths on this origin (the lane's release
+   * downloads, as github.com serves them beside the repository). It answers
+   * `true` for a request it took, `false` to leave it to the fake GitHub.
+   */
+  mount(handler) {
+    this.#mounts.push(handler);
+  }
+
   async #handle(request, response) {
+    for (const handler of this.#mounts) if (handler(request, response)) return undefined;
     const url = new URL(request.url ?? "/", "http://fake-github.invalid");
     const record = { at: Date.now(), method: request.method, path: url.pathname };
     this.requests.push(record);

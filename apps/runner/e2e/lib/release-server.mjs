@@ -11,8 +11,12 @@
  *
  * {@link ReleaseServer.publish} adds a release from files or bytes. A draft
  * is listed by nothing, as on GitHub's unauthenticated API. HEAD and GET only;
- * every request is recorded for evidence. Binds 127.0.0.1 by default: the
- * lane's container shares the host network, so the box sees the same URL.
+ * every request is recorded for evidence.
+ *
+ * It listens on its own loopback port, or is **mounted** on another server
+ * (`mountedAt(origin)` + {@link ReleaseServer.handle}): the lane mounts it on
+ * the fake GitHub, so release downloads come from the same HTTPS origin as
+ * the repository, as on github.com.
  */
 
 import { readFileSync } from "node:fs";
@@ -59,6 +63,7 @@ export class ReleaseServer {
   releases = [];
   requests = [];
   #server = null;
+  #mountedOrigin = null;
 
   constructor({ owner = "hussainph", repo = "volli-code", host = "127.0.0.1" } = {}) {
     this.owner = owner;
@@ -66,9 +71,30 @@ export class ReleaseServer {
     this.host = host;
   }
 
+  /** Serve under another server's `origin`; that server calls {@link handle}. */
+  mountedAt(origin) {
+    this.#mountedOrigin = origin.replace(/\/+$/u, "");
+    return this;
+  }
+
   get origin() {
+    if (this.#mountedOrigin !== null) return this.#mountedOrigin;
     if (this.#server === null) throw new Error("the release server is not listening");
     return `http://${this.host}:${this.#server.address().port}`;
+  }
+
+  /** Whether `pathname` is one of this repository's release paths. */
+  serves(pathname) {
+    const repoOf = (match) => match !== null && match[1] === this.owner && match[2] === this.repo;
+    return [DOWNLOAD, LATEST, API_LIST].some((pattern) => repoOf(pattern.exec(pathname)));
+  }
+
+  /** Answer `request` when it is a release path; `false` (untouched) otherwise. */
+  handle(request, response) {
+    const url = new URL(request.url ?? "/", "http://release.invalid");
+    if (!this.serves(url.pathname)) return false;
+    this.#handle(request, response);
+    return true;
   }
 
   /** The directory a tag's assets live under: what `--release-base` takes. */

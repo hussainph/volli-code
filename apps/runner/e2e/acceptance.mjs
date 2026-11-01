@@ -79,7 +79,7 @@ import {
 } from "./lib/backend.mjs";
 import { buildBoxImage, startBox } from "./lib/box.mjs";
 import { exitCodeFor, redact, renderSummary, runLegs } from "./lib/legs.mjs";
-import { assetSetVersion, startReleaseServer } from "./lib/release-server.mjs";
+import { assetSetVersion, ReleaseServer, startReleaseServer } from "./lib/release-server.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const exec = promisify(execFile);
@@ -265,6 +265,18 @@ async function harness(context, log) {
     await onBox(context, "no Node on the box", "! command -v node");
   }
 
+  // The box trusts this run's own CA, as it would GitHub's, and resolves the
+  // fake GitHub's name (releases are served from the same origin).
+  if (context.tls) {
+    await box.copyIn(context.tls.caPath, "/usr/local/share/ca-certificates/volli-e2e-ca.crt");
+    await onBox(context, "the box trusts the run's CA", "update-ca-certificates >/dev/null");
+    await onBox(
+      context,
+      "the fake GitHub's name resolves on the box",
+      `grep -q '${WORLD.githubHostname}' /etc/hosts || echo '127.0.0.1 ${WORLD.githubHostname}' >> /etc/hosts`,
+    );
+  }
+
   // The box reaches the backend, the site and the release.
   await onBox(context, "backend reachable", `curl -fsS ${fixture.convexUrl}/version`);
   const fetched = await onBox(
@@ -275,17 +287,7 @@ async function harness(context, log) {
   assert.equal(fetched.stdout.split(" ")[0], sha256(probe), "the box got the published bytes");
 
   // The box's git against the fake GitHub, over the HTTPS a runner's GitHub
-  // remotes use (the box trusts this run's own CA, as it would GitHub's):
-  // a token clones and pushes; none is refused.
-  if (context.tls) {
-    await box.copyIn(context.tls.caPath, "/usr/local/share/ca-certificates/volli-e2e-ca.crt");
-    await onBox(context, "the box trusts the run's CA", "update-ca-certificates >/dev/null");
-    await onBox(
-      context,
-      "the fake GitHub's name resolves on the box",
-      `grep -q '${WORLD.githubHostname}' /etc/hosts || echo '127.0.0.1 ${WORLD.githubHostname}' >> /etc/hosts`,
-    );
-  }
+  // remotes use: a token clones and pushes; none is refused.
   const gitOrigin = context.tls ? github.httpsOrigin : github.origin;
   const token = github.issueAccessToken(WORLD.github.userId);
   context.secrets.push(token);
@@ -677,7 +679,13 @@ async function main(argv) {
       context.github = await startFakeGithub({ hostname: WORLD.githubHostname, tls: context.tls });
     }
     secrets.push(context.github.privateKeyPem, context.github.app.clientSecret);
-    context.release = await startReleaseServer();
+    if (context.tls) {
+      // Release downloads from the fake GitHub's own origin, as on github.com.
+      context.release = new ReleaseServer().mountedAt(context.github.httpsOrigin);
+      context.github.mount((request, response) => context.release.handle(request, response));
+    } else {
+      context.release = await startReleaseServer();
+    }
     if (useHostShell) {
       context.box = hostShell();
     } else {
