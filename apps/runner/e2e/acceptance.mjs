@@ -159,9 +159,10 @@ const BYO = {
   manifest: { ticket: "VC-1040 (BYO-7)", path: "scripts/runner-release-manifest.mjs" },
   tokenRoute: {
     ticket: "VC-1041 (BYO-8)",
-    path: "convex/functions/http.ts",
-    contains: "/runner/github-token",
+    path: "packages/shared/src/cloud/runner-git.ts",
+    contains: "RUNNER_GITHUB_TOKEN_PATH",
   },
+  gitHelper: { ticket: "VC-1041 (BYO-8)", path: "apps/runner/src/git/git-credential.ts" },
   managedClone: {
     ticket: "VC-1041 (BYO-8)",
     path: "packages/host-core/src/cloud-store/managed-clone.ts",
@@ -618,7 +619,7 @@ export const LEGS = [
     title: "startOn → the agent commits and pushes → the fake GitHub has it",
     after: ["install"],
     run: sessionLeg,
-    needs: [BYO.startOn, BYO.picker, BYO.executor, BYO.tokenRoute, BYO.managedClone],
+    needs: [BYO.startOn, BYO.picker, BYO.executor, BYO.tokenRoute, BYO.managedClone, BYO.gitHelper],
   },
   {
     id: "update",
