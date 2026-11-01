@@ -7,6 +7,12 @@ import test from "node:test";
 
 import { parse } from "yaml";
 
+// ci.yml invokes this release-contract entrypoint; keep the installer/manifest checks here
+// without adding a runner to the desktop or Vitest test surfaces.
+import "./runner-install.test.mjs";
+import "./runner-release-manifest.test.mjs";
+import "./runner-native-build.test.mjs";
+
 const workflow = parse(
   readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
 );
@@ -29,7 +35,11 @@ function enabled(job, { event, dryRun, results = {}, outputs = {}, cancelled = f
 
 test("dispatch defaults to dry run and can never enter tagging or desktop signing/publishing", () => {
   assert.equal(workflow.on.workflow_dispatch.inputs.dry_run.default, true);
-  const ctx = { event: "workflow_dispatch", dryRun: true, results: { "hostd-assets": "success" } };
+  const ctx = {
+    event: "workflow_dispatch",
+    dryRun: true,
+    results: { "hostd-assets": "success", "runner-assets": "success" },
+  };
   assert.equal(enabled("prepare", ctx), false);
   assert.equal(enabled("release", ctx), false);
   assert.equal(enabled("hostd-ref", ctx), true);
@@ -43,7 +53,11 @@ test("tag and manually dispatched releases require both architecture builds and 
     const ctx = {
       event,
       dryRun: false,
-      results: { prepare: event === "push" ? "skipped" : "success", "hostd-assets": "success" },
+      results: {
+        prepare: event === "push" ? "skipped" : "success",
+        "hostd-assets": "success",
+        "runner-assets": "success",
+      },
     };
     assert.equal(enabled("hostd-ref", ctx), true);
     assert.equal(enabled("release", ctx), true);
@@ -56,7 +70,7 @@ test("tag and manually dispatched releases require both architecture builds and 
     }
     assert.equal(enabled("release", { ...ctx, cancelled: true }), false);
   }
-  assert.deepEqual(workflow.jobs.release.needs, ["prepare", "hostd-assets"]);
+  assert.deepEqual(workflow.jobs.release.needs, ["prepare", "hostd-assets", "runner-assets"]);
   assert.deepEqual(workflow.jobs.hostd.strategy.matrix.include, [
     { arch: "x64", runner: "ubuntu-24.04" },
     { arch: "arm64", runner: "ubuntu-24.04-arm" },
@@ -182,7 +196,7 @@ test("failed preparation blocks hostd/release; dry builds have read-only content
   const ctx = {
     event: "workflow_dispatch",
     dryRun: false,
-    results: { prepare: "failure", "hostd-assets": "success" },
+    results: { prepare: "failure", "hostd-assets": "success", "runner-assets": "success" },
   };
   assert.equal(enabled("hostd-ref", ctx), false);
   assert.equal(enabled("release", ctx), false);
@@ -463,5 +477,220 @@ test("release guard requires a green ci.yml AND ci-extended.yml run on the exact
       env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CI: ci, EXTENDED: extended },
     });
     assert.equal(run.status === 0, green, `ci=${ci} extended=${extended}\n${run.stdout}`);
+  }
+});
+
+test("runner builds both native architectures at the bullseye ABI baseline", () => {
+  const runner = workflow.jobs.runner;
+  assert.deepEqual(runner.strategy.matrix.include, workflow.jobs.hostd.strategy.matrix.include);
+  assert.equal(runner.if, workflow.jobs.hostd.if);
+  assert.deepEqual(runner.needs, ["prepare", "hostd-ref"]);
+  assert.equal(runner.permissions.contents, "read");
+  const commands = runner.steps.map((step) => step.run ?? "").join("\n");
+  assert.match(commands, /runner-build\/Dockerfile/);
+  assert.match(commands, /ci-build-artifact\.sh/);
+  assert.match(commands, /ci-boot-artifact\.sh/);
+  assert.match(commands, /EXPECTED_ARCH/);
+  assert.match(commands, /-e ALLOW_SKELETON="\$ALLOW_SKELETON"/);
+  const build = runner.steps.find((step) => step.name === "Package and boot runner");
+  assert.equal(
+    build.env.ALLOW_SKELETON,
+    "${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}",
+  );
+  for (const name of ["VOLLI_BUILD_CONVEX_URL", "VOLLI_BUILD_CONVEX_SITE_URL"]) {
+    assert.equal(build.env[name], `\u0024{{ vars.${name} }}`);
+    assert.ok(build.run.includes(`-e ${name}`));
+  }
+  const dockerfile = readFileSync(
+    new URL("../.devcontainer/runner-build/Dockerfile", import.meta.url),
+    "utf8",
+  );
+  assert.match(dockerfile, /FROM debian:bullseye-slim/);
+  assert.match(dockerfile, /sha256sum -c/);
+  assert.match(dockerfile, /archive\.debian\.org\/debian bullseye main/);
+  assert.match(dockerfile, /archive\.debian\.org\/debian-security bullseye-security main/);
+  assert.doesNotMatch(dockerfile, /trusted=yes|allow-unauthenticated|AllowInsecureRepositories/);
+  assert.match(dockerfile, /amd64\) arch=x64; sha=[0-9a-f]{64}/);
+  assert.match(dockerfile, /arm64\) arch=arm64; sha=[0-9a-f]{64}/);
+  const packager = readFileSync(
+    new URL("../apps/runner/scripts/package.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(packager, /probe-glibc.cjs/);
+  assert.match(packager, /probe-natives.cjs/);
+  assert.match(packager, /probe-codemode.mjs/);
+});
+
+test("runner assets are verified and attested, and gate every publishing path", () => {
+  const assets = workflow.jobs["runner-assets"];
+  assert.deepEqual(assets.needs, ["hostd-ref", "runner"]);
+  const nodeSetup = assets.steps.find((step) => step.name === "Setup pinned Node");
+  assert.equal(nodeSetup.uses, "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38");
+  assert.deepEqual(nodeSetup.with, {
+    "node-version-file": ".nvmrc",
+    "package-manager-cache": false,
+  });
+  const download = assets.steps.findIndex((step) => step.with?.pattern === "runner-linux-*");
+  const generate = assets.steps.findIndex(
+    (step) => step.name === "Generate runner manifest and stamped installer",
+  );
+  const sign = assets.steps.findIndex((step) => step.id === "provenance");
+  assert.ok(download < generate && generate < sign);
+  assert.match(assets.steps[generate].run, /sha256sum -c volli-runner-SHA256SUMS/);
+  assert.equal(
+    assets.steps[sign].if,
+    "github.event_name != 'workflow_dispatch' || !inputs.dry_run",
+  );
+  for (const file of [
+    "*.tar.gz",
+    "volli-runner-manifest.json",
+    "volli-runner-install.sh",
+    "volli-runner-SHA256SUMS",
+  ]) {
+    assert.ok(assets.steps[sign].with["subject-path"].includes(file));
+  }
+  assert.match(
+    assets.steps.find((step) => step.name === "Collect runner signature bundle").run,
+    /volli-runner-provenance.sigstore.json/,
+  );
+  for (const job of ["release", "dry-run-desktop"]) {
+    assert.ok(workflow.jobs[job].needs.includes("runner-assets"));
+    assert.equal(
+      enabled(job, {
+        event: "workflow_dispatch",
+        dryRun: job !== "release",
+        results: { prepare: "success", "hostd-assets": "success", "runner-assets": "failure" },
+      }),
+      false,
+    );
+  }
+  const steps = workflow.jobs.release.steps;
+  const verify = steps.findIndex((step) => step.name === "Verify runner release asset set");
+  assert.ok(verify < steps.findIndex((step) => step.name === "Pre-create GitHub release"));
+  assert.match(steps[verify].run, /shasum -a 256 -c volli-runner-SHA256SUMS/);
+  assert.match(
+    steps.find((step) => step.name === "Publish artifacts to the release").run,
+    /files\+=\("\$\{runnerFiles\[@\]\}"\)/,
+  );
+  for (const job of ["runner", "runner-assets"]) {
+    for (const action of workflow.jobs[job].steps.filter((step) => step.uses))
+      assert.match(action.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+  }
+});
+
+test("artifact gate accepts only the declared run stub; implemented run must boot", (t) => {
+  const script = readFileSync(
+    new URL("../apps/runner/scripts/ci-boot-artifact.sh", import.meta.url),
+    "utf8",
+  );
+  const start = script.indexOf('if [[ "${ALLOW_SKELETON:-false}" != true ]]; then');
+  assert.ok(start > 0);
+  const skeletonGuard = script.slice(start);
+  const root = versionFixture(t);
+  mkdirSync(join(root, "bin"));
+  // Simulated wiring: this process double tests the real shell guard. Like the
+  // actual registry, help always succeeds even while a command remains a stub.
+  // The release container runs the shipped binary, not this double.
+  writeFileSync(
+    join(root, "bin/volli-runner"),
+    `#!/bin/sh
+if [ "\${2:-}" = --help ]; then echo Usage; exit 0; fi
+if [ "$1" = version ]; then
+  if [ "$TEST_INSTALL_BEHAVIOR" = wrong-version ]; then echo 0.0.0; else echo "$TEST_EXPECTED_VERSION"; fi
+  exit 0
+fi
+if [ "$1" = install ]; then
+  printf '%s\\n' "$@" "HOME=$HOME" "XDG_DATA_HOME=$XDG_DATA_HOME" "XDG_STATE_HOME=$XDG_STATE_HOME" "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" > "$TEST_INSTALL_RECORD"
+  [ "$#" -eq 6 ] && [ "$2" = --user ] && [ "$3" = --from ] && [ "$4" = "$root" ] && [ "$5" = --no-start ] && [ "$6" = --no-link ] || exit 97
+  [ "$TEST_INSTALL_CODE" = 0 ] || exit "$TEST_INSTALL_CODE"
+  [ "$TEST_INSTALL_BEHAVIOR" != noop ] || exit 0
+  release="$HOME/.local/share/volli-runner/releases/$TEST_EXPECTED_VERSION"
+  mkdir -p "$release/bin" "$HOME/.local/bin"
+  cp "$0" "$release/bin/volli-runner"
+  ln -s "$release" "$HOME/.local/share/volli-runner/current"
+  ln -s "$HOME/.local/share/volli-runner/current/bin/volli-runner" "$HOME/.local/bin/volli-runner"
+  exit 0
+fi
+[ "$1" = run ] && [ "$2" = --data-dir ] || exit 98
+if [ "$TEST_CODE" = live ]; then
+  trap 'exit 0' TERM
+  while :; do sleep 0.02; done
+fi
+printf '%s\\n' "$TEST_MESSAGE" >&2
+exit "$TEST_CODE"
+`,
+    { mode: 0o755 },
+  );
+  const cleanup = `trap 'if [[ -n "\${pid:-}" ]]; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" || true; fi' EXIT\n`;
+  const installHome = join(root, "install-home");
+  const installRecord = join(root, "install-record");
+  const runData = join(root, "run-data");
+  mkdirSync(runData);
+  for (const [
+    code,
+    message,
+    allowSkeleton,
+    installCode,
+    skeleton,
+    success,
+    installBehavior = "copy",
+  ] of [
+    ["69", "volli-runner: `run` is not available in this build yet.", "true", "69", true, true],
+    ["69", "volli-runner: `run` is not available in this build yet.", "false", "0", false, false],
+    [
+      "69",
+      "crash: volli-runner: `run` is not available in this build yet.",
+      "true",
+      "0",
+      false,
+      false,
+    ],
+    ["69", "arbitrary unavailable/crash", "true", "0", false, false],
+    ["1", "runtime failure", "true", "0", false, false],
+    ["0", "premature successful exit", "true", "0", false, false],
+    ["live", "", "false", "69", false, false],
+    ["live", "", "false", "0", false, true],
+    ["live", "", "false", "0", false, false, "noop"],
+    ["live", "", "false", "0", false, false, "wrong-version"],
+  ]) {
+    rmSync(installHome, { recursive: true, force: true });
+    rmSync(installRecord, { force: true });
+    mkdirSync(installHome);
+    const result = spawnSync("bash", ["-eu", "-c", `${cleanup}${skeletonGuard}`], {
+      encoding: "utf8",
+      timeout: 15000,
+      env: {
+        ...process.env,
+        root,
+        data: runData,
+        install_home: installHome,
+        expected_version: "1.2.3",
+        log: join(root, "run.log"),
+        TEST_EXPECTED_VERSION: "1.2.3",
+        TEST_INSTALL_RECORD: installRecord,
+        TEST_INSTALL_BEHAVIOR: installBehavior,
+        TEST_CODE: code,
+        TEST_MESSAGE: message,
+        TEST_INSTALL_CODE: installCode,
+        ALLOW_SKELETON: allowSkeleton,
+      },
+    });
+    assert.equal(result.status === 0, success, result.stdout + result.stderr);
+    if (allowSkeleton === "false") {
+      assert.deepEqual(readFileSync(installRecord, "utf8").trim().split("\n"), [
+        "install",
+        "--user",
+        "--from",
+        root,
+        "--no-start",
+        "--no-link",
+        `HOME=${installHome}`,
+        `XDG_DATA_HOME=${installHome}/.local/share`,
+        `XDG_STATE_HOME=${installHome}/.local/state`,
+        `XDG_CONFIG_HOME=${installHome}/.config`,
+      ]);
+    }
+    assert.equal(result.stdout.includes("skeleton artifact"), skeleton);
+    assert.equal(result.stdout.includes("unlinked boot and SIGTERM passed"), success && !skeleton);
   }
 });
