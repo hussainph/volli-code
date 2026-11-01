@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
-import { startReleaseServer } from "./release-server.mjs";
+import { assetSetVersion, startReleaseServer } from "./release-server.mjs";
 
 let release;
 const scratch = mkdtempSync(join(tmpdir(), "byo-release-"));
@@ -75,4 +75,23 @@ test("the Releases API lists published releases newest first, with absolute asse
   ).json();
   assert.equal(latest.tag_name, "v0.3.0");
   assert.ok(release.requests.length > 0);
+});
+
+test("an asset set's version comes from both tarballs, which must agree", () => {
+  const x64 = "volli-runner-0.3.0-linux-x64.tar.gz";
+  const arm = "volli-runner-0.3.0-linux-arm64.tar.gz";
+  assert.equal(assetSetVersion([x64, `${x64}.sha256`, arm, `${arm}.sha256`]), "0.3.0");
+  assert.equal(
+    assetSetVersion([
+      "volli-runner-0.3.1-canary.2-linux-x64.tar.gz",
+      "volli-runner-0.3.1-canary.2-linux-arm64.tar.gz",
+    ]),
+    "0.3.1-canary.2",
+  );
+  assert.throws(() => assetSetVersion([x64]), /need both linux tarballs/u);
+  assert.throws(
+    () => assetSetVersion([x64, "volli-runner-0.3.1-linux-arm64.tar.gz"]),
+    /one version/u,
+  );
+  assert.throws(() => assetSetVersion([]), /found: none/u);
 });

@@ -25,6 +25,28 @@ const API_LIST = /^\/api\/v3\/repos\/([^/]+)\/([^/]+)\/releases(\/latest)?$/u;
 
 const ASSET_NAME = /^[A-Za-z0-9._-]+$/u;
 
+/** The runner tarball's name (C4): `volli-runner-<version>-linux-<arch>.tar.gz`. */
+const RUNNER_TARBALL = /^volli-runner-(.+)-linux-(x64|arm64)\.tar\.gz$/u;
+
+/**
+ * The version a C4 asset set carries, read from its tarball names (both
+ * targets must be present and agree).
+ */
+export function assetSetVersion(names) {
+  const found = names.flatMap((name) => {
+    const match = RUNNER_TARBALL.exec(name);
+    return match ? [{ version: match[1], arch: match[2] }] : [];
+  });
+  const arches = found.map((entry) => entry.arch).toSorted();
+  const versions = new Set(found.map((entry) => entry.version));
+  if (arches.join(",") !== "arm64,x64" || versions.size !== 1) {
+    throw new Error(
+      `need both linux tarballs of one version, found: ${names.join(", ") || "none"}`,
+    );
+  }
+  return [...versions][0];
+}
+
 function contentType(name) {
   if (name.endsWith(".json")) return "application/json";
   if (name.endsWith(".sh")) return "text/x-shellscript";

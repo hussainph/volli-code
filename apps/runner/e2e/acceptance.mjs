@@ -75,7 +75,7 @@ import {
 } from "./lib/backend.mjs";
 import { buildBoxImage, startBox } from "./lib/box.mjs";
 import { exitCodeFor, redact, renderSummary, runLegs } from "./lib/legs.mjs";
-import { startReleaseServer } from "./lib/release-server.mjs";
+import { assetSetVersion, startReleaseServer } from "./lib/release-server.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const exec = promisify(execFile);
@@ -89,28 +89,6 @@ export const WORLD = Object.freeze({
   boxHostname: "byo-box-1",
   runnerName: "hetzner-1",
 });
-
-/** The runner tarball's name (C4): `volli-runner-<version>-linux-<arch>.tar.gz`. */
-const RUNNER_TARBALL = /^volli-runner-(.+)-linux-(x64|arm64)\.tar\.gz$/u;
-
-/**
- * The version a C4 asset set carries, read from its tarball names (both
- * targets must be present and agree).
- */
-export function assetSetVersion(names) {
-  const found = names.flatMap((name) => {
-    const match = RUNNER_TARBALL.exec(name);
-    return match ? [{ version: match[1], arch: match[2] }] : [];
-  });
-  const arches = found.map((entry) => entry.arch).toSorted();
-  const versions = new Set(found.map((entry) => entry.version));
-  if (arches.join(",") !== "arm64,x64" || versions.size !== 1) {
-    throw new Error(
-      `need both linux tarballs of one version, found: ${names.join(", ") || "none"}`,
-    );
-  }
-  return [...versions][0];
-}
 
 /**
  * Publish the CI-built runner as release `v<version>` on the local release:
