@@ -28,6 +28,15 @@
  *   else is a 401 with GitHub's `WWW-Authenticate`, so `git` fails the way it
  *   does against a private repository.
  *
+ * **One port, two schemes.** With `tls` (a key and certificate for
+ * `hostname`), the same port also answers HTTPS: the first byte of each
+ * connection picks the protocol (a TLS handshake starts with 0x16). A backend
+ * reaches the API and web flow over plain HTTP while a box's `git` reaches the
+ * very same origin as `https://<hostname>:<port>`, which is the form a runner's
+ * GitHub remotes take (`normalizeGitRemoteUrl` in `@volli/shared/cloud`).
+ * `hostname` names the fake in URLs (a box refuses a loopback literal as a
+ * remote); the lane maps it to the loopback in `/etc/hosts`.
+ *
  * Binds 127.0.0.1 by default. Each request is recorded (never a token: the
  * log names the credential's kind only) for evidence.
  *
@@ -40,8 +49,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes, timingSafeEqual, verify } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Duplex } from "node:stream";
 import { pathToFileURL } from "node:url";
 
 export const FAKE_GITHUB_APP = Object.freeze({
@@ -145,6 +157,34 @@ function splitCgi(output) {
   return { status, headers, body: output.subarray(end + gap) };
 }
 
+/** A duplex over `socket` whose readable side starts with `first`. */
+function replaying(socket, first) {
+  const stream = new Duplex({
+    read() {
+      socket.resume();
+    },
+    write(chunk, encoding, done) {
+      socket.write(chunk, encoding, done);
+    },
+    final(done) {
+      socket.end();
+      done();
+    },
+    destroy(error, done) {
+      socket.destroy();
+      done(error);
+    },
+  });
+  stream.remoteAddress = socket.remoteAddress;
+  stream.push(first);
+  socket.on("data", (chunk) => {
+    if (!stream.push(chunk)) socket.pause();
+  });
+  socket.once("end", () => stream.push(null));
+  socket.once("close", () => stream.destroy());
+  return stream;
+}
+
 export class FakeGithub {
   /** @type {Map<number, {id:number,login:string,name:string|null,emails:object[],installations:number[]}>} */
   users = new Map();
@@ -164,10 +204,15 @@ export class FakeGithub {
   signedInUserId = null;
   #counter = 0;
   #server = null;
+  #protocols = [];
   #ownsGitRoot = false;
 
-  constructor({ gitRoot, host = "127.0.0.1", app = FAKE_GITHUB_APP } = {}) {
-    this.host = host;
+  #tls = null;
+
+  constructor({ gitRoot, bind = "127.0.0.1", hostname = bind, tls, app = FAKE_GITHUB_APP } = {}) {
+    this.bind = bind;
+    this.host = hostname;
+    this.#tls = tls ?? null;
     this.app = app;
     this.#ownsGitRoot = gitRoot === undefined;
     this.gitRoot = gitRoot ?? mkdtempSync(join(tmpdir(), "volli-fake-github-"));
@@ -181,6 +226,12 @@ export class FakeGithub {
     if (this.#server === null) throw new Error("the fake GitHub is not listening");
     const { port } = this.#server.address();
     return `http://${this.host}:${port}`;
+  }
+
+  /** The same origin over HTTPS (only with `tls`): where a box's git reaches it. */
+  get httpsOrigin() {
+    if (this.#tls === null) throw new Error("the fake GitHub has no TLS certificate");
+    return this.origin.replace(/^http:/u, "https:");
   }
 
   get apiUrl() {
@@ -665,10 +716,27 @@ export class FakeGithub {
   }
 
   async listen(port = 0) {
-    this.#server = createServer((request, response) => void this.#handle(request, response));
+    const handler = (request, response) => void this.#handle(request, response);
+    const http = createServer(handler);
+    this.#protocols = [http];
+    if (this.#tls === null) {
+      this.#server = http;
+    } else {
+      const https = createHttpsServer({ key: this.#tls.key, cert: this.#tls.cert }, handler);
+      this.#protocols.push(https);
+      // Read the first chunk, then hand the protocol it speaks a stream that
+      // replays it. (A raw socket cannot be handed over with the chunk put
+      // back: TLS and the HTTP parser read the native handle, not the stream.)
+      this.#server = createNetServer((socket) => {
+        socket.on("error", () => socket.destroy());
+        socket.once("data", (first) => {
+          (first[0] === 0x16 ? https : http).emit("connection", replaying(socket, first));
+        });
+      });
+    }
     await new Promise((done, fail) => {
       this.#server.once("error", fail);
-      this.#server.listen(port, this.host, done);
+      this.#server.listen(port, this.bind, done);
     });
     return this;
   }
@@ -676,6 +744,7 @@ export class FakeGithub {
   async close() {
     if (this.#server !== null) {
       const server = this.#server;
+      for (const protocol of this.#protocols) protocol.closeAllConnections?.();
       server.closeAllConnections?.();
       await new Promise((done) => server.close(() => done()));
     }

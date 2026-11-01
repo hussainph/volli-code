@@ -10,6 +10,7 @@ import { after, before, test } from "node:test";
 import { promisify } from "node:util";
 
 import { FAKE_GITHUB_APP, startFakeGithub } from "./server.mjs";
+import { createTestCertificates } from "./tls.mjs";
 
 const exec = promisify(execFile);
 const REDIRECT = "http://127.0.0.1:9/github/oauth/callback";
@@ -250,4 +251,42 @@ test("git clones and pushes only with x-access-token and a token that reaches th
   const { code } = github.authorize(authorizeUrl(challenge).toString(), 8);
   const eve = await token({ code, code_verifier: verifier, redirect_uri: REDIRECT });
   await refused(remote(eve.access_token));
+});
+
+test("with a certificate, one port answers HTTP for the backend and HTTPS for git", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fake-github-tls-"));
+  const tls = createTestCertificates(dir, "localhost");
+  const secure = await startFakeGithub({ hostname: "localhost", tls });
+  try {
+    secure.addUser({ id: 7, login: "dana" });
+    secure.createRepo("dana", "demo");
+    secure.addInstallation({
+      id: 70,
+      account: { id: 7, login: "dana" },
+      repositories: [{ id: 700, owner: "dana", name: "demo" }],
+      userIds: [7],
+    });
+    const access = secure.issueAccessToken(7);
+    assert.match(secure.origin, /^http:\/\/localhost:\d+$/u);
+    assert.equal(secure.httpsOrigin, secure.origin.replace("http:", "https:"));
+    // Plain HTTP: the API, as a backend calls it.
+    const user = await fetch(`${secure.apiUrl.replace("localhost", "127.0.0.1")}/user`, {
+      headers: { authorization: `Bearer ${access}` },
+    });
+    assert.equal(user.status, 200);
+    // HTTPS on the same port: git trusts the run's own CA and nothing else.
+    const url = `https://x-access-token:${access}@${secure.httpsOrigin.replace("https://", "")}/dana/demo.git`;
+    const work = join(dir, "clone");
+    await exec("git", ["clone", "--quiet", url, work], {
+      env: { ...gitEnv, GIT_SSL_CAINFO: tls.caPath },
+    });
+    await assert.rejects(
+      exec("git", ["clone", "--quiet", url, join(dir, "untrusted")], {
+        env: { ...gitEnv, GIT_SSL_CAINFO: "/dev/null" },
+      }),
+    );
+  } finally {
+    await secure.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
