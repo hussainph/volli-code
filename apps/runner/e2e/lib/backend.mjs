@@ -240,8 +240,15 @@ export function listRunners(person) {
   return person.query("runners:list", {});
 }
 
-/** Poll `probe` until it answers non-null, or fail naming `what` and the last answer. */
-export async function waitFor(what, probe, { timeoutMs = 60_000, intervalMs = 500 } = {}) {
+/**
+ * Poll `probe` until it answers non-null, or fail naming `what` and the last
+ * answer. A throw is retried, unless `fatal(error)` says it ends the wait.
+ */
+export async function waitFor(
+  what,
+  probe,
+  { timeoutMs = 60_000, intervalMs = 500, fatal = () => false } = {},
+) {
   const deadline = Date.now() + timeoutMs;
   let last;
   for (;;) {
@@ -249,6 +256,7 @@ export async function waitFor(what, probe, { timeoutMs = 60_000, intervalMs = 50
       last = await probe();
       if (last !== null && last !== undefined && last !== false) return last;
     } catch (error) {
+      if (fatal(error)) throw error;
       last = error;
     }
     if (Date.now() >= deadline) {
@@ -257,4 +265,44 @@ export async function waitFor(what, probe, { timeoutMs = 60_000, intervalMs = 50
     }
     await new Promise((done) => setTimeout(done, intervalMs));
   }
+}
+
+/**
+ * SETUP: one more of the person's runners linked through an install token and
+ * signed in with its own runner token, the way a Mac's desktop runner is. It
+ * never heartbeats; the lane uses it only to report a checkout, as the
+ * person's Mac does when it first opens the project's folder.
+ */
+export async function linkReportingMac(fixture, person, fetchImpl = fetch) {
+  const minted = await createInstallToken(person, "byo-mac");
+  const linked = await fetchImpl(`${fixture.siteUrl}/runner/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      installToken: minted.installToken,
+      host: {
+        hostname: "byo-mac",
+        platform: { os: "darwin", arch: "arm64", release: "25.0.0", distro: null },
+        installMode: "user",
+      },
+      name: null,
+    }),
+  });
+  if (!linked.ok) throw new Error(`linking the Mac answered ${linked.status}`);
+  const grant = await linked.json();
+  const exchanged = await fetchImpl(`${fixture.siteUrl}/runner/token`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runnerId: grant.runnerId, credential: grant.credential }),
+  });
+  if (!exchanged.ok) throw new Error(`the Mac's token exchange answered ${exchanged.status}`);
+  const { token } = await exchanged.json();
+  const call = (kind) => (path, args) =>
+    convexCall(fixture.convexUrl, kind, path, args, { bearer: token }, fetchImpl);
+  return {
+    runnerId: grant.runnerId,
+    secrets: [minted.installToken, grant.credential, token],
+    query: call("query"),
+    mutation: call("mutation"),
+  };
 }

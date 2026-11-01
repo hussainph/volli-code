@@ -110,6 +110,16 @@ test("waitFor answers the first truthy probe, retries through throws, and names 
   );
   assert.equal(value, "done");
   await assert.rejects(
+    waitFor(
+      "a fatal answer",
+      async () => {
+        throw new RangeError("refused");
+      },
+      { timeoutMs: 10_000, intervalMs: 1, fatal: (error) => error instanceof RangeError },
+    ),
+    /refused/u,
+  );
+  await assert.rejects(
     waitFor("never", async () => false, { timeoutMs: 20, intervalMs: 5 }),
     /timed out after 20 ms waiting for never \(last: false\)/u,
   );

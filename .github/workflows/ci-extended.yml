@@ -692,8 +692,9 @@ jobs:
       - name: Fetch and verify the pinned backend
         run: vp run --filter @volli/convex backend:fetch
 
-      # The x64 artifact for the install leg's local release. Not on this
-      # tree yet (BYO-7) is a notice; on the tree but not built is red.
+      # Both runner artifacts for the install leg's local release (a C4
+      # manifest names both targets; the box installs x64). Not on this tree
+      # yet (BYO-7) is a notice; on the tree but not built is red.
       - name: Check the packaging is on this tree
         id: present
         run: |
@@ -704,12 +705,18 @@ jobs:
             echo "::notice title=Runner artifact pending::BYO-7 (VC-1040) packaging is not on this tree yet"
           fi
 
-      - name: Download the x64 runner artifact
+      - name: Download both runner artifacts
         if: steps.present.outputs.present == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: byo-runner-linux-x64
+          pattern: byo-runner-linux-*
+          merge-multiple: true
           path: ${{ runner.temp }}/runner-assets
+
+      # The fake GitHub's name (a runner refuses a loopback literal as a
+      # remote). The box adds the same line to its own /etc/hosts.
+      - name: Map github.byo.test to the loopback
+        run: echo "127.0.0.1 github.byo.test" | sudo tee -a /etc/hosts
 
       - name: Harness self-tests (fake GitHub, release server, legs)
         run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs

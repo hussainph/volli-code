@@ -80,6 +80,25 @@ test("legs run in order: pass, fail, pending on unmerged work or no wiring, bloc
   assert.match(results[5].detail, /boom/u);
 });
 
+test("a leg that needs a box is pending on a host shell, and never runs there", async () => {
+  let ran = false;
+  const legs = [
+    { id: "a", title: "A", run: async () => "ok" },
+    { id: "b", title: "B", needsBox: true, run: async () => (ran = true) },
+  ];
+  const onShell = await runLegs(legs, { box: { hostShell: true } }, { root });
+  assert.deepEqual(
+    onShell.map((result) => [result.id, result.status, result.detail]),
+    [
+      ["a", "passed", "ok"],
+      ["b", "pending", "host shell: not a box"],
+    ],
+  );
+  assert.equal(ran, false);
+  const inBox = await runLegs(legs, { box: {} }, { root });
+  assert.equal(inBox[1].status, "passed");
+});
+
 test("only a failure is red, unless every leg is required", () => {
   const passed = { status: "passed" };
   const pending = { status: "pending" };
