@@ -186,7 +186,7 @@ export function createManagedClones(options: ManagedCloneOptions) {
     return {
       ...env,
       ...appendGitConfig(inheritedGitConfig(), [
-        [`http.${http.origin}.extraHeader`, `AUTHORIZATION: basic ${basic}`],
+        [`http.${http.origin}.extraHeader`, `AUTHORIZATION: Basic ${basic}`],
       ]),
     };
   }

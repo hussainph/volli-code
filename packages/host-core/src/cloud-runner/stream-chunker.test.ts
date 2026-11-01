@@ -1042,6 +1042,8 @@ describe("the backend link and the runtime source", () => {
           expect(name).toBe(STREAM_CHUNK_FUNCTIONS.watched);
           listener = onValue;
           return () => {
+            // As the Convex client does: a second unsubscribe throws.
+            if (unsubscribed) throw new TypeError("already unsubscribed");
             unsubscribed = true;
           };
         },
@@ -1061,6 +1063,8 @@ describe("the backend link and the runtime source", () => {
     expect(time.running).toBe(false);
     await streams.stop();
     expect(unsubscribed).toBe(true);
+    // A second stop (the store's dispose after its connection's stop) is the first one's.
+    await streams.stop();
     expect(errors).toEqual([]);
     // Defaults: no error port, real timers.
     const bare = startStreamChunks({

@@ -7,6 +7,7 @@
  * interrupt aborts a command that waits; a second one exits at once.
  */
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { createRunnerLinkClient, runnerHostFacts } from "@volli/host-core/cloud-runner";
 
@@ -15,6 +16,7 @@ import { COMMANDS, type CommandContext } from "./commands";
 import { BUILD_DEPLOYMENT } from "./link/deployment";
 import { RUNNER_LIVE_PROBES } from "./shell/runner-status";
 import { readAll } from "./git/git-credential";
+import { runnerRuntimePaths } from "./shell/runtime-paths";
 import { abortableSleep } from "./shell/sleep";
 import { RUNNER_VERSION } from "./shell/version";
 import {
@@ -73,6 +75,19 @@ async function main(): Promise<number> {
       provenance: (cachePath) => sigstoreProvenance({ cachePath }),
     },
     readStdin: () => readAll(process.stdin),
+    daemon: {
+      process,
+      writeLog: (line) => process.stdout.write(line),
+      // The bundle (`dist/runner.cjs`, or `lib/runner/` in the artifact) locates its siblings.
+      runtimePaths: () => runnerRuntimePaths(__dirname),
+      // The artifact's `bin/volli-runner`, or a source boot's `dev-bin/volli-runner`.
+      runnerExecutable: () => join(runnerRuntimePaths(__dirname).binDir, "volli-runner"),
+      // Loaded on first connect, as desktop does: an unlinked runner never loads it.
+      convex: async () => ({
+        ConvexClient: (await import("convex/browser")).ConvexClient,
+        makeFunctionReference: (await import("convex/server")).makeFunctionReference,
+      }),
+    },
   };
   return parsed.command.run(parsed.input, context);
 }

@@ -486,6 +486,9 @@ importers:
       '@volli/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      convex:
+        specifier: 1.48.0
+        version: 1.48.0(react@19.3.1)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

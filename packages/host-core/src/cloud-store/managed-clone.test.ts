@@ -329,7 +329,7 @@ describe("runner-managed clones", { timeout: REAL_GIT_TIMEOUT_MS }, () => {
     const fetch = calls.find((call) => call.args[0] === "fetch")!;
     expect(fetch.env).toMatchObject({
       GIT_CONFIG_KEY_0: "http.https://git.example.test/.extraHeader",
-      GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from("x-access-token:ghu_secret").toString("base64")}`,
+      GIT_CONFIG_VALUE_0: `AUTHORIZATION: Basic ${Buffer.from("x-access-token:ghu_secret").toString("base64")}`,
     });
     expect(calls.every((call) => !call.args.join(" ").includes("ghu_secret"))).toBe(true);
     // Nothing about the token is written into the clone's configuration.
