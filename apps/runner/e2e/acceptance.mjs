@@ -67,6 +67,7 @@ import { startFakeGithub } from "../../../scripts/fake-github/server.mjs";
 import { createTestCertificates } from "../../../scripts/fake-github/tls.mjs";
 import { startFakeProvider } from "../../desktop/e2e/volli-drive/lib/fake-provider.mjs";
 import {
+  adminOf,
   connectGithub,
   createInstallToken,
   fixtureFromEnv,
@@ -80,6 +81,7 @@ import {
 import { buildBoxImage, startBox } from "./lib/box.mjs";
 import { exitCodeFor, redact, renderSummary, runLegs } from "./lib/legs.mjs";
 import { assetSetVersion, ReleaseServer, startReleaseServer } from "./lib/release-server.mjs";
+import { restampArchive } from "./lib/restamp.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const exec = promisify(execFile);
@@ -611,6 +613,172 @@ async function sessionLeg(context, log) {
   return `Session on ${context.runner.name} pushed ${sha.slice(0, 12)} to ${WORLD.repo.owner}/${WORLD.repo.name} (${commit.author})`;
 }
 
+/** `x.y.z[-pre]` → `x.y.(z+1)-e2e.<n>`: newer than the build, and plainly a test version. */
+export function laterVersion(version, n) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-.+)?$/u.exec(version);
+  if (!match) throw new Error(`not a version: ${version}`);
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}-e2e.${n}`;
+}
+
+/**
+ * Publish a re-stamped release (`lib/restamp.mjs`) of this run's build as
+ * `version`, through BYO-7's release script with the original version as its
+ * `minRunnerVersion`, so the update is a target and not a floor.
+ */
+async function publishRestamped(context, version, { broken }) {
+  const { release, published } = context;
+  const assetsDir = process.env.VOLLI_BYO_RUNNER_ASSETS;
+  const staged = mkdtempSync(join(tmpdir(), `byo-release-${version}-`));
+  for (const arch of ["x64", "arm64"]) {
+    restampArchive({
+      archive: join(assetsDir, `volli-runner-${published.version}-linux-${arch}.tar.gz`),
+      from: published.version,
+      to: version,
+      arch,
+      outDir: staged,
+      broken,
+    });
+  }
+  const tag = `v${version}`;
+  // The release script takes its version from the repository's manifests, so
+  // a re-stamp gives it a root of its own that names `version` (and the
+  // tree's real installer template).
+  const stampRoot = mkdtempSync(join(tmpdir(), `byo-root-${version}-`));
+  mkdirSync(join(stampRoot, "apps/desktop"), { recursive: true });
+  for (const manifest of ["package.json", "apps/desktop/package.json"]) {
+    writeFileSync(join(stampRoot, manifest), `${JSON.stringify({ version })}\n`);
+  }
+  const { generateRunnerReleaseManifest } = await import(
+    pathToFileURL(join(ROOT, "scripts/runner-release-manifest.mjs")).href
+  );
+  await generateRunnerReleaseManifest(staged, {
+    root: stampRoot,
+    releaseBase: release.downloadBase(tag),
+    minRunnerVersion: published.version,
+    installerTemplate: join(ROOT, "apps/runner/packaging/install.sh"),
+  });
+  release.publish(
+    tag,
+    Object.fromEntries(readdirSync(staged).map((name) => [name, join(staged, name)])),
+  );
+  return { version, tag, manifestUrl: release.assetUrl(tag, "volli-runner-manifest.json") };
+}
+
+/** The operator's pin of the runner's channel to `release` (BYO-5's `runnerReleases.pin`). */
+async function pinChannel(context, release) {
+  const runner = (await listRunners(context.person)).find(
+    (entry) => entry.id === context.runner.id,
+  );
+  const channel = runner?.autoUpdate?.channel ?? "stable";
+  await adminOf(context.fixture).mutation("runnerReleases:pin", {
+    channel,
+    version: release.version,
+    minVersion: context.published.version,
+    manifestUrl: release.manifestUrl,
+    publishedAt: Date.now(),
+  });
+  return channel;
+}
+
+/** The person's view of the box: its version, status and last update outcome. */
+async function boxRow(context) {
+  return (
+    (await listRunners(context.person)).find((entry) => entry.id === context.runner.id) ?? null
+  );
+}
+
+/**
+ * SETUP, once per box: let the root updater and the daemon reach this run's
+ * HTTPS release (Node keeps its own CA list, so they get the run's CA through
+ * `NODE_EXTRA_CA_CERTS`), and have the install verify SHA-256 only
+ * (`update.json` `provenance: "sha-only"`, the test-lane setting only the
+ * install root's owner can choose: nothing here can be Sigstore-signed).
+ */
+async function prepareUpdates(context) {
+  if (context.updatesPrepared) return;
+  const ca = "/usr/local/share/ca-certificates/volli-e2e-ca.crt";
+  const dropIn = `[Service]\nEnvironment=NODE_EXTRA_CA_CERTS=${ca}\n`;
+  await onBox(
+    context,
+    "the runner and its updater trust the run's CA; SHA-only updates (test seam)",
+    [
+      "set -e",
+      "for unit in volli-runner volli-runner-update; do",
+      '  mkdir -p "/etc/systemd/system/$unit.service.d"',
+      `  printf '%s' "$BYO_CA_DROP_IN" > "/etc/systemd/system/$unit.service.d/byo-e2e-ca.conf"`,
+      "done",
+      "node=/opt/volli-runner/current/bin/node",
+      `"$node" -e 'const fs=require("fs");const p="/opt/volli-runner/update.json";const c=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,"utf8")):{};c.provenance="sha-only";fs.writeFileSync(p,JSON.stringify(c)+"\\n")'`,
+      "cat /opt/volli-runner/update.json",
+      "systemctl daemon-reload",
+      "systemctl restart volli-runner",
+    ].join("\n"),
+    { env: { BYO_CA_DROP_IN: dropIn } },
+  );
+  await waitFor("the box online after its restart", async () =>
+    (await boxRow(context))?.status === "online" ? true : null,
+  );
+  context.updatesPrepared = true;
+}
+
+/**
+ * Leg 3: v+1 (this build, re-stamped) published to the release and set in
+ * `releaseChannels` → the box updates itself and is online at v+1.
+ */
+async function updateLeg(context, log) {
+  await prepareUpdates(context);
+  const next = await publishRestamped(context, laterVersion(context.published.version, 1), {
+    broken: false,
+  });
+  const channel = await pinChannel(context, next);
+  log(`pinned ${channel} to ${next.version} (re-stamped from ${context.published.version})`);
+  const row = await waitFor(
+    `the box online at ${next.version}`,
+    async () => {
+      const found = await boxRow(context);
+      return found?.status === "online" && found.version === next.version ? found : null;
+    },
+    { timeoutMs: 10 * 60_000, intervalMs: 2_000 },
+  );
+  const current = await onBox(context, "current is v+1", "readlink /opt/volli-runner/current");
+  assert.match(current.stdout, new RegExp(next.version.replaceAll(".", "\\."), "u"));
+  context.updated = next;
+  return `${row.name} updated ${context.published.version} → ${next.version} (re-stamped build); outcome ${JSON.stringify(row.update ?? null)}`;
+}
+
+/**
+ * Leg 4: a broken v+2 (stages, never comes online) → the box rolls back to
+ * v+1 and reports `update_failed`.
+ */
+async function rollbackLeg(context, log) {
+  const broken = await publishRestamped(context, laterVersion(context.published.version, 2), {
+    broken: true,
+  });
+  await pinChannel(context, broken);
+  log(`pinned to the broken ${broken.version}`);
+  const row = await waitFor(
+    `update_failed for ${broken.version}, online again at ${context.updated.version}`,
+    async () => {
+      const found = await boxRow(context);
+      return found?.update?.kind === "update_failed" &&
+        found.update.version === broken.version &&
+        found.status === "online" &&
+        found.version === context.updated.version
+        ? found
+        : null;
+    },
+    { timeoutMs: 12 * 60_000, intervalMs: 2_000 },
+  );
+  const current = await onBox(
+    context,
+    "current is back at v+1",
+    "readlink /opt/volli-runner/current",
+  );
+  assert.match(current.stdout, new RegExp(context.updated.version.replaceAll(".", "\\."), "u"));
+  assert.doesNotMatch(current.stdout, new RegExp(broken.version.replaceAll(".", "\\."), "u"));
+  return `${row.name} refused ${broken.version} (${row.update.reason ?? "no reason"}) and is online at ${row.version}`;
+}
+
 /** The legs, in order. */
 export const LEGS = [
   { id: "harness", title: "Harness: backend, fake GitHub, release, systemd box", run: harness },
@@ -641,12 +809,14 @@ export const LEGS = [
     id: "update",
     title: "v+1 published and set in releaseChannels → online at v+1",
     after: ["install"],
+    run: updateLeg,
     needs: [BYO.releaseFeed, BYO.update],
   },
   {
     id: "rollback",
     title: "broken v+2 → rolled back to v+1, update_failed reported",
     after: ["update"],
+    run: rollbackLeg,
     needs: [BYO.releaseFeed, BYO.update],
   },
 ];
