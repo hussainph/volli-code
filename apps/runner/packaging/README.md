@@ -37,6 +37,15 @@ are absolute, so mirrors must regenerate the manifest with their own base URL.
 The bootstrap passes the selected containing release URL to the binary installer
 as `VOLLI_RUNNER_RELEASE_BASE`; the installer can persist its validated parent as
 the origin for future updates, including mirror and local-test releases.
+
+For a non-`*.convex.cloud` deployment, pass `--server <backend-origin>` and
+`--site <http-actions-origin>` together, or set `VOLLI_SERVER` and
+`VOLLI_SERVER_SITE` together. Both are forwarded to the binary installer/link
+command, which validates the origins (HTTPS, or HTTP on loopback). Like `link`,
+an explicit `--server` does not borrow the environment's site; supply `--site`
+explicitly with it. A `--site` flag can also override the site paired with
+`VOLLI_SERVER`. A conventional `*.convex.cloud` server infers its site.
+
 Without systemd, installation skips starting a service; use `volli-runner run`.
 
 The shell bootstrap hands a private `${TMPDIR:-/tmp}/volli-runner.*` staging

@@ -70,7 +70,7 @@ async function fixture(t) {
     );
     writeFileSync(
       join(from, "bin/volli-runner"),
-      '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nprintf "%s" "$VOLLI_RUNNER_TOKEN" > "$TOKEN_RECORD"\nprintf "%s" "$VOLLI_SERVER" > "$SERVER_RECORD"\nprintf "%s" "$VOLLI_RUNNER_RELEASE_BASE" > "$RELEASE_BASE_RECORD"\numask > "$UMASK_RECORD"\n',
+      '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nprintf "%s" "$VOLLI_RUNNER_TOKEN" > "$TOKEN_RECORD"\nprintf "%s" "$VOLLI_SERVER" > "$SERVER_RECORD"\nprintf "%s" "$VOLLI_SERVER_SITE" > "$SITE_RECORD"\nprintf "%s" "$VOLLI_RUNNER_RELEASE_BASE" > "$RELEASE_BASE_RECORD"\numask > "$UMASK_RECORD"\n',
       { mode: 0o755 },
     );
     for (const probeName of ["probe-natives.cjs", "probe-codemode.mjs"])
@@ -134,11 +134,13 @@ async function fixture(t) {
     RECORD: join(root, "record"),
     TOKEN_RECORD: join(root, "token"),
     SERVER_RECORD: join(root, "server"),
+    SITE_RECORD: join(root, "site"),
     RELEASE_BASE_RECORD: join(root, "release-base"),
     UMASK_RECORD: join(root, "umask"),
     PROBE_RECORD: join(root, "probes"),
     VOLLI_RUNNER_TOKEN: "",
     VOLLI_SERVER: "",
+    VOLLI_SERVER_SITE: "",
   };
   return {
     root,
@@ -175,6 +177,8 @@ test("POSIX installer downloads a release over HTTP, verifies and probes before 
     "--name",
     "box with spaces",
     "--server",
+    "https://deployment.convex.cloud",
+    "--site",
     "https://deployment.convex.site",
     "--token",
     "private-install-token",
@@ -193,18 +197,87 @@ test("POSIX installer downloads a release over HTTP, verifies and probes before 
     "--name",
     "box with spaces",
     "--server",
+    "https://deployment.convex.cloud",
+    "--site",
     "https://deployment.convex.site",
     "--no-start",
     "--no-link",
   ]);
   assert.equal(readFileSync(f.env.TOKEN_RECORD, "utf8"), "private-install-token");
-  assert.equal(readFileSync(f.env.SERVER_RECORD, "utf8"), "https://deployment.convex.site");
+  assert.equal(readFileSync(f.env.SERVER_RECORD, "utf8"), "https://deployment.convex.cloud");
+  assert.equal(readFileSync(f.env.SITE_RECORD, "utf8"), "https://deployment.convex.site");
   assert.match(readFileSync(f.env.UMASK_RECORD, "utf8"), /^0*22\n$/);
   assert.equal(readFileSync(f.env.RELEASE_BASE_RECORD, "utf8"), f.base);
   assert.equal(readFileSync(f.env.PROBE_RECORD, "utf8").trim().split("\n").length, 2);
   assert.doesNotMatch(result.stdout + result.stderr + args.join(" "), /private-install-token/);
   assert.match(result.stderr, /authenticity trusts TLS/);
   assert.deepEqual(f.requests, ["/volli-runner-manifest.json", "/x64.tar.gz"]);
+});
+
+test("bootstrap forwards a coherent server/site pair through the HTTP install handoff", async (t) => {
+  // Simulated wiring: downloads, checksum and shell handoff are real; the
+  // fixture's binary records argv/env. BYO acceptance proves the real link.
+  for (const [label, flags, env, server, site] of [
+    [
+      "environment pair",
+      [],
+      { VOLLI_SERVER: "http://127.0.0.1:3210", VOLLI_SERVER_SITE: "http://127.0.0.1:3211" },
+      "http://127.0.0.1:3210",
+      "http://127.0.0.1:3211",
+    ],
+    [
+      "flag pair in either order overrides ambient deployment",
+      ["--site", "https://actions.example.test", "--server", "https://backend.example.test"],
+      { VOLLI_SERVER: "http://127.0.0.1:3210", VOLLI_SERVER_SITE: "http://127.0.0.1:3211" },
+      "https://backend.example.test",
+      "https://actions.example.test",
+    ],
+    [
+      "flag server never borrows the environment site",
+      ["--server", "https://staging.convex.cloud"],
+      { VOLLI_SERVER: "http://127.0.0.1:3210", VOLLI_SERVER_SITE: "http://127.0.0.1:3211" },
+      "https://staging.convex.cloud",
+      "",
+    ],
+    [
+      "flag site overrides the environment site",
+      ["--site", "https://actions.example.test"],
+      {
+        VOLLI_SERVER: "https://backend.example.test",
+        VOLLI_SERVER_SITE: "https://old-actions.example.test",
+      },
+      "https://backend.example.test",
+      "https://actions.example.test",
+    ],
+  ]) {
+    await t.test(label, async (subtest) => {
+      const f = await fixture(subtest);
+      const result = await f.run([...flags, "--no-start"], env);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(f.record().slice(4), [
+        "--channel",
+        "stable",
+        "--server",
+        server,
+        ...(site === "" ? [] : ["--site", site]),
+        "--no-start",
+      ]);
+      assert.equal(readFileSync(f.env.SERVER_RECORD, "utf8"), server);
+      assert.equal(readFileSync(f.env.SITE_RECORD, "utf8"), site);
+      assert.deepEqual(f.requests, ["/volli-runner-manifest.json", "/x64.tar.gz"]);
+    });
+  }
+});
+
+test("bootstrap refuses a site without a server before downloading", async (t) => {
+  for (const flags of [[], ["--site", "http://127.0.0.1:3211"]]) {
+    const f = await fixture(t);
+    const result = await f.run(flags, { VOLLI_SERVER_SITE: "http://127.0.0.1:3211" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--site needs --server/);
+    assert.equal(f.installed(), false);
+    assert.deepEqual(f.requests, []);
+  }
 });
 
 test("bootstrap warns about Git 2.30 without claiming the distro package upgrade fixes it", async (t) => {
@@ -349,6 +422,7 @@ test("help, unknown flags and missing values are safe; partial script cannot inv
     "--token",
     "--name",
     "--server",
+    "--site",
     "--version",
     "--channel",
     "--release-base",

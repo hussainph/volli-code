@@ -15,6 +15,9 @@ main() {
   token=${VOLLI_RUNNER_TOKEN:-}
   name=
   server=${VOLLI_SERVER:-}
+  site=${VOLLI_SERVER_SITE:-}
+  server_flag=false
+  site_flag=false
   fail() { printf 'volli-runner: %s\n' "$*" >&2; exit 1; }
   need_value() {
     if [ "$#" -lt 2 ] || [ -z "$2" ]; then fail "$1 needs a value"; fi
@@ -23,7 +26,8 @@ main() {
     case "$1" in
       --token) need_value "$@"; token=$2; shift 2 ;;
       --name) need_value "$@"; name=$2; shift 2 ;;
-      --server) need_value "$@"; server=$2; shift 2 ;;
+      --server) need_value "$@"; server=$2; server_flag=true; shift 2 ;;
+      --site) need_value "$@"; site=$2; site_flag=true; shift 2 ;;
       --version) need_value "$@"; version=$2; shift 2 ;;
       --channel) need_value "$@"; channel=$2; shift 2 ;;
       --release-base) need_value "$@"; release_base=${2%/}; shift 2 ;;
@@ -32,15 +36,19 @@ main() {
       --no-link) no_link=true; shift ;;
       --verify-provenance) provenance=true; shift ;;
       --help|-h)
-        printf '%s\n' 'Usage: install.sh [--token TOKEN] [--name NAME] [--server URL] [--user|--system]' \
+        printf '%s\n' 'Usage: install.sh [--token TOKEN] [--name NAME] [--server URL] [--site URL] [--user|--system]' \
           '  [--channel stable|canary] [--version VERSION] [--no-start] [--no-link]' \
           '  [--release-base URL] [--verify-provenance]' \
-          'VOLLI_RUNNER_TOKEN and VOLLI_SERVER are also accepted. No system packages are installed.' \
+          'VOLLI_RUNNER_TOKEN, VOLLI_SERVER and VOLLI_SERVER_SITE are also accepted. No system packages are installed.' \
           'The script installs its stamped version; --channel selects the update channel.'
         return ;;
       *) fail "unknown option: $1" ;;
     esac
   done
+  # Match link's deployment pairing: a flag's server must not borrow an
+  # unrelated site from the environment. Explicit flags work in either order.
+  if "$server_flag" && ! "$site_flag"; then site=; fi
+  [ -z "$site" ] || [ -n "$server" ] || fail '--site needs --server (or VOLLI_SERVER)'
   case "$channel" in stable|canary) ;; *) fail 'channel must be stable or canary' ;; esac
   printf '%s\n' "$version" | LC_ALL=C awk '/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/ { ok=1 } END { exit !ok }' || fail 'invalid version (use --version X.Y.Z)'
   case "$(uname -s)" in
@@ -188,11 +196,12 @@ main() {
   "$from/bin/node" "$from/lib/probe-natives.cjs" || fail 'native modules cannot run on this machine'
   "$from/bin/node" "$from/lib/probe-codemode.mjs" || fail 'Code Mode cannot run on this machine'
   # Keep tokens out of the process argument list, including --token input.
-  export VOLLI_RUNNER_TOKEN="$token" VOLLI_SERVER="$server" \
+  export VOLLI_RUNNER_TOKEN="$token" VOLLI_SERVER="$server" VOLLI_SERVER_SITE="$site" \
     VOLLI_RUNNER_RELEASE_BASE="$release_base"
   set -- install "$mode" --from "$from" --channel "$channel"
   [ -z "$name" ] || set -- "$@" --name "$name"
   [ -z "$server" ] || set -- "$@" --server "$server"
+  [ -z "$site" ] || set -- "$@" --site "$site"
   if "$no_start"; then set -- "$@" --no-start; fi
   if "$no_link"; then set -- "$@" --no-link; fi
   # install copies --from to its permanent release before starting the service.
