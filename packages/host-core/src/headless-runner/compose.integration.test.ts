@@ -113,6 +113,7 @@ function fakeDeployment() {
   const states: string[] = [];
   const capabilities: Record<string, unknown>[] = [];
   let exchanges = 0;
+  const githubTokenRequests: { authorization: string | null; body: Record<string, unknown> }[] = [];
   let revoked = false;
   let reachable = true;
   let hangWhenUnreachable = false;
@@ -128,6 +129,16 @@ function fakeDeployment() {
   };
   const fetch = async (url: string, init?: RequestInit): Promise<Response> => {
     if (!reachable) throw new Error("connect ECONNREFUSED");
+    if (url.endsWith("/runner/github-token")) {
+      githubTokenRequests.push({
+        authorization: new Headers(init?.headers).get("authorization"),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      });
+      return Response.json(
+        { error: { code: "github_not_connected", message: "Not connected.", resetAt: null } },
+        { status: 409 },
+      );
+    }
     if (!url.endsWith("/runner/token")) return Response.json({}, { status: 404 });
     const body = JSON.parse(String(init?.body)) as { runnerId: string; credential: string };
     if (revoked)
@@ -264,6 +275,7 @@ function fakeDeployment() {
     capabilities,
     queries,
     exchanges: () => exchanges,
+    githubTokenRequests,
     enqueue(job: ClaimedJob) {
       queued.push(job);
       wake?.({ ready: queued.length, nextAvailableAt: null });
@@ -698,6 +710,16 @@ describe("volli-runner run: the headless composition", { timeout: 30_000 }, () =
         args: expect.objectContaining({ kind: "managed_clone" }),
       }),
     );
+    // The clone asked Volli Cloud for the owner's GitHub token under this
+    // Session's claim, with the runner's own token (here: not connected).
+    expect(f.deployment.githubTokenRequests[0]).toMatchObject({
+      authorization: expect.stringMatching(/^Bearer /),
+      body: { sessionId: SESSION, projectRepoId: REPO },
+    });
+    expect(f.logs).toContainEqual({
+      level: "warn",
+      message: "Volli Cloud gave this runner no GitHub token",
+    });
   });
 
   it("refuses a session.start for a provider this box is not signed in to, saying where to sign in", async () => {

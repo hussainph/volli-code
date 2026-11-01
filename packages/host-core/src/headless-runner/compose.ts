@@ -601,13 +601,29 @@ export async function startHeadlessRunner(
     const { host, ports } = opened;
     // The owner's GitHub token for a claimed Session or a leased job (BYO-8):
     // what a managed clone fetches with and what a Session's git asks for.
-    const github = createRunnerGithubTokens({
+    const tokens = createRunnerGithubTokens({
       siteUrl: deployment.siteUrl,
       runnerToken: () => parts.lifecycle!.token(),
       ...(deployment.fetch === undefined
         ? {}
         : { fetch: deployment.fetch as unknown as typeof globalThis.fetch }),
     });
+    // A refusal is the reason a clone or a push goes without a token: the
+    // journal names it (never the token, which only a grant carries).
+    const github: RunnerGithubTokens = {
+      ...tokens,
+      get: async (request) => {
+        const answer = await tokens.get(request);
+        if (!answer.ok)
+          logger.warn("Volli Cloud gave this runner no GitHub token", {
+            code: answer.error.code,
+            message: answer.error.message,
+            claim: request.claim.kind,
+            projectRepoId: request.projectRepoId,
+          });
+        return answer;
+      },
+    };
     const cloud = createCloudProductStore({
       host,
       ownerUserId,
@@ -622,7 +638,7 @@ export async function startHeadlessRunner(
       // recorded remote under `<dataDir>/repos`, never "Choose the folder".
       managedClones: createManagedClones({
         root: join(dataDir, "repos"),
-        credentials: managedCloneCredentials(github),
+        credentials: cloneCredentials(github, logger),
         onWarning: (message, error) => logger.warn(message, { error }),
       }),
     });
@@ -849,6 +865,35 @@ export async function startHeadlessRunner(
         return clean;
       })();
       return stopping;
+    },
+  };
+}
+
+/**
+ * BYO-8's clone credentials, saying in the journal when a grant names
+ * another host than the remote's: the clone then fetches without it.
+ */
+function cloneCredentials(
+  github: RunnerGithubTokens,
+  logger: HeadlessRunnerLogger,
+): ReturnType<typeof managedCloneCredentials> {
+  const base = managedCloneCredentials(github);
+  return {
+    async forRemote(input) {
+      const answer = await base.forRemote(input);
+      const remoteHost = /^https?:\/\//iu.test(input.remoteUrl)
+        ? new URL(input.remoteUrl).host
+        : null;
+      if (
+        answer !== null &&
+        remoteHost !== null &&
+        answer.host.toLowerCase() !== remoteHost.toLowerCase()
+      )
+        logger.warn("the GitHub token is for another host than the project's remote", {
+          tokenHost: answer.host,
+          remoteHost,
+        });
+      return answer;
     },
   };
 }
