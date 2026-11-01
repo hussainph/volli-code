@@ -13,8 +13,8 @@ image=volli-installer-systemd:ci
 box=
 mode=
 capture_journal() {
-  local -a filters=(-u volli-runner.service)
-  if [ "$mode" = user ]; then filters=("_SYSTEMD_USER_UNIT=volli-runner.service" "_UID=2000"); fi
+  local -a filters=(-u volli-runner.service -u volli-runner-update.service -u volli-runner-update.path)
+  if [ "$mode" = user ]; then filters=("_SYSTEMD_USER_UNIT=volli-runner.service" "_SYSTEMD_USER_UNIT=volli-runner-update.service" "_SYSTEMD_USER_UNIT=volli-runner-update.path" "_UID=2000"); fi
   docker exec "$box" journalctl --no-pager -n 100 "${filters[@]}"
 }
 cleanup() {

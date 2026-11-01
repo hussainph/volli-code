@@ -1,6 +1,7 @@
 import { isAbsolute, join } from "node:path";
 
 import type { CommandContext, CommandInput } from "../commands";
+import { defaultInstallRoot } from "../update/layout";
 
 export const UNIT = "volli-runner.service";
 export type InstallMode = "user" | "system";
@@ -33,7 +34,7 @@ export function installLayout(
   if (mode === "system") {
     return {
       mode,
-      root: `${prefix}/opt/volli-runner`,
+      root: `${prefix}${defaultInstallRoot(mode, context.home, context.env)}`,
       dataDir: `${prefix}/var/lib/volli-runner`,
       configDir: `${prefix}/etc/volli-runner`,
       binDir: `${prefix}/usr/local/bin`,
@@ -42,7 +43,7 @@ export function installLayout(
   }
   return {
     mode,
-    root: join(xdg("XDG_DATA_HOME", ".local/share"), "volli-runner"),
+    root: defaultInstallRoot(mode, context.home, context.env),
     dataDir: join(xdg("XDG_STATE_HOME", ".local/state"), "volli-runner"),
     configDir: join(xdg("XDG_CONFIG_HOME", ".config"), "volli-runner"),
     binDir: join(context.home, ".local/bin"),

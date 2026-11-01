@@ -14,7 +14,11 @@ runner bundles. Full runner/cloud acceptance is a separate lane.
 The checks cover unit parsing (`systemd-analyze verify`), active service + matching
 status PID/socket, restart to a new PID, `changed:false` on repeat install, default
 uninstall retaining working data and its encryption key, and a repeat install
-around the kept data. Root's `--user` is refused. Reports retain the fixture label.
+around the kept data. The updater's path and boot service are installed and
+enabled, the path watcher becomes active, and the real updater's no-request
+oneshot succeeds; uninstall removes and disables both units. This is unit wiring,
+not update or rollback acceptance. Root's `--user` is refused. Reports retain the
+fixture label.
 
 After the locked dependency install and `vp run --filter @volli/runner build`, CI
 runs `node apps/runner/src/install/ci/prepare.mjs <payload>` followed by

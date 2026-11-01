@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { DEFAULT_RELEASE_ORIGIN, updateOrigin } from "./update-origin";
+import { DEFAULT_RELEASE_ORIGIN } from "../update/manifest";
+import { updateOrigin } from "./update-origin";
 
 const VERSION = "0.3.0-canary.2";
 describe("the bootstrap release base", () => {

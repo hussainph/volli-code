@@ -23,10 +23,13 @@ import { LINK_FILE_NAME } from "../link/file-store";
 import { stringOption } from "../shell/paths";
 import { checkRunnerStatus } from "../shell/runner-status";
 import { atomicWrite } from "../shell/write-file";
+import { updateLayout } from "../update/layout";
+import { DEFAULT_RELEASE_ORIGIN } from "../update/manifest";
+import { UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT, updateUnits } from "../update/units";
 import { proxyEnvironment, serviceUnit, UNIT, type InstallLayout } from "./layout";
 import { mustRun, type RunTool } from "./tools";
 import { normalizeReleaseModes } from "./release";
-import { DEFAULT_RELEASE_ORIGIN, updateOrigin } from "./update-origin";
+import { updateOrigin } from "./update-origin";
 
 export interface InstallPorts {
   run: RunTool;
@@ -169,6 +172,7 @@ export async function installRunner(
   }
   // Render before touching disk: control characters must never enter a unit.
   const unit = serviceUnit(layout, { ...context.env, HOME: context.home });
+  const updaterUnits = updateUnits(updateLayout(layout.mode, layout.root, layout.dataDir));
   const proxyEnv = proxyEnvironment(context.env);
   let changed = false;
   if (layout.mode === "system") {
@@ -261,11 +265,20 @@ export async function installRunner(
     // Proxy values live in root/user-private proxy.env, not public Environment=.
     unitChanged = replaceFile(join(layout.unitDir, UNIT), unit, 0o600);
     changed = unitChanged || changed;
-    // Always reload: a prior install may have died just after writing its unit.
+    changed =
+      replaceFile(join(layout.unitDir, UPDATE_PATH_UNIT), updaterUnits.path, 0o600) || changed;
+    changed =
+      replaceFile(join(layout.unitDir, UPDATE_SERVICE_UNIT), updaterUnits.service, 0o600) ||
+      changed;
+    // Always reload: a prior install may have died just after writing its units.
     mustRun(ports.run, "systemctl", systemctl(layout, ["daemon-reload"]));
-    if (ports.run("systemctl", systemctl(layout, ["is-enabled", UNIT])).status !== 0) {
-      mustRun(ports.run, "systemctl", systemctl(layout, ["enable", UNIT]));
-      changed = true;
+    for (const name of [UNIT, UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT]) {
+      if (ports.run("systemctl", systemctl(layout, ["is-enabled", name])).status !== 0) {
+        // The updater service runs once at boot to recover interrupted activation.
+        // --no-start enables the watcher too, but does not start any service now.
+        mustRun(ports.run, "systemctl", systemctl(layout, ["enable", name]));
+        changed = true;
+      }
     }
     if (
       layout.mode === "user" &&
@@ -303,7 +316,7 @@ export async function installRunner(
     const cli = join(layout.root, "current/bin/volli-runner");
     context.out(
       ports.systemd
-        ? `Start with: systemctl ${layout.mode === "user" ? "--user " : ""}start ${UNIT}\n`
+        ? `Start with: systemctl ${layout.mode === "user" ? "--user " : ""}start ${UNIT} ${UPDATE_PATH_UNIT}\n`
         : `Start with: ${layout.mode === "system" ? "sudo -u volli " : ""}env NODE_USE_ENV_PROXY=1 ${shellQuote(`HOME=${layout.mode === "system" ? layout.dataDir : context.home}`)} ${shellQuote(`VOLLI_RUNNER_INSTALL_MODE=${layout.mode}`)} ${shellQuote(`VOLLI_SECRET_KEY_FILE=${join(layout.configDir, "session-secrets.key")}`)} ${[cli, "run", ...paths].map(shellQuote).join(" ")}\n`,
     );
     return 0;
@@ -322,6 +335,9 @@ export async function installRunner(
   if (restart && before.status !== null) {
     mustRun(ports.run, "systemctl", systemctl(layout, ["restart", UNIT]));
   }
+  if (ports.run("systemctl", systemctl(layout, ["is-active", UPDATE_PATH_UNIT])).status !== 0)
+    changed = true;
+  mustRun(ports.run, "systemctl", systemctl(layout, ["enable", "--now", UPDATE_PATH_UNIT]));
   if (!alreadyOnline || restart) changed = true;
   context.out(`${JSON.stringify({ changed, started: true, mode: layout.mode })}\n`);
   for (let attempt = 0; attempt < 60 && !context.signal.aborted; attempt++) {

@@ -1,5 +1,3 @@
-export const DEFAULT_RELEASE_ORIGIN = "https://github.com/hussainph/volli-code/releases/download/";
-
 /** Bootstrap passes one containing release URL; updates use its validated parent. */
 export function updateOrigin(base: string | undefined, version: string): string | undefined {
   if (base === undefined) return undefined;

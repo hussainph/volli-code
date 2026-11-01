@@ -14,6 +14,8 @@ Before=shutdown.target
 
 [Service]
 Type=oneshot
+Environment=NODE_USE_ENV_PROXY=1
+EnvironmentFile=-/opt/volli-runner/proxy.env
 ExecStart=/opt/volli-runner/current/bin/volli-runner update apply --install-root /opt/volli-runner --data-dir /var/lib/volli-runner
 # A download, two probes, and two health checks of 2 minutes at most.
 TimeoutStartSec=45min

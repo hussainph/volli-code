@@ -8,6 +8,7 @@ import { fileRunnerLinkStore, LINK_FILE_NAME, LINK_KEY_FILE_NAME } from "../link
 import { RUNNER } from "../shell/identity";
 import { acquireInstanceLock } from "../shell/instance-lock";
 import { pathsFor } from "../shell/paths";
+import { UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT } from "../update/units";
 import { UNIT, type InstallLayout } from "./layout";
 import { asRunner, systemctl, type InstallPorts } from "./manage";
 import { mustRun } from "./tools";
@@ -108,15 +109,21 @@ export async function uninstallRunner(
   ) {
     throw new Error(`${cli} is not this install's managed link; move it aside first.`);
   }
-  const unit = join(layout.unitDir, UNIT);
+  // Stop the watcher first, then any privileged applier, before the runner and
+  // before removing code/data. Otherwise a queued update can race uninstall.
+  const units = [UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT, UNIT];
+  const unitFiles = units.map((name) => join(layout.unitDir, name));
   let changed =
     cliStat !== undefined ||
     existsSync(layout.root) ||
-    existsSync(unit) ||
+    unitFiles.some((path) => existsSync(path)) ||
     existsSync(join(layout.configDir, LINK_FILE_NAME)) ||
     existsSync(join(layout.configDir, LINK_KEY_FILE_NAME));
-  if (ports.systemd && existsSync(unit)) {
-    mustRun(ports.run, "systemctl", systemctl(layout, ["disable", "--now", UNIT]));
+  if (ports.systemd) {
+    for (const name of units) {
+      if (existsSync(join(layout.unitDir, name)))
+        mustRun(ports.run, "systemctl", systemctl(layout, ["disable", "--now", name]));
+    }
   }
   const hasServiceAccount =
     layout.mode === "system" && ports.run("id", ["-u", "volli"]).status === 0;
@@ -176,7 +183,7 @@ export async function uninstallRunner(
       ? acquireInstanceLock(RUNNER, layout.dataDir)
       : null;
   try {
-    for (const path of [unit, cli]) {
+    for (const path of [...unitFiles, cli]) {
       // lstat also sees a dangling managed symlink after an interrupted uninstall.
       try {
         const stat = lstatSync(path);

@@ -19,6 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { CommandInput } from "../commands";
 import type { RunnerStatus } from "../shell/runner-status";
 import { testContext } from "../testing/context";
+import { readUpdateConfig } from "../update/config";
+import { updateLayout } from "../update/layout";
+import { UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT, updateUnits } from "../update/units";
 import { installLayout, proxyEnvironment, serviceUnit, unitPath, unitQuote, UNIT } from "./layout";
 import { asRunner, installRunner, systemctl, type InstallPorts } from "./manage";
 import type { RunTool } from "./tools";
@@ -180,6 +183,10 @@ describe("managed layout and units", () => {
     expect(user).not.toContain("network-online.target");
     expect(unit).toContain(`ReadWritePaths="${sys.configDir}"`);
     expect(user).toContain("WantedBy=default.target");
+    const update = updateUnits(updateLayout("user", "/home/with space/100%", "/home/state"));
+    expect(update.service.split("\n")).toContain(
+      "EnvironmentFile=-/home/with space/100%%/proxy.env",
+    );
     expect(systemctl(sys, ["start"])).toEqual(["start"]);
     expect(systemctl(layout(), ["start"])).toEqual(["--user", "start"]);
     const shipped = readFileSync(
@@ -208,6 +215,19 @@ describe("install", () => {
     expect(lstatSync(at.dataDir).mode & 0o777).toBe(0o700);
     expect(lstatSync(at.configDir).mode & 0o777).toBe(0o700);
     expect(lstatSync(join(at.unitDir, UNIT)).mode & 0o777).toBe(0o600);
+    const updates = updateUnits(updateLayout(at.mode, at.root, at.dataDir));
+    for (const [name, text] of [
+      [UPDATE_PATH_UNIT, updates.path],
+      [UPDATE_SERVICE_UNIT, updates.service],
+    ] as const) {
+      expect(readFileSync(join(at.unitDir, name), "utf8")).toBe(text);
+      expect(lstatSync(join(at.unitDir, name)).mode & 0o777).toBe(0o600);
+    }
+    expect(updates.service).not.toContain("network-online.target");
+    expect(updates.service).not.toContain("sysinit.target");
+    expect(updates.service).not.toContain("basic.target");
+    expect(updates.service).toContain(`EnvironmentFile=-${at.root}/proxy.env`);
+    expect(updates.service).toContain("Environment=NODE_USE_ENV_PROXY=1");
     expect(readlinkSync(join(at.root, "current"))).toBe(
       join(at.root, "releases/9.9.9-test-abc123"),
     );
@@ -258,6 +278,11 @@ describe("install", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
       releaseOrigin: "http://127.0.0.1:8080/prefix/",
     });
+    const at = layout();
+    expect(readUpdateConfig(updateLayout(at.mode, at.root, at.dataDir))).toEqual({
+      releaseOrigin: "http://127.0.0.1:8080/prefix/",
+      provenance: "required",
+    });
     await install();
     context = { ...context, env: {} };
     await install();
@@ -272,6 +297,35 @@ describe("install", () => {
     await install();
     expect(existsSync(file)).toBe(false);
     await install();
+  });
+  it("enables both updater units for boot, defers starts with no-start, and starts the watcher on normal install", async () => {
+    ports.run = (command, args) => {
+      calls.push({ command, args });
+      return { status: args.includes("is-enabled") ? 1 : 0, stdout: "yes" };
+    };
+    await install();
+    for (const name of [UNIT, UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT])
+      expect(calls.some((call) => call.args.join(" ") === `--user enable ${name}`)).toBe(true);
+    expect(calls.some((call) => call.args.includes("--now"))).toBe(false);
+    expect(context.stdout()).toContain(`start ${UNIT} ${UPDATE_PATH_UNIT}`);
+    rmSync(join(layout().unitDir, UPDATE_PATH_UNIT));
+    context = {
+      ...context,
+      statusProbes: { read: () => status(), alive: () => true, accepts: async () => true },
+    };
+    calls.length = 0;
+    ports.run = (command, args) => {
+      calls.push({ command, args });
+      return { status: args.includes("is-active") ? 1 : 0, stdout: "yes" };
+    };
+    expect(await install({ "no-start": false })).toBe(0);
+    expect(existsSync(join(layout().unitDir, UPDATE_PATH_UNIT))).toBe(true);
+    expect(
+      calls.some((call) => call.args.join(" ") === `--user enable --now ${UPDATE_PATH_UNIT}`),
+    ).toBe(true);
+    expect(
+      calls.some((call) => call.args.includes(UPDATE_SERVICE_UNIT) && call.args.includes("--now")),
+    ).toBe(false);
   });
   it("compares managed bytes through a no-follow descriptor and refuses unexpected read errors", async () => {
     await install();
@@ -308,7 +362,8 @@ describe("install", () => {
     expect(context.stdout()).not.toContain("secret@proxy");
     expect(context.stderr()).toContain("PATH");
     expect(calls).toEqual([]);
-    expect(existsSync(join(layout().unitDir, UNIT))).toBe(false);
+    for (const name of [UNIT, UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT])
+      expect(existsSync(join(layout().unitDir, name))).toBe(false);
   });
   it("keeps proxy passwords out of systemd properties and restarts on private proxy changes", async () => {
     await install();
@@ -354,6 +409,8 @@ describe("install", () => {
       at,
       ports,
     );
+    for (const name of [UNIT, UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT])
+      expect(existsSync(join(at.unitDir, name))).toBe(false);
     expect(child.mock.calls.some(([cmd]) => cmd === "useradd")).toBe(true);
     const link = child.mock.calls.find(([cmd]) => cmd === "runuser")!;
     expect(link[1]).toContain("link");
@@ -394,6 +451,14 @@ describe("install", () => {
       stdout: cmd === "getent" ? `volli:x:123:123::${at.dataDir}:/bin/bash` : "",
     });
     await installRunner(input({ "no-link": true, "no-start": true }), context, at, ports);
+    const updater = readFileSync(join(at.unitDir, UPDATE_SERVICE_UNIT), "utf8");
+    expect(updater).toContain("Wants=network-online.target");
+    expect(updater).toContain("ProtectSystem=strict");
+    expect(updater).toContain(`EnvironmentFile=-${at.root}/proxy.env`);
+    expect(updater).toContain("Environment=NODE_USE_ENV_PROXY=1");
+    expect(readFileSync(join(at.unitDir, UPDATE_PATH_UNIT), "utf8")).toContain(
+      "WantedBy=paths.target",
+    );
     ports.run = () => ({ status: 0, stdout: "volli:x:123:123::/var/lib/volli-hostd:/bin/bash" });
     await expect(installRunner(input(), context, at, ports)).rejects.toThrow(
       "another installation",
@@ -600,9 +665,25 @@ describe("uninstall", () => {
     expect(existsSync(join(at.configDir, "session-secrets.key"))).toBe(true);
     expect(existsSync(join(at.configDir, "credential"))).toBe(false);
     expect(existsSync(at.root)).toBe(false);
+    expect(
+      calls.filter((call) => call.args.includes("disable")).map((call) => call.args.at(-1)),
+    ).toEqual([UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT, UNIT]);
+    for (const name of [UNIT, UPDATE_PATH_UNIT, UPDATE_SERVICE_UNIT])
+      expect(existsSync(join(at.unitDir, name))).toBe(false);
     const second = testContext({ root });
     await uninstallRunner(input(), second, at, ports);
     expect(second.stdout()).toContain('"changed":false');
+  });
+  it("cleans up orphan updater units after an interrupted uninstall", async () => {
+    const at = layout();
+    mkdirSync(at.unitDir, { recursive: true });
+    writeFileSync(join(at.unitDir, UPDATE_SERVICE_UNIT), "orphan updater");
+    expect(await uninstallRunner(input(), context, at, ports)).toBe(0);
+    expect(context.stdout()).toContain('"changed":true');
+    expect(
+      calls.filter((call) => call.args.includes("disable")).map((call) => call.args.at(-1)),
+    ).toEqual([UPDATE_SERVICE_UNIT]);
+    expect(existsSync(join(at.unitDir, UPDATE_SERVICE_UNIT))).toBe(false);
   });
   it("cleans up an interrupted uninstall's dangling managed link and orphaned credential key", async () => {
     const at = layout();
