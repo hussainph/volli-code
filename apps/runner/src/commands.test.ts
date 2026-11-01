@@ -28,7 +28,7 @@ describe("the command registry", () => {
 
   it("answers a command this build does not have yet with EX_UNAVAILABLE", async () => {
     const stubs = COMMANDS.filter((entry) => entry.stub === true).map((entry) => entry.name);
-    expect(stubs).toEqual(["run", "logs"]);
+    expect(stubs).toEqual(["logs"]);
     for (const name of stubs) {
       const context = testContext({ root });
       expect(await command(name).run({ values: {}, positionals: [] }, context)).toBe(

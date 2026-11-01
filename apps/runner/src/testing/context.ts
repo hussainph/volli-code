@@ -6,7 +6,7 @@
 import { createRunnerLinkClient } from "@volli/host-core/cloud-runner";
 import { RUNNER_HTTP_PATHS, type RunnerHostFacts } from "@volli/shared/cloud";
 
-import type { CommandContext } from "../commands";
+import type { CommandContext, RunnerDaemonPorts } from "../commands";
 import type { UpdateDeps } from "../update/command";
 import type { RunnerStatus } from "../shell/runner-status";
 import type { StatusProbes } from "../shell/status";
@@ -60,6 +60,8 @@ export function testContext(options: {
   sleep?: (ms: number) => Promise<void>;
   /** What the command reads on stdin; a function to make the read fail. */
   stdin?: string | (() => Promise<string>);
+  /** `run`'s ports; by default a daemon that cannot boot (no bundle, no backend). */
+  daemon?: Partial<RunnerDaemonPorts>;
 }): TestContext {
   let stdout = "";
   let stderr = "";
@@ -113,6 +115,20 @@ export function testContext(options: {
     readStdin: () => {
       const stdin = options.stdin;
       return typeof stdin === "function" ? stdin() : Promise.resolve(stdin ?? "");
+    },
+    daemon: {
+      process: {
+        on: () => undefined,
+        exit: (code) => {
+          throw new Error(`exit(${code}) in a test`);
+        },
+      },
+      writeLog: () => {},
+      runtimePaths: () => {
+        throw new Error("No runner bundle in this test.");
+      },
+      convex: () => Promise.reject(new Error("No backend in this test.")),
+      ...options.daemon,
     },
     ...(options.now === undefined ? {} : { now: options.now }),
     stdout: () => stdout,

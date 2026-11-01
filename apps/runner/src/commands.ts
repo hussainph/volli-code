@@ -21,9 +21,14 @@
  */
 import type { ParseArgsOptionsConfig } from "node:util";
 
-import type { RunnerLinkClient } from "@volli/host-core/cloud-runner";
+import type {
+  ConvexClientModule,
+  RunnerFetch,
+  RunnerLinkClient,
+} from "@volli/host-core/cloud-runner";
 import type { RunnerHostFacts } from "@volli/shared/cloud";
 
+import { runRun } from "./commands/run";
 import { doctorCommand } from "./doctor/commands";
 import { installCommand, uninstallCommand } from "./install/commands";
 import { runGitCredential } from "./git/git-credential";
@@ -32,12 +37,28 @@ import type { RunnerDeployment } from "./link/deployment";
 import { loginCommand, logoutCommand } from "./login/commands";
 import { PATH_OPTIONS, PATH_USAGE, type RunnerPaths } from "./shell/paths";
 import type { RunnerStatus } from "./shell/runner-status";
+import type { RunnerRuntimePaths } from "./shell/runtime-paths";
+import type { ServiceProcess } from "./shell/service";
 import type { StatusProbes } from "./shell/status";
 import { runStatus } from "./shell/status-command";
 import { UPDATE_COMMAND, type UpdateDeps } from "./update/command";
 
 /** sysexits' `EX_UNAVAILABLE`: the command exists, and this build does not have it yet. */
 export const EXIT_UNAVAILABLE = 69;
+
+/** What `run` reaches beyond a command's ports: the daemon's process, log sink, bundle and backend. */
+export interface RunnerDaemonPorts {
+  /** Signals, uncaught failures and exit, for the shell's `runService`. */
+  readonly process: ServiceProcess;
+  /** Where the process log's JSON lines go (stdout, for the journal). */
+  writeLog(line: string): void;
+  /** Where this bundle's `volli` CLI and Code Mode's sandbox are. */
+  runtimePaths(): RunnerRuntimePaths;
+  /** `convex/browser`'s client and `convex/server`'s references, loaded only once linked. */
+  convex(): Promise<ConvexClientModule>;
+  /** The `/runner/*` client's fetch: the global one, unless a test scripts it. */
+  readonly fetch?: RunnerFetch;
+}
 
 /** What a command may reach: the process, and the live ports a test replaces. */
 export interface CommandContext {
@@ -63,6 +84,7 @@ export interface CommandContext {
   readonly update: UpdateDeps;
   /** The whole of stdin, as UTF-8 (git's request to `git-credential`). */
   readStdin(): Promise<string>;
+  readonly daemon: RunnerDaemonPorts;
   readonly now?: () => number;
 }
 
@@ -123,7 +145,13 @@ export const COMMANDS: readonly RunnerCommand[] = [
     options: PATH_OPTIONS,
     run: runUnlink,
   },
-  stub("run", "Serve in the foreground.", PATH_USAGE),
+  {
+    name: "run",
+    summary: "Serve in the foreground until stopped (systemd runs this).",
+    usage: PATH_USAGE,
+    options: PATH_OPTIONS,
+    run: runRun,
+  },
   {
     name: "status",
     summary: "Report health as JSON; exit 0 serving, 1 refusing, 3 not serving.",

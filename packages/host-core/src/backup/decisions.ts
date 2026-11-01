@@ -38,6 +38,7 @@ import { blobsRoot } from "../blob-store";
 import { browserTracesRoot } from "../browser/trace-disk";
 import { profileLogsRoot } from "../log/file-sink";
 import { globalCommandsRoot } from "../prompt-templates";
+import { RUNNER_OWNER_FILE } from "../headless-runner/owner";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
 
 /** What a backup does with one persisted table. */
@@ -663,6 +664,13 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason:
       "Machine-local move snapshots, reports, return exports and recovery artifacts contain source paths and backend progress; portable restores omit the move journals and must not resume this machine's imports.",
+  },
+  {
+    // Bound to the file's own name, with its temp files beside it.
+    area: `${RUNNER_OWNER_FILE}*`,
+    decision: "exclude",
+    reason:
+      "Which person a headless runner belongs to, keyed by its runner id and read again from its runner token; a restored machine links as a new runner.",
   },
   {
     area: "volli.db.backup-v*",

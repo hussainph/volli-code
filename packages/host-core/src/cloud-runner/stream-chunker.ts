@@ -652,10 +652,16 @@ export function startStreamChunks(parts: {
   const off = parts.link.subscribe(STREAM_CHUNK_FUNCTIONS.watched, {}, (value) =>
     chunker.setWatched(watchedSessionIds(value)),
   );
+  let stopping: Promise<void> | undefined;
   return {
-    async stop() {
-      off();
-      await chunker.close();
+    // Idempotent: the store's dispose and its connection's stop both end the
+    // streams, and the Convex client throws on a second unsubscribe.
+    stop() {
+      stopping ??= (async () => {
+        off();
+        await chunker.close();
+      })();
+      return stopping;
     },
   };
 }

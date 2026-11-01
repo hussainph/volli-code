@@ -19,7 +19,7 @@ rely on the command table now.
 | `uninstall [--keep-data\|--purge] [--yes]`                               | _not yet._ Remove the runner from this box.                                                                                             |
 | `link [--token <vrt_…>] [--name <name>] [--server <url> [--site <url>]]` | Link this box to your Volli account (below).                                                                                            |
 | `unlink`                                                                 | Forget this box's link. Refuses while the runner runs.                                                                                  |
-| `run`                                                                    | _not yet._ Serve in the foreground.                                                                                                     |
+| `run`                                                                    | Serve in the foreground until SIGTERM (systemd runs this). Exit 0 clean, 1 failed, 78 a boot to fix.                     |
 | `status`                                                                 | One JSON report: the daemon's status file and liveness, and the link on disk. Exit 0 serving, 1 refusing, 3 not serving.                |
 | `doctor`                                                                 | _not yet._ Check git, disk, network and model sign-ins.                                                                                 |
 | `login [provider] [--api-key] [--status]` / `logout <provider>`          | Store, list or remove this runner's model sign-ins (below).                                                                             |
@@ -59,8 +59,8 @@ data dir, so a copied data dir or a backup does not carry the link.
   `*.convex.site`, and any other server (a local backend) names it with
   `--site <url>` (or `VOLLI_SERVER_SITE`). A development build has none baked
   and links only with `--server`.
-- `--name` names the runner for an install token; a device code's name is
-  chosen in Volli when it is approved.
+- `--name` names the runner for an install token. A device-code runner is
+  named after the box's hostname; rename it in Settings → Runners.
 - An already linked box is refused: `unlink` first. The store also refuses to
   replace one runner's link with another's, should two `link`s race.
 
@@ -179,6 +179,7 @@ src/
   main.ts           the process edge: argv, the live context, exit codes
   args.ts           argv → one registry entry (node:util parseArgs, strict)
   commands.ts       the command registry, its context, and the stubs
+  commands/run.ts   `run`: the shell around host-core's headless runner
   link/             deployment (baked + --server), the sealed link file,
                     link and unlink
   update/           auto-update: policy, the daemon's agent, the applier
@@ -214,13 +215,26 @@ with an entry from its own module (`src/<area>/…`), keep the order (it is the
 
 ### What `run` composes
 
-`run` is not built yet. The shell holds what it boots with: `prepareDataDir`
-and `warnOfSharedSocketDir`, `acquireInstanceLock(RUNNER, dataDir)`,
-`openHeadlessSecrets` and `logCredentials`, `installProcessLog` and
-`routeConsole`, `writeStatus(RUNNER, …)` with a `RunnerStatus` (state
-`unlinked` until it holds a link), `runnerRuntimePaths`, and `runService`
-with `drain` for signals, the shutdown deadline and the exit codes (78 for a
-boot refusal). Unlinked, it serves nothing but `status`.
+`run` (`src/commands/run.ts`) boots the shell (`prepareDataDir` and
+`warnOfSharedSocketDir`, `acquireInstanceLock(RUNNER, dataDir)` for the
+process's life, `openHeadlessSecrets`, `installProcessLog`) under
+`runService`, then `@volli/host-core/headless-runner`'s `startHeadlessRunner`
+over the sealed link: host-core with headless ports, the cloud product store,
+the Session runtime, the agent socket (`<dataDir>/volli.sock`, 0600) with the
+cloud agent routes, and the outbound connection to the deployment the link
+names (the Convex client is loaded only once linked). Every state change is
+written to `runner-status.json` as a `RunnerStatus`. Unlinked, it serves only
+its status and boots on once `link` saves a link. The runner's owner is read
+from its first runner token and kept in `<dataDir>/runner-owner.json`, so a
+restart while Volli Cloud is unreachable still recovers its Sessions. Its model
+access is the sealed store `login` writes (`runnerModelAccess`, under the same
+key as the Session secrets); a login or logout is re-reported to Volli Cloud
+while it runs. The connection is host-core's headless lifecycle
+(`createHeadlessRunner`): one token source per link, reconnects from 1 s to 60 s. The unit sets `VOLLI_RUNNER_SERVICE=1`, so the runner reports itself always on; a foreground `run` does not. SIGTERM reports `draining`, closes
+the Session runtime (questions withdrawn, shells joined), reports `stopped`,
+closes the socket and checkpoints SQLite. A failure after boot stops it and
+exits 1; a boot an operator must fix (another runner on the data directory,
+an unreadable link, a database that will not open) exits 78.
 
 ## Develop
 
@@ -231,7 +245,8 @@ vp test run                                  # from apps/runner
 ```
 
 The bundle is one CommonJS file with every `@volli` package inside; what is
-under `dependencies` (the natives, and the Sigstore verifier, which loads only
-when an update verifies) stays external and resolves from `node_modules`. CI builds it on Linux and runs `status` against an empty box
+under `dependencies` (the natives, jsdom, which reads its own stylesheet from
+beside itself, and the Sigstore verifier, which loads only when an update
+verifies) stays external and resolves from `node_modules`. CI builds it on Linux and runs `status` against an empty box
 (exit 3) in `Check + Build`; `Test (packages)` runs its suite at 100%
 coverage.
