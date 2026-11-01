@@ -24,6 +24,8 @@ import type { ParseArgsOptionsConfig } from "node:util";
 import type { RunnerLinkClient } from "@volli/host-core/cloud-runner";
 import type { RunnerHostFacts } from "@volli/shared/cloud";
 
+import { doctorCommand } from "./doctor/commands";
+import { installCommand, uninstallCommand } from "./install/commands";
 import { runLink, runUnlink } from "./link/commands";
 import type { RunnerDeployment } from "./link/deployment";
 import { loginCommand, logoutCommand } from "./login/commands";
@@ -96,8 +98,8 @@ function stub(name: string, summary: string, usage = ""): RunnerCommand {
 }
 
 export const COMMANDS: readonly RunnerCommand[] = [
-  stub("install", "Put this release in place under systemd and link it.", "--system|--user"),
-  stub("uninstall", "Remove the runner from this box.", "[--keep-data|--purge] [--yes]"),
+  installCommand,
+  uninstallCommand,
   {
     name: "link",
     summary: "Link this box to your Volli account: an install token, or a device code.",
@@ -126,7 +128,7 @@ export const COMMANDS: readonly RunnerCommand[] = [
     options: PATH_OPTIONS,
     run: runStatus,
   },
-  stub("doctor", "Check git, disk, network and model sign-ins, and print the fixes."),
+  doctorCommand,
   loginCommand,
   logoutCommand,
   UPDATE_COMMAND,

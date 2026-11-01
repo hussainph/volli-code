@@ -9,7 +9,9 @@
  * `$XDG_STATE_HOME` defaults to `~/.local/state` and `$XDG_CONFIG_HOME` to
  * `~/.config`; a relative one is ignored, as the XDG spec says. Root means a
  * system install: agents never run as root, so root's runner is the system
- * one. The config dir holds the sealed link and its key and never goes into
+ * one. Its unprivileged service uid inherits `VOLLI_RUNNER_INSTALL_MODE=system`
+ * and therefore uses those same system paths. The config dir holds the sealed
+ * link and its key and never goes into
  * the data dir, so a copied data dir or a backup does not carry the link.
  * `--data-dir` and `--config-dir` override either.
  */
@@ -35,7 +37,7 @@ function xdg(env: PathInputs["env"], name: string, fallback: string): string {
 }
 
 export function defaultRunnerPaths({ uid, home, env }: PathInputs): RunnerPaths {
-  if (uid === 0) {
+  if (uid === 0 || env["VOLLI_RUNNER_INSTALL_MODE"] === "system") {
     return { mode: "system", dataDir: "/var/lib/volli-runner", configDir: "/etc/volli-runner" };
   }
   return {

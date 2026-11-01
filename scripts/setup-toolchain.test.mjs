@@ -20,7 +20,13 @@ const step = (name) => {
 test("all Vite+ workflow sites use the shared locked bootstrap after checkout", () => {
   const sites = [];
   const deferredInstalls = [];
-  for (const file of ["ci.yml", "ci-extended.yml", "release.yml", "smoke-quarantine.yml"]) {
+  for (const file of [
+    "ci.yml",
+    "ci-extended.yml",
+    "release.yml",
+    "smoke-quarantine.yml",
+    "runner-install.yml",
+  ]) {
     const workflow = load(`.github/workflows/${file}`);
     for (const [name, job] of Object.entries(workflow.jobs)) {
       for (const [index, setup] of (job.steps ?? []).entries()) {
@@ -41,7 +47,7 @@ test("all Vite+ workflow sites use the shared locked bootstrap after checkout", 
   }
   // Keep an explicit inventory so removing an entire setup step cannot silently
   // pass a loop that checks only the sites it still discovers.
-  assert.equal(sites.length, 21, `bootstrap inventory changed:\n${sites.join("\n")}`);
+  assert.equal(sites.length, 22, `bootstrap inventory changed:\n${sites.join("\n")}`);
   assert.equal(deferredInstalls.length, 3, `deferred installs:\n${deferredInstalls.join("\n")}`);
 });
 

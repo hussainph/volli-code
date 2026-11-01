@@ -11,6 +11,50 @@ describe("the runner's paths", () => {
     });
   });
 
+  it("are system paths for the unprivileged service uid, even with XDG variables", () => {
+    const env = {
+      VOLLI_RUNNER_INSTALL_MODE: "system",
+      XDG_STATE_HOME: "/state",
+      XDG_CONFIG_HOME: "/config",
+    };
+    expect(defaultRunnerPaths({ uid: 997, home: "/var/lib/volli-runner", env })).toEqual({
+      mode: "system",
+      dataDir: "/var/lib/volli-runner",
+      configDir: "/etc/volli-runner",
+    });
+    expect(
+      pathsFor(
+        { "data-dir": "/custom/state", "config-dir": "/custom/config" },
+        { uid: 997, home: "/var/lib/volli-runner", env, cwd: "/" },
+      ),
+    ).toEqual({ mode: "system", dataDir: "/custom/state", configDir: "/custom/config" });
+    // A user-mode env value cannot make root run a user instance.
+    expect(
+      defaultRunnerPaths({ uid: 0, home: "/root", env: { VOLLI_RUNNER_INSTALL_MODE: "user" } })
+        .mode,
+    ).toBe("system");
+  });
+
+  it("keeps user XDG paths unchanged for explicit user or unknown mode values", () => {
+    for (const mode of ["user", "unknown", ""]) {
+      expect(
+        defaultRunnerPaths({
+          uid: 1000,
+          home: "/home/ada",
+          env: {
+            VOLLI_RUNNER_INSTALL_MODE: mode,
+            XDG_STATE_HOME: "/state",
+            XDG_CONFIG_HOME: "/config",
+          },
+        }),
+      ).toEqual({
+        mode: "user",
+        dataDir: "/state/volli-runner",
+        configDir: "/config/volli-runner",
+      });
+    }
+  });
+
   it("are under the person's XDG directories otherwise", () => {
     expect(defaultRunnerPaths({ uid: 1000, home: "/home/ada", env: {} })).toEqual({
       mode: "user",

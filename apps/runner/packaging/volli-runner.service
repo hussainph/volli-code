@@ -1,0 +1,51 @@
+# Packaged default system template; install renders an equivalent unit with paths and proxy env.
+# No socket activation: the daemon connects outbound and owns its local 0600 socket.
+[Unit]
+Description=Volli runner
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=volli
+Group=volli
+StateDirectory=volli-runner
+StateDirectoryMode=0700
+UMask=0077
+Environment=VOLLI_RUNNER_SERVICE=1
+WorkingDirectory=/var/lib/volli-runner
+Environment=HOME=/var/lib/volli-runner
+Environment=VOLLI_RUNNER_INSTALL_MODE=system
+Environment=VOLLI_SECRET_KEY_FILE=/etc/volli-runner/session-secrets.key
+Environment=NODE_USE_ENV_PROXY=1
+# Environment= properties are public; proxy credentials stay in this root-only file.
+EnvironmentFile=-/opt/volli-runner/proxy.env
+ExecStart=:/opt/volli-runner/current/bin/volli-runner run --data-dir /var/lib/volli-runner --config-dir /etc/volli-runner
+KillSignal=SIGTERM
+TimeoutStopSec=45
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=78
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+# Credential rotation and the secrets key are written by the service uid.
+ReadWritePaths=/etc/volli-runner
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=user pid net
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

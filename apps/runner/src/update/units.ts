@@ -92,13 +92,14 @@ Documentation=https://github.com/hussainph/volli-code/blob/main/apps/runner/READ
 # Its boot run must not hold up boot: no default dependencies, so the target
 # that wants it does not wait for it. The runner's own unit wants the network.
 DefaultDependencies=no
-Wants=network-online.target
-After=sysinit.target basic.target network-online.target ${RUNNER_UNIT}
+${system ? `Wants=network-online.target\nAfter=sysinit.target basic.target network-online.target ${RUNNER_UNIT}` : `After=${RUNNER_UNIT}`}
 Conflicts=shutdown.target
 Before=shutdown.target
 
 [Service]
 Type=oneshot
+Environment=NODE_USE_ENV_PROXY=1
+EnvironmentFile=-${layout.installRoot.replace(/%/gu, "%%")}/proxy.env
 ExecStart=${execStart}
 # A download, two probes, and two health checks of 2 minutes at most.
 TimeoutStartSec=45min
