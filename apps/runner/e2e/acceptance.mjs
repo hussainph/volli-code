@@ -485,7 +485,7 @@ export function agentScript(turn) {
  */
 async function replyInTranscript(person, sessionId) {
   const events = [];
-  for (let after = 0; ; ) {
+  for (let after = 0; ;) {
     const page = await person.query("sessions:history", { sessionId, afterSequence: after });
     events.push(...page.events);
     if (!page.hasMore || page.events.length === 0) break;
