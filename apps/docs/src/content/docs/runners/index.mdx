@@ -1,0 +1,151 @@
+---
+title: Runners
+description: Run Sessions on your own machines — this Mac, or a Linux box you own — and understand what leaves them.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+A **runner** is the machine that runs a Session's agent: it holds the working
+copy, runs the model's tool calls, and commits and pushes the result. Volli
+Cloud keeps the board, the Session history and the attention states; the work
+itself happens on a runner you own. Volli Cloud runs no agent code itself: the
+machine, and the work, are yours.
+
+<Aside type="note">
+  **Settings → Runners** appears in a Volli Cloud launch: signed in, with the
+  **Volli Cloud (unstable)** experimental flag on. A signed-out local launch
+  has no runners.
+</Aside>
+
+## This Mac
+
+Every signed-in Mac is already a runner, and a Session started on it works
+with no setup. **Settings → Runners → Keep this Mac working as a runner** is
+on by default in a Volli Cloud launch; while it is on:
+
+- Volli starts at login without a window, in the menu bar.
+- While the Mac has wall power, Volli holds off idle sleep, so a queued
+  Session does not wait on a sleeping machine. On battery nothing is held: a
+  Mac you carried away still sleeps, and the Session waits for it.
+- Closing the window, or pressing ⌘Q, leaves Volli in the menu bar and
+  serving. **Quit Volli** in the menu-bar menu is what stops it.
+
+Turn the switch off to stop taking work on this Mac. A lid closed on a laptop
+sleeps it regardless of the switch; a Session assigned to that Mac then waits,
+and the composer says **Waiting for &lt;name&gt;** until it is back.
+
+## A Linux box or VPS
+
+A Linux server keeps working with nothing open on your Mac. Volli Cloud starts
+a Session on the box, the box clones the repository, and the branch is pushed
+when the agent is done.
+
+Two ways to add one:
+
+- **A box you already have:** [Add a Linux runner](/runners/linux/) — one
+  command pasted from **Settings → Runners → Add a runner**.
+- **No box yet:** [Run a runner on a VPS](/runners/vps/) — create a server at
+  your own provider with a cloud-init snippet from **Get an always-on
+  runner**.
+
+Both end with the box showing **Online** in **Settings → Runners** and its
+name in the composer's runner menu. The Mac app is the only client: a box has
+no window and no board of its own, and you administer it with `volli-runner`.
+The `volli` CLI on a box is for the Session's agent, not for you.
+
+## Choosing a runner
+
+The chip beside the model picker in the composer names the runner a new
+Session will use. Its menu lists your runners with their state — **Online**,
+**Waiting for &lt;name&gt;**, or **Needs an update** — and Volli picks a
+starting choice for you:
+
+1. an online runner that is always on and plugged in, most recently active
+   first;
+2. otherwise this Mac;
+3. otherwise the first online runner.
+
+If no runner is online at all, the composer starts here, as it would without
+the picker.
+
+The runner you choose for a project is remembered for that project on this
+Mac. A Session keeps the runner it started on; changing the picker affects new
+Sessions.
+
+## What a runner does
+
+- It holds one working copy per ticket, and keeps it between Sessions.
+- It runs the agent's tools: shell commands, file edits, `git`, and the
+  `volli` CLI inside the Session.
+- It clones and fetches from your project's remote. For a project moved to
+  Volli Cloud, the runner clones the recorded remote into its own data
+  directory.
+- It reports facts, transcript chunks and attention states to Volli Cloud.
+
+A Linux runner does not install a browser. **Browser Tabs are a Mac feature**;
+a Session on a box has no browser tools, and `volli-runner doctor` says so
+rather than offering to fix it.
+
+## Security
+
+- **No listener.** The runner opens no port and has no inbound service, no
+  pairing port and no operator token. A box can firewall every inbound port
+  except SSH. Every connection it makes is outbound.
+- **Local sockets only.** The `volli` CLI inside a Session talks to the runner
+  over a Unix socket in the data directory, mode `0600`, and git reaches the
+  runner's credential helper over a second one. Both are readable by the
+  runner's own account alone.
+- **One account.** In a system install the runner and every Session it starts
+  run as one unprivileged account, `volli`; in a user install they run as you.
+  The file modes fence out *other* users, not the Sessions themselves: any
+  Session on that box can read the runner's own files, including the model
+  sign-in and the git credential. That is the boundary you accept by putting
+  credentials on a box, and it is why a runner is a machine you own and
+  control.
+- **Root only for updates.** A system install runs one small privileged step:
+  applying an update. The runner itself never runs as root.
+- **Personal.** A runner belongs to one person. Teammates cannot use your
+  runner, and you cannot use theirs.
+- **Removal is immediate.** Removing a runner in **Settings → Runners**
+  revokes it: every call it makes is refused from then on. It stays up and
+  idle, and it never deletes your working copies on its own.
+
+## Network
+
+A runner needs outbound access only:
+
+| Destination | Why |
+| --- | --- |
+| Your Volli Cloud deployment (`*.convex.cloud` for HTTPS and WebSocket, `*.convex.site` for HTTP actions) | Sessions, facts, transcripts, job claims, and the update target |
+| `github.com`, and the release-asset host it redirects downloads to (`objects.githubusercontent.com`, `release-assets.githubusercontent.com`) | The installer, and every update download |
+| Your repositories' git hosts | Clone, fetch and push for Sessions |
+| The model providers you sign in on the box | Model calls for Sessions on that box |
+| Your distribution's package mirror, at first boot only | The one package a cloud-init server installs before the runner (see [the VPS guide](/runners/vps/)) |
+
+Model requests go from the box to the provider with the credentials on that
+box; they do not pass through Volli. A box that reaches these destinations
+needs no other network access, and no inbound rule at all.
+
+## Supported machines
+
+| Platform | Support |
+| --- | --- |
+| Linux x86-64, glibc 2.31 or newer | Tested on Ubuntu 20.04, 22.04 and 24.04, Debian 11 and 12, and Fedora 41. RHEL 9 and later should work and is not in the tested matrix |
+| Linux arm64, glibc 2.31 or newer | The same distributions, on arm64 |
+| systemd | Used for the service; without it the installer skips starting and prints `volli-runner run` |
+| musl (Alpine) | Not supported |
+| macOS | The installer prints "Your Mac runner is the Volli app" and exits; the app is the Mac runner |
+| Chromium | Not installed, and not needed |
+
+The installer downloads and verifies its own release. It needs `curl` or
+`wget`, `tar`, `gzip`, `awk`, `df`, `mktemp` and a SHA-256 tool, and it never
+installs system packages and never uses a system Node: the release carries its
+own. Git is the one thing it cannot provide, and Sessions need git 2.31 or
+newer — newer than Ubuntu 20.04 (2.25) and Debian 11 (2.30) ship, so check
+`git --version` and use backports where the distribution is older.
+
+## Next steps
+
+- [Add a Linux runner](/runners/linux/)
+- [Run a runner on a VPS](/runners/vps/)
+- [Local and cloud data and network access](/reference/data-and-privacy/)

@@ -40,6 +40,14 @@ export const DOC_SECTIONS: DocSection[] = [
     ],
   },
   {
+    label: "Runners",
+    items: [
+      { label: "Overview", slug: "runners" },
+      { label: "Add a Linux runner", slug: "runners/linux" },
+      { label: "Run a runner on a VPS", slug: "runners/vps" },
+    ],
+  },
+  {
     label: "Automations",
     items: [
       { label: "Overview", slug: "guides/automations" },

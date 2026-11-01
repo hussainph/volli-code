@@ -1,0 +1,263 @@
+---
+title: Add a Linux runner
+description: Install the Volli runner on a Linux box with one command, sign in a model, and keep it updated.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+A Linux runner is a box you own — a server, a home machine, a VM — that runs
+Sessions while your Mac is closed. You add it from the app: **Settings →
+Runners → Add a runner** makes a one-time token and the command that uses it.
+You paste the command on the box, and the box does the rest.
+
+Nothing on the box needs a Volli account, a browser or a window. It links
+itself with the token, installs as a service, and appears in **Settings →
+Runners** as **Online**.
+
+<Aside type="note">
+  **Settings → Runners** appears in a Volli Cloud launch: signed in, with the
+  **Volli Cloud (unstable)** experimental flag on. A signed-out local launch
+  has no runners.
+</Aside>
+
+## Before you start
+
+| Requirement | Detail |
+| --- | --- |
+| Linux | x86-64 or arm64, glibc 2.31 or newer. Tested on Ubuntu 20.04, 22.04 and 24.04, Debian 11 and 12, and Fedora 41 |
+| Disk | 1 GiB free where the runner is installed |
+| systemd | Used for the service. Without it the install finishes but starts nothing, and you run `volli-runner run` yourself |
+| Git | 2.31 or newer, for the Sessions that clone and push. Ubuntu 20.04 ships 2.25 and Debian 11 ships 2.30, so check `git --version`. The installer never installs packages: it prints your distribution's install command instead |
+| Network | Outbound HTTPS and WebSocket, 443. See [Runners](/runners/#network) for the destinations |
+
+musl systems (Alpine) are not supported, and the installer refuses them with a
+one-line reason rather than installing something that cannot run.
+
+## Install it from the app
+
+1. In Volli, open **Settings → Runners → Add a runner**.
+2. Optionally type a **Runner name**; blank uses the box's own hostname.
+3. Select **Create install command**.
+4. Choose the **Install command** variant — user, environment variable, or
+   system install — and select **Copy command**.
+5. Run it on the box, in a shell. A system install asks for `sudo`; a user
+   install needs none.
+
+The command it copies is pinned to your app's version, so the box installs
+exactly the build you are running:
+
+```sh
+curl -fsSL https://github.com/hussainph/volli-code/releases/download/v<version>/volli-runner-install.sh \
+  | sh -s -- --token 'vrt_…' --name 'hetzner-1' --user
+```
+
+The token is single-use and expires an hour after the sheet makes it, so a
+copy left in shell history is harmless once it has been used. The three
+variants differ only in how the token travels and who the runner runs as:
+
+| Variant | What it does |
+| --- | --- |
+| User install | Installs under your own login, and Sessions run as you |
+| Environment variable | The same user install, with the token in `VOLLI_RUNNER_TOKEN` instead of an argument, so it stays out of the process list |
+| System install (sudo) | Installs a `volli` service account, and Sessions run as that unprivileged user |
+
+Choose the system install for a dedicated server, and the user install on a
+machine you share. `--user` is refused as root: agents never run as root.
+
+### Without a token
+
+A device code is for a box that has no token: install first without linking,
+then link it from the box. On a system install the link belongs to the service
+account, so both commands run as root:
+
+```sh
+curl -fsSL https://github.com/hussainph/volli-code/releases/download/v<version>/volli-runner-install.sh \
+  | sudo sh -s -- --system --no-link
+sudo volli-runner link
+```
+
+For a user install, drop `sudo` and use `--user`. `volli-runner link` prints a
+short code. Enter it in **Settings → Runners → Link a runner**, read the
+**Machine**, **System** and **IP address** it reports, then select **Approve
+runner**. The code waits ten minutes, and only approve a machine you own: the
+reported name and address are hints, not proof of identity.
+
+A device-code link takes the box's hostname as its name; rename it in
+**Settings → Runners**. `--name` works only with a token.
+
+## What the install does
+
+The script downloads the release for this machine, checks its SHA-256 against
+the release manifest, proves the build runs here (natives and Code Mode), and
+hands over to `volli-runner install`, which:
+
+- unpacks the release beside any earlier one and moves `current` to it;
+- creates the service account and directories (system install) or uses yours;
+- installs and starts the systemd service, enabled at boot;
+- links the box with the token and waits for the deployment to accept it.
+
+Re-running finishes an interrupted install and changes nothing else. The token
+is spent once the runner links, so a second run needs a fresh command from the
+sheet.
+
+| What | System install | User install |
+| --- | --- | --- |
+| Releases | `/opt/volli-runner/releases/` | `~/.local/share/volli-runner/releases/` |
+| Command | `/usr/local/bin/volli-runner` | `~/.local/bin/volli-runner` |
+| Data | `/var/lib/volli-runner` | `~/.local/state/volli-runner` |
+| Link and keys | `/etc/volli-runner` | `~/.config/volli-runner` |
+| Service | `/etc/systemd/system/volli-runner.service` | `~/.config/systemd/user/volli-runner.service` |
+
+The data directory holds the working copies and the runner's machine state.
+The link and its keys live in the config directory, so a copy of the data
+directory never carries the credential. In a system install the `volli`
+account's home is the data directory, so its git config and `~/.git-credentials`
+are there too.
+
+A user install keeps running after you log out only if lingering is enabled
+for your account (`loginctl enable-linger`). Without it the installer warns,
+and the runner stops when your session ends. `~/.local/bin` may not be on your
+`PATH` until you log in again; the installer warns about that too.
+
+## Sign in a model
+
+Sessions on the box need a model provider, signed in **on the box**. The
+runner reports which providers it can serve, and the composer offers only
+those models for that runner.
+
+```sh
+volli-runner login anthropic              # the provider's own sign-in, in the terminal
+volli-runner login anthropic --api-key    # paste an API key instead (not echoed)
+volli-runner login --status               # what this runner has stored
+volli-runner logout anthropic
+```
+
+Run these with `sudo` on a system install. Root never creates credentials, so
+the command switches to the `volli` service account and writes the sign-in
+there, where the runner reads it.
+
+`login` without `--api-key` runs the provider's own sign-in flow: it prints a
+URL to open and a code to paste back. Over SSH, follow its paste-code or
+redirect-URL prompt, or forward a port-1455 callback first
+(`ssh -L 1455:localhost:1455 box`) and open the URL on your Mac.
+
+Do not copy your Mac's `~/.pi/agent/auth.json` to the box: both machines would
+then refresh one grant and sign each other out. Make a separate sign-in on the
+box.
+
+An API key exported in the service's environment is not a sign-in: only what
+`volli-runner login` stores is reported, so sign in with the command even when
+the key is already on the box.
+
+## Git
+
+Sessions commit and push as the runner's own account. When your Volli Cloud
+account has a GitHub connection, the runner asks Volli Cloud for a short-lived
+token per Session and keeps nothing on disk.
+
+Without that connection, give the box its own credentials once, **before** it
+clones anything: a private repository asks for credentials the moment a clone
+starts, and nobody can answer a prompt the agent hits. A deploy key with write
+access is the narrowest option; a fine-grained token limited to that one
+repository works too.
+
+```sh
+sudo -u volli -H install -d -m 700 /var/lib/volli-runner/.ssh
+sudo -u volli -H ssh-keygen -t ed25519 -N "" -C "volli@hetzner-1" \
+  -f /var/lib/volli-runner/.ssh/id_ed25519
+sudo cat /var/lib/volli-runner/.ssh/id_ed25519.pub   # add as a deploy key with write access
+sudo -u volli -H sh -c 'ssh-keyscan github.com >> /var/lib/volli-runner/.ssh/known_hosts'
+sudo -u volli -H git config --global user.name "Volli on hetzner-1"
+sudo -u volli -H git config --global user.email "you+volli@example.com"
+```
+
+A deploy key needs an SSH remote (`git@github.com:…`), and `ssh-keyscan` is
+what keeps the first clone from stopping at a host-key prompt nobody can
+answer. For an HTTPS remote, store a token instead — git reads
+`~/.git-credentials` only with the `store` helper configured:
+
+```sh
+sudo -u volli -H git config --global credential.helper store
+sudo -u volli -H bash -c 'umask 077; printf "https://x-access-token:%s@github.com\n" "<token>" > /var/lib/volli-runner/.git-credentials'
+```
+
+Keep the credential out of the remote URL either way: a URL is printed in
+errors and copied into every working copy's config.
+
+## Check it
+
+```sh
+volli-runner status                    # one JSON report; exit 0 serving, 1 refusing, 3 not serving
+volli-runner doctor                    # every check, with the one command that fixes it
+sudo journalctl -u volli-runner -f     # the runner's log, as it happens
+```
+
+A user install uses the user unit: `systemctl --user status volli-runner` and
+`journalctl --user -u volli-runner -f`, without `sudo`.
+
+`doctor` checks the link, the platform and glibc, git, disk, systemd and
+lingering, the clock, the deployment, github.com, the model providers you
+signed in, and the browser it does not install. Every failure names the one
+command that fixes it, and `--json` prints the same report for a script. It
+exits 0 when no check failed and 1 when one did. On a system install, run it
+with `sudo` so it reads the runner's own directories.
+
+In the app, the runner's row shows its state and the version it reports. From
+the composer, pick it for a new Session, or let Volli choose it: an online
+runner that is always on and plugged in comes first.
+
+## Updates
+
+A runner updates itself. When the release channel names a newer version and
+the box is idle, it stages the release, verifies it, drains, and restarts on
+the new one; if it does not come back online, it rolls back and reports what
+happened, so a bad release cannot strand a box.
+
+- **Manual.** `volli-runner update` prints what this box runs, what is staged
+  and the last outcome. `volli-runner update --now` asks the running runner to
+  update now: it stages the release, waits up to 30 minutes for the box to be
+  idle, and restarts. `--to <version>` picks the version. A system install
+  writes the install root, so `--now` needs `sudo`.
+- **Needs an update.** A runner below the oldest version the deployment
+  accepts shows **Needs an update** in **Settings → Runners** and in the
+  composer, and takes no new Sessions until it updates. An update cannot be
+  declined past that floor.
+- **Channel.** `--channel canary` at install follows prereleases; the default,
+  `--channel stable`, follows stable releases. An update never moves a runner
+  to an older version.
+
+## Remove it
+
+```sh
+sudo volli-runner uninstall              # system install; keeps the data directory
+volli-runner uninstall                   # user install
+sudo volli-runner uninstall --purge      # also removes working copies and the account
+```
+
+Uninstall stops and removes the service and the release, and leaves the data
+directory alone unless you pass `--purge`. With `--purge` it lists working
+copies that hold uncommitted or unpushed work and asks before removing them;
+`--yes` skips the question. Afterwards, remove the runner in **Settings →
+Runners** if it is still listed: a box that is already gone cannot unlink
+itself.
+
+`volli-runner unlink` forgets the link on the box alone, and refuses while the
+runner is running. Stop the service first, then unlink and link again:
+
+```sh
+sudo systemctl stop volli-runner
+sudo volli-runner unlink
+sudo volli-runner link
+sudo systemctl start volli-runner
+```
+
+## If something is wrong
+
+| What you see | What to check |
+| --- | --- |
+| **Waiting for hetzner-1** in the composer | The box is asleep, stopped or offline. `systemctl status volli-runner` (or `systemctl --user status volli-runner`), then `volli-runner status` |
+| **Needs an update** | `volli-runner update`, or wait for an idle automatic update |
+| The runner vanished from Settings | It was removed there, which revokes it. Stop the service, `volli-runner unlink`, `volli-runner link`, start the service again |
+| `volli-runner status` exits 3 | Not serving: the output names the reason. `sudo journalctl -u volli-runner -n 50` has the last lines |
+| No model in the composer for this box | Sign in on the box: `volli-runner login --status` shows what it has stored, and `volli-runner login <provider>` adds one |
+| A Session's push failed | The box has no credential for that remote; see Git above |

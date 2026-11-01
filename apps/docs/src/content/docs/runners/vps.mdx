@@ -1,0 +1,141 @@
+---
+title: Run a runner on a VPS
+description: Create an always-on Linux server at your own provider and turn it into a Volli runner with one cloud-init snippet.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+A server in your own provider account is the runner that never sleeps: no lid,
+no battery, nothing to keep awake. Volli does not create the server and does
+not sit between you and the provider — you make the server, paste one snippet,
+and the box turns itself into a runner.
+
+**Settings → Runners → Get an always-on runner** makes the snippet, with the
+name and a one-time token already in it.
+
+<Aside type="note">
+  **Settings → Runners** appears in a Volli Cloud launch: signed in, with the
+  **Volli Cloud (unstable)** experimental flag on. A signed-out local launch
+  has no runners.
+</Aside>
+
+## The server to make
+
+| Setting | Value |
+| --- | --- |
+| Image | Ubuntu 24.04 LTS — Ubuntu 22.04 or 20.04, Debian 11 or 12 and Fedora also work (glibc 2.31 or newer) |
+| Architecture | x86-64 or arm64, whichever your provider offers |
+| Disk | 10 GB is plenty; the installer requires 1 GiB free |
+| Network | A public address, and no inbound rule: the runner makes outbound connections only |
+| User data / cloud-init | Where the snippet goes. Every provider below has one |
+
+A small shared instance is enough to begin with: the heavy part of a Session is
+the model call, which your model provider runs, not the box. Give it more CPU
+if Sessions on it will build and test large projects.
+
+## Get the snippet
+
+1. In Volli, open **Settings → Runners → Get an always-on runner**.
+2. Optionally type a **Runner name**; blank uses the box's own hostname.
+3. Select **Create install command**.
+4. Pick the **Provider** — Hetzner, DigitalOcean, or Other for any cloud-init
+   server. It changes the instructions beside the snippet, not the snippet.
+5. Select **Copy cloud-init**.
+
+The snippet is `#cloud-config` user data. It installs `curl`, downloads the
+installer for your app's version into a private temporary file, and runs it as
+a system install with the token in its environment:
+
+```yaml
+#cloud-config
+package_update: true
+packages:
+  - curl
+runcmd:
+  - |
+    set -eu
+    umask 077
+    script=$(mktemp)
+    trap 'rm -f "$script"' 0
+    curl -fsSL https://github.com/hussainph/volli-code/releases/download/v<version>/volli-runner-install.sh -o "$script"
+    VOLLI_RUNNER_TOKEN='vrt_…' sh "$script" --name 'hetzner-1' --system
+```
+
+The token expires an hour after the sheet made it, so create the server right
+away. A server started later fails to link and needs a fresh snippet.
+
+The snippet installs one package, `curl`, so the server needs your
+distribution's package mirror once. It does not install git: add `git` to the
+`packages` list, or install it afterwards, if the image has none and Sessions
+on this box will clone and push. Sessions need git 2.31 or newer.
+
+## Hetzner
+
+1. **Cloud Console → Add server.**
+2. Choose a location, and Ubuntu 24.04 as the image.
+3. Pick the smallest shared vCPU instance that fits your work.
+4. Open **Cloud config** and paste the snippet into the user-data field.
+5. Create the server and wait for it to boot.
+
+## DigitalOcean
+
+1. **Create → Droplets.**
+2. Choose Ubuntu 24.04, a region, and the smallest plan that fits.
+3. Expand **Advanced options** and tick **Add Initialization scripts (free)**.
+4. Paste the snippet as the user data.
+5. Create the Droplet.
+
+## Any other provider
+
+Any provider with a `#cloud-config` user-data field works the same way: paste
+the snippet at creation. If a provider offers only a shell script, run the
+install command from [Add a Linux runner](/runners/linux/) as root instead —
+it is the same install with the token as an argument and `--system` in place
+of `--user`.
+
+## After it boots
+
+The first boot installs, links and starts the runner. Within a minute or two
+of the server being reachable, it shows **Online** in **Settings → Runners**,
+and its name appears in the composer's runner menu.
+
+Then:
+
+1. **Delete the user data at your provider** if it lets you. The token is
+   single-use and spent once the runner links, but user data stays readable to
+   the server's own metadata service until it is gone.
+2. **Run one Session on it.** Pick the box in the composer, start a small
+   Session, and watch it finish. This proves cloning, the model sign-in and
+   the push on a real box.
+3. **Run `volli-runner doctor`** on the box. It reports git, disk, systemd,
+   the deployment, your git hosts and the providers you signed in, each with
+   the one command that fixes it.
+
+If the model list is empty for this runner, sign a provider in on the box:
+`sudo volli-runner login <provider>`. See [Add a Linux
+runner](/runners/linux/#sign-in-a-model).
+
+## Reboots, updates and SSH
+
+- The service starts at boot; a reboot brings the runner back with no action.
+- Updates apply when the runner is idle and it restarts on the new release; if
+  the new version does not come back online it rolls back.
+- Keep SSH access for administration, but nothing else needs an inbound port.
+  The runner has no listener, and every connection it makes is outbound.
+- Firewalling all inbound ports except SSH is the intended setup, not a
+  restriction on the runner.
+
+## If it does not come online
+
+On the box:
+
+```sh
+cloud-init status --long          # did the user data run, and did it fail
+sudo journalctl -u volli-runner -n 50
+sudo volli-runner status          # one JSON report, with the reason it is not serving
+```
+
+The usual causes are a token that expired before the server booted, a package
+install that failed (no route to the distribution's mirror), and a server that
+cannot reach the deployment. The runner's status names which. To start over,
+delete the server and create it again with a fresh snippet.
