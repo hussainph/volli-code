@@ -7,7 +7,7 @@ main push, nightly, on dispatch, and on a PR that changes `ci-extended.yml`.
 
 ```sh
 # CI runs exactly this, from convex/ (needs Docker and a Linux host network):
-node fixture/with-backend.ts --deploy -- node ../apps/runner/e2e/acceptance.mjs
+node fixture/with-backend.ts --deploy -- node ../apps/runner/e2e/acceptance.mjs --require-all
 
 # Local debugging without Docker: box commands run in a plain shell on this
 # machine, labelled HOST SHELL in every output. Never what CI runs.
@@ -27,10 +27,11 @@ node fixture/with-backend.ts --deploy -- node ../apps/runner/e2e/acceptance.mjs 
 The Session leg runs last, so a start that cannot run (and stays queued for
 a retry) never stands between the box and the idle moment an update waits for.
 
-Each leg reports one of `PASS`, `FAIL`, `PENDING` (work it needs has not
-merged; the summary names the files and tickets) or `BLOCKED` (a leg it
-builds on did not pass). A failure is always red. `--require-all` also makes
-`PENDING` and `BLOCKED` red, for the lane once every leg's work is on main.
+Each leg reports one of `PASS`, `FAIL`, `PENDING` (work it needs is not on
+the tree; the summary names the files and tickets) or `BLOCKED` (a leg it
+builds on did not pass). CI runs the lane with `--require-all`, since every
+leg's work is on main: anything short of every leg passing is red. Without
+the flag (local runs, older trees) only a failure is red.
 A start that failed for good ends the Session leg with the start's own reason.
 
 The harness's own unit tests are `node:test` files, run by the job's

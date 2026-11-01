@@ -26,9 +26,9 @@
  *    person (the picker's API) runs a fake-model turn whose agent commits
  *    and `git push`es → the fake GitHub has the commit.
  *
- * Legs 1–4 are declared with the merged work they need and stay `pending`
- * until it lands and the leg is wired (VC-1043 final); `--require-all` makes
- * anything short of every leg passing red.
+ * Legs 1–4 are declared with the merged work they need, and report `pending`
+ * on a tree without it. CI passes `--require-all` (every leg's work is on
+ * main), which makes anything short of every leg passing red.
  *
  * SETUP and doubles, never the behaviour under test: the person (test
  * issuer, preview granted with the fixture's admin key), the fake GitHub

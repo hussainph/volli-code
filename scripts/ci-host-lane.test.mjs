@@ -614,6 +614,8 @@ test("the BYO lanes gate on merged work: pending is a notice, present-but-broken
   assert.equal(acceptance["working-directory"], "convex");
   assert.ok(acceptance.run.includes("fixture/with-backend.ts --deploy"));
   assert.ok(acceptance.run.includes("../apps/runner/e2e/acceptance.mjs"));
+  // Every leg's work is on main: pending or blocked is red, not a pass.
+  assert.match(acceptance.run, /acceptance\.mjs --require-all$/u);
   assert.equal(
     byo.steps.find((step) => step.name.startsWith("Harness self-tests")).run,
     "node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs",

@@ -657,10 +657,10 @@ jobs:
   # (scripts/fake-github: OAuth + REST for the backend, git smart HTTP that
   # checks x-access-token), a local "GitHub release" file server, and a fresh
   # Ubuntu 24.04 box booted under systemd in a privileged container on the
-  # host network. The harness leg proves that plumbing; the install leg
-  # reports PENDING (naming the merged work it waits on) and the legs built on
-  # it BLOCKED until the BYO sprint lands them. A leg that runs and fails is
-  # red (apps/runner/e2e/README.md). Linux, no macOS slot.
+  # host network. Every leg's work is on main, so the lane runs with
+  # --require-all: install, update, rollback and the Session leg must each
+  # PASS; a leg that fails, or is left PENDING or BLOCKED, is red
+  # (apps/runner/e2e/README.md). Linux, no macOS slot.
   byo-runner:
     name: BYO runner acceptance
     needs: byo-runner-artifact
@@ -728,7 +728,7 @@ jobs:
         working-directory: convex
         run: >-
           node fixture/with-backend.ts --deploy --
-          node ../apps/runner/e2e/acceptance.mjs
+          node ../apps/runner/e2e/acceptance.mjs --require-all
 
       - name: Upload BYO runner acceptance evidence
         if: always()
