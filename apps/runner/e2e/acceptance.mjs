@@ -372,11 +372,12 @@ async function installLeg(context, log) {
   log(`published ${published.tag} on the local release`);
   const minted = await createInstallToken(person, null);
   context.secrets.push(minted.installToken);
+  // One command line, as the person pastes it.
   const command = [
     `curl -fsSL ${published.base}/volli-runner-install.sh |`,
-    `  VOLLI_SERVER_SITE=${fixture.siteUrl} sh -s -- --token "$BYO_INSTALL_TOKEN"`,
-    `  --name ${WORLD.runnerName} --server ${fixture.convexUrl} --release-base ${published.base}`,
-  ].join("\n");
+    `VOLLI_SERVER_SITE=${fixture.siteUrl} sh -s -- --token "$BYO_INSTALL_TOKEN"`,
+    `--name ${WORLD.runnerName} --server ${fixture.convexUrl} --release-base ${published.base}`,
+  ].join(" ");
   const installed = await onBox(context, "curl … | sh (system install)", command, {
     env: { BYO_INSTALL_TOKEN: minted.installToken },
     timeoutMs: 10 * 60_000,
