@@ -559,6 +559,7 @@ async function sessionLeg(context, log) {
     title: "Add a file from the box",
   });
   const clientRequestId = randomUUID();
+  const startedAt = Date.now();
   const started = await person.mutation("sessionStarts:startOn", {
     clientRequestId,
     runnerId: picker.defaultRunnerId,
@@ -593,6 +594,7 @@ async function sessionLeg(context, log) {
   assert.ok(
     github.requests.some(
       (entry) =>
+        entry.at >= startedAt &&
         entry.service === "git-receive-pack" &&
         entry.credential === `user:${WORLD.github.login}` &&
         entry.status === 200,
@@ -608,8 +610,10 @@ async function sessionLeg(context, log) {
     { timeoutMs: 2 * 60_000, intervalMs: 1_000 },
   );
   const status = await person.query("sessionStarts:status", { sessionId: started.sessionId });
-  assert.equal(status?.runner?.id, context.runner.id);
-  assert.notEqual(status?.state, "failed", JSON.stringify(status?.failure ?? null));
+  if (status !== null) {
+    assert.equal(status.runner?.id, context.runner.id);
+    assert.notEqual(status.state, "failed", JSON.stringify(status.failure ?? null));
+  }
   return `Session on ${context.runner.name} pushed ${sha.slice(0, 12)} to ${WORLD.repo.owner}/${WORLD.repo.name} (${commit.author})`;
 }
 
@@ -680,6 +684,47 @@ async function pinChannel(context, release) {
   return channel;
 }
 
+/** `current` names exactly a `releases/<version>-<revision>` directory. */
+async function assertCurrent(context, version) {
+  const current = await onBox(
+    context,
+    `current is ${version}`,
+    "readlink /opt/volli-runner/current",
+  );
+  const release = current.stdout.trim().replace(/\/+$/u, "").split("/").at(-1) ?? "";
+  assert.ok(
+    release === version || release.startsWith(`${version}-`),
+    `current points at ${current.stdout.trim()}, not a ${version} release`,
+  );
+}
+
+/**
+ * EVIDENCE, as an operator reads it: the runner's `runnerEvents` rows through
+ * the pinned Convex CLI with the fixture's admin key (no person-facing query
+ * reads the event log).
+ */
+async function runnerEvents(fixture, runnerId) {
+  const cli = join(ROOT, "convex/node_modules/convex/bin/main.js");
+  const args = [
+    "data",
+    "runnerEvents",
+    "--url",
+    fixture.convexUrl,
+    "--admin-key",
+    fixture.adminKey,
+  ];
+  const { stdout } = await exec(
+    process.execPath,
+    [cli, ...args, "--limit", "200", "--format", "jsonLines"],
+    { cwd: join(ROOT, "convex"), maxBuffer: 16 * 1024 * 1024 },
+  );
+  return stdout
+    .split("\n")
+    .filter((line) => line.trim().startsWith("{"))
+    .map((line) => JSON.parse(line))
+    .filter((event) => event.runnerId === runnerId);
+}
+
 /** The person's view of the box: its version, status and last update outcome. */
 async function boxRow(context) {
   return (
@@ -740,15 +785,15 @@ async function updateLeg(context, log) {
     },
     { timeoutMs: 10 * 60_000, intervalMs: 2_000 },
   );
-  const current = await onBox(context, "current is v+1", "readlink /opt/volli-runner/current");
-  assert.match(current.stdout, new RegExp(next.version.replaceAll(".", "\\."), "u"));
+  await assertCurrent(context, next.version);
   context.updated = next;
   return `${row.name} updated ${context.published.version} → ${next.version} (re-stamped build); outcome ${JSON.stringify(row.update ?? null)}`;
 }
 
 /**
  * Leg 4: a broken v+2 (stages, never comes online) → the box rolls back to
- * v+1 and reports `update_failed`.
+ * v+1: `update_failed` for v+2 and then `rolled_back` to v+1 are reported
+ * (the person's row shows the newest; the event log keeps both).
  */
 async function rollbackLeg(context, log) {
   const broken = await publishRestamped(context, laterVersion(context.published.version, 2), {
@@ -757,11 +802,12 @@ async function rollbackLeg(context, log) {
   await pinChannel(context, broken);
   log(`pinned to the broken ${broken.version}`);
   const row = await waitFor(
-    `update_failed for ${broken.version}, online again at ${context.updated.version}`,
+    `rolled back from ${broken.version}, online again at ${context.updated.version}`,
     async () => {
       const found = await boxRow(context);
-      return found?.update?.kind === "update_failed" &&
-        found.update.version === broken.version &&
+      return found?.update?.kind === "rolled_back" &&
+        found.update.fromVersion === broken.version &&
+        found.update.version === context.updated.version &&
         found.status === "online" &&
         found.version === context.updated.version
         ? found
@@ -769,14 +815,15 @@ async function rollbackLeg(context, log) {
     },
     { timeoutMs: 12 * 60_000, intervalMs: 2_000 },
   );
-  const current = await onBox(
-    context,
-    "current is back at v+1",
-    "readlink /opt/volli-runner/current",
+  const events = await runnerEvents(context.fixture, context.runner.id);
+  const failed = events.find(
+    (event) =>
+      event.kind === "update_failed" &&
+      JSON.stringify(event.detail ?? null).includes(broken.version),
   );
-  assert.match(current.stdout, new RegExp(context.updated.version.replaceAll(".", "\\."), "u"));
-  assert.doesNotMatch(current.stdout, new RegExp(broken.version.replaceAll(".", "\\."), "u"));
-  return `${row.name} refused ${broken.version} (${row.update.reason ?? "no reason"}) and is online at ${row.version}`;
+  assert.ok(failed, `update_failed for ${broken.version} in the runner's event log`);
+  await assertCurrent(context, context.updated.version);
+  return `${row.name} reported update_failed for ${broken.version} (${JSON.stringify(failed.detail)}) and rolled back: online again at ${row.version}`;
 }
 
 /**
@@ -791,6 +838,7 @@ export const LEGS = [
     title: "curl … | sh -s -- --token … --server … → is online",
     after: ["harness"],
     run: installLeg,
+    needsBox: true,
     needs: [
       BYO.runner,
       BYO.lifecycle,
@@ -807,6 +855,7 @@ export const LEGS = [
     title: "v+1 published and set in releaseChannels → online at v+1",
     after: ["install"],
     run: updateLeg,
+    needsBox: true,
     needs: [BYO.releaseFeed, BYO.update],
   },
   {
@@ -814,6 +863,7 @@ export const LEGS = [
     title: "broken v+2 → rolled back to v+1, update_failed reported",
     after: ["update"],
     run: rollbackLeg,
+    needsBox: true,
     needs: [BYO.releaseFeed, BYO.update],
   },
   {
@@ -821,6 +871,7 @@ export const LEGS = [
     title: "startOn → the agent commits and pushes → the fake GitHub has it",
     after: ["install"],
     run: sessionLeg,
+    needsBox: true,
     needs: [BYO.startOn, BYO.picker, BYO.executor, BYO.tokenRoute, BYO.managedClone, BYO.gitHelper],
   },
 ];

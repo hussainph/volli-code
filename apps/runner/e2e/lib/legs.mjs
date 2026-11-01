@@ -60,6 +60,14 @@ export async function runLegs(legs, context, { root, log = () => {}, now = Date.
     const base = { id: leg.id, title: leg.title };
     const unmet = (leg.after ?? []).filter((id) => outcome.get(id) !== "passed");
     const missing = missingPrerequisites(root, leg);
+    // A leg that needs the box cannot run on a plain shell (`--host-shell`).
+    if (leg.needsBox && context.box?.hostShell) {
+      const result = { ...base, status: "pending", detail: "host shell: not a box", missing: [] };
+      results.push(result);
+      outcome.set(leg.id, result.status);
+      log(`[${leg.id}] pending: host shell: not a box`);
+      continue;
+    }
     if (unmet.length > 0) {
       const waiting = missing.length > 0 ? `; also waiting on ${describeMissing(missing)}` : "";
       const result = {

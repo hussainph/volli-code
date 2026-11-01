@@ -205,6 +205,7 @@ export class FakeGithub {
   #counter = 0;
   #server = null;
   #protocols = [];
+  #raw = new Set();
   /** Other servers' handlers, tried first: `(request, response) => handled`. */
   #mounts = [];
   #ownsGitRoot = false;
@@ -740,6 +741,10 @@ export class FakeGithub {
       // replays it. (A raw socket cannot be handed over with the chunk put
       // back: TLS and the HTTP parser read the native handle, not the stream.)
       this.#server = createNetServer((socket) => {
+        // Tracked until closed: a connection that never sends its first byte
+        // is no protocol server's, and must not hold `close()` open.
+        this.#raw.add(socket);
+        socket.once("close", () => this.#raw.delete(socket));
         socket.on("error", () => socket.destroy());
         socket.once("data", (first) => {
           (first[0] === 0x16 ? https : http).emit("connection", replaying(socket, first));
@@ -757,6 +762,7 @@ export class FakeGithub {
     if (this.#server !== null) {
       const server = this.#server;
       for (const protocol of this.#protocols) protocol.closeAllConnections?.();
+      for (const socket of this.#raw) socket.destroy();
       server.closeAllConnections?.();
       await new Promise((done) => server.close(() => done()));
     }

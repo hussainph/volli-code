@@ -6,6 +6,8 @@ import { createHash, randomBytes, sign } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { once } from "node:events";
+import { connect as connectSocket } from "node:net";
 import { after, before, test } from "node:test";
 import { promisify } from "node:util";
 
@@ -285,6 +287,10 @@ test("with a certificate, one port answers HTTP for the backend and HTTPS for gi
         env: { ...gitEnv, GIT_SSL_CAINFO: "/dev/null" },
       }),
     );
+    // A connection that never speaks cannot hold the server open.
+    const silent = connectSocket(Number(new URL(secure.origin).port), "127.0.0.1");
+    silent.on("error", () => {});
+    await once(silent, "connect");
   } finally {
     await secure.close();
     rmSync(dir, { recursive: true, force: true });
