@@ -717,6 +717,16 @@ export async function startHeadlessRunner(
       logger.error("could not open the git credential socket", { error });
       return null;
     });
+    // An attach that failed says why in the box's journal too: on a box the
+    // operator reads `journalctl`, not the Session's receipt in an app.
+    const offAttachFailures = host.sessionWakeBus.subscribe(({ event }) => {
+      if (event.payload.kind !== "attachment.failed") return;
+      logger.warn("a Session could not attach on this runner", {
+        sessionId: event.sessionId,
+        code: event.payload.failure.code,
+        detail: event.payload.failure.detail,
+      });
+    });
     // Before recovery: interrupted cloud turns wait for the first connection.
     // Its own retries cover an unreachable backend; a throw here is a bug to log.
     linked.start().catch((error: unknown) => {
@@ -748,6 +758,7 @@ export async function startHeadlessRunner(
       },
       stopProducers: () => runtimeOwner.stopProducers(),
       close: async () => {
+        offAttachFailures();
         try {
           await runtimeOwner.close();
         } finally {
