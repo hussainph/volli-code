@@ -142,7 +142,12 @@ const BYO = {
     path: "packages/host-core/src/cloud-store/session-start-jobs.ts",
   },
   releaseFeed: { ticket: "VC-1038 (BYO-5)", path: "convex/functions/runnerReleases.ts" },
-  installScript: { ticket: "VC-1040 (BYO-7)", path: "apps/runner/packaging/install.sh" },
+  // `--site`: a server that is not *.convex.cloud (this lane's local backend).
+  installScript: {
+    ticket: "VC-1040 (BYO-7)",
+    path: "apps/runner/packaging/install.sh",
+    contains: "--site)",
+  },
   buildImage: { ticket: "VC-1040 (BYO-7)", path: ".devcontainer/runner-build/Dockerfile" },
   buildScript: { ticket: "VC-1040 (BYO-7)", path: "apps/runner/scripts/ci-build-artifact.sh" },
   manifest: { ticket: "VC-1040 (BYO-7)", path: "scripts/runner-release-manifest.mjs" },
@@ -357,9 +362,8 @@ async function harness(context, log) {
  * Leg 1: the pasted command from Settings → Runners, on a fresh box, as root
  * (so a system install under systemd): `curl … | sh -s -- --token … --server …`
  * ends with "hetzner-1 is online.", and the person's runner list agrees.
- * `VOLLI_SERVER_SITE` names the fixture's HTTP-actions origin: a real
- * deployment's site is derived from its `.convex.cloud` URL, a loopback
- * backend's is not.
+ * `--site` names the fixture's HTTP-actions origin: a real deployment's site
+ * is derived from its `.convex.cloud` URL, a loopback backend's is not.
  */
 async function installLeg(context, log) {
   const { fixture, person } = context;
@@ -375,8 +379,8 @@ async function installLeg(context, log) {
   // One command line, as the person pastes it.
   const command = [
     `curl -fsSL ${published.base}/volli-runner-install.sh |`,
-    `VOLLI_SERVER_SITE=${fixture.siteUrl} sh -s -- --token "$BYO_INSTALL_TOKEN"`,
-    `--name ${WORLD.runnerName} --server ${fixture.convexUrl} --release-base ${published.base}`,
+    `sh -s -- --token "$BYO_INSTALL_TOKEN" --name ${WORLD.runnerName}`,
+    `--server ${fixture.convexUrl} --site ${fixture.siteUrl} --release-base ${published.base}`,
   ].join(" ");
   const installed = await onBox(context, "curl … | sh (system install)", command, {
     env: { BYO_INSTALL_TOKEN: minted.installToken },
