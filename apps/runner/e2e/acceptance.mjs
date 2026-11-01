@@ -440,6 +440,8 @@ async function installLeg(context, log) {
   return `${runner.name} online at ${published.version} (system install, systemd, power ac/alwaysOn)`;
 }
 
+class StartFailed extends Error {}
+
 /** The branch the scripted agent pushes, and the file it adds. */
 const AGENT_BRANCH = "byo/agent-change";
 const AGENT_FILE = "byo-agent.txt";
@@ -564,11 +566,20 @@ async function sessionLeg(context, log) {
     model: provider.pin,
   });
   log(`Session ${started.sessionId} started on ${context.runner.name}`);
+  // A start the runner refused or failed says so in its status: report that
+  // rather than wait out the clock.
   const sha = await waitFor(
     `${AGENT_BRANCH} on the fake GitHub`,
-    async () =>
-      github.refs(WORLD.repo.owner, WORLD.repo.name)[`refs/heads/${AGENT_BRANCH}`] ?? null,
-    { timeoutMs: 5 * 60_000, intervalMs: 1_000 },
+    async () => {
+      const pushed = github.refs(WORLD.repo.owner, WORLD.repo.name)[`refs/heads/${AGENT_BRANCH}`];
+      if (pushed) return pushed;
+      const start = await person.query("sessionStarts:status", { sessionId: started.sessionId });
+      if (start?.failure) {
+        throw new StartFailed(`the start ${start.state}: ${JSON.stringify(start.failure)}`);
+      }
+      return null;
+    },
+    { timeoutMs: 5 * 60_000, intervalMs: 1_000, fatal: (error) => error instanceof StartFailed },
   );
   const commit = github.commit(WORLD.repo.owner, WORLD.repo.name, sha);
   assert.equal(commit.subject, "Add a file from the box");

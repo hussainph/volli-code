@@ -240,8 +240,15 @@ export function listRunners(person) {
   return person.query("runners:list", {});
 }
 
-/** Poll `probe` until it answers non-null, or fail naming `what` and the last answer. */
-export async function waitFor(what, probe, { timeoutMs = 60_000, intervalMs = 500 } = {}) {
+/**
+ * Poll `probe` until it answers non-null, or fail naming `what` and the last
+ * answer. A throw is retried, unless `fatal(error)` says it ends the wait.
+ */
+export async function waitFor(
+  what,
+  probe,
+  { timeoutMs = 60_000, intervalMs = 500, fatal = () => false } = {},
+) {
   const deadline = Date.now() + timeoutMs;
   let last;
   for (;;) {
@@ -249,6 +256,7 @@ export async function waitFor(what, probe, { timeoutMs = 60_000, intervalMs = 50
       last = await probe();
       if (last !== null && last !== undefined && last !== false) return last;
     } catch (error) {
+      if (fatal(error)) throw error;
       last = error;
     }
     if (Date.now() >= deadline) {
