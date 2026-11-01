@@ -17,6 +17,7 @@ import type {
   RunnerFetch,
 } from "@volli/host-core/cloud-runner";
 import { resetRetentionWatcherForTest } from "@volli/host-core/testing";
+import type { RunningHeadlessRunner } from "@volli/host-core/headless-runner";
 import type { RunnerId } from "@volli/shared/cloud";
 
 import type { CommandInput, RunnerDaemonPorts } from "../commands";
@@ -28,7 +29,7 @@ import { runnerRuntimePaths } from "../shell/runtime-paths";
 import type { ServiceProcess } from "../shell/service";
 import { readStatus } from "../shell/status";
 import { testContext, type Route } from "../testing/context";
-import { runRun } from "./run";
+import { runRun, updateAgentPorts } from "./run";
 
 const RUNNER_ID = "11111111-1111-4111-8111-111111111111" as RunnerId;
 const OWNER = "99999999-8888-4777-8666-555555555555";
@@ -208,7 +209,8 @@ describe("volli-runner run", { timeout: 30_000 }, () => {
       socketPath: join(dataDir, "volli.sock"),
       link: null,
       backend: null,
-      update: null,
+      // A foreground `run` has no unit to restart it onto a new release.
+      update: { targetVersion: null, minVersion: null, phase: "idle", detail: "unsupervised" },
       credentials: { state: "empty" },
     });
     shell.emit("SIGTERM");
@@ -234,13 +236,14 @@ describe("volli-runner run", { timeout: 30_000 }, () => {
     });
     const exit = runRun(input(), context);
     const online = await until(
-      () => status()?.state === "online" && status()?.update !== null && status(),
+      () => status()?.state === "online" && status()?.update?.targetVersion !== null && status(),
       "online",
     );
     expect(online).toMatchObject({
       link: { runnerId: RUNNER_ID, name: "hetzner-1", server: DEPLOYMENT.url },
       backend: { state: "online", detail: null, lastHeartbeatAt: expect.any(String) },
-      update: { targetVersion: "9.9.10", minVersion: null, phase: "idle", detail: null },
+      // The heartbeat's target reached the update agent, which asks the updater to stage it.
+      update: { targetVersion: "9.9.10", minVersion: null },
     });
     expect(backend.urls).toEqual([DEPLOYMENT.url]);
     expect(backend.requests.map((request) => request.url)).toEqual([
@@ -296,6 +299,21 @@ describe("volli-runner run", { timeout: 30_000 }, () => {
     acquireInstanceLock(RUNNER, dataDir).release();
   });
 
+  it("refuses (78) an update config it cannot read", async () => {
+    // The user install root (`$XDG_DATA_HOME/volli-runner`) holds `update.json`.
+    const installRoot = join(root, "share", "volli-runner");
+    mkdirSync(installRoot, { recursive: true });
+    writeFileSync(join(installRoot, "update.json"), "[1, 2, 3]");
+    const shell = standInProcess();
+    const context = testContext({
+      root,
+      env: { XDG_DATA_HOME: join(root, "share") },
+      daemon: daemon({ process: shell.process }),
+    });
+    expect(await runRun(input(), context)).toBe(78);
+    acquireInstanceLock(RUNNER, dataDir).release();
+  });
+
   it("fails (1) a boot that cannot find its bundle", async () => {
     const shell = standInProcess();
     // The test context's default daemon has no bundle.
@@ -316,5 +334,74 @@ describe("volli-runner run", { timeout: 30_000 }, () => {
     });
     expect(await runRun(input(), context)).toBe(1);
     expect(status()?.state).toBe("stopped");
+  });
+});
+
+describe("the update agent's ports", () => {
+  it("drive the running runner, and wait for it to exist", async () => {
+    const calls: unknown[] = [];
+    const live: { current: RunningHeadlessRunner | null } = { current: null };
+    const lines: unknown[] = [];
+    const ports = updateAgentPorts(
+      live,
+      { info: (message, fields) => void lines.push([message, fields]) },
+      () => 42,
+    );
+    // Before boot: nothing to drain or resume, nothing in flight, and no report.
+    await ports.drain();
+    await ports.resume();
+    expect(ports.inFlight()).toBe(0);
+    await expect(
+      ports.report({
+        outcomeId: "o-1",
+        kind: "update_applied",
+        version: "9.9.10",
+        fromVersion: "9.9.9",
+        reason: null,
+        at: 1,
+      }),
+    ).rejects.toThrow(/not started/);
+    live.current = {
+      updates: {
+        drain: async () => void calls.push("drain"),
+        resume: async () => void calls.push("resume"),
+        inFlight: () => 2,
+        report: async (name: string, args: unknown) => void calls.push([name, args]),
+      },
+    } as unknown as RunningHeadlessRunner;
+    await ports.drain();
+    await ports.resume();
+    expect(ports.inFlight()).toBe(2);
+    await ports.report({
+      outcomeId: "o-1",
+      kind: "update_applied",
+      version: "9.9.10",
+      fromVersion: "9.9.9",
+      reason: null,
+      at: 1,
+    });
+    expect(calls).toEqual([
+      "drain",
+      "resume",
+      [
+        "runnerUpdateReports:report",
+        {
+          outcomeId: "o-1",
+          kind: "update_applied",
+          version: "9.9.10",
+          fromVersion: "9.9.9",
+          reason: null,
+          at: 1,
+        },
+      ],
+    ]);
+    expect(ports.now()).toBe(42);
+    ports.log("staged", { version: "9.9.10" });
+    expect(lines).toEqual([["staged", { source: "update", version: "9.9.10" }]]);
+    let ticks = 0;
+    const stop = ports.setInterval(() => void ticks++, 5);
+    await new Promise((done) => setTimeout(done, 30));
+    stop();
+    expect(ticks).toBeGreaterThan(0);
   });
 });

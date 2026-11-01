@@ -26,6 +26,7 @@ import {
   HeadlessRunnerBootError,
   startHeadlessRunner,
   type HeadlessRunnerStatus,
+  type RunningHeadlessRunner,
 } from "@volli/host-core/headless-runner";
 import { logLevelFrom } from "@volli/shared";
 
@@ -40,15 +41,47 @@ import { BootError } from "../shell/boot-error";
 import { prepareDataDir, warnOfSharedSocketDir } from "../shell/data-dir";
 import { RUNNER } from "../shell/identity";
 import { acquireInstanceLock } from "../shell/instance-lock";
-import { installProcessLog, routeConsole } from "../shell/log";
+import { installProcessLog, routeConsole, type ShellLogger } from "../shell/log";
 import { pathsFor, runnerSocketPath } from "../shell/paths";
 import type { RunnerStatus } from "../shell/runner-status";
 import { logCredentials, openHeadlessSecrets } from "../shell/secrets";
 import { runService, type ServiceProcess } from "../shell/service";
 import { writeStatus } from "../shell/status";
+import { createUpdateAgent, type UpdateAgentPorts } from "../update/agent";
+import { readUpdateConfig, type UpdateConfig } from "../update/config";
+import { defaultInstallRoot, updateLayout } from "../update/layout";
 
 /** The refusals `run` raises beside the shell's own. */
-type RunBootFailure = "link" | "database" | "secrets";
+type RunBootFailure = "link" | "database" | "secrets" | "update";
+
+/** The update agent's ports over the running runner (`null` until it booted). */
+export function updateAgentPorts(
+  runner: { current: RunningHeadlessRunner | null },
+  logger: Pick<ShellLogger, "info">,
+  now: () => number,
+): UpdateAgentPorts {
+  return {
+    drain: async () => {
+      await runner.current?.updates.drain();
+    },
+    resume: async () => {
+      await runner.current?.updates.resume();
+    },
+    inFlight: () => runner.current?.updates.inFlight() ?? 0,
+    report: async (outcome) => {
+      const live = runner.current;
+      if (live === null) throw new Error("The runner has not started yet.");
+      await live.updates.report("runnerUpdateReports:report", { ...outcome });
+    },
+    now,
+    log: (message, fields) => logger.info(message, { source: "update", ...fields }),
+    setInterval: (callback, ms) => {
+      const timer = setInterval(callback, ms);
+      timer.unref();
+      return () => clearInterval(timer);
+    },
+  };
+}
 
 export async function runRun(input: CommandInput, context: CommandContext): Promise<number> {
   const paths = pathsFor(input.values, context);
@@ -112,7 +145,39 @@ export async function runRun(input: CommandInput, context: CommandContext): Prom
           },
         };
         const runtime = daemon.runtimePaths();
-        const record = (status: HeadlessRunnerStatus): void => {
+        const service = context.env["VOLLI_RUNNER_SERVICE"] === "1";
+        // The update agent (`../update/agent.ts`): the heartbeat's target asks,
+        // it stages through the update unit, drains this runner and activates.
+        const layout = updateLayout(
+          paths.mode,
+          defaultInstallRoot(paths.mode, context.home, context.env),
+          paths.dataDir,
+        );
+        let updateConfig: UpdateConfig;
+        try {
+          updateConfig = readUpdateConfig(layout);
+        } catch (error) {
+          throw new BootError<RunBootFailure>("update", (error as Error).message);
+        }
+        const running: { current: RunningHeadlessRunner | null } = { current: null };
+        /** The runner's latest status; the update agent's changes are written beside it. */
+        let last: HeadlessRunnerStatus = {
+          state: "starting",
+          runner: null,
+          backend: null,
+          target: null,
+          database: null,
+        };
+        const agent = createUpdateAgent({
+          layout,
+          config: updateConfig,
+          running: context.version,
+          supervised: service,
+          ports: updateAgentPorts(running, logger, context.now ?? Date.now),
+          onStatus: () => record(),
+        });
+        const record = (): void => {
+          const status = last;
           const report: RunnerStatus = {
             v: 1,
             state: status.state,
@@ -138,13 +203,12 @@ export async function runRun(input: CommandInput, context: CommandContext): Prom
                         : new Date(status.backend.lastHeartbeatAt).toISOString(),
                     detail: status.backend.detail,
                   },
-            update:
-              status.target === null ? null : { ...status.target, phase: "idle", detail: null },
+            update: agent.status(),
             credentials: secrets.status,
           };
           writeStatus(RUNNER, paths.dataDir, report);
         };
-        const running = await startHeadlessRunner({
+        const started = await startHeadlessRunner({
           dataDir: paths.dataDir,
           socketPath,
           binDir: runtime.binDir,
@@ -154,7 +218,7 @@ export async function runRun(input: CommandInput, context: CommandContext): Prom
           installMode: paths.mode,
           // The runner's own unit says so (`Environment=VOLLI_RUNNER_SERVICE=1`); a
           // foreground `run`, even one started from another unit, does not.
-          service: context.env["VOLLI_RUNNER_SERVICE"] === "1",
+          service,
           env: context.env,
           logger,
           secretStore: secrets.store,
@@ -177,16 +241,23 @@ export async function runRun(input: CommandInput, context: CommandContext): Prom
               env: storeEnv,
             }),
           signInFile: join(paths.dataDir, CREDENTIAL_INVENTORY_FILE_NAME),
-          onStatus: record,
+          onStatus: (status) => {
+            last = status;
+            record();
+          },
+          onTarget: (target) => void agent.onTarget(target),
         });
-        void running.failure.then((error) => {
+        running.current = started;
+        agent.start();
+        void started.failure.then((error) => {
           const failure = error instanceof Error ? error : new Error(String(error));
           for (const listener of failureListeners) listener(failure);
         });
         return {
           async stop(reason) {
+            agent.stop();
             try {
-              return await running.stop(reason);
+              return await started.stop(reason);
             } finally {
               lock.release();
             }

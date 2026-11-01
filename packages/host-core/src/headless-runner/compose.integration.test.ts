@@ -558,6 +558,25 @@ describe("volli-runner run: the headless composition", { timeout: 30_000 }, () =
     expect(existsSync(join(f.dataDir, "volli.sock"))).toBe(false);
   });
 
+  it("gives its updater the drain, the resume, the work in flight and a report", async () => {
+    const f = fixture();
+    const runner = await f.start();
+    await until(() => runner.status().state === "online", "online");
+    expect(runner.updates.inFlight()).toBe(0);
+    await runner.updates.drain();
+    await until(() => f.deployment.states.includes("draining"), "draining reported");
+    await runner.updates.resume();
+    await until(() => f.deployment.states.at(-1) === "online", "online reported");
+    await runner.updates.report("runnerUpdateReports:report", { outcomeId: "o-1" });
+    expect(f.deployment.mutations).toContainEqual({
+      name: "runnerUpdateReports:report",
+      args: { outcomeId: "o-1" },
+    });
+    expect(await runner.stop("SIGTERM")).toBe(true);
+    // Stopped: a report is refused, and the agent sends it again next boot.
+    await expect(runner.updates.report("runnerUpdateReports:report", {})).rejects.toThrow();
+  });
+
   it("re-reports the providers it can serve when a login lands on the box", async () => {
     const f = fixture();
     const runner = await f.start();

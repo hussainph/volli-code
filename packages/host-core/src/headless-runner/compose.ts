@@ -184,6 +184,18 @@ export interface HeadlessRunnerOptions {
   readonly signInPollMs?: number;
 }
 
+/** The running runner, as its updater (`apps/runner`'s update agent) reaches it. */
+export interface HeadlessRunnerUpdatePorts {
+  /** Stop claiming new work and report `draining`; turns in flight finish. */
+  drain(): Promise<void>;
+  /** Claim again after a drain an update gave up on (`online`). */
+  resume(): Promise<void>;
+  /** Turns running on this runner now. */
+  inFlight(): number;
+  /** One runner mutation over the live link (`runnerUpdateReports:report`). Throws when offline. */
+  report(name: string, args: Record<string, unknown>): Promise<unknown>;
+}
+
 export interface RunningHeadlessRunner {
   status(): HeadlessRunnerStatus;
   /** The live host once linked and booted; `null` before. */
@@ -194,6 +206,8 @@ export interface RunningHeadlessRunner {
    * recovery failed). The process should stop and exit non-zero.
    */
   readonly failure: Promise<unknown>;
+  /** What the runner's updater drives: claims, the work in flight, and its reports. */
+  readonly updates: HeadlessRunnerUpdatePorts;
   /** Stops serving and closes the database. Idempotent; `true` when everything closed cleanly. */
   stop(reason: string): Promise<boolean>;
 }
@@ -704,6 +718,20 @@ export async function startHeadlessRunner(
     status: snapshot,
     host: () => live,
     failure: failed.promise,
+    updates: {
+      drain: async () => {
+        await lifecycle?.drain();
+      },
+      resume: async () => {
+        await lifecycle?.reportState("online");
+      },
+      inFlight: () => live?.liveWork.current().turns ?? 0,
+      report: async (name, args) => {
+        const link = lifecycle?.connection?.link;
+        if (link === undefined) throw new Error("This runner is not connected to Volli Cloud.");
+        return link.call(name, args);
+      },
+    },
     stop(reason) {
       stopping ??= (async () => {
         logger.info("stopping", { reason });

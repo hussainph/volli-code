@@ -230,7 +230,7 @@ restart while Volli Cloud is unreachable still recovers its Sessions. Its model
 access is the sealed store `login` writes (`runnerModelAccess`, under the same
 key as the Session secrets); a login or logout is re-reported to Volli Cloud
 while it runs. The connection is host-core's headless lifecycle
-(`createHeadlessRunner`): one token source per link, reconnects from 1 s to 60 s. The unit sets `VOLLI_RUNNER_SERVICE=1`, so the runner reports itself always on; a foreground `run` does not. SIGTERM reports `draining`, closes
+(`createHeadlessRunner`): one token source per link, reconnects from 1 s to 60 s. Each heartbeat's update target goes to the update agent (`src/update/agent.ts`), which drains this runner through the composition and reports outcomes over its link; its phase is the status file's `update`. The unit sets `VOLLI_RUNNER_SERVICE=1`, so the runner reports itself always on; a foreground `run` does not. SIGTERM reports `draining`, closes
 the Session runtime (questions withdrawn, shells joined), reports `stopped`,
 closes the socket and checkpoints SQLite. A failure after boot stops it and
 exits 1; a boot an operator must fix (another runner on the data directory,

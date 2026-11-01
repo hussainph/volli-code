@@ -13,6 +13,7 @@ export {
   type HeadlessRunnerOptions,
   type HeadlessRunnerState,
   type HeadlessRunnerStatus,
+  type HeadlessRunnerUpdatePorts,
   type RunningHeadlessRunner,
   startHeadlessRunner,
 } from "../headless-runner/compose";
