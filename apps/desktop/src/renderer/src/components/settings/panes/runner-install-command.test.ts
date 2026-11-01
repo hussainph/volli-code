@@ -218,7 +218,7 @@ describe("runnerCloudInit", () => {
     expect(document.startsWith("#cloud-config\n")).toBe(true);
     const parsed = parseYaml(document) as CloudInitDocument;
     expect(parsed.package_update).toBe(true);
-    expect(parsed.packages).toEqual(["curl"]);
+    expect(parsed.packages).toEqual(["curl", "git"]);
     const runcmd = parsed.runcmd ?? [];
     expect(runcmd).toHaveLength(1);
     const script = runcmd[0] ?? "";

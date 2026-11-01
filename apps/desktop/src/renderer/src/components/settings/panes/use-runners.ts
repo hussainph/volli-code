@@ -7,14 +7,15 @@
  *   again and removing it go through main (`runners.addThisMac`,
  *   `runners.removeThisMac`); main keeps a removed Mac from adding itself back.
  * - **Every runner**: the window's own Volli Cloud client (`runners.list`),
- *   renamed and removed with `runners.rename` and `runners.remove`.
+ *   renamed and removed with `runners.rename` and `runners.remove`. Linux
+ *   update intent uses `runners.updateNow` and `runners.setAutoUpdate`.
  *
  * A runner's status is an open set on read: a status this build does not
  * name is shown as the backend wrote it.
  */
 import * as React from "react";
 import type { ThisMacRunnerSnapshot } from "@volli/shared";
-import { runnerPlaceAvailability } from "@volli/shared/cloud";
+import { runnerPlaceAvailability, type RunnerHeartbeatReply } from "@volli/shared/cloud";
 
 import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
 import { availabilityDotState, sinceLabel } from "@renderer/lib/cloud-places";
@@ -47,6 +48,8 @@ export interface RunnerRow {
   readonly statusChangedAt: number;
   /** Absent in older read projections; do not invent a version for them. */
   readonly version?: string;
+  /** Missing on older backends; their rows keep update policy read-only. */
+  readonly autoUpdate?: Readonly<RunnerHeartbeatReply["autoUpdate"]>;
 }
 
 export type Loaded<Value> =
@@ -62,6 +65,10 @@ export interface RunnerCommands {
   rename(runnerId: string, name: string): Promise<string>;
   /** Removes another of the person's runners. */
   remove(runnerId: string): Promise<unknown>;
+  /** Requests the channel's release once, without enabling automatic updates. */
+  updateNow(runnerId: string): Promise<unknown>;
+  /** Changes only enabled; the backend keeps the runner's current channel. */
+  setAutoUpdate(runnerId: string, enabled: boolean): Promise<unknown>;
   addThisMac(): Promise<unknown>;
   removeThisMac(): Promise<unknown>;
 }
@@ -95,6 +102,12 @@ function runnerCommands(rpc: RunnersRpc, current: () => CloudSession | null): Ru
       ).name,
     remove: (runnerId) =>
       write(current, ({ client, api }) => client.mutation(api.runners.remove, { runnerId })),
+    updateNow: (runnerId) =>
+      write(current, ({ client, api }) => client.mutation(api.runners.updateNow, { runnerId })),
+    setAutoUpdate: (runnerId, enabled) =>
+      write(current, ({ client, api }) =>
+        client.mutation(api.runners.setAutoUpdate, { runnerId, enabled }),
+      ),
     addThisMac: () => rpc.runners.addThisMac.mutate(),
     removeThisMac: () => rpc.runners.removeThisMac.mutate(),
   };
