@@ -54,6 +54,8 @@ export interface RunnerDaemonPorts {
   writeLog(line: string): void;
   /** Where this bundle's `volli` CLI and Code Mode's sandbox are. */
   runtimePaths(): RunnerRuntimePaths;
+  /** The `volli-runner` git runs as its credential helper (the artifact's `bin/volli-runner`). */
+  runnerExecutable(): string;
   /** `convex/browser`'s client and `convex/server`'s references, loaded only once linked. */
   convex(): Promise<ConvexClientModule>;
   /** The `/runner/*` client's fetch: the global one, unless a test scripts it. */

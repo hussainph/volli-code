@@ -127,6 +127,7 @@ export function testContext(options: {
       runtimePaths: () => {
         throw new Error("No runner bundle in this test.");
       },
+      runnerExecutable: () => "/opt/volli-runner/current/bin/volli-runner",
       convex: () => Promise.reject(new Error("No backend in this test.")),
       ...options.daemon,
     },

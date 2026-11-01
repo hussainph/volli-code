@@ -36,6 +36,7 @@
 import { availableParallelism } from "node:os";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, unwatchFile, watchFile } from "node:fs";
+import { join } from "node:path";
 
 import type { CodeModeSandboxAssets, PiModelAccess } from "@volli/agent-runtime";
 import {
@@ -64,6 +65,18 @@ import type { RunnerFetch } from "../cloud-runner/link-client";
 import { probeRunnerCapabilities, readRunnerLoad } from "../cloud-runner/platform";
 import type { RunnerLinkLoss } from "../cloud-runner/token-source";
 import { createCloudProductStore } from "../cloud-store";
+import {
+  createGitCredentialBroker,
+  runnerSessionGitEnv,
+  serveGitCredentials,
+} from "../cloud-store/git-credential-broker";
+import {
+  createRunnerGithubTokens,
+  managedCloneCredentials,
+  type RunnerGithubTokens,
+} from "../cloud-store/github-tokens";
+import { createManagedClones } from "../cloud-store/managed-clone";
+import { prepared } from "../db/prepared";
 import { SecretService } from "../secrets/service";
 import type { SecretStore } from "../secrets/store";
 import {
@@ -172,8 +185,14 @@ export interface HeadlessRunnerOptions {
   /** The file a login or logout rewrites; watched, so the providers are re-reported. */
   readonly signInFile: string;
   readonly codeModeSandbox?: CodeModeSandboxAssets;
-  /** The process's additions to a Session command's environment (its git credential helper). */
-  sessionEnvironment?(env: Record<string, string>): Record<string, string>;
+  /**
+   * Volli's git credential helper as git runs it (`volli-runner
+   * git-credential --data-dir <dir>`, shell-quoted), installed for the GitHub
+   * host in every Session command's environment.
+   */
+  readonly gitCredentialHelper: string;
+  /** Where that helper asks this runner (`<dataDir>/git-credential.sock`, 0600). */
+  readonly gitCredentialSocket: string;
   /** Every status change, for the status file. */
   onStatus?(status: HeadlessRunnerStatus): void;
   /** Every heartbeat reply's update target and floor, for the updater. */
@@ -235,6 +254,8 @@ export async function startHeadlessRunner(
   let backend: HeadlessBackendStatus | null = null;
   let lastHeartbeatAt: number | null = null;
   let lost: RunnerLinkLoss | null = null;
+  /** The updater drained this runner for an update; it says `draining` until resumed or stopped. */
+  let updateDraining = false;
   let live: LiveHostCore | null = null;
   const snapshot = (): HeadlessRunnerStatus => ({
     state,
@@ -278,8 +299,9 @@ export async function startHeadlessRunner(
       lastHeartbeatAt,
       detail,
     };
-    if (state === "draining" || state === "stopping" || state === "stopped") return publish();
-    publish(seen);
+    if (stopRequested) return publish();
+    // An update's drain shows as `draining` (the applier activates only then).
+    publish(updateDraining ? "draining" : seen);
   };
 
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -498,6 +520,7 @@ export async function startHeadlessRunner(
 
   interface Composed {
     cloud: ReturnType<typeof createCloudProductStore>;
+    github: RunnerGithubTokens;
     composition: ReturnType<typeof createRunnerComposition>;
     runtimeOwner: ReturnType<ReturnType<typeof createRunnerComposition>["owner"]>;
   }
@@ -576,6 +599,15 @@ export async function startHeadlessRunner(
     parts: BootParts,
   ): Composed {
     const { host, ports } = opened;
+    // The owner's GitHub token for a claimed Session or a leased job (BYO-8):
+    // what a managed clone fetches with and what a Session's git asks for.
+    const github = createRunnerGithubTokens({
+      siteUrl: deployment.siteUrl,
+      runnerToken: () => parts.lifecycle!.token(),
+      ...(deployment.fetch === undefined
+        ? {}
+        : { fetch: deployment.fetch as unknown as typeof globalThis.fetch }),
+    });
     const cloud = createCloudProductStore({
       host,
       ownerUserId,
@@ -586,6 +618,13 @@ export async function startHeadlessRunner(
       environmentRecipes: () => true,
       // A `session.start` for a provider this box is not signed in to says where to sign in.
       signInHint: (providerId) => `run \`volli-runner login ${providerId}\``,
+      // A box has no folder of the person's: each project is a clone of its
+      // recorded remote under `<dataDir>/repos`, never "Choose the folder".
+      managedClones: createManagedClones({
+        root: join(dataDir, "repos"),
+        credentials: managedCloneCredentials(github),
+        onWarning: (message, error) => logger.warn(message, { error }),
+      }),
     });
     parts.cloud = cloud;
     const composition = createRunnerComposition({
@@ -609,10 +648,13 @@ export async function startHeadlessRunner(
       // The unit's environment is the operator's; no rc file is executed.
       beforeExecution: async () => {},
       // Every Session command reaches THIS runner's socket through `volli`.
-      sessionEnvironment: (budget) => {
-        const env = { ...budget, [VOLLI_SOCKET_ENV]: options.socketPath };
-        return options.sessionEnvironment?.(env) ?? env;
-      },
+      // Its git asks Volli's helper for the GitHub host (rebuilt per command:
+      // the owner's connection state moves as answers arrive).
+      sessionEnvironment: (budget) =>
+        runnerSessionGitEnv(
+          { ...budget, [VOLLI_SOCKET_ENV]: options.socketPath },
+          { helperCommand: options.gitCredentialHelper, github: github.github() },
+        ),
       doors: (ready) => ({ experiments: null, busyWorktreeSites: busyFor(ready) }),
       installQuitHold: () => {},
     });
@@ -636,6 +678,7 @@ export async function startHeadlessRunner(
     return {
       cloud,
       composition,
+      github,
       runtimeOwner: composition.owner({ bind: (ready) => void composition.handlers(ready) }),
     };
   }
@@ -648,7 +691,32 @@ export async function startHeadlessRunner(
     composed: Composed,
   ): Booted {
     const { host, ports } = opened;
-    const { cloud, composition, runtimeOwner } = composed;
+    const { cloud, composition, github, runtimeOwner } = composed;
+    // Volli's git credential helper asks here (BYO-8): only for a live
+    // Session's own repository, only with its attachment token.
+    const helper = serveGitCredentials({
+      socketPath: options.gitCredentialSocket,
+      broker: createGitCredentialBroker({
+        verifySession: (token) => composition.tokens.verify(token),
+        repositoryOf: async (sessionId) => {
+          const session = await cloud.engine.getBaseSession({ sessionId });
+          if (session === null) return null;
+          // The project's checkout on this runner (its managed clone): the
+          // repository `checkouts.ofProject` resolves the Session's folder from.
+          const row = prepared<[string, string], { project_repo_id: string }>(
+            host.database.db,
+            "SELECT project_repo_id FROM project_checkout_paths WHERE runner_id = ? AND project_id = ? ORDER BY project_repo_id LIMIT 1",
+          ).get(link.runnerId, session.projectId);
+          return row?.project_repo_id ?? null;
+        },
+        tokens: github,
+      }),
+      onError: (error) => logger.warn("the git credential helper failed", { error }),
+    }).catch((error: unknown) => {
+      // Sessions' git then falls back to nothing it can ask; the runner still serves.
+      logger.error("could not open the git credential socket", { error });
+      return null;
+    });
     // Before recovery: interrupted cloud turns wait for the first connection.
     // Its own retries cover an unreachable backend; a throw here is a bug to log.
     linked.start().catch((error: unknown) => {
@@ -680,6 +748,7 @@ export async function startHeadlessRunner(
       close: async () => {
         try {
           await runtimeOwner.close();
+          await (await helper)?.close();
         } finally {
           // `stopped`, then the link closes.
           await stopLifecycle(linked);
@@ -720,10 +789,15 @@ export async function startHeadlessRunner(
     failure: failed.promise,
     updates: {
       drain: async () => {
+        updateDraining = true;
         await lifecycle?.drain();
+        // Written before this resolves: the agent's activate request follows.
+        follow();
       },
       resume: async () => {
+        updateDraining = false;
         await lifecycle?.reportState("online");
+        follow();
       },
       inFlight: () => live?.liveWork.current().turns ?? 0,
       report: async (name, args) => {

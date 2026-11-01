@@ -36,6 +36,7 @@ import { CREDENTIAL_INVENTORY_FILE_NAME } from "@volli/host-core/secrets";
 
 import type { RunnerDeployment } from "../link/deployment";
 import { fileRunnerLinkStore, UnreadableRunnerLinkError } from "../link/file-store";
+import { gitCredentialHelperCommand, gitCredentialSocketPath } from "../git/git-credential";
 import { runnerModelAccess, runnerModelKeyPath } from "../login/model-access";
 import { BootError } from "../shell/boot-error";
 import { prepareDataDir, warnOfSharedSocketDir } from "../shell/data-dir";
@@ -241,6 +242,9 @@ export async function runRun(input: CommandInput, context: CommandContext): Prom
               env: storeEnv,
             }),
           signInFile: join(paths.dataDir, CREDENTIAL_INVENTORY_FILE_NAME),
+          // Volli's git credential helper (BYO-8): this program, for this data dir.
+          gitCredentialHelper: gitCredentialHelperCommand(daemon.runnerExecutable(), paths.dataDir),
+          gitCredentialSocket: gitCredentialSocketPath(paths.dataDir),
           onStatus: (status) => {
             last = status;
             record();

@@ -19,7 +19,7 @@ rely on the command table now.
 | `uninstall [--keep-data\|--purge] [--yes]`                               | _not yet._ Remove the runner from this box.                                                                                             |
 | `link [--token <vrt_…>] [--name <name>] [--server <url> [--site <url>]]` | Link this box to your Volli account (below).                                                                                            |
 | `unlink`                                                                 | Forget this box's link. Refuses while the runner runs.                                                                                  |
-| `run`                                                                    | Serve in the foreground until SIGTERM (systemd runs this). Exit 0 clean, 1 failed, 78 a boot to fix.                     |
+| `run`                                                                    | Serve in the foreground until SIGTERM (systemd runs this). Exit 0 clean, 1 failed, 78 a boot to fix.                                    |
 | `status`                                                                 | One JSON report: the daemon's status file and liveness, and the link on disk. Exit 0 serving, 1 refusing, 3 not serving.                |
 | `doctor`                                                                 | _not yet._ Check git, disk, network and model sign-ins.                                                                                 |
 | `login [provider] [--api-key] [--status]` / `logout <provider>`          | Store, list or remove this runner's model sign-ins (below).                                                                             |
@@ -230,7 +230,7 @@ restart while Volli Cloud is unreachable still recovers its Sessions. Its model
 access is the sealed store `login` writes (`runnerModelAccess`, under the same
 key as the Session secrets); a login or logout is re-reported to Volli Cloud
 while it runs. The connection is host-core's headless lifecycle
-(`createHeadlessRunner`): one token source per link, reconnects from 1 s to 60 s. Each heartbeat's update target goes to the update agent (`src/update/agent.ts`), which drains this runner through the composition and reports outcomes over its link; its phase is the status file's `update`. The unit sets `VOLLI_RUNNER_SERVICE=1`, so the runner reports itself always on; a foreground `run` does not. SIGTERM reports `draining`, closes
+(`createHeadlessRunner`): one token source per link, reconnects from 1 s to 60 s. Each heartbeat's update target goes to the update agent (`src/update/agent.ts`), which drains this runner through the composition and reports outcomes over its link; its phase is the status file's `update`. An update's drain shows as `draining` in the status file before the update unit is asked to activate. A project's folder on the box is a managed clone of its recorded remote under `<dataDir>/repos` (BYO-8); a Session's git asks Volli's helper (`git-credential`, over `<dataDir>/git-credential.sock`) for the owner's GitHub token, and commits under the owner's identity. The unit sets `VOLLI_RUNNER_SERVICE=1`, so the runner reports itself always on; a foreground `run` does not. SIGTERM reports `draining`, closes
 the Session runtime (questions withdrawn, shells joined), reports `stopped`,
 closes the socket and checkpoints SQLite. A failure after boot stops it and
 exits 1; a boot an operator must fix (another runner on the data directory,

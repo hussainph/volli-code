@@ -21,7 +21,7 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { piOwnedModelAccess } from "@volli/agent-runtime";
 import { cloudMessageSubmit, decodeSessionEventPayload } from "@volli/shared";
 import type { ClaimedJob, JobOutcome, RunnerHeartbeatReply } from "@volli/shared/cloud";
@@ -57,6 +57,7 @@ const roots: string[] = [];
 const running: RunningHeadlessRunner[] = [];
 afterEach(async () => {
   for (const runner of running.splice(0)) await runner.stop("test done");
+  vi.unstubAllEnvs();
   resetRetentionWatcherForTest();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -345,6 +346,8 @@ function fixture(
         fetch: deployment.fetch,
       }),
       signInFile: join(root, "pi", "auth.json"),
+      gitCredentialHelper: "!false",
+      gitCredentialSocket: join(dataDir, "git-credential.sock"),
       modelAccess: () => ({
         ...piOwnedModelAccess({ agentDir: join(root, "pi") }),
         models: script.models,
@@ -420,8 +423,10 @@ describe("volli-runner run: the headless composition", { timeout: 30_000 }, () =
     await until(() => f.targets.length > 0, "a heartbeat reply");
     expect(runner.status().target).toEqual({ targetVersion: "0.3.1", minVersion: "0.3.0" });
     expect(runner.status().backend).toMatchObject({ state: "online", detail: null });
-    // The agent socket is this user's alone, and answers once recovery is done.
+    // The agent socket and the git credential socket are this user's alone.
     expect(statSync(join(f.dataDir, "volli.sock")).mode & 0o777).toBe(0o600);
+    await until(() => existsSync(join(f.dataDir, "git-credential.sock")), "the helper socket");
+    expect(statSync(join(f.dataDir, "git-credential.sock")).mode & 0o777).toBe(0o600);
     // Dispatched past readiness: a caller with no project gets the verb's own refusal.
     expect(
       await socketRequest(join(f.dataDir, "volli.sock"), {
@@ -565,8 +570,13 @@ describe("volli-runner run: the headless composition", { timeout: 30_000 }, () =
     expect(runner.updates.inFlight()).toBe(0);
     await runner.updates.drain();
     await until(() => f.deployment.states.includes("draining"), "draining reported");
+    // The status file says so before the agent asks the applier to activate:
+    // the applier refuses `not_draining` otherwise.
+    expect(runner.status().state).toBe("draining");
+    expect(f.statuses.at(-1)?.state).toBe("draining");
     await runner.updates.resume();
     await until(() => f.deployment.states.at(-1) === "online", "online reported");
+    expect(runner.status().state).toBe("online");
     await runner.updates.report("runnerUpdateReports:report", { outcomeId: "o-1" });
     expect(f.deployment.mutations).toContainEqual({
       name: "runnerUpdateReports:report",
@@ -633,6 +643,61 @@ describe("volli-runner run: the headless composition", { timeout: 30_000 }, () =
     );
     // The first message the model saw is the one the person sent from another device.
     expect(JSON.stringify(f.script.requests)).toContain("Say hello from the box");
+  });
+
+  it("starts a Session for a remote-only project in a managed clone, never 'Choose the folder'", async () => {
+    const f = fixture();
+    // The project's remote: a local bare repository behind the https URL Volli
+    // recorded, reached through an `insteadOf` rewrite as BYO-8's tests do.
+    const remote = join(f.root, "remote.git");
+    git(f.root, ["init", "--bare", "-b", "main", remote]);
+    git(f.checkout, ["push", remote, "main"]);
+    const REMOTE_URL = "https://git.example.test/acme/app.git";
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", `url.${remote}.insteadOf`);
+    vi.stubEnv("GIT_CONFIG_VALUE_0", REMOTE_URL);
+    const runner = await f.start();
+    await until(() => runner.status().state === "online", "online");
+    const START = "88888888-2222-4333-8444-555555555557";
+    const first = cloudMessageSubmit({
+      sessionId: SESSION,
+      commandId: START,
+      message: { id: "m-1", role: "user", parts: [{ type: "text", text: "Hello from a clone" }] },
+    });
+    f.deployment.queries.set("sessionStarts:startContext", () => ({
+      kind: "ready",
+      projectId: PROJECT,
+      ticket: null,
+      runnerName: "hetzner-1",
+      body: first.body,
+    }));
+    // No checkout is registered on this box: only the recorded remote.
+    f.deployment.queries.set("runnerContext:forSession", (args) => {
+      const facts = forSession(args);
+      return { ...facts, primaryRepo: { ...facts.primaryRepo, remoteUrl: REMOTE_URL } };
+    });
+    f.deployment.enqueue(sessionStartJob(START, first.reference, MODEL));
+    const outcome = await until(() => f.deployment.completed.get(START), "the start's outcome");
+    expect(outcome).toEqual({
+      status: "done",
+      result: { kind: "started", sessionId: SESSION, model: MODEL },
+    });
+    await until(
+      () =>
+        f.deployment.accepted.some(
+          (event) => event.sessionId === SESSION && event.kind === "turn.completed",
+        ),
+      "the turn's facts accepted",
+    );
+    // The clone lives under the runner's data dir, with the remote's history.
+    const clone = join(f.dataDir, "repos", REPO);
+    expect(git(clone, ["log", "-1", "--format=%s"])).toBe("initial");
+    expect(f.deployment.mutations).toContainEqual(
+      expect.objectContaining({
+        name: "projectCheckouts:report",
+        args: expect.objectContaining({ kind: "managed_clone" }),
+      }),
+    );
   });
 
   it("refuses a session.start for a provider this box is not signed in to, saying where to sign in", async () => {
