@@ -64,6 +64,24 @@ variants differ only in how the token travels and who the runner runs as:
 Choose the system install for a dedicated server, and the user install on a
 machine you share. `--user` is refused as root: agents never run as root.
 
+### A deployment that is not Volli Cloud
+
+The copied command carries no server flags: on a release build it targets the
+deployment the app was built against. A launch pointed at another deployment —
+staging, or a backend you run yourself — installs against it with two URLs:
+
+```sh
+curl -fsSL https://github.com/hussainph/volli-code/releases/download/v<version>/volli-runner-install.sh \
+  | sudo sh -s -- --token 'vrt_…' --server https://<deployment>.convex.cloud --site https://<deployment>.convex.site
+```
+
+`--server` is that deployment's Convex URL, and `--site` is its HTTP actions
+origin, where the runner's `/runner/*` calls go. A `*.convex.cloud` server's
+site is the matching `*.convex.site`, so `--site` is only needed for anything
+else, and it always needs a `--server` to go with it. `VOLLI_SERVER` and
+`VOLLI_SERVER_SITE` carry the same two values in the environment; an explicit
+`--server` does not borrow an environment site, so pass `--site` with it.
+
 ### Without a token
 
 A device code is for a box that has no token: install first without linking,
