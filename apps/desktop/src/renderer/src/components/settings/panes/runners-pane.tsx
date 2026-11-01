@@ -63,6 +63,7 @@ import { RunnerAvailability } from "./runner-availability";
 
 // Public build metadata only; no deployment credential reaches the renderer.
 declare const VOLLI_RUNNER_INSTALL_SITE_URL: string | null;
+declare const VOLLI_RUNNER_INSTALL_BACKEND_URL: string | null;
 import {
   runnerStatus,
   thisMacRecovery,
@@ -110,9 +111,15 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
   const siteUrl = launch?.siteUrl ?? null;
   const packagedSite =
     typeof VOLLI_RUNNER_INSTALL_SITE_URL === "undefined" ? null : VOLLI_RUNNER_INSTALL_SITE_URL;
+  const packagedBackend =
+    typeof VOLLI_RUNNER_INSTALL_BACKEND_URL === "undefined"
+      ? null
+      : VOLLI_RUNNER_INSTALL_BACKEND_URL;
   const installTarget = runnerInstallTarget({
     appVersion,
+    backendUrl: launch?.backendUrl ?? null,
     siteUrl,
+    packagedBackendUrl: packagedBackend,
     packagedSiteUrl: packagedSite,
     deployment: launch?.deployment,
   });

@@ -366,6 +366,16 @@ async function journey(fixture) {
       { timeout: 60_000, interval: 250 },
     );
     const { installToken, version } = installCommandFromSnapshot(command);
+    // Check public origins without putting the token-bearing command in an
+    // assertion's actual/expected output. The simulated box uses these same endpoints.
+    assert.ok(
+      command.includes(`--server '${new URL(fixture.convexUrl).origin}'`),
+      "install command targets the fixture's client origin",
+    );
+    assert.ok(
+      command.includes(`--site '${new URL(fixture.siteUrl).origin}'`),
+      "install command targets the fixture's HTTP actions origin",
+    );
     // Drop the token-bearing snapshot text as soon as the token is read out.
     command = "";
     startBox({ installToken, siteUrl: fixture.siteUrl, convexUrl: fixture.convexUrl, version });

@@ -78,7 +78,8 @@ it.each(["Add a runner", "Get an always-on runner"])(
     await click("Create install command");
     expect(action).toHaveBeenCalledOnce();
     expect(document.body.textContent).toContain("/v0.3.0-canary.1/volli-runner-install.sh");
-    expect(document.body.textContent).toContain("--server 'https://staging.convex.site'");
+    expect(document.body.textContent).toContain("--server 'https://staging.convex.cloud'");
+    expect(document.body.textContent).toContain("--site 'https://staging.convex.site'");
     act(() =>
       cloud.answer(
         "runners:installTokenStatus",

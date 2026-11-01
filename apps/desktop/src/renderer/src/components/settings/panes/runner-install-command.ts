@@ -8,8 +8,14 @@
  * redirect — so a command someone pasted into a box cannot be swapped for a
  * different script later, and the token never rides in the URL. The script's
  * flags are the release contract (C3): `--token` or `VOLLI_RUNNER_TOKEN`,
- * `--name` (the box's own hostname when absent), `--server` for a deployment
- * that is not the packaged default, and `--user` / `--system`.
+ * `--name` (the box's own hostname when absent), `--server` with the
+ * deployment's Convex client URL when it is not the packaged default, `--site`
+ * with that deployment's HTTP actions origin, and `--user` / `--system`.
+ *
+ * `--server` and `--site` are two different origins and are never derived from
+ * each other here: the installer infers a conventional `*.convex.cloud`
+ * server's site, so a site may be absent, but a site with no server names
+ * nothing to link to and is refused. Both are checked by the same rules.
  *
  * Everything a person typed is single-quoted before it can reach a shell, and
  * is refused outright if it holds a control character or a line break. No
@@ -35,8 +41,18 @@ export interface RunnerInstallOptions {
   token: string;
   /** What the person typed. Blank means the installer keeps the box's hostname. */
   name: string;
-  /** A deployment's site URL when it is not the packaged default; `null` for none. */
+  /**
+   * The deployment's Convex client URL (`https://<name>.convex.cloud`) when it
+   * is not the packaged default; `null` for none.
+   */
   server?: string | null;
+  /**
+   * The same deployment's HTTP actions origin (`https://<name>.convex.site`),
+   * where the installer's `/runner/*` lives; `null` for none. Absent is how a
+   * conventional `*.convex.cloud` server gets its site inferred, and `site`
+   * without `server` is refused.
+   */
+  site?: string | null;
   /** `token` (the default) is the plain user install. */
   variant?: RunnerInstallVariant;
 }
@@ -55,7 +71,7 @@ const INSTALLER_ASSET = "volli-runner-install.sh";
 const NAME_MAX_LENGTH = 80;
 /** Today a token is `vrt_` plus 256 random bits; the bound is only a guard. */
 const TOKEN_MAX_LENGTH = 512;
-const SERVER_MAX_LENGTH = 2048;
+const ADDRESS_MAX_LENGTH = 2048;
 const VERSION_MAX_LENGTH = 64;
 
 /** A release tag's version: `0.3.0`, `0.3.0-canary.1`, with optional build metadata. */
@@ -119,31 +135,54 @@ function checkedName(name: string): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-function parseServerUrl(value: string): URL {
+function parseAddress(value: string, field: string): URL {
   try {
     return new URL(value);
   } catch {
-    return refuse("the server address is not a URL");
+    return refuse(`the ${field} is not a URL`);
   }
 }
 
-/** The URL as typed, or `null`; plain HTTP only where a fixture answers locally. */
-function checkedServer(server: string | null | undefined): string | null {
-  if (server == null) return null;
-  checkPlain(server, "server address", SERVER_MAX_LENGTH);
-  const trimmed = server.trim();
+/**
+ * The address as typed, or `null`; plain HTTP only where a fixture answers
+ * locally. A server and a site are held to the same rules, so the field only
+ * names which one a refusal is about — never its value.
+ */
+function checkedAddress(value: string | null | undefined, field: string): string | null {
+  if (value == null) return null;
+  checkPlain(value, field, ADDRESS_MAX_LENGTH);
+  const trimmed = value.trim();
   if (trimmed === "") return null;
-  if (/\s/.test(trimmed)) refuse("the server address holds whitespace");
-  const url = parseServerUrl(trimmed);
+  if (/\s/.test(trimmed)) refuse(`the ${field} holds whitespace`);
+  const url = parseAddress(trimmed, field);
   const loopback = url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
   if (url.protocol !== "https:" && !loopback) {
-    refuse("the server address must be https, or http on this machine");
+    refuse(`the ${field} must be https, or http on this machine`);
   }
   if (url.username !== "" || url.password !== "") {
-    refuse("the server address carries a user name or password");
+    refuse(`the ${field} carries a user name or password`);
   }
-  if (url.hash !== "") refuse("the server address carries a fragment");
+  if (url.hash !== "") refuse(`the ${field} carries a fragment`);
   return trimmed;
+}
+
+/**
+ * The installer's two deployment addresses, each as typed or `null`. A
+ * conventional `*.convex.cloud` server infers its site, so the site is
+ * optional; a site alone names nothing to link to. The installer itself reads
+ * a path or query leniently, and this generator keeps that behaviour rather
+ * than pretending to police a URL the script will judge.
+ */
+function checkedDeployment(
+  server: string | null | undefined,
+  site: string | null | undefined,
+): { server: string | null; site: string | null } {
+  const checkedServer = checkedAddress(server, "server address");
+  const checkedSite = checkedAddress(site, "site address");
+  if (checkedSite !== null && checkedServer === null) {
+    refuse("the site address needs a server address");
+  }
+  return { server: checkedServer, site: checkedSite };
 }
 
 /** The installer's arguments. The token is absent when the environment carries it. */
@@ -151,12 +190,16 @@ function installFlags(parts: {
   token: string | null;
   name: string | null;
   server: string | null;
+  site: string | null;
   system: boolean;
 }): string {
   const flags: string[] = [];
   if (parts.token !== null) flags.push("--token", shellQuote(parts.token));
   if (parts.name !== null) flags.push("--name", shellQuote(parts.name));
+  // The site follows the server: a site means nothing without it, and the
+  // script accepts either order.
   if (parts.server !== null) flags.push("--server", shellQuote(parts.server));
+  if (parts.site !== null) flags.push("--site", shellQuote(parts.site));
   flags.push(parts.system ? "--system" : "--user");
   return flags.join(" ");
 }
@@ -171,14 +214,14 @@ export function runnerInstallCommand(options: RunnerInstallOptions): string {
   const variant = options.variant ?? "token";
   const token = checkedToken(options.token);
   const name = checkedName(options.name);
-  const server = checkedServer(options.server);
+  const { server, site } = checkedDeployment(options.server, options.site);
   const download = `curl -fsSL ${installerUrl(options.appVersion)}`;
   if (variant === "environment") {
-    const flags = installFlags({ token: null, name, server, system: false });
+    const flags = installFlags({ token: null, name, server, site, system: false });
     return `${download} | VOLLI_RUNNER_TOKEN=${shellQuote(token)} sh -s -- ${flags}`;
   }
   const system = variant === "sudo";
-  const flags = installFlags({ token, name, server, system });
+  const flags = installFlags({ token, name, server, site, system });
   return `${download} | ${system ? "sudo sh" : "sh"} -s -- ${flags}`;
 }
 
@@ -195,10 +238,12 @@ export function runnerInstallCommand(options: RunnerInstallOptions): string {
 export function runnerCloudInit(options: RunnerCloudInitOptions): string {
   const url = installerUrl(options.appVersion);
   const token = checkedToken(options.token);
+  const { server, site } = checkedDeployment(options.server, options.site);
   const flags = installFlags({
     token: null,
     name: checkedName(options.name),
-    server: checkedServer(options.server),
+    server,
+    site,
     system: true,
   });
   return [
