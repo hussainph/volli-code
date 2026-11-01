@@ -38,7 +38,7 @@ const probeReport = async (host: RunnerHostCapabilities): Promise<RunnerCapabili
     cpuCount: 8,
     memTotalMb: 16_384,
     git: { version: "2.43.0" },
-    docker: host.docker,
+    docker: host.docker ?? false,
     terminals: host.terminals ? "available" : "unavailable",
     browser: host.browser,
     maxConcurrentSessions: host.maxConcurrentSessions,
