@@ -84,6 +84,7 @@ import type * as projectImportPurge from "../projectImportPurge.js";
 import type * as projectImports from "../projectImports.js";
 import type * as projects from "../projects.js";
 import type * as runnerContext from "../runnerContext.js";
+import type * as runnerGithub from "../runnerGithub.js";
 import type * as runnerHttp from "../runnerHttp.js";
 import type * as runnerJobs from "../runnerJobs.js";
 import type * as runnerLinkRateLimit from "../runnerLinkRateLimit.js";
@@ -193,6 +194,7 @@ declare const fullApi: ApiFromModules<{
   projectImports: typeof projectImports;
   projects: typeof projects;
   runnerContext: typeof runnerContext;
+  runnerGithub: typeof runnerGithub;
   runnerHttp: typeof runnerHttp;
   runnerJobs: typeof runnerJobs;
   runnerLinkRateLimit: typeof runnerLinkRateLimit;

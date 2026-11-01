@@ -58,6 +58,8 @@ export function testContext(options: {
   now?: () => number;
   update?: Partial<UpdateDeps>;
   sleep?: (ms: number) => Promise<void>;
+  /** What the command reads on stdin; a function to make the read fail. */
+  stdin?: string | (() => Promise<string>);
 }): TestContext {
   let stdout = "";
   let stderr = "";
@@ -108,6 +110,10 @@ export function testContext(options: {
     statusProbes: options.statusProbes ?? NOT_RUNNING,
     sleep: options.sleep ?? (() => Promise.resolve()),
     update: { ...UNREACHABLE_UPDATE, ...options.update },
+    readStdin: () => {
+      const stdin = options.stdin;
+      return typeof stdin === "function" ? stdin() : Promise.resolve(stdin ?? "");
+    },
     ...(options.now === undefined ? {} : { now: options.now }),
     stdout: () => stdout,
     stderr: () => stderr,

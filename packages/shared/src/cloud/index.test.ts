@@ -30,6 +30,7 @@ test("the cloud entry point exposes each module", () => {
     "decideCreateProject",
     "boardIntentDigest",
     "parseRunnerCapabilities",
+    "normalizeGitRemoteUrl",
     "migrationDocument",
     "foldCloudSessionState",
     "extractGithubEvent",

@@ -78,6 +78,7 @@ export function registerWorkingCopyJobs(
             return failed("invalid_job_payload", "Ticket identity does not match the job.");
           const location = await options.location.materialize({
             sessionId: job.id,
+            jobId: job.id,
             projectId: job.projectId,
             ticketId,
           });

@@ -3,7 +3,14 @@ import { basename, dirname, join } from "node:path";
 
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
 import { displayTicketId, LOCAL_RUNNER, type Session } from "@volli/shared";
-import type { CheckoutMode, WorkingCopyState } from "@volli/shared/cloud";
+import {
+  normalizeGitRemoteUrl,
+  type CheckoutMode,
+  type JobId,
+  type RunnerGithubTokenClaim,
+  type SessionId,
+  type WorkingCopyState,
+} from "@volli/shared/cloud";
 
 import {
   acquireWorktreeStartLease,
@@ -17,6 +24,12 @@ import {
 import { homeDir } from "../worktree/home";
 import { resolveWorktreeIdentity } from "../worktree/identity";
 import { isFirstRunPending } from "../worktree/first-run";
+import {
+  createRunnerGit,
+  ManagedCloneUnavailable,
+  type ManagedClones,
+  type RunnerGit,
+} from "./managed-clone";
 import type { RunnerPathRegistry } from "./paths";
 
 /** The path-free subset of runnerContext.forSession needed by the machine. */
@@ -40,6 +53,8 @@ export interface CloudLocationFacts {
     projectId: string;
     baseBranch: string | null;
     defaultBranchCache?: string | null;
+    /** What a runner with no folder of the person's clones (`managedClones`). */
+    remoteUrl?: string | null;
   };
   /** Fresh backend facts; the runner applies the shared rule with its machine TTL. */
   retention?: {
@@ -53,6 +68,11 @@ export interface CloudLocationRequest {
   sessionId: string;
   projectId: string;
   ticketId: string | null;
+  /**
+   * Set when an inbox job (not a Session) is materializing: then `sessionId`
+   * holds the job's id. A managed clone's GitHub token is asked for this claim.
+   */
+  jobId?: string;
 }
 export interface CloudWorkingCopyReport {
   ticketId: string;
@@ -70,6 +90,8 @@ export interface CloudLocationReports {
     kind: "main" | "managed_clone";
     headBranch: string | null;
     headSha: string | null;
+    /** A main checkout's `origin`, normalized with no credentials; `null` when it has none. */
+    remoteUrl?: string | null;
   }): Promise<unknown>;
   workingCopy(input: CloudWorkingCopyReport): Promise<{ workingCopyId: string | null }>;
 }
@@ -79,6 +101,30 @@ export class CloudFolderRequired extends Error {
   constructor(projectName: string) {
     super(`Choose the folder for ${projectName} on this Mac.`);
     this.name = "CloudFolderRequired";
+  }
+}
+
+/** Why a runner with managed clones cannot clone a project: it has no remote on record. */
+export class CloudRemoteRequired extends ManagedCloneUnavailable {
+  constructor(projectName: string) {
+    super(
+      `Volli doesn't know where to clone ${projectName} from yet. Open it on a Mac that has its folder, or connect its GitHub repository.`,
+    );
+    this.name = "CloudRemoteRequired";
+  }
+}
+
+/** A main checkout's `origin` as a report carries it: normalized, never a path or a secret. */
+export async function readCheckoutRemote(
+  git: RunnerGit,
+  checkoutPath: string,
+): Promise<string | null> {
+  try {
+    const url = (await git(["remote", "get-url", "origin"], { cwd: checkoutPath })).trim();
+    return normalizeGitRemoteUrl(url);
+  } catch {
+    // No origin, or no repository at all: unknown, never guessed.
+    return null;
   }
 }
 
@@ -92,6 +138,15 @@ export interface CloudSessionLocationOptions {
   environmentRecipes?: () => boolean;
   materializeAttachments?: EnsureExplicitPorts["materializeAttachments"];
   /**
+   * Runner-managed clones (`managed-clone.ts`): set on a runner with no folder
+   * of the person's. A project with no registered checkout is then cloned
+   * from its `primaryRepo.remoteUrl` instead of refused as
+   * {@link CloudFolderRequired}. Absent (the Mac) keeps that refusal.
+   */
+  managedClones?: ManagedClones;
+  /** Reads a main checkout's `origin` for its report. Defaults to {@link readCheckoutRemote}. */
+  readRemote?(checkoutPath: string): Promise<string | null>;
+  /**
    * The host's setup/resume runner. It must write machine facts only, never
    * frozen ticket events. A pending setup without this port fails closed.
    */
@@ -103,13 +158,22 @@ export interface CloudSessionLocationOptions {
   }): Promise<void>;
 }
 
+/** The claim a managed clone's own fetch authenticates under: the job's, else the Session's. */
+function claimOf(request: CloudLocationRequest): RunnerGithubTokenClaim {
+  return request.jobId === undefined
+    ? { kind: "session", sessionId: request.sessionId as SessionId }
+    : { kind: "job", jobId: request.jobId as JobId };
+}
+
 function requestFor(session: Session): CloudLocationRequest {
   return { sessionId: session.id, projectId: session.projectId, ticketId: session.ticketId };
 }
 
 /** Shared by Session starts and inbox materialization; never writes SQLite board rows. */
 export function createCloudSessionLocationResolver(options: CloudSessionLocationOptions) {
-  const { registry, gitAsync, reports } = options;
+  const { registry, gitAsync, reports, managedClones } = options;
+  const readRemote =
+    options.readRemote ?? ((path: string) => readCheckoutRemote(createRunnerGit(), path));
   // Registry reservation happens synchronously before the git pipeline's first
   // await; Session and inbox services then share its path-scoped flight.
   const ensurePorts: EnsureExplicitPorts = {
@@ -124,7 +188,12 @@ export function createCloudSessionLocationResolver(options: CloudSessionLocation
   };
 
   async function factsFor(request: CloudLocationRequest): Promise<CloudLocationFacts> {
-    const facts = await options.forSession(request);
+    // Only the Session's identity crosses: the backend's read takes no job id.
+    const facts = await options.forSession({
+      sessionId: request.sessionId,
+      projectId: request.projectId,
+      ticketId: request.ticketId,
+    });
     if (
       facts.project.id !== request.projectId ||
       facts.primaryRepo.projectId !== request.projectId ||
@@ -134,10 +203,28 @@ export function createCloudSessionLocationResolver(options: CloudSessionLocation
       throw new Error("Volli Cloud returned a location for another project or ticket.");
     return facts;
   }
+  /**
+   * The registered checkout, or with managed clones the clone's planned
+   * checkout, registered here so every later read finds it; `materialize`
+   * makes it exist.
+   */
+  function checkoutOf(facts: CloudLocationFacts): string {
+    const repoId = facts.primaryRepo.id;
+    const registered = registry.checkouts.pathOf(facts.project.id, repoId);
+    if (registered) return registered;
+    if (managedClones === undefined) throw new CloudFolderRequired(facts.project.name);
+    if (!facts.primaryRepo.remoteUrl) throw new CloudRemoteRequired(facts.project.name);
+    return registry.checkouts.register({
+      projectId: facts.project.id,
+      projectRepoId: repoId,
+      absPath: managedClones.checkoutPath(repoId),
+      kind: "managed_clone",
+      adoptedFromFrozen: false,
+    }).absPath;
+  }
   function locate(facts: CloudLocationFacts) {
     const repoId = facts.primaryRepo.id;
-    const checkoutPath = registry.checkouts.pathOf(facts.project.id, repoId);
-    if (!checkoutPath) throw new CloudFolderRequired(facts.project.name);
+    const checkoutPath = checkoutOf(facts);
     const ticket = facts.ticket;
     if (!ticket) return { checkoutPath, directory: checkoutPath };
     if (ticket.checkoutMode === "main_checkout") {
@@ -265,14 +352,25 @@ export function createCloudSessionLocationResolver(options: CloudSessionLocation
     const lease = acquireWorktreeStartLease(directory);
     if (!lease) throw new Error(UNDER_DELETION_REFUSAL);
     try {
+      const checkoutKind = registry.checkouts.get(facts.project.id, facts.primaryRepo.id)!.kind;
+      if (checkoutKind === "managed_clone" && managedClones !== undefined) {
+        if (!facts.primaryRepo.remoteUrl) throw new CloudRemoteRequired(facts.project.name);
+        await managedClones.ensure({
+          projectRepoId: facts.primaryRepo.id,
+          remoteUrl: facts.primaryRepo.remoteUrl,
+          claim: claimOf(request),
+        });
+      }
       if (!existsSync(checkoutPath)) throw new CloudFolderRequired(facts.project.name);
       const checkoutHead = await head(checkoutPath);
       await reports.checkout({
         projectId: facts.project.id,
         projectRepoId: facts.primaryRepo.id,
-        kind: registry.checkouts.get(facts.project.id, facts.primaryRepo.id)!.kind,
+        kind: checkoutKind,
         headBranch: checkoutHead.branch,
         headSha: checkoutHead.headSha,
+        // Only the person's own checkout names the project's remote.
+        ...(checkoutKind === "main" ? { remoteUrl: await readRemote(checkoutPath) } : {}),
       });
       const ticket = facts.ticket;
       let baseBranch = ticket?.baseBranch ?? facts.primaryRepo.baseBranch;

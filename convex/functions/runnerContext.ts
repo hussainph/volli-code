@@ -12,6 +12,7 @@ import {
   retentionFacts,
   runnerProject,
   runnerTicket,
+  withRemoteUrl,
 } from "./lib/runnerContext";
 import { nullable } from "./lib/validators";
 
@@ -25,6 +26,9 @@ import { nullable } from "./lib/validators";
  * independently checks the birth and creates the claim.
  *
  * The caller records the brief durably once, then reuses it on reattachment.
+ *
+ * `primaryRepo.remoteUrl` is what a runner with no folder of the person's
+ * clones (`repoRemoteUrl`): never a path, never a credential.
  */
 export const forSession = query({
   args: {
@@ -86,7 +90,7 @@ export const forSession = query({
       ticket: ticket === null ? null : publicRow(ticket),
       body: ticket === null ? null : (body?.body ?? ""),
       ticketPrefix: project.ticketPrefix,
-      primaryRepo: await primaryRepo(ctx, project),
+      primaryRepo: withRemoteUrl(await primaryRepo(ctx, project)),
       retention: await retentionFacts(ctx, ticket),
     };
   },
@@ -107,7 +111,7 @@ export const forProject = query({
     return {
       ownerUserId: caller.ownerUserId,
       project: publicRow(project),
-      primaryRepo: await primaryRepo(ctx, project),
+      primaryRepo: withRemoteUrl(await primaryRepo(ctx, project)),
     };
   },
 });

@@ -351,6 +351,10 @@ export default defineSchema({
     // Whether the App still reaches the repository (`provider: github` rows).
     githubAccess: v.optional(literals(GITHUB_REPO_ACCESS)),
     accessCheckedAt: v.optional(time),
+    // The remote a runner without the person's folder clones (`provider: none`
+    // rows): the last `origin` a main checkout reported, normalized with no
+    // credentials (`normalizeGitRemoteUrl`). GitHub rows derive theirs.
+    remoteUrl: v.optional(nullable(v.string())),
   })
     .index("by_uuid", ["id"])
     .index("by_project", ["projectId", "position"])
