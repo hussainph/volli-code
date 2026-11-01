@@ -713,6 +713,11 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/runner-assets
 
+      # The fake GitHub's name (a runner refuses a loopback literal as a
+      # remote). The box adds the same line to its own /etc/hosts.
+      - name: Map github.byo.test to the loopback
+        run: echo "127.0.0.1 github.byo.test" | sudo tee -a /etc/hosts
+
       - name: Harness self-tests (fake GitHub, release server, legs)
         run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs
 

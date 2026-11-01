@@ -46,7 +46,8 @@
  */
 
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { execFile, spawn } from "node:child_process";
 import {
   appendFileSync,
@@ -63,11 +64,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { startFakeGithub } from "../../../scripts/fake-github/server.mjs";
+import { createTestCertificates } from "../../../scripts/fake-github/tls.mjs";
+import { startFakeProvider } from "../../desktop/e2e/volli-drive/lib/fake-provider.mjs";
 import {
   connectGithub,
   createInstallToken,
   fixtureFromEnv,
   installGithubApp,
+  linkReportingMac,
   listRunners,
   seedPerson,
   setDeploymentEnv,
@@ -87,6 +91,8 @@ export const WORLD = Object.freeze({
   github: { userId: 9001, login: "byo-person", installationId: 90_010, repoId: 900_100 },
   repo: { owner: "byo-person", name: "demo" },
   boxHostname: "byo-box-1",
+  /** The fake GitHub's name: a box refuses a loopback literal as a remote. */
+  githubHostname: "github.byo.test",
   runnerName: "hetzner-1",
 });
 
@@ -267,15 +273,28 @@ async function harness(context, log) {
   );
   assert.equal(fetched.stdout.split(" ")[0], sha256(probe), "the box got the published bytes");
 
-  // The box's git against the fake GitHub: a token clones and pushes; none is refused.
+  // The box's git against the fake GitHub, over the HTTPS a runner's GitHub
+  // remotes use (the box trusts this run's own CA, as it would GitHub's):
+  // a token clones and pushes; none is refused.
+  if (context.tls) {
+    await box.copyIn(context.tls.caPath, "/usr/local/share/ca-certificates/volli-e2e-ca.crt");
+    await onBox(context, "the box trusts the run's CA", "update-ca-certificates >/dev/null");
+    await onBox(
+      context,
+      "the fake GitHub's name resolves on the box",
+      `grep -q '${WORLD.githubHostname}' /etc/hosts || echo '127.0.0.1 ${WORLD.githubHostname}' >> /etc/hosts`,
+    );
+  }
+  const gitOrigin = context.tls ? github.httpsOrigin : github.origin;
   const token = github.issueAccessToken(WORLD.github.userId);
   context.secrets.push(token);
-  const host = github.origin.replace(/^http:\/\//u, "");
+  const host = gitOrigin.replace(/^https?:\/\//u, "");
+  const scheme = context.tls ? "https" : "http";
   const work = `/tmp/byo-harness-${randomBytes(3).toString("hex")}`;
   await onBox(
     context,
     "an unauthenticated clone is refused",
-    `! ${BOX_GIT} clone --quiet ${github.origin}/${WORLD.repo.owner}/${WORLD.repo.name}.git ${work}-refused`,
+    `! ${BOX_GIT} clone --quiet ${gitOrigin}/${WORLD.repo.owner}/${WORLD.repo.name}.git ${work}-refused`,
   );
   // Refused by the fake GitHub's token gate, not by an unreachable server.
   assert.ok(
@@ -292,7 +311,7 @@ async function harness(context, log) {
     "a token clones, commits and pushes",
     [
       "set -e",
-      `${BOX_GIT} clone --quiet "http://x-access-token:$BYO_GIT_TOKEN@${host}/${WORLD.repo.owner}/${WORLD.repo.name}.git" ${work}`,
+      `${BOX_GIT} clone --quiet "${scheme}://x-access-token:$BYO_GIT_TOKEN@${host}/${WORLD.repo.owner}/${WORLD.repo.name}.git" ${work}`,
       `cd ${work}`,
       "echo harness > harness.txt",
       `${BOX_GIT} add harness.txt`,
@@ -418,6 +437,163 @@ async function installLeg(context, log) {
   return `${runner.name} online at ${published.version} (system install, systemd, power ac/alwaysOn)`;
 }
 
+/** The branch the scripted agent pushes, and the file it adds. */
+const AGENT_BRANCH = "byo/agent-change";
+const AGENT_FILE = "byo-agent.txt";
+const AGENT_REPLY = "Pushed byo/agent-change.";
+
+/**
+ * The fake model's script for the Session leg: the first turn runs one `bash`
+ * call that commits and pushes from the Session's working copy (git, its
+ * credential and its identity are the runner's: nothing here names a token or
+ * an author); once the tool's output is back, it answers in text.
+ */
+export function agentScript(turn) {
+  const input = Array.isArray(turn.body?.input) ? turn.body.input : [];
+  if (input.some((item) => item?.type === "function_call_output")) return { text: AGENT_REPLY };
+  return {
+    toolCalls: [
+      {
+        name: "bash",
+        arguments: {
+          command: [
+            "set -e",
+            `git switch -c ${AGENT_BRANCH}`,
+            `echo "written on the box" > ${AGENT_FILE}`,
+            `git add ${AGENT_FILE}`,
+            'git commit -m "Add a file from the box"',
+            `git push origin HEAD:refs/heads/${AGENT_BRANCH}`,
+          ].join(" && "),
+        },
+      },
+    ],
+  };
+}
+
+/** A user message's JSON text, as the composer sends one (`sessionStarts.startOn`'s `body`). */
+function userMessage(text) {
+  return JSON.stringify({ id: randomUUID(), role: "user", parts: [{ type: "text", text }] });
+}
+
+/**
+ * Leg 2: a Session started on the box through the picker's own API, as the
+ * person: the agent commits and pushes, and the fake GitHub has the commit.
+ *
+ * SETUP: the person's Mac (a second runner, linked the way a desktop is)
+ * reports its checkout's `origin`, so the folder project records the remote
+ * a box clones; the box signs in to the fake model provider with the real
+ * `volli-runner login --api-key`, and its unit gets the provider's base URL
+ * (a test seam: the fake speaks Azure's Responses API on loopback).
+ */
+async function sessionLeg(context, log) {
+  const { fixture, person, github, projectId } = context;
+  const remote = `${github.httpsOrigin}/${WORLD.repo.owner}/${WORLD.repo.name}.git`;
+  const mac = await linkReportingMac(fixture, person);
+  context.secrets.push(...mac.secrets);
+  await mac.mutation("projectCheckouts:report", {
+    projectId,
+    projectRepoId: projectId,
+    kind: "main",
+    headBranch: "main",
+    headSha: null,
+    remoteUrl: remote,
+  });
+  log(`the person's Mac reported origin ${remote}`);
+
+  const provider = await startFakeProvider({ script: agentScript });
+  context.fakeProvider = provider;
+  context.secrets.push(provider.apiKey);
+  const dropIn = [
+    "[Service]",
+    `Environment=AZURE_OPENAI_BASE_URL=${provider.baseUrl}`,
+    `Environment=AZURE_OPENAI_API_VERSION=${provider.env.AZURE_OPENAI_API_VERSION}`,
+  ].join("\n");
+  await onBox(
+    context,
+    "the unit reaches the fake model provider (test seam)",
+    [
+      "set -e",
+      "mkdir -p /etc/systemd/system/volli-runner.service.d",
+      `printf '%s\\n' "$BYO_DROP_IN" > /etc/systemd/system/volli-runner.service.d/byo-fake-model.conf`,
+      "systemctl daemon-reload",
+      "systemctl restart volli-runner",
+    ].join("\n"),
+    { env: { BYO_DROP_IN: dropIn } },
+  );
+  await onBox(
+    context,
+    `volli-runner login ${provider.providerId} --api-key`,
+    `printf '%s\\n' "$BYO_MODEL_KEY" | volli-runner login ${provider.providerId} --api-key`,
+    { env: { BYO_MODEL_KEY: provider.apiKey } },
+  );
+  await waitFor("the box online again after its restart", async () => {
+    const found = (await listRunners(person)).find((entry) => entry.id === context.runner.id);
+    return found?.status === "online" ? found : null;
+  });
+
+  // The picker's read: the box is the default and serves the provider.
+  const picker = await waitFor(`the box listing ${provider.providerId}`, async () => {
+    const answer = await person.query("runnerPicker:forComposer", { projectId });
+    const row = answer.runners.find((runner) => runner.id === context.runner.id);
+    return row?.providers.includes(provider.providerId) ? answer : null;
+  });
+  assert.equal(
+    picker.defaultRunnerId,
+    context.runner.id,
+    "an online, always-on, plugged-in box is the default",
+  );
+
+  const ticketId = randomUUID();
+  await person.mutation("board:createTicket", {
+    commandId: randomUUID(),
+    projectId,
+    ticketId,
+    status: "todo",
+    title: "Add a file from the box",
+  });
+  const clientRequestId = randomUUID();
+  const started = await person.mutation("sessionStarts:startOn", {
+    clientRequestId,
+    runnerId: picker.defaultRunnerId,
+    projectId,
+    ticketId,
+    body: userMessage("Add a file, commit it and push it."),
+    model: provider.pin,
+  });
+  log(`Session ${started.sessionId} started on ${context.runner.name}`);
+  const sha = await waitFor(
+    `${AGENT_BRANCH} on the fake GitHub`,
+    async () =>
+      github.refs(WORLD.repo.owner, WORLD.repo.name)[`refs/heads/${AGENT_BRANCH}`] ?? null,
+    { timeoutMs: 5 * 60_000, intervalMs: 1_000 },
+  );
+  const commit = github.commit(WORLD.repo.owner, WORLD.repo.name, sha);
+  assert.equal(commit.subject, "Add a file from the box");
+  // The runner's git identity is the owner's, never the box's or root's.
+  assert.doesNotMatch(commit.author, /root|volli@|byo-box/u, `author ${commit.author}`);
+  assert.ok(
+    github.requests.some(
+      (entry) =>
+        entry.service === "git-receive-pack" &&
+        entry.credential === `user:${WORLD.github.login}` &&
+        entry.status === 200,
+    ),
+    "pushed with the owner's GitHub user token",
+  );
+  await waitFor(
+    "the agent's reply in the Session's history",
+    async () => {
+      const page = await person.query("sessions:history", { sessionId: started.sessionId });
+      return JSON.stringify(page).includes(AGENT_REPLY) ? page : null;
+    },
+    { timeoutMs: 2 * 60_000, intervalMs: 1_000 },
+  );
+  const status = await person.query("sessionStarts:status", { sessionId: started.sessionId });
+  assert.equal(status?.runner?.id, context.runner.id);
+  assert.notEqual(status?.state, "failed", JSON.stringify(status?.failure ?? null));
+  return `Session on ${context.runner.name} pushed ${sha.slice(0, 12)} to ${WORLD.repo.owner}/${WORLD.repo.name} (${commit.author})`;
+}
+
 /** The legs, in order. */
 export const LEGS = [
   { id: "harness", title: "Harness: backend, fake GitHub, release, systemd box", run: harness },
@@ -441,6 +617,7 @@ export const LEGS = [
     id: "session",
     title: "startOn → the agent commits and pushes → the fake GitHub has it",
     after: ["install"],
+    run: sessionLeg,
     needs: [BYO.startOn, BYO.picker, BYO.executor, BYO.tokenRoute, BYO.managedClone],
   },
   {
@@ -482,7 +659,22 @@ async function main(argv) {
     const fixture = fixtureFromEnv();
     context.fixture = fixture;
     secrets.push(fixture.adminKey, fixture.privateKeyPem);
-    context.github = await startFakeGithub();
+    if (useHostShell) {
+      context.github = await startFakeGithub();
+    } else {
+      // The backend reaches it over HTTP and a box's git over HTTPS, both at
+      // github.byo.test, which the job maps to the loopback in /etc/hosts.
+      const resolved = await lookup(WORLD.githubHostname).catch(() => null);
+      if (resolved?.address !== "127.0.0.1") {
+        throw new Error(
+          `${WORLD.githubHostname} must resolve to 127.0.0.1 (add it to /etc/hosts), not ${resolved?.address ?? "nothing"}`,
+        );
+      }
+      const certDir = mkdtempSync(join(tmpdir(), "byo-tls-"));
+      context.tls = createTestCertificates(certDir, WORLD.githubHostname);
+      secrets.push(context.tls.key);
+      context.github = await startFakeGithub({ hostname: WORLD.githubHostname, tls: context.tls });
+    }
     secrets.push(context.github.privateKeyPem, context.github.app.clientSecret);
     context.release = await startReleaseServer();
     if (useHostShell) {
@@ -523,6 +715,12 @@ async function main(argv) {
       // Redacted again here: a secret learned after a command ran (the link
       // grant's credential) must not survive in what that command printed.
       boxCommands: JSON.parse(redact(JSON.stringify(context.boxCommands), secrets)),
+      fakeModelRequests: (context.fakeProvider?.requests ?? []).map((entry) => ({
+        at: entry.at,
+        path: entry.path,
+        status: entry.status,
+        authorized: entry.authorized,
+      })),
       fakeGithubRequests: JSON.parse(
         redact(JSON.stringify(context.github?.requests ?? []), secrets),
       ),
@@ -531,6 +729,7 @@ async function main(argv) {
     };
     writeFileSync(join(evidenceDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
     await context.box?.stop();
+    await context.fakeProvider?.close();
     await context.github?.close();
     await context.release?.close();
   }
