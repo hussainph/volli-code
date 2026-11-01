@@ -301,7 +301,7 @@ export async function startHeadlessRunner(
     };
     if (stopRequested) return publish();
     // An update's drain shows as `draining` (the applier activates only then).
-    publish(updateDraining ? "draining" : seen);
+    publish(updateDraining && seen !== "revoked" && seen !== "unlinked" ? "draining" : seen);
   };
 
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -727,6 +727,8 @@ export async function startHeadlessRunner(
     // must be able to close the runtime that unblocks it.
     const starting = host.start({
       start: async () => {
+        // The helper answers before any Session's git can ask it.
+        await helper;
         await runtimeOwner.start();
         const ready = await composition.ready();
         const commands = createHostAgentCommands(ports, {
@@ -748,8 +750,8 @@ export async function startHeadlessRunner(
       close: async () => {
         try {
           await runtimeOwner.close();
-          await (await helper)?.close();
         } finally {
+          await (await helper)?.close();
           // `stopped`, then the link closes.
           await stopLifecycle(linked);
         }

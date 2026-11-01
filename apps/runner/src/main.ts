@@ -6,7 +6,6 @@
  * HTTP client, this box's facts, the status probes), and the exit code. An
  * interrupt aborts a command that waits; a second one exits at once.
  */
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -81,11 +80,8 @@ async function main(): Promise<number> {
       writeLog: (line) => process.stdout.write(line),
       // The bundle (`dist/runner.cjs`, or `lib/runner/` in the artifact) locates its siblings.
       runtimePaths: () => runnerRuntimePaths(__dirname),
-      // The artifact's launcher; a source boot runs its bundle, which git can exec.
-      runnerExecutable: () => {
-        const launcher = join(runnerRuntimePaths(__dirname).binDir, "volli-runner");
-        return existsSync(launcher) ? launcher : process.argv[1]!;
-      },
+      // The artifact's `bin/volli-runner`, or a source boot's `dev-bin/volli-runner`.
+      runnerExecutable: () => join(runnerRuntimePaths(__dirname).binDir, "volli-runner"),
       // Loaded on first connect, as desktop does: an unlinked runner never loads it.
       convex: async () => ({
         ConvexClient: (await import("convex/browser")).ConvexClient,

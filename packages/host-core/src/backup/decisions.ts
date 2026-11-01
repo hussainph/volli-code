@@ -666,6 +666,12 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
       "Machine-local move snapshots, reports, return exports and recovery artifacts contain source paths and backend progress; portable restores omit the move journals and must not resume this machine's imports.",
   },
   {
+    area: "repos",
+    decision: "exclude",
+    reason:
+      "A headless runner's managed clones of each project's remote: machine-local working copies, cloned again from the remote on a restored machine.",
+  },
+  {
     // Bound to the file's own name, with its temp files beside it.
     area: `${RUNNER_OWNER_FILE}*`,
     decision: "exclude",

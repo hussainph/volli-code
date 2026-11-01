@@ -1,0 +1,8 @@
+#!/bin/sh
+# The `volli-runner` a source-booted runner hands git as its credential helper
+# (`run` installs `<bin>/volli-runner git-credential …`): the workspace's runner
+# bundle, under the `node` on PATH. The artifact ships its own
+# bin/volli-runner instead. Build the bundle first:
+#   pnpm --filter @volli/runner run build
+here=$(dirname "$(readlink -f "$0")")
+exec node "$here/../dist/runner.cjs" "$@"
