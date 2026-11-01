@@ -18,13 +18,13 @@
  *    is refused); and the box redeeming an install token over
  *    `POST /runner/link`, which Settings → Runners then lists.
  * 1. **install** — `curl … | sh -s -- --token … --server …` → "is online".
- * 2. **session** — a Session started through `sessionStarts.startOn` as the
+ * 2. **update** — v+1 published to the local release and set in
+ *    `releaseChannels` → the runner updates and is online at v+1.
+ * 3. **rollback** — a broken v+2 → the runner rolls back to v+1 and reports
+ *    `update_failed`.
+ * 4. **session** — a Session started through `sessionStarts.startOn` as the
  *    person (the picker's API) runs a fake-model turn whose agent commits
  *    and `git push`es → the fake GitHub has the commit.
- * 3. **update** — v+1 published to the local release and set in
- *    `releaseChannels` → the runner updates and is online at v+1.
- * 4. **rollback** — a broken v+2 → the runner rolls back to v+1 and reports
- *    `update_failed`.
  *
  * Legs 1–4 are declared with the merged work they need and stay `pending`
  * until it lands and the leg is wired (VC-1043 final); `--require-all` makes
@@ -779,7 +779,11 @@ async function rollbackLeg(context, log) {
   return `${row.name} refused ${broken.version} (${row.update.reason ?? "no reason"}) and is online at ${row.version}`;
 }
 
-/** The legs, in order. */
+/**
+ * The legs, in order. The Session leg runs last, so a Session that cannot
+ * start (its start stays queued for a retry) never stands between the box and
+ * the idle moment an update waits for.
+ */
 export const LEGS = [
   { id: "harness", title: "Harness: backend, fake GitHub, release, systemd box", run: harness },
   {
@@ -799,13 +803,6 @@ export const LEGS = [
     ],
   },
   {
-    id: "session",
-    title: "startOn → the agent commits and pushes → the fake GitHub has it",
-    after: ["install"],
-    run: sessionLeg,
-    needs: [BYO.startOn, BYO.picker, BYO.executor, BYO.tokenRoute, BYO.managedClone, BYO.gitHelper],
-  },
-  {
     id: "update",
     title: "v+1 published and set in releaseChannels → online at v+1",
     after: ["install"],
@@ -818,6 +815,13 @@ export const LEGS = [
     after: ["update"],
     run: rollbackLeg,
     needs: [BYO.releaseFeed, BYO.update],
+  },
+  {
+    id: "session",
+    title: "startOn → the agent commits and pushes → the fake GitHub has it",
+    after: ["install"],
+    run: sessionLeg,
+    needs: [BYO.startOn, BYO.picker, BYO.executor, BYO.tokenRoute, BYO.managedClone, BYO.gitHelper],
   },
 ];
 
