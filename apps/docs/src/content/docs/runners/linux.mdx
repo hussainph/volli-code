@@ -96,9 +96,9 @@ hands over to `volli-runner install`, which:
 - installs and starts the systemd service, enabled at boot;
 - links the box with the token and waits for the deployment to accept it.
 
-Re-running finishes an interrupted install and changes nothing else. The token
-is spent once the runner links, so a second run needs a fresh command from the
-sheet.
+Re-running finishes an interrupted install and changes nothing else. A box
+that is already linked is not linked again, so a second run needs no new token
+even though the first one was spent.
 
 | What | System install | User install |
 | --- | --- | --- |
@@ -195,12 +195,22 @@ sudo journalctl -u volli-runner -f     # the runner's log, as it happens
 A user install uses the user unit: `systemctl --user status volli-runner` and
 `journalctl --user -u volli-runner -f`, without `sudo`.
 
+A system install's link belongs to the service account, sealed under a key only
+that account can read, so read it as that account:
+
+```sh
+sudo -u volli env VOLLI_RUNNER_INSTALL_MODE=system volli-runner status
+```
+
+Run as root instead, `status` reports the runner correctly and the link as
+unreadable, because the file is the service account's. `doctor` reads the same
+link, so run it the same way.
+
 `doctor` checks the link, the platform and glibc, git, disk, systemd and
 lingering, the clock, the deployment, github.com, the model providers you
 signed in, and the browser it does not install. Every failure names the one
 command that fixes it, and `--json` prints the same report for a script. It
-exits 0 when no check failed and 1 when one did. On a system install, run it
-with `sudo` so it reads the runner's own directories.
+exits 0 when no check failed and 1 when one did.
 
 In the app, the runner's row shows its state and the version it reports. From
 the composer, pick it for a new Session, or let Volli choose it: an online
@@ -213,6 +223,11 @@ the box is idle, it stages the release, verifies it, drains, and restarts on
 the new one; if it does not come back online, it rolls back and reports what
 happened, so a bad release cannot strand a box.
 
+- **From the app.** A Linux runner's row in **Settings → Runners** shows the
+  version it runs and has **Update now** and **Automatic updates**. Update now
+  asks the box to take the release the deployment names; Automatic updates
+  turns the idle update off for that runner. The floor still wins: a runner
+  below the oldest accepted version cannot decline its way past it.
 - **Manual.** `volli-runner update` prints what this box runs, what is staged
   and the last outcome. `volli-runner update --now` asks the running runner to
   update now: it stages the release, waits up to 30 minutes for the box to be
@@ -237,9 +252,13 @@ sudo volli-runner uninstall --purge      # also removes working copies and the a
 Uninstall stops and removes the service and the release, and leaves the data
 directory alone unless you pass `--purge`. With `--purge` it lists working
 copies that hold uncommitted or unpushed work and asks before removing them;
-`--yes` skips the question. Afterwards, remove the runner in **Settings →
-Runners** if it is still listed: a box that is already gone cannot unlink
-itself.
+`--yes` skips the question, and `--purge` without it stops unless you confirm
+on the terminal.
+
+It also removes the runner from Volli Cloud, so it disappears from **Settings →
+Runners** by itself. When that call cannot be made — an offline box, a revoked
+credential — it says so and leaves you to remove the runner in **Settings →
+Runners**, which is the only way left once the box is gone.
 
 `volli-runner unlink` forgets the link on the box alone, and refuses while the
 runner is running. Stop the service first, then unlink and link again:

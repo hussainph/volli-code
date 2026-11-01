@@ -51,6 +51,7 @@ a system install with the token in its environment:
 package_update: true
 packages:
   - curl
+  - git
 runcmd:
   - |
     set -eu
@@ -64,10 +65,11 @@ runcmd:
 The token expires an hour after the sheet made it, so create the server right
 away. A server started later fails to link and needs a fresh snippet.
 
-The snippet installs one package, `curl`, so the server needs your
-distribution's package mirror once. It does not install git: add `git` to the
-`packages` list, or install it afterwards, if the image has none and Sessions
-on this box will clone and push. Sessions need git 2.31 or newer.
+The snippet installs two packages, `curl` and `git`, so the server needs your
+distribution's package mirror once. That git is the distribution's, and Sessions
+need 2.31 or newer: on an image whose own git is older (Ubuntu 20.04 ships
+2.25, Debian 11 ships 2.30), `volli-runner doctor` says so and names where to
+get a newer one.
 
 ## Hetzner
 
