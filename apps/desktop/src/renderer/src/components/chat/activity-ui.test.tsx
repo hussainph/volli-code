@@ -128,33 +128,6 @@ describe("collapsed live bundles", () => {
   });
 });
 
-describe("hard refusal", () => {
-  it("shows the host explanation without opening details or offering approval", () => {
-    const html = renderToStaticMarkup(
-      <ToolRow
-        part={{
-          type: "dynamic-tool",
-          toolName: "execute",
-          toolCallId: "hard-refusal",
-          state: "output-error",
-          input: { command: "curl -k https://example.com" },
-          errorText: "Volli refused this call.\nCertificate verification cannot be disabled.",
-          toolMetadata: {
-            [ACTIVITY_METADATA_KEY]: {
-              ...descriptor,
-              kind: "run-command",
-              nativeToolName: "execute",
-            },
-          } as DynamicToolUIPart["toolMetadata"],
-        }}
-      />,
-    );
-    expect(html).toContain("Certificate verification cannot be disabled.");
-    expect(html).not.toContain("Allow once");
-    expect(html).not.toContain('data-slot="approval-card"');
-  });
-});
-
 describe("legacy approval rows", () => {
   // A row recorded before the approval machinery was removed: the call was
   // allowed, but no execution result ever followed it.
@@ -323,6 +296,135 @@ const editTs: DynamicToolUIPart = {
     },
   } as DynamicToolUIPart["toolMetadata"],
 };
+
+describe("failed tool disclosure", () => {
+  const bashError = "/bin/bash: -c: line 5: syntax error near unexpected token `('\n".repeat(80);
+  const refusal = "Volli refused this call.\nCertificate verification cannot be disabled.";
+  const outcome = {
+    exitCode: 2,
+    matchCount: null,
+    fileCount: null,
+    lineCount: null,
+    bytes: null,
+    addedLines: null,
+    removedLines: null,
+    diff: null,
+    summary: "Command failed (summary only)",
+  };
+  const cases: { name: string; part: DynamicToolUIPart; message: string }[] = [
+    { name: "failed read without presenter detail", part: failed, message: "boom" },
+    {
+      name: "failed bash with multiline output",
+      part: {
+        ...failed,
+        toolName: "bash",
+        input: bashRow.input,
+        errorText: bashError,
+        toolMetadata: {
+          [ACTIVITY_METADATA_KEY]: {
+            ...descriptor,
+            kind: "run-command",
+            nativeToolName: "bash",
+            outcome,
+          },
+        } as DynamicToolUIPart["toolMetadata"],
+      },
+      message: bashError,
+    },
+    {
+      name: "hard refusal",
+      part: {
+        ...failed,
+        input: bashRow.input,
+        toolMetadata: bashRow.toolMetadata,
+        errorText: refusal,
+      },
+      message: refusal,
+    },
+    {
+      name: "failed write with input content",
+      part: {
+        ...failed,
+        toolName: "write",
+        input: writeTs.input,
+        toolMetadata: writeTs.toolMetadata,
+        errorText: "Permission denied",
+      },
+      message: "Permission denied",
+    },
+    {
+      name: "denied call with only an outcome explanation",
+      part: {
+        type: "dynamic-tool",
+        toolName: "read",
+        toolCallId: "denied-read",
+        input: null,
+        state: "output-denied",
+        approval: { id: "legacy-denied", approved: false },
+        toolMetadata: {
+          [ACTIVITY_METADATA_KEY]: { ...descriptor, outcome: { ...outcome, summary: refusal } },
+        } as DynamicToolUIPart["toolMetadata"],
+      },
+      message: refusal,
+    },
+    {
+      name: "denied write does not show input as a successful result",
+      part: {
+        type: "dynamic-tool",
+        toolName: "write",
+        toolCallId: "denied-write",
+        input: writeTs.input,
+        state: "output-denied",
+        approval: { id: "legacy-denied-write", approved: false },
+        toolMetadata: {
+          [ACTIVITY_METADATA_KEY]: {
+            ...descriptor,
+            kind: "write-file",
+            nativeToolName: "write",
+            outcome: { ...outcome, summary: refusal },
+          },
+        } as DynamicToolUIPart["toolMetadata"],
+      },
+      message: refusal,
+    },
+  ];
+
+  it.each(cases)("keeps $name inside the capped disclosure", ({ part, message }) => {
+    act(() => root?.render(<ToolRow part={part} />));
+    expect(container?.textContent).not.toContain(message);
+    expect(container?.querySelector(".text-destructive")).not.toBeNull();
+    expect(container?.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]')?.click());
+    const frames = Array.from(container?.querySelectorAll(".max-h-72") ?? []);
+    const output = frames.filter((frame) => frame.textContent === message);
+    expect(output).toHaveLength(1);
+    expect(output[0]?.className).toContain("overflow-auto");
+    expect(output[0]?.className).toContain("font-mono");
+    expect(output[0]?.className).toContain("whitespace-pre-wrap");
+    expect(container?.textContent).not.toContain("summary only");
+    expect(container?.textContent).not.toContain("export const created");
+    expect(container?.querySelector("[data-line]")).toBeNull();
+    expect(container?.textContent).not.toContain("Allow once");
+    expect(container?.querySelector('[data-slot="approval-card"]')).toBeNull();
+    if (part === cases[1]?.part) {
+      expect(frames[0]?.textContent).toBe("pnpm run typecheck &&\npnpm run test");
+    }
+
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Hide details"]')?.click());
+    expect(container?.textContent).not.toContain(message);
+    expect(container?.querySelector(".max-h-72")).toBeNull();
+  });
+
+  it("keeps successful output behind the same disclosure", () => {
+    act(() => root?.render(<ToolRow part={bashRow} />));
+    expect(container?.textContent).not.toContain("Typecheck passed");
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]')?.click());
+    expect(container?.textContent).toContain("Typecheck passed\nTests passed");
+  });
+});
 
 describe("ToolRow expanded detail colouring (VC-125)", () => {
   it(
