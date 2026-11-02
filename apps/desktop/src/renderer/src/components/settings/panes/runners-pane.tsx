@@ -1,8 +1,8 @@
 /**
  * Settings → Runners (VC-895): the person's runners, this Mac among them.
- * Each row is a name (renamed in place), its kind, and its status; this
- * Mac's row is marked. Remove is the one irreversible action, so it is the
- * one confirm.
+ * Each row shows its name, kind, status and reported version; this Mac is
+ * marked. Linux rows with update policy offer one-shot and automatic updates.
+ * Remove is the one irreversible action, so it is the one confirm.
  *
  * This Mac's own registration is main's (`use-runners.ts`): when it is
  * blocked (removed, or its registration failed) the pane shows why and the
@@ -14,6 +14,8 @@
  * Shown only in a Volli Cloud launch: the category does not exist otherwise.
  */
 import * as React from "react";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
 import { CloudIcon } from "@phosphor-icons/react/dist/csr/Cloud";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
@@ -23,6 +25,7 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import type { ThisMacRunnerSnapshot } from "@volli/shared";
+import { runnerPlaceAvailability } from "@volli/shared/cloud";
 
 import { Empty, Health, PrefSection, SectionAction } from "@renderer/components/settings/kit";
 import {
@@ -40,6 +43,7 @@ import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -48,7 +52,18 @@ import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { toastError } from "@renderer/lib/toast";
 
+import { cloudLaunchNow } from "@renderer/stores/launch";
+import { useUpdateStore } from "@renderer/stores/update";
+import { AddRunnerSheet } from "./add-runner-sheet";
+import { AlwaysOnRunnerSheet } from "./always-on-runner-sheet";
+import { LinkRunnerSheet } from "./link-runner-sheet";
+import { runnerSetup } from "./runner-setup";
+import { runnerInstallTarget } from "./runner-install-target";
 import { RunnerAvailability } from "./runner-availability";
+
+// Public build metadata only; no deployment credential reaches the renderer.
+declare const VOLLI_RUNNER_INSTALL_SITE_URL: string | null;
+declare const VOLLI_RUNNER_INSTALL_BACKEND_URL: string | null;
 import {
   runnerStatus,
   thisMacRecovery,
@@ -84,6 +99,30 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
   const { thisMac, runners, commands, retry } = useRunners(props);
   const [removing, setRemoving] = React.useState<Removing | null>(null);
   const [confirming, setConfirming] = React.useState(false);
+  const [sheet, setSheet] = React.useState<"add" | "link" | "always-on" | null>(null);
+  const sheetOpener = React.useRef<HTMLButtonElement | null>(null);
+  const restoreFocus = React.useCallback(() => {
+    sheetOpener.current?.focus();
+  }, []);
+  const { current } = props;
+  const setup = React.useMemo(() => runnerSetup(current), [current]);
+  const appVersion = useUpdateStore((state) => state.state?.currentVersion ?? null);
+  const launch = cloudLaunchNow();
+  const siteUrl = launch?.siteUrl ?? null;
+  const packagedSite =
+    typeof VOLLI_RUNNER_INSTALL_SITE_URL === "undefined" ? null : VOLLI_RUNNER_INSTALL_SITE_URL;
+  const packagedBackend =
+    typeof VOLLI_RUNNER_INSTALL_BACKEND_URL === "undefined"
+      ? null
+      : VOLLI_RUNNER_INSTALL_BACKEND_URL;
+  const installTarget = runnerInstallTarget({
+    appVersion,
+    backendUrl: launch?.backendUrl ?? null,
+    siteUrl,
+    packagedBackendUrl: packagedBackend,
+    packagedSiteUrl: packagedSite,
+    deployment: launch?.deployment,
+  });
   const snapshot = thisMac.kind === "ready" ? thisMac.value : null;
 
   const failed = runners.kind === "failed" || thisMac.kind === "failed";
@@ -117,7 +156,60 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
           </>
         )}
       </PrefSection>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={installTarget === null}
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("add");
+          }}
+        >
+          Add a runner
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("link");
+          }}
+        >
+          Link a runner
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={installTarget === null}
+          onClick={(event) => {
+            sheetOpener.current = event.currentTarget;
+            setSheet("always-on");
+          }}
+        >
+          Get an always-on runner
+        </Button>
+      </div>
       <RunnerAvailability />
+      {sheet === "link" ? (
+        <LinkRunnerSheet setup={setup} restoreFocus={restoreFocus} onClose={() => setSheet(null)} />
+      ) : null}
+      {sheet === "add" && installTarget !== null ? (
+        <AddRunnerSheet
+          setup={setup}
+          {...installTarget}
+          restoreFocus={restoreFocus}
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
+      {sheet === "always-on" && installTarget !== null ? (
+        <AlwaysOnRunnerSheet
+          setup={setup}
+          {...installTarget}
+          restoreFocus={restoreFocus}
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -263,10 +355,26 @@ function RunnerItem({
   onRemove: () => void;
 }) {
   const [editing, setEditing] = React.useState(false);
+  const [updating, setUpdating] = React.useState(false);
+  const updatePending = React.useRef(false);
+  const updateDisabled = updating || runnerPlaceAvailability(runner).kind === "removed";
+  const update = (run: () => Promise<unknown>, what: string) => {
+    if (updatePending.current) return;
+    updatePending.current = true;
+    setUpdating(true);
+    act(async () => {
+      try {
+        await run();
+      } finally {
+        updatePending.current = false;
+        setUpdating(false);
+      }
+    }, what);
+  };
   return (
     <ListRow
       data-testid={`runner-${runner.id}`}
-      density="row"
+      density={runner.version ? "two-line" : "row"}
       leading={<KindGlyph kind={runner.kind} />}
       primary={
         editing ? (
@@ -285,6 +393,11 @@ function RunnerItem({
         )
       }
       primaryTrailing={thisMac ? <Badge variant="outline">This Mac</Badge> : undefined}
+      secondary={
+        runner.version
+          ? `Version ${runner.version}${runner.autoUpdate?.pinnedVersion ? ` · Update to ${runner.autoUpdate.pinnedVersion} requested` : ""}`
+          : undefined
+      }
       trailing={<Health state={status.state}>{status.label}</Health>}
       actions={
         <DropdownMenu>
@@ -299,6 +412,33 @@ function RunnerItem({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {runner.kind === "linux" && runner.autoUpdate !== undefined ? (
+              <>
+                <DropdownMenuItem
+                  disabled={updateDisabled}
+                  onSelect={() =>
+                    update(() => commands.updateNow(runner.id), `Couldn’t update ${runner.name}`)
+                  }
+                >
+                  <ArrowClockwiseIcon />
+                  Update now
+                </DropdownMenuItem>
+                <DropdownMenuCheckboxItem
+                  checked={runner.autoUpdate.enabled}
+                  disabled={updateDisabled}
+                  onCheckedChange={(enabled) =>
+                    update(
+                      () => commands.setAutoUpdate(runner.id, enabled),
+                      `Couldn’t change automatic updates for ${runner.name}`,
+                    )
+                  }
+                >
+                  <ArrowsClockwiseIcon />
+                  Automatic updates
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
             <DropdownMenuItem onSelect={() => setEditing(true)}>
               <PencilSimpleIcon />
               Rename

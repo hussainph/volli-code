@@ -725,6 +725,9 @@ export async function pollRetention(
           worktreePath: discoveryCwd,
           branch,
         });
+        // The freeze again, at the write, fresh rather than from the cycle's
+        // memo: a move can freeze the project while `gh` answers.
+        if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
         if (!discovered.ok) {
           result.failed += 1;
           if (discovered.failure.kind === "no-remote") {
@@ -830,6 +833,9 @@ export async function pollRetention(
       }
       result.attempted += 1;
       const status = await ghPrStatus(deps.net, { worktreePath: statusCwd, prUrl });
+      // The freeze again, fresh rather than from the cycle's memo: a move can
+      // freeze the project while `gh` answers.
+      if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
       if (!status.ok) {
         result.failed += 1;
         log.error("pull request status failed", {

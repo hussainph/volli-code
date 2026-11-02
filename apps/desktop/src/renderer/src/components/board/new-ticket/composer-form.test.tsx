@@ -2,7 +2,16 @@
 import { act, useImperativeHandle, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import type { Automation, BlobLinkView, Project, ModelSelection } from "@volli/shared";
+import {
+  LOCAL_LAUNCH,
+  type Automation,
+  type BlobLinkView,
+  type Project,
+  type ModelSelection,
+} from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
+import type { ComposerRunner } from "@renderer/components/chat/runner-picker-model";
+import { startRunnerKickoff } from "./runner-kickoff";
 import { ComposerForm } from "./composer-form";
 import type { ComposerFooter } from "./composer-footer";
 import type { ComposerBreadcrumb } from "./composer-breadcrumb";
@@ -34,12 +43,24 @@ const mocks = vi.hoisted(() => ({
     explicit: false,
     setSelection: () => {},
   },
+  runners: {
+    runners: [],
+    selected: null as ComposerRunner | null,
+    thisMacId: "mac",
+    loading: false,
+    error: null,
+    choose: () => {},
+  },
   branches: { status: "loading" },
   editorFocus: vi.fn(),
 }));
 vi.mock("@renderer/hooks/use-file-index", () => ({ useFileIndex: () => mocks.files }));
 vi.mock("@renderer/hooks/use-attachments", () => ({ useAttachments: () => mocks.attachments }));
 vi.mock("./composer-run", () => ({ useComposerRun: () => mocks.run }));
+vi.mock("@renderer/components/chat/runner-picker", () => ({
+  useRunnerPicker: () => mocks.runners,
+}));
+vi.mock("./runner-kickoff", () => ({ startRunnerKickoff: vi.fn(async () => "draft") }));
 vi.mock("./composer-branch", () => ({ useBranchListing: () => mocks.branches }));
 vi.mock("@renderer/components/automations/automation-run-menu", () => ({
   useAutomationRunOffer: () => mocks.offer,
@@ -145,6 +166,8 @@ beforeEach(async () => {
   mocks.attachments.attachments = [];
   mocks.run.selection = null;
   mocks.run.explicit = false;
+  mocks.runners.selected = null;
+  adoptLaunch(LOCAL_LAUNCH);
   mocks.offer.ready = true;
   mocks.offer.groups = [
     { status: "doing", label: "Doing", current: false, automations: [automation] },
@@ -169,6 +192,7 @@ afterEach(async () => {
   host.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  adoptLaunch(LOCAL_LAUNCH);
 });
 async function click(text: string) {
   await act(async () =>
@@ -536,3 +560,66 @@ it("refuses every submission while the project's host cannot serve, keeping the 
     useExperimentsStore.setState({ snapshot: null });
   }
 });
+
+async function renderCloud() {
+  adoptLaunch({ store: "cloud", userId: "user", backendUrl: "https://example.convex.cloud" });
+  await act(async () =>
+    root.render(
+      <ComposerForm
+        initialProject={project}
+        expanded={false}
+        onToggleExpand={() => {}}
+        onClose={() => {}}
+      />,
+    ),
+  );
+}
+
+it("does not create a cloud kickoff through the keyboard before a runner is selected", async () => {
+  await renderCloud();
+  await chord(true);
+  expect(runKickoff).not.toHaveBeenCalled();
+  await chord();
+  expect(runPlainCreate).toHaveBeenCalledOnce();
+});
+
+it.each(["remote", "mac"])(
+  "routes cloud kickoff for %s through a runner Draft, never local creation",
+  async (id) => {
+    mocks.runners.selected = {
+      id,
+      name: "Chosen runner",
+      kind: "mac",
+      status: "online",
+      statusChangedAt: 1,
+      providers: ["anthropic"],
+      version: "1",
+      upgradeRequired: false,
+    };
+    mocks.run.selection = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
+    vi.mocked(runKickoff).mockImplementationOnce(async (fields, deps, opts) => {
+      await deps.startChat(fields.projectId, "created-ticket", {
+        title: "ONE-1",
+        refineTitle: true,
+        message: "Begin work",
+        ...opts,
+      });
+      return { created: true };
+    });
+    await renderCloud();
+    await chord(true);
+    expect(startRunnerKickoff).toHaveBeenCalledWith(
+      "p1",
+      "created-ticket",
+      {
+        title: "ONE-1",
+        refineTitle: true,
+        message: "Begin work",
+        model: mocks.run.selection,
+      },
+      mocks.runners.selected,
+    );
+    // The ticket is consumed even if its Session is still awaiting intake.
+    expect(clearDraft).toHaveBeenCalledOnce();
+  },
+);

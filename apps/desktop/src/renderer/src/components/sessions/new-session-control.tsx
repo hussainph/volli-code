@@ -62,6 +62,7 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { cn } from "@renderer/lib/utils";
+import { RunnerPicker, useRunnerPicker } from "@renderer/components/chat/runner-picker";
 
 /** The chord each kind announces in a menu's trailing slot. */
 const CHORD = { chat: "⌘T", terminal: "⌥⌘T" } as const;
@@ -212,13 +213,14 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
+  const runners = useRunnerPicker(projectId);
   // A new chat is a send (VC-895): in a cloud launch this Mac's runner starts
   // it, so the cloud link decides. Terminals and Browser Tabs are this Mac's
   // alone and have no cloud Session to belong to, so a cloud launch offers
   // neither.
   const canWrite = useCanSendSession(projectId);
-  const disabled = booting || !canWrite;
   const cloud = launchStore() === "cloud";
+  const disabled = booting || !canWrite || (cloud && runners.selected === null);
   const newTerminal = cloud ? undefined : onNewTerminal;
   const newBrowser = cloud ? undefined : onNewBrowser;
 
@@ -257,93 +259,96 @@ export function NewSessionControl({
   });
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        {/* The press-scale sits on the WRAPPER, not on each half: `:active`
+    <div className="inline-flex min-w-0 items-center gap-1">
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          {/* The press-scale sits on the WRAPPER, not on each half: `:active`
             matches an ancestor of the pressed element, so the whole pill
             depresses as one object. Halves scaling independently would open a
             seam mid-press, which reads as two buttons that happen to touch —
             the exact thing this shape is trying not to be. Disabled dims here
             too (and the halves cancel their own `disabled:opacity-50`, which
             would otherwise multiply into an unreadable 25%). */}
-        <div
-          {...readOnlyMark(canWrite)}
-          className={cn(
-            // `transition-transform` already covers `scale` (v4 expands it to
-            // transform,translate,scale,rotate), so only the reduced-motion
-            // cancel had to change: `transform: none` cannot cancel a `scale`
-            // declaration. See the press note in `ui/button.tsx`.
-            "inline-flex shrink-0 items-center rounded-full transition-transform duration-100 ease-out active:scale-[0.97] motion-reduce:scale-100!",
-            disabled && "pointer-events-none opacity-50",
-            className,
-          )}
-        >
-          <Button
-            type="button"
-            variant={drawing.variant}
-            size={drawing.size}
-            disabled={disabled}
-            aria-label="New chat"
-            {...(shortcuts ? { "aria-keyshortcuts": "Meta+T" } : {})}
-            onClick={onNewChat}
-            // `scale-100!`, not `scale-100`: both halves' opt-out and the
-            // Button's own `active:scale-[0.97]` land on the same element at
-            // the same (0,1,1), and Tailwind emits the arbitrary value last —
-            // so the plain cancel lost, and each half depressed inside the
-            // wrapper that was already depressing.
-            className="rounded-r-none pr-1 active:scale-100! disabled:opacity-100"
+          <div
+            {...readOnlyMark(canWrite)}
+            className={cn(
+              // `transition-transform` already covers `scale` (v4 expands it to
+              // transform,translate,scale,rotate), so only the reduced-motion
+              // cancel had to change: `transform: none` cannot cancel a `scale`
+              // declaration. See the press note in `ui/button.tsx`.
+              "inline-flex shrink-0 items-center rounded-full transition-transform duration-100 ease-out active:scale-[0.97] motion-reduce:scale-100!",
+              disabled && "pointer-events-none opacity-50",
+              className,
+            )}
           >
-            {/* Outline, the baseline. The Button's own size rule draws this at
+            <Button
+              type="button"
+              variant={drawing.variant}
+              size={drawing.size}
+              disabled={disabled}
+              aria-label="New chat"
+              {...(shortcuts ? { "aria-keyshortcuts": "Meta+T" } : {})}
+              onClick={onNewChat}
+              // `scale-100!`, not `scale-100`: both halves' opt-out and the
+              // Button's own `active:scale-[0.97]` land on the same element at
+              // the same (0,1,1), and Tailwind emits the arbitrary value last —
+              // so the plain cancel lost, and each half depressed inside the
+              // wrapper that was already depressing.
+              className="rounded-r-none pr-1 active:scale-100! disabled:opacity-100"
+            >
+              {/* Outline, the baseline. The Button's own size rule draws this at
                 14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier
                 — and a weight step that only half its rooms earn is not a step.
                 The caret below is `size-3` in every room, so it keeps bold. */}
-            <PlusIcon />
-            {drawing.label}
-          </Button>
-          <span aria-hidden className="h-3 w-px bg-border" />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant={drawing.variant}
-                size={drawing.caret}
-                disabled={disabled}
-                // Not "other session kinds" any more: a Browser Tab is not a
-                // Session, and this menu now holds both.
-                aria-label="Other things to open"
-                // Narrower than a stock icon button: this segment holds one
-                // 12px caret and exists to be SEEN, not aimed at — the whole
-                // menu is also on right-click, so a tab strip pays the smallest
-                // width that still says "there is another kind".
-                className="group w-4! rounded-l-none px-0 active:scale-100! disabled:opacity-100"
-              >
-                <CaretDownIcon
-                  weight="bold"
-                  // The flip is STATE, not decoration, so reduced motion drops
-                  // the travel and keeps the end position — `transition-none`,
-                  // not a cancelled rotation. (`transform-none` was neither:
-                  // v4 compiles `rotate-180` to the standalone `rotate`
-                  // property, which `transform: none` cannot touch.)
-                  className="size-3 transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-                />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align={align} onCloseAutoFocus={handleCloseAutoFocus}>
-              {items}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </ContextMenuTrigger>
-      {/* The same items on right-click, so turning to the caret is a
+              <PlusIcon />
+              {drawing.label}
+            </Button>
+            <span aria-hidden className="h-3 w-px bg-border" />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant={drawing.variant}
+                  size={drawing.caret}
+                  disabled={disabled}
+                  // Not "other session kinds" any more: a Browser Tab is not a
+                  // Session, and this menu now holds both.
+                  aria-label="Other things to open"
+                  // Narrower than a stock icon button: this segment holds one
+                  // 12px caret and exists to be SEEN, not aimed at — the whole
+                  // menu is also on right-click, so a tab strip pays the smallest
+                  // width that still says "there is another kind".
+                  className="group w-4! rounded-l-none px-0 active:scale-100! disabled:opacity-100"
+                >
+                  <CaretDownIcon
+                    weight="bold"
+                    // The flip is STATE, not decoration, so reduced motion drops
+                    // the travel and keeps the end position — `transition-none`,
+                    // not a cancelled rotation. (`transform-none` was neither:
+                    // v4 compiles `rotate-180` to the standalone `rotate`
+                    // property, which `transform: none` cannot touch.)
+                    className="size-3 transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+                  />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align={align} onCloseAutoFocus={handleCloseAutoFocus}>
+                {items}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </ContextMenuTrigger>
+        {/* The same items on right-click, so turning to the caret is a
           convenience and never the only route. */}
-      <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-        {newSessionMenuRows("context", {
-          shortcuts,
-          onNewChat,
-          onNewBrowser: handleNewBrowser,
-          onNewTerminal: newTerminal,
-        })}
-      </ContextMenuContent>
-    </ContextMenu>
+        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          {newSessionMenuRows("context", {
+            shortcuts,
+            onNewChat,
+            onNewBrowser: handleNewBrowser,
+            onNewTerminal: newTerminal,
+          })}
+        </ContextMenuContent>
+      </ContextMenu>
+      {cloud ? <RunnerPicker state={runners} disabled={booting} /> : null}
+    </div>
   );
 }

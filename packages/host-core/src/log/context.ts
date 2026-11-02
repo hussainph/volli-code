@@ -68,6 +68,30 @@ export function currentTrace(): TraceContext | null {
 }
 
 /**
+ * Told how long each outermost door call held the event loop (VC-1073): the
+ * synchronous part of `fn`, from entry to its return or throw. Called inside
+ * the call's own context, so a line it writes carries the call's trace, door
+ * and operation. It must not throw.
+ */
+export type DoorSpanObserver = (syncMs: number) => void;
+
+let doorObserver: DoorSpanObserver | null = null;
+/** How many door calls are on the stack: only the outermost is timed. */
+let doorDepth = 0;
+
+/**
+ * Installs the one observer every {@link withTrace} reports to (the main
+ * stall monitor). Returns the undo, which removes it unless something
+ * replaced it since. With none installed, a door costs one null check.
+ */
+export function observeDoorSpans(observer: DoorSpanObserver): () => void {
+  doorObserver = observer;
+  return () => {
+    if (doorObserver === observer) doorObserver = null;
+  };
+}
+
+/**
  * Opens a door's context for one request. The trace is, in order: the one
  * the peer sent (when well formed), the one already running (an in-process
  * door inside another operation), or a fresh one. The span is the peer's
@@ -80,12 +104,25 @@ export function withTrace<Result>(
 ): Result {
   const sent = readTraceContext(incoming);
   const running = currentTrace();
+  const observer = doorObserver;
   return withLogContext(
     {
       traceId: sent?.traceId ?? running?.traceId ?? mintTraceId(),
       spanId: sent?.spanId ?? mintSpanId(),
       ...fields,
     },
-    fn,
+    observer === null || doorDepth > 0 ? fn : () => timedDoor(observer, fn),
   );
+}
+
+/** Runs `fn` unchanged, then tells `observer` how long it ran synchronously. */
+function timedDoor<Result>(observer: DoorSpanObserver, fn: () => Result): Result {
+  doorDepth += 1;
+  const startedAt = performance.now();
+  try {
+    return fn();
+  } finally {
+    doorDepth -= 1;
+    observer(performance.now() - startedAt);
+  }
 }

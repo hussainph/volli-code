@@ -65,6 +65,10 @@ export const AGENT_ERROR_CODES = [
   // The backend has not accepted this Session's creation yet (its runner's
   // drain is behind): transient, retry shortly. Exit 75.
   "NOT_YET_SYNCED",
+  // Volli Cloud was busy with concurrent changes to the same board (its writes
+  // take turns) or Session and applied nothing, even after the runner's
+  // bounded retries: transient, the same command is safe again. Exit 75.
+  "BUSY",
   // A board or Session verb from a caller with no Session evidence, in a cloud
   // launch: the CLI holds no sign-in of its own, so only a Session may ask.
   "SIGN_IN_REQUIRED",

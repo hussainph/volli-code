@@ -32,7 +32,7 @@
  * retiring the declared policy also retired the one assertion that covered
  * every verb at once, so that assertion is rebuilt by driving the whole table
  * through the real dispatch. The named cases above it stay for the claims a
- * set-equality cannot make — that the hot path resolves no identity either,
+ * per-command comparison cannot make — that the hot path resolves no identity either,
  * and that two reads of the roster share one fold.
  */
 
@@ -821,21 +821,29 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
 
   /**
    * The verbs whose ANSWER contains a Session, and which therefore have to read
-   * the roster. Everything else must not, and the assertion below is an
-   * equality so this list cannot quietly grow.
+   * the roster. Each command is checked against this exact allowlist, so
+   * nothing else may fold and every listed binding must stay registered.
    *
    * - `session.list` IS the listing.
    * - `session.peek` resolves a handle against both halves of it (VC-79).
    * - `session.answer` resolves the same handle before reading one artifact.
    *
    * `cost` is absent on purpose: it reads the roster only for `--session`,
-   * which the second test below drives separately.
+   * which the dedicated cost test below drives separately.
    */
   const READS_THE_ROSTER = ["session.list", "session.peek", "session.show", "session.answer"];
 
-  it("folds the roster for exactly the verbs whose answer holds a Session", async () => {
-    const folded: string[] = [];
-    for (const command of AGENT_COMMANDS) {
+  // Keep the exhaustive guarantee, but give each migrated fixture its own
+  // test budget: one aggregate timeout must not grow with the command catalog.
+  it("keeps every expected roster-reading binding registered", () => {
+    expect(new Set(READS_THE_ROSTER).size).toBe(READS_THE_ROSTER.length);
+    for (const verb of READS_THE_ROSTER)
+      expect(Object.values(AGENT_COMMAND_BINDINGS)).toContain(verb);
+  });
+
+  it.each(AGENT_COMMANDS)(
+    "folds the roster exactly when %s answers with a Session",
+    async (command) => {
       const { service, listSessions, env } = scenario();
       await service.execute({
         v: 1,
@@ -843,24 +851,22 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
         args: { ...ARGS[AGENT_COMMAND_BINDINGS[command]] },
         // The authenticated caller, so a coordination-tier verb reaches its
         // handler rather than stopping at admission — admission itself touches
-        // neither engine door, which is what makes this count the handler's own
-        // work.
+        // neither engine door, which makes this count the handler's own work.
         ctx: { cwd: "/repo/volli", env },
       });
-      if (listSessions.mock.calls.length > 0) folded.push(AGENT_COMMAND_BINDINGS[command]);
-      ctx.cleanup();
-    }
-
-    expect(folded.toSorted()).toEqual(READS_THE_ROSTER.toSorted());
-  });
+      expect(listSessions.mock.calls.length > 0).toBe(
+        READS_THE_ROSTER.includes(AGENT_COMMAND_BINDINGS[command]),
+      );
+    },
+  );
 
   // Verb parity at the map (VC-923): every verb the socket answers reaches
   // the map's entry for its own key (a board write: the board's), once,
   // admitted by the socket's policy, and no other entry, the four Session
   // reads included (VC-894), and a verb its dispatch refused touches none.
-  it("reaches exactly its own map entry, under the socket's policy, for every verb", async () => {
-    const reached: Record<string, string[]> = {};
-    for (const command of AGENT_COMMANDS) {
+  it.each(AGENT_COMMANDS)(
+    "reaches exactly its own map entry under the socket policy: %s",
+    async (command) => {
       const records: string[] = [];
       const { service, env } = scenario(({ door, key, admitted }) =>
         records.push(`${door} ${key} ${admitted}`),
@@ -880,31 +886,23 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
         ctx: { cwd: "/repo/volli", env },
       });
       // Admitted is not ran: an entry nothing served would answer this.
-      if (!response.ok) {
+      if (!response.ok)
         expect(response.error.message, command).not.toMatch(
           /is not served|Session reads are unavailable/,
         );
-      }
-      reached[command] = records;
-      ctx.cleanup();
-    }
-    const expected: Record<string, string[]> = {};
-    for (const command of AGENT_COMMANDS) {
       const key = projectedHandlerKey(AGENT_VERB_TABLE[AGENT_COMMAND_BINDINGS[command]]);
-      expected[command] =
+      const expected =
         key === undefined ||
-        // Refused at the door: the person's verbs, which a Session may not
-        // run (`session.start` answers only a hostd operator token).
+        // Refused at admission: a Session cannot call these person's/operator verbs.
         command === "project.add" ||
         command === "session.start" ||
-        // Refused before the map by its own decode: the comment's text is
-        // `--message`, and these args name none.
+        // Refused by decode: these args do not carry the required --message.
         command === "ticket.comment"
           ? []
           : [`agent-socket ${key} true`];
-    }
-    expect(reached).toEqual(expected);
-  });
+      expect(records).toEqual(expected);
+    },
+  );
 
   it("folds the roster for cost only when a --session handle has to be resolved", async () => {
     const withoutHandle = scenario();

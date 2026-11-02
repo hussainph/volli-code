@@ -26,6 +26,7 @@ export * from "./handler-keys";
 export * from "./desktop-entries";
 export * from "./environment-recipe";
 export * from "./account";
+export * from "./preview-legal";
 export * from "./this-mac-runner";
 export * from "./cloud-checkout";
 export * from "./runner-preferences";
@@ -97,6 +98,7 @@ export * from "./project-identity";
 export * from "./project-relink";
 export * from "./prompt-template";
 export * from "./prompt-resource";
+export * from "./repo-instructions";
 export * from "./composer-verb";
 export * from "./skill";
 export * from "./slash-name";
@@ -206,7 +208,12 @@ export type {
   ProfileRestoreBundle,
   ProfileRestoreProject,
 } from "./profile-restore";
-export { CLOUD_MOVE_ACTIONS, CLOUD_MOVE_STEPS, CLOUD_MOVE_VIEW_STATES } from "./cloud-moves";
+export {
+  CLOUD_MOVE_ACTIONS,
+  CLOUD_MOVE_PREFLIGHT_PHASES,
+  CLOUD_MOVE_STEPS,
+  CLOUD_MOVE_VIEW_STATES,
+} from "./cloud-moves";
 export type {
   CloudMoveCounts,
   CloudMoveExclusion,
@@ -214,6 +221,8 @@ export type {
   CloudMoveProject,
   CloudMovePreflightInput,
   CloudMovePreflight,
+  CloudMovePreflightPhase,
+  CloudMovePreflightProgress,
   CloudMoveStartInput,
   CloudMoveAction,
   CloudMoveCommand,

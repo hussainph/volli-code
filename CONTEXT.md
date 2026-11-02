@@ -4,6 +4,17 @@ Planner and execution app for coding agents: one board and one Session history, 
 
 ## Language
 
+**Volli Local**:
+Permanent, free, signed-out operation on the Mac, with no account and no network
+required. Today the local product uses SQLite and receives bug fixes only. The
+target uses the same `convex/` functions and schema as cloud mode on an embedded,
+loopback-only backend, with the same Runner. The embedded backend is planned,
+not bundled today. Existing SQLite data is imported locally; moving a project
+to the cloud or back is optional export/import between deployments, never forced
+sign-in. Sharing, teams, other devices and cloud runners require cloud mode.
+See [Workspace authority and offline](docs/BOUNDARIES.md#workspace-authority-and-offline).
+_Avoid_: legacy mode (for the permanent product), forced migration, database sync
+
 **Workspace**:
 The team container: projects (boards, tickets, history), Members and roles,
 billing, and shared connections (GitHub App, secrets, MCP, skills, plugins,
@@ -629,9 +640,10 @@ cannot be called.
 _Avoid_: Pi tools (as product vocabulary)
 
 **Client Surface**:
-A host API a Volli client — the desktop renderer, a future mobile or cloud
-client — speaks for the humans driving the product. Clients talk to hosts,
-never to databases, and no client is an agent.
+The authority's API a Volli client — the desktop window, web or phone client —
+speaks for the people driving the product. Cloud clients call backend functions;
+today's signed-out desktop reaches its local services through IPC. Clients never
+talk directly to databases, and no client is an agent.
 _Avoid_: renderer API, app surface
 
 **External Agent Surface**:

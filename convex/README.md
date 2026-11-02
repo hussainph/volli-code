@@ -3,7 +3,7 @@
 The Volli Cloud backend: the Convex schema and server functions, plus a pinned
 local backend that tests and codegen run against. The schema holds the whole
 cloud data model (validators and indexes); product functions arrive area by
-area, each in its own module. No cloud deployment exists yet.
+area, each in its own module.
 
 Owner setup and deployment gates: [`docs/runbooks/cloud-deploy.md`](../docs/runbooks/cloud-deploy.md).
 
@@ -71,6 +71,7 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/lib/visibility.ts`                                                                    | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
 | `functions/runners.ts`                                                                           | Runners: linking (desktop, install token, device code), a Mac's successor taking over its work, the rotated credential with reuse detection, heartbeat, sleep and capabilities, the offline sweep, the Settings list, and `places`: the runner a visible Session lives on ("Waiting for <Mac>").  |
 | `functions/runnerHttp.ts`, `functions/http.ts`                                                   | `/runner/link`, `/runner/link/start`, `/runner/link/poll`, `/runner/token` (HTTP actions; secrets are minted here, mutations see hashes) and the deployment's HTTP router.                                                                                                                        |
+| `functions/runnerGithub.ts`                                                                      | `POST /runner/github-token` (route in `runnerHttp.ts`, runner token as Bearer): the runner owner's GitHub user token and commit identity for a Session or leased job it holds. Never a refresh token. Refuses `github_not_installed` when Volli isn't on the repo's account.                      |
 | `functions/{,lib/}runnerLinkRateLimit.ts`                                                        | Transactional linking limits and the hourly cleanup of refilled buckets.                                                                                                                                                                                                                          |
 | `functions/lib/runnerAuth.ts`                                                                    | `requireRunner`: the check every runner-called function starts with. A runner token is never a person.                                                                                                                                                                                            |
 | `functions/streamChunks.ts`                                                                      | Streamed text: the chunk rows a runner appends while someone watches, the cursor read a viewer folds, and their cleanups (settle, turn end, sweep).                                                                                                                                               |
@@ -84,6 +85,8 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/testJobs.ts`                                                                          | Test-only runner-inbox hooks for `test:backend` (enqueue, inspect, age a lease), guarded the same way.                                                                                                                                                                                            |
 | `functions/sessions.ts`                                                                          | Sessions on the cloud ledger: `accept` (the claimed runner's facts, fenced, contiguous, idempotent), `command` (a person's or an agent's intent, queued as a `session.command` job), the reads `snapshot`, `history`, `list`, `attention`, and the internal `catchUp`, `refold`, `transferClaim`. |
 | `functions/sessionMessages.ts`                                                                   | `pending`: an owner's commands with no engine receipt, waiting or ended with a reason, and a message's staged body (runners read staged bodies through `transcripts.commandArtifact`).                                                                                                            |
+| `functions/sessionStarts.ts`                                                                     | A Session started on any of the person's runners: `startOn` (mints the Session, stages its first message, queues a `session.start` job), `status` (what the start waits for) and the runner's lease-fenced `startContext`.                                                                        |
+| `functions/runnerPicker.ts`                                                                      | `forComposer`: the caller's live runners for the composer's picker (status, power, signed-in providers, update state) and the server half of the default rule.                                                                                                                                    |
 | `functions/lib/sessionIntake.ts`, `functions/lib/sessionDerived.ts`                              | The intake rules and the fold (`sessionIntake`), and what a folded fact derives: turns, attention items, the second job receipt, the listing row (`sessionDerived`).                                                                                                                              |
 | `functions/lib/sessionIntakeDiagnostics.ts`                                                      | The intake transaction boundary's typed errors and content-free rejection log (see **Session intake rejection diagnostics**).                                                                                                                                                                     |
 | `functions/attention.ts`, `functions/lib/attention.ts`                                           | Needs-you attention: `markSeen`, `raiseFromRunner` (`volli notify`), the internal `access_lost` sweep. `lib/attention.ts` is the one writer of `attentionItems` (and the push hook); reads filter with `attentionVisibility` (`canSeeAttention`).                                                 |
@@ -468,7 +471,17 @@ backend.client("user:alice", { claims: { email: "alice@example.com", name: "Alic
 ```
 
 The backend is shared by every file in a run, so each test signs in as fresh
-subjects rather than expecting an empty database.
+subjects rather than expecting an empty database. Backend files always run
+serially: quota resets and deployment settings cannot be isolated by a worker.
+`vite.backend.config.ts` clamps any ambient `VITEST_MAX_WORKERS` to `1` too,
+because Vitest reads that variable after config and CLI flags. Raising `--maxWorkers` does
+not make this suite parallel.
+
+Files that need S3 start their own loopback server on a free port in `beforeAll`
+and restore the exact previous deployment settings in `afterAll`, before closing
+the server (`fixture/deployment-env.ts`). Only settings they own are touched;
+empty and absent values remain distinct. The S3 fixtures use per-instance access
+ids and reject a different fixture's configuration without weakening SigV4 checks.
 
 ## The board
 
@@ -484,11 +497,83 @@ same gap conflict and retry instead of colliding (`board.backend.test.ts`).
 The local SQLite board (signed-out mode) keeps its own commands; it was not
 rewritten onto these decisions, because its dense integer positions differ.
 
+**A project's board writes take turns.** Every one reads and writes the
+project's counter document, which is what keeps ticket numbers contiguous
+and `seq` gapless (a project import counts changes by it, the activity feed
+pages by it), so a project accepts one board write at a time. Each write's
+read set is otherwise kept to the documents it needs (point reads by id, the
+one row next to a column end or gap; a create reads the project's labels only
+when it names some), and the counter stays a tiny document of its own. A
+burst bigger than the backend's own optimistic-concurrency retries absorb (a
+few attempts in about a second) is the client transport's to answer, and
+nothing a lost attempt ran was committed:
+
+- a window (WebSocket): the Convex client closes the socket (1013),
+  reconnects and resends the same mutation, and never drops it; while the
+  socket is down the window reads as offline;
+- a runner, for its agents' verbs (HTTP): the 503 with the platform's
+  `OptimisticConcurrencyControlFailure` body is contention, not offline; the
+  runner sends the same arguments again after jittered, doubling waits, a
+  bounded number of times inside the verb's deadline, and past that answers
+  `BUSY` (exit 75: that change applied nothing), or `TIMEOUT` if an earlier
+  attempt timed out and so may have landed. A function's own refusal is never
+  resent.
+
+`board.contention.backend.test.ts` holds both at four times the burst the
+board test uses, and shows that every write the raw HTTP API refused under
+it was contention and left nothing behind (`VOLLI_TEST_BOARD_BURST` raises
+the burst to reproduce it harder).
+
+### App compatibility
+
 **Public function arguments are a cross-version contract.** A shipped
 desktop calls these functions directly from its window (VC-889), through the
 generated references this package exports as `@volli/convex/api` (the only
 import a client takes from here). Change a public function's arguments
 additively only: a new optional argument, never a removed or retyped one.
+
+[`scripts/convex-api/`](../scripts/convex-api/) enforces this in the PR's
+`Check + Build` job (required by `CI gate`). It snapshots **every public query,
+mutation and action**, including shared/nested validators, into
+[`api-contract.json`](api-contract.json). Internal functions and HTTP routes
+are not this generated client API. Regenerate after an intentional change:
+
+```sh
+node scripts/convex-api/generate.mjs
+node --test scripts/convex-api/*.test.mjs
+node scripts/convex-api/generate.mjs --check --base origin/main
+```
+
+`--check` rejects stale snapshots and compares against both the base revision
+and the newest semver `v*` app tag, including canaries (stable wins over the
+same version's canary). Fetch full history and tags first. For a revision from before this
+check existed, it archives that revision and evaluates its own validators
+with its own frozen dependencies; a missing snapshot never skips compatibility.
+The pinned `convex function-spec` CLI needs a deployed backend, so this check
+reads Convex's registered `exportArgs` / `exportReturns` offline instead.
+No function handler runs and no deployment credentials are used.
+
+Input unions may widen, new arguments must be optional, existing arguments
+must remain accepted (including nested objects). Function removals, public to
+internal changes and kind changes fail. Declared return validators preserve
+all existing fields, their requiredness and the values older clients can read;
+new fields and widened unions are allowed. Clients must tolerate new union
+cases; existing arms cannot silently lose or retype fields. **Undeclared returns are recorded as `null`, not inferred**:
+this guard cannot prove their handler's return shape. The older-app live lane
+below covers real client behavior, not every possible return value.
+
+An intentional break needs an exact entry in
+[`api-contract-allowlist.json`](api-contract-allowlist.json), reviewed as code:
+`{"function":"module:name","path":"args.field","code":"argument_removed",
+"reason":"Why retiring this caller is safe","retiresIn":"v0.4.0"}`.
+The check prints the exact function/path/code to use. Exceptions expire when
+the newest released app reaches `retiresIn`; no wildcard exemptions.
+
+`ci-extended.yml` also runs the newest released app's own cloud board and
+Session live suites against **this** backend, deployed to one pinned local
+backend. It runs on main pushes, nightly and dispatch; the summary requires
+it. Suites absent at the tag are listed explicitly, and an empty selection
+fails rather than claiming compatibility.
 
 **No cloud deployment may ever set `VOLLI_TEST_JWKS`.** Without it, the
 deployment trusts no test issuer.
@@ -673,6 +758,9 @@ Registering an App (once per environment):
    account** for a dev App.
 8. Create it; note the App id, client id and slug; generate a client secret and a private key;
    set the variables above with `npx convex env set`, then delete the local key files.
+9. Check: `npx convex run health:deploymentChecks '{}'` reports none of the six as
+   `incomplete`, and an unsigned `POST https://<deployment>.convex.site/github/webhook`
+   answers `401` (`503` means the deployment still reads the App as unset).
 
 Rotation: add the new key or secret on GitHub, update the variable (for the
 webhook secret, `new,old` first, then `new` alone once GitHub sends with it),
@@ -684,14 +772,16 @@ then delete the old one on GitHub.
 beside the desktop lanes and never inside them. It restores the binary cache
 (keyed on `backend.json`), regenerates the code and requires that nothing
 changed, and runs both test suites. `CI gate` requires it. `Check + Build`
-typechecks this package along with the rest of the workspace.
+typechecks this package along with the rest of the workspace and runs the
+[public API contract check](#app-compatibility) against both the base and newest app
+tag. CI extended's `Older app (live)` runs the released tag's own live clients
+against this backend on main pushes, nightly and dispatch (details above).
 
-## Deployments (not yet)
+## Deployments
 
-There are no cloud deployments yet. Dev, staging and prod deployments, deploy
-CI, the object-storage bucket (R2), backups and export are added once the
-Convex and Cloudflare accounts exist. Signing uploads already works against
-any S3-compatible store: a deployment points at its bucket with the
+Environment status and operator setup are maintained in the
+[deployment runbook](../docs/runbooks/cloud-deploy.md). Signing uploads works
+against any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
 
 ### Deploying with the self-check
@@ -729,7 +819,14 @@ at all (`forbidden`) or any of these is unset (`missing`):
 | `VOLLI_SECRETS_ROOT_KEYS`                                                                      | Sealed secrets ("Secrets root key")       |
 | `VOLLI_S3_ENDPOINT`, `VOLLI_S3_BUCKET`, `VOLLI_S3_ACCESS_KEY_ID`, `VOLLI_S3_SECRET_ACCESS_KEY` | Object storage                            |
 
-`{"mode":"test"}` allows both, for the throwaway local backend only: on a
+The GitHub App ("GitHub App") is optional, but its six variables go
+together: with none set GitHub stays off, which passes; with some set, each
+unset one is a problem (`incomplete`). A partial set would otherwise serve
+`configured: false` without saying why. `GITHUB_WEBHOOK_SECRETS` with no
+secret in it (`,`) counts as unset; `GITHUB_API_URL` and `GITHUB_WEB_URL` are
+not checked.
+
+`{"mode":"test"}` allows all of these, for the throwaway local backend only: on a
 deployment whose `CONVEX_CLOUD_URL` is not loopback it answers
 `test_mode_refused` and runs the cloud check anyway. Against the fixture:
 

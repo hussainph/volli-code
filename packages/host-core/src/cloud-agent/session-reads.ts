@@ -101,7 +101,7 @@ import { positiveIntOr } from "../agent-dispatch/resolution";
 import { CHAT_PEEK_ENTRIES, sessionPeekAttention } from "../agent-dispatch/session-verbs";
 import { publicSessionOrigin } from "../agent-dispatch/wire";
 import { NotYetSyncedError, type AgentBackend, type AgentCallOptions } from "./agent-backend";
-import { CLOUD_VERB_BUDGET_MS, type CloudVerb } from "./board-verbs";
+import { BUSY_MESSAGE, CLOUD_VERB_BUDGET_MS, type CloudVerb } from "./board-verbs";
 import { CloudFunctionError, CloudOfflineError } from "./functions-client";
 
 // ── bounds ───────────────────────────────────────────────────────────────────
@@ -240,6 +240,7 @@ const AUTH_CODES: ReadonlySet<string> = new Set([
 
 export function cloudSessionRefusal(error: CloudFunctionError): AgentResponse {
   if (error.code === "not_found") return failure("SESSION_NOT_FOUND", error.message);
+  if (error.code === "contention") return failure("BUSY", BUSY_MESSAGE);
   if (["invalid_request", "invalid_argument", "id_taken"].includes(error.code)) {
     return failure("INVALID_REQUEST", error.message);
   }

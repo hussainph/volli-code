@@ -1386,11 +1386,20 @@ function renderPromptBaseline(data: Record<string, unknown>): string | null {
     (section) =>
       `  ${terminalSafeInline(section["id"])}  ~${terminalSafeInline(section["tokens"])} tokens  ${terminalSafeInline(section["chars"])} chars${cacheClassCell(section)}`,
   );
+  // Project-sized, not Volli's (VC-1054): already inside the total, said once
+  // so a reader can tell the repository's file from what Volli composes.
+  const repo = data["repoInstructions"];
+  const repoLine =
+    isRecord(repo) && typeof repo["chars"] === "number" && repo["chars"] > 0
+      ? [
+          `of which repository instructions  ~${terminalSafeInline(repo["tokens"])} tokens  ${terminalSafeInline(repo["chars"])} chars`,
+        ]
+      : [];
   const excluded =
     typeof data["excluded"] === "string"
       ? [`excluded  ${terminalSafeInline(data["excluded"])}`]
       : [];
-  return [header, ...rows, ...excluded].join("\n");
+  return [header, ...repoLine, ...rows, ...excluded].join("\n");
 }
 
 function renderStableLines(command: string, data: unknown, full: boolean): string | null {
@@ -1810,9 +1819,9 @@ export function renderCliError(error: AgentError, options: RenderErrorOptions = 
 
 export function exitCodeForError(code: AgentErrorCode): 1 | 2 | 3 | 75 {
   if (code === "APP_UNREACHABLE") return 3;
-  // EX_TEMPFAIL: Volli Cloud was unreachable (or not caught up) and nothing
-  // was written, so the same command is safe to retry.
-  if (code === "OFFLINE" || code === "NOT_YET_SYNCED") return 75;
+  // EX_TEMPFAIL: Volli Cloud was unreachable, not caught up or busy, and
+  // nothing was written, so the same command is safe to retry.
+  if (code === "OFFLINE" || code === "NOT_YET_SYNCED" || code === "BUSY") return 75;
   if (
     code === "USAGE" ||
     code === "INVALID_REQUEST" ||

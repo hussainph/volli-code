@@ -1,5 +1,7 @@
 import {
   DEFAULT_CODE_MODE_LIMITS,
+  REPO_INSTRUCTIONS_RESOURCE_NAME,
+  repoInstructionsResource,
   skillPromptResource,
   skillsIndexResource,
   type PromptResource,
@@ -378,5 +380,107 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
         .filter((section) => section.placement === "message")
         .map((section) => section.id),
     ).toEqual(["brief", TOOL_SURFACE_REMINDER_ID, WORKSPACE_ENVIRONMENT_REMINDER_ID]);
+  });
+});
+
+/** Repository instructions as a start records them, from an AGENTS.md of `text`. */
+function repo(text: string): PromptResource {
+  const resource = repoInstructionsResource([{ file: "AGENTS.md", text }]);
+  if (resource === null) throw new Error("expected repository instructions");
+  return resource;
+}
+
+/**
+ * Repository instructions are project-sized, not Volli-sized (VC-1054): a
+ * repository's `AGENTS.md` can be many times everything Volli composes. They
+ * are priced as their own section and rollup, and the Volli-owned budget above
+ * is judged without them rather than loosened to absorb a file Volli does not
+ * write.
+ */
+describe("promptBaseline — repository instructions as their own slice (VC-1054)", () => {
+  it("is a measured zero when the workspace has no instruction file", () => {
+    expect(promptBaseline(input()).repoInstructions).toEqual({ chars: 0, tokens: 0 });
+  });
+
+  it("prices the section and its separator, inside system and total", () => {
+    const instructions = repo("y".repeat(40_000));
+    const withRepo = promptBaseline(input({ promptResources: [instructions, INDEX] }));
+    const without = promptBaseline(input({ promptResources: [INDEX] }));
+    const block = `--- BEGIN RESOURCE: ${REPO_INSTRUCTIONS_RESOURCE_NAME} ---\n${instructions.text}\n--- END RESOURCE: ${REPO_INSTRUCTIONS_RESOURCE_NAME} ---`;
+    expect(withRepo.repoInstructions.chars).toBe(block.length + 2);
+    // Removing the slice leaves exactly the Session without the file, except
+    // for the Execution layer's one sentence that says the file is below.
+    const executionDelta =
+      (withRepo.sections.find((section) => section.id === "execution")?.chars ?? 0) -
+      (without.sections.find((section) => section.id === "execution")?.chars ?? 0);
+    expect(executionDelta).toBe(30);
+    expect(withRepo.total.chars - withRepo.repoInstructions.chars).toBe(
+      without.total.chars + executionDelta,
+    );
+  });
+
+  it("claims project-static for the instructions and for a set of only project facts", () => {
+    const instructions = repo("rules");
+    const classes = (promptResources: readonly PromptResource[]) =>
+      Object.fromEntries(
+        promptBaseline(input({ promptResources })).sections.map((section) => [
+          section.id,
+          section.cacheClass,
+        ]),
+      );
+    expect(classes([instructions, INDEX])).toMatchObject({
+      operating: "project-static",
+      execution: "role-static",
+      "resources-header": "project-static",
+      [`resource:${REPO_INSTRUCTIONS_RESOURCE_NAME}`]: "project-static",
+      "resource:skills index": "project-static",
+    });
+    expect(classes([instructions])).toMatchObject({ operating: "project-static" });
+    // A named skill makes the set Session-specific; the instructions ahead of
+    // it are still the project's bytes in a position nothing selected precedes.
+    const named = skillPromptResource(skill("svg"));
+    expect(classes([instructions, named, INDEX])).toMatchObject({
+      operating: "session-static",
+      [`resource:${REPO_INSTRUCTIONS_RESOURCE_NAME}`]: "project-static",
+      "resource:svg": "session-static",
+      "resource:skills index": "session-static",
+    });
+    // Out of first position it proves nothing about what precedes it.
+    expect(classes([named, instructions])).toMatchObject({
+      [`resource:${REPO_INSTRUCTIONS_RESOURCE_NAME}`]: "session-static",
+    });
+    // A duplicated name is not the shape production records.
+    expect(classes([instructions, instructions])).toMatchObject({
+      "resources-header": "session-static",
+    });
+  });
+
+  it("keeps the Volli-owned Board package below 1,700 estimated tokens beside a large AGENTS.md", () => {
+    const measured = promptBaseline(
+      input({
+        promptResources: [
+          repo("z".repeat(60_000)),
+          { ...INDEX, text: "x".repeat(SKILLS_INDEX_MAX_CHARS) },
+        ],
+        brief: { text: "x".repeat(280) },
+        tools: {
+          tools: ["read", "edit", "write", "execute"],
+          verbs: [
+            "session.start",
+            "ticket.await",
+            "automation.run",
+            "session.stop",
+            "session.send",
+            "session.delegate",
+          ],
+        },
+      }),
+    );
+    // 6,736 chars at the index ceiling (above), plus the Execution layer's
+    // 30-character delta in the sentence saying the instructions are below.
+    const volliOwned = measured.total.chars - measured.repoInstructions.chars;
+    expect(volliOwned).toBe(6_766);
+    expect(Math.ceil(volliOwned / PROMPT_BASELINE_CHARS_PER_TOKEN)).toBeLessThan(1_700);
+    expect(measured.repoInstructions.tokens).toBeGreaterThan(15_000);
   });
 });

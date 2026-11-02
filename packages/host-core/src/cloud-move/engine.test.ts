@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
-import { queueOrder } from "./engine";
+import { MoveProblemError, queueOrder, refuseDryRunExport } from "./engine";
 import { movePhase, reached, MOVE_STATES } from "./states";
 
 let ctx: TestDb;
@@ -66,5 +66,16 @@ describe("move states", () => {
     expect(reached("rows", "staged")).toBe(true);
     expect(reached("staged", "rows")).toBe(false);
     expect(reached("rolling_back", "queued")).toBe(false);
+  });
+});
+
+describe("a dry run's export (VC-1029)", () => {
+  it("is never a move's: one that only measured its history is refused before it is journaled", () => {
+    const measured = { transcripts: 1, transcriptBytes: 2, piSlices: 1, piLogBytes: 3 };
+    expect(() => refuseDryRunExport({ historyMeasured: measured })).toThrow(MoveProblemError);
+    expect(() => refuseDryRunExport({ historyMeasured: measured })).toThrow(
+      expect.objectContaining({ code: "export_integrity" }),
+    );
+    expect(() => refuseDryRunExport({})).not.toThrow();
   });
 });

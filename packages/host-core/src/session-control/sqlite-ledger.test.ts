@@ -576,6 +576,184 @@ describe("SqliteSessionLedger", () => {
     await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([]);
   });
 
+  it("reads latest ticket signals through the kind index with the same rows as the full event join (VC-1075)", async () => {
+    let now = 1_000;
+    const { control, projectId } = setup(() => now);
+    insertProject(ctx.db, testProject({ id: "project-other" }));
+    const tickets = ["ticket-a", "Ticket-b", "ticket-c", "ticket-d"];
+    for (const id of tickets)
+      insertTicket(ctx.db, testTicket(projectId, { id, usesWorktree: false }));
+    insertTicket(ctx.db, testTicket("project-other", { id: "ticket-other", usesWorktree: false }));
+    const sessions: string[] = [];
+    const homes: [string, string | null][] = [
+      ...tickets.flatMap((ticketId) => [
+        [projectId, ticketId] as [string, string | null],
+        [projectId, ticketId] as [string, string | null],
+      ]),
+      [projectId, "ticket-c"],
+      [projectId, null],
+      ["project-other", "ticket-other"],
+    ];
+    for (const [index, [home, ticketId]] of homes.entries()) {
+      const created = await control.createSession({
+        commandId: `create-${index}`,
+        projectId: home,
+        ticketId,
+        role: ticketId === null ? "project" : "ticket",
+        parentSessionId: null,
+        title: `Session ${index}`,
+        provenance,
+      });
+      sessions.push(created.session.id);
+    }
+    // A fixed pseudo-random walk: signals and unrelated facts interleave, the
+    // clock jumps backwards and repeats, and one ticket (`ticket-d`'s second
+    // Session aside) has Sessions that never signal at all.
+    let seed = 7;
+    const next = (bound: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed % bound;
+    };
+    for (let step = 0; step < 120; step += 1) {
+      const sessionId = sessions[next(sessions.length)]!;
+      now += next(5) - 2;
+      const roll = next(3);
+      await control.submit({
+        commandId: `step-${step}`,
+        sessionId,
+        intent:
+          roll === 0
+            ? { kind: "session.retitle", title: `Title ${step}` }
+            : {
+                kind: "session.signal",
+                signal: roll === 1 ? "done" : "blocked",
+                reason: step % 4 === 0 ? null : `step ${step}`,
+              },
+        provenance,
+      });
+    }
+    // A malformed signal as one Session's latest signal row: both reads skip
+    // it and fall back to that Session's previous well-formed signal.
+    const corrupted = sessions[0]!;
+    const head = ctx.db
+      .prepare("SELECT MAX(sequence) AS sequence FROM session_events WHERE session_id = ?")
+      .get(corrupted) as { sequence: number };
+    ctx.db
+      .prepare(
+        `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+         VALUES ('malformed-signal', ?, ?, 5000, 5000, ?, NULL, NULL, ?)`,
+      )
+      .run(
+        corrupted,
+        head.sequence + 1,
+        provenanceId(),
+        JSON.stringify({ kind: "session.signaled", signal: "unexpected", reason: null }),
+      );
+
+    // The pre-VC-1075 statement, verbatim: every event of every ticketed
+    // Session, kind read from the payload. It is the reference, not the path.
+    const reference = ctx.db
+      .prepare(
+        `WITH latest_session_signals AS (
+           SELECT s.ticket_id AS ticket_id, s.id AS session_id,
+                  json_extract(e.payload, '$.signal') AS signal,
+                  json_extract(e.payload, '$.reason') AS reason,
+                  e.occurred_at AS occurred_at, es.sequence AS accepted_sequence,
+                  ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY e.sequence DESC) AS session_rank
+             FROM sessions s
+             JOIN session_events e ON e.session_id = s.id
+             JOIN session_event_sequence es ON es.event_id = e.id
+            WHERE s.project_id = @projectId
+              AND s.ticket_id IS NOT NULL
+              AND json_extract(e.payload, '$.kind') = 'session.signaled'
+              AND json_extract(e.payload, '$.signal') IN ('done', 'blocked')
+         ), latest_ticket_signals AS (
+           SELECT ticket_id, session_id, signal, reason, occurred_at,
+                  ROW_NUMBER() OVER (PARTITION BY ticket_id ORDER BY accepted_sequence DESC) AS ticket_rank
+             FROM latest_session_signals WHERE session_rank = 1
+         )
+         SELECT ticket_id, session_id, signal, reason, occurred_at
+           FROM latest_ticket_signals WHERE ticket_rank = 1
+          ORDER BY ticket_id COLLATE BINARY ASC`,
+      )
+      .all({ projectId }) as {
+      ticket_id: string;
+      session_id: string;
+      signal: "done" | "blocked";
+      reason: string | null;
+      occurred_at: number;
+    }[];
+    expect(reference.map((row) => row.ticket_id)).toEqual([
+      "Ticket-b",
+      "ticket-a",
+      "ticket-c",
+      "ticket-d",
+    ]);
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual(
+      reference.map((row) => ({
+        ticketId: row.ticket_id,
+        sessionId: row.session_id,
+        signal: row.signal,
+        reason: row.reason,
+        createdAt: row.occurred_at,
+      })),
+    );
+    await expect(control.listLatestTicketSignals({ projectId: "project-other" })).resolves.toEqual([
+      expect.objectContaining({ ticketId: "ticket-other" }),
+    ]);
+  });
+
+  it("accepts a write to a Session whose older receipt pairing is corrupt, and still refuses its own (VC-1075)", async () => {
+    const { control, ledger, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-corrupt-own",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Prior",
+      provenance,
+    });
+    ctx.db
+      .prepare("UPDATE session_command_receipts SET receipt_event_id = NULL WHERE id = ?")
+      .run(created.receipt.id);
+
+    // Only the pairs a write makes are checked at its boundary, so older
+    // history in the same Session no longer fails every later write.
+    await expect(
+      control.submit({
+        commandId: "retitle-after-corruption",
+        sessionId: created.session.id,
+        intent: { kind: "session.retitle", title: "Later" },
+        provenance,
+      }),
+    ).resolves.toMatchObject({ receipt: { commandId: "retitle-after-corruption" } });
+
+    const before = ctx.db.prepare("SELECT COUNT(*) AS count FROM session_command_receipts").get();
+    await expect(
+      ledger.transaction((transaction) => {
+        transaction.saveCommand({
+          id: "command-unpaired",
+          sessionId: created.session.id,
+          createdAt: 500,
+          intent: { kind: "session.retitle", title: "Unpaired" },
+          route: null,
+        });
+        transaction.appendReceipt({
+          ...created.receipt,
+          id: "receipt-unpaired",
+          commandId: "command-unpaired",
+          sequence: 99,
+          recordedAt: 500,
+        });
+      }),
+    ).rejects.toThrow("Receipt receipt-unpaired has no matching event");
+    expect(ctx.db.prepare("SELECT COUNT(*) AS count FROM session_command_receipts").get()).toEqual(
+      before,
+    );
+  });
+
   it("writes LOCAL_RUNNER as the shipped local/local columns and provenance bytes", async () => {
     // The frozen desktop identity: older builds and boot recovery read these
     // exact values, so naming the literal must not move a byte on disk.

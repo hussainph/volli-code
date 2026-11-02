@@ -28,6 +28,7 @@ describe("runner availability control", () => {
     const root = createRoot(container);
     try {
       await act(async () => root.render(<RunnerAvailability />));
+      expect(container.textContent).toContain("Keep this Mac working as a runner");
       const toggle = () => container.querySelector<HTMLButtonElement>("[role=switch]")!;
       expect(toggle().getAttribute("aria-checked")).toBe("true");
       await act(async () => toggle().click());

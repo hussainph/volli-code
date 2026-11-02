@@ -2,6 +2,7 @@ import { ComposerAttachButton } from "@renderer/components/attachments/composer-
 import { OffNote } from "@renderer/components/automations/automation-run-menu";
 import type { AutomationGroup } from "@renderer/components/automations/ticket-rail-automations-model";
 import { ComposerRunRow, type ComposerRun } from "./composer-run";
+import { RunnerPicker, type RunnerPickerState } from "@renderer/components/chat/runner-picker";
 import { composerLaunchAction, type ComposerLaunch } from "./composer-launch";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -50,6 +51,7 @@ export function ComposerFooter({
   onSubmit,
   automationOffer,
   disabled,
+  runners,
 }: {
   projectId: string;
   onAttachFiles?: (files: readonly File[]) => void;
@@ -65,6 +67,8 @@ export function ComposerFooter({
     enabledIds: readonly string[];
   };
   disabled: boolean;
+  /** Only cloud chat kickoff needs a runner; filing and Automations do not. */
+  runners?: RunnerPickerState;
 }) {
   const action = composerLaunchAction(launch, projectId, automationOffer);
   const selection =
@@ -85,7 +89,12 @@ export function ComposerFooter({
         {onAttachFiles === undefined ? null : (
           <ComposerAttachButton className="prompt-add" onFiles={onAttachFiles} />
         )}
-        {launch.kind === "kickoff" ? <ComposerRunRow run={run} /> : null}
+        {launch.kind === "kickoff" ? (
+          <>
+            {runners === undefined ? null : <RunnerPicker state={runners} />}
+            <ComposerRunRow run={run} />
+          </>
+        ) : null}
         {launch.kind === "automation" ? (
           <span
             role="status"
@@ -131,7 +140,11 @@ export function ComposerFooter({
         <Button
           data-testid={launch.kind === "kickoff" ? "composer-kickoff" : "composer-submit"}
           onClick={onSubmit}
-          disabled={disabled || !action.available}
+          disabled={
+            disabled ||
+            !action.available ||
+            (launch.kind === "kickoff" && runners !== undefined && runners.selected === null)
+          }
           aria-label={action.label}
           aria-keyshortcuts="Shift+Meta+Enter Shift+Control+Enter"
           title={`${action.label} (⇧⌘↵)`}

@@ -27,7 +27,14 @@
  * chosen before the default changed, or before that provider was signed out.
  */
 import * as React from "react";
-import { resolveDefaultModel, type ModelSelection } from "@volli/shared";
+import {
+  resolveDefaultModel,
+  type HiddenModelRef,
+  type ModelAccessDefaults,
+  type ModelAccessSnapshot,
+  type ModelSelection,
+} from "@volli/shared";
+import { modelsOnRunner, type ComposerRunner } from "@renderer/components/chat/runner-picker-model";
 
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
@@ -96,18 +103,44 @@ export interface ComposerRun {
 export function useComposerRun(
   projectDefault: ModelSelection | null = null,
   projectId?: string,
+  // Undefined is the local path; null means the cloud picker has no runner yet.
+  runner?: ComposerRunner | null,
 ): ComposerRun {
   const access = useModelAccessClient();
-  const [models, setModels] = React.useState<readonly ComposerModel[]>(NO_MODELS);
-  const [tiers, setTiers] = React.useState<readonly ComposerTierRow[]>(NO_TIERS);
+  const [catalog, setCatalog] = React.useState<{
+    snapshot: ModelAccessSnapshot;
+    hidden: readonly HiddenModelRef[];
+    configured: ModelAccessDefaults;
+  } | null>(null);
+  const { models, tiers } = React.useMemo(() => {
+    if (catalog === null) return { models: NO_MODELS, tiers: NO_TIERS };
+    const { snapshot, hidden, configured } = catalog;
+    const available =
+      runner === undefined
+        ? snapshot.models
+        : runner === null
+          ? []
+          : modelsOnRunner(snapshot.models, runner);
+    return {
+      models: offerableModels(available, snapshot.providers, hidden),
+      tiers: composerTierRows(configured, available, snapshot.providers, hidden),
+    };
+  }, [catalog, runner]);
   const [seed, setSeed] = React.useState<ModelSelection | null>(null);
   const [choice, setChoice] = React.useState<{
     projectId?: string;
     selection: ModelSelection;
   } | null>(null);
   React.useEffect(() => setChoice(null), [projectId]);
-  const explicit = choice !== null && choice.projectId === projectId;
-  const selection = explicit ? choice.selection : seed;
+  const chosen = choice !== null && choice.projectId === projectId ? choice.selection : null;
+  const offered = (model: ModelSelection | null) =>
+    model !== null &&
+    (runner === undefined ||
+      models.some(
+        (entry) => entry.providerId === model.providerId && entry.modelId === model.modelId,
+      ));
+  const explicit = offered(chosen);
+  const selection = explicit ? chosen : offered(seed) ? seed : null;
   const setSelection = React.useCallback(
     (picked: ModelSelection) => {
       setChoice({ projectId, selection: picked });
@@ -125,8 +158,7 @@ export function useComposerRun(
     void Promise.all([inspect({}), hiddenModels(), defaults()])
       .then(([snapshot, hidden, configured]) => {
         if (!current) return;
-        setModels(offerableModels(snapshot.models, snapshot.providers, hidden));
-        setTiers(composerTierRows(configured, snapshot.models, snapshot.providers, hidden));
+        setCatalog({ snapshot, hidden, configured });
         // The chain in rung order, exactly as main resolves a start: the
         // project's own preference first, then `resolveDefaultModel` — the
         // policy, not a guess: an unset Ticket default MEANS the project
@@ -138,8 +170,7 @@ export function useComposerRun(
         // no selection the start sends no override and main answers the same
         // question from the same defaults.
         if (!current) return;
-        setModels(NO_MODELS);
-        setTiers(NO_TIERS);
+        setCatalog(null);
         setSeed(null);
       });
     return () => {

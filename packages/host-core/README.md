@@ -58,6 +58,7 @@ Everything else is an implementation detail.
 | `@volli/host-core`                 | `index.ts`, `host-lifecycle.ts`, `db-open-failure.ts`, `runtime-services.ts`, `session-services.ts`                                                                                                                                                                                                                                                                                                 | `createHostCore`, `HostCore`/`LiveHostCore`, `HostCorePorts`, `defaultDatabasePath`, `DbHandle`, the transaction-guard handlers                                                                                                                                                                                                                                       |
 | `@volli/host-core/cloud-runner`    | `cloud-runner/`, `cloud-agent/`, `cloud-store/`                                                                                                                                                                                                                                                                                                                                                     | A runner's Volli Cloud registration and sync: link, the rotating runner token, heartbeat and capabilities, the sleep/wake sequence (`wake.ts`); the backend link, the fact drain over cursor rows, the inbox worker and job journal (migration 65); agent verbs in a cloud launch: the route table, the HTTP functions client, Agent tokens and the cloud board verbs |
 | `@volli/host-core/cloud-move`      | `cloud-move/`                                                                                                                                                                                                                                                                                                                                                                                       | "Move to Volli Cloud": the move engine (step machine, journal and resume, the "Move all" queue, verification, commit, handover, the real-path check, roll back and Go back to local), the verified kept whole-profile backup port and the project freeze (migration 68)                                                                                               |
+| `@volli/host-core/headless-runner` | `headless-runner/`                                                                                                                                                                                                                                                                                                                                                                                  | `volli-runner run`'s composition: a linked box's host-core with headless ports, the cloud product store, the Session runtime, the agent socket with the cloud routes, the owner read from the runner token, and the live connection (presence, sync, revocation, drain on stop)                                                                                       |
 | `@volli/host-core/ports`           | `ports/`                                                                                                                                                                                                                                                                                                                                                                                            | The [ports](#ports) and their headless answers (`HEADLESS_ATTENTION`, `NO_POWER_EVENTS`)                                                                                                                                                                                                                                                                              |
 | `@volli/host-core/db`              | `db/`                                                                                                                                                                                                                                                                                                                                                                                               | `openVolliDb`, migrations, the transaction gate, the repositories ([Persistence](#persistence))                                                                                                                                                                                                                                                                       |
 | `@volli/host-core/secrets`         | `secrets/`                                                                                                                                                                                                                                                                                                                                                                                          | `SecretStore`, `SecretService`, the file key and the sealed credential module ([Secrets](#secrets))                                                                                                                                                                                                                                                                   |
@@ -270,6 +271,20 @@ capability report, alerts an unattended Run's owner through
 `attention.raiseFromRunner` (`cloud-store/automation-attention.ts`), and the
 agent's `automation_run` queues the Run in Volli Cloud
 (`cloud-agent/session-verbs.ts`).
+A person's Session started on any of their runners from another device
+(`sessionStarts.startOn`) arrives as a `session.start` job, executed by
+`cloud-store/session-start-jobs.ts` through the same recovered Session
+services: it re-checks the project and ticket against the lease-fenced
+`sessionStarts.startContext`, which also answers the staged first message
+(no runner holds the unborn Session's claim, so `transcripts.commandArtifact`
+cannot), writes that body to the runner's own artifact store, mints the
+Session under the backend's id and an operation id derived from the job (a
+crash resumes the same Session and first message), and delivers the first
+message under the job's command id. A pinned model the runner cannot serve
+refuses before anything exists, naming the provider, the runner and the
+composition's `signInHint`. The job is registered outside the owner gate the
+other `session.*` kinds cross (the gate refuses a Session not yet held here),
+and `session.start` joins `automation.run` in the capability report.
 `createHostAgentCommands` builds the socket verb door over the host's
 [handler map](#the-handler-map); `session-runtime/agents`
 owns the lazy tool door and watches. `createHostAgentSocket` composes the
@@ -350,6 +365,13 @@ log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or
 - **Cheap, and never fatal.** The level check runs before anything is built;
   the file sink only queues on the caller's stack, and a disk failure disables
   it with one warning.
+- **Main stalls are logged** (`startMainStallMonitor`, `log/stall`; VC-1073).
+  While it runs, every door's synchronous span is timed (two clock reads) and
+  one over the threshold (200 ms) writes a `main-stall` `main stall` line in
+  that call's own trace; event-loop lag no door explains is logged as
+  `attribution: "unattributed"` with the last door call as a hint, never its
+  trace. An hourly `main stall load` line rolls up the count, loop-delay
+  p95/max and the top operations. The desktop starts it with its log.
 - **No bare console.** Production code in host-core and Electron main logs only
   through a host logger; `src/log/no-console.test.ts` (and its twin in
   `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and
@@ -589,6 +611,21 @@ metadata stays local alongside the path.
 local adapter supplies SQLite reads and event publication, while the core owns
 the same git/reconcile/copy sequence. `reclaimExplicit` keeps its dirty, busy,
 Keep, git-lock and unpushed-work checks without requiring a board row.
+
+### Git on a runner with no folder of the person's
+
+`cloud-store/managed-clone.ts` gives such a runner (`volli-runner run` passes
+`managedClones` to `createCloudProductStore`) one clone per repository: a bare
+`<root>/<repoId>.git` holding only origin's refs, plus a detached main worktree
+`<root>/<repoId>` that the registry records as a `managed_clone` checkout and
+ticket worktrees are added from. The remote is `primaryRepo.remoteUrl` from
+`runnerContext.forSession`; the person's own checkouts report theirs
+(`location.ts`, `readCheckoutRemote`). The runner's own fetch carries the
+owner's GitHub token in command-scope `http.<origin>.extraHeader`
+(`github-tokens.ts` over `POST /runner/github-token`). A Session's git asks
+the runner over a 0600 Unix socket through `volli-runner git-credential`
+(`git-credential-broker.ts`), which answers only for the token's host and
+only for the Session its `VOLLI_SESSION_TOKEN` proves.
 
 `cloud-store/index.ts` now composes the cloud arm of `RunnerProductStore` over
 these ports. Desktop main supplies the Mac runner's existing link/presence and

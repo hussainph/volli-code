@@ -409,6 +409,7 @@ export async function promptBaselineVerb(
   const ticketArg = request.args["ticket"];
   let role: "ticket" | "project";
   let project: Project;
+  let ticketId: string | null = null;
   let workspacePath: string;
   let brief: string;
   if (ticketArg !== undefined) {
@@ -416,6 +417,7 @@ export async function promptBaselineVerb(
     if (!resolved.ok) return resolved.response;
     role = "ticket";
     project = resolved.project;
+    ticketId = resolved.ticket.id;
     // The directory a fresh attach would run in: the stamped worktree
     // when the ticket has one, the main checkout when it never will.
     workspacePath = resolved.ticket.worktreePath ?? project.path;
@@ -436,6 +438,13 @@ export async function promptBaselineVerb(
   // session baseline this command exists to price. `null` is a real
   // measurement: a prompt with no resources section at all.
   const index = await options.skillsIndex(project.id);
+  // Recorded ahead of the index at birth (VC-1054), so priced in that order;
+  // the breakdown rolls it up separately as project-sized, not Volli's.
+  const instructions = (await options.repoInstructions?.(project.id, ticketId)) ?? null;
+  const promptResources = [
+    ...(instructions === null ? [] : [instructions]),
+    ...(index === null ? [] : [index]),
+  ];
   // No `workspacePath`: it is not a prompt byte any more (VC-164), so it
   // cannot change what the prompt costs. The measured environment is back
   // — not as a prompt layer, but because a workspace with absent
@@ -450,7 +459,7 @@ export async function promptBaselineVerb(
     // than a Ticket Session's because it holds more. Priced from the same
     // registry data a real mint resolves, so the two cannot disagree.
     tools: { tools: [...PI_TOOLS.tools], verbs: roleVerbBundle(role) },
-    ...(index === null ? {} : { promptResources: [index] }),
+    ...(promptResources.length === 0 ? {} : { promptResources }),
     brief: { text: brief },
     workspaceEnvironment: readWorkspaceEnvironment(workspacePath),
   });

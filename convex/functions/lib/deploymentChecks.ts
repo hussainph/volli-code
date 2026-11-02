@@ -11,7 +11,15 @@
  * stand in for the cloud check: on a deployment whose own URL
  * (`CONVEX_CLOUD_URL`, set by Convex) is not loopback it is refused, and the
  * cloud check runs anyway.
+ *
+ * The GitHub App is optional, but its six variables go together: none set
+ * leaves GitHub off (`github.config` answers `configured: false`), while a
+ * partial set would silently do the same, so the check names each one missing
+ * (`incomplete`).
  */
+
+import { GITHUB_APP_VARIABLES, isGithubVariableSet } from "./github/config";
+import { isLoopbackUrl } from "./loopback";
 
 type DeploymentCheckMode = "cloud" | "test";
 
@@ -35,7 +43,7 @@ const REQUIRED_VARIABLES = [
   "VOLLI_S3_SECRET_ACCESS_KEY",
 ] as const;
 
-type DeploymentProblemCode = "forbidden" | "missing" | "test_mode_refused";
+type DeploymentProblemCode = "forbidden" | "incomplete" | "missing" | "test_mode_refused";
 
 // Type aliases, not interfaces: a `ConvexError`'s data must be a Convex `Value`,
 // which an interface (no implicit index signature) is not.
@@ -51,18 +59,6 @@ type DeploymentReport = {
   deployment: "loopback" | "remote";
   problems: DeploymentProblem[];
 };
-
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
-
-/** Whether `url` is an http(s) URL on this machine's loopback interface. */
-export function isLoopbackUrl(url: string | undefined): boolean {
-  try {
-    const parsed = new URL(url ?? "");
-    return /^https?:$/.test(parsed.protocol) && LOOPBACK_HOSTS.has(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Checks the configuration `read` answers for (the deployment's own
@@ -85,6 +81,15 @@ export function checkDeployment(
     for (const variable of REQUIRED_VARIABLES) {
       if ((read(variable) ?? "").trim() === "") problems.push({ variable, code: "missing" });
     }
+    const github = GITHUB_APP_VARIABLES.map((variable) => ({
+      variable,
+      set: isGithubVariableSet(variable, read(variable)),
+    }));
+    if (github.some(({ set }) => set)) {
+      for (const { variable, set } of github) {
+        if (!set) problems.push({ variable, code: "incomplete" });
+      }
+    }
   }
   return {
     ok: problems.length === 0,
@@ -96,6 +101,8 @@ export function checkDeployment(
 
 const EXPLANATIONS: Record<DeploymentProblemCode, string> = {
   forbidden: "set; it trusts the test issuer, so no cloud deployment may carry it",
+  incomplete:
+    "unset while other GitHub App variables are set; set all six or none (GitHub stays off until then)",
   missing: "unset; a cloud deployment requires it",
   test_mode_refused: "not loopback; a test check runs only on the local backend",
 };

@@ -1,4 +1,5 @@
 import { expect, it } from "vite-plus/test";
+import { PREVIEW_AGREEMENT_VERSION } from "../preview-legal";
 import {
   DEFAULT_PREVIEW_SPONSOR_SEATS,
   MAX_PREVIEW_SPONSOR_SEATS,
@@ -13,8 +14,8 @@ it("describes the preview waitlist without implying local projects moved", () =>
   );
 });
 
-it("pins the current enrollment agreement until the legal-page shared constant lands", () => {
-  expect(PREVIEW_ENROLLMENT_AGREEMENT_VERSION).toBe("preview-0.3-2026-10-25");
+it("keeps the legacy enrollment name identical to the published agreement", () => {
+  expect(PREVIEW_ENROLLMENT_AGREEMENT_VERSION).toBe(PREVIEW_AGREEMENT_VERSION);
   expect(PREVIEW_AGREEMENT_REQUIRED_MESSAGE).toContain("current Preview Agreement");
 });
 
