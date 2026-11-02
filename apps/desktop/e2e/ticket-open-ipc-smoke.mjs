@@ -166,8 +166,11 @@ async function scenario(label, body) {
 const cardById = (id) =>
   page
     .locator("article")
-    .filter({ visible: true })
-    .filter({ has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }) });
+
+    .filter({
+      visible: true,
+      has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }),
+    });
 
 const docTab = (id) => page.getByRole("tab", { name: id, exact: true });
 

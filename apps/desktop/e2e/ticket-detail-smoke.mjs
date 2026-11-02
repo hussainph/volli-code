@@ -278,8 +278,7 @@ function cardById(page, id) {
   const exact = new RegExp(`^${id}$`);
   return page
     .locator("article")
-    .filter({ visible: true })
-    .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
+    .filter({ visible: true, has: page.locator("span.font-mono", { hasText: exact }) });
 }
 
 /** The Doc tab is labeled with the display id (round-2) — the reliable "detail is open" signal. */
