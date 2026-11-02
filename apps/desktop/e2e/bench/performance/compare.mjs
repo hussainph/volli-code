@@ -59,9 +59,17 @@ function round(value) {
 /** Reads a summary from a run directory or the file itself. */
 export async function readSummary(path) {
   const absolute = resolve(path);
-  const stat = await fs.stat(absolute);
-  const file = stat.isDirectory() ? join(absolute, "benchmark.summary.json") : absolute;
-  const summary = JSON.parse(await fs.readFile(file, "utf8"));
+  // Read, and fall back to the directory's summary: no stat-then-read window.
+  let file = absolute;
+  let body;
+  try {
+    body = await fs.readFile(file, "utf8");
+  } catch (error) {
+    if (error?.code !== "EISDIR") throw error;
+    file = join(absolute, "benchmark.summary.json");
+    body = await fs.readFile(file, "utf8");
+  }
+  const summary = JSON.parse(body);
   if (!isRecord(summary) || !Array.isArray(summary.arms) || !isRecord(summary.fixture)) {
     throw new Error(`${file} is not a benchmark.summary.json`);
   }
