@@ -196,11 +196,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   adoptLaunch(LOCAL_LAUNCH);
 });
+
 /**
  * The body's text lives in the draft cache from the keystroke it is typed in, so
- * its document must never count as unsaved. As an autosave document nothing
- * ever saved it, and once the composer closed, ⌘Q warned about a "Ticket
- * description" for the rest of the session (VC-1094).
+ * its document must never count as unsaved, or ⌘Q asks about it (VC-1094).
  */
 it("hands the body editor the draft save policy", () => {
   const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Ticket description"]');

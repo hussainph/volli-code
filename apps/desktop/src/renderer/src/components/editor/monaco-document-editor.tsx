@@ -10,7 +10,11 @@ import {
   type DocumentModeAttachment,
 } from "@renderer/editor/document-mode-contribution";
 import { documentModeOptions } from "@renderer/editor/document-mode";
-import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
+import type {
+  DocumentLease,
+  DocumentRevision,
+  DocumentSavePolicy,
+} from "@renderer/editor/document-registry";
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { type FileRefsConfig, refInsertion } from "@renderer/editor/file-refs";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
@@ -79,9 +83,10 @@ export interface MonacoDocumentEditorProps {
    * `autosave` (the default) when the host writes the text some time after an
    * edit, so the edit counts as unsaved until then. `draft` when the host caches
    * every change as it lands (the New-ticket composer), so the document never
-   * counts as unsaved and ⌘Q does not ask about it (VC-1094).
+   * counts as unsaved. See {@link DocumentSavePolicy}. Read when the document
+   * mounts and fixed for the life of that mount.
    */
-  savePolicy?: "autosave" | "draft";
+  savePolicy?: Extract<DocumentSavePolicy, "autosave" | "draft">;
   placeholder?: string;
   autoFocus?: boolean;
   /**
@@ -428,8 +433,8 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         host.dataset.monacoStatus = "ready";
         host.dataset.monacoLanguage = lease.snapshot().language;
-        // A document surface is never read-only (CONCEPT #49 gives it autosave,
-        // not a policy flag), but the attribute is the shared contract the e2e
+        // A document surface is never read-only (CONCEPT #49: its host autosaves
+        // or caches every edit), but the attribute is the shared contract the e2e
         // kit's `isMonacoEditable` reads, and a MISSING attribute reads as "not
         // editable" there rather than "not applicable".
         host.dataset.monacoReadOnly = "false";
