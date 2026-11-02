@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { runnerCloudInit, runnerInstallCommand } from "./runner-install-command";
 import { runnerInstallTarget } from "./runner-install-target";
 
 const target = {
@@ -8,6 +9,14 @@ const target = {
   packagedBackendUrl: "https://default.convex.cloud",
   packagedSiteUrl: "https://default.convex.site",
 };
+/** The install command and cloud-init a sheet would offer for this launch. */
+function build(input: typeof target): string[] {
+  const resolved = runnerInstallTarget(input);
+  if (resolved === null) throw new Error("no install target");
+  const options = { ...resolved, token: "vrt_composed", name: "" };
+  return [runnerInstallCommand(options), runnerCloudInit(options)];
+}
+
 describe("Runner install deployment", () => {
   it("omits both origins only when the entire packaged deployment matches", () => {
     expect(runnerInstallTarget(target)).toEqual({
@@ -46,6 +55,22 @@ describe("Runner install deployment", () => {
       server: backendUrl,
       site: siteUrl,
     });
+  });
+  it("composes into commands: the packaged deployment omits both flags, any other passes both", () => {
+    for (const text of build(target)) {
+      expect(text).not.toContain("--server");
+      expect(text).not.toContain("--site");
+    }
+    const staging = {
+      ...target,
+      backendUrl: "https://staging.convex.cloud",
+      siteUrl: "https://staging.convex.site",
+    };
+    for (const text of build(staging)) {
+      expect(text).toContain(
+        "--server 'https://staging.convex.cloud' --site 'https://staging.convex.site'",
+      );
+    }
   });
   it("does not guess absent metadata or expose local deployments", () => {
     expect(runnerInstallTarget({ ...target, appVersion: null })).toBeNull();
