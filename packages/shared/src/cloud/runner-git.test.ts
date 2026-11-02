@@ -2,13 +2,17 @@ import { describe, expect, test } from "vite-plus/test";
 
 import {
   githubHostOf,
+  githubInstalledOn,
+  githubRepoOfRemote,
   githubNoreplyEmail,
   githubRemoteUrl,
   normalizeGitRemoteUrl,
   parseRunnerGithubTokenGrant,
   parseRunnerGithubTokenRequest,
   readRunnerGithubTokenError,
+  runnerGithubRefusalLine,
   runnerGithubTokenBody,
+  type RunnerGithubTokenError,
   type RunnerGithubTokenRequest,
 } from "./runner-git";
 import type { JobId, ProjectRepoId, SessionId } from "./ids";
@@ -198,11 +202,12 @@ describe("the /runner/github-token wire", () => {
       readRunnerGithubTokenError({
         error: { code: "github_rate_limited", message: "slow down", resetAt: 99 },
       }),
-    ).toEqual({ code: "github_rate_limited", message: "slow down", resetAt: 99 });
+    ).toEqual({ code: "github_rate_limited", message: "slow down", resetAt: 99, account: null });
     expect(readRunnerGithubTokenError({ error: { code: "from_the_future" } })).toEqual({
       code: "github_unavailable",
       message: "GitHub is unavailable.",
       resetAt: null,
+      account: null,
     });
     for (const odd of [null, [], { error: [] }, { error: null }, "x"]) {
       expect(readRunnerGithubTokenError(odd).code).toBe("github_unavailable");
@@ -211,5 +216,125 @@ describe("the /runner/github-token wire", () => {
       readRunnerGithubTokenError({ error: { code: "not_claimed", message: "m".repeat(2000) } })
         .message,
     ).toHaveLength(1024);
+  });
+});
+
+const accountRead = (account: unknown) =>
+  readRunnerGithubTokenError({ error: { code: "github_not_installed", message: "m", account } })
+    .account;
+
+describe("a refusal's account", () => {
+  test("is kept only when it is a plain GitHub login", () => {
+    expect(accountRead("Octo-Org")).toBe("Octo-Org");
+    for (const odd of [
+      undefined,
+      7,
+      "",
+      "-leading",
+      "a".repeat(40),
+      "two words",
+      "evil\u001b[2Jlogin",
+      "line\nbreak",
+      "owner/repo",
+    ]) {
+      expect(accountRead(odd)).toBeNull();
+    }
+  });
+});
+
+describe("githubRepoOfRemote", () => {
+  test("reads the owner and name of a canonical GitHub remote on that host", () => {
+    expect(githubRepoOfRemote("https://github.com/Octo-Org/hello.world.git", "github.com")).toEqual(
+      { owner: "Octo-Org", name: "hello.world" },
+    );
+    expect(githubRepoOfRemote("http://ghe.example:8443/team/app.git", "GHE.example:8443")).toEqual({
+      owner: "team",
+      name: "app",
+    });
+  });
+
+  test("answers null for anything else", () => {
+    for (const remote of [
+      "not a url",
+      "ssh://git@github.com/o/r.git",
+      "https://gitlab.com/o/r.git",
+      "https://github.com/o/r",
+      "https://github.com/group/sub/r.git",
+      "https://github.com/-o/r.git",
+    ]) {
+      expect(githubRepoOfRemote(remote, "github.com")).toBeNull();
+    }
+  });
+});
+
+describe("githubInstalledOn", () => {
+  test("a live installation on the owner's account, in any case, counts", () => {
+    expect(githubInstalledOn([{ accountLogin: "Octo-Org", suspended: false }], "octo-org")).toBe(
+      true,
+    );
+  });
+
+  test("a suspended installation, another account, or none does not", () => {
+    expect(githubInstalledOn([{ accountLogin: "octo-org", suspended: true }], "octo-org")).toBe(
+      false,
+    );
+    expect(githubInstalledOn([{ accountLogin: "someone", suspended: false }], "octo-org")).toBe(
+      false,
+    );
+    expect(githubInstalledOn([], "octo-org")).toBe(false);
+  });
+});
+
+describe("runnerGithubRefusalLine", () => {
+  const NOW = 1_000_000;
+  const line = (error: Partial<RunnerGithubTokenError> & Pick<RunnerGithubTokenError, "code">) =>
+    runnerGithubRefusalLine({ resetAt: null, account: null, ...error }, NOW);
+
+  test("each refusal the person can fix gets one line naming the fix", () => {
+    expect(line({ code: "github_not_connected" })).toBe(
+      "volli: GitHub isn't connected. Connect it in Volli → Settings → Account.",
+    );
+    expect(line({ code: "github_needs_reconnect" })).toBe(
+      "volli: GitHub needs reconnecting. Reconnect it in Volli → Settings → Account.",
+    );
+    expect(line({ code: "github_not_installed", account: "Octo-Org" })).toBe(
+      "volli: Volli can't reach this repository. Install Volli on Octo-Org on GitHub.",
+    );
+    expect(line({ code: "github_not_installed" })).toBe(
+      "volli: Volli can't reach this repository. Install Volli on its owner on GitHub.",
+    );
+  });
+
+  test("a rate limit says when to try again", () => {
+    expect(line({ code: "github_rate_limited" })).toBe(
+      "volli: GitHub is rate limiting Volli. Try again in a few minutes.",
+    );
+    expect(line({ code: "github_rate_limited", resetAt: NOW + 30_000 })).toBe(
+      "volli: GitHub is rate limiting Volli. Try again in 1 minute.",
+    );
+    expect(line({ code: "github_rate_limited", resetAt: NOW - 5_000 })).toBe(
+      "volli: GitHub is rate limiting Volli. Try again in 1 minute.",
+    );
+    expect(line({ code: "github_rate_limited", resetAt: NOW + 4 * 60_000 + 1 })).toBe(
+      "volli: GitHub is rate limiting Volli. Try again in 5 minutes.",
+    );
+  });
+
+  test("other refusals add nothing", () => {
+    for (const code of [
+      "invalid_request",
+      "unauthenticated",
+      "not_a_runner",
+      "revoked",
+      "preview_access_required",
+      "not_claimed",
+      "not_your_runner",
+      "not_found",
+      "not_a_member",
+      "invalid_repo",
+      "github_unavailable",
+    ] as const) {
+      expect(line({ code })).toBeNull();
+    }
   });
 });

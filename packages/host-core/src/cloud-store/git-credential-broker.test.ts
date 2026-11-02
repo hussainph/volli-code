@@ -5,7 +5,7 @@
  * `fetch` semantics) → the answer git reads.
  */
 import { execFile } from "node:child_process";
-import { createServer } from "node:net";
+import { createServer, type Socket } from "node:net";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import { createSessionTokenRegistry } from "../session-tokens";
 import {
   askGitCredentialDaemon,
   createGitCredentialBroker,
+  GIT_CREDENTIAL_EXPLAIN_ONLY_ENV,
   runnerSessionGitEnv,
   serveGitCredentials,
 } from "./git-credential-broker";
@@ -83,7 +84,7 @@ async function world(options: { answer?: (body: unknown) => Response; allowHttp?
   const socketPath = join(dir, "git-credential.sock");
   const served = await serveGitCredentials({ socketPath, broker });
   closers.push(() => served.close());
-  const ask = (
+  const reply = (
     request: string,
     env: Record<string, string | undefined> = {
       VOLLI_SESSION: SESSION,
@@ -91,7 +92,8 @@ async function world(options: { answer?: (body: unknown) => Response; allowHttp?
     },
     action = "get",
   ) => askGitCredentialDaemon({ socketPath, action, request, env });
-  return { ask, fake, tokens, socketPath, sessionToken, sessions };
+  const ask = async (...args: Parameters<typeof reply>) => (await reply(...args)).answer;
+  return { ask, reply, fake, tokens, socketPath, sessionToken, sessions };
 }
 
 const GITHUB = "protocol=https\nhost=github.com\npath=acme/app.git\n\n";
@@ -254,6 +256,152 @@ describe("a runner Session's git credentials", () => {
     expect(tokens.github()).toEqual({ state: "disconnected" });
   });
 
+  it("a refusal the person can fix comes back as one stderr line, never a token", async () => {
+    const NOW = 5_000_000;
+    const refused = async (error: Record<string, unknown>) => {
+      const { reply } = await world({ answer: () => json(409, { error }) });
+      return reply(GITHUB);
+    };
+    expect(await refused({ code: "github_not_connected", message: "m" })).toEqual({
+      answer: "",
+      stderr: "volli: GitHub isn't connected. Connect it in Volli → Settings → Account.\n",
+    });
+    expect(await refused({ code: "github_needs_reconnect", message: "m" })).toEqual({
+      answer: "",
+      stderr: "volli: GitHub needs reconnecting. Reconnect it in Volli → Settings → Account.\n",
+    });
+    expect(await refused({ code: "github_not_installed", message: "m", account: "acme" })).toEqual({
+      answer: "",
+      stderr: "volli: Volli can't reach this repository. Install Volli on acme on GitHub.\n",
+    });
+    expect((await refused({ code: "github_rate_limited", message: "m" })).stderr).toBe(
+      "volli: GitHub is rate limiting Volli. Try again in a few minutes.\n",
+    );
+    // Not the person's to fix: git says what it says, Volli adds nothing.
+    expect(await refused({ code: "github_unavailable", message: "m" })).toEqual({
+      answer: "",
+      stderr: "",
+    });
+    // The broker's clock words a rate limit's wait.
+    const tokens = {
+      github: () => ({ state: "unknown" }) as const,
+      get: async () => ({
+        ok: false as const,
+        error: {
+          code: "github_rate_limited" as const,
+          message: "m",
+          resetAt: NOW + 120_000,
+          account: null,
+        },
+      }),
+    };
+    const broker = createGitCredentialBroker({
+      verifySession: () => SESSION,
+      repositoryOf: async () => REPO,
+      tokens,
+      now: () => NOW,
+    });
+    expect(
+      await broker.answer({ v: 1, action: "get", request: GITHUB, session: SESSION, token: "t" }),
+    ).toEqual({
+      answer: "",
+      stderr: "volli: GitHub is rate limiting Volli. Try again in 2 minutes.\n",
+    });
+  });
+
+  it("explain-only never answers a token, but still says why there is none", async () => {
+    const { reply, sessionToken } = await world();
+    const env = {
+      VOLLI_SESSION: SESSION,
+      VOLLI_SESSION_TOKEN: sessionToken,
+      [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1",
+    };
+    expect(await reply(GITHUB, env)).toEqual({ answer: "", stderr: "" });
+    const refusing = await world({
+      answer: () => json(409, { error: { code: "github_not_connected", message: "m" } }),
+    });
+    expect(
+      (
+        await refusing.reply(GITHUB, {
+          VOLLI_SESSION: SESSION,
+          VOLLI_SESSION_TOKEN: refusing.sessionToken,
+          [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1",
+        })
+      ).stderr,
+    ).toContain("Connect it in Volli");
+  });
+
+  it("the helper prints at most one plain line of what the runner sends for stderr", async () => {
+    const at = (name: string, line: string) => {
+      const socketPath = join(dir, name);
+      const open = new Set<Socket>();
+      const server = createServer((socket) => {
+        open.add(socket);
+        socket.on("error", () => {});
+        socket.end(line);
+      });
+      closers.push(
+        () =>
+          new Promise((resolve) => {
+            for (const socket of open) socket.destroy();
+            server.close(() => resolve());
+          }),
+      );
+      return new Promise<string>((resolve) => server.listen(socketPath, () => resolve(socketPath)));
+    };
+    const ask = async (line: string) =>
+      askGitCredentialDaemon({
+        socketPath: await at(`s${closers.length}.sock`, line),
+        action: "get",
+        request: GITHUB,
+        env: {},
+      });
+    // An older runner sends no stderr.
+    expect(await ask(`${JSON.stringify({ v: 1, answer: "a" })}\n`)).toEqual({
+      answer: "a",
+      stderr: "",
+    });
+    expect(
+      await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "one\u001b[2J\rline\nsecond" })}\n`),
+    ).toEqual({ answer: "", stderr: "one[2Jline\n" });
+    expect(await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "\nx" })}\n`)).toEqual({
+      answer: "",
+      stderr: "",
+    });
+    expect(await ask(`${JSON.stringify({ v: 2, answer: "a" })}\n`)).toEqual({
+      answer: "",
+      stderr: "",
+    });
+    expect(await ask("not json\n")).toEqual({ answer: "", stderr: "" });
+  });
+
+  it("Volli not installed on the repository's account is remembered for a minute and keeps the connection", async () => {
+    let now = 0;
+    const fake = site(() =>
+      json(409, { error: { code: "github_not_installed", message: "m", account: "acme" } }),
+    );
+    const tokens = createRunnerGithubTokens({
+      siteUrl: SITE,
+      runnerToken: async () => "jwt",
+      fetch: fake.fetch,
+      now: () => now,
+    });
+    const request = {
+      claim: { kind: "session" as const, sessionId: SESSION as never },
+      projectRepoId: REPO as never,
+    };
+    expect(await tokens.get(request)).toMatchObject({
+      ok: false,
+      error: { code: "github_not_installed", account: "acme" },
+    });
+    expect(tokens.github()).toEqual({ state: "unknown" });
+    await tokens.get(request);
+    expect(fake.calls).toHaveLength(1);
+    now += GITHUB_NOT_CONNECTED_TTL_MS;
+    await tokens.get(request);
+    expect(fake.calls).toHaveLength(2);
+  });
+
   it("concurrent askers share one request", async () => {
     const { ask, fake } = await world();
     await Promise.all([ask(GITHUB), ask(GITHUB), ask(GITHUB)]);
@@ -268,7 +416,7 @@ describe("a runner Session's git credentials", () => {
         request: GITHUB,
         env: {},
       }),
-    ).toBe("");
+    ).toEqual({ answer: "", stderr: "" });
     const broken = await serveGitCredentials({
       socketPath: join(dir, "broken.sock"),
       broker: {
@@ -286,7 +434,7 @@ describe("a runner Session's git credentials", () => {
         request: GITHUB,
         env: {},
       }),
-    ).toBe("");
+    ).toEqual({ answer: "", stderr: "" });
     writeFileSync(join(dir, "not-a-socket"), "x");
     await expect(
       serveGitCredentials({ socketPath: join(dir, "not-a-socket"), broker: broken as never }),
@@ -317,7 +465,7 @@ describe("a runner Session's git credentials", () => {
             action: call.action,
             request: call.input,
             env: call.env,
-          }).then((answer) => socket.end(answer));
+          }).then((reply) => socket.end(reply.answer));
         });
       });
       await new Promise<void>((resolve) => relay.listen(relayPath, resolve));
@@ -329,7 +477,7 @@ describe("a runner Session's git credentials", () => {
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const socket = createConnection(${JSON.stringify(relayPath)});
-socket.write(JSON.stringify({ action: process.argv[2], input, env: { VOLLI_SESSION: process.env.VOLLI_SESSION, VOLLI_SESSION_TOKEN: process.env.VOLLI_SESSION_TOKEN } }) + "\\n");
+socket.write(JSON.stringify({ action: process.argv[2], input, env: { VOLLI_SESSION: process.env.VOLLI_SESSION, VOLLI_SESSION_TOKEN: process.env.VOLLI_SESSION_TOKEN, ${GIT_CREDENTIAL_EXPLAIN_ONLY_ENV}: process.env.${GIT_CREDENTIAL_EXPLAIN_ONLY_ENV} } }) + "\\n");
 socket.pipe(process.stdout);
 `,
       );
@@ -380,6 +528,11 @@ socket.pipe(process.stdout);
       expect(
         await git(["credential", "fill"], "protocol=https\nhost=gitlab.example.com\n\n", github),
       ).toContain("password=other_pat");
+      // Known disconnected with nothing in the box's chain for GitHub: Volli's
+      // helper is asked last, explain-only, and hands out no token even though
+      // the runner holds one, so git fails rather than leak it to the store.
+      await expect(fill({ state: "disconnected" })).rejects.toThrow();
+      expect(readFileSync(stored, "utf8")).toBe("https://me:other_pat@gitlab.example.com\n");
     },
   );
 });
@@ -425,8 +578,22 @@ describe("runnerSessionGitEnv", () => {
     expect(env).not.toHaveProperty("GIT_AUTHOR_NAME");
   });
 
-  it("known disconnected, leaves the box's chain whole and installs no Volli helper", () => {
+  it("known disconnected, leaves the box's chain whole and appends Volli's helper, explain-only", () => {
     const env = runnerSessionGitEnv({}, { helperCommand: "!h", github: { state: "disconnected" } });
-    expect(env).toEqual({ GIT_TERMINAL_PROMPT: "0" });
+    expect(env).toEqual({
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
+      GIT_CONFIG_VALUE_0: "!h",
+      GIT_CONFIG_KEY_1: "credential.http://github.com.helper",
+      GIT_CONFIG_VALUE_1: "!h",
+      [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1",
+      GIT_TERMINAL_PROMPT: "0",
+    });
+    // Connected again: the mode is dropped even if the base still carries it.
+    const connected = runnerSessionGitEnv(
+      { [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1" },
+      { helperCommand: "!h", github: { state: "unknown" } },
+    );
+    expect(connected).not.toHaveProperty(GIT_CREDENTIAL_EXPLAIN_ONLY_ENV);
   });
 });

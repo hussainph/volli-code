@@ -10,10 +10,13 @@
  * `VOLLI_SESSION` and `VOLLI_SESSION_TOKEN`, and prints the runner's answer:
  * the owner's GitHub token for that Session, or nothing.
  *
- * Quiet by construction: stdout carries git's answer and nothing else, and
- * stderr stays empty (git shows a helper's stderr to whoever runs it). It
- * always exits 0: a runner that is down or has no token answers nothing, and
- * git moves on to the box's own credentials or fails without a prompt.
+ * Quiet by default: stdout carries git's answer and nothing else. Stderr
+ * (which git shows to whoever runs it) carries at most one line, and only
+ * when the runner says why there is no token and the person can fix it:
+ * GitHub not connected, needing a reconnect, Volli not installed on the
+ * repository's account, or a rate limit. It never names a token. It always
+ * exits 0: a runner that is down or has no token answers nothing, and git
+ * moves on to the box's own credentials or fails without a prompt.
  */
 import { join } from "node:path";
 
@@ -54,16 +57,16 @@ export async function runGitCredential(
   if (action === undefined) return 0;
   try {
     const paths = pathsFor(input.values, context);
-    context.out(
-      await askGitCredentialDaemon({
-        socketPath: gitCredentialSocketPath(paths.dataDir),
-        action,
-        request: await context.readStdin(),
-        env: context.env,
-      }),
-    );
+    const reply = await askGitCredentialDaemon({
+      socketPath: gitCredentialSocketPath(paths.dataDir),
+      action,
+      request: await context.readStdin(),
+      env: context.env,
+    });
+    context.out(reply.answer);
+    if (reply.stderr !== "") context.err(reply.stderr);
   } catch {
-    // Nothing on stderr either: see the module comment.
+    // Nothing on stderr: a helper failure is not the person's to fix.
   }
   return 0;
 }

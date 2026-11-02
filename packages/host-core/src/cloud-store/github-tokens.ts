@@ -4,8 +4,10 @@
  *
  * A grant is cached per claim and repository until the backend's `useUntil`
  * (already well before GitHub expires it); concurrent askers share one
- * request. `github_not_connected` is remembered for a minute, so a box whose
- * owner never connected GitHub does not ask on every git command. Nothing is
+ * request. `github_not_connected` and `github_not_installed` are remembered
+ * for a minute, so a box whose owner never connected GitHub, or never
+ * installed Volli on the repository's account, does not ask on every git
+ * command. Nothing is
  * written to disk, and a refresh token never reaches the runner.
  *
  * {@link RunnerGithubTokens.github} is what the newest answer taught:
@@ -42,7 +44,10 @@ export type RunnerGithubTokenAnswer =
   | { ok: true; grant: RunnerGithubTokenGrant }
   | { ok: false; error: RunnerGithubTokenError };
 
-/** How long "this owner hasn't connected GitHub" is believed without asking again. */
+/**
+ * How long "this owner hasn't connected GitHub" (or "Volli isn't installed on
+ * this repository's account") is believed without asking again.
+ */
 export const GITHUB_NOT_CONNECTED_TTL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -60,7 +65,7 @@ const keyOf = (request: RunnerGithubTokenRequest) =>
   `${request.claim.kind === "session" ? `s:${request.claim.sessionId}` : `j:${request.claim.jobId}`}:${request.projectRepoId}`;
 
 function failure(code: RunnerGithubTokenError["code"], message: string): RunnerGithubTokenAnswer {
-  return { ok: false, error: { code, message, resetAt: null } };
+  return { ok: false, error: { code, message, resetAt: null, account: null } };
 }
 
 export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
@@ -123,6 +128,9 @@ export function createRunnerGithubTokens(options: RunnerGithubTokensOptions) {
           } else if (answer.error.code === "github_not_connected") {
             cached.set(key, { answer, until: now() + GITHUB_NOT_CONNECTED_TTL_MS });
             github = { state: "disconnected" };
+          } else if (answer.error.code === "github_not_installed") {
+            // The owner is connected: only this repository is out of reach.
+            cached.set(key, { answer, until: now() + GITHUB_NOT_CONNECTED_TTL_MS });
           } else if (answer.error.code === "github_needs_reconnect") {
             github = { state: "disconnected" };
           }

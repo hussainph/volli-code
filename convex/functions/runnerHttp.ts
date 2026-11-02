@@ -35,7 +35,9 @@ import {
   RUNNER_TOKEN_TTL_MS,
   RunnerWireError,
   formatUserCode,
+  githubInstalledOn,
   githubNoreplyEmail,
+  githubRepoOfRemote,
   parseRunnerGithubTokenRequest,
   parseRunnerDeviceLinkPollRequest,
   parseRunnerDeviceLinkStartRequest,
@@ -55,6 +57,8 @@ import {
 import { internal } from "./_generated/api";
 import { httpAction, type ActionCtx } from "./_generated/server";
 import { mintGithubToken, type GithubMint } from "./githubTokens";
+import { githubClient } from "./lib/github/client";
+import { readGithubConfig } from "./lib/github/config";
 import { githubRemoteHost } from "./lib/runnerContext";
 import { mintSecret, mintUserCode, runnerSigningKey, signRunnerToken } from "./lib/runnerSecrets";
 
@@ -272,6 +276,7 @@ const GITHUB_TOKEN_STATUS_OF: Record<RunnerGithubTokenErrorCode, number> = {
   github_needs_reconnect: 409,
   github_unavailable: 503,
   github_rate_limited: 429,
+  github_not_installed: 409,
 };
 
 const GITHUB_MINT_REFUSAL: Record<
@@ -294,13 +299,35 @@ function githubTokenFailure(
   code: RunnerGithubTokenErrorCode,
   message: string,
   resetAt: number | null = null,
+  account?: string,
 ): Response {
   const seconds = resetAt === null ? null : Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
   return reply(
     GITHUB_TOKEN_STATUS_OF[code],
-    { error: { code, message, resetAt } },
+    { error: { code, message, resetAt, ...(account === undefined ? {} : { account }) } },
     seconds === null ? {} : { "retry-after": String(seconds) },
   );
+}
+
+/**
+ * The GitHub account a repository needs Volli installed on, when the person's
+ * token reaches no installation there; `null` when it does, when the remote is
+ * not a GitHub repository, or when GitHub could not say. Only a definite "not
+ * installed" refuses: any doubt hands the token out, and GitHub decides.
+ */
+async function missingInstallation(
+  remoteUrl: string | null,
+  userToken: string,
+): Promise<string | null> {
+  const app = readGithubConfig();
+  const repo = remoteUrl === null ? null : githubRepoOfRemote(remoteUrl, githubRemoteHost());
+  if (app === null || repo === null) return null;
+  try {
+    const installations = await githubClient(app).userInstallations(userToken);
+    return githubInstalledOn(installations, repo.owner) ? null : repo.owner;
+  } catch {
+    return null;
+  }
 }
 
 /** A refusal thrown by the authorization read, if it is one of this route's codes. */
@@ -326,7 +353,11 @@ export const githubToken = httpAction(async (ctx, request) => {
   if (identity === null) {
     return githubTokenFailure("unauthenticated", "Send this runner's token as a Bearer token.");
   }
-  let authorized: { ownerUserId: string; identity: { name: string; email: string } | null };
+  let authorized: {
+    ownerUserId: string;
+    identity: { name: string; email: string } | null;
+    remoteUrl: string | null;
+  };
   try {
     authorized = await ctx.runQuery(internal.runnerGithub.authorizeToken, body);
   } catch (error) {
@@ -345,6 +376,15 @@ export const githubToken = httpAction(async (ctx, request) => {
   if (!mint.ok) {
     const refusal = GITHUB_MINT_REFUSAL[mint.code];
     return githubTokenFailure(refusal.code, refusal.message, mint.resetAt);
+  }
+  const account = await missingInstallation(authorized.remoteUrl, mint.token);
+  if (account !== null) {
+    return githubTokenFailure(
+      "github_not_installed",
+      `Install Volli on ${account} on GitHub.`,
+      null,
+      account,
+    );
   }
   const grant: RunnerGithubTokenGrant = {
     token: mint.token,

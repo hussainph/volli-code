@@ -340,6 +340,59 @@ describe("POST /runner/github-token", () => {
     });
   });
 
+  test("a GitHub repository whose account has no installation the person reaches is refused, naming it", async () => {
+    const world = await runnerWorld();
+    await report(world, { remoteUrl: "git@github.test:acme/app.git" });
+    await connectGithub(world.t, world.alice.as);
+    const { sessionId, runner } = await claimedSession(world);
+    const body = { sessionId, projectRepoId: world.projectRepoId };
+    expect(await refusal(await askToken(runner, body))).toEqual({
+      status: 409,
+      code: "github_not_installed",
+      message: "Install Volli on acme on GitHub.",
+      resetAt: null,
+      account: "acme",
+    });
+    // An installation on another account, or a suspended one, does not reach it.
+    const dana = github.users.get(DANA.id)!;
+    github.addInstallation({ id: 71, account: { id: 9, login: "someone", type: "User" } });
+    github.addInstallation({
+      id: 72,
+      account: { id: 10, login: "acme", type: "Organization" },
+      suspended_at: "2025-01-01T00:00:00Z",
+    });
+    dana.installations.push(71, 72);
+    expect(await refusal(await askToken(runner, body))).toMatchObject({
+      code: "github_not_installed",
+    });
+    github.addInstallation({ id: 73, account: { id: 11, login: "ACME", type: "Organization" } });
+    dana.installations.push(73);
+    expect((await askToken(runner, body)).status).toBe(200);
+  });
+
+  test("GitHub failing the installation check, or a remote elsewhere, hands the token out", async () => {
+    const world = await runnerWorld();
+    await report(world, { remoteUrl: "git@github.test:acme/app.git" });
+    await connectGithub(world.t, world.alice.as);
+    const { sessionId, runner } = await claimedSession(world);
+    const body = { sessionId, projectRepoId: world.projectRepoId };
+    github.down = /^\/user\/installations$/u;
+    expect((await askToken(runner, body)).status).toBe(200);
+    github.down = null;
+    const other = await runnerWorld();
+    await report(other, { remoteUrl: "https://git.example.com/acme/app.git" });
+    await connectGithub(other.t, other.alice.as);
+    const elsewhere = await claimedSession(other);
+    expect(
+      (
+        await askToken(elsewhere.runner, {
+          sessionId: elsewhere.sessionId,
+          projectRepoId: other.projectRepoId,
+        })
+      ).status,
+    ).toBe(200);
+  });
+
   test("a due token is refreshed once; GitHub down during it is unavailable", async () => {
     const world = await runnerWorld();
     await connectGithub(world.t, world.alice.as);
