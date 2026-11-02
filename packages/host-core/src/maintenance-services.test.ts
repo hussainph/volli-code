@@ -423,9 +423,9 @@ describe("createHostMaintenance", () => {
     maintenance.stop();
     await new Promise((resolve) => setTimeout(resolve, 20));
     await maintenance.settled();
-    expect(testDb.db.prepare("SELECT session_id FROM session_projection_checkpoints").all()).toEqual(
-      [],
-    );
+    expect(
+      testDb.db.prepare("SELECT session_id FROM session_projection_checkpoints").all(),
+    ).toEqual([]);
   });
 
   it("stops without building a retention watch nobody started", () => {
