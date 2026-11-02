@@ -301,7 +301,7 @@ describe("runnerGithubRefusalLine", () => {
       "volli: Volli can't reach this repository. Install Volli on Octo-Org on GitHub.",
     );
     expect(line({ code: "github_not_installed" })).toBe(
-      "volli: Volli can't reach this repository. Install Volli on its owner on GitHub.",
+      "volli: Volli can't reach this repository. Install Volli on the repository's owner on GitHub.",
     );
   });
 

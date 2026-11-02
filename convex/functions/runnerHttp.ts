@@ -309,11 +309,17 @@ function githubTokenFailure(
   );
 }
 
+/** How long the installation check may add to a grant before it is skipped. */
+const INSTALLATION_CHECK_MS = 3_000;
+
 /**
  * The GitHub account a repository needs Volli installed on, when the person's
  * token reaches no installation there; `null` when it does, when the remote is
- * not a GitHub repository, or when GitHub could not say. Only a definite "not
- * installed" refuses: any doubt hands the token out, and GitHub decides.
+ * not a GitHub repository, or when GitHub could not say in time. Only a
+ * definite "not installed" refuses: any doubt hands the token out, and GitHub
+ * decides. A recorded remote may name an old owner (GitHub redirects git after
+ * a rename or transfer), so before refusing, the repository's current owner is
+ * asked for and checked too.
  */
 async function missingInstallation(
   remoteUrl: string | null,
@@ -322,11 +328,29 @@ async function missingInstallation(
   const app = readGithubConfig();
   const repo = remoteUrl === null ? null : githubRepoOfRemote(remoteUrl, githubRemoteHost());
   if (app === null || repo === null) return null;
+  const client = githubClient(app);
+  const check = async (): Promise<string | null> => {
+    const listed = await client.userInstallationList(userToken);
+    if (!listed.complete || githubInstalledOn(listed.installations, repo.owner)) return null;
+    const current = await client.userRepository(userToken, repo.owner, repo.name);
+    const owner = current?.owner ?? repo.owner;
+    return githubInstalledOn(listed.installations, owner) ? null : owner;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const installations = await githubClient(app).userInstallations(userToken);
-    return githubInstalledOn(installations, repo.owner) ? null : repo.owner;
-  } catch {
+    return await Promise.race([
+      check(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), INSTALLATION_CHECK_MS);
+      }),
+    ]);
+  } catch (error) {
+    console.warn("runner github-token: installation check failed; granting", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

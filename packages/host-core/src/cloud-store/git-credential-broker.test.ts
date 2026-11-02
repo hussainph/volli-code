@@ -17,7 +17,7 @@ import { createSessionTokenRegistry } from "../session-tokens";
 import {
   askGitCredentialDaemon,
   createGitCredentialBroker,
-  GIT_CREDENTIAL_EXPLAIN_ONLY_ENV,
+  GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG,
   runnerSessionGitEnv,
   serveGitCredentials,
 } from "./git-credential-broker";
@@ -91,7 +91,8 @@ async function world(options: { answer?: (body: unknown) => Response; allowHttp?
       VOLLI_SESSION_TOKEN: sessionToken,
     },
     action = "get",
-  ) => askGitCredentialDaemon({ socketPath, action, request, env });
+    explainOnly = false,
+  ) => askGitCredentialDaemon({ socketPath, action, request, env, explainOnly });
   const ask = async (...args: Parameters<typeof reply>) => (await reply(...args)).answer;
   return { ask, reply, fake, tokens, socketPath, sessionToken, sessions };
 }
@@ -311,24 +312,22 @@ describe("a runner Session's git credentials", () => {
 
   it("explain-only never answers a token, but still says why there is none", async () => {
     const { reply, sessionToken } = await world();
-    const env = {
-      VOLLI_SESSION: SESSION,
-      VOLLI_SESSION_TOKEN: sessionToken,
-      [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1",
-    };
-    expect(await reply(GITHUB, env)).toEqual({ answer: "", stderr: "" });
+    const env = { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: sessionToken };
+    expect(await reply(GITHUB, env, "get", true)).toEqual({
+      answer: "",
+      stderr: "volli: GitHub is connected now. Run the command again.\n",
+    });
     const refusing = await world({
       answer: () => json(409, { error: { code: "github_not_connected", message: "m" } }),
     });
-    expect(
-      (
-        await refusing.reply(GITHUB, {
-          VOLLI_SESSION: SESSION,
-          VOLLI_SESSION_TOKEN: refusing.sessionToken,
-          [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1",
-        })
-      ).stderr,
-    ).toContain("Connect it in Volli");
+    const refused = await refusing.reply(
+      GITHUB,
+      { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: refusing.sessionToken },
+      "get",
+      true,
+    );
+    expect(refused.answer).toBe("");
+    expect(refused.stderr).toContain("Connect it in Volli");
   });
 
   it("the helper prints at most one plain line of what the runner sends for stderr", async () => {
@@ -364,6 +363,9 @@ describe("a runner Session's git credentials", () => {
     expect(
       await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "one\u001b[2J\rline\nsecond" })}\n`),
     ).toEqual({ answer: "", stderr: "one[2Jline\n" });
+    expect(
+      await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "a\u202eb\u2028c" })}\n`),
+    ).toEqual({ answer: "", stderr: "ab\n" });
     expect(await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "\nx" })}\n`)).toEqual({
       answer: "",
       stderr: "",
@@ -456,15 +458,16 @@ describe("a runner Session's git credentials", () => {
           raw += chunk.toString("utf8");
           if (!raw.endsWith("\n")) return;
           const call = JSON.parse(raw) as {
-            action: string;
+            argv: string[];
             input: string;
             env: Record<string, string>;
           };
           void askGitCredentialDaemon({
             socketPath,
-            action: call.action,
+            action: call.argv.at(-1)!,
             request: call.input,
             env: call.env,
+            explainOnly: call.argv.includes(GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG),
           }).then((reply) => socket.end(reply.answer));
         });
       });
@@ -477,7 +480,7 @@ describe("a runner Session's git credentials", () => {
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const socket = createConnection(${JSON.stringify(relayPath)});
-socket.write(JSON.stringify({ action: process.argv[2], input, env: { VOLLI_SESSION: process.env.VOLLI_SESSION, VOLLI_SESSION_TOKEN: process.env.VOLLI_SESSION_TOKEN, ${GIT_CREDENTIAL_EXPLAIN_ONLY_ENV}: process.env.${GIT_CREDENTIAL_EXPLAIN_ONLY_ENV} } }) + "\\n");
+socket.write(JSON.stringify({ argv: process.argv.slice(2), input, env: { VOLLI_SESSION: process.env.VOLLI_SESSION, VOLLI_SESSION_TOKEN: process.env.VOLLI_SESSION_TOKEN } }) + "\\n");
 socket.pipe(process.stdout);
 `,
       );
@@ -583,17 +586,10 @@ describe("runnerSessionGitEnv", () => {
     expect(env).toEqual({
       GIT_CONFIG_COUNT: "2",
       GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
-      GIT_CONFIG_VALUE_0: "!h",
+      GIT_CONFIG_VALUE_0: "!h --explain-only",
       GIT_CONFIG_KEY_1: "credential.http://github.com.helper",
-      GIT_CONFIG_VALUE_1: "!h",
-      [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1",
+      GIT_CONFIG_VALUE_1: "!h --explain-only",
       GIT_TERMINAL_PROMPT: "0",
     });
-    // Connected again: the mode is dropped even if the base still carries it.
-    const connected = runnerSessionGitEnv(
-      { [GIT_CREDENTIAL_EXPLAIN_ONLY_ENV]: "1" },
-      { helperCommand: "!h", github: { state: "unknown" } },
-    );
-    expect(connected).not.toHaveProperty(GIT_CREDENTIAL_EXPLAIN_ONLY_ENV);
   });
 });

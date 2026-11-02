@@ -370,6 +370,30 @@ describe("POST /runner/github-token", () => {
     expect((await askToken(runner, body)).status).toBe(200);
   });
 
+  test("a remote naming an old owner is checked against the repository's current owner", async () => {
+    const world = await runnerWorld();
+    await report(world, { remoteUrl: "git@github.test:oldorg/app.git" });
+    await connectGithub(world.t, world.alice.as);
+    const { sessionId, runner } = await claimedSession(world);
+    const body = { sessionId, projectRepoId: world.projectRepoId };
+    const moved = {
+      id: 77,
+      name: "app",
+      owner: { login: "neworg" },
+      default_branch: "main",
+      archived: false,
+    };
+    github.reposByName.set("oldorg/app", moved);
+    // Named by its current owner, which has no installation yet.
+    expect(await refusal(await askToken(runner, body))).toMatchObject({
+      code: "github_not_installed",
+      account: "neworg",
+    });
+    github.addInstallation({ id: 81, account: { id: 12, login: "neworg", type: "Organization" } });
+    github.users.get(DANA.id)!.installations.push(81);
+    expect((await askToken(runner, body)).status).toBe(200);
+  });
+
   test("GitHub failing the installation check, or a remote elsewhere, hands the token out", async () => {
     const world = await runnerWorld();
     await report(world, { remoteUrl: "git@github.test:acme/app.git" });

@@ -375,7 +375,7 @@ export function runnerGithubRefusalLine(
       return "volli: GitHub needs reconnecting. Reconnect it in Volli → Settings → Account.";
     case "github_not_installed":
       return error.account === null
-        ? "volli: Volli can't reach this repository. Install Volli on its owner on GitHub."
+        ? "volli: Volli can't reach this repository. Install Volli on the repository's owner on GitHub."
         : `volli: Volli can't reach this repository. Install Volli on ${error.account} on GitHub.`;
     case "github_rate_limited": {
       if (error.resetAt === null) {

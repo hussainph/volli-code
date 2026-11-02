@@ -4,7 +4,9 @@
  *
  * A Session's commands install it as the GitHub host's only command-scope
  * credential helper ({@link gitCredentialHelperCommand}, through host-core's
- * `runnerSessionGitEnv`, which resets the box's helpers for that host). Git appends
+ * `runnerSessionGitEnv`, which resets the box's helpers for that host), or,
+ * while the owner is known to be disconnected, after the box's own helpers
+ * with `--explain-only`, when it never prints a token. Git appends
  * the action and writes its request on stdin; this asks the running runner
  * over `<dataDir>/git-credential.sock` (0600), naming the Session by its
  * `VOLLI_SESSION` and `VOLLI_SESSION_TOKEN`, and prints the runner's answer:
@@ -20,10 +22,21 @@
  */
 import { join } from "node:path";
 
-import { askGitCredentialDaemon } from "@volli/host-core/cloud-runner";
+import {
+  askGitCredentialDaemon,
+  GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG,
+} from "@volli/host-core/cloud-runner";
 
 import type { CommandContext, CommandInput } from "../commands";
-import { pathsFor } from "../shell/paths";
+import { PATH_OPTIONS, pathsFor } from "../shell/paths";
+
+const EXPLAIN_ONLY = GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG.replace(/^--/u, "");
+
+/** The helper's options: the paths, and the explain-only mode host-core may append. */
+export const GIT_CREDENTIAL_OPTIONS = {
+  ...PATH_OPTIONS,
+  [EXPLAIN_ONLY]: { type: "boolean" },
+} as const;
 
 /** The socket the running runner answers helper calls on. */
 export function gitCredentialSocketPath(dataDir: string): string {
@@ -62,6 +75,7 @@ export async function runGitCredential(
       action,
       request: await context.readStdin(),
       env: context.env,
+      explainOnly: input.values[EXPLAIN_ONLY] === true,
     });
     context.out(reply.answer);
     if (reply.stderr !== "") context.err(reply.stderr);

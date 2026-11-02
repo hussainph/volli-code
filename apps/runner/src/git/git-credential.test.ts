@@ -110,6 +110,25 @@ describe("volli-runner git-credential", () => {
     );
   });
 
+  it("with --explain-only, as host-core appends it after the box's helpers, never prints a token", async () => {
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir);
+    await runnerServing(dataDir);
+    const context = testContext({
+      root,
+      env: { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: "session-token" },
+      stdin: "protocol=https\nhost=github.com\n\n",
+    });
+    const routed = parseRunnerArgv(
+      ["git-credential", "--data-dir", dataDir, "--explain-only", "get"],
+      COMMANDS,
+    );
+    const { command, input } = routed as Extract<typeof routed, { kind: "command" }>;
+    expect(await command.run(input, context)).toBe(0);
+    expect(context.stdout()).toBe("");
+    expect(context.stderr()).toBe("volli: GitHub is connected now. Run the command again.\n");
+  });
+
   it("is silent and exits 0 when the runner is down, the action is missing or paths fail", async () => {
     const down = testContext({ root, stdin: "protocol=https\nhost=github.com\n\n" });
     expect(

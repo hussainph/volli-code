@@ -31,7 +31,7 @@ import type { RunnerHostFacts } from "@volli/shared/cloud";
 import { runRun } from "./commands/run";
 import { doctorCommand } from "./doctor/commands";
 import { installCommand, uninstallCommand } from "./install/commands";
-import { runGitCredential } from "./git/git-credential";
+import { GIT_CREDENTIAL_OPTIONS, runGitCredential } from "./git/git-credential";
 import { runLink, runUnlink } from "./link/commands";
 import type { RunnerDeployment } from "./link/deployment";
 import { loginCommand, logoutCommand } from "./login/commands";
@@ -169,8 +169,8 @@ export const COMMANDS: readonly RunnerCommand[] = [
   {
     name: "git-credential",
     summary: "Volli's git credential helper, run by git; not for people.",
-    usage: `${PATH_USAGE} <get|store|erase>`,
-    options: PATH_OPTIONS,
+    usage: `${PATH_USAGE} [--explain-only] <get|store|erase>`,
+    options: GIT_CREDENTIAL_OPTIONS,
     positionals: 1,
     run: runGitCredential,
   },

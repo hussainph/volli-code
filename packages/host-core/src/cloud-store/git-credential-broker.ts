@@ -13,14 +13,14 @@
  *   approve. Other hosts keep the box's chain. That holds connected (the
  *   token's host) and before any answer (`github.com`). Only when the owner is
  *   known to be disconnected is the box's chain left whole, with no Volli
- *   helper at all, so a connection made later cannot leak through it either;
- *   the next materialization's token request learns it. So that the person
- *   still learns why git failed, Volli's helper is then appended after the
- *   box's chain in explain-only mode ({@link GIT_CREDENTIAL_EXPLAIN_ONLY_ENV}):
- *   git asks it only when the box's own helpers answered nothing, and it
- *   never answers a token, whatever the runner has learned since. Git's
- *   terminal prompt is off, and the owner's commit identity is set when
- *   known. Command-scope
+ *   helper that could answer a token, so a connection made later cannot leak
+ *   through it either; the next materialization's token request learns it.
+ *   So that the person still learns why git failed, Volli's helper then
+ *   follows the box's chain in explain-only mode ({@link GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG}, part of
+ *   the configured command itself): git asks it only when the box's own
+ *   helpers answered nothing, and it never answers a token, whatever the
+ *   runner has learned since. Git's terminal prompt is off, and the owner's
+ *   commit identity is set when known. Command-scope
  *   configuration needs git 2.31; older git ignores it, so the box's own
  *   chain answers and no token is ever offered.
  * - **The helper → runner hop.** The helper sends git's request, the action,
@@ -69,11 +69,14 @@ const MAX_MESSAGE_BYTES = 64 * 1024;
 const SOCKET_TIMEOUT_MS = 20_000;
 
 /**
- * Set to `1` in a Session command's environment when Volli's helper sits after
- * the box's own chain ({@link runnerSessionGitEnv}, known disconnected): the
- * helper then only explains a refusal and never answers a token.
+ * Appended to Volli's helper command when it sits after the box's own chain
+ * ({@link runnerSessionGitEnv}, known disconnected): the helper then only
+ * explains a refusal and never answers a token. It is part of the configured
+ * command, so it cannot be separated from that entry, and a helper that does
+ * not know it refuses the call (fails closed). `volli-runner git-credential`
+ * accepts it.
  */
-export const GIT_CREDENTIAL_EXPLAIN_ONLY_ENV = "VOLLI_GIT_CREDENTIAL_EXPLAIN_ONLY";
+export const GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG = "--explain-only";
 
 /** One helper call, as the helper sends it. */
 export interface GitCredentialQuery {
@@ -141,7 +144,10 @@ export function createGitCredentialBroker(options: GitCredentialBrokerOptions) {
         return line === null ? NO_REPLY : { answer: "", stderr: `${line}\n` };
       }
       // Behind the box's own chain, a token would reach its helpers on approve.
-      if (query.explainOnly === true) return NO_REPLY;
+      // The next command's environment puts Volli's helper first again.
+      if (query.explainOnly === true) {
+        return { answer: "", stderr: "volli: GitHub is connected now. Run the command again.\n" };
+      }
       // The token is for the deployment's GitHub only.
       if (answer.grant.host !== host.toLowerCase()) return NO_REPLY;
       // The expiry keeps a box's own `store`/`cache` helper (git ≥ 2.41) from
@@ -270,6 +276,8 @@ export function askGitCredentialDaemon(input: {
   action: string;
   request: string;
   env: Readonly<Record<string, string | undefined>>;
+  /** The helper ran with {@link GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG}. */
+  explainOnly?: boolean;
   timeoutMs?: number;
 }): Promise<GitCredentialReply> {
   return new Promise((resolve) => {
@@ -290,7 +298,7 @@ export function askGitCredentialDaemon(input: {
         request: input.request,
         session: input.env.VOLLI_SESSION ?? null,
         token: input.env.VOLLI_SESSION_TOKEN ?? null,
-        explainOnly: input.env[GIT_CREDENTIAL_EXPLAIN_ONLY_ENV] === "1",
+        explainOnly: input.explainOnly === true,
       };
       socket.write(`${JSON.stringify(query)}\n`);
     });
@@ -313,7 +321,9 @@ export function askGitCredentialDaemon(input: {
 
 /** The first line of `text`, without control characters, newline-terminated; or "". */
 function oneStderrLine(text: string): string {
-  const line = (text.split("\n", 1)[0] ?? "").replace(/\p{Cc}/gu, "").slice(0, 512);
+  const line = (text.split(/[\n\u2028\u2029]/u, 1)[0] ?? "")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .slice(0, 512);
   return line === "" ? "" : `${line}\n`;
 }
 
@@ -341,11 +351,9 @@ export function runnerSessionGitEnv(
           [scope, ""],
           [scope, input.helperCommand],
         ]
-      : [[scope, input.helperCommand]];
+      : [[scope, `${input.helperCommand} ${GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG}`]];
   });
   const env = appendGitConfig(base, entries);
-  if (exclusive) delete env[GIT_CREDENTIAL_EXPLAIN_ONLY_ENV];
-  else env[GIT_CREDENTIAL_EXPLAIN_ONLY_ENV] = "1";
   env.GIT_TERMINAL_PROMPT = "0";
   if (github.state === "connected") {
     for (const role of ["AUTHOR", "COMMITTER"] as const) {
