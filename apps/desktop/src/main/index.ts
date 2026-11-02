@@ -1566,10 +1566,14 @@ const appStartup = app.whenReady().then(async () => {
   // The pictures a transcript card shows (VC-238): live captures bounded in
   // memory, model-requested screenshots also on disk under userData — never
   // the Blob store, whose Session links become the next turn's input.
+  // Both disks write off main's turn (VC-1082); an accepted quit waits for
+  // what they still hold (`settleBackgroundWork` below).
+  const browserPictureSink = browserPictureDisk(browserPicturesRoot(app.getPath("userData")));
+  const browserTraceSink = browserTraceDisk(browserTracesRoot(app.getPath("userData")));
   const browserPictures = new BrowserPictureStore({
     createId: randomUUID,
     now: Date.now,
-    persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+    persist: browserPictureSink,
   });
   // App shortcuts out of a focused Browser page (VC-301): the host delivers,
   // the handler map's `browserShortcuts.*` entries subscribe and hand focus back.
@@ -1613,7 +1617,7 @@ const appStartup = app.whenReady().then(async () => {
       createId: randomUUID,
       now: Date.now,
       frameOf: (pictureId) => browserPictures.copyOf(pictureId),
-      persist: browserTraceDisk(browserTracesRoot(app.getPath("userData"))),
+      persist: browserTraceSink,
     }),
     // The holder's name for the pill and the cursor label (VC-239), from the
     // Session's own projection. A launch with no runtime has no Sessions to
@@ -1650,7 +1654,11 @@ const appStartup = app.whenReady().then(async () => {
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
     settleBackgroundWork: async () => {
-      await restore?.settled();
+      await Promise.all([
+        restore?.settled(),
+        browserPictureSink.settled(),
+        browserTraceSink.settled(),
+      ]);
     },
     terminalQuit: prepareTerminalQuit,
     createSessionRpc,
