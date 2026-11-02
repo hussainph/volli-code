@@ -281,6 +281,52 @@ function collectNode(
 }
 
 /**
+ * Whether a walk reads a node's children: the rule {@link collectNode} follows.
+ * Ignored and silent structure splices its children up; a text leaf ends the
+ * walk (its children are Chromium's inline text boxes, which repeat it); every
+ * other line walks on.
+ */
+function walksChildren(node: AXNodeLike): boolean {
+  const role = roleOf(node).toLowerCase();
+  return node.ignored === true || SILENT_ROLES.has(role) || role === "" || !TEXT_ROLES.has(role);
+}
+
+/**
+ * The nodes the printers' walk visits whose children are not all in `byId`,
+ * in walk order (VC-1082).
+ *
+ * The walk is {@link collect}'s, node for node — the same visited set, node
+ * bound and depth bound, starting at `rootId` — at the widest bound any print
+ * walks (a find's, which a whole print shares; a snapshot's is a prefix of
+ * it). A tree read piece by piece is therefore complete for every print once
+ * this answers empty: each node a print can reach is present, and so is each
+ * child a bound stops at, so the print marks its cut exactly as it would on
+ * the whole tree.
+ */
+export function axTreeGaps(byId: ReadonlyMap<string, AXNodeLike>, rootId: string): string[] {
+  const gaps: string[] = [];
+  const visited = new Set<string>();
+  let remainingNodes = FIND_MAX_NODES;
+  const walk = (node: AXNodeLike, treeDepth: number): void => {
+    if (visited.has(node.nodeId) || remainingNodes === 0 || treeDepth > SNAPSHOT_MAX_TREE_DEPTH)
+      return;
+    visited.add(node.nodeId);
+    remainingNodes -= 1;
+    if (!walksChildren(node)) return;
+    let gap = false;
+    for (const childId of node.childIds ?? []) {
+      const child = byId.get(childId);
+      if (child === undefined) gap = true;
+      else walk(child, treeDepth + 1);
+    }
+    if (gap) gaps.push(node.nodeId);
+  };
+  const root = byId.get(rootId);
+  if (root !== undefined) walk(root, 0);
+  return gaps;
+}
+
+/**
  * The tree worth printing. The roots are the nodes nothing points at — CDP
  * returns the tree flat, in document order, with `RootWebArea` first.
  */

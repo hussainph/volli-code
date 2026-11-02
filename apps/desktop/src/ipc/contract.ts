@@ -1,4 +1,4 @@
-import type { RendererLogEntry } from "@volli/shared";
+import type { RendererLogEntry, RendererStallBatch } from "@volli/shared";
 import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   FileMutationResult,
@@ -1456,6 +1456,13 @@ export interface SupportInfo {
    * report reads exactly as before. Not required.
    */
   cloudRunner?: string;
+  /**
+   * The last day's stalls from this machine's perf store (VC-1092) as one
+   * line: hours observed, then per process the count, total and p95 and its
+   * worst operations by code-owned name — never a Session, a path or a
+   * message. Absent when the store did not open. Not required.
+   */
+  perfStalls?: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;
@@ -2650,6 +2657,10 @@ export interface VolliSendContract {
   // for main's log (VC-699). Nobody waits on a log line, and an invoke per
   // line would put a round-trip on the path of whatever is failing.
   "volli:renderer-log": { args: [entry: RendererLogEntry] };
+  // Send-based (ipcRenderer.send, not invoke): a batch of this window's long
+  // frames and slow inputs for main's log (VC-1091). Nobody waits on it, and
+  // a round-trip would add work to a window that is already running slow.
+  "volli:renderer-stalls": { args: [batch: RendererStallBatch] };
   // Send-based (ipcRenderer.send, not invoke): the renderer's answer to a
   // `volli:client-state-flush` push (VC-577) — every pending client-local
   // write it held has been acknowledged by main. Main asked, so main is the

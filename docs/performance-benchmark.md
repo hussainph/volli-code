@@ -2,6 +2,8 @@
 
 The repeatable desktop matrix measures production behavior with a generated,
 real-scale database. It does not enable product optimizations.
+To find and track stalls in the app you actually run, use `volli perf`
+([performance-signals.md](performance-signals.md)).
 
 > Compare runs only on the same machine, in the same power/thermal state, with
 > the same preset, seed, build, repetition count and load arm.

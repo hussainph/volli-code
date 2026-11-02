@@ -18,6 +18,7 @@ import { SessionTeamHeader } from "@renderer/components/sessions/session-team";
 import { toast } from "sonner";
 import { useStore } from "zustand";
 
+import { holdInteraction, markInteraction } from "@renderer/lib/renderer-stalls";
 import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
@@ -1845,6 +1846,7 @@ function ChatPlaneContent({
    */
   const submitComposer = React.useCallback(
     (text: string, intent: ComposerIntent) => {
+      markInteraction("send");
       // Read-only (VC-576): the box is already inert; a press that raced the
       // host going away keeps its draft and says why.
       if (teamReadOnly) return;
@@ -1946,6 +1948,9 @@ function ChatPlaneContent({
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const turnRunning = working || turnActive || openingSendIds.size > 0;
+  // A turn running in view: its frames are the stream's unless a person's own
+  // interaction claims them (VC-1091).
+  React.useEffect(() => (turnRunning ? holdInteraction("stream") : undefined), [turnRunning]);
   // Runtime failures need recovery only once work has stopped. A new turn
   // removes the old failure surface, even before Attention catches up — all
   // but a row about that turn itself (a restart resume's).

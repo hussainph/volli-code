@@ -226,7 +226,7 @@ export interface SessionEnginePorts {
    *
    * A listing's fold cache (VC-388) changes how often this fires without
    * changing whether it does: a cache hit answers straight from {@link
-   * ListingFold} and never calls {@link projectStoredSession}, so a checkpoint
+   * ListingFold} and never reads the checkpoint row, so a checkpoint
    * failure for a Session that stays cached is reported once — on the fold
    * that populated the entry — rather than once per listing, until the entry
    * is evicted or the Session's log moves again.
@@ -299,6 +299,105 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    * (VC-800): the working set {@link evictListingFolds} sizes the cache to.
    */
   const rosterSizes = new Map<string, number>();
+  /**
+   * The decoded checkpoint of each Session a fact was recently recorded for,
+   * advanced past that fact (VC-1076). Insertion-ordered, so the first key is
+   * the least recently written Session. See {@link HotCheckpoint}.
+   */
+  const hotCheckpoints = new Map<string, HotCheckpoint>();
+
+  /**
+   * The Session's checkpoint at its log head, from memory when a recorded fact
+   * left it there and from the ledger otherwise. `shared` says the answer is
+   * the cache's own object, which a caller that hands it out must copy.
+   *
+   * A hot entry answers only when it is AT the head and was built from the
+   * same base row. Both are needed and together they are sufficient: entries
+   * are only ever stored once their transaction committed (see
+   * {@link rememberHotCheckpoint}), committed events are immutable, so a
+   * checkpoint through the head's sequence is exactly the fold of the log —
+   * and any append this entry did not see (another verb's, another engine's
+   * read path never appends) moves the head past it, which is a miss.
+   */
+  const loadStored = (
+    transaction: SessionLedgerTransaction,
+    session: Session,
+  ): { stored: StoredSessionProjection; shared: boolean } => {
+    const hot = hotCheckpoints.get(session.id);
+    if (
+      hot !== undefined &&
+      sameSession(hot.session, session) &&
+      hot.stored.checkpoint.throughSequence === transaction.latestEventSequence(session.id)
+    ) {
+      hotCheckpoints.delete(session.id);
+      hotCheckpoints.set(session.id, hot);
+      return { stored: hot.stored, shared: true };
+    }
+    return {
+      stored: storedSessionProjection(transaction, session, reportCheckpointFailure),
+      shared: false,
+    };
+  };
+
+  /**
+   * Keeps a committed fact's advanced checkpoint hot. Called only after the
+   * transaction that appended the fact resolved, so a rolled-back append can
+   * never leave a checkpoint behind whose cursor a different fact later
+   * reaches. A late caller never replaces a newer entry.
+   */
+  const rememberHotCheckpoint = (entry: HotCheckpoint): void => {
+    const current = hotCheckpoints.get(entry.session.id);
+    if (
+      current !== undefined &&
+      current.stored.checkpoint.throughSequence >= entry.stored.checkpoint.throughSequence
+    ) {
+      return;
+    }
+    hotCheckpoints.delete(entry.session.id);
+    hotCheckpoints.set(entry.session.id, entry);
+    for (const oldest of hotCheckpoints.keys()) {
+      if (hotCheckpoints.size <= HOT_CHECKPOINT_LIMIT) break;
+      hotCheckpoints.delete(oldest);
+    }
+  };
+
+  /** `getSession`'s projection: never written back, and copied when shared. */
+  const readProjection = (
+    transaction: SessionLedgerTransaction,
+    session: Session,
+  ): SessionProjection => {
+    const { stored, shared } = loadStored(transaction, session);
+    return shared
+      ? plainProjectionCopy(stored.checkpoint.projection)
+      : stored.checkpoint.projection;
+  };
+
+  /**
+   * Records one appended fact against the checkpoint it was checked against:
+   * refreshes the durable row on the write cadence, and returns the entry to
+   * keep hot once the transaction commits.
+   */
+  const advanceStored = (
+    transaction: SessionLedgerTransaction,
+    session: Session,
+    stored: StoredSessionProjection,
+    appended: SessionEvent,
+  ): HotCheckpoint => {
+    // The cache's own copy of the fact: the payload holds objects the
+    // observer handed in, and the event goes back out to the caller.
+    const checkpoint = advanceSessionProjection(
+      stored.checkpoint,
+      [plainProjectionCopy(appended)],
+      session,
+    );
+    const persistedThrough = refreshProjectionCheckpoint(
+      transaction,
+      checkpoint,
+      stored.persistedThrough,
+      reportCheckpointFailure,
+    );
+    return { session, stored: { checkpoint, persistedThrough } };
+  };
 
   /**
    * Trims the cache to {@link SESSION_LISTING_CACHE_LIMIT} or the rosters it
@@ -364,9 +463,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       listingFolds.set(session.id, cached);
       return cached.projection;
     }
-    const projection = frozenProjectionCopy(
-      projectStoredSessionAndPersist(transaction, session, reportCheckpointFailure),
-    );
+    const { stored, shared } = loadStored(transaction, session);
+    if (!shared) persistReadFold(transaction, stored, reportCheckpointFailure);
+    const projection = frozenProjectionCopy(stored.checkpoint.projection);
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
     return projection;
@@ -551,7 +650,8 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     },
 
     async observe(observation) {
-      return ports.ledger.transaction((transaction) => {
+      let hot: HotCheckpoint | null = null;
+      const recorded = await ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(observation.sessionId);
         if (!session) throw new SessionEngineNotFoundError(observation.sessionId);
         // No whole-log read here (VC-356). Recording one fact used to list every
@@ -654,7 +754,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             );
           }
 
-          const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+          const { stored } = loadStored(transaction, session);
           assertReceiptObservation(transaction, session, stored.checkpoint.projection, observation);
           const sequence = transaction.latestEventSequence(session.id) + 1;
           const event = receiptRecordedEvent(
@@ -668,7 +768,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           );
           transaction.appendReceipt(event.payload.receipt);
           transaction.appendEvent(event);
-          refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
+          hot = advanceStored(transaction, session, stored, event);
           return event;
         }
 
@@ -703,7 +803,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return existingEvent;
         }
 
-        const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+        const { stored } = loadStored(transaction, session);
         assertObservableFact(stored.checkpoint.projection, observation);
         assertPendingStartReservation(stored.checkpoint.projection, observation);
         const event: SessionEvent = {
@@ -718,9 +818,12 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           payload,
         };
         transaction.appendEvent(event);
-        refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
+        hot = advanceStored(transaction, session, stored, event);
         return event;
       });
+      // Committed: only now may the advanced checkpoint answer a later read.
+      if (hot !== null) rememberHotCheckpoint(hot);
+      return recorded;
     },
 
     async submit(request) {
@@ -739,7 +842,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         // it reached for the same whole-log read `observe` did (VC-356). The
         // replay branch above already returned, so nothing here needs the log
         // itself — only the folded state and the next sequence.
-        const projection = projectStoredSession(transaction, session, reportCheckpointFailure);
+        // Read-only use of the projection: nothing below hands it out, so the
+        // hot checkpoint may answer without a copy.
+        const projection = loadStored(transaction, session).stored.checkpoint.projection;
         const routeResolution = resolveCommandRoute(projection, request.intent);
         const command: SessionCommand = {
           ...commandRequest,
@@ -965,7 +1070,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const session = transaction.getSession(query.sessionId);
         // Deliberately read-only, unlike a listing: `getSession` answers
         // previews and dry runs that promise no durable change at all.
-        return session ? projectStoredSession(transaction, session, reportCheckpointFailure) : null;
+        return session ? readProjection(transaction, session) : null;
       });
     },
 
@@ -1084,6 +1189,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     },
 
     async saveProjectionCheckpoint(checkpoint) {
+      // Someone else wrote the durable row: the hot entry's idea of how far
+      // behind it is no longer holds, so the next fact starts from the row.
+      hotCheckpoints.delete(checkpoint.sessionId);
       return ports.ledger.transaction((transaction) =>
         transaction.saveProjectionCheckpoint(checkpoint),
       );
@@ -1269,6 +1377,43 @@ function frozenProjectionCopy<T>(value: T): T {
   return Object.freeze(copy) as T;
 }
 
+/**
+ * How many Sessions keep a decoded checkpoint in memory between facts
+ * (VC-1076): the Sessions facts are being recorded for right now.
+ *
+ * Without it, every runtime fact re-read its Session's checkpoint row, hashed
+ * it, parsed it and checked it before folding the tail — about 5 ms per fact
+ * for a 1 MB checkpoint, which a long chat's commands and receipts grow into.
+ * The live set is small (a person runs tens of Sessions, not hundreds), and a
+ * Session past the bound only pays what every fact paid before. Measured
+ * checkpoints average 12 KB; the bound is what keeps the rare 1 MB one from
+ * multiplying.
+ */
+export const HOT_CHECKPOINT_LIMIT = 64;
+
+/** One Session's checkpoint at a committed log head, and the row it was folded against. */
+interface HotCheckpoint {
+  /** The base row the fold used; compared like {@link ListingFold.session}. */
+  session: Session;
+  /** Advanced to the head; `persistedThrough` tracks the durable row's cursor. */
+  stored: StoredSessionProjection;
+}
+
+/**
+ * A plain (unfrozen) deep copy of a JSON-shaped value — see
+ * {@link frozenProjectionCopy} for why a recursive copy is sufficient. Used
+ * where a hot checkpoint's projection leaves the engine (`getSession`, which
+ * promises callers a fresh graph) and for the appended fact the hot
+ * checkpoint keeps, whose payload objects belong to the observer.
+ */
+function plainProjectionCopy<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item: unknown) => plainProjectionCopy(item)) as T;
+  const copy: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) copy[key] = plainProjectionCopy(child);
+  return copy as T;
+}
+
 interface StoredSessionProjection {
   checkpoint: SessionProjectionCheckpoint;
   /**
@@ -1315,14 +1460,6 @@ function storedSessionProjection(
   };
 }
 
-function projectStoredSession(
-  transaction: SessionLedgerTransaction,
-  session: Session,
-  onCheckpointFailure: (error: unknown) => void,
-): SessionProjection {
-  return storedSessionProjection(transaction, session, onCheckpointFailure).checkpoint.projection;
-}
-
 /**
  * A read path's fold, written back to the durable cache when the row it
  * started from was missing, unusable, or a whole refresh window behind
@@ -1345,45 +1482,44 @@ function projectStoredSession(
  * no events has nothing to cache. Never throws: a failed write is a slower
  * next read, reported, not a failed read.
  */
-function projectStoredSessionAndPersist(
+function persistReadFold(
   transaction: SessionLedgerTransaction,
-  session: Session,
+  stored: StoredSessionProjection,
   onCheckpointFailure: (error: unknown) => void,
-): SessionProjection {
-  const stored = storedSessionProjection(transaction, session, onCheckpointFailure);
+): void {
   const { checkpoint, persistedThrough } = stored;
   const stale =
     persistedThrough === null ||
     checkpoint.throughSequence - persistedThrough >= CHECKPOINT_REFRESH_EVENTS;
-  if (stale && checkpoint.throughSequence > 0) {
-    try {
-      transaction.saveProjectionCheckpoint(checkpoint);
-    } catch (error) {
-      onCheckpointFailure(error);
-    }
+  if (!stale || checkpoint.throughSequence === 0) return;
+  try {
+    transaction.saveProjectionCheckpoint(checkpoint);
+  } catch (error) {
+    onCheckpointFailure(error);
   }
-  return checkpoint.projection;
 }
 
 /**
- * Folds one just-appended fact into the derived cache when it has drifted far
- * enough to be worth a write. Never throws: the checkpoint is rebuildable, so
- * a failed refresh is slower, not wrong.
+ * Writes a checkpoint already advanced past a just-appended fact to the
+ * derived cache when it has drifted far enough to be worth a write, and
+ * returns the cursor the durable row now holds. Never throws: the checkpoint
+ * is rebuildable, so a failed refresh is slower, not wrong.
  */
 function refreshProjectionCheckpoint(
   transaction: SessionLedgerTransaction,
-  session: Session,
-  stored: StoredSessionProjection,
-  appended: SessionEvent,
+  advanced: SessionProjectionCheckpoint,
+  persistedThrough: number | null,
   onCheckpointFailure: (error: unknown) => void,
-): void {
-  if (appended.sequence - (stored.persistedThrough ?? 0) < CHECKPOINT_REFRESH_EVENTS) return;
+): number | null {
+  if (advanced.throughSequence - (persistedThrough ?? 0) < CHECKPOINT_REFRESH_EVENTS) {
+    return persistedThrough;
+  }
   try {
-    transaction.saveProjectionCheckpoint(
-      advanceSessionProjection(stored.checkpoint, [appended], session),
-    );
+    transaction.saveProjectionCheckpoint(advanced);
+    return advanced.throughSequence;
   } catch (error) {
     onCheckpointFailure(error);
+    return persistedThrough;
   }
 }
 
