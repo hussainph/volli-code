@@ -26,8 +26,11 @@ async function main() {
   });
   const deployment = await readDeployment({ deployment: "staging" }, REPO);
   const controller = new AbortController();
+  // `on`, not `once`: a repeated Ctrl-C while a refresh is in flight must not
+  // kill the process before it removes the file.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"])
-    process.once(signal, () => {
+    process.on(signal, () => {
+      if (controller.signal.aborted) return;
       log("stopping; removing the token file");
       controller.abort();
     });
@@ -42,7 +45,9 @@ async function main() {
       // challenge, state); no token.
       log(`sign in as the rehearsal account in the browser:\n  ${url}`);
       if (process.platform === "darwin")
-        spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+        spawn("open", [url], { stdio: "ignore", detached: true })
+          .on("error", () => log("could not open a browser; open the URL above"))
+          .unref();
     },
   });
 }

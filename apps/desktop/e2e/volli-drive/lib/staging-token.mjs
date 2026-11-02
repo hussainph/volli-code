@@ -32,11 +32,11 @@ const { workosProvider } = await import(account("workos.ts"));
 export { workosProvider };
 
 /** How long the person has to finish the browser sign-in. */
-export const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
+const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
 /** Refresh this long before expiry when the token lives long enough to allow it. */
-export const REFRESH_MARGIN_MS = 60 * 1000;
+const REFRESH_MARGIN_MS = 60 * 1000;
 /** The wait after a transient refresh failure (offline, a 5xx). */
-export const RETRY_MS = 15 * 1000;
+const RETRY_MS = 15 * 1000;
 const MIN_DELAY_MS = 250;
 
 /**
@@ -130,6 +130,9 @@ export async function runTokenFile({
   const pkce = createPkcePair();
   const state = newState();
   const callback = await listenForCallback({ state, timeoutMs: signInTimeoutMs, signal });
+  // The loopback listener and its timer are unref'd (desktop main stays alive
+  // on its own); this process has nothing else running while the person signs in.
+  const hold = setInterval(() => {}, 1 << 30);
   let tokens;
   try {
     await openUrl(
@@ -140,7 +143,14 @@ export async function runTokenFile({
         connection,
       }),
     );
-    const result = await callback.result;
+    let result;
+    try {
+      result = await callback.result;
+    } catch (error) {
+      // Stopped before the browser came back: a normal stop, nothing written.
+      if (signal?.aborted) return;
+      throw error;
+    }
     if (result.kind !== "code") throw new Error(`sign-in did not finish: ${result.error}`);
     tokens = await provider.exchangeCode({
       code: result.code,
@@ -148,6 +158,7 @@ export async function runTokenFile({
       redirectUri: callback.redirectUri,
     });
   } finally {
+    clearInterval(hold);
     callback.close();
   }
   try {

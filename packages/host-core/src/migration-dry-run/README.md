@@ -44,7 +44,8 @@ Follow [`cloud-deploy.md` §1–8](../../../../docs/runbooks/cloud-deploy.md) wi
    to a mode-0600 file containing only that token. It is re-read on each call,
    so something must replace it before expiry: run the staging token helper
    below for the whole rehearsal. A frozen environment token must live long
-   enough for the whole rehearsal (WorkOS's default is 5 minutes). Set `VOLLI_MOVE_ADMIN_KEY` to the deployment-scoped
+   enough for the whole rehearsal (WorkOS's default is 5 minutes). Set
+   `VOLLI_MOVE_ADMIN_KEY` to the deployment-scoped
    operator key. These are explicit inputs: the harness never discovers
    credentials, unlocks the keychain, or reads the copied account/Pi auth.
    Do not put tokens in argv, reports, git, tickets, or terminal history.
@@ -68,23 +69,29 @@ before each expiry. It prints times and outcomes, never a token. It reads the
 staging client id from the same checkout-local `.scratch/deployments/staging.json`
 the UI check uses (below), so create that first; it has no production mode.
 
-In a separate terminal, before starting the harness and for its whole run
-(through both cleanups):
+First, in the **harness shell**, make the private rehearsal root and print it:
 
 ```sh
-REHEARSAL_ROOT=$(mktemp -d /tmp/volli-rehearsal.XXXXXX)   # reuse it below
+REHEARSAL_ROOT=$(mktemp -d /tmp/volli-rehearsal.XXXXXX); echo "$REHEARSAL_ROOT"
+export VOLLI_MOVE_TOKEN_FILE="$REHEARSAL_ROOT/move-token"
+```
+
+Then, in a **separate terminal**, start the helper with that printed path and
+leave it running for the harness's whole run (through both cleanups):
+
+```sh
 node apps/desktop/e2e/volli-drive/staging-token.mjs \
-  --out "$REHEARSAL_ROOT/move-token" --connection github   # or google
+  --out '<printed root>/move-token' --connection github   # or google
 ```
 
 Sign in as the **rehearsal account** in the browser it opens (the URL is also
-printed). Wait for `signed in; token written`, then in the harness shell
-`export VOLLI_MOVE_TOKEN_FILE="$REHEARSAL_ROOT/move-token"` and start the
-harness. Leave the helper running. Ctrl-C stops it and removes the file. A
-transient refresh failure (offline, a 5xx) is retried every 15 s and logged; if
-WorkOS refuses the refresh token, the helper removes the file and exits 1. Rerun
-it, sign in again, then resume the harness (`--cleanup` recovery below) if it
-failed meanwhile.
+printed). Wait for `signed in; token written` before starting the harness.
+Ctrl-C stops the helper and removes the file. A transient refresh failure
+(offline, a 5xx) is retried every 15 s and logged. If WorkOS refuses the
+refresh token, the helper removes the file and exits 1; a refresh that timed
+out after WorkOS already rotated the token ends the same way. Rerun it, sign in
+again, then resume the harness (`--cleanup` recovery below) if it failed
+meanwhile.
 
 ### Run on the profile copy
 
@@ -96,7 +103,7 @@ while the engine runs. Choose **new** scratch/report paths on an APFS volume:
 pnpm install
 mkdir -p .scratch/rehearsal
 SOURCE="$HOME/Library/Application Support/Volli Code"
-# REHEARSAL_ROOT: the same private root the token helper writes into.
+# REHEARSAL_ROOT: the root made above, in this same shell.
 COPY="$REHEARSAL_ROOT/profile"
 REPORT="$PWD/.scratch/rehearsal/report.json"
 

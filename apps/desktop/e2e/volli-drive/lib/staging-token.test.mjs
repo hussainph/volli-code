@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import {
@@ -180,4 +182,72 @@ test("refuses an unknown connection before listening", async () => {
     runTokenFile({ provider: {}, out: "/tmp/x", connection: "okta", openUrl: () => {} }),
     /github or google/,
   );
+});
+
+test("a stop before the browser returns is a normal stop; a provider error is not", async () => {
+  await withDir(async (dir) => {
+    const out = join(dir, "token");
+    const controller = new AbortController();
+    await runTokenFile({
+      provider: workosProvider({ clientId: "client_staging", apiBase: "http://127.0.0.1:9" }),
+      out,
+      connection: "github",
+      openUrl: () => setImmediate(() => controller.abort()),
+      log: () => {},
+      signal: controller.signal,
+    });
+    await assert.rejects(lstat(out), { code: "ENOENT" });
+    await assert.rejects(
+      runTokenFile({
+        provider: workosProvider({ clientId: "client_staging", apiBase: "http://127.0.0.1:9" }),
+        out,
+        connection: "github",
+        openUrl: async (url) => {
+          const authorize = new URL(url);
+          const callback = new URL(authorize.searchParams.get("redirect_uri"));
+          callback.searchParams.set("error", "access_denied");
+          callback.searchParams.set("state", authorize.searchParams.get("state"));
+          setImmediate(() => void fetch(callback));
+        },
+        log: () => {},
+      }),
+      /sign-in did not finish: access_denied/,
+    );
+  });
+});
+
+test("the process stays alive while the person signs in, and Ctrl-C ends it cleanly", async () => {
+  await withDir(async (dir) => {
+    const lib = fileURLToPath(new URL("./staging-token.mjs", import.meta.url));
+    const child = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const { runTokenFile, workosProvider } = await import(${JSON.stringify(lib)});
+         const controller = new AbortController();
+         process.on("SIGINT", () => controller.abort());
+         await runTokenFile({
+           provider: workosProvider({ clientId: "c", apiBase: "http://127.0.0.1:9" }),
+           out: ${JSON.stringify(join(dir, "token"))},
+           connection: "github",
+           openUrl: () => process.stdout.write("waiting\\n"),
+           log: () => {},
+           signal: controller.signal,
+         });
+         process.stdout.write("stopped\\n");`,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    let stdout = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    const exited = new Promise((resolve) => child.once("exit", (code) => resolve(code)));
+    await waitFor(() => stdout.includes("waiting"));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(child.exitCode, null, "still waiting for the browser");
+    child.kill("SIGINT");
+    assert.equal(await exited, 0);
+    assert.match(stdout, /stopped/);
+    assert.deepEqual(await readdir(dir), []);
+  });
 });
