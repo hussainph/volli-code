@@ -644,6 +644,17 @@ describe("facade captured ports and capability degradations", () => {
         projectBaseBranch: "trunk",
       }),
     );
+    // A project that never chose a base hands none on; the reader resolves it.
+    vi.mocked(getProjectById).mockReturnValue({
+      id: "p",
+      path: "/repo",
+      ticketPrefix: "VC",
+    } as never);
+    expect(await instructions("t")).toBe("ticket VC-7");
+    expect(readTicket).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ projectBaseBranch: null }),
+    );
     // No project, no instructions — and the baseline's port is the same one.
     vi.mocked(getProjectById).mockReturnValue(undefined);
     expect(await skills.instructions!("p", null)).toBeNull();
