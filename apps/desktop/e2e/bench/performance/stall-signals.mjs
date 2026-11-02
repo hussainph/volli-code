@@ -260,6 +260,13 @@ export function armSignals(repetitions, { summarize, mainStallThresholdMs }) {
         (stall) => `${stall.door}\u0000${stall.operation}`,
         (stall) => ({ door: stall.door, operation: stall.operation }),
       ).slice(0, TOP),
+      // What ran last before each unattributed stall: a lead, never the cause
+      // (`stall.ts`), but usually the work an await continuation belongs to.
+      unattributedHints: grouped(
+        main.filter((stall) => stall.attribution === "unattributed"),
+        (stall) => stall.lastOperation ?? "none",
+        (stall) => ({ lastOperation: stall.lastOperation ?? "none" }),
+      ).slice(0, TOP),
       byInteraction: Object.fromEntries(
         windowIds.map((id) => {
           const totals = repetitions.map(
@@ -342,6 +349,20 @@ export function signalsMarkdown(arms, labelOf) {
     for (const operation of arm.signals.main.topOperations) {
       lines.push(
         `| ${arm.name} | \`${operation.door}\` | \`${operation.operation}\` | ${operation.count} | ${operation.totalMs} ms | ${operation.maxMs} ms |`,
+      );
+    }
+  }
+  lines.push(
+    "",
+    "### Unattributed main stalls by last operation (a hint, not a cause)",
+    "",
+    "| Load | last operation before it | stalls | total | max |",
+    "|---|---|---:|---:|---:|",
+  );
+  for (const arm of withSignals) {
+    for (const hint of arm.signals.main.unattributedHints ?? []) {
+      lines.push(
+        `| ${arm.name} | \`${hint.lastOperation}\` | ${hint.count} | ${hint.totalMs} ms | ${hint.maxMs} ms |`,
       );
     }
   }

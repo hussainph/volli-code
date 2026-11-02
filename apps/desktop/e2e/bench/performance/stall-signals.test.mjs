@@ -162,6 +162,9 @@ describe("arm signals", () => {
       totalMs: 700,
       maxMs: 400,
     });
+    expect(signals.main.unattributedHints).toEqual([
+      { lastOperation: "volli:data-bootstrap", count: 1, totalMs: 250, maxMs: 250 },
+    ]);
     expect(signals.main.byInteraction).toMatchObject({
       cold_launch: { count: 2, totalMs: 650, maxMs: 400 },
       workspace_switch: { count: 1, totalMs: 300 },
@@ -196,6 +199,7 @@ describe("arm signals", () => {
     expect(markdown).toContain("| idle | Workspace switch | 1 | 300 ms | 300 ms |");
     expect(markdown).toContain("| idle | `ipc` | `volli:session-list` | 2 | 700 ms | 400 ms |");
     expect(markdown).toContain("| idle | `draft-typing` | input | 1 | 120 ms | 120 ms |");
+    expect(markdown).toContain("| idle | `volli:data-bootstrap` | 1 | 250 ms | 250 ms |");
     expect(markdown).not.toContain("stream-only");
   });
 });
