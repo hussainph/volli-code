@@ -38,6 +38,28 @@ const GITHUB_ENV = {
   webUrl: "GITHUB_WEB_URL",
 } as const;
 
+/**
+ * The six variables an App needs, all set or none: with any one unset
+ * `readGithubConfig` answers `null`. `health:deploymentChecks` names each one
+ * a partial set is missing (`lib/deploymentChecks.ts`).
+ */
+export const GITHUB_APP_VARIABLES = [
+  GITHUB_ENV.appId,
+  GITHUB_ENV.slug,
+  GITHUB_ENV.clientId,
+  GITHUB_ENV.clientSecret,
+  GITHUB_ENV.privateKey,
+  GITHUB_ENV.webhookSecrets,
+] as const;
+
+/** Whether `value` counts as set for `name`, by the rule `readGithubConfig` applies. */
+export function isGithubVariableSet(name: string, value: string | undefined): boolean {
+  const trimmed = (value ?? "").trim();
+  return name === GITHUB_ENV.webhookSecrets
+    ? parseWebhookSecrets(trimmed).length > 0
+    : trimmed !== "";
+}
+
 function read(name: string): string {
   const value = process.env[name];
   return typeof value === "string" ? value.trim() : "";
