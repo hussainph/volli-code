@@ -17,6 +17,12 @@
  * Work an executor reports from its own listeners carries the Session and
  * attachment, and joins a trace only by identifier (`log/correlation`): a
  * turn's end joins the trace its start had. Otherwise it carries none.
+ *
+ * Each call's synchronous part is also timed as the Session's main-thread
+ * work (VC-1090, `door: "runtime"`): attaching and a dispatch
+ * (`dispatch:<kind>`), so a stall there names the Session instead of landing
+ * in `unattributed`. The facts an executor reports are timed where they are
+ * written (`session-control/session-wake.ts`): its sink only queues them.
  */
 import type {
   BindingHandle,
@@ -26,7 +32,7 @@ import type {
   ObservationSink,
 } from "@volli/session-engine";
 
-import { logContext, withLogContext, withRootLogContext } from "../log/context";
+import { logContext, withLogContext, withMainSpan, withRootLogContext } from "../log/context";
 import { commandTrace } from "../log/correlation";
 
 export function correlatedExecutor(adapter: NativeHarnessAdapter): NativeHarnessAdapter {
@@ -36,9 +42,11 @@ export function correlatedExecutor(adapter: NativeHarnessAdapter): NativeHarness
     adapterVersion: adapter.adapterVersion,
     runtime: adapter.runtime,
     async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
-      const handle = await withRootLogContext(
-        { sessionId: spec.sessionId, attachmentId: spec.attachmentId },
-        () => adapter.attach(spec, sink),
+      const sessionId = spec.sessionId;
+      const handle = await withRootLogContext({ sessionId, attachmentId: spec.attachmentId }, () =>
+        withMainSpan({ door: "runtime", operation: "attach", sessionId }, () =>
+          adapter.attach(spec, sink),
+        ),
       );
       return correlatedHandle(handle);
     },
@@ -59,6 +67,16 @@ function correlatedHandle(handle: BindingHandle): BindingHandle {
 }
 
 function dispatchUnderCommandTrace(
+  handle: BindingHandle,
+  command: HarnessCommand,
+): ReturnType<BindingHandle["dispatch"]> {
+  return withMainSpan(
+    { door: "runtime", operation: `dispatch:${command.kind}`, sessionId: command.sessionId },
+    () => dispatchTraced(handle, command),
+  );
+}
+
+function dispatchTraced(
   handle: BindingHandle,
   command: HarnessCommand,
 ): ReturnType<BindingHandle["dispatch"]> {

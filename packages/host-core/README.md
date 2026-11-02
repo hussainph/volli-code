@@ -373,6 +373,15 @@ log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or
   `attribution: "unattributed"` with the last door call as a hint, never its
   trace. An hourly `main stall load` line rolls up the count, loop-delay
   p95/max and the top operations. The desktop starts it with its log.
+  Work no door starts carries a span of its own (`withMainSpan`, VC-1090):
+  a Session's runtime (`door: "runtime"`: fact writes, the wake fan-out, Pi
+  events, tool calls), projections (`"projection"`), host timers (`"timer"`)
+  and fan-outs to windows (`"broadcast"`); the innermost span over the
+  threshold wins and names its parent. A block of many short spans is
+  logged as `"aggregate"`, one mostly spent in GC as `"gc"`, and one main
+  spent off the CPU as `"off-cpu"`. The roll-up adds `unattributedShare`,
+  `offCpuShare` and per-door totals; it is written once more when the
+  monitor stops (`VOLLI_MAIN_STALL_SUMMARY_MS` sets the interval).
 - **Renderer stalls land beside them** (VC-1091). Desktop main, not
   host-core, writes them: each window's Long Animation Frames and Event Timing
   entries over 100 ms arrive in batches on `volli:renderer-stalls`, are read

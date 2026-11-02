@@ -35,6 +35,10 @@ import { readSessionProvenance, readSessionProvenances } from "../db/session-pro
 import { getTicketRow } from "../db/tickets-repo";
 import { readSessionUnread, readSessionUnreads } from "../db/session-read-repo";
 import { sessionListingRow, sessionListingRows } from "./listing-row";
+import { withMainSpan } from "../log/context";
+
+/** The rows' build (VC-1090). */
+const LISTING_ROWS = { door: "projection", operation: "listing-rows" } as const;
 
 /**
  * How many Sessions one stretch of the rows step reads and builds before the
@@ -55,29 +59,31 @@ export async function sessionListingRowsForRoster(
     // Between chunks, never before the first: a one-chunk roster costs what
     // it always did.
     if (from > 0) await yieldToHost();
-    const chunk = sessions.slice(from, from + SESSION_LISTING_ROWS_CHUNK);
-    const provenanceOf = readSessionProvenances(
-      db,
-      chunk.map((session) => ({
-        sessionId: session.session.id,
-        ticketId: session.session.ticketId,
-      })),
-    );
-    // The second per-Session fact a row carries (VC-30), joined here for
-    // exactly the reason provenance is: one set-based read per chunk, and the
-    // same answer the push channel reads one Session at a time.
-    const readOf = readSessionUnreads(
-      db,
-      chunk.map((session) => session.session.id),
-    );
-    rows.push(
-      ...sessionListingRows(
+    // Each chunk is timed (VC-1090): it runs after the door's await, outside its span.
+    const built = withMainSpan(LISTING_ROWS, () => {
+      const chunk = sessions.slice(from, from + SESSION_LISTING_ROWS_CHUNK);
+      const provenanceOf = readSessionProvenances(
+        db,
+        chunk.map((session) => ({
+          sessionId: session.session.id,
+          ticketId: session.session.ticketId,
+        })),
+      );
+      // The second per-Session fact a row carries (VC-30), joined here for
+      // exactly the reason provenance is: one set-based read per chunk, and the
+      // same answer the push channel reads one Session at a time.
+      const readOf = readSessionUnreads(
+        db,
+        chunk.map((session) => session.session.id),
+      );
+      return sessionListingRows(
         chunk,
         (session) => provenanceOf(session.session.id),
         liveAttachmentIds,
         (session) => readOf(session.session.id),
-      ),
-    );
+      );
+    });
+    rows.push(...built);
   }
   return rows;
 }

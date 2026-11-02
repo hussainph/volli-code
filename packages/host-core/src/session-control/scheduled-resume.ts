@@ -53,6 +53,7 @@ import type {
 
 import type { NotificationRequest } from "@volli/shared";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("scheduled-resume");
 
@@ -142,7 +143,7 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
         : Math.min(Math.max(nextAt - now(), 0), SCHEDULED_RESUME_TICK_MS);
     timer = setTimer(delay, () => {
       timer = null;
-      void pass();
+      void withMainSpan({ door: "timer", operation: "scheduled-resume" }, pass);
     });
   }
 

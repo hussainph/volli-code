@@ -138,6 +138,7 @@ import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
 import type { TurnAttachments } from "../turn-attachments";
+import { withMainSpan } from "../log/context";
 import { hostLogger } from "../log/root";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
@@ -747,6 +748,8 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
     ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
+    // The stall log names the Session behind a Pi event or a tool's start (VC-1090).
+    mainSpan: withMainSpan,
     ...(options.persistActivityImage === undefined
       ? {}
       : { persistActivityImage: options.persistActivityImage }),

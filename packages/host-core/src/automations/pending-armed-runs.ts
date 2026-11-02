@@ -22,6 +22,7 @@ import {
 
 import type { LogFields } from "../log/logger";
 import type { RunAutomationOutcome } from "./run";
+import { withMainSpan } from "../log/context";
 
 export interface DeliberateMoveArrival {
   projectId: string;
@@ -157,7 +158,11 @@ export function createPendingArmedRunCoordinator(
       pending.id,
       deps.setTimer(delay, () => {
         timers.delete(pending.id);
-        track(settle(pending.id));
+        track(
+          withMainSpan({ door: "timer", operation: "automation-armed-run" }, () =>
+            settle(pending.id),
+          ),
+        );
       }),
     );
   }

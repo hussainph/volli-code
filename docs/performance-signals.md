@@ -23,8 +23,19 @@ names, never content:
 - `door/operation` for work a door started (`ipc/volli:board-load`, a socket
   verb, a Session RPC call) or a labelled span (a Session's runtime, a host
   timer, a broadcast).
+- Labelled spans for work no door starts (`withMainSpan`): `runtime/…` for
+  a Session's work on main (`observe:<kind>` fact writes, `wake`, `pi:<event>`,
+  `tool:<name>`, `dispatch:<kind>`), `projection/…` for Session projections
+  (`get-session`, `listing-rows`), `timer/<name>` for host timers
+  (`retention-poll`, `session-watchdog`, `backup-schedule`, …) and
+  `broadcast/<channel>` for fan-outs to windows. The innermost span over the
+  threshold wins; its `hint` is the span it ran in. A block made of many short
+  spans is filed under the one that ran longest (kind `aggregate`).
+- `gc/<kind>` for a block mostly spent in garbage collection, and
+  `off-cpu/wait` for one in which main's own thread barely ran: a blocking
+  call, or a machine too busy to schedule it. Neither is code a span can name.
 - `unattributed/unattributed` for main lag nothing explains. Its `hint` is
-  the last door call before it: where to start looking, never a claim.
+  the last door call or span before it: where to start looking, never a claim.
 - `renderer/<operation>` for a window, with the interaction `label`
   (`pane-switch`, `draft-typing`, …).
 

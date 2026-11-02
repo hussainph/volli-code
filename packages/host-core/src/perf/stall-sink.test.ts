@@ -63,13 +63,22 @@ describe("the perf store's stall hook", () => {
   });
 
   it("records the real monitor's unattributed stall under unattributed, with its hint", () => {
-    const monitor = startMainStallMonitor({ tickMs: 50, thresholdMs: 200 });
+    // On the CPU throughout, and no GC: the block stays unattributed (VC-1090).
+    const monitor = startMainStallMonitor({
+      tickMs: 50,
+      thresholdMs: 200,
+      threadCpuMs: () => clock,
+      observeGc: () => () => {},
+    });
     monitors.push(monitor);
     withTrace(null, { door: "socket", operation: "ticket.list" }, () => {
       clock += 1;
     });
     // The door call above ran 1 ms inside this tick, so the lag reads 401.
     clock += 50 + 400;
+    vi.advanceTimersByTime(50);
+    // Held one tick, for the GC pauses inside it to arrive.
+    clock += 50;
     vi.advanceTimersByTime(50);
     expect(rows).toEqual([
       expect.objectContaining({

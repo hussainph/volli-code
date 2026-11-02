@@ -5,11 +5,13 @@ import type {
   SessionEngine,
   SubmitSessionCommandResult,
 } from "@volli/session-engine";
-import type { SessionEvent, SessionInput } from "@volli/shared";
+import type { LogRecord, SessionEvent, SessionInput } from "@volli/shared";
 
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject } from "../db/test-helpers";
+import { installHostLog } from "../log/root";
+import { startMainStallMonitor } from "../log/stall";
 import type { TestDb } from "../db/test-helpers";
 import { createSessionWakeBus, type SessionWake } from "./session-wake";
 
@@ -327,5 +329,60 @@ describe("the Session wake bus", () => {
     void bus.engine.listEvents({} as never);
     void bus.engine.reportUsage({} as never);
     for (const read of Object.values(reads)) expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Holds the event loop for `ms`, as a slow synchronous transaction would. */
+function block(ms: number): void {
+  const until = performance.now() + ms;
+  while (performance.now() < until) {
+    // Busy: nothing else in this process runs until it returns.
+  }
+}
+
+describe("the Session wake bus's main-thread spans (VC-1090)", () => {
+  it("names the Session and kind behind a blocking fact write, and the fan-out after it", async () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    ctx.db
+      .prepare(
+        "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?, ?, NULL, ?, 1)",
+      )
+      .run("s-one", project.id, "s-one");
+    const { engine } = writingEngine(ctx.db);
+    const inner = engine.observe;
+    const bus = createSessionWakeBus(
+      {
+        ...engine,
+        observe: (observation) => {
+          block(40);
+          return inner(observation);
+        },
+      },
+      { db: ctx.db },
+    );
+    bus.subscribe(() => block(40));
+    const records: LogRecord[] = [];
+    const undoLog = installHostLog({
+      level: "info",
+      sink: { write: (record) => records.push(record) },
+    });
+    const monitor = startMainStallMonitor({ thresholdMs: 30 });
+    try {
+      await bus.engine.observe({ kind: "turn.completed", sessionId: "s-one" } as never);
+    } finally {
+      monitor.stop();
+      undoLog();
+    }
+    expect(records.filter((record) => record.msg === "main stall")).toEqual([
+      expect.objectContaining({
+        attribution: "span",
+        door: "runtime",
+        operation: "observe:turn.completed",
+        sessionId: "s-one",
+      }),
+      expect.objectContaining({ attribution: "span", door: "runtime", operation: "wake" }),
+    ]);
   });
 });

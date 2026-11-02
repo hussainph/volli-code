@@ -87,6 +87,7 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
+import { onRawIpc } from "./raw-ipc";
 import {
   applyQuietAppPolicy,
   hideDockForMenuBar,
@@ -2122,7 +2123,7 @@ const appStartup = app.whenReady().then(async () => {
   // What each window is showing, for the focused-target rule. A `send`: it
   // flips on every navigation, needs no reply, and main's copy is advisory —
   // a report that never arrives costs one duplicate alert.
-  ipcMain.on(
+  onRawIpc(
     "volli:notification-active-target" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {
       const window = BrowserWindow.fromWebContents(event.sender);
@@ -2436,7 +2437,7 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
 
-  ipcMain.on(
+  onRawIpc(
     "volli:unsaved-documents" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
       recordUnsavedDocuments(args[0]);
@@ -2565,7 +2566,7 @@ const appStartup = app.whenReady().then(async () => {
   // The draft flush-and-ack barrier (VC-577): menu-bar entry and a system
   // shutdown ask each renderer to save its drafts before a window goes.
   const clientStateFlush = createClientStateFlush({ newRequestId: () => randomUUID() });
-  ipcMain.on(
+  onRawIpc(
     "volli:client-state-flushed" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
       clientStateFlush.acknowledge(args[0]);
