@@ -60,7 +60,7 @@ name: CI
 #     older builds read back (migrations, backup/restore, ledger, blobs) or the
 #     N-1 harness — where a change can break an older build yet pass against
 #     the base. Anything else is caught on the merge. Measured repeat flakers stay in
-#     smoke-quarantine.yml (nightly, non-gating). Quarantine policy: AGENTS.md.
+#     smoke-quarantine.yml (nightly, non-gating). Quarantine policy: docs/development/smoke-tests.md.
 #     Every failed smoke retries ONCE in a fresh profile; retry-green is FLAKY
 #     in the job summary, and both attempts' evidence is uploaded for 30 days.
 #   - A COARSE path gate skips the macOS lane for changes that provably cannot

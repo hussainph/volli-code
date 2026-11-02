@@ -1,7 +1,7 @@
 name: Smoke quarantine
 
 # Non-gating observation lane, not deleted coverage. Repeat-flake threshold,
-# evidence and return criteria: AGENTS.md, Smoke quarantine requirements.
+# evidence and return criteria: docs/development/smoke-tests.md, Measured quarantine.
 # Each entry has a tracked repair ticket.
 # A smoke red is visible in the summary/artifact but does not make this workflow
 # red (or send failed-smoke emails). Infrastructure/build failures still do.
