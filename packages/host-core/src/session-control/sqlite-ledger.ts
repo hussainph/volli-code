@@ -57,9 +57,43 @@ export interface SqliteSessionLedgerScope {
   bindings?: Readonly<Record<`scope${string}`, string | number | null>>;
 }
 
-function birthPayload(sessionId: string): string {
-  return `(SELECT e.payload FROM session_events e WHERE e.session_id = ${sessionId}
-    AND json_extract(e.payload, '$.kind') = 'session.created' ORDER BY e.sequence LIMIT 1) AS birth_payload`;
+/** The base row's own columns; its birth payload is joined in JS ({@link birthPayloads}). */
+const SESSION_COLUMNS = "id, project_id, ticket_id, role, parent_session_id, title, created_at";
+
+/**
+ * A Session's birth payload — its first `session.created` event, the one fact
+ * a base row is decoded from that `sessions` does not hold — memoized per
+ * database connection (VC-1076).
+ *
+ * It used to be a correlated subquery in every base-row read. That is an index
+ * seek per Session, but the row it lands on is the Session's second event,
+ * scattered across the whole events table, so a roster read touched one cold
+ * page per Session: measured on a 1.9 GB profile, a 4,542-Session roster took
+ * 3.3 s cold against 82 ms for the same statement without it — and it was paid
+ * again whenever folding evicted those pages, which a first listing does.
+ *
+ * Memoizing is sound because the answer is an immutable fact: events are
+ * insert-only and a Session's first `session.created` is appended in the same
+ * transaction that creates the row. Only a FOUND payload is kept, so a legacy
+ * Session with no birth event is asked again rather than pinned absent, and an
+ * entry is only kept once the transaction that read it has COMMITTED at the
+ * top level (see {@link SqliteSessionLedger.transaction}), so a rolled-back
+ * create can never leave a payload behind for an id that may be reused.
+ *
+ * Keyed by connection so a host that reopens its database (a restore) starts
+ * empty. Entries are a few hundred bytes and are never evicted: Sessions are
+ * deleted only with their project, so this holds at most one payload per
+ * Session read since the connection opened.
+ */
+const birthPayloads = new WeakMap<Database.Database, Map<string, string>>();
+
+function birthPayloadMemo(db: Database.Database): Map<string, string> {
+  let memo = birthPayloads.get(db);
+  if (memo === undefined) {
+    memo = new Map();
+    birthPayloads.set(db, memo);
+  }
+  return memo;
 }
 
 /**
@@ -74,9 +108,17 @@ export class SqliteSessionLedger implements SessionLedger {
 
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
     let appended: readonly SessionEvent[] = [];
+    // Only a top-level transaction's reads may be memoized: a nested one's
+    // commit is a savepoint release that its caller can still roll back.
+    const births = this.db.inTransaction ? null : new Map<string, string>();
     const settled = settleTransaction(this.db, () => {
       let open = true;
-      const transaction = new SqliteSessionLedgerTransaction(this.db, () => open, this.scope);
+      const transaction = new SqliteSessionLedgerTransaction(
+        this.db,
+        () => open,
+        this.scope,
+        births,
+      );
       try {
         const value = work(transaction);
         transaction.assertReceiptEventPairs();
@@ -89,6 +131,10 @@ export class SqliteSessionLedger implements SessionLedger {
     // Logged once committed, inside the operation that appended them (VC-699).
     return settled.then((value) => {
       if (appended.length > 0) logSessionEvents(appended);
+      if (births !== null && births.size > 0) {
+        const memo = birthPayloadMemo(this.db);
+        for (const [sessionId, payload] of births) memo.set(sessionId, payload);
+      }
       return value;
     });
   }
@@ -145,8 +191,29 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     private readonly db: Database.Database,
     private readonly isOpen: () => boolean,
     private readonly scope?: SqliteSessionLedgerScope,
+    /** Birth payloads read here, kept by the ledger once this commits; null keeps none. */
+    private readonly births: Map<string, string> | null = null,
   ) {
     this.scopeBindings = { ...scope?.bindings };
+  }
+
+  /** A base row decoded with its birth payload, from the memo when it has one. */
+  private decodeSessionRow(row: unknown): Session {
+    const value = asRecord(row, "sessions row");
+    const sessionId = readString(value.id, "sessions row.id");
+    let birth: string | null = birthPayloadMemo(this.db).get(sessionId) ?? null;
+    if (birth === null) {
+      const found = prepared(
+        this.db,
+        `SELECT e.payload FROM session_events e WHERE e.session_id = ?
+           AND json_extract(e.payload, '$.kind') = 'session.created' ORDER BY e.sequence LIMIT 1`,
+      ).get(sessionId) as unknown;
+      if (found !== undefined) {
+        birth = readString(rowValue(found, "payload", "birth payload"), "birth payload");
+        this.births?.set(sessionId, birth);
+      }
+    }
+    return decodeSession({ ...value, birth_payload: birth }, "sessions row");
   }
 
   private readonly scopeBindings: Readonly<Record<`scope${string}`, string | number | null>>;
@@ -159,10 +226,9 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const row = prepared(
       this.db,
-      `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at,
-        ${birthPayload("sessions.id")} FROM sessions WHERE id = @sessionId${this.scopeSql("sessions.id")}`,
+      `SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = @sessionId${this.scopeSql("sessions.id")}`,
     ).get({ sessionId, ...this.scopeBindings }) as unknown;
-    return row === undefined ? null : decodeSession(row, "sessions row");
+    return row === undefined ? null : this.decodeSessionRow(row);
   }
 
   listSessions(query: ListSessionsQuery): readonly Session[] {
@@ -175,8 +241,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
           : "";
     const rows = prepared(
       this.db,
-      `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at,
-                ${birthPayload("sessions.id")}
+      `SELECT ${SESSION_COLUMNS}
            FROM sessions
           WHERE project_id = @projectId${scope}${this.scopeSql("sessions.id")}
           ORDER BY created_at DESC, id COLLATE BINARY DESC`,
@@ -184,7 +249,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       ...(query.scope === "ticket" ? query : { projectId: query.projectId }),
       ...this.scopeBindings,
     }) as unknown[];
-    return rows.map((row) => decodeSession(row, "sessions row"));
+    return rows.map((row) => this.decodeSessionRow(row));
   }
 
   countSessions(query: ListSessionsQuery): number {
@@ -951,8 +1016,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const rows = prepared(
       this.db,
-      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at,
-                ${birthPayload("s.id")}
+      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at
            FROM sessions s
           WHERE 1 = 1${this.scopeSql("s.id")} AND EXISTS (
                 SELECT 1
@@ -963,7 +1027,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
                 )
           ORDER BY s.created_at DESC, s.id COLLATE BINARY DESC`,
     ).all(this.scopeBindings) as unknown[];
-    return rows.map((row) => decodeSession(row, "sessions row"));
+    return rows.map((row) => this.decodeSessionRow(row));
   }
 
   private assertEventForeignKeys(event: SessionEvent): void {

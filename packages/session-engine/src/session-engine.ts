@@ -365,7 +365,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return cached.projection;
     }
     const projection = frozenProjectionCopy(
-      projectStoredSession(transaction, session, reportCheckpointFailure),
+      projectStoredSessionAndPersist(transaction, session, reportCheckpointFailure),
     );
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
@@ -963,7 +963,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async getSession(query) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
-        return session ? projectStoredSession(transaction, session, reportCheckpointFailure) : null;
+        return session
+          ? projectStoredSessionAndPersist(transaction, session, reportCheckpointFailure)
+          : null;
       });
     },
 
@@ -1319,6 +1321,45 @@ function projectStoredSession(
   onCheckpointFailure: (error: unknown) => void,
 ): SessionProjection {
   return storedSessionProjection(transaction, session, onCheckpointFailure).checkpoint.projection;
+}
+
+/**
+ * A read path's fold, written back to the durable cache when the row it
+ * started from was missing, unusable, or a whole refresh window behind
+ * (VC-1076).
+ *
+ * Before this, only `observe` ever wrote a checkpoint, so a Session that was
+ * merely LISTED — one with no checkpoint yet, one whose row an older build
+ * wrote at a schema version this build refuses, or one whose row fell behind
+ * while facts arrived through `submit` — folded its whole log on every read,
+ * on every launch, forever. The fold has already been paid for here, so
+ * persisting it costs one encode and one row; not persisting it costs the
+ * same fold again on the next launch.
+ *
+ * The rule is the write path's own cadence (`refreshProjectionCheckpoint`):
+ * a usable row less than {@link CHECKPOINT_REFRESH_EVENTS} behind is left
+ * alone, so a read never writes more often than a fact does. A Session with
+ * no events has nothing to cache. Never throws: a failed write is a slower
+ * next read, reported, not a failed read.
+ */
+function projectStoredSessionAndPersist(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  onCheckpointFailure: (error: unknown) => void,
+): SessionProjection {
+  const stored = storedSessionProjection(transaction, session, onCheckpointFailure);
+  const { checkpoint, persistedThrough } = stored;
+  const stale =
+    persistedThrough === null ||
+    checkpoint.throughSequence - persistedThrough >= CHECKPOINT_REFRESH_EVENTS;
+  if (stale && checkpoint.throughSequence > 0) {
+    try {
+      transaction.saveProjectionCheckpoint(checkpoint);
+    } catch (error) {
+      onCheckpointFailure(error);
+    }
+  }
+  return checkpoint.projection;
 }
 
 /**

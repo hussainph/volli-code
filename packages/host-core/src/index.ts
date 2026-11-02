@@ -204,6 +204,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   const maintenance = createHostMaintenance({
     db,
     ports,
+    sessionEngine: sessionServices.sessionEngine,
     worktrees,
     processReaders: options.processReaders,
     ...(backupPlatform === undefined

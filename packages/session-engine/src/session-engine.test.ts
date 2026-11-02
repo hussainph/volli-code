@@ -1589,7 +1589,7 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
-  it("resumes getSession and listSessions from checkpoint tails without mutating reads", async () => {
+  it("resumes getSession and listSessions from checkpoint tails, persisting only full folds", async () => {
     const stored = createInMemorySessionLedger();
     const cursors: Array<number | undefined> = [];
     const auditReads: string[] = [];
@@ -1627,13 +1627,13 @@ describe("SessionEngine creation and explicit commands", () => {
     const first = await plane.listSessions({ projectId: "project-1", scope: "all" });
     expect(cursors).toEqual([undefined]);
     expect(first).toHaveLength(1);
-    await expect(
-      plane.getProjectionCheckpoint({ sessionId: created.session.id }),
-    ).resolves.toBeNull();
-
+    // The listing had to fold the whole log, so it kept the result (VC-1076):
+    // the next launch resumes from here instead of folding it again.
     const events = await plane.listEvents({ sessionId: created.session.id });
     const checkpoint = createSessionProjectionCheckpoint(created.session, events);
-    await plane.saveProjectionCheckpoint(checkpoint);
+    await expect(plane.getProjectionCheckpoint({ sessionId: created.session.id })).resolves.toEqual(
+      checkpoint,
+    );
     await plane.submit({
       commandId: "command-checkpoint-tail",
       sessionId: created.session.id,
@@ -1892,6 +1892,138 @@ describe("SessionEngine creation and explicit commands", () => {
     expect(events.map((event) => event.sequence)).toEqual(events.map((_event, index) => index + 1));
     await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
       liveExecutor: { id: opened.id, native: { id: `native-${facts - 1}` } },
+    });
+  });
+
+  describe("read paths persist the folds they had to do (VC-1076)", () => {
+    /** An in-memory ledger whose checkpoint writes are counted, and can be made to fail. */
+    function countingComposition() {
+      const stored = createInMemorySessionLedger();
+      const saved: number[] = [];
+      let failSaves: Error | null = null;
+      const ledger: SessionLedger = {
+        transaction: (work) =>
+          stored.transaction((transaction) =>
+            work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property !== "saveProjectionCheckpoint") {
+                    return Reflect.get(target, property, receiver);
+                  }
+                  return (checkpoint: SessionProjectionCheckpoint) => {
+                    if (failSaves) throw failSaves;
+                    saved.push(checkpoint.throughSequence);
+                    transaction.saveProjectionCheckpoint(checkpoint);
+                  };
+                },
+              }),
+            ),
+          ),
+      };
+      const reported: unknown[] = [];
+      const plane = createSessionEngine({
+        ledger,
+        clock: { now: () => 100 },
+        ids: ids(),
+        onProjectionCheckpointFailure: (error) => reported.push(error),
+      });
+      return {
+        plane,
+        ledger,
+        saved,
+        reported,
+        failWith: (error: Error | null) => {
+          failSaves = error;
+        },
+      };
+    }
+
+    async function retitle(
+      plane: ReturnType<typeof createSessionEngine>,
+      sessionId: string,
+      times: number,
+    ) {
+      for (let index = 0; index < times; index += 1) {
+        await plane.submit({
+          commandId: `command-retitle-${sessionId}-${index}-${Math.random()}`,
+          sessionId,
+          intent: { kind: "session.retitle", title: `Title ${index}` },
+          provenance: userProvenance,
+        });
+      }
+    }
+
+    it("writes a getSession full fold back, so the next read resumes from it", async () => {
+      const { plane, saved } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-get"));
+      const head = await plane.latestEventSequence({ sessionId: session.id });
+
+      const folded = await plane.getSession({ sessionId: session.id });
+      expect(saved).toEqual([head]);
+      await expect(plane.getProjectionCheckpoint({ sessionId: session.id })).resolves.toEqual(
+        createSessionProjectionCheckpoint(
+          session,
+          await plane.listEvents({ sessionId: session.id }),
+        ),
+      );
+
+      // Resumed, not refolded, and a usable row is never rewritten by a read.
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toEqual(folded);
+      expect(saved).toEqual([head]);
+    });
+
+    it("refreshes a row a whole window behind and leaves one inside the window alone", async () => {
+      const { plane, saved } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-window"));
+      await plane.getSession({ sessionId: session.id });
+      const persisted = saved.at(-1)!;
+
+      // `submit` never refreshes the checkpoint, so its tail only grows. A
+      // retitle appends three events: a command, the fact and its receipt.
+      const insideWindow = Math.floor((CHECKPOINT_REFRESH_EVENTS - 1) / 3);
+      await retitle(plane, session.id, insideWindow);
+      await plane.getSession({ sessionId: session.id });
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(saved).toEqual([persisted]);
+
+      await retitle(plane, session.id, 1);
+      const head = await plane.latestEventSequence({ sessionId: session.id });
+      expect(head - persisted).toBeGreaterThanOrEqual(CHECKPOINT_REFRESH_EVENTS);
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(saved).toEqual([persisted, head]);
+      expect(
+        (await plane.getProjectionCheckpoint({ sessionId: session.id }))?.throughSequence,
+      ).toBe(head);
+    });
+
+    it("answers the read and reports when the write-back fails", async () => {
+      const { plane, reported, failWith, saved } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-failure"));
+      const failure = new Error("checkpoint table is read-only");
+      failWith(failure);
+
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+        session: { id: session.id },
+      });
+      await expect(
+        plane.listSessions({ projectId: "project-1", scope: "all" }),
+      ).resolves.toHaveLength(1);
+      expect(reported).toEqual([failure, failure]);
+      expect(saved).toEqual([]);
+      await expect(plane.getProjectionCheckpoint({ sessionId: session.id })).resolves.toBeNull();
+    });
+
+    it("lists the same projections from the row a listing persisted", async () => {
+      const { plane, saved, ledger } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-same"));
+      await retitle(plane, session.id, 30);
+      const query: ListSessionsQuery = { projectId: "project-1", scope: "all" };
+      const first = await plane.listSessions(query);
+      expect(saved).toHaveLength(1);
+      // A fresh engine (a relaunch) resumes from the persisted row instead.
+      const relaunched = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      expect(await relaunched.listSessions(query)).toEqual(first);
+      expect(saved).toHaveLength(1);
     });
   });
 
