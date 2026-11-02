@@ -60,6 +60,67 @@ prereleases. The single desktop publisher uploads the complete Mac + hostd
 asset set, so rerun cleanup does not delete hostd assets. A release containing migration 061 must retain the corresponding database
 compatibility/rollback checks.
 
+### Release deploy key and main's ruleset
+
+`main` is meant to require a green `CI gate` on a branch that is up to date
+with `main` (repository ruleset "Main Protection", id `19737203`). The button's
+`chore(release): <version>` commit is made inside `prepare` and can never have
+that check, and GitHub refuses the GitHub Actions integration as a bypass actor
+on a user-owned repository (HTTP 422). So `prepare` pushes the bump to `main`
+over SSH with a write deploy key from the `RELEASE_DEPLOY_KEY` secret, and the
+ruleset lets deploy keys bypass it. The push is not forced: if `main` moved
+during the run, git rejects the non-fast-forward and nothing is tagged.
+
+The tag is still pushed with `GITHUB_TOKEN`. The ruleset targets only the
+default branch, so the tag needs no bypass, and a tag pushed with
+`GITHUB_TOKEN` does not start the workflow's own tag path; a deploy-key tag
+push would, and would publish the release twice. The deploy-key push to `main`
+does start `ci.yml` on the release commit. `prepare` fails first, before any
+guard or bump, when `RELEASE_DEPLOY_KEY` is missing. Dry runs skip `prepare`
+and never need the key.
+
+One-time owner setup, in this order. Applying the ruleset before the key
+exists, or before release.yml pushes over SSH, breaks button releases:
+
+```sh
+ssh-keygen -t ed25519 -N '' -C 'volli-code release' -f release_key
+# Settings → Deploy keys → Add deploy key: paste release_key.pub,
+# title "release.yml", tick "Allow write access". Or:
+gh repo deploy-key add release_key.pub --repo hussainph/volli-code --allow-write --title release.yml
+gh secret set RELEASE_DEPLOY_KEY --repo hussainph/volli-code < release_key
+rm -f release_key release_key.pub
+gh api -X PUT repos/hussainph/volli-code/rulesets/19737203 --input main-protection.json
+```
+
+where `main-protection.json` is the complete ruleset (a PUT replaces the
+rules and bypass list wholesale):
+
+```json
+{
+  "name": "Main Protection",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "bypass_actors": [{ "actor_type": "DeployKey", "bypass_mode": "always" }],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [{ "context": "CI gate", "integration_id": 15368 }]
+      }
+    }
+  ]
+}
+```
+
+`integration_id` 15368 is the GitHub Actions app, which posts `CI gate`.
+`ci.yml` has no path filters, so every pull request reports it. Confirm with
+`gh api repos/hussainph/volli-code/rulesets/19737203`. Any deploy key with
+write access can bypass this ruleset, so keep the release key the only one.
+
 A `hostd-assets` failure (including provenance signing) deliberately blocks the
 desktop release: the signed desktop pin requires matching assets on that same
 release. After a failure, use **“Re-run all jobs”**, not “re-run failed jobs”

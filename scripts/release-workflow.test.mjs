@@ -694,3 +694,78 @@ exit "$TEST_CODE"
     assert.equal(result.stdout.includes("unlinked boot and SIGTERM passed"), success && !skeleton);
   }
 });
+
+test("button bump goes to main over SSH with the deploy key; the tag stays on GITHUB_TOKEN", (t) => {
+  const prepare = workflow.jobs.prepare;
+  // The key guard runs first, before checkout and every other guard.
+  assert.equal(prepare.steps[0].name, "Guard: release deploy key present");
+  assert.deepEqual(prepare.steps[0].env, {
+    RELEASE_DEPLOY_KEY: "${{ secrets.RELEASE_DEPLOY_KEY }}",
+  });
+  for (const [key, status] of [
+    ["", 1],
+    ["-----BEGIN OPENSSH PRIVATE KEY-----", 0],
+  ]) {
+    const run = spawnSync("bash", ["-c", prepare.steps[0].run], {
+      encoding: "utf8",
+      env: { ...process.env, RELEASE_DEPLOY_KEY: key },
+    });
+    assert.equal(run.status, status, run.stdout + run.stderr);
+    if (status) assert.match(run.stdout, /::error::Missing repo secret RELEASE_DEPLOY_KEY/);
+  }
+  // Only prepare (never a dry-run or tag-path job) reads the key.
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (name !== "prepare") assert.doesNotMatch(JSON.stringify(job), /RELEASE_DEPLOY_KEY/, name);
+  }
+
+  // Run the real step with git stubbed: record each push, its SSH command and
+  // the key file as git would see it.
+  const root = versionFixture(t);
+  const temp = join(root, "runner-temp");
+  mkdirSync(temp);
+  const log = join(root, "git.log");
+  const stub = `git() {
+    if [ "$1" = push ]; then
+      { echo "push $2 $3"; echo "ssh \${GIT_SSH_COMMAND:-none}"
+        echo "key $(cat "$RUNNER_TEMP/release_deploy_key" 2>/dev/null || echo absent) $(stat -c %a "$RUNNER_TEMP/release_deploy_key" 2>/dev/null || stat -f %Lp "$RUNNER_TEMP/release_deploy_key" 2>/dev/null)"
+      } >> "$GIT_LOG"
+    fi
+  }\n`;
+  const bump = prepare.steps.find((step) => step.name === "Bump versions, commit, tag, push");
+  assert.equal(bump.env.RELEASE_DEPLOY_KEY, "${{ secrets.RELEASE_DEPLOY_KEY }}");
+  const run = spawnSync("bash", ["-c", stub + bump.run], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      VERSION: "1.2.4",
+      TAG: "v1.2.4",
+      RELEASE_DEPLOY_KEY: "test-key",
+      RUNNER_TEMP: temp,
+      GITHUB_REPOSITORY: "owner/repo",
+      GIT_LOG: log,
+    },
+  });
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  const lines = readFileSync(log, "utf8").trim().split("\n");
+  const sshCommand =
+    `ssh -i ${temp}/release_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes ` +
+    `-o UserKnownHostsFile=${temp}/github_known_hosts`;
+  assert.deepEqual(lines, [
+    // Branch first and unforced, so a moved main fails before any tag exists.
+    "push git@github.com:owner/repo.git HEAD:refs/heads/main",
+    `ssh ${sshCommand}`,
+    "key test-key 600",
+    "push origin refs/tags/v1.2.4",
+    "ssh none",
+    "key test-key 600",
+  ]);
+  assert.doesNotMatch(bump.run, /--force|\s\+(?:HEAD|refs)/);
+  // GitHub's published ed25519 host key (api.github.com/meta), nothing else.
+  assert.equal(
+    readFileSync(join(temp, "github_known_hosts"), "utf8"),
+    "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n",
+  );
+  // The private key never outlives the step.
+  assert.equal(spawnSync("test", ["-e", join(temp, "release_deploy_key")]).status, 1);
+});
