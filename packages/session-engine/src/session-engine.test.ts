@@ -7,6 +7,7 @@ import {
 } from "./index";
 import {
   CHECKPOINT_REFRESH_EVENTS,
+  HOT_CHECKPOINT_LIMIT,
   SESSION_LISTING_CACHE_LIMIT,
   SESSION_LISTING_FOLD_CHUNK,
 } from "./session-engine";
@@ -2026,6 +2027,230 @@ describe("SessionEngine creation and explicit commands", () => {
       const relaunched = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
       expect(await relaunched.listSessions(query)).toEqual(first);
       expect(saved).toHaveLength(1);
+    });
+  });
+
+  describe("hot checkpoints for Sessions recording facts (VC-1076)", () => {
+    function hotComposition() {
+      const stored = createInMemorySessionLedger();
+      const rowReads: string[] = [];
+      let rollBackNext = false;
+      let ticketDeleted = false;
+      const ledger: SessionLedger = {
+        transaction: (work) =>
+          stored.transaction((transaction) => {
+            const value = work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property === "getProjectionCheckpoint") {
+                    return (sessionId: string) => {
+                      rowReads.push(sessionId);
+                      return transaction.getProjectionCheckpoint(sessionId);
+                    };
+                  }
+                  if (property === "getSession") {
+                    return (sessionId: string) => {
+                      const session = transaction.getSession(sessionId);
+                      return session && ticketDeleted ? { ...session, ticketId: null } : session;
+                    };
+                  }
+                  return Reflect.get(target, property, receiver);
+                },
+              }),
+            );
+            if (rollBackNext) {
+              rollBackNext = false;
+              throw new Error("rolled back");
+            }
+            return value;
+          }),
+      };
+      const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      return {
+        plane,
+        ledger,
+        rowReads,
+        rollBack: () => {
+          rollBackNext = true;
+        },
+        deleteTicket: () => {
+          ticketDeleted = true;
+        },
+      };
+    }
+
+    async function liveSession(plane: ReturnType<typeof createSessionEngine>, commandId: string) {
+      const { session } = await plane.createSession(createRequest(commandId));
+      const opened = attachment(session.id, `attachment-${commandId}`);
+      await plane.observe({
+        id: `observation-${commandId}-opened`,
+        sessionId: session.id,
+        occurredAt: 200,
+        provenance: adapterProvenance,
+        kind: "attachment.opened",
+        attachment: opened,
+      });
+      let index = 0;
+      const fact = () =>
+        plane.observe({
+          id: `observation-${commandId}-${index}`,
+          sessionId: session.id,
+          occurredAt: 300 + index,
+          provenance: adapterProvenance,
+          attachmentId: opened.id,
+          kind: "attachment.native_referenced",
+          native: { id: `native-${index++}`, detail: null },
+        });
+      return { session, fact };
+    }
+
+    it("records facts without re-reading the checkpoint row, and folds to the same answer", async () => {
+      const { plane, ledger, rowReads } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-facts");
+      rowReads.length = 0;
+      // Past a refresh window, so the durable row is rewritten under the cache.
+      for (let index = 0; index < CHECKPOINT_REFRESH_EVENTS + 10; index += 1) await fact();
+      expect(rowReads).toEqual([]);
+
+      const hot = await plane.getSession({ sessionId: session.id });
+      expect(rowReads).toEqual([]);
+      // A fresh engine reads the durable row and log; the answers agree.
+      const cold = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      expect(await cold.getSession({ sessionId: session.id })).toEqual(hot);
+      expect(
+        (await cold.getProjectionCheckpoint({ sessionId: session.id }))?.throughSequence,
+      ).toBeGreaterThanOrEqual(CHECKPOINT_REFRESH_EVENTS);
+    });
+
+    it("hands getSession a copy the cache does not share", async () => {
+      const { plane } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-copy");
+      await fact();
+      const first = await plane.getSession({ sessionId: session.id });
+      (first as unknown as { attachments: unknown[] }).attachments.length = 0;
+      (first!.session as unknown as { title: string | null }).title = "mutated";
+      const second = await plane.getSession({ sessionId: session.id });
+      expect(second?.attachments).toHaveLength(1);
+      expect(second?.session.title).toBe("Durable Session");
+    });
+
+    it("keeps nothing hot from a fact whose transaction rolled back", async () => {
+      const { plane, rowReads, rollBack } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-rollback");
+      await fact();
+      rollBack();
+      await expect(fact()).rejects.toThrow("rolled back");
+      rowReads.length = 0;
+      await fact();
+      // The cache held the head before the rolled-back fact, which is still
+      // the head, so it answered; the rolled-back fact is nowhere.
+      expect(rowReads).toEqual([]);
+      const events = await plane.listEvents({ sessionId: session.id });
+      expect(events.map((event) => event.sequence)).toEqual(events.map((_e, index) => index + 1));
+      expect((await plane.getSession({ sessionId: session.id }))?.liveExecutor?.native).toEqual({
+        id: "native-2",
+        detail: null,
+      });
+    });
+
+    it("misses when another verb appended, the base row moved, or the row was replaced", async () => {
+      const { plane, rowReads, deleteTicket } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-miss");
+      await fact();
+
+      await plane.submit({
+        commandId: "command-hot-retitle",
+        sessionId: session.id,
+        intent: { kind: "session.retitle", title: "Retitled" },
+        provenance: userProvenance,
+      });
+      rowReads.length = 0;
+      await fact();
+      expect(rowReads).toEqual([session.id]);
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+        session: { title: "Retitled" },
+      });
+
+      deleteTicket();
+      rowReads.length = 0;
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+        session: { ticketId: null },
+      });
+      expect(rowReads).toEqual([session.id]);
+
+      await fact();
+      rowReads.length = 0;
+      const events = await plane.listEvents({ sessionId: session.id });
+      await plane.saveProjectionCheckpoint(createSessionProjectionCheckpoint(session, events));
+      await fact();
+      expect(rowReads).toEqual([session.id]);
+    });
+
+    it("never lets a commit that resolves late replace a newer hot checkpoint", async () => {
+      const stored = createInMemorySessionLedger();
+      const rowReads: string[] = [];
+      let delayNext = false;
+      const ledger: SessionLedger = {
+        transaction: (work) => {
+          const delayed = delayNext;
+          delayNext = false;
+          const settled = stored.transaction((transaction) =>
+            work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property !== "getProjectionCheckpoint") {
+                    return Reflect.get(target, property, receiver);
+                  }
+                  return (sessionId: string) => {
+                    rowReads.push(sessionId);
+                    return transaction.getProjectionCheckpoint(sessionId);
+                  };
+                },
+              }),
+            ),
+          );
+          return delayed
+            ? settled.then((value) => new Promise((resolve) => setTimeout(() => resolve(value), 5)))
+            : settled;
+        },
+      };
+      const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      const { session, fact } = await liveSession(plane, "hot-late");
+      delayNext = true;
+      const late = fact();
+      await fact();
+      await late;
+      rowReads.length = 0;
+      await fact();
+      expect(rowReads).toEqual([]);
+      const events = await plane.listEvents({ sessionId: session.id });
+      expect(await plane.getSession({ sessionId: session.id })).toEqual(
+        createSessionProjectionCheckpoint(session, events).projection,
+      );
+    });
+
+    it("keeps at most HOT_CHECKPOINT_LIMIT Sessions hot, evicting the least recently written", async () => {
+      const { plane, rowReads } = hotComposition();
+      const live: Awaited<ReturnType<typeof liveSession>>[] = [];
+      for (let index = 0; index <= HOT_CHECKPOINT_LIMIT; index += 1) {
+        live.push(await liveSession(plane, `hot-bound-${index}`));
+      }
+      rowReads.length = 0;
+      await live.at(-1)!.fact();
+      expect(rowReads).toEqual([]);
+      await live[0]!.fact();
+      expect(rowReads).toEqual([live[0]!.session.id]);
+    });
+
+    it("lets a listing fold a hot Session without reading its row", async () => {
+      const { plane, rowReads } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-listing");
+      await fact();
+      rowReads.length = 0;
+      const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(rowReads).toEqual([]);
+      expect(row).toEqual(await plane.getSession({ sessionId: session.id }));
+      expect(Object.isFrozen(row)).toBe(true);
     });
   });
 
