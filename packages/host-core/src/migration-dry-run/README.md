@@ -41,10 +41,10 @@ Follow [`cloud-deploy.md` §1–8](../../../../docs/runbooks/cloud-deploy.md) wi
 
 6. Supply the person's staging access token (not a runner or deploy token) as
    `VOLLI_MOVE_TOKEN`, or preferably `VOLLI_MOVE_TOKEN_FILE`, an absolute path
-   to a mode-0600 file containing only that token. The operator's staging OAuth
-   session/token refresh process must replace this file before expiry; it is
-   re-read on each call. A frozen environment token must live long enough for
-   the whole rehearsal. Set `VOLLI_MOVE_ADMIN_KEY` to the deployment-scoped
+   to a mode-0600 file containing only that token. It is re-read on each call,
+   so something must replace it before expiry: run the staging token helper
+   below for the whole rehearsal. A frozen environment token must live long
+   enough for the whole rehearsal (WorkOS's default is 5 minutes). Set `VOLLI_MOVE_ADMIN_KEY` to the deployment-scoped
    operator key. These are explicit inputs: the harness never discovers
    credentials, unlocks the keychain, or reads the copied account/Pi auth.
    Do not put tokens in argv, reports, git, tickets, or terminal history.
@@ -57,6 +57,35 @@ Follow [`cloud-deploy.md` §1–8](../../../../docs/runbooks/cloud-deploy.md) wi
    complete or unlocks the source profile to discover values. Do not proceed
    unless the inventory is complete; staging still receives private history.
 
+### Keep the staging token fresh
+
+`apps/desktop/e2e/volli-drive/staging-token.mjs` holds the rehearsal account's
+staging sign-in while Volli is quit. It signs in once in the browser through the
+desktop's own public-client flow (PKCE, loopback callback, WorkOS adapter from
+`apps/desktop/src/main/account/`), keeps the rotating refresh token in its own
+memory only, and replaces the access-token file atomically (mode 0600) a minute
+before each expiry. It prints times and outcomes, never a token. It reads the
+staging client id from the same checkout-local `.scratch/deployments/staging.json`
+the UI check uses (below), so create that first; it has no production mode.
+
+In a separate terminal, before starting the harness and for its whole run
+(through both cleanups):
+
+```sh
+REHEARSAL_ROOT=$(mktemp -d /tmp/volli-rehearsal.XXXXXX)   # reuse it below
+node apps/desktop/e2e/volli-drive/staging-token.mjs \
+  --out "$REHEARSAL_ROOT/move-token" --connection github   # or google
+```
+
+Sign in as the **rehearsal account** in the browser it opens (the URL is also
+printed). Wait for `signed in; token written`, then in the harness shell
+`export VOLLI_MOVE_TOKEN_FILE="$REHEARSAL_ROOT/move-token"` and start the
+harness. Leave the helper running. Ctrl-C stops it and removes the file. A
+transient refresh failure (offline, a 5xx) is retried every 15 s and logged; if
+WorkOS refuses the refresh token, the helper removes the file and exits 1. Rerun
+it, sign in again, then resume the harness (`--cleanup` recovery below) if it
+failed meanwhile.
+
 ### Run on the profile copy
 
 Quit Volli completely, including menu-bar hosts and dev instances. Keep it
@@ -67,7 +96,7 @@ while the engine runs. Choose **new** scratch/report paths on an APFS volume:
 pnpm install
 mkdir -p .scratch/rehearsal
 SOURCE="$HOME/Library/Application Support/Volli Code"
-REHEARSAL_ROOT=$(mktemp -d /tmp/volli-rehearsal.XXXXXX)
+# REHEARSAL_ROOT: the same private root the token helper writes into.
 COPY="$REHEARSAL_ROOT/profile"
 REPORT="$PWD/.scratch/rehearsal/report.json"
 
@@ -159,7 +188,7 @@ and marks the empty Workspace deleted. Content-free Workspace/import/stream
 tombstones remain: move ids stay single-use and accounting references are not
 orphaned. It never deletes an existing Workspace or
 runner. Upload expiry protection means rollback/cleanup can each take
-**30–45 minutes**; keep refreshing the staging person token. The scratch
+**30–45 minutes**; keep the staging token helper running. The scratch
 profile (including its backups and readable escape-hatch export) is deleted.
 Save anything you want from it before continuing past `--hold`. Afterward
 remove the temporary root's UI HOME/evidence and sensitive input files through
