@@ -55,11 +55,7 @@ export class NativeAttachmentError extends Error {
   constructor(
     message: string,
     readonly code: string,
-    readonly attentionKind:
-      | "configuration_invalid"
-      | "adapter_unrecoverable"
-      /** An attach that did not finish in time at a direct door (VC-1072). */
-      | "adapter_disconnected",
+    readonly attentionKind: "configuration_invalid" | "adapter_unrecoverable",
   ) {
     super(message);
     this.name = "NativeAttachmentError";
