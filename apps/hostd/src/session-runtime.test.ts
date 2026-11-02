@@ -535,10 +535,13 @@ describe("headless runtime ownership", () => {
         ({ session }) => session.id,
       ),
     ).toEqual(["s-1"]);
-    // The scoped SQLite reader selects first; only local rows reach the host's fold,
-    // including when a cloud birth's runner cursor is absent (for example, a restore).
-    expect(getSession).toHaveBeenCalledExactlyOnceWith({ sessionId: "s-1" });
-    expect(listSessions).not.toHaveBeenCalled();
+    // The scoped SQLite reader selects membership first; only local rows are
+    // answered, including when a cloud birth's runner cursor is absent (for
+    // example, a restore). The folds come from the host engine's own cached
+    // listing of the same query (VC-1072), and `getSession` only for a scoped
+    // row that listing has not seen.
+    expect(listSessions).toHaveBeenCalledExactlyOnceWith({ projectId: "p", scope: "all" });
+    expect(getSession).not.toHaveBeenCalled();
     expect(
       (await sessionListing.listSessions({ projectId: "p", scope: "ticket", ticketId: "t" })).map(
         ({ session }) => session.id,
