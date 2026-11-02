@@ -148,7 +148,19 @@ function world() {
     };
   }
 
-  return { project, other, engine, session };
+  /**
+   * A fresh engine over the same ledger: what a relaunch folds. A log
+   * rewritten beneath the codec (`rewritten`) is out of band, and an engine
+   * that already folded it keeps what it folded until a new one is built.
+   */
+  const cold = () =>
+    createSessionEngine({
+      ledger: createSqliteSessionLedger(ctx.db),
+      clock: { now: () => clock++ },
+      ids: { next: (kind) => `${kind}-${++id}` },
+    });
+
+  return { project, other, engine, session, cold };
 }
 
 type World = ReturnType<typeof world>;
@@ -393,7 +405,7 @@ describe("createBootRecoveryEngine (VC-1095)", () => {
     await grown.retitle("after the checkpoint");
 
     const reader = createBootRecoveryEngine({ db: ctx.db, engine: w.engine });
-    const folded = await w.engine.listSessions({ projectId: w.project.id, scope: "all" });
+    const folded = await w.cold().listSessions({ projectId: w.project.id, scope: "all" });
     // Session by Session: each answer alone is that Session's own fold.
     for (const projection of folded) {
       const others = new Set(ids.filter((id) => id !== projection.session.id));
@@ -455,7 +467,7 @@ describe("createBootRecoveryEngine (VC-1095)", () => {
     await expect(
       reader.latestActivityAt({ projectIds: [w.project.id], excluding: new Set() }),
     ).rejects.toThrow(/turnId|attachmentId/);
-    await expect(w.engine.listSessions({ projectId: w.project.id, scope: "all" })).rejects.toThrow(
+    await expect(w.cold().listSessions({ projectId: w.project.id, scope: "all" })).rejects.toThrow(
       /turnId|attachmentId/,
     );
 
