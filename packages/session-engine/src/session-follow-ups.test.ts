@@ -158,6 +158,7 @@ function fixture(
     retryDelays?: readonly number[];
     admissionTimeoutMs?: number;
     firstAttachPreparationTimeoutMs?: number;
+    directAttachTimeoutMs?: number;
     prepare?: () => void | Promise<void>;
     reaffirm?: () => void | Promise<void>;
   } = {},
@@ -204,6 +205,9 @@ function fixture(
       ...(options.firstAttachPreparationTimeoutMs === undefined
         ? {}
         : { firstAttachPreparationTimeoutMs: options.firstAttachPreparationTimeoutMs }),
+      ...(options.directAttachTimeoutMs === undefined
+        ? {}
+        : { directAttachTimeoutMs: options.directAttachTimeoutMs }),
     });
   return { engine, artifacts, followUps, adapter, errors, runtime };
 }
@@ -2780,6 +2784,9 @@ describe("host follow-ups never strand a row", () => {
       const f = fixture({
         adapter,
         admissionTimeoutMs: 10,
+        // The attach itself waits under the direct door's own ceiling, not
+        // the queue's bound (VC-1072); a short one here is that ceiling.
+        directAttachTimeoutMs: 10,
         retryDelays: [],
         ...(stage === "resolve" ? { locate: () => gate.promise } : {}),
       });
@@ -2794,10 +2801,10 @@ describe("host follow-ups never strand a row", () => {
       else
         expect((await attaching).receipt).toMatchObject({
           status: "rejected",
-          code: "queue_admission_timeout",
+          code: "attach_timeout",
         });
       expect((await attentionDetails(runtime, sessionId)).join()).toContain(
-        "queue_admission_timeout",
+        stage === "resolve" ? "queue_admission_timeout" : "attach_timeout",
       );
       expect((await f.engine.getSession({ sessionId }))!.pendingExecutorStart).toBeNull();
       gate.resolve();
@@ -2812,6 +2819,94 @@ describe("host follow-ups never strand a row", () => {
       expect(await attentionDetails(runtime, sessionId)).toEqual([]);
       await runtime.close();
     }
+  });
+
+  it("waits out a direct attach past the queue's admission bound instead of discarding it (VC-1072)", async () => {
+    // A slow attach at a direct door — five Session starts on one Mac — was
+    // failed at the queue's thirty seconds while it was still making progress.
+    for (const commandId of ["operation:start", "reattach"]) {
+      const adapter = new GatedAdapter();
+      const gate = Promise.withResolvers<void>();
+      adapter.gate = gate.promise;
+      const f = fixture({ adapter, admissionTimeoutMs: 10, retryDelays: [] });
+      const runtime = f.runtime();
+      const sessionId = await create(runtime);
+      const attaching = runtime.command({
+        commandId,
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      // Well past the queue's bound before the attach finishes.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      gate.resolve();
+      expect((await attaching).receipt).toMatchObject({ status: "accepted" });
+      expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+      expect(adapter.released).toBe(0);
+      await runtime.close();
+    }
+  });
+
+  it("reports a direct attach that outlasts its ceiling as disconnected, not stopped, and clears it on the next attach (VC-1072)", async () => {
+    const adapter = new GatedAdapter();
+    const gate = Promise.withResolvers<void>();
+    adapter.gate = gate.promise;
+    const f = fixture({ adapter, directAttachTimeoutMs: 10, retryDelays: [] });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+
+    const timedOut = await runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(timedOut.receipt).toMatchObject({ status: "rejected", code: "attach_timeout" });
+    const raised = (await f.engine.getSession({ sessionId }))!.attention.active;
+    expect(raised.map(({ kind }) => kind)).toEqual(["adapter_disconnected"]);
+    expect(raised[0]?.detail).toContain("did not finish starting");
+    // The late binding is released, never published as a second one.
+    gate.resolve();
+    await expect.poll(() => adapter.released).toBe(1);
+
+    await runtime.command({
+      commandId: "retry-start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect((await f.engine.getSession({ sessionId }))!.attention.active).toEqual([]);
+    await runtime.close();
+  });
+
+  it("names a reattach's workspace timeout disconnected at a direct door, unrecoverable only for the queue (VC-1072)", async () => {
+    const gate = Promise.withResolvers<void>();
+    let hold = false;
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      retryDelays: [],
+      prepare: () => (hold ? gate.promise : undefined),
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    await runtime.command({
+      commandId: "stop",
+      sessionId,
+      command: { kind: "session.stop" },
+    });
+    hold = true;
+
+    const reattached = await runtime.command({
+      commandId: "reattach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(reattached.receipt).toMatchObject({ status: "rejected", code: "location_unavailable" });
+    expect(
+      (await f.engine.getSession({ sessionId }))!.attention.active.map(({ kind }) => kind),
+    ).toEqual(["adapter_disconnected"]);
+    gate.resolve();
+    await runtime.close();
   });
 
   it("waits out a first attach's slow workspace preparation instead of failing it unrecoverable (VC-799)", async () => {

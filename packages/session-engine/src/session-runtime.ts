@@ -191,6 +191,14 @@ export interface SessionRuntimePorts {
    */
   firstAttachPreparationTimeoutMs?: number;
   /**
+   * The ceiling on an executor attach a direct door is waiting on — a Session
+   * start, a reattach, a Retry (VC-1072). Not the queue's admission bound:
+   * a person is watching this attach, and failing one that is still making
+   * progress only makes them start it again. Ten minutes unless a test says
+   * otherwise; the queue's own attaches keep {@link followUpAdmissionTimeoutMs}.
+   */
+  directAttachTimeoutMs?: number;
+  /**
    * Every structured runtime this runtime can attach, and the default a
    * Session runs on (VC-916). Pi is the one entry that ships; see
    * {@link SessionExecutorSlot} for how a Session's runtime is selected.
@@ -340,7 +348,10 @@ type DeliveryResultKind =
   | "message.submitted"
   | "model.selected"
   | "interaction.resolved";
-type AttachFailureAttentionKind = "configuration_invalid" | "adapter_unrecoverable";
+type AttachFailureAttentionKind =
+  | "configuration_invalid"
+  | "adapter_unrecoverable"
+  | "adapter_disconnected";
 /**
  * The Attention kinds a successful attach retires.
  *
@@ -366,6 +377,7 @@ type AttachFailureAttentionKind = "configuration_invalid" | "adapter_unrecoverab
 const ATTACH_FAILURE_ATTENTION_KINDS: Readonly<Record<AttachFailureAttentionKind, true>> = {
   configuration_invalid: true,
   adapter_unrecoverable: true,
+  adapter_disconnected: true,
 };
 /** One attach's stage clock, and what is known of the attempt once it starts. */
 interface AttachTimingState {
@@ -1909,7 +1921,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         // successful attach once the directory can be made.
         attentionKind:
           error instanceof NativeAttachmentError && error.code === "queue_admission_timeout"
-            ? "adapter_unrecoverable"
+            ? attachTimeoutAttentionKind(request)
             : "configuration_invalid",
       });
     }
@@ -1943,20 +1955,29 @@ class DefaultSessionRuntime implements SessionRuntime {
     let handle: BindingHandle;
     try {
       const attaching = adapter.attach({ ...spec, markStage: clock.mark }, sink);
-      handle = await this.#followUps.admissionWait(
-        `follow-up:${request.commandId}`,
-        attaching,
-        "executor attach",
-        () => {
-          sink.discard();
-          // A timed-out attach must never publish or become a second binding.
-          void attaching.then(
-            (late) =>
-              late.release("adapter_failure").catch((error) => this.#followUps.failure(error)),
-            () => undefined,
-          );
-        },
-      );
+      const abandon = () => {
+        sink.discard();
+        // A timed-out attach must never publish or become a second binding.
+        void attaching.then(
+          (late) =>
+            late.release("adapter_failure").catch((error) => this.#followUps.failure(error)),
+          () => undefined,
+        );
+      };
+      // Only the queue's own attach is admission-bounded (VC-1072). A direct
+      // door — a start, a reattach, a Retry — has a person or a Run waiting on
+      // it, and failing an attach that is still making progress at the
+      // queue's thirty seconds only discarded one that was about to open. It
+      // waits under a generous ceiling of its own instead, as a first attach's
+      // workspace preparation does (VC-799).
+      handle = request.commandId.startsWith("follow-up:")
+        ? await this.#followUps.admissionWait(
+            request.commandId,
+            attaching,
+            "executor attach",
+            abandon,
+          )
+        : await this.#directAttachWait(attaching, abandon);
     } catch (error) {
       sink.discard();
       const nativeFailure =
@@ -2269,6 +2290,38 @@ class DefaultSessionRuntime implements SessionRuntime {
    * attach records as `configuration_invalid`; the preparation itself is not
    * stopped, so a worktree it finishes later is there for the Retry.
    */
+  /**
+   * A direct door's executor attach, under {@link DIRECT_ATTACH_TIMEOUT_MS}.
+   *
+   * Outlasting it is reported as what it is: an attach that did not finish, a
+   * connection a Retry may well make — `adapter_disconnected` ("Disconnected",
+   * Retry), never `adapter_unrecoverable`, which says the runtime stopped.
+   */
+  async #directAttachWait(
+    attaching: Promise<BindingHandle>,
+    abandon: () => void,
+  ): Promise<BindingHandle> {
+    const ceilingMs = this.ports.directAttachTimeoutMs ?? DIRECT_ATTACH_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ceiling = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        abandon();
+        reject(
+          new NativeAttachmentError(
+            `attach_timeout: the runtime did not finish starting within ${ceilingMs / 1000} s. Nothing was sent; Retry starts it again.`,
+            "attach_timeout",
+            "adapter_disconnected",
+          ),
+        );
+      }, ceilingMs);
+    });
+    try {
+      return await Promise.race([attaching, ceiling]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async #firstAttachPreparation(preparing: Promise<SessionLocation>): Promise<SessionLocation> {
     const ceilingMs =
       this.ports.firstAttachPreparationTimeoutMs ?? FIRST_ATTACH_PREPARATION_TIMEOUT_MS;
@@ -4843,6 +4896,23 @@ class DefaultSessionRuntime implements SessionRuntime {
 
 /** A first attach's preparation ceiling: generous, for a loaded machine making a worktree. */
 const FIRST_ATTACH_PREPARATION_TIMEOUT_MS = 10 * 60_000;
+
+/** A direct door's executor attach ceiling: generous, for a loaded machine (VC-1072). */
+const DIRECT_ATTACH_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * What a direct door's attach that ran out of time raises (VC-1072).
+ *
+ * The queue's own attach keeps `adapter_unrecoverable`, which is how
+ * `#failAttach` knows to leave its report to the queue's retryable Attention.
+ * A direct door's is `adapter_disconnected`: the attach did not finish, which
+ * a Retry may well fix, where `adapter_unrecoverable` reads "Runtime stopped".
+ */
+function attachTimeoutAttentionKind(request: AttachCommandRequest): AttachFailureAttentionKind {
+  return request.commandId.startsWith("follow-up:")
+    ? "adapter_unrecoverable"
+    : "adapter_disconnected";
+}
 
 export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);
