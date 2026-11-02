@@ -314,6 +314,26 @@ export interface ChatPlaneProps {
   store?: ChatSessionsStore;
 }
 
+/**
+ * Holds a visible plane's Session resident (VC-515): adopts it if nothing has
+ * yet — a tab restored at relaunch is opened, not adopted, until a pane shows
+ * it — wakes it if its idle client was let go, and keeps it off the eviction
+ * list while on screen. A provisional Draft has no Session to show.
+ */
+function useChatSessionShown(
+  sessionsStore: ChatSessionsStore,
+  sessionId: string | null,
+  projectId: string,
+): void {
+  const provisional = useChatDraftsStore((state) =>
+    sessionId === null ? false : state.drafts[sessionId]?.provisional !== undefined,
+  );
+  React.useEffect(() => {
+    if (sessionId === null || provisional) return;
+    return sessionsStore.getState().showChatSession(sessionId, projectId);
+  }, [projectId, provisional, sessionId, sessionsStore]);
+}
+
 export function ChatPlane(props: ChatPlaneProps) {
   return (
     <BlobReadProvider projectId={props.projectId}>
@@ -338,6 +358,7 @@ function ChatPlaneContent({
   // keeps what it shows while the listing says whether it waits on anyone.
   useRemoteSessionOnScreen(surfaceVisible ? projectId : null, sessionId);
   useCloudSessionOnScreen(surfaceVisible ? sessionId : null);
+  useChatSessionShown(store ?? useChatSessionsStore, surfaceVisible ? sessionId : null, projectId);
   const browser = useChatBrowserTabs(sessionId, projectId);
   // Where a background shell's tail opens (VC-270's hand-off): a modal over
   // this chat, mounted only while open — see `ShellOutputDialog`. The shells
