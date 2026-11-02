@@ -137,6 +137,7 @@ import {
   offerableModels,
   SessionComposer,
   type ComposerModelSelection,
+  type SessionComposerProps,
 } from "@renderer/components/chat/composer-ui";
 import {
   ComposerInteractionStack,
@@ -435,7 +436,7 @@ function ChatPlaneContent({
   // The half-typed message is part of the Session, not this view: it has to
   // survive both a tab switch (this component unmounts) and a relaunch, so it
   // lives in the chat-drafts store rather than local state (see stores/chat-drafts.ts).
-  const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
+  // The words themselves are read by `DraftComposer`, not here — see it for why.
   const held = useChatDraftsStore((state) => state.drafts[sessionId]?.held ?? NO_HELD);
   const idleSends = useStore(sessionsStore, (state) => state.idleSends[sessionId] ?? NO_IDLE_SENDS);
   // Present only before the first message has promoted this identity into a
@@ -1013,6 +1014,13 @@ function ChatPlaneContent({
       resetAttachments(strip);
     },
     [removeAttachment, resetAttachments],
+  );
+  // The strip's ✕ — held at a stable identity because it is a prop of the
+  // memoised composer, and an inline arrow here re-rendered the whole box
+  // every time the plane did.
+  const removeComposerAttachment = React.useCallback(
+    (attachment: BlobLinkView) => void removeAttachment(attachment),
+    [removeAttachment],
   );
 
   const dispatch = React.useCallback(
@@ -2162,8 +2170,8 @@ function ChatPlaneContent({
                 // composer separately owns turn-only interrupt.
                 onWithdraw={withdraw}
               >
-                <SessionComposer
-                  value={input}
+                <DraftComposer
+                  sessionId={sessionId}
                   onValueChange={onInputChange}
                   textareaRef={textareaRef}
                   onComposerFocusRequest={focusComposer}
@@ -2234,7 +2242,7 @@ function ChatPlaneContent({
                   onStop={stopTurn}
                   attachments={attachments}
                   onAttachFiles={attachDraftFiles}
-                  onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
+                  onRemoveAttachment={removeComposerAttachment}
                   onRestoreAttachments={restoreAttachments}
                   imagesUnsupported={imagesUnsupported}
                   hostModelOnly={remoteHost}
@@ -2269,6 +2277,26 @@ function ChatPlaneContent({
       />
     </div>
   );
+}
+
+/* ---------------------------------------------------------------- composer */
+
+/**
+ * The composer, subscribed to its Draft's words by itself (VC-1079).
+ *
+ * The words change on every keystroke and nothing else in the plane reads
+ * them — Send, Edit and the `@` reference all take them from the store at the
+ * moment they act. Subscribing here rather than in the plane is what keeps a
+ * keystroke from re-rendering the whole plane (transcript shell, island, empty
+ * state) to hand one string to one child: the store wakes this wrapper, and the
+ * memoised `SessionComposer` beneath it is the only other thing that renders.
+ */
+function DraftComposer({
+  sessionId,
+  ...props
+}: Omit<SessionComposerProps, "value"> & { sessionId: string }) {
+  const value = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
+  return <SessionComposer {...props} value={value} />;
 }
 
 /* ------------------------------------------------------------ model access */

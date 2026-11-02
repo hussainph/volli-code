@@ -503,6 +503,31 @@ describe("a provisional chat plane", () => {
     );
   });
 
+  it("types into the Draft without re-reading the document's styles per keystroke (VC-1079)", async () => {
+    const { store } = provisionalChatStore();
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    expect(container?.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
+
+    // The empty state's chart reads its colours off the root. A keystroke is
+    // not a theme change, so typing must not read them again.
+    const styleReads = vi.spyOn(window, "getComputedStyle");
+    const typed = "one keystroke at a time";
+    for (let length = 1; length <= typed.length; length += 1) {
+      await act(async () => {
+        type(box, typed.slice(0, length));
+      });
+    }
+    expect(
+      styleReads.mock.calls.filter(([element]) => element === document.documentElement),
+    ).toHaveLength(0);
+    // The words still reach the box and the Draft, exactly as before.
+    expect(box.value).toBe(typed);
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe(typed);
+    expect(container?.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
+  });
+
   it("retains the persisted first message until the host accepts its queued command", async () => {
     const { enqueue, store } = provisionalChatStore();
     let accept!: (outcome: "delivered" | "refused") => void;

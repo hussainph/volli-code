@@ -25,6 +25,19 @@
  *
  * Numbers from one machine under one load are comparable to each other and to
  * nothing else; run both arms back to back.
+ *
+ * `--arm draft` (VC-1079) asks a different question: what does one keystroke in
+ * an empty Draft cost, with long transcripts and a sidebar-sized document
+ * beside it? The keys are sent through Chromium's trusted input path
+ * (`webContents.sendInputEvent`) and the page reports React's synchronous work
+ * per keystroke, key-to-paint latency and long tasks:
+ *
+ *   node apps/desktop/e2e/chat-window-bench.mjs --arm draft --sessions 2 \
+ *     --draft-ballast 8000 --draft-cpu-throttle 4 --draft-key-interval 80
+ *
+ * `--draft-planes` (transcripts beside the Draft), `--draft-keys`, and
+ * `--draft-trace <file>` (a Chromium trace of the typing window, for
+ * attributing style, layout and paint) are its other knobs.
  */
 import { spawn } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
@@ -47,6 +60,19 @@ const STREAM_SAMPLES = flag("stream-samples", "8");
 const STREAM_STEPS = flag("stream-steps", "120");
 const STREAM_TOKEN_RATE = flag("stream-token-rate", "30");
 const SKIP_BUILD = args.includes("--skip-build");
+// `--arm draft` (VC-1079): type into an empty Draft beside a realistic document
+// instead of the transcript steps. Its own knobs pass through unchanged.
+const PASSTHROUGH = [
+  "arm",
+  "draft-planes",
+  "draft-ballast",
+  "draft-keys",
+  "draft-key-interval",
+  "draft-trace",
+  "draft-cpu-throttle",
+]
+  .filter((name) => args.includes(`--${name}`))
+  .flatMap((name) => [`--${name}`, flag(name, "")]);
 
 function run(command, commandArgs, options = {}) {
   return new Promise((resolve, reject) => {
@@ -61,6 +87,15 @@ function run(command, commandArgs, options = {}) {
       code === 0 ? resolve(out) : reject(new Error(`${command} exited ${code}`)),
     );
   });
+}
+
+/** One probe series as the line the report prints: count, mean and spread. */
+function stats(values) {
+  if (!Array.isArray(values) || values.length === 0) return "none";
+  const sorted = values.toSorted((a, b) => a - b);
+  const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  return `n=${sorted.length} mean=${mean.toFixed(2)} p50=${at(0.5).toFixed(2)} p95=${at(0.95).toFixed(2)} max=${sorted.at(-1).toFixed(2)}`;
 }
 
 const electron = (await import(join(APP, "node_modules", "electron", "index.js"))).default;
@@ -155,6 +190,7 @@ const output = await run(
     STREAM_STEPS,
     "--stream-token-rate",
     STREAM_TOKEN_RATE,
+    ...PASSTHROUGH,
   ],
   { cwd: APP, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "1" } },
 );
@@ -189,6 +225,18 @@ if (match?.groups?.json === undefined) {
     console.log(
       `stream+scroll (${STREAM_TOKEN_RATE} tokens/s): latency ms [${latencies.join(", ")}], ` +
         `dropped [${dropped.join(", ")}], long tasks [${longTasks.join(", ")}]`,
+    );
+  }
+  if (report.draftTyping !== undefined) {
+    const typing = report.draftTyping;
+    console.log(
+      `\ndraft typing (${typing.typedCharacters} chars, ${typing.nodes} DOM nodes, empty state ${typing.emptyStateMounted ? "mounted" : "ABSENT"}):`,
+    );
+    console.log(`  input handler ms   ${stats(typing.handlerMs)}`);
+    console.log(`  key->paint ms      ${stats(typing.latencyMs)}`);
+    const longTotal = (typing.longTasksMs ?? []).reduce((sum, value) => sum + value, 0);
+    console.log(
+      `  long tasks         ${typing.longTasksMs?.length ?? 0} (${longTotal.toFixed(0)} ms total)`,
     );
   }
   if (report.errors?.length > 0) console.log("console errors:", report.errors.slice(0, 5));
