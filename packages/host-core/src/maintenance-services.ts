@@ -37,7 +37,6 @@ import {
 } from "./process/parked-terminals";
 import { SpawnLedger } from "./process/spawn-ledger";
 import { listWorktreeRefs, listWorktreeHoldersForSessions } from "./db/tickets-repo";
-import type { SessionEngine } from "@volli/session-engine";
 import { backfillProjectionCheckpoints } from "./session-control/checkpoint-backfill";
 import { hostLogger } from "./log/root";
 
@@ -91,10 +90,10 @@ export interface HostMaintenanceOptions {
   /** Process-table and signal seams for the parked-terminal release; tests only. */
   readonly parkedTerminals?: Pick<ParkedTerminalRecoveryPorts, "processes" | "signal">;
   /**
-   * The host's Session engine, for the one-shot projection checkpoint backfill
-   * (VC-1076). Absent, no backfill runs.
+   * Runs the one-shot projection checkpoint backfill (VC-1076) over `db`.
+   * Absent or false, no backfill runs.
    */
-  readonly sessionEngine?: Pick<SessionEngine, "getSession">;
+  readonly checkpointBackfill?: boolean;
   /** Delay before the backfill starts; tests only. */
   readonly checkpointBackfillDelayMs?: number;
 }
@@ -151,11 +150,11 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
   const backfillAbort = new AbortController();
   let backfillTimer: ReturnType<typeof setTimeout> | null = null;
   let backfill: Promise<unknown> = Promise.resolve();
-  const scheduleBackfill = (engine: Pick<SessionEngine, "getSession">): void => {
+  const scheduleBackfill = (): void => {
     backfillTimer = setTimeout(() => {
       backfillTimer = null;
       const startedAt = Date.now();
-      backfill = backfillProjectionCheckpoints({ db, engine, signal: backfillAbort.signal }).then(
+      backfill = backfillProjectionCheckpoints({ db, signal: backfillAbort.signal }).then(
         (result) =>
           log.info("projection checkpoint backfill finished", {
             ...result,
@@ -186,7 +185,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
         launchedAt,
         ...options.parkedTerminals,
       });
-      if (options.sessionEngine) scheduleBackfill(options.sessionEngine);
+      if (options.checkpointBackfill === true) scheduleBackfill();
     },
     triggerRetention() {
       if (!stopped) retentionWatch().triggerNow();

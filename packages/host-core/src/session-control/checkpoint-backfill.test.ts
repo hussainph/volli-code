@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { SESSION_PROJECTION_CHECKPOINT_VERSION } from "@volli/shared";
 
 import { insertProject } from "../db/projects-repo";
@@ -53,18 +53,14 @@ describe("backfillProjectionCheckpoints (VC-1076)", () => {
     const expected = await engine.listSessions({ projectId, scope: "all" });
     // Start from what a long-lived profile has: some rows absent, some
     // written by an older build at a version this build refuses.
-    ctx.db.prepare("DELETE FROM session_projection_checkpoints").run();
-    await engine.getSession({ sessionId: ids[0]! });
-    await engine.getSession({ sessionId: ids[1]! });
+    ctx.db
+      .prepare("DELETE FROM session_projection_checkpoints WHERE session_id NOT IN (?, ?)")
+      .run(ids[0], ids[1]);
     ctx.db
       .prepare("UPDATE session_projection_checkpoints SET schema_version = 1 WHERE session_id = ?")
       .run(ids[1]);
 
-    const result = await backfillProjectionCheckpoints({
-      db: ctx.db,
-      engine,
-      yieldToHost: immediate,
-    });
+    const result = await backfillProjectionCheckpoints({ db: ctx.db, yieldToHost: immediate });
 
     expect(result).toEqual({ candidates: 4, refreshed: 4 });
     expect(checkpointRows().toSorted((a, b) => a.session_id.localeCompare(b.session_id))).toEqual(
@@ -78,67 +74,64 @@ describe("backfillProjectionCheckpoints (VC-1076)", () => {
 
     // Nothing left to do: a second launch's pass finds no candidates.
     await expect(
-      backfillProjectionCheckpoints({ db: ctx.db, engine, yieldToHost: immediate }),
+      backfillProjectionCheckpoints({ db: ctx.db, yieldToHost: immediate }),
     ).resolves.toEqual({ candidates: 0, refreshed: 0 });
   });
 
   it("hands the host a turn once a slice has run its budget", async () => {
-    const { engine } = await seed(3);
+    await seed(3);
     ctx.db.prepare("DELETE FROM session_projection_checkpoints").run();
     let clock = 0;
     let yields = 0;
     await backfillProjectionCheckpoints({
       db: ctx.db,
-      // Every fold costs a whole slice on this clock.
-      engine: {
-        getSession: async (query) => {
-          clock += BACKFILL_SLICE_MS;
-          return engine.getSession(query);
-        },
-      },
       yieldToHost: async () => {
         yields += 1;
         await immediate();
       },
-      now: () => clock,
+      // Every reading of the clock is a whole slice later than the last.
+      now: () => (clock += BACKFILL_SLICE_MS),
     });
     expect(yields).toBeGreaterThanOrEqual(3);
   });
 
-  it("stops between Sessions once aborted", async () => {
-    const { engine } = await seed(4);
+  it("stops between Sessions once aborted, and yields on a macrotask by default", async () => {
+    await seed(4);
     ctx.db.prepare("DELETE FROM session_projection_checkpoints").run();
     const abort = new AbortController();
-    let folds = 0;
+    let clock = 0;
+    let reads = 0;
     const result = await backfillProjectionCheckpoints({
       db: ctx.db,
-      engine: {
-        getSession: async (query) => {
-          folds += 1;
-          if (folds === 2) abort.abort();
-          return engine.getSession(query);
-        },
-      },
-      yieldToHost: immediate,
       signal: abort.signal,
+      now: () => {
+        reads += 1;
+        // The turn taken after the second Session aborts the pass.
+        if (reads === 5) abort.abort();
+        return (clock += BACKFILL_SLICE_MS);
+      },
     });
     expect(result).toEqual({ candidates: 2, refreshed: 2 });
     expect(checkpointRows()).toHaveLength(2);
   });
 
   it("moves past a Session it cannot fold", async () => {
-    const { engine, ids } = await seed(3);
+    const { ids } = await seed(3);
     ctx.db.prepare("DELETE FROM session_projection_checkpoints").run();
-    const result = await backfillProjectionCheckpoints({
-      db: ctx.db,
-      engine: {
-        getSession: async (query) => {
-          if (query.sessionId === ids[1]) throw new Error("unfoldable");
-          return engine.getSession(query);
-        },
-      },
-      yieldToHost: immediate,
-    });
-    expect(result).toEqual({ candidates: 3, refreshed: 2 });
+    // A malformed field inside a known kind is corruption, and fails loudly.
+    ctx.db
+      .prepare(
+        `UPDATE session_events SET payload = '{"kind":"session.created"}'
+          WHERE session_id = ? AND json_extract(payload, '$.kind') = 'session.created'`,
+      )
+      .run(ids[1]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await backfillProjectionCheckpoints({ db: ctx.db, yieldToHost: immediate });
+      expect(result).toEqual({ candidates: 3, refreshed: 2 });
+      expect(JSON.stringify(warn.mock.calls)).toContain(ids[1]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

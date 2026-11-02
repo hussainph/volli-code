@@ -963,9 +963,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async getSession(query) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
-        return session
-          ? projectStoredSessionAndPersist(transaction, session, reportCheckpointFailure)
-          : null;
+        // Deliberately read-only, unlike a listing: `getSession` answers
+        // previews and dry runs that promise no durable change at all.
+        return session ? projectStoredSession(transaction, session, reportCheckpointFailure) : null;
       });
     },
 
@@ -1327,6 +1327,9 @@ function projectStoredSession(
  * A read path's fold, written back to the durable cache when the row it
  * started from was missing, unusable, or a whole refresh window behind
  * (VC-1076).
+ *
+ * Listings only: `getSession` stays a pure read, because dry runs and
+ * previews read through it and promise the database is left byte-identical.
  *
  * Before this, only `observe` ever wrote a checkpoint, so a Session that was
  * merely LISTED — one with no checkpoint yet, one whose row an older build

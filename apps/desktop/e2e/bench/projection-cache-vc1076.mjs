@@ -116,7 +116,6 @@ try {
     report.backfill = await measure(() =>
       backfillModule.backfillProjectionCheckpoints({
         db,
-        engine: engineFor(),
         yieldToHost: () => new Promise((done) => setImmediate(done)),
       }),
     );

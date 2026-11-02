@@ -1953,12 +1953,16 @@ describe("SessionEngine creation and explicit commands", () => {
       }
     }
 
-    it("writes a getSession full fold back, so the next read resumes from it", async () => {
+    it("writes a listing's full fold back, so the next read resumes from it", async () => {
       const { plane, saved } = countingComposition();
       const { session } = await plane.createSession(createRequest("command-persist-get"));
       const head = await plane.latestEventSequence({ sessionId: session.id });
 
+      // A plain read never writes: previews promise an untouched database.
       const folded = await plane.getSession({ sessionId: session.id });
+      expect(saved).toEqual([]);
+
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
       expect(saved).toEqual([head]);
       await expect(plane.getProjectionCheckpoint({ sessionId: session.id })).resolves.toEqual(
         createSessionProjectionCheckpoint(
@@ -1969,13 +1973,14 @@ describe("SessionEngine creation and explicit commands", () => {
 
       // Resumed, not refolded, and a usable row is never rewritten by a read.
       await expect(plane.getSession({ sessionId: session.id })).resolves.toEqual(folded);
+      await plane.listAttachedSessions();
       expect(saved).toEqual([head]);
     });
 
     it("refreshes a row a whole window behind and leaves one inside the window alone", async () => {
       const { plane, saved } = countingComposition();
       const { session } = await plane.createSession(createRequest("command-persist-window"));
-      await plane.getSession({ sessionId: session.id });
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
       const persisted = saved.at(-1)!;
 
       // `submit` never refreshes the checkpoint, so its tail only grows. A
@@ -2002,13 +2007,10 @@ describe("SessionEngine creation and explicit commands", () => {
       const failure = new Error("checkpoint table is read-only");
       failWith(failure);
 
-      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
-        session: { id: session.id },
-      });
       await expect(
         plane.listSessions({ projectId: "project-1", scope: "all" }),
       ).resolves.toHaveLength(1);
-      expect(reported).toEqual([failure, failure]);
+      expect(reported).toEqual([failure]);
       expect(saved).toEqual([]);
       await expect(plane.getProjectionCheckpoint({ sessionId: session.id })).resolves.toBeNull();
     });

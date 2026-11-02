@@ -355,26 +355,22 @@ describe("createHostMaintenance", () => {
   it("backfills projection checkpoints once, after its delay, and joins it before close (VC-1076)", async () => {
     recordingLoops();
     seedWorktree(testDb.db, "session-backfill");
-    const folded = deferred();
-    const getSession = vi.fn(async () => {
-      folded.resolve();
-      return null;
-    });
+    const checkpoints = () =>
+      testDb.db.prepare("SELECT session_id FROM session_projection_checkpoints").all();
     const maintenance = createHostMaintenance({
       db: testDb.db,
       ports: { events, attention },
       worktrees,
       processReaders: readers(),
-      sessionEngine: { getSession },
+      checkpointBackfill: true,
       checkpointBackfillDelayMs: 0,
     });
-    expect(getSession).not.toHaveBeenCalled();
+    expect(checkpoints()).toEqual([]);
     maintenance.start();
     maintenance.start();
-    await folded.promise;
+    await vi.waitFor(() => expect(checkpoints()).toEqual([{ session_id: "session-backfill" }]));
     maintenance.stop();
     await maintenance.settled();
-    expect(getSession.mock.calls).toEqual([[{ sessionId: "session-backfill" }]]);
   });
 
   it("waits out its default delay, then logs a backfill that failed", async () => {
@@ -395,7 +391,7 @@ describe("createHostMaintenance", () => {
         ports: { events, attention },
         worktrees,
         processReaders: readers(),
-        sessionEngine: { getSession: async () => null },
+        checkpointBackfill: true,
       });
       maintenance.start();
       vi.advanceTimersByTime(CHECKPOINT_BACKFILL_DELAY_MS - 1);
@@ -415,20 +411,21 @@ describe("createHostMaintenance", () => {
   it("never starts a backfill a stop beat to its delay", async () => {
     recordingLoops();
     seedWorktree(testDb.db, "session-unfolded");
-    const getSession = vi.fn(async () => null);
     const maintenance = createHostMaintenance({
       db: testDb.db,
       ports: { events, attention },
       worktrees,
       processReaders: readers(),
-      sessionEngine: { getSession },
+      checkpointBackfill: true,
       checkpointBackfillDelayMs: 5,
     });
     maintenance.start();
     maintenance.stop();
     await new Promise((resolve) => setTimeout(resolve, 20));
     await maintenance.settled();
-    expect(getSession).not.toHaveBeenCalled();
+    expect(testDb.db.prepare("SELECT session_id FROM session_projection_checkpoints").all()).toEqual(
+      [],
+    );
   });
 
   it("stops without building a retention watch nobody started", () => {

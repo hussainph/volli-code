@@ -2102,20 +2102,26 @@ describe("birth payload memo (VC-1076)", () => {
     ).toEqual(first[0]?.session);
   });
 
-  it("replaces a checkpoint row an older build wrote at another schema version on read", async () => {
+  it("replaces a checkpoint row an older build wrote at another schema version on listing", async () => {
     const { control } = setup();
     const created = await control.createSession(request("create-version", "owner-a"));
-    await control.getSession({ sessionId: created.session.id });
+    await control.listSessions({ projectId: "project", scope: "all" });
     ctx.db
       .prepare("UPDATE session_projection_checkpoints SET schema_version = 1 WHERE session_id = ?")
       .run(created.session.id);
-    const folded = await control.getSession({ sessionId: created.session.id });
+    // A fresh engine: the first one's listing cache would answer unread.
+    const relaunched = createSessionEngine({
+      ledger: createSqliteSessionLedger(ctx.db),
+      clock: { now: () => 100 },
+      ids: { next: (kind) => `${kind}-relaunched` },
+    });
+    const [folded] = await relaunched.listSessions({ projectId: "project", scope: "all" });
     expect(
       ctx.db
         .prepare("SELECT schema_version FROM session_projection_checkpoints WHERE session_id = ?")
         .get(created.session.id),
     ).toEqual({ schema_version: SESSION_PROJECTION_CHECKPOINT_VERSION });
-    await expect(control.getSession({ sessionId: created.session.id })).resolves.toEqual(folded);
+    expect(await control.getSession({ sessionId: created.session.id })).toEqual(folded);
   });
 });
 

@@ -10,13 +10,16 @@
  * and 1,107 had a v1 row, and the first listing after launch re-folded all of
  * them on every launch.
  *
- * Read paths now persist a full fold themselves, so a listing heals what it
+ * Listings now persist a full fold themselves, so a listing heals what it
  * touches. This pass is for the rest, and for doing it off the person's
- * critical path: it asks the engine for each such Session's projection, which
- * folds it and writes the checkpoint back (`projectStoredSessionAndPersist`),
- * most recently inserted first, because those are what a listing shows first. It is the
- * engine's own read, so the row it writes is exactly the one a read would
- * write — no second encoder here to drift from the first.
+ * critical path: for each such Session it folds the whole log and writes the
+ * checkpoint, most recently inserted first, because those are what a listing
+ * shows first. The fold is the shared `createSessionProjectionCheckpoint`
+ * over the ledger's own projection read, and the write is the ledger's
+ * `saveProjectionCheckpoint` — exactly what the engine does for a Session with
+ * no usable row — so there is no second encoder here to drift from the first.
+ * It runs through its own ledger rather than the engine because the engine's
+ * single-Session read (`getSession`) is deliberately read-only.
  *
  * Idempotent and cheap to repeat: once every Session has a current row the
  * candidate query returns nothing, so running it at each launch is how it
@@ -29,12 +32,15 @@
  * listing would have paid, paid once and in the background.
  */
 import type Database from "better-sqlite3";
-import type { SessionEngine } from "@volli/session-engine";
-import { SESSION_PROJECTION_CHECKPOINT_VERSION } from "@volli/shared";
+import {
+  createSessionProjectionCheckpoint,
+  SESSION_PROJECTION_CHECKPOINT_VERSION,
+} from "@volli/shared";
 
 import { setImmediate } from "node:timers";
 import { prepared } from "../db/prepared";
 import { hostLogger } from "../log/root";
+import { createSqliteSessionLedger } from "./sqlite-ledger";
 
 const log = hostLogger("session-checkpoint");
 
@@ -46,8 +52,6 @@ const BACKFILL_PAGE = 256;
 
 export interface CheckpointBackfillPorts {
   readonly db: Database.Database;
-  /** The host's engine: its read folds and persists a missing checkpoint. */
-  readonly engine: Pick<SessionEngine, "getSession">;
   /**
    * A macrotask turn; see `SessionEnginePorts.yieldToHost` for why not a
    * microtask. Defaults to `setImmediate`.
@@ -70,7 +74,8 @@ export interface CheckpointBackfillResult {
 export async function backfillProjectionCheckpoints(
   ports: CheckpointBackfillPorts,
 ): Promise<CheckpointBackfillResult> {
-  const { db, engine, signal } = ports;
+  const { db, signal } = ports;
+  const ledger = createSqliteSessionLedger(db);
   const yieldToHost = ports.yieldToHost ?? yieldToMainProcess;
   const now = ports.now ?? (() => performance.now());
   const page = prepared(
@@ -110,7 +115,17 @@ export async function backfillProjectionCheckpoints(
       if (signal?.aborted) break;
       candidates += 1;
       try {
-        await engine.getSession({ sessionId: row.id });
+        await ledger.transaction((transaction) => {
+          const session = transaction.getSession(row.id);
+          // Gone since the page was read: its project was deleted.
+          if (session === null) return;
+          transaction.saveProjectionCheckpoint(
+            createSessionProjectionCheckpoint(
+              session,
+              transaction.listProjectionEvents({ sessionId: session.id }),
+            ),
+          );
+        });
         if (isCurrent.get(row.id, SESSION_PROJECTION_CHECKPOINT_VERSION) !== undefined) {
           refreshed += 1;
         }
