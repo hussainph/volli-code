@@ -347,7 +347,8 @@ describe("headless runtime ownership", () => {
       PATH: "/service/bin",
       VOLLI_SOCKET: "/run/hostd.sock",
     });
-    expect(await seam.concurrency.mock.lastCall![0].listAttachedSessions()).toEqual([]);
+    // Only executors this host holds count (VC-1085): none yet, and no terminals here.
+    expect(seam.concurrency.mock.lastCall![0].liveSessionIds()).toEqual(new Set());
     const context = seam.context.mock.lastCall![0];
     await context.waitForBirth("s"); // Internal recovery must not wait for itself.
     expect(f.lifecycle.ready).not.toHaveBeenCalled();

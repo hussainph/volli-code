@@ -123,32 +123,40 @@ function chatQuestion(): SessionInteraction {
   };
 }
 
+/** Every given Session's executor live in this process — the ordinary case for a count. */
+function allLive(projections: readonly SessionProjection[]): ReadonlySet<string> {
+  return new Set(projections.map((projection) => projection.session.id));
+}
+
+/** A count over Sessions that are all live, as the reader hands them over. */
+function liveFleet(projections: SessionProjection[]) {
+  return { projections, liveSessionIds: allLive(projections) };
+}
+
 describe("workingSessionCount", () => {
   it("counts live terminal Sessions and structured Sessions mid-turn", () => {
     expect(
-      workingSessionCount({
-        projections: [liveTerminal("a"), workingChat("b"), liveTerminal("c")],
-      }),
+      workingSessionCount(liveFleet([liveTerminal("a"), workingChat("b"), liveTerminal("c")])),
     ).toBe(3);
   });
 
   it("ignores a terminal Session whose shell has exited", () => {
     expect(
-      workingSessionCount({ projections: [projectionWith("a", [terminalAttachment("closed")])] }),
+      workingSessionCount(liveFleet([projectionWith("a", [terminalAttachment("closed")])])),
     ).toBe(0);
   });
 
   it("ignores a structured Session that is idle, waiting or stopped", () => {
     expect(
-      workingSessionCount({
-        projections: [
+      workingSessionCount(
+        liveFleet([
           projectionWith("idle", [structuredAttachment()]),
           projectionWith("stopped", [structuredAttachment()], {
             turnActive: true,
             stopped: { at: 3, reason: null, by: { kind: "user" } },
           }),
-        ],
-      }),
+        ]),
+      ),
     ).toBe(0);
   });
 
@@ -158,10 +166,20 @@ describe("workingSessionCount", () => {
   it("excludes the Session whose start this is", () => {
     expect(
       workingSessionCount({
-        projections: [liveTerminal("mine"), liveTerminal("theirs")],
+        ...liveFleet([liveTerminal("mine"), liveTerminal("theirs")]),
         excludeSessionId: "mine",
       }),
     ).toBe(1);
+  });
+
+  // VC-1085: an open attachment is a resumable binding, not a running
+  // executor. A chat whose turn the ledger still calls open, or a terminal
+  // whose attachment was never closed, counts only while this process holds
+  // its executor.
+  it("counts nothing whose executor this process does not hold", () => {
+    const projections = [liveTerminal("terminal"), workingChat("chat")];
+    expect(workingSessionCount({ projections, liveSessionIds: new Set() })).toBe(0);
+    expect(workingSessionCount({ projections, liveSessionIds: new Set(["chat"]) })).toBe(1);
   });
 });
 
@@ -170,7 +188,7 @@ describe("sessionConcurrencyEnv", () => {
   // others are working on an 8-core machine.
   it("gives a fifth Session on an 8-core machine a budget of two", () => {
     const env = sessionConcurrencyEnv({
-      projections: ["a", "b", "c", "d"].map((id) => liveTerminal(id)),
+      ...liveFleet(["a", "b", "c", "d"].map((id) => liveTerminal(id))),
       excludeSessionId: "mine",
       environment: {},
       cores: 8,
@@ -182,7 +200,7 @@ describe("sessionConcurrencyEnv", () => {
   });
 
   it("gives a Session alone on the machine every core", () => {
-    const env = sessionConcurrencyEnv({ projections: [], environment: {}, cores: 8 });
+    const env = sessionConcurrencyEnv({ ...liveFleet([]), environment: {}, cores: 8 });
     expect(env["VOLLI_CONCURRENCY_HINT"]).toBe("8");
   });
 
@@ -190,7 +208,7 @@ describe("sessionConcurrencyEnv", () => {
   // login shell keeps it, untouched and unmerged.
   it("never overwrites a variable the user's own environment defines", () => {
     const env = sessionConcurrencyEnv({
-      projections: [liveTerminal("a"), liveTerminal("b")],
+      ...liveFleet([liveTerminal("a"), liveTerminal("b")]),
       environment: { MAKEFLAGS: "-j16", GOFLAGS: "-mod=vendor" },
       cores: 8,
     });
@@ -203,7 +221,7 @@ describe("sessionConcurrencyEnv", () => {
   // launched from a terminal inside another Volli Session.
   it("recomputes over an inherited hint instead of preserving it", () => {
     const env = sessionConcurrencyEnv({
-      projections: [liveTerminal("a")],
+      ...liveFleet([liveTerminal("a")]),
       environment: { VOLLI_CONCURRENCY_HINT: "7" },
       cores: 8,
     });
@@ -211,73 +229,117 @@ describe("sessionConcurrencyEnv", () => {
   });
 
   it("reads this host's core count when none is supplied", () => {
-    const env = sessionConcurrencyEnv({ projections: [], environment: {} });
+    const env = sessionConcurrencyEnv({ ...liveFleet([]), environment: {} });
     expect(Number.parseInt(env["VOLLI_CONCURRENCY_HINT"] ?? "0", 10)).toBeGreaterThanOrEqual(1);
   });
 });
 
-/** A ports double whose one narrow read is scriptable per test. */
-function fakePorts(
-  listAttachedSessions: () => Promise<readonly SessionProjection[]>,
-): SessionConcurrencyPorts {
-  return { listAttachedSessions };
+/**
+ * A ports double over a scriptable live fleet: `liveSessionIds` names every
+ * Session the script currently returns, and `getSession` folds each to the
+ * projection it returned. Each read of the live set is one `reads` call.
+ */
+function fakePorts(fleet: () => readonly SessionProjection[]) {
+  const reads = vi.fn(() => fleet());
+  let folds = new Map<string, SessionProjection>();
+  const getSession = vi.fn(
+    async ({ sessionId }: { sessionId: string }) => folds.get(sessionId) ?? null,
+  );
+  const ports: SessionConcurrencyPorts = {
+    liveSessionIds: () => {
+      const projections = reads();
+      folds = new Map(projections.map((projection) => [projection.session.id, projection]));
+      return new Set(folds.keys());
+    },
+    getSession,
+  };
+  return { ports, reads, getSession };
 }
 
 describe("createSessionConcurrencyEnvReader", () => {
   it("uses the host clock and default TTL when no options are supplied", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     try {
-      const listAttachedSessions = vi.fn(async () => [liveTerminal("a")]);
-      const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions));
+      const fake = fakePorts(() => [liveTerminal("a")]);
+      const reader = createSessionConcurrencyEnvReader(fake.ports);
       await reader({ environment: {}, cores: 8 });
       clock.mockReturnValue(6001);
       await reader({ environment: {}, cores: 8 });
-      expect(listAttachedSessions).toHaveBeenCalledTimes(2);
+      expect(fake.reads).toHaveBeenCalledTimes(2);
     } finally {
       clock.mockRestore();
     }
   });
 
-  it("counts the Sessions of every project on the machine, from one read", async () => {
-    // The narrow read is unscoped by design: load is a fact about the machine,
-    // so Sessions from two projects arrive together and are counted together.
-    const listAttachedSessions = vi.fn(async () => [
-      liveTerminal("a"),
-      liveTerminal("b"),
-      workingChat("c"),
-    ]);
-    const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions), {
-      now: () => 0,
-    });
+  it("counts the live Sessions of every project on the machine, from one read", async () => {
+    // Unscoped by design: load is a fact about the machine, so Sessions from
+    // two projects arrive together and are counted together.
+    const fake = fakePorts(() => [liveTerminal("a"), liveTerminal("b"), workingChat("c")]);
+    const reader = createSessionConcurrencyEnvReader(fake.ports, { now: () => 0 });
 
     const env = await reader({ environment: {}, cores: 9 });
 
     expect(env["VOLLI_CONCURRENCY_HINT"]).toBe("3");
-    expect(listAttachedSessions).toHaveBeenCalledTimes(1);
+    expect(fake.reads).toHaveBeenCalledTimes(1);
+  });
+
+  // VC-1085: the read is the size of what is running. A profile with
+  // thousands of resumable (open, unbound) attachments folds none of them.
+  it("folds only the Sessions whose executor is live", async () => {
+    const fake = fakePorts(() => [workingChat("bound")]);
+    const reader = createSessionConcurrencyEnvReader(fake.ports, { now: () => 0 });
+
+    expect((await reader({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"]).toBe("8");
+    expect(fake.getSession.mock.calls).toEqual([[{ sessionId: "bound" }]]);
+  });
+
+  it("asks for nothing when no executor is live", async () => {
+    const fake = fakePorts(() => []);
+    const reader = createSessionConcurrencyEnvReader(fake.ports, { now: () => 0 });
+
+    expect((await reader({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"]).toBe("8");
+    expect(fake.getSession).not.toHaveBeenCalled();
+  });
+
+  // A binding released between the live read and its fold leaves nothing to fold.
+  it("drops a live Session that is gone by the time it is folded", async () => {
+    const reader = createSessionConcurrencyEnvReader(
+      {
+        liveSessionIds: () => new Set(["gone", "terminal"]),
+        getSession: async ({ sessionId }) =>
+          sessionId === "terminal" ? liveTerminal("terminal") : null,
+      },
+      { now: () => 0 },
+    );
+
+    expect((await reader({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"]).toBe("8");
+    expect(
+      (await reader({ excludeSessionId: "other", environment: {}, cores: 8 }))[
+        "VOLLI_CONCURRENCY_HINT"
+      ],
+    ).toBe("8");
   });
 
   // The precedence the listing shows a person, held through the cached reader
   // and not only through the pure count: a terminal that has exited outranks
   // whatever its chat half would have said, and a waiting chat is not working.
   it("keeps the terminal/chat precedence the listing uses", async () => {
-    const reader = createSessionConcurrencyEnvReader(
-      fakePorts(async () => [
-        liveTerminal("live-terminal"),
-        // A terminal Session whose shell exited. It also carries a structured
-        // attachment mid-turn, and the terminal half still decides.
-        projectionWith("exited-terminal", [terminalAttachment("closed"), structuredAttachment()], {
-          turnActive: true,
-        }),
-        workingChat("working-chat"),
-        // Waiting outranks working: an agent that has asked a question is not
-        // consuming the machine while it waits.
-        projectionWith("waiting-chat", [structuredAttachment()], {
-          turnActive: true,
-          interactions: { active: [chatQuestion()], resolved: [] },
-        }),
-      ]),
-      { now: () => 0 },
-    );
+    const fake = fakePorts(() => [
+      liveTerminal("live-terminal"),
+      // A terminal Session whose shell exited. It also carries a structured
+      // attachment mid-turn, and the terminal half still decides.
+      projectionWith("exited-terminal", [terminalAttachment("closed"), structuredAttachment()], {
+        turnActive: true,
+      }),
+      workingChat("working-chat"),
+      // Waiting outranks working: an agent that has asked a question is not
+      // consuming the machine while it waits.
+      projectionWith("waiting-chat", [structuredAttachment()], {
+        turnActive: true,
+        interactions: { active: [chatQuestion()], resolved: [] },
+      }),
+    ]);
+    const reader = createSessionConcurrencyEnvReader(fake.ports, { now: () => 0 });
 
     // Two of the four count as working — the live terminal and the mid-turn
     // chat — so an 8-core machine divides by two.
@@ -286,8 +348,8 @@ describe("createSessionConcurrencyEnvReader", () => {
 
   it("runs one read for two calls inside the TTL", async () => {
     let clock = 0;
-    const listAttachedSessions = vi.fn(async () => [liveTerminal("a")]);
-    const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions), {
+    const fake = fakePorts(() => [liveTerminal("a")]);
+    const reader = createSessionConcurrencyEnvReader(fake.ports, {
       ttlMs: 5_000,
       now: () => clock,
     });
@@ -296,13 +358,14 @@ describe("createSessionConcurrencyEnvReader", () => {
     clock += 1_000;
     await reader({ environment: {}, cores: 8 });
 
-    expect(listAttachedSessions).toHaveBeenCalledTimes(1);
+    expect(fake.reads).toHaveBeenCalledTimes(1);
+    expect(fake.getSession).toHaveBeenCalledTimes(1);
   });
 
   it("runs a fresh read once the TTL has elapsed", async () => {
     let clock = 0;
-    const listAttachedSessions = vi.fn(async () => [liveTerminal("a")]);
-    const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions), {
+    const fake = fakePorts(() => [liveTerminal("a")]);
+    const reader = createSessionConcurrencyEnvReader(fake.ports, {
       ttlMs: 5_000,
       now: () => clock,
     });
@@ -311,7 +374,7 @@ describe("createSessionConcurrencyEnvReader", () => {
     clock += 5_001;
     await reader({ environment: {}, cores: 8 });
 
-    expect(listAttachedSessions).toHaveBeenCalledTimes(2);
+    expect(fake.reads).toHaveBeenCalledTimes(2);
   });
 
   /**
@@ -327,10 +390,10 @@ describe("createSessionConcurrencyEnvReader", () => {
   it("does not count a Session that started inside the cache window", async () => {
     let clock = 0;
     const fleet: SessionProjection[] = [liveTerminal("first")];
-    const reader = createSessionConcurrencyEnvReader(
-      fakePorts(async () => [...fleet]),
-      { ttlMs: 5_000, now: () => clock },
-    );
+    const reader = createSessionConcurrencyEnvReader(fakePorts(() => [...fleet]).ports, {
+      ttlMs: 5_000,
+      now: () => clock,
+    });
 
     expect((await reader({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"]).toBe("8");
     fleet.push(liveTerminal("second"));
@@ -344,14 +407,18 @@ describe("createSessionConcurrencyEnvReader", () => {
   });
 
   it("shares one in-flight read across concurrent callers instead of running N", async () => {
-    let resolveRead!: (value: readonly SessionProjection[]) => void;
-    const pending = new Promise<readonly SessionProjection[]>((resolve) => {
-      resolveRead = resolve;
+    let resolveFold!: (value: SessionProjection) => void;
+    const pending = new Promise<SessionProjection>((resolve) => {
+      resolveFold = resolve;
     });
-    const listAttachedSessions = vi.fn(() => pending);
-    const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions), {
-      now: () => 0,
-    });
+    const liveSessionIds = vi.fn(() => new Set(["a", "b"]));
+    const getSession = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+      sessionId === "a" ? pending : liveTerminal("b"),
+    );
+    const reader = createSessionConcurrencyEnvReader(
+      { liveSessionIds, getSession },
+      { now: () => 0 },
+    );
 
     const calls = [
       reader({ environment: {}, cores: 8 }),
@@ -360,19 +427,18 @@ describe("createSessionConcurrencyEnvReader", () => {
     ];
     // Nothing has settled yet — every caller above joined the one read rather
     // than starting its own.
-    expect(listAttachedSessions).toHaveBeenCalledTimes(1);
-    resolveRead([liveTerminal("a"), liveTerminal("b")]);
+    expect(liveSessionIds).toHaveBeenCalledTimes(1);
+    resolveFold(liveTerminal("a"));
     const results = await Promise.all(calls);
 
-    expect(listAttachedSessions).toHaveBeenCalledTimes(1);
+    expect(liveSessionIds).toHaveBeenCalledTimes(1);
+    expect(getSession).toHaveBeenCalledTimes(2);
     for (const env of results) expect(env["VOLLI_CONCURRENCY_HINT"]).toBe("4");
   });
 
   it("applies each caller's own exclusion against the one cached fleet", async () => {
-    const listAttachedSessions = vi.fn(async () => [liveTerminal("a"), liveTerminal("b")]);
-    const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions), {
-      now: () => 0,
-    });
+    const fake = fakePorts(() => [liveTerminal("a"), liveTerminal("b")]);
+    const reader = createSessionConcurrencyEnvReader(fake.ports, { now: () => 0 });
 
     // Same cached read, two different exclusions: one names a Session that is
     // actually in the fleet, the other names one that is not — so the counted
@@ -384,7 +450,7 @@ describe("createSessionConcurrencyEnvReader", () => {
       cores: 8,
     });
 
-    expect(listAttachedSessions).toHaveBeenCalledTimes(1);
+    expect(fake.reads).toHaveBeenCalledTimes(1);
     expect(excludingA["VOLLI_CONCURRENCY_HINT"]).toBe("8");
     expect(excludingNobody["VOLLI_CONCURRENCY_HINT"]).toBe("4");
   });
@@ -393,19 +459,22 @@ describe("createSessionConcurrencyEnvReader", () => {
   // loaded machine, a Session that fails to start is a person unable to work.
   it("yields no variables on a failed read, and does not poison the cache", async () => {
     let calls = 0;
-    const listAttachedSessions = async (): Promise<readonly SessionProjection[]> => {
-      calls += 1;
-      if (calls === 1) throw new Error("ledger is closed");
-      return [liveTerminal("a")];
-    };
-    const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions), {
-      now: () => 0,
-    });
+    const reader = createSessionConcurrencyEnvReader(
+      {
+        liveSessionIds: () => new Set(["a"]),
+        getSession: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("ledger is closed");
+          return liveTerminal("a");
+        },
+      },
+      { now: () => 0 },
+    );
 
     expect(await reader({ environment: {}, cores: 8 })).toEqual({});
     // The failure was not cached as "no one is working": the next call
     // retries the read rather than serving a poisoned empty answer.
-    const recovered = await reader({ environment: {}, cores: 8 });
+    const recovered = await reader({ excludeSessionId: "mine", environment: {}, cores: 8 });
     expect(recovered["VOLLI_CONCURRENCY_HINT"]).toBe("8");
     expect(calls).toBe(2);
   });

@@ -387,11 +387,16 @@ describe("createHostCore", () => {
         { ...headlessOptions(root), secretKey: codec, terminal },
       ),
     );
+    // Asking who has a running PTY composes no manager (VC-1085).
+    expect(core.liveTerminalSessionIds?.()).toEqual(new Set());
+    expect(terminal).not.toHaveBeenCalled();
     const terminals = core.terminals;
     if (terminals.kind !== "available") throw new Error("Expected terminal capability.");
     const manager = terminals.manager;
     expect(core.terminals).toEqual({ kind: "available", manager });
     expect(terminal).toHaveBeenCalledOnce();
+    vi.spyOn(manager, "liveSessionIds").mockReturnValue(new Set(["running"]));
+    expect(core.liveTerminalSessionIds?.()).toEqual(new Set(["running"]));
     core.secretStore.put({ name: "TOKEN", value: "fixture", scope: "always" });
     expect(core.secretStore.list()).toHaveLength(1);
     const adopted = live(

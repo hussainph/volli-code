@@ -313,12 +313,23 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     // One row per started shell (VC-341).
     ...(live === undefined ? {} : { ledger: live.maintenance.spawnLedger }),
   });
-  // This process's one reader of who is working (VC-403).
+  // This process's one reader of who is working (VC-403): the executors this
+  // process holds — structured bindings and running PTYs — and never the
+  // ledger's open attachments, which stay open across a quit as resumable
+  // bindings (VC-1085). Read lazily: the runtime is assembled below, and no
+  // Session starts before it is.
   const concurrency: SessionConcurrencyEnvReader | null =
     sessionEngine === null
       ? null
       : createSessionConcurrencyEnvReader({
-          listAttachedSessions: () => sessionEngine.listAttachedSessions(),
+          liveSessionIds: () => {
+            const ids = new Set(live?.liveTerminalSessionIds?.());
+            for (const binding of assembly.sessionRuntime?.openNativeBindings() ?? []) {
+              ids.add(binding.sessionId);
+            }
+            return ids;
+          },
+          getSession: (query) => sessionEngine.getSession(query),
         });
   // One Session's share of the machine (VC-339), under the host's additions.
   const concurrencyEnvFor = async (sessionId: string): Promise<Record<string, string>> => {

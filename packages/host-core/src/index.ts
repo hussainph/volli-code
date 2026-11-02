@@ -159,6 +159,12 @@ export interface LiveHostCore
   readonly terminals:
     | { readonly kind: "unavailable" }
     | { readonly kind: "available"; readonly manager: PtyManager };
+  /**
+   * The Sessions whose PTY is running right now, without composing a terminal
+   * supervisor nobody has asked for: a host that never built one has no
+   * terminal running. The concurrency budget's terminal half (VC-1085).
+   */
+  readonly liveTerminalSessionIds?: () => ReadonlySet<string>;
 }
 export type HostCore = LiveHostCore | DegradedHostCore;
 
@@ -297,6 +303,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
         })),
       };
     },
+    liveTerminalSessionIds: () => ptyManager?.liveSessionIds() ?? NO_LIVE_TERMINALS,
     fileServices: createHostFileServices(ports, machinePaths),
     get runtimeServices() {
       return (runtimeServices ??= createHostRuntimeServices(
@@ -317,6 +324,8 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     },
   };
 }
+
+const NO_LIVE_TERMINALS: ReadonlySet<string> = new Set();
 
 const refuseSecretKey = (): never => {
   throw new SecretKeyUnavailableError("unavailable", "This host has no secret key port.");

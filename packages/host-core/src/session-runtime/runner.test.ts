@@ -41,7 +41,8 @@ import { ownerGuardedInbox } from "../cloud-store/session-jobs";
 import type { JobExecutor } from "../cloud-runner/inbox";
 import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
 import { insertProject } from "../db/projects-repo";
-import { testProject } from "../db/test-helpers";
+import { testProject, testSession } from "../db/test-helpers";
+import { insertSession } from "../session-control/test-support";
 
 const roots: string[] = [];
 const hosts: HostCore[] = [];
@@ -724,6 +725,89 @@ describe("runner composition", () => {
     ).rejects.toBe(failure);
     expect(f.automationsStart).toHaveBeenCalledOnce();
     expect(f.automationsStop).toHaveBeenCalledOnce();
+  });
+
+  // VC-1085: an open attachment is the resumable binding a relaunch keeps,
+  // not a running executor. The budget counts what this process holds — a
+  // structured binding mid-turn, a running PTY — and folds nothing else.
+  it("budgets against the executors this process holds, never open attachments", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const { host } = fixture;
+    if (!isLiveHost(host)) throw new Error(host.database.error);
+    const project = testProject({ id: "budget-project" });
+    insertProject(host.database.db, project);
+    // A terminal whose attachment the ledger still has open, and a chat whose
+    // structured attachment is open with a turn the ledger calls active.
+    const terminal = testSession(project.id);
+    insertSession(host.database.db, terminal);
+    const provenance = {
+      source: { kind: "system", id: "test", detail: null },
+      venue: LOCAL_RUNNER,
+    } as const;
+    const chat = await host.sessionEngine.createSession({
+      commandId: "chat-birth",
+      projectId: project.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Resumable chat",
+      provenance,
+    });
+    const start = await host.sessionEngine.submit({
+      commandId: "chat-start",
+      sessionId: chat.session.id,
+      intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+      provenance,
+    });
+    await host.sessionEngine.observe({
+      id: "chat-opened",
+      kind: "attachment.opened",
+      sessionId: chat.session.id,
+      commandId: start.command.id,
+      occurredAt: 2,
+      provenance,
+      attachment: {
+        id: "chat-attachment",
+        sessionId: chat.session.id,
+        adapterId: "pi",
+        venue: LOCAL_RUNNER,
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+    await host.sessionEngine.observe({
+      id: "chat-turn",
+      kind: "turn.started",
+      sessionId: chat.session.id,
+      attachmentId: "chat-attachment",
+      occurredAt: 3,
+      provenance,
+      turnId: "turn-1",
+    } as never);
+    // Each read lands past the reader's five-second window, so none is cached.
+    let clock = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (clock += 10_000));
+    const f = compose(fixture);
+    const runtime = f.runner.runtime!;
+    const getSession = vi.spyOn(host.sessionEngine, "getSession");
+    const hint = async () =>
+      (await f.runner.concurrency!({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"];
+
+    // Nothing held: both open attachments are history, and neither is folded.
+    expect(await hint()).toBe("8");
+    expect(getSession).not.toHaveBeenCalled();
+
+    // The terminal's PTY running: one working Session, still every core.
+    vi.spyOn(host, "liveTerminalSessionIds").mockReturnValue(new Set([terminal.id]));
+    expect(await hint()).toBe("8");
+    expect(getSession.mock.calls).toEqual([[{ sessionId: terminal.id }]]);
+
+    // The chat's binding held by the runtime as well: two working, half each.
+    vi.spyOn(runtime, "openNativeBindings").mockReturnValue([
+      { sessionId: chat.session.id, attachmentId: "chat-attachment" } as never,
+    ]);
+    expect(await hint()).toBe("4");
   });
 
   it("composes a degraded host with no runtime, through the same start and stop", async () => {
