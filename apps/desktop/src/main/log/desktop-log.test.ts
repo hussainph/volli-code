@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   desktopLogDirectory,
   exitAfterLogFlush,
+  mainStallThresholdMs,
   startDesktopLog,
   type DesktopLog,
 } from "./desktop-log";
@@ -26,6 +27,31 @@ function profile(): string {
   dirs.push(dir);
   return dir;
 }
+
+describe("the main stall threshold", () => {
+  it("reads VOLLI_MAIN_STALL_MS as a positive integer, else leaves the monitor's default", () => {
+    expect(mainStallThresholdMs({ VOLLI_MAIN_STALL_MS: "50" })).toBe(50);
+    for (const raw of [undefined, "", "0", "-5", "1.5", "abc", "050"]) {
+      expect(mainStallThresholdMs({ VOLLI_MAIN_STALL_MS: raw })).toBeUndefined();
+    }
+  });
+
+  it("logs a stall in main to the profile's file while the log is installed", async () => {
+    const userData = profile();
+    const log = startDesktopLog({ userData, dev: false, env: { VOLLI_MAIN_STALL_MS: "30" } });
+    logs.push(log);
+    withTrace(TRACE, { door: "ipc", operation: "volli:test-block" }, () => {
+      const until = performance.now() + 40;
+      while (performance.now() < until) {
+        // Busy: holds the loop past the threshold.
+      }
+    });
+    await log.flush();
+    const text = readFileSync(log.file.currentFile()!, "utf8");
+    expect(text).toContain('"component":"main-stall"');
+    expect(text).toContain('"operation":"volli:test-block"');
+  });
+});
 
 describe("the desktop's log", () => {
   it("writes every host logger's lines as JSON under the profile's log directory, traced", async () => {

@@ -91,6 +91,7 @@ export default defineConfig({
         "src/log/ring.ts",
         "src/log/steps.ts",
         "src/log/correlation.ts",
+        "src/log/stall.ts",
         "src/session-runtime/correlated-executor.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
