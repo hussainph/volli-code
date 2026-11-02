@@ -65,10 +65,30 @@ const SESSION_COLUMNS = "id, project_id, ticket_id, role, parent_session_id, tit
  * `NULL` when `session_birth_owners` has no row — consult the birth fact —
  * `''` when it vouches for a birth with no owner, else the owner. The cache
  * never holds an empty owner, so `''` is unambiguous.
+ *
+ * A database below 069 (a restore's staged file, a test pinned to an older
+ * schema) has no cache: every row then reads `NULL` and is answered from its
+ * birth fact, as before the cache existed.
  */
-function birthOwnerColumn(idColumn: string): string {
-  return `(SELECT ifnull(birth_owner.owner_user_id, '') FROM session_birth_owners birth_owner
-     WHERE birth_owner.session_id = ${idColumn}) AS birth_owner`;
+function birthOwnerColumn(db: Database.Database, idColumn: string): string {
+  return hasBirthOwnerCache(db)
+    ? `(SELECT ifnull(birth_owner.owner_user_id, '') FROM session_birth_owners birth_owner
+     WHERE birth_owner.session_id = ${idColumn}) AS birth_owner`
+    : "NULL AS birth_owner";
+}
+
+/** Connections known to have the cache; a later migration can add it, never remove it. */
+const birthOwnerCaches = new WeakSet<Database.Database>();
+
+function hasBirthOwnerCache(db: Database.Database): boolean {
+  if (birthOwnerCaches.has(db)) return true;
+  const found =
+    prepared(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_birth_owners'",
+    ).get() !== undefined;
+  if (found) birthOwnerCaches.add(db);
+  return found;
 }
 
 /** A Session's birth owner; `null` when its birth names none. */
@@ -258,7 +278,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const row = prepared(
       this.db,
-      `SELECT ${SESSION_COLUMNS}, ${birthOwnerColumn("sessions.id")}
+      `SELECT ${SESSION_COLUMNS}, ${birthOwnerColumn(this.db, "sessions.id")}
          FROM sessions WHERE id = @sessionId${this.scopeSql("sessions.id")}`,
     ).get({ sessionId, ...this.scopeBindings }) as unknown;
     return row === undefined ? null : this.decodeSessionRow(row);
@@ -274,7 +294,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
           : "";
     const rows = prepared(
       this.db,
-      `SELECT ${SESSION_COLUMNS}, ${birthOwnerColumn("sessions.id")}
+      `SELECT ${SESSION_COLUMNS}, ${birthOwnerColumn(this.db, "sessions.id")}
            FROM sessions
           WHERE project_id = @projectId${scope}${this.scopeSql("sessions.id")}
           ORDER BY created_at DESC, id COLLATE BINARY DESC`,
@@ -1069,7 +1089,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     const rows = prepared(
       this.db,
       `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at,
-              ${birthOwnerColumn("s.id")}
+              ${birthOwnerColumn(this.db, "s.id")}
            FROM sessions s
           WHERE 1 = 1${this.scopeSql("s.id")} AND EXISTS (
                 SELECT 1

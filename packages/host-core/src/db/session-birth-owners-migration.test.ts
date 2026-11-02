@@ -206,5 +206,12 @@ describe("session_birth_owners (migration 069, VC-1097)", () => {
     // With no row, the birth fact answers, as before the cache existed.
     ctx.db.exec("DELETE FROM session_birth_owners");
     expect(await owners(fresh())).toEqual(expected);
+    // And on a database below 069, which has no cache at all.
+    ctx.db.exec(`DROP TRIGGER session_birth_owner_recorded;
+      DROP TRIGGER session_birth_owner_order_updated;
+      DROP TRIGGER session_birth_owner_order_deleted;
+      DROP TRIGGER session_birth_owner_event_rewritten;
+      DROP TABLE session_birth_owners;`);
+    expect(await owners(fresh())).toEqual(expected);
   });
 });
