@@ -69,7 +69,11 @@ const json = (status: number, body: unknown) =>
 async function world(options: { answer?: (body: unknown) => Response; allowHttp?: boolean } = {}) {
   const sessions = createSessionTokenRegistry();
   const sessionToken = sessions.mint({ sessionId: SESSION, attachmentId: "attachment-1" });
-  const fake = site((body) => options.answer?.(body) ?? json(200, grant()));
+  // The one grant the fake site serves, built once. `grant()` reads the wall
+  // clock, so a test that called it again for its expectation could land in a
+  // different second than the answer it is checking; read this object instead.
+  const servedGrant = grant();
+  const fake = site((body) => options.answer?.(body) ?? json(200, servedGrant));
   const tokens = createRunnerGithubTokens({
     siteUrl: `${SITE}/`,
     runnerToken: async () => "runner-jwt",
@@ -94,18 +98,18 @@ async function world(options: { answer?: (body: unknown) => Response; allowHttp?
     explainOnly = false,
   ) => askGitCredentialDaemon({ socketPath, action, request, env, explainOnly });
   const ask = async (...args: Parameters<typeof reply>) => (await reply(...args)).answer;
-  return { ask, reply, fake, tokens, socketPath, sessionToken, sessions };
+  return { ask, reply, fake, tokens, socketPath, sessionToken, sessions, servedGrant };
 }
 
 const GITHUB = "protocol=https\nhost=github.com\npath=acme/app.git\n\n";
 
 describe("a runner Session's git credentials", () => {
   it("answer the owner's token for the token's host, over a socket only this account opens", async () => {
-    const { ask, fake, tokens, socketPath } = await world();
+    const { ask, fake, tokens, socketPath, servedGrant } = await world();
     expect(tokens.github()).toEqual({ state: "unknown" });
     expect(statSync(socketPath).mode & 0o777).toBe(0o600);
     expect(await ask(GITHUB)).toBe(
-      `username=x-access-token\npassword=ghu_box_token\npassword_expiry_utc=${Math.floor(grant().useUntil / 1000)}\n`,
+      `username=x-access-token\npassword=ghu_box_token\npassword_expiry_utc=${Math.floor(servedGrant.useUntil / 1000)}\n`,
     );
     expect(fake.calls).toEqual([
       {
@@ -117,7 +121,7 @@ describe("a runner Session's git credentials", () => {
     expect(tokens.github()).toEqual({
       state: "connected",
       host: "github.com",
-      identity: grant().identity,
+      identity: servedGrant.identity,
     });
     // Cached until its useUntil: the second git command asks nobody.
     expect(await ask("protocol=https\nhost=GitHub.com\nusername=x-access-token\n")).toContain(
