@@ -70,7 +70,10 @@ export interface DesktopLogOptions {
 }
 
 /** A positive-integer environment variable, or `undefined` for the monitor's default. */
-function positiveMs(env: Readonly<Record<string, string | undefined>>, name: string): number | undefined {
+function positiveMs(
+  env: Readonly<Record<string, string | undefined>>,
+  name: string,
+): number | undefined {
   const raw = env[name];
   if (raw === undefined || !/^[1-9][0-9]*$/.test(raw)) return undefined;
   return Number(raw);

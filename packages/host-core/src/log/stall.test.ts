@@ -271,9 +271,14 @@ describe("the main stall monitor", () => {
     });
     try {
       // Enough short-lived garbage for at least one scavenge.
-      let kept = 0;
-      for (let i = 0; i < 200_000; i += 1) kept += new Array(64).fill(i).length;
-      expect(kept).toBeGreaterThan(0);
+      let junk: Array<{ i: number; s: string }> = [];
+      let made = 0;
+      for (let i = 0; i < 400_000; i += 1) {
+        junk.push({ i, s: String(i) });
+        made += 1;
+        if (junk.length > 10_000) junk = [];
+      }
+      expect(made).toBeGreaterThan(0);
       await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 2_000 });
     } finally {
       undo();
