@@ -508,6 +508,11 @@ export function ComposerForm({
             ticketId: COMPOSER_DRAFT_TICKET_ID,
           }}
           viewId="composer:body"
+          // The draft cache (draft.ts) keeps every keystroke, so the body is never
+          // unsaved work. As an autosave document nothing would ever mark it
+          // saved, and after the composer closed ⌘Q warned about a "Ticket
+          // description" for the rest of the session (VC-1094).
+          savePolicy="draft"
           value={body}
           onChange={setBody}
           placeholder="Add description…"

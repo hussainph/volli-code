@@ -75,6 +75,13 @@ export interface MonacoDocumentEditorProps {
    * this into the workbench close-guard; the ticket body leaves it unset.
    */
   onDirtyChange?(dirty: boolean): void;
+  /**
+   * `autosave` (the default) when the host writes the text some time after an
+   * edit, so the edit counts as unsaved until then. `draft` when the host caches
+   * every change as it lands (the New-ticket composer), so the document never
+   * counts as unsaved and ⌘Q does not ask about it (VC-1094).
+   */
+  savePolicy?: "autosave" | "draft";
   placeholder?: string;
   autoFocus?: boolean;
   /**
@@ -187,6 +194,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     viewId,
     value,
     revision = null,
+    savePolicy = "autosave",
     onChange,
     onDirtyChange,
     onBlur,
@@ -213,6 +221,7 @@ export const MonacoDocumentEditor = React.forwardRef<
   const liveRef = React.useRef({
     identity,
     revision,
+    savePolicy,
     onChange,
     onDirtyChange,
     onBlur,
@@ -224,6 +233,7 @@ export const MonacoDocumentEditor = React.forwardRef<
   liveRef.current = {
     identity,
     revision,
+    savePolicy,
     onChange,
     onDirtyChange,
     onBlur,
@@ -332,7 +342,7 @@ export const MonacoDocumentEditor = React.forwardRef<
           identity: liveRef.current.identity,
           viewId,
           seed: { value: seed, revision: seedRevision },
-          savePolicy: "autosave",
+          savePolicy: liveRef.current.savePolicy,
         });
         if (cancelled) {
           lease.release();
