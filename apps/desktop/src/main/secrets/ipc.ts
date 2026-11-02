@@ -1,7 +1,7 @@
-import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { SecretRequestExpiredError, type SecretService } from "@volli/host-core/secrets";
 import type { VolliInvokeContract } from "../../ipc/contract";
+import { handleRawIpc } from "../raw-ipc";
 
 function record(raw: unknown): Record<string, unknown> {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw))
@@ -32,7 +32,7 @@ export function registerSecretIpc(
   trusted: (sender: WebContents) => boolean,
 ): void {
   const handle = (channel: keyof VolliInvokeContract, run: (...args: unknown[]) => unknown) => {
-    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+    handleRawIpc(channel, (event, ...args: unknown[]) => {
       if (!trusted(event.sender) || event.senderFrame !== event.sender.mainFrame) {
         return { ok: false, error: "Credentials can only be changed in Volli." };
       }

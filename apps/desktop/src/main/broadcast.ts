@@ -17,6 +17,7 @@
  * events and are sent directly.
  */
 import { BrowserWindow } from "electron";
+import { withMainSpan } from "@volli/host-core/log";
 import type { HostEventBus, HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/ports";
 import type { PendingArmedRun } from "@volli/shared";
 import { createDataChangeCoalescer, type DataChangeScope } from "./data-change-coalescer";
@@ -31,12 +32,18 @@ import type {
   VolliIpcEvent,
 } from "../ipc/contract";
 
-/** Sends one message to every window whose page is still alive. */
+/**
+ * Sends one message to every window whose page is still alive. Each send
+ * serializes the payload on main, so the fan-out is timed as a `broadcast`
+ * span under its channel (VC-1090).
+ */
 function sendToEveryWindow(channel: VolliIpcEvent, payload: unknown): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send(channel, payload);
-  }
+  withMainSpan({ door: "broadcast", operation: channel }, () => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.webContents.isDestroyed()) continue;
+      window.webContents.send(channel, payload);
+    }
+  });
 }
 
 /**

@@ -60,6 +60,7 @@ import {
 } from "./retention";
 import { getTrimSettings } from "./trim-settings";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("worktree-watch");
 
@@ -1090,7 +1091,7 @@ export class RetentionWatcher {
         clearTimeout(this.timer);
         this.timer = null;
       }
-      void this.runOnce(false);
+      void withMainSpan({ door: "timer", operation: "retention-poll" }, () => this.runOnce(false));
     }, this.config.changeDebounceMs);
     this.changeTimer.unref();
   }
@@ -1102,7 +1103,13 @@ export class RetentionWatcher {
     // in-flight run's `finally` schedule a SECOND self-perpetuating chain
     // that stop() can no longer reach (it only clears the last-written id).
     if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.runOnce(false), delay);
+    this.timer = setTimeout(
+      () =>
+        void withMainSpan({ door: "timer", operation: "retention-poll" }, () =>
+          this.runOnce(false),
+        ),
+      delay,
+    );
     // Never keep the process alive for a poll at quit (park.ts precedent).
     this.timer.unref();
   }

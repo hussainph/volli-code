@@ -33,6 +33,10 @@ import { readSessionProvenance, readSessionProvenances } from "../db/session-pro
 import { getTicketRow } from "../db/tickets-repo";
 import { readSessionUnread, readSessionUnreads } from "../db/session-read-repo";
 import { sessionListingRow, sessionListingRows } from "./listing-row";
+import { withMainSpan } from "../log/context";
+
+/** The rows' build, timed after the door's await (VC-1090): it runs outside the door's span. */
+const LISTING_ROWS = { door: "projection", operation: "listing-rows" } as const;
 
 export function sessionListingRowsForRoster(
   db: Database.Database,
@@ -80,7 +84,9 @@ export async function projectSessionListing(
   projectId: string,
 ): Promise<SessionListingRow[]> {
   const sessions = await sources.listSessions({ projectId, scope: "all" });
-  return sessionListingRowsForRoster(sources.db, sessions, sources.liveAttachmentIds());
+  return withMainSpan(LISTING_ROWS, () =>
+    sessionListingRowsForRoster(sources.db, sessions, sources.liveAttachmentIds()),
+  );
 }
 
 /**
@@ -98,7 +104,9 @@ export async function ticketSessionListing(
     scope: "ticket",
     ticketId,
   });
-  return sessionListingRowsForRoster(sources.db, sessions, sources.liveAttachmentIds());
+  return withMainSpan(LISTING_ROWS, () =>
+    sessionListingRowsForRoster(sources.db, sessions, sources.liveAttachmentIds()),
+  );
 }
 
 /** The most rows one `session.listing` answer carries (VC-713). */

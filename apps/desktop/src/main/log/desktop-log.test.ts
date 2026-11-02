@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   desktopLogDirectory,
   exitAfterLogFlush,
+  mainStallSummaryMs,
   mainStallThresholdMs,
   startDesktopLog,
   type DesktopLog,
@@ -34,6 +35,26 @@ describe("the main stall threshold", () => {
     for (const raw of [undefined, "", "0", "-5", "1.5", "abc", "050"]) {
       expect(mainStallThresholdMs({ VOLLI_MAIN_STALL_MS: raw })).toBeUndefined();
     }
+  });
+
+  it("reads VOLLI_MAIN_STALL_SUMMARY_MS the same way, for the roll-up interval", () => {
+    expect(mainStallSummaryMs({ VOLLI_MAIN_STALL_SUMMARY_MS: "60000" })).toBe(60_000);
+    expect(mainStallSummaryMs({ VOLLI_MAIN_STALL_SUMMARY_MS: "0" })).toBeUndefined();
+    expect(mainStallSummaryMs({})).toBeUndefined();
+  });
+
+  it("rolls the stall window up into the profile's file when the log closes", async () => {
+    const userData = profile();
+    const log = startDesktopLog({
+      userData,
+      dev: false,
+      env: { VOLLI_MAIN_STALL_SUMMARY_MS: "60000" },
+    });
+    await log.close();
+    const written = readdirSync(log.directory).map((name) =>
+      readFileSync(join(log.directory, name), "utf8"),
+    );
+    expect(written.join("")).toContain('"msg":"main stall load"');
   });
 
   it("logs a stall in main to the profile's file while the log is installed", async () => {

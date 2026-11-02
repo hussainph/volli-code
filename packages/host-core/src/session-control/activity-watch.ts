@@ -52,6 +52,7 @@ import type {
 import { sessionListingRow } from "./listing-row";
 import type { SubscribeSessionWake } from "./session-wake";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("activity-watch");
 
@@ -209,7 +210,9 @@ export function watchSessionActivity(
     if (timer !== null) return;
     timer = setTimeout(() => {
       timer = null;
-      draining = draining.then(flush).catch(onError);
+      draining = draining
+        .then(() => withMainSpan({ door: "timer", operation: "session-activity-flush" }, flush))
+        .catch(onError);
     }, coalesceMs);
     // Never hold the event loop open for a diagnostic timer: an app that has
     // finished its work must be allowed to quit with this pending.

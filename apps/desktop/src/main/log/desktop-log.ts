@@ -12,7 +12,8 @@
  * - **Main stalls** (VC-1073): while the log is installed, every event-loop
  *   block in main over 200 ms (`VOLLI_MAIN_STALL_MS` when set) writes a
  *   `main-stall` line naming the door and operation that held it, and an
- *   hourly roll-up (`startMainStallMonitor`).
+ *   hourly roll-up (`VOLLI_MAIN_STALL_SUMMARY_MS` when set;
+ *   `startMainStallMonitor`).
  *
  * Nothing here is visible to a person using the app: no window, no setting.
  */
@@ -60,13 +61,25 @@ export interface DesktopLogOptions {
   readonly terminal?: boolean;
 }
 
+/** A positive-integer environment variable, or `undefined` for the monitor's default. */
+function positiveMs(env: Readonly<Record<string, string | undefined>>, name: string): number | undefined {
+  const raw = env[name];
+  if (raw === undefined || !/^[1-9][0-9]*$/.test(raw)) return undefined;
+  return Number(raw);
+}
+
 /** `VOLLI_MAIN_STALL_MS` as a threshold: a positive integer, or the monitor's default. */
 export function mainStallThresholdMs(
   env: Readonly<Record<string, string | undefined>>,
 ): number | undefined {
-  const raw = env["VOLLI_MAIN_STALL_MS"];
-  if (raw === undefined || !/^[1-9][0-9]*$/.test(raw)) return undefined;
-  return Number(raw);
+  return positiveMs(env, "VOLLI_MAIN_STALL_MS");
+}
+
+/** `VOLLI_MAIN_STALL_SUMMARY_MS` as the roll-up interval, for a bench or a short run (VC-1090). */
+export function mainStallSummaryMs(
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  return positiveMs(env, "VOLLI_MAIN_STALL_SUMMARY_MS");
 }
 
 /** The profile's log directory. */
@@ -96,7 +109,11 @@ export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
   if (options.terminal ?? options.dev) sinks.push(consoleSink(options.console));
   const undo = installHostLog({ level, sink: teeSinks(...sinks) });
   const thresholdMs = mainStallThresholdMs(options.env);
-  const stalls = startMainStallMonitor(thresholdMs === undefined ? {} : { thresholdMs });
+  const summaryIntervalMs = mainStallSummaryMs(options.env);
+  const stalls = startMainStallMonitor({
+    ...(thresholdMs === undefined ? {} : { thresholdMs }),
+    ...(summaryIntervalMs === undefined ? {} : { summaryIntervalMs }),
+  });
   return {
     directory,
     level,
