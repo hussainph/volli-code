@@ -147,6 +147,7 @@ function fixture() {
   const engine = createTestSessionEngine(database.db);
   const runtime = {
     openNativeBindings: vi.fn(() => []),
+    pendingTurnStarts: vi.fn(() => new Set<string>()),
     projection: vi.fn(async () => ({ projection: { turnActive: true } })),
   };
   const assembly = { sessionRuntime: runtime, piRuntimeHost: {}, sessionToolSurface: {} };
@@ -202,6 +203,7 @@ function fixture() {
     dataDir: "/data",
     runtimeServices,
     maintenance: { spawnLedger },
+    liveTerminalSessionIds: vi.fn(() => new Set<string>()),
   } as unknown as LiveHostCore;
   const log = { warn: vi.fn(), error: vi.fn() };
   const store = { redact: vi.fn((text) => text), redactPartial: vi.fn((text) => text) };
@@ -347,7 +349,12 @@ describe("headless runtime ownership", () => {
       PATH: "/service/bin",
       VOLLI_SOCKET: "/run/hostd.sock",
     });
-    expect(await seam.concurrency.mock.lastCall![0].listAttachedSessions()).toEqual([]);
+    // Only executors this host holds count (VC-1085): none yet, and no terminals here.
+    expect(seam.concurrency.mock.lastCall![0].liveExecutors()).toEqual({
+      turnSessionIds: new Set(),
+      boundAttachmentIds: new Set(),
+      terminalSessionIds: new Set(),
+    });
     const context = seam.context.mock.lastCall![0];
     await context.waitForBirth("s"); // Internal recovery must not wait for itself.
     expect(f.lifecycle.ready).not.toHaveBeenCalled();

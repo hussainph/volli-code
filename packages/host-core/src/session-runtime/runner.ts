@@ -73,6 +73,9 @@ import { createCloudEnvironmentPreparation } from "../cloud-store/environment";
 import { prepared } from "../db/prepared";
 import { localSessionRow } from "../db/local-product";
 
+/** No terminals: a degraded host runs none. */
+const NO_SESSIONS: ReadonlySet<string> = new Set();
+
 /**
  * Where a runner's product state lives: projects, the board and Session
  * history. `local` is the host's own SQLite. A store is chosen here, once;
@@ -313,12 +316,31 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     // One row per started shell (VC-341).
     ...(live === undefined ? {} : { ledger: live.maintenance.spawnLedger }),
   });
-  // This process's one reader of who is working (VC-403).
+  // This process's one reader of who is working (VC-403): what this process
+  // is running — turns open or accepted on its bindings, and its PTYs — and
+  // never the ledger's open attachments, which stay open across a quit as
+  // resumable bindings, nor its idle bindings, which stay held until quit
+  // (VC-1085). Read lazily: the runtime is assembled below, and no Session
+  // starts before it is.
   const concurrency: SessionConcurrencyEnvReader | null =
     sessionEngine === null
       ? null
       : createSessionConcurrencyEnvReader({
-          listAttachedSessions: () => sessionEngine.listAttachedSessions(),
+          liveExecutors: () => {
+            const runtime = assembly.sessionRuntime;
+            const turnSessionIds = new Set(runtime?.pendingTurnStarts());
+            const boundAttachmentIds = new Set<string>();
+            for (const binding of runtime?.openNativeBindings() ?? []) {
+              boundAttachmentIds.add(binding.attachmentId);
+              if (binding.turnOpen) turnSessionIds.add(binding.sessionId);
+            }
+            return {
+              turnSessionIds,
+              boundAttachmentIds,
+              terminalSessionIds: live?.liveTerminalSessionIds() ?? NO_SESSIONS,
+            };
+          },
+          getSession: (query) => sessionEngine.getSession(query),
         });
   // One Session's share of the machine (VC-339), under the host's additions.
   const concurrencyEnvFor = async (sessionId: string): Promise<Record<string, string>> => {

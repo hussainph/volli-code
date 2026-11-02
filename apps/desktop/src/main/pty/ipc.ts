@@ -200,15 +200,28 @@ export function registerTerminalIpcHandlers(
    * passes the same instance the structured door uses, so both answer this
    * machine's load from one read. Defaults to a reader over this handle's own
    * engine, which is what a test registering handlers on a fixture database
-   * wants; the default is never the production path.
+   * wants — counting the PTYs this manager runs (VC-1085); the default is
+   * never the production path.
    */
-  concurrencyEnvReader: SessionConcurrencyEnvReader | null = sessionEngine === null
-    ? null
-    : createSessionConcurrencyEnvReader({
-        listAttachedSessions: () => sessionEngine.listAttachedSessions(),
-      }),
+  concurrencyEnvReaderOption?: SessionConcurrencyEnvReader | null,
   ownership: { manager?: PtyManager; registerQuitGate?: boolean } = {},
 ): PtyManager {
+  // The default reader asks the manager built below, once it exists.
+  let defaultManager: PtyManager | undefined;
+  const concurrencyEnvReader =
+    concurrencyEnvReaderOption !== undefined
+      ? concurrencyEnvReaderOption
+      : sessionEngine === null
+        ? null
+        : createSessionConcurrencyEnvReader({
+            // No structured runtime behind a fixture database: only its PTYs.
+            liveExecutors: () => ({
+              turnSessionIds: new Set(),
+              boundAttachmentIds: new Set(),
+              terminalSessionIds: defaultManager?.liveSessionIds() ?? new Set(),
+            }),
+            getSession: (query) => sessionEngine.getSession(query),
+          });
   // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production
   // seam, `app.getPath("userData")`-derived.
   const blobsRootPath = blobsRoot(app.getPath("userData"));
@@ -227,6 +240,7 @@ export function registerTerminalIpcHandlers(
       blobsRootPath,
       ...(handle.ok ? { spawnLedger: new SpawnLedger(handle.db), concurrencyEnvReader } : {}),
     });
+  defaultManager = manager;
 
   // Closed over the live runtime object rather than a snapshot of it: the
   // trusted set lands there only once the wrappers are generated, which is
