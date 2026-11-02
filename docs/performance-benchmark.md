@@ -59,9 +59,16 @@ production `openVolliDb` and migrations, never copied SQL or an in-memory schema
 | `small` | 120 | 26,040 | 40 | 547 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
 | `real` | 1,198 | 259,855 | 392 | 5,361 | 8,541 | 50 | 17 | 1,668 | 1,600 | 373 MB | 173 MB |
 | `2x` | 2,396 | 519,710 | 784 | 10,722 | 17,082 | 100 | 34 | 3,336 | 3,200 | 746 MB | 346 MB |
+| `owner` | 5,034 | 1,040,000 | 1,218 | 16,656 | 35,890 | 155 | 53 | 3,336 | 1,600 | 1.9 GB | 692 MB |
 | `tickets-300` | 120 | 26,040 | 300 | 600 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
 | `tickets-3k` | 120 | 26,040 | 3,000 | 6,000 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
 | `tickets-10k` | 120 | 26,040 | 10,000 | 20,000 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
+
+`owner` is the owner's profile as the 2026-11 stutter audit counted it (Sessions,
+Session Events, tickets, file size); what the audit did not count keeps `real`'s
+ratios. It is the fleet-storm scale and is opt-in: generating it writes about
+2 GB and takes many minutes. Generate it once with `--keep-fixture` and reuse it
+with `--fixture`.
 
 The `tickets-*` presets vary only ticket scale, holding Session mass at `small`;
 they measure the board's per-card slope, not whole-app scale. The default seed
@@ -155,6 +162,29 @@ profile. The built-renderer assertion rejects dev-server runs.
     decreases. Restore unfiltered state afterwards. This measures derivation
     over held tickets, not only mounted cards.
 11. **RPC:** one native preload/session-RPC projection round trip in renderer.
+12. **Workspace switch:** a one-ticket second project is added through the
+    app's own `projects.create` (the fixture keeps one project, so its bytes do
+    not change). After one warm round trip, ⌘N back to the fixture's project
+    until its board holds every ticket and has painted; the light direction is
+    `toLightMs`. ⌘N is the path that marks `workspace-switch`.
+13. **Fleet storm:** VC-1078's activity storm (`sidebar-store-bench.mjs`) in the
+    real app: `--storm-sessions` Sessions (default 16, spread over the fixture)
+    each call `sessions.setRead` every `--storm-interval-ms` (60) for
+    `--storm-duration-ms` (4,000), scheduled up front so a slow app falls behind.
+    Each push costs main what a running Session's activity costs it — an engine
+    read, a receipt write, a listing-row rebuild and a `volli:session-activity`
+    broadcast — and every window takes the row through its shipped intake. The
+    board is in front. Latency is first push to last answer painted; samples
+    also record `stormLagMs`, the setRead round-trip p95 and how many activity
+    notices arrived (none fails the sample). Use `--preset owner` for owner scale.
+14. **Draft typing under load:** a fixed 47-key draft typed into a `+ Chat`
+    composer on the long chat's ticket (fixture Sessions have no live executor,
+    so their composers are disabled), 40 ms apart, while a storm of the same shape runs. `keyToPaintMs`
+    is each key's `keydown` to the task after the next frame.
+
+Chat-tab switch and return-to-board-from-a-ticket arms are VC-1080's
+(`chat_tab_switch`, `board_return`); they take their stall signals the same way
+as every arm here.
 
 Report nearest-rank p50/p95 and population variance. Renderer memory uses
 `app.getAppMetrics()` working set. Long-task counts are per-sample, not a raw
@@ -175,6 +205,63 @@ wall time, so a real frame regression can leave latency unchanged. Inspect
 frame times and dropped frames together. Sensitivity measured with development
 React does not transfer to production. Any temporary regression injection used
 to check sensitivity must be removed, not retained as an accidental baseline flag.
+
+## Stall signals
+
+Every full-app repetition reads its own profile's structured log
+(`<profile>/logs/*.jsonl`) back after the app quits — the same lines an owner's
+machine writes, not a bench-only probe:
+
+- `main-stall` (VC-1073, VC-1090): an Electron main event-loop block at or over
+  the threshold, with its attribution (`door` + `operation`, or `unattributed`).
+  The threshold is production's 200 ms unless `--main-stall-ms` sets
+  `VOLLI_MAIN_STALL_MS` for the app; it is recorded and a compare refuses to
+  pair two thresholds.
+- `renderer-stall` (VC-1091): long frames and slow inputs ≥ 100 ms, labelled by
+  interaction (`workspace-switch`, `draft-typing`, `idle`, …). A repetition waits
+  one renderer batch interval before quitting so the last batch lands.
+
+Each measured interaction records its wall-clock window; a main stall belongs to
+the window its line falls in (plus the 100 ms the lag probe can take to notice),
+otherwise to `between-interactions`. Samples carry `mainStallCount`,
+`mainStallMs` and `mainStallMaxMs`, which aggregate like any other field.
+Renderer lines are stamped when main receives a batch, so they are reported by
+label, not window. Per arm, `benchmark.summary.json` holds `signals`: main and
+renderer totals, per-repetition distributions, unattributed share, top
+operations, stalls by interaction and by label; `benchmark.md` has the tables.
+Raw lines per repetition stay in `benchmark.json` (`repetitionSignals`). The
+warm-up repetition's stalls are discarded with it. Each repetition also records how the app
+closed (`closeKind`): the log sink writes each line as it comes, so lines
+logged before the pre-quit wait are on disk even when the close falls back to a
+signal. A stream-only run launches
+no full app and has no signals.
+
+## Compare two runs
+
+```sh
+pnpm bench:desktop:compare -- performance-results/before performance-results/after \
+  --output performance-results/before-vs-after
+```
+
+Each argument is an output directory or its `benchmark.summary.json`. Runs of a
+different preset, seed, main-stall threshold or storm shape are refused
+(`--allow-mismatch` compares anyway and says so). Different device, macOS,
+repetitions, load or a dirty tree are printed as warnings. For each arm and
+interaction in both, it reports latency p50/p95, frame p95, dropped frames,
+long tasks and window main-stall ms, and per arm the stall totals.
+
+Budgets are soft and flag rather than fail (`--fail-on-regression` makes them
+exit 1). Defaults: latency p95 must grow by both ×1.15 and 15 ms; window
+main-stall p95, or arm main-stall ms per repetition p95, by 200 ms; renderer
+stalls per repetition p95 by 2. `--budgets FILE` merges JSON over them, with
+per-interaction overrides and absolute ceilings:
+
+```json
+{ "latencyP95Ratio": 1.1, "interactions": { "board_render": { "maxLatencyP95Ms": 800 } } }
+```
+
+A single short run on a shared Mac is noisy: compare the same commit against
+itself first (the compare warns when both SHAs match) to see what a flag is worth.
 
 ## Reproducible load and comparison
 
