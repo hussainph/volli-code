@@ -11,7 +11,8 @@ name: Release
 # button's tag stays on GITHUB_TOKEN: pushing it with a PAT or deploy key would
 # start the tag path too and publish twice. Only the bump commit goes to main
 # over SSH with RELEASE_DEPLOY_KEY (VC-1057), the one actor main's ruleset lets
-# past its required "CI gate" check; that push does start ci.yml on main.
+# past its required "CI gate" check. That push does start ci.yml,
+# ci-extended.yml and codeql.yml on main, as merges do.
 #
 # Build, staple, verify, then upload: uploading while the staple hook writes
 # can corrupt the distributed DMG even when the local file passes validation.
@@ -26,8 +27,9 @@ name: Release
 #   APPLE_API_KEY_P8: App Store Connect API key
 #   APPLE_API_KEY_ID: API key identifier
 #   APPLE_API_ISSUER: API issuer identifier
-#   RELEASE_DEPLOY_KEY: private half of a write deploy key, button releases
-#     only (see docs/runbooks/hostd-release.md); dry runs and tags never read it
+#   RELEASE_DEPLOY_KEY: private half of a write deploy key, held in the
+#     main-only `release` environment, never repo-wide; button releases only
+#     (see docs/runbooks/hostd-release.md); dry runs and tags never read it
 # Missing credentials fail preflight rather than falling back to ad-hoc signing.
 #
 # Hyphenated tags are prereleases (EP_PRE_RELEASE=true); only canary-enabled
@@ -72,6 +74,9 @@ jobs:
     permissions:
       contents: write
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    # The deploy key can bypass main's ruleset, so it lives in an environment
+    # only main may deploy from, not in repo secrets a branch could read.
+    environment: release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -85,7 +90,7 @@ jobs:
           RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
         run: |
           if [ -z "$RELEASE_DEPLOY_KEY" ]; then
-            echo "::error::Missing repo secret RELEASE_DEPLOY_KEY — main's ruleset requires 'CI gate', and only the release deploy key may push the version bump past it. Create it per docs/runbooks/hostd-release.md, or run a dry run (no key needed)."
+            echo "::error::Missing secret RELEASE_DEPLOY_KEY — main's ruleset requires 'CI gate', and only the release deploy key may push the version bump past it. Set it in the 'release' environment per docs/runbooks/hostd-release.md, or run a dry run (no key needed)."
             exit 1
           fi
 
@@ -195,7 +200,7 @@ jobs:
           trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$RELEASE_DEPLOY_KEY" > "$key")
           printf '%s\n' "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/github_known_hosts"
-          ssh_command="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/github_known_hosts"
+          ssh_command="ssh -i '$key' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile='$RUNNER_TEMP/github_known_hosts'"
           # Push the branch first, without force: if main moved while this job
           # ran, git refuses the non-fast-forward itself (the deploy key
           # bypasses the ruleset, so the ruleset is no longer what stops it),
@@ -203,6 +208,7 @@ jobs:
           # Re-run to pick up the new head.
           GIT_SSH_COMMAND="$ssh_command" \
             git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:refs/heads/main
+          rm -f "$key"
           # The tag stays on GITHUB_TOKEN so it does not also start the tag path.
           git push origin "refs/tags/$TAG"
 

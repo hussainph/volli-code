@@ -75,25 +75,45 @@ The tag is still pushed with `GITHUB_TOKEN`. The ruleset targets only the
 default branch, so the tag needs no bypass, and a tag pushed with
 `GITHUB_TOKEN` does not start the workflow's own tag path; a deploy-key tag
 push would, and would publish the release twice. The deploy-key push to `main`
-does start `ci.yml` on the release commit. `prepare` fails first, before any
-guard or bump, when `RELEASE_DEPLOY_KEY` is missing. Dry runs skip `prepare`
-and never need the key.
+does start `ci.yml`, `ci-extended.yml` and `codeql.yml` on the release commit,
+as a merge does (and cancels an older in-progress `ci.yml` push run on `main`).
 
-One-time owner setup, in this order. Applying the ruleset before the key
-exists, or before release.yml pushes over SSH, breaks button releases:
+That key can bypass every rule on `main`, so it lives in a `release`
+environment that only `main` may deploy from, never in repository secrets that
+a workflow on any branch could read. `prepare` declares `environment: release`
+and fails first, before any guard or bump, when `RELEASE_DEPLOY_KEY` is
+missing. Dry runs skip `prepare` and never need the key.
 
-```sh
-ssh-keygen -t ed25519 -N '' -C 'volli-code release' -f release_key
-# Settings → Deploy keys → Add deploy key: paste release_key.pub,
-# title "release.yml", tick "Allow write access". Or:
-gh repo deploy-key add release_key.pub --repo hussainph/volli-code --allow-write --title release.yml
-gh secret set RELEASE_DEPLOY_KEY --repo hussainph/volli-code < release_key
-rm -f release_key release_key.pub
-gh api -X PUT repos/hussainph/volli-code/rulesets/19737203 --input main-protection.json
-```
+One-time owner setup, in this order:
 
-where `main-protection.json` is the complete ruleset (a PUT replaces the
-rules and bypass list wholesale):
+1. Create the key, the environment and the secret. This changes nothing for
+   the current workflow and can happen before this change merges.
+
+   ```sh
+   dir="$(mktemp -d)"
+   ssh-keygen -t ed25519 -N '' -C 'volli-code release' -f "$dir/release_key"
+   # Deploy key with write access (or Settings → Deploy keys → Add deploy key,
+   # paste release_key.pub, tick "Allow write access"):
+   gh repo deploy-key add "$dir/release_key.pub" --repo hussainph/volli-code --allow-write --title release.yml
+   # Environment "release", deployable from main only:
+   gh api -X PUT repos/hussainph/volli-code/environments/release \
+     -F 'deployment_branch_policy[protected_branches]=false' \
+     -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST repos/hussainph/volli-code/environments/release/deployment-branch-policies \
+     -f name=main -f type=branch
+   gh secret set RELEASE_DEPLOY_KEY --env release --repo hussainph/volli-code < "$dir/release_key"
+   ```
+
+2. Check the key works: `ssh -i "$dir/release_key" -o IdentitiesOnly=yes -T git@github.com`
+   should greet `hussainph/volli-code`.
+3. Delete the local files: `rm -rf "$dir"`.
+4. Merge the release.yml change (VC-1057).
+5. Apply the ruleset: `gh api -X PUT repos/hussainph/volli-code/rulesets/19737203 --input main-protection.json`.
+   Applying it before step 4 breaks button releases.
+6. Confirm with `gh api repos/hussainph/volli-code/rulesets/19737203`.
+
+`main-protection.json` is the complete ruleset (a PUT replaces the rules and
+bypass list wholesale):
 
 ```json
 {
@@ -101,7 +121,7 @@ rules and bypass list wholesale):
   "target": "branch",
   "enforcement": "active",
   "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
-  "bypass_actors": [{ "actor_type": "DeployKey", "bypass_mode": "always" }],
+  "bypass_actors": [{ "actor_id": null, "actor_type": "DeployKey", "bypass_mode": "always" }],
   "rules": [
     { "type": "deletion" },
     { "type": "non_fast_forward" },
@@ -117,9 +137,9 @@ rules and bypass list wholesale):
 ```
 
 `integration_id` 15368 is the GitHub Actions app, which posts `CI gate`.
-`ci.yml` has no path filters, so every pull request reports it. Confirm with
-`gh api repos/hussainph/volli-code/rulesets/19737203`. Any deploy key with
-write access can bypass this ruleset, so keep the release key the only one.
+`ci.yml` has no path filters, so every pull request reports it. Any deploy key
+with write access can bypass this ruleset, so keep the release key the only
+one.
 
 A `hostd-assets` failure (including provenance signing) deliberately blocks the
 desktop release: the signed desktop pin requires matching assets on that same
