@@ -148,15 +148,24 @@ profile. The built-renderer assertion rejects dev-server runs.
    rather than listing. Both are populated from the generation clock (above).
 7. **Ticket switch:** pre-open both workspaces, then time switching existing tabs
    until heading/editor are visible and accept focus, not a first open.
-8. **Board render:** until published held-ticket count equals the fixture and
+8. **Chat tab switch:** in the long chat's Ticket view, open a second chat
+   beside it, make one warm round trip, then time pressing the long chat's tab
+   until it is selected and its transcript is visible. Pressed and polled inside
+   the page each frame; a chat a pane keeps mounted behind another (VC-1080) is
+   in the document while hidden, so readiness requires it on screen.
+9. **Board return:** with the board drawn once, open the long chat's ticket from
+   its card, then time Escape until the board is on screen again with its held
+   count and a visible card. A Home plane kept hidden behind the Ticket view
+   (VC-1080) is in the document, so readiness requires it on screen.
+10. **Board render:** until published held-ticket count equals the fixture and
    every nonempty column paints a card. Count held tickets versus mounted cards;
    a windowed DOM is not the entire board.
-9. **Column scroll:** drive the fullest column end-to-end in 60 frame-spaced
-   steps. Compare frame times, not just gesture duration; fail if none scrolls.
-10. **Board filter:** apply Priority to an already-drawn board until held count
+11. **Column scroll:** drive the fullest column end-to-end in 60 frame-spaced
+    steps. Compare frame times, not just gesture duration; fail if none scrolls.
+12. **Board filter:** apply Priority to an already-drawn board until held count
     decreases. Restore unfiltered state afterwards. This measures derivation
     over held tickets, not only mounted cards.
-11. **RPC:** one native preload/session-RPC projection round trip in renderer.
+13. **RPC:** one native preload/session-RPC projection round trip in renderer.
 
 Report nearest-rank p50/p95 and population variance. Renderer memory uses
 `app.getAppMetrics()` working set. Long-task counts are per-sample, not a raw

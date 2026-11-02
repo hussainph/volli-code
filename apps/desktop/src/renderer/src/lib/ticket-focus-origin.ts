@@ -3,12 +3,12 @@
  * hold focus when it comes back (VC-419).
  *
  * Pressing Enter on a board card or a list row opens the ticket, and the
- * surface the key was pressed on is then unmounted whole — `home-surface.tsx`
- * swaps the board for the detail view, and the board is rebuilt from scratch on
- * the way back. A DOM node captured on the way in is therefore worthless on the
- * way out: the element that comes back is a different object, and it may not
- * come back at all (the column window mounts a slice, a filter hides cards, the
- * ticket itself can be archived while it is open).
+ * surface the key was pressed on is then hidden — `home-surface.tsx` keeps the
+ * board mounted behind `<Activity mode="hidden">` while the detail view is up
+ * (VC-1080). A DOM node captured on the way in is still no promise on the way
+ * out: the board may have re-rendered meanwhile, a project switch rebuilds it,
+ * the column window mounts a slice, a filter hides cards, and the ticket itself
+ * can be archived while it is open.
  *
  * So the origin is recorded as IDENTITY plus the neighbourhood it sat in, and
  * this module answers the one question the DOM cannot: given the ids the board

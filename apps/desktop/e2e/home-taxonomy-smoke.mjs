@@ -318,7 +318,7 @@ try {
     5,
     "opening a ticket hides the Home strip; leaving it restores the strip and its tabs",
     async () => {
-      await page.locator("article").first().dblclick();
+      await page.locator("article").filter({ visible: true }).first().dblclick();
       await waitUntil(
         "the Ticket view to open",
         async () => (await tabStrip(page, "Ticket tabs").count()) > 0,
