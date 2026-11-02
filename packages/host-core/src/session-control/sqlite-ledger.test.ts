@@ -52,6 +52,20 @@ function provenanceId(): number {
   return internSessionEventProvenance(ctx.db, JSON.stringify(provenance));
 }
 
+/**
+ * A relaunch's read: a fresh engine over the same ledger. Tests that rewrite
+ * history beneath the insert-only contract use it, because a live engine may
+ * answer from the fold it already holds (VC-1076), exactly as it is entitled
+ * to for history nothing can rewrite.
+ */
+function rereadSession(ledger: SessionLedger, sessionId: string) {
+  return createSessionEngine({
+    ledger,
+    clock: { now: () => 100 },
+    ids: { next: (kind) => `${kind}-reread` },
+  }).getSession({ sessionId });
+}
+
 // The port's guarantees — ordering, rollback, sequences, receipts, signals,
 // usage scope, checkpoints — are the shared contract, run against this adapter
 // in `sqlite-ledger.contract.test.ts`. These are what only SQLite has: its
@@ -1155,7 +1169,7 @@ describe("SqliteSessionLedger", () => {
   });
 
   it("rejects an interaction whose prompts or answers are structurally wrong", async () => {
-    const { control, projectId } = setup();
+    const { control, projectId, ledger } = setup();
     const created = await control.createSession({
       commandId: "create-invalid",
       projectId,
@@ -1251,7 +1265,7 @@ describe("SqliteSessionLedger", () => {
           }
         ).payload,
       ) as { interaction?: { prompts: unknown }; resolution?: { answers: unknown } };
-    const project = () => control.getSession({ sessionId: created.session.id });
+    const project = () => rereadSession(ledger, created.session.id);
 
     const opened = read("interaction-opened-invalid");
     opened.interaction!.prompts = "prompt:0";
@@ -1303,7 +1317,7 @@ describe("SqliteSessionLedger", () => {
   });
 
   it("round-trips a cancelled interaction without a resolution and rejects an unknown reason", async () => {
-    const { control, projectId } = setup();
+    const { control, projectId, ledger } = setup();
     const created = await control.createSession({
       commandId: "create-cancelled",
       projectId,
@@ -1391,7 +1405,7 @@ describe("SqliteSessionLedger", () => {
       }),
       "interaction-cancelled",
     );
-    await expect(control.getSession({ sessionId: created.session.id })).rejects.toThrow(
+    await expect(rereadSession(ledger, created.session.id)).rejects.toThrow(
       "reason has an unsupported value",
     );
     ctx.db.pragma("ignore_check_constraints = OFF");

@@ -33,6 +33,8 @@ if (DB_PATH === null) throw new Error("--db <path to a COPY of volli.db> is requ
 const FACTS = Number(argument("facts", "200"));
 const ACTIVE = Number(argument("active", "20"));
 const BACKFILL = argument("backfill", "off") === "on";
+/** `--facts-only` skips the listing arms, for profiling the per-fact path. */
+const FACTS_ONLY = process.argv.includes("--facts-only");
 
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -137,15 +139,18 @@ try {
       rowsMs: round(performance.now() - rowsStartedAt),
     };
   };
-  report.firstListing = await measure(() => listing(engineFor()));
-  report.afterFirstListing = checkpointCensus();
-  // A relaunch: a new connection and a fresh engine, over what the first
-  // listing persisted.
-  reopen();
-  report.relaunchListing = await measure(() => listing(engineFor()));
-  const warmEngine = engineFor();
-  await listing(warmEngine);
-  report.warmListing = await measure(() => listing(warmEngine));
+  if (!FACTS_ONLY) await listingArms();
+  async function listingArms() {
+    report.firstListing = await measure(() => listing(engineFor()));
+    report.afterFirstListing = checkpointCensus();
+    // A relaunch: a new connection and a fresh engine, over what the first
+    // listing persisted.
+    reopen();
+    report.relaunchListing = await measure(() => listing(engineFor()));
+    const warmEngine = engineFor();
+    await listing(warmEngine);
+    report.warmListing = await measure(() => listing(warmEngine));
+  }
 
   // ── One runtime fact on the Session with the largest checkpoint ────────
   const large = db
@@ -178,6 +183,16 @@ try {
     perFact.push(performance.now() - startedAt);
   }
   perFact.sort((a, b) => a - b);
+  // What a fact paid before the hot cache, on its own: one checkpoint row
+  // read, hash, parse and check for this Session.
+  const rowReads = [];
+  for (let index = 0; index < 20; index += 1) {
+    const startedAt = performance.now();
+    await ledger.transaction((transaction) => transaction.getProjectionCheckpoint(large.id));
+    rowReads.push(performance.now() - startedAt);
+  }
+  rowReads.sort((a, b) => a - b);
+  report.checkpointRowReadMedianMs = round(rowReads[10] * 100) / 100;
   report.perFact = {
     checkpointBytes: large.bytes,
     facts: FACTS,
