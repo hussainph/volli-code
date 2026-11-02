@@ -43,6 +43,6 @@ volli-drive state vd-xxxx sql "SELECT value, updated_at FROM app_state WHERE key
 ## Gotchas
 - Don't launch with `VOLLI_EXPERIMENTAL` in the environment. Its value wins, disables the switch, and makes the host refuse the write (`Experiment is set by environment`). Check `volli-drive doctor` or `logs` if the switch is disabled. A boot log line `[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids` means a stray value (main/experiments.ts:34-37).
 - While a save is in flight the switch is disabled (`busy`). Snapshot again after the click before asserting.
-- No consumer reacts yet. In the desktop app, only the Settings page reads the flag: `isExperimentEnabled("cloud")` has no callers outside main/experiments.ts. So there is nothing else to see change. docs/experimental-flags.md also notes that services built at boot need a restart.
+- This fixture proves the stored switch, not a cloud launch. The flag now gates account, backend and runner features; boot-constructed services need a restart. A signed-in, configured cloud launch uses Convex, while this basic signed-out fixture remains local. Stable builds hide the switch and require a fresh preview grant. See [Experimental flags](../../../../docs/experimental-flags.md) for launch policy and current consumers.
 - `find "Settings"` matches several nodes (the button, nav `Settings categories`, the search box). Act on the sidebar `button`.
 - AGENTS.md "UI copy" rule: the description line under the label is the registry's own text. It isn't an error or a notice.

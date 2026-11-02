@@ -60,7 +60,7 @@ name: CI
 #     older builds read back (migrations, backup/restore, ledger, blobs) or the
 #     N-1 harness — where a change can break an older build yet pass against
 #     the base. Anything else is caught on the merge. Measured repeat flakers stay in
-#     smoke-quarantine.yml (nightly, non-gating). Quarantine policy: AGENTS.md.
+#     smoke-quarantine.yml (nightly, non-gating). Quarantine policy: docs/development/smoke-tests.md.
 #     Every failed smoke retries ONCE in a fresh profile; retry-green is FLAKY
 #     in the job summary, and both attempts' evidence is uploaded for 30 days.
 #   - A COARSE path gate skips the macOS lane for changes that provably cannot
@@ -193,7 +193,7 @@ jobs:
 
           # Container inputs and host code. Workflow edits run it too, so the
           # job and gate are exercised on the PR changing their own definition.
-          host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|scripts/(check-host-electron-imports|ci-host-lane)[./])'
+          host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|\.github/actions/|scripts/(check-host-electron-imports|ci-host-lane)[./])'
           if grep -qE "$host" <<<"$changed"; then
             echo "host-container=true" >> "$GITHUB_OUTPUT"
           else
@@ -208,7 +208,7 @@ jobs:
           # through the harness. Those PRs run every lane, which also holds the
           # release policy (no floor raise while the latest release predates
           # the guard) at PR time. The merge runs every lane regardless.
-          n1='^(packages/host-core/src/(db|backup|session-control|session-runtime)/|packages/host-core/src/(blob-store|ticket-commands)|packages/host-core/scripts/n1/|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$)'
+          n1='^(packages/host-core/src/(db|backup|session-control|session-runtime)/|packages/host-core/src/(blob-store|ticket-commands)|packages/host-core/scripts/n1/|\.github/workflows/ci\.yml$|\.github/actions/|scripts/ci-host-lane\.test\.mjs$)'
           if grep -qE "$n1" <<<"$changed"; then
             echo "n1-lanes=$n1_all" >> "$GITHUB_OUTPUT"
             echo "-> migration or N-1 inputs changed; running every N-1 lane"
@@ -232,9 +232,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -273,6 +272,36 @@ jobs:
           fi
           node scripts/protocol-schema/generate.mjs --check "${args[@]}"
 
+      # Public functions are called by already-shipped desktop builds. Check
+      # both the PR base and newest released app (including canaries); the
+      # generator derives real source contracts for pre-snapshot revisions.
+      - name: Restore derived pre-snapshot Convex API baselines
+        id: convex-api-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .scratch/convex-api-cache
+          key: convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', 'package.json', '.nvmrc') }}-${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          restore-keys: |
+            convex-api-${{ runner.os }}-${{ hashFiles('scripts/convex-api/generate.mjs', 'scripts/convex-api/snapshot.mjs', 'scripts/convex-compat/materialize.mjs', 'pnpm-lock.yaml', 'package.json', '.nvmrc') }}-
+
+      - name: Check committed Convex API and additive compatibility
+        env:
+          CONVEX_API_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          node --test scripts/convex-api/*.test.mjs scripts/convex-compat/*.test.mjs
+          args=()
+          if [[ -n "$CONVEX_API_BASE" && "$CONVEX_API_BASE" != 0000000000000000000000000000000000000000 ]]; then
+            args=(--base "$CONVEX_API_BASE")
+          fi
+          node scripts/convex-api/generate.mjs --check "${args[@]}"
+
+      - name: Save derived pre-snapshot Convex API baselines
+        if: always() && steps.convex-api-cache.outcome == 'success' && steps.convex-api-cache.outputs.cache-hit != 'true' && hashFiles('.scratch/convex-api-cache/**/*.json') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .scratch/convex-api-cache
+          key: ${{ steps.convex-api-cache.outputs.cache-primary-key }}
+
       # Smoke helpers and date-boundary fixtures are pure checks on every PR,
       # including helpers whose live journey needs credentials (kickoff).
       - name: Test smoke runner policy, reporting and helpers
@@ -305,15 +334,13 @@ jobs:
           apps/desktop/e2e/volli-drive/lib/native-window-lifecycle.test.mjs
           apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
           apps/desktop/e2e/volli-drive/lib/cloud-acceptance.test.mjs
+          apps/desktop/e2e/volli-drive/lib/cloud-automation-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/cloud-transcript-acceptance.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
       #
-      # `vp run`, not `pnpm run`: setup-vp puts `vp` on PATH and manages pnpm
-      # internally, so a bare `pnpm` in a plain shell step is a 127. The check
-      # itself reads pnpm-workspace.yaml directly for the same reason — it has
-      # to run where pnpm is not a command.
+      # Use the workspace-locked Vite+ CLI shared with the other quality gates.
       - name: Check workspace license metadata
         run: vp run check:workspace-licenses
 
@@ -332,11 +359,18 @@ jobs:
           apps/desktop/scripts/copy-hostd-manifest.test.mjs
           apps/desktop/scripts/check-packaged-e2e.test.mjs
 
+      # The BYO runner acceptance lane's harness (VC-1043): the fake GitHub,
+      # the release server and the leg runner. The lane itself runs in
+      # ci-extended.yml; its harness is checked here so a break is caught
+      # before merge, not as a red CI extended on main.
+      - name: Test the BYO acceptance harness
+        run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs
+
       - name: Check host Electron boundary and CI gate policy
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
-          node --test scripts/ci-host-lane.test.mjs
+          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
@@ -439,6 +473,23 @@ jobs:
       - name: Build desktop pipeline
         run: vp run --filter @volli/desktop build
 
+      # The runner's one-file bundle (apps/runner), then the bundle itself on
+      # this Linux runner: its version; `status` on an empty box, which is not
+      # serving (exit 3); and `unlink` over a data directory, which takes the
+      # instance lock and so loads better-sqlite3 from the workspace install.
+      - name: Build and probe the runner bundle
+        run: |
+          vp run --filter @volli/runner build
+          runner=(node apps/runner/dist/runner.cjs)
+          box=(--data-dir "$RUNNER_TEMP/runner/data" --config-dir "$RUNNER_TEMP/runner/config")
+          "${runner[@]}" --version
+          code=0
+          "${runner[@]}" status "${box[@]}" || code=$?
+          test "$code" -eq 3
+          mkdir -m 700 -p "$RUNNER_TEMP/runner/data"
+          "${runner[@]}" unlink "${box[@]}"
+          test -e "$RUNNER_TEMP/runner/data/runner.lock"
+
       - name: Build public sites
         run: |
           vp run --filter @volli/website build
@@ -482,9 +533,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -563,9 +613,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -617,9 +666,9 @@ jobs:
   # in this job. And `--filter` cannot be combined with `-r`. A new package
   # under apps/ or packages/ is picked up with no edit here; one without a
   # `test:coverage` script is skipped, as `-r` skipped apps/docs.
-  # This IS the Linux host lane: plain Node/Vitest, not Electron. Today it
-  # covers session-engine, session-rpc, agent-runtime, shared and host-core.
-  # Future host-protocol and apps/hostd suites join with test:coverage.
+  # This IS the Linux host lane: plain Node/Vitest, not Electron. It covers
+  # every package with a `test:coverage` script, apps/hostd and apps/runner
+  # among them.
   # Native host builds must stay Node-ABI (see docs/development/host-linux.md).
   test-packages:
     name: Test (packages)
@@ -632,10 +681,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          # Exact host/container pin, rather than the root engines caret range.
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -645,7 +692,7 @@ jobs:
       # Electron's headers. Rebuild it from source for this Node (this job runs
       # no Electron; the desktop jobs keep their own Electron build), then
       # prove it loads and runs a shell before the tests depend on it.
-      # `vp rebuild`, not `pnpm rebuild`: pnpm is not a command on this runner.
+      # Rebuild is a package-manager operation, not a local Vite+ command.
       - name: Build node-pty for Node
         working-directory: packages/host-core
         run: |
@@ -654,7 +701,7 @@ jobs:
             npm_config_target="$(node -p 'process.versions.node')" \
             npm_config_disturl=https://nodejs.org/download/release \
             npm_config_build_from_source=true \
-            vp rebuild node-pty
+            pnpm rebuild node-pty
           node scripts/probe-node-pty.mjs
 
       # host-core's Chromium backend suite (VC-619) drives a real browser:
@@ -733,9 +780,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -850,9 +896,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -976,9 +1021,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 

@@ -3,7 +3,13 @@
 import { act } from "react";
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { LOCAL_LAUNCH, type RendererSessionInteraction } from "@volli/shared";
+import {
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  LOCAL_LAUNCH,
+  type RendererSessionInteraction,
+} from "@volli/shared";
+import * as modelAccess from "@renderer/lib/model-access-client";
+import * as hosts from "@renderer/components/hosts/use-remote-project";
 import { api as cloudApi } from "@volli/convex/api";
 import * as cloudClient from "@renderer/lib/cloud-client";
 import { adoptLaunch } from "@renderer/stores/launch";
@@ -27,6 +33,8 @@ import {
 import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { noteProjectTeam, useCloudTeamStore } from "@renderer/lib/cloud-team";
 import { ChatPlane } from "./chat-plane";
+import * as runnerPicker from "./runner-picker";
+import { getFunctionName } from "convex/server";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
@@ -411,6 +419,150 @@ it("keeps a new cloud chat's composer before any Session exists", async () => {
   expect(container.querySelector('textarea[aria-label="Message"]')).not.toBeNull();
   expect(container.textContent).not.toContain("Loading Session owner…");
 });
+
+it("picks another runner in the composer and sends its durable first-message request without local promotion", async () => {
+  adoptLaunch({ store: "cloud", userId: "owner", backendUrl: "https://example.convex.cloud" });
+  const requestId = "20000000-0000-4000-8000-000000000001";
+  useChatDraftsStore.getState().openProvisional(SESSION, {
+    projectId: PROJECT,
+    ticketId: null,
+    title: null,
+    operationId: requestId,
+  });
+  const mac = {
+    id: "mac",
+    name: "This Mac",
+    kind: "mac",
+    status: "online",
+    statusChangedAt: 1,
+    providers: [],
+    version: "1",
+    upgradeRequired: false,
+  };
+  const box = { ...mac, id: "box", name: "Build box", kind: "linux" };
+  vi.spyOn(runnerPicker, "useRunnerPicker").mockImplementation((_project, _enabled, pinned) => ({
+    runners: [mac, box],
+    selected: pinned === "box" ? box : mac,
+    thisMacId: "mac",
+    loading: false,
+    error: null,
+    choose: () => {},
+  }));
+  const mutation = vi.fn().mockResolvedValue({ sessionId: "remote-session" });
+  const client = {
+    mutation,
+    connectionState: () => ({ isWebSocketConnected: true }),
+    watchQuery: () => ({ localQueryResult: () => undefined, onUpdate: () => () => {} }),
+  };
+  const cloud = { client, api: cloudApi } as unknown as cloudClient.CloudSession;
+  vi.spyOn(cloudClient, "cloudSession").mockReturnValue(cloud);
+  vi.spyOn(cloudClient, "followCloudSession").mockImplementation((listener) => {
+    listener(cloud);
+    return () => {};
+  });
+  const bridge = refusingBridge() as typeof window.api;
+  const persisted = Promise.withResolvers<{ ok: true }>();
+  let writes = 0;
+  vi.stubGlobal(
+    "api",
+    new Proxy(bridge, {
+      get(target, key) {
+        if (key === "appState")
+          return { set: async () => (++writes === 1 ? persisted.promise : { ok: true }) };
+        return Reflect.get(target, key);
+      },
+    }),
+  );
+  const { container, store } = await mountPlane(true, false, true);
+  const localPromotion = vi.spyOn(store.getState(), "promoteChatSession");
+  const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Runner: This Mac"]')!;
+  await act(async () =>
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+  );
+  const option = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+    (node) => node.textContent?.includes("Build box"),
+  )!;
+  await act(async () => option.click());
+  typeDraft(message(container));
+  await act(async () => {
+    const send = container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!;
+    send.click();
+    // Same tick, before React paints the disabled state or storage acknowledges.
+    send.click();
+  });
+  expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toHaveLength(1);
+  expect(mutation).not.toHaveBeenCalled();
+  await act(async () => persisted.resolve({ ok: true }));
+  await vi.waitFor(() => expect(mutation).toHaveBeenCalledTimes(1));
+  expect(getFunctionName(mutation.mock.calls[0]![0])).toBe("sessionStarts:startOn");
+  expect(mutation.mock.calls[0]![1]).toMatchObject({
+    runnerId: "box",
+    clientRequestId: requestId,
+    projectId: PROJECT,
+    ticketId: null,
+  });
+  expect(JSON.parse(mutation.mock.calls[0]![1].body).parts).toEqual([
+    { type: "text", text: DRAFT },
+  ]);
+  expect(localPromotion).not.toHaveBeenCalled();
+  expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.runnerStart?.sessionId).toBe(
+    "remote-session",
+  );
+  expect(container.textContent).toContain("Sent — waiting for Build box");
+});
+
+it.each([{ providers: ["anthropic"] }, { providers: [] }])(
+  "keeps durable runner context without local credential warnings (%j)",
+  async ({ providers }) => {
+    cloudSecrets("this-mac");
+    vi.spyOn(hosts, "useRemoteHostName").mockReturnValue(null);
+    vi.spyOn(modelAccess, "useModelAccessClient").mockReturnValue({
+      revision: 0,
+      inspect: async () => ({
+        observedAt: 1,
+        providers: [],
+        models: [
+          {
+            providerId: "anthropic",
+            modelId: "opus",
+            label: "Remote Opus",
+            state: "authentication-required",
+            reasoningLevels: ["high"],
+            acceptsImageInput: true,
+          },
+        ],
+      }),
+      defaults: async () => EMPTY_MODEL_ACCESS_DEFAULTS,
+      hiddenModels: async () => [],
+    } as unknown as NonNullable<ReturnType<typeof modelAccess.useModelAccessClient>>);
+    const runner = {
+      id: "r1",
+      name: "Build box",
+      kind: "linux",
+      status: "online",
+      statusChangedAt: 1,
+      providers,
+      version: "1",
+      upgradeRequired: false,
+    };
+    const picker = vi.spyOn(runnerPicker, "useRunnerPicker").mockReturnValue({
+      runners: [runner],
+      selected: runner,
+      thisMacId: "this-mac",
+      loading: false,
+      error: null,
+      choose: vi.fn(),
+    });
+    const { container } = await mountPlane();
+    expect(picker).toHaveBeenLastCalledWith(PROJECT, true, "r1");
+    if (providers.length > 0) expect(container.textContent).toContain("Remote Opus");
+    expect(container.textContent).not.toContain("Model unavailable");
+    expect(container.textContent).not.toContain("No models configured");
+    expect(container.textContent).not.toContain("Sign-in required");
+    // Placement can no longer be edited, even though its model supply stays live.
+    expect(container.querySelector('[aria-label^="Runner:"]')).toBeNull();
+  },
+);
 
 it("keeps the known owner's composer while names load or fail", async () => {
   adoptLaunch({ store: "cloud", userId: "owner", backendUrl: "https://example.convex.cloud" });

@@ -163,10 +163,8 @@ export async function relinkProject(
   const project = getProjectById(deps.db, request.projectId);
   if (project === undefined) return { ok: false, error: "Unknown project" };
   // A project moving to Volli Cloud keeps its folder until its move settles (VC-993).
-  const frozen = projectFreeze(deps.db, project.id);
-  if (frozen !== null) {
-    return { ok: false, error: new ProjectFrozenError(project.id, frozen).message };
-  }
+  const frozen = frozenRefusal(deps.db, project.id);
+  if (frozen !== null) return frozen;
 
   const candidatePath = resolve(request.path);
   const candidate = await probeFolder(candidatePath);
@@ -198,6 +196,10 @@ export async function relinkProject(
       error: `This folder belongs to ${holder.name}, which was removed. Add it again instead.`,
     };
   }
+  // The freeze again, at the write: the looks at the disk above await, and a
+  // move can freeze the project meanwhile.
+  const frozenNow = frozenRefusal(deps.db, project.id);
+  if (frozenNow !== null) return frozenNow;
 
   const relinked = updateProjectPath(deps.db, project.id, validation.path, now());
   // `getProjectById` answered for this id a moment ago and nothing deletes a
@@ -225,6 +227,14 @@ export async function relinkProject(
       containerMoved: container.moved,
     },
   };
+}
+
+/** The refusal for a project a move froze, or null when it is writable. */
+function frozenRefusal(db: Database.Database, projectId: string): ProjectRelinkOutcome | null {
+  const frozen = projectFreeze(db, projectId);
+  return frozen === null
+    ? null
+    : { ok: false, error: new ProjectFrozenError(projectId, frozen).message };
 }
 
 /** Those of `paths` a look at the disk still finds. */

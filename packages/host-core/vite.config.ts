@@ -211,6 +211,7 @@ export default defineConfig({
         // cancelled export that reads as complete. `worker-entry.ts` stays
         // out: its one line only ever runs inside a worker thread, which the
         // coverage provider does not instrument; `worker.test.ts` drives it.
+        "src/migration-export/chunk-lines.ts",
         "src/migration-export/errors.ts",
         "src/migration-export/exporter.ts",
         "src/migration-export/file-streams.ts",

@@ -12,8 +12,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentCommand, AgentRequest, AgentResponse } from "@volli/shared";
 
-import { createAgentBackend } from "./agent-backend";
-import { createCloudBoardVerbs, type CloudBoardVerbs } from "./board-verbs";
+import { CONTENTION_RETRIES, createAgentBackend } from "./agent-backend";
+import { BUSY_MESSAGE, createCloudBoardVerbs, type CloudBoardVerbs } from "./board-verbs";
 import { createCloudFunctionsClient } from "./functions-client";
 
 const SESSION = "5e550000-0000-4000-8000-000000000001";
@@ -154,7 +154,7 @@ interface FakeBackend {
   calls: Call[];
   state: ReturnType<typeof boardState>;
   /** Overrides one path's answer (for refusals and stalls). */
-  override: Map<string, (call: Call) => Answer | "hang">;
+  override: Map<string, (call: Call) => Answer | "hang" | "contention">;
   close(): Promise<void>;
 }
 
@@ -163,7 +163,7 @@ const backends: FakeBackend[] = [];
 async function fakeBackend(): Promise<FakeBackend> {
   const state = boardState();
   const calls: Call[] = [];
-  const override = new Map<string, (call: Call) => Answer | "hang">();
+  const override = new Map<string, (call: Call) => Answer | "hang" | "contention">();
   const answer = (call: Call): Answer => {
     const { path, args } = call;
     const byId = (id: unknown) => state.tickets.find((row) => row.id === id);
@@ -294,6 +294,17 @@ async function fakeBackend(): Promise<FakeBackend> {
       const custom = override.get(call.path);
       const result = typeof custom === "function" ? custom(call) : answer(call);
       if (result === "hang") return;
+      if (result === "contention") {
+        // What Convex's HTTP API answers a mutation that lost every retry.
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            code: "OptimisticConcurrencyControlFailure",
+            message: 'Documents read from or written to the "projectCounters" table changed.',
+          }),
+        );
+        return;
+      }
       response.writeHead("value" in result ? 200 : 400, { "content-type": "application/json" });
       response.end(
         JSON.stringify(
@@ -337,6 +348,8 @@ async function verbsOver(
     }),
     runnerToken: async () => "runner-token",
     connected: options.connected ?? (() => true),
+    // Contention retries wait no wall time here.
+    random: () => 0,
   });
   const verbs = createCloudBoardVerbs({
     backend: agentBackend,
@@ -878,6 +891,36 @@ describe("failing fast", () => {
     const attempts = writes(backend);
     expect(attempts).toHaveLength(2);
     expect(attempts[1]!.args).toEqual(attempts[0]!.args);
+  });
+
+  it("a write that keeps losing to concurrent board writes is BUSY: retried with the same command id, nothing applied", async () => {
+    const { verbs, backend } = await verbsOver();
+    backend.override.set("board:createComment", () => "contention");
+    const refused = await verbs["board.createComment"]({
+      sessionId: SESSION,
+      request: request("ticket.comment", { id: "VC-1", message: "Busy." }),
+    });
+    // Not TIMEOUT: the backend answered, and nothing was written.
+    expect(refused).toMatchObject({
+      ok: false,
+      error: { code: "BUSY", message: BUSY_MESSAGE },
+    });
+    const attempts = writes(backend);
+    expect(attempts).toHaveLength(CONTENTION_RETRIES + 1);
+    expect(new Set(attempts.map((call) => JSON.stringify(call.args))).size).toBe(1);
+
+    // Contention that clears lands the write, once.
+    let busyFor = 2;
+    backend.override.set("board:createComment", (call) =>
+      busyFor-- > 0
+        ? "contention"
+        : { value: { commentId: call.args["commentId"], createdAt: 77 } },
+    );
+    const landed = await verbs["board.createComment"]({
+      sessionId: SESSION,
+      request: request("ticket.comment", { id: "VC-1", message: "Landed." }),
+    });
+    expect(landed.ok).toBe(true);
   });
 
   it("a write that landed is ok even when reading it back fails", async () => {

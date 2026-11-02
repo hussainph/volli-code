@@ -170,6 +170,23 @@ export function driveInstance(label, socket) {
   };
 }
 
+/** Open the journey's sole Run for this Automation, not a title substring:
+ * its birth title also names the column chip and can already be stale after
+ * auto-title. The Session-only provenance survives that rename. No `first`:
+ * two matching Sessions are ambiguous and must fail, not open the wrong Run. */
+export async function finishRunTurn(drive, automationName, marker) {
+  await openProjectHome(drive, AUTOMATION_PROJECT.name);
+  const provenance = provenanceMarkCopy(automationName);
+  await waitUntil(
+    `${drive.label}: Run Session is listed`,
+    () => drive.has("button", provenance, { contains: true }),
+    { timeout: 60_000, interval: 200 },
+  );
+  await drive.click("button", provenance, { contains: true });
+  await drive.wait(marker, 120_000);
+  await drive.gone("Stop turn", 60_000);
+}
+
 /* ------------------------------------------------- launching and signing --- */
 
 /**

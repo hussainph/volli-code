@@ -11,6 +11,8 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
 import { profileMaintenanceActive } from "../backup/profile-maintenance";
+import { writeMoveProfile } from "../migration-dry-run/test-support/move-profile";
+import { SYNTHETIC_IDS } from "../migration-dry-run/test-support/synthetic-profile";
 import { exportMigrationSnapshot, type MigrationExportProgress } from "./exporter";
 import { STATE_FILE, stagingDirOf } from "./staging";
 import { verifyMigrationExport } from "./verify";
@@ -153,6 +155,24 @@ describe("runMigrationExportInWorker", () => {
     ).rejects.toMatchObject({ code: "worker_failed", message: "odd" });
   });
 
+  it("carries the Session a refusal names across the thread, and nothing else in its place", async () => {
+    const failing = (name: string, sessionId: unknown) =>
+      runMigrationExportInWorker(
+        script(
+          name,
+          `import { parentPort } from "node:worker_threads";
+           parentPort.postMessage(${JSON.stringify({ type: "failed", code: "pi_log_too_large", message: "too large", sessionId })});`,
+        ),
+        request(),
+      );
+    await expect(failing("named.mjs", "session-1")).rejects.toMatchObject({
+      code: "pi_log_too_large",
+      sessionId: "session-1",
+    });
+    const unnamed = await failing("unnamed.mjs", 5).catch((error: unknown) => error);
+    expect(unnamed).toMatchObject({ code: "pi_log_too_large", sessionId: undefined });
+  });
+
   it("terminates a worker that does not stop within the grace period", async () => {
     const stubborn = script(
       "stubborn.mjs",
@@ -210,6 +230,16 @@ describe("serveMigrationExportWorker", () => {
       port.postMessage({ type: "cancel" });
     });
     expect(answer).toMatchObject({ type: "failed", code: "cancelled" });
+  });
+
+  it("answers a refusal with the Session it names", async () => {
+    const moved = writeMoveProfile(join(work, "moved"), { artifacts: 1, fault: "piTruncated" });
+    const { answer } = await serve({ ...request(), sourcePath: moved.dbPath });
+    expect(answer).toMatchObject({
+      type: "failed",
+      code: "pi_log_incomplete",
+      sessionId: SYNTHETIC_IDS.hotSession,
+    });
   });
 
   it("answers a failure with the code the exporter classified it under", async () => {

@@ -10,6 +10,7 @@ import {
   SESSION_FOLLOW_UP_FORMAT,
   SESSION_INTERRUPT_FORMAT,
   SESSION_NOTICE_FORMAT,
+  SESSION_START_FORMAT,
   parseJobPayload,
   isExecutableAutomationRun,
 } from "./job-payloads";
@@ -44,6 +45,21 @@ const VALID: Partial<Record<JobKind, Record<string, unknown>>> = {
     kickoff: { id: "message-1", mediaType: "text/markdown", digest: null },
     title: "Review the diff",
     model: { providerId: "anthropic", modelId: "claude", reasoningLevel: null },
+  },
+  "session.start": {
+    format: SESSION_START_FORMAT,
+    projectId: USER,
+    ticketId: TICKET,
+    title: "Fix the flaky test",
+    firstMessage: {
+      commandId: COPY,
+      body: {
+        id: `sha256:${"a".repeat(64)}`,
+        mediaType: "application/vnd.volli.ui-message+json",
+        digest: `sha256:${"a".repeat(64)}`,
+      },
+    },
+    model: { providerId: "anthropic", modelId: "claude", reasoningLevel: "high" },
   },
   "session.notice": {
     format: SESSION_NOTICE_FORMAT,
@@ -83,12 +99,7 @@ describe("parseJobPayload", () => {
 
   test("accepts any JSON object for the kinds no ticket has typed yet", () => {
     const opaque = JOB_KINDS.filter((kind) => VALID[kind] === undefined);
-    expect(opaque).toEqual([
-      "session.start",
-      "session.release",
-      "workingCopy.refresh",
-      "environment.run",
-    ]);
+    expect(opaque).toEqual(["session.release", "workingCopy.refresh", "environment.run"]);
     for (const kind of opaque) {
       expect(parseJobPayload(kind, { anything: [1, "two"] })).toEqual({ anything: [1, "two"] });
       expect(parseJobPayload(kind, Object.create(null))).toEqual({});
@@ -104,6 +115,41 @@ describe("parseJobPayload", () => {
     }
     expect(refusal("session.start", { body: "x".repeat(JOB_PAYLOAD_MAX_CHARS) })).toMatch(
       /larger than 65536 characters/,
+    );
+  });
+
+  test("reads a session.start: a Board Session, the runner's default model, no title", () => {
+    const start = VALID["session.start"]!;
+    const board = { ...start, ticketId: null, title: null, model: null };
+    expect(parseJobPayload("session.start", board)).toEqual(board);
+    const level = { ...start, model: { providerId: "a", modelId: "b", reasoningLevel: null } };
+    expect(parseJobPayload("session.start", level)).toEqual(level);
+    expect(refusal("session.start", { ...start, format: "volli.session-start.v2" })).toMatch(
+      /format is not one of volli.session-start.v1/,
+    );
+    expect(refusal("session.start", { ...start, sessionId: SESSION })).toMatch(
+      /unexpected field "sessionId"/,
+    );
+    expect(
+      refusal("session.start", {
+        ...start,
+        firstMessage: { commandId: "cmd-1", body: start.firstMessage },
+      }),
+    ).toMatch(/firstMessage.commandId is not a UUID/);
+    expect(
+      refusal("session.start", {
+        ...start,
+        firstMessage: { ...(start.firstMessage as object), body: { id: "" } },
+      }),
+    ).toMatch(/firstMessage.body.id is not a non-empty id/);
+    expect(
+      refusal("session.start", {
+        ...start,
+        model: { providerId: "a", modelId: "b", reasoningLevel: "max-plus" },
+      }),
+    ).toMatch(/model.reasoningLevel is not one of/);
+    expect(refusal("session.start", { ...start, projectId: "p-1" })).toMatch(
+      /projectId is not a UUID/,
     );
   });
 

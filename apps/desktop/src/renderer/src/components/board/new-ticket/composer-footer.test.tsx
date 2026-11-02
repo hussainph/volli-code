@@ -269,3 +269,35 @@ it("does not claim an empty catalogue or expose cached runs while reading", () =
   expect(html).not.toContain("No ticket automations");
   expect(html).not.toContain("Implement");
 });
+
+it("blocks only kickoff while cloud runner discovery is unresolved", async () => {
+  const runners = {
+    runners: [],
+    selected: null,
+    thisMacId: null,
+    loading: true,
+    error: null,
+    choose: () => {},
+  };
+  await act(async () => root.render(<ComposerFooter {...props} runners={runners} />));
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="composer-kickoff"]')!.disabled).toBe(
+    true,
+  );
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="composer-create"]')!.disabled).toBe(
+    false,
+  );
+  expect(host.textContent).toContain("Loading runners");
+  await act(async () =>
+    root.render(
+      <ComposerFooter
+        {...props}
+        runners={runners}
+        launch={{ kind: "automation", projectId: "p1", automationId: "a1" }}
+      />,
+    ),
+  );
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')!.disabled).toBe(
+    false,
+  );
+  expect(host.textContent).not.toContain("Loading runners");
+});

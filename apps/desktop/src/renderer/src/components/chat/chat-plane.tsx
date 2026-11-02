@@ -172,6 +172,18 @@ import {
 } from "@renderer/lib/cloud-session-read-only";
 import { CLOUD_ATTACHMENTS_UNAVAILABLE } from "@renderer/lib/cloud-session-transport";
 import { launchStore } from "@renderer/stores/launch";
+import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { RunnerPicker, useRunnerPicker } from "./runner-picker";
+import { modelsOnRunner } from "./runner-picker-model";
+import {
+  runnerStartAccountScope,
+  runnerStartIntent,
+  runnerStartText,
+  submitRunnerDraft,
+} from "./runner-picker-start";
+import { RunnerStartStatusPanel, useRunnerStartStatus } from "./runner-picker-start-status";
 import { useWorktreeSetupGate } from "@renderer/components/chat/use-worktree-setup-gate";
 import { notAvailableOn, useRemoteHostName } from "@renderer/components/hosts/use-remote-project";
 import { useRemoteSessionOnScreen } from "@renderer/lib/remote-sessions";
@@ -430,6 +442,20 @@ function ChatPlaneContent({
   // Session. The rest of the plane can render its empty projections unchanged;
   // the few operations that require durability branch explicitly below.
   const provisional = useChatDraftsStore((state) => state.drafts[sessionId]?.provisional);
+  const cloudLaunch = launchStore() === "cloud";
+  const placedRunnerId = useCloudPlacesStore(
+    (state) => (state.sessions[sessionId] ?? state.openedPlaces[sessionId])?.placeRunnerId ?? null,
+  );
+  const runners = useRunnerPicker(
+    projectId,
+    provisional !== undefined || placedRunnerId !== null,
+    provisional?.runnerChoice?.id ?? placedRunnerId ?? undefined,
+  );
+  const runnerStart = provisional?.runnerStart;
+  const startStatus = useRunnerStartStatus(
+    runnerStart?.accountScope === runnerStartAccountScope() ? runnerStart?.sessionId : undefined,
+  );
+  const remoteRunner = runners.selected !== null && runners.selected.id !== runners.thisMacId;
   const setDraft = useChatDraftsStore((state) => state.setDraft);
   const setDraftAttachments = useChatDraftsStore((state) => state.setDraftAttachments);
   const holdMessage = useChatDraftsStore((state) => state.holdMessage);
@@ -439,6 +465,31 @@ function ChatPlaneContent({
     (text: string) => setDraft(sessionId, text),
     [sessionId, setDraft],
   );
+  React.useEffect(() => {
+    const remoteId = runnerStart?.sessionId;
+    if (!surfaceVisible || remoteId === undefined || startStatus?.status?.state !== "started")
+      return;
+    const sessions = sessionsStore.getState();
+    const owner = Object.entries(sessions.openTabs).find(([, tabs]) =>
+      tabs.includes(sessionId),
+    )?.[0];
+    const draft = useChatDraftsStore.getState().drafts[sessionId];
+    if (owner === undefined || draft?.provisional?.runnerStart?.sessionId !== remoteId) return;
+    sessions.adoptChatSession(remoteId, projectId);
+    sessions.openChatTab(owner, remoteId);
+    if (draft.text !== "") useChatDraftsStore.getState().setDraft(remoteId, draft.text);
+    if (owner === projectId)
+      useProjectUiStore.getState().openHomeTab(projectId, chatTabId(remoteId));
+    else useProjectUiStore.getState().openTicketTab(projectId, owner, chatTabId(remoteId));
+    sessions.closeChatTab(owner, sessionId);
+  }, [
+    projectId,
+    runnerStart?.sessionId,
+    sessionId,
+    sessionsStore,
+    startStatus?.status?.state,
+    surfaceVisible,
+  ]);
   // Per interaction, not per surface: a harness can have several cards open at
   // once, and one boolean disables every other card's controls while one of
   // them is in flight.
@@ -512,7 +563,7 @@ function ChatPlaneContent({
   // ternary. Both sides of the wire must answer the same question the same
   // way, and the mapping exists precisely so the NEXT Role is a decision in
   // one place rather than a silent `global` in this one.
-  const provisionalModel =
+  const defaultProvisionalModel =
     provisional === undefined || remoteHost !== null
       ? null
       : (provisional.model ??
@@ -521,6 +572,12 @@ function ChatPlaneContent({
           defaults,
           modelPurposeForRole(roleImpliedByTicket(provisional.ticketId)),
         ));
+  const provisionalModel =
+    remoteRunner &&
+    defaultProvisionalModel !== null &&
+    !runners.selected?.providers.includes(defaultProvisionalModel.providerId)
+      ? null
+      : defaultProvisionalModel;
   const modelSelection = projection?.modelSelection ?? provisionalModel;
   /**
    * Whether the transcript is still to come (VC-383). The client sets the
@@ -555,7 +612,6 @@ function ChatPlaneContent({
   // other write, the draft kept in it. In a cloud launch the box is a send to
   // the Session's runner through Volli Cloud (VC-895), so the cloud link
   // decides, not the generic Session-write gate (which stays shut there).
-  const cloudLaunch = launchStore() === "cloud";
   const canWriteLocal = useCanWriteSession(projectId);
   const canSendCloud = useCanSendSession(projectId);
   const team = useSessionTeam(sessionId);
@@ -563,19 +619,31 @@ function ChatPlaneContent({
   const canWrite = cloudLaunch ? canSendCloud && !teamReadOnly : canWriteLocal;
   // What this picker may offer (VC-53), decided in one place because the
   // New-ticket composer asks the same question — see `offerableModels`.
+  const pickerModels = React.useMemo(
+    () =>
+      cloudLaunch && provisional === undefined && runners.selected === null
+        ? NO_MODELS
+        : remoteRunner && runners.selected !== null
+          ? modelsOnRunner(models, runners.selected)
+          : models,
+    [cloudLaunch, models, provisional, remoteRunner, runners.selected],
+  );
   const composerModels = React.useMemo(
-    () => offerableModels(models, providers, hidden),
-    [hidden, models, providers],
+    () => offerableModels(pickerModels, providers, hidden),
+    [hidden, pickerModels, providers],
   );
   // The pill's Defaults view (VC-259): the user's tier table against the same
   // catalog and curation the All-models list is filtered by.
   const composerTiers = React.useMemo(
-    () => composerTierRows(defaults, models, providers, hidden),
-    [defaults, hidden, models, providers],
+    () => composerTierRows(defaults, pickerModels, providers, hidden),
+    [defaults, hidden, pickerModels, providers],
   );
   const sessionModel = React.useMemo(
-    () => sessionModelStanding(modelSelection, models, providers),
-    [modelSelection, models, providers],
+    () =>
+      cloudLaunch && provisional === undefined && runners.selected === null
+        ? null
+        : sessionModelStanding(modelSelection, pickerModels, providers),
+    [cloudLaunch, modelSelection, pickerModels, providers, provisional, runners.selected],
   );
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
@@ -683,6 +751,33 @@ function ChatPlaneContent({
   const deliver = React.useCallback(
     async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery> => {
       if (provisional !== undefined) {
+        if (
+          (cloudLaunch && runners.selected === null && runnerStart === undefined) ||
+          (!cloudLaunch && provisional.runnerChoice !== undefined)
+        ) {
+          toastError("Choose an available runner in Volli Cloud.");
+          return "refused";
+        }
+        if (runnerStart !== undefined || (cloudLaunch && remoteRunner)) {
+          try {
+            const startIntent =
+              runnerStart?.intent ??
+              runnerStartIntent(
+                {
+                  clientRequestId: provisional.operationId,
+                  runnerId: runners.selected!.id,
+                  projectId: provisional.projectId,
+                  ticketId: provisional.ticketId,
+                  model: provisionalModel,
+                },
+                message,
+              );
+            return (await submitRunnerDraft(sessionId, startIntent)) ? "delivered" : "refused";
+          } catch (error) {
+            toastError(errorMessage(error));
+            return "refused";
+          }
+        }
         // This Mac freezes its known model choice before promotion. A remote
         // Draft deliberately has no local model: VC-713 lets the box resolve
         // its default and report missing-model recovery in that host's name.
@@ -722,6 +817,10 @@ function ChatPlaneContent({
     },
     [
       deliverable,
+      cloudLaunch,
+      remoteRunner,
+      runnerStart,
+      runners.selected,
       provisional,
       provisionalModel,
       remoteHost,
@@ -1010,7 +1109,27 @@ function ChatPlaneContent({
       // first Enter. The composer is already not-ready in that window (see
       // `composable`), so this is the race guard behind the visible refusal,
       // never the only thing standing between a person and a lost message.
-      if (importingFirstMessage.current !== null) return;
+      if (importingFirstMessage.current !== null || launch?.runnerStart !== undefined) return;
+      // The first durability flush precedes freezing startOn. Latch here,
+      // synchronously, so two Enter presses cannot share one remote request.
+      if (
+        launch !== undefined &&
+        cloudLaunch &&
+        remoteRunner &&
+        (provisionalDispatches.current > 0 || (drafts.drafts[sessionId]?.held.length ?? 0) > 0)
+      )
+        return;
+      if (launch !== undefined && cloudLaunch) {
+        if (runners.selected === null) {
+          toastError(runners.error ?? "Choose an available runner.");
+          return;
+        }
+        if (launch.runnerChoice === undefined)
+          drafts.setProvisionalRunner(sessionId, {
+            id: runners.selected.id,
+            name: runners.selected.name,
+          });
+      }
       // Defaults stay live while this is merely a Draft. Send is the boundary
       // that freezes the resolved choice: a create that lands before a later
       // Blob/setup failure must replay the same model even if Settings changes
@@ -1079,6 +1198,10 @@ function ChatPlaneContent({
     [
       captureFirstImport,
       clearAttachments,
+      cloudLaunch,
+      remoteRunner,
+      runners.selected,
+      runners.error,
       deliver,
       dispatch,
       provisionalModel,
@@ -1195,6 +1318,10 @@ function ChatPlaneContent({
         .map((provider) => ({ id: provider.id, label: provider.label })),
     [providers],
   );
+  // This Mac's empty/failed credential catalog cannot prescribe local sign-in
+  // for another runner. Its capabilities govern model standing; execution
+  // failures still come from the Session's own attention and transport.
+  const localModelRecovery = !cloudLaunch || runners.selected?.id === runners.thisMacId;
   const candidateBlocker = sessionBlocker(
     {
       sessionError: session.sessionError,
@@ -1202,10 +1329,12 @@ function ChatPlaneContent({
       // The failure a notification click named, so the row shows THAT problem
       // rather than whichever one happens to be newest (VC-295).
       revealedAttentionId: revealed?.attentionId ?? null,
-      catalogState,
-      catalogError,
-      sessionModel,
-      signInProviders,
+      catalogState: localModelRecovery ? catalogState : "ready",
+      catalogError: localModelRecovery ? catalogError : null,
+      // A capability inventory can lag execution (or omit environment-backed
+      // credentials). Only the runner's Session attention can reject its model.
+      sessionModel: localModelRecovery ? sessionModel : null,
+      signInProviders: localModelRecovery ? signInProviders : [],
       scheduledResume: projection?.scheduledResume ?? null,
       turnActive: projection?.turnActive ?? false,
       liveExecutorId,
@@ -1994,9 +2123,36 @@ function ChatPlaneContent({
                 stands ABOVE the box, which stays, so a message can be queued
                 for a runner that is away. A secret is entered on the machine
                 that asked for it, never here for another runner. */}
-              {cloudLaunch && (
+              {cloudLaunch && provisional === undefined && (
                 <CloudComposerStatus sessionId={sessionId} turnActive={projection?.turnActive} />
               )}
+              {runnerStart !== undefined ? (
+                <RunnerStartStatusPanel
+                  name={
+                    startStatus?.status?.runner?.name ?? provisional?.runnerChoice?.name ?? "runner"
+                  }
+                  status={startStatus?.status ?? null}
+                  error={startStatus?.error ?? null}
+                  accepted={runnerStart.sessionId !== undefined}
+                  onRetry={() => {
+                    void submitRunnerDraft(sessionId).catch((error) =>
+                      toastError(errorMessage(error)),
+                    );
+                  }}
+                  onEdit={() => {
+                    if (startStatus?.status?.state !== "failed") return;
+                    useChatDraftsStore
+                      .getState()
+                      .resetRunnerStart(
+                        sessionId,
+                        runnerStartText(runnerStart.intent),
+                        crypto.randomUUID(),
+                      );
+                    for (const message of sessionsStore.getState().idleSends[sessionId] ?? [])
+                      sessionsStore.getState().forgetIdleSend(sessionId, message.id);
+                  }}
+                />
+              ) : null}
               <SecretCards sessionId={sessionId} interactions={interactions} />
               <ComposerInteractionStack
                 interaction={pending}
@@ -2031,18 +2187,46 @@ function ChatPlaneContent({
                   // (VC-289): the card above owns the answer, its field and its
                   // send, and this draft is the reader's own to keep.
                   models={composerModels}
+                  runnerPicker={
+                    cloudLaunch && provisional !== undefined ? (
+                      <RunnerPicker
+                        state={{
+                          ...runners,
+                          choose: (id) => {
+                            const selected = runners.runners.find((row) => row.id === id);
+                            if (selected === undefined) return;
+                            runners.choose(id);
+                            useChatDraftsStore
+                              .getState()
+                              .setProvisionalRunner(sessionId, { id, name: selected.name });
+                          },
+                        }}
+                        disabled={held.length > 0 || runnerStart !== undefined}
+                      />
+                    ) : undefined
+                  }
                   tiers={composerTiers}
                   selection={selection}
                   selectionProviderLabel={sessionModel?.providerLabel}
                   selectionTier={selectionTier}
                   selectionAuto={selectionAuto}
                   onSelectionChange={changeModel}
-                  modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
+                  modelChoiceDisabled={
+                    working ||
+                    runnerStart !== undefined ||
+                    (provisional !== undefined && held.length > 0)
+                  }
                   working={working}
-                  ready={composable && canWrite}
+                  ready={
+                    composable &&
+                    canWrite &&
+                    runnerStart === undefined &&
+                    (!remoteRunner || provisional === undefined || held.length === 0) &&
+                    (!cloudLaunch || provisional === undefined || runners.selected !== null)
+                  }
                   hostReadOnly={!canWrite}
                   contextUsage={contextUsage}
-                  queued={strip}
+                  queued={runnerStart === undefined ? strip : []}
                   steeringMessages={pendingSteerIds}
                   onQueuedChange={onQueuedChange}
                   onSteerQueued={onSteerQueued}

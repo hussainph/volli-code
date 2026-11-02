@@ -562,6 +562,8 @@ export async function pollRetention(
           worktreePath: cwd,
           branch,
         });
+        // The freeze again, at the write: a move can freeze the project while `gh` answers.
+        if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
         if (!discovered.ok) {
           result.failed += 1;
           log.error("pull request discovery failed", {
@@ -645,6 +647,7 @@ export async function pollRetention(
       // (2) STATUS — read the PR's live state.
       result.attempted += 1;
       const status = await ghPrStatus(deps.net, { worktreePath: cwd, prUrl });
+      if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
       if (!status.ok) {
         result.failed += 1;
         log.error("pull request status failed", {

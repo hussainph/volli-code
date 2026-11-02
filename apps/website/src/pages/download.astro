@@ -5,6 +5,7 @@
  * The build is resolved live from GitHub Releases by `src/lib/releases.ts`, so
  * a new release needs no edit here (VC-62).
  */
+import { PREVIEW_PRIVACY_URL } from "@volli/shared";
 import Mark from "../components/Mark.astro";
 import Super from "../components/Super.astro";
 import World from "../components/World.astro";
@@ -68,8 +69,10 @@ const description =
         <div>
           <dt>Your data</dt>
           <dd>
-            Your projects, tickets and chats stay on your Mac. Model requests go only to the
-            provider you sign in to. <a href={`${DOCS_URL}/start/install/`}>Where it all lives</a>.
+            Signed-out projects, tickets and chats stay on your Mac. Signed-in preview
+            Workspaces and Session history sync to the cloud. Model requests go to the
+            provider or gateway you configure. <a href={PREVIEW_PRIVACY_URL}>Preview privacy</a>
+            and <a href={`${DOCS_URL}/start/install/`}>where it all lives</a>.
           </dd>
         </div>
         <div>

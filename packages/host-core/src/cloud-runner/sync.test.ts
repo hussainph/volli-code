@@ -302,6 +302,18 @@ describe("the composed sync over one gate", () => {
         list: () => [...rows.values()],
         get: (id) => rows.get(id) ?? null,
         save: (c) => void rows.set(c.sessionId, c),
+        update: (c, expected) => {
+          const row = rows.get(c.sessionId);
+          if (
+            row?.ownerUserId !== c.ownerUserId ||
+            row.generation !== expected.generation ||
+            row.acceptedThrough !== expected.acceptedThrough
+          ) {
+            return false;
+          }
+          rows.set(c.sessionId, c);
+          return true;
+        },
       },
       accept: acceptOverLink(link),
       ownerUserId: "u",

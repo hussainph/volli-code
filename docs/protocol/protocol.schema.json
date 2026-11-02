@@ -7795,6 +7795,106 @@
               },
               "type": "array"
             },
+            "preflight": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "done": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "phase": {
+                      "enum": [
+                        "checking",
+                        "snapshot",
+                        "reading",
+                        "exporting",
+                        "history",
+                        "verifying",
+                        "planning",
+                        "sizing"
+                      ],
+                      "type": "string"
+                    },
+                    "projectCount": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "projectIndex": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "projectName": {
+                      "anyOf": [
+                        {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startedAt": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "total": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "records",
+                            "files"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "phase",
+                    "projectIndex",
+                    "projectCount",
+                    "projectName",
+                    "done",
+                    "total",
+                    "unit",
+                    "startedAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "revision": {
               "maximum": 9007199254740991,
               "minimum": 0,
@@ -7843,6 +7943,7 @@
             "account",
             "workspaces",
             "unavailable",
+            "preflight",
             "moves"
           ],
           "type": "object"

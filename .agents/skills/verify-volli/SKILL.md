@@ -85,6 +85,7 @@ volli-drive screenshot vd-xxxxxx --name after-move   # prints the PNG path
 ```
 
 - Every `act`/`wait`/`find` returns a **new generation**; pass the latest one. A stale generation or a ref the snapshot never showed is refused — re-snapshot, never guess.
+- Captures wait up to 10 s for non-empty aria content; `wait` uses its existing `--timeout` budget, including empty captures. An empty tree never means "found 0" or "gone": persistent emptiness fails with `empty snapshot` (a capture timing out before any tree returns is `snapshot readiness timeout`). Rejected raw trees survive as `snapshots/empty-<capture>-<attempt>-<window>.txt`; `snapshot-empty` / `snapshot-ready` transcript entries retain capture timing and counts. A non-empty boot error or missing control still fails the journey normally.
 - Refs look like `f2e75` (frame-prefixed). Prefer `find "<visible text or aria name>"` over printing the whole tree; `--find` on `act`/`wait`/`snapshot` filters the fresh tree the same way.
 - No drag kind and no right-click: use the product's keyboard paths (board cards: focus → `Space` → arrows → `Space`).
 - Elements behind a modal lose their refs (they are inert) — that is the app, not the tool.

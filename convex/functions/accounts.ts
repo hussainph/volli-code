@@ -301,7 +301,10 @@ export const cancelDeletion = mutation({
     const now = Date.now();
     const request = await pendingRequest(ctx, found.userId);
     if (request === null || (found.user.purgeAfter !== null && now >= found.user.purgeAfter)) {
-      throw accountError("purge_started", "This account's deletion has already started.");
+      throw accountError(
+        "purge_started",
+        "This request can no longer be cancelled in the app. Email privacy@volli.app for help.",
+      );
     }
     await ctx.db.patch(request._id, { status: "cancelled" });
     await ctx.db.patch(found.user._id, {
