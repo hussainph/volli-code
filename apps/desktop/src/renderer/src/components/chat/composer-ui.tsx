@@ -150,6 +150,7 @@ import {
 } from "@renderer/components/ui/tooltip";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
+import { markInteraction } from "@renderer/lib/renderer-stalls";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
@@ -979,6 +980,7 @@ function ComposerTextarea({
       // short paragraph. Content still grows to the existing scroll ceiling.
       className="min-h-20 py-4 text-sm"
       onChange={(event) => {
+        markInteraction("draft-typing");
         caret.trackCaret(event.currentTarget);
         onValueChange(event.currentTarget.value);
       }}
@@ -991,6 +993,7 @@ function ComposerTextarea({
       onSelect={(event) => caret.trackCaret(event.currentTarget)}
       onKeyUp={(event) => caret.trackCaret(event.currentTarget)}
       onKeyDown={(event) => {
+        markInteraction("draft-typing");
         // A modified ⏎ is an explicit send; the picker never takes it.
         if (!event.metaKey && !event.ctrlKey && caret.handleKeyDown(event)) return;
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {

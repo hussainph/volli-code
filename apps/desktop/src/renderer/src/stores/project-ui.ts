@@ -80,6 +80,7 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
+import { markInteraction } from "@renderer/lib/renderer-stalls";
 import { publishWorkspaceTabSelection } from "@renderer/lib/workspace-tab-selection";
 import {
   HOME_BOARD_TAB_ID,
@@ -1679,6 +1680,7 @@ export function createProjectUiStore(
         },
 
         setHomeActiveTab(projectId, tabId) {
+          markInteraction("pane-switch");
           set((state) => activateHomeTab(state, projectId, tabId, false));
           // Even when nothing above changed: the saved front tab can still be
           // covered by an empty Draft, and selecting it is what uncovers it.
@@ -1686,6 +1688,7 @@ export function createProjectUiStore(
         },
 
         openHomeTab(projectId, tabId) {
+          markInteraction("pane-switch");
           set((state) => activateHomeTab(state, projectId, tabId, true));
           publishHomeSelection(get(), projectId, tabId);
         },
@@ -1939,6 +1942,7 @@ export function createProjectUiStore(
         },
 
         openHome(projectId, tabId, opts) {
+          if (tabId !== undefined) markInteraction("pane-switch");
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             return patchProjectUi(
@@ -1960,6 +1964,7 @@ export function createProjectUiStore(
         },
 
         openHomeBoard(projectId) {
+          markInteraction("board-return");
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             return patchProjectUi(state, projectId, {
@@ -1976,6 +1981,7 @@ export function createProjectUiStore(
         },
 
         openTicket(projectId, ticketId) {
+          markInteraction("ticket-open");
           // The Board tab too: `openTicketId` alone renders nothing while a Home
           // Session tab is in front (`home-surface.tsx`). Nav is deliberately
           // NOT touched here — that is `openTicketView`'s job, and the
@@ -2000,6 +2006,7 @@ export function createProjectUiStore(
         },
 
         openTicketView(projectId, ticketId, opts) {
+          markInteraction("ticket-open");
           // The switch's commit point, wherever it was asked for (VC-385): the
           // palette, a board card, nav history. Stamped in the store rather
           // than at each caller so the measured boundary cannot depend on
@@ -2047,6 +2054,7 @@ export function createProjectUiStore(
         },
 
         closeTicket(projectId) {
+          markInteraction("board-return");
           set((state) => patchProjectUi(state, projectId, { openTicketId: null }));
         },
 
@@ -2230,12 +2238,14 @@ export function createProjectUiStore(
         },
 
         setTicketActiveTab(projectId, ticketId, tabId) {
+          markInteraction("pane-switch");
           set((state) => activateTicketTab(state, projectId, ticketId, tabId, false));
           // See setHomeActiveTab: a no-op write is still a selection.
           publishTicketSelection(get(), projectId, ticketId, tabId);
         },
 
         openTicketTab(projectId, ticketId, tabId) {
+          markInteraction("pane-switch");
           set((state) => activateTicketTab(state, projectId, ticketId, tabId, true));
           publishTicketSelection(get(), projectId, ticketId, tabId);
         },
@@ -2450,10 +2460,12 @@ export function createProjectUiStore(
         },
 
         focusHomePane(projectId, paneId) {
+          markInteraction("pane-switch");
           set((state) => applyHomeSplit(state, projectId, (split) => focusPane(split, paneId)));
         },
 
         focusTicketPane(projectId, ticketId, paneId) {
+          markInteraction("pane-switch");
           set((state) =>
             applyTicketSplit(state, projectId, ticketId, (split) => focusPane(split, paneId)),
           );
