@@ -137,7 +137,14 @@ export function sqliteDrainLedger(db: Database.Database): DrainLedger {
 }
 
 class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
-  readonly #touchedSessionIds = new Set<string>();
+  /**
+   * The receipt rows this transaction wrote or linked, and the receipt events
+   * it appended: the only rows whose pairing a write can change. Receipts are
+   * never updated except to link their event, and events are never rewritten,
+   * so pairs committed by an earlier transaction stay as they were checked.
+   */
+  readonly #pairedReceiptIds = new Set<string>();
+  readonly #receiptEventIds = new Set<string>();
   /** Every fact this transaction appended, in order: logged once it commits. */
   readonly appended: SessionEvent[] = [];
 
@@ -244,6 +251,13 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
    * final order (server-assigned sequence) or each signal must explicitly
    * supersede the one it replaces; this read then orders by that instead of by
    * `session_event_sequence`.
+   *
+   * The same sidecar is how the read finds the rows (VC-1075): its derived
+   * `kind` (kept equal to the payload's by migration 057's trigger) seeks
+   * `session_event_sequence_match (session_id, kind, sequence)` per Session,
+   * so only signal events are read and parsed rather than every event of
+   * every ticketed Session. The payload's own kind is still tested, so the
+   * index narrows the rows and never decides them.
    */
   listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
     this.assertOpen();
@@ -258,8 +272,9 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
                   es.sequence AS accepted_sequence,
                   ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY e.sequence DESC) AS session_rank
              FROM sessions s
-             JOIN session_events e ON e.session_id = s.id
-             JOIN session_event_sequence es ON es.event_id = e.id
+             JOIN session_event_sequence es
+               ON es.session_id = s.id AND es.kind = 'session.signaled'
+             JOIN session_events e ON e.id = es.event_id
             WHERE s.project_id = @projectId${this.scopeSql("s.id")}
               AND s.ticket_id IS NOT NULL
               AND json_extract(e.payload, '$.kind') = 'session.signaled'
@@ -476,7 +491,6 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   appendEvent(event: SessionEvent): void {
     this.assertOpen();
     assertSessionEvent(event, "Session event");
-    this.#touchedSessionIds.add(event.sessionId);
     this.assertGloballyUnusedId(event.id);
     const prior = prepared(
       this.db,
@@ -528,6 +542,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       });
     }
     if (event.payload.kind === "command.receipt.recorded") {
+      this.#receiptEventIds.add(event.id);
+      this.#pairedReceiptIds.add(event.payload.receipt.id);
       const receipt = this.getReceipt(event.payload.receipt.id);
       if (!receipt || !sameCommandReceipt(receipt, event.payload.receipt)) {
         throw new Error(`Receipt ${event.payload.receipt.id} does not match its event`);
@@ -805,7 +821,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertGloballyUnusedId(receipt.id);
     const command = this.getCommand(receipt.commandId);
     if (!command) throw new Error(`Command ${receipt.commandId} was not found`);
-    this.#touchedSessionIds.add(command.sessionId);
+    this.#pairedReceiptIds.add(receipt.id);
     prepared(
       this.db,
       `INSERT INTO session_command_receipts
@@ -821,17 +837,25 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     });
   }
 
-  /** Called at the transaction boundary, after every append has happened. */
+  /**
+   * Called at the transaction boundary, after every append has happened.
+   *
+   * Checks only the receipts and receipt events this transaction wrote or
+   * linked, each by primary key, so the cost is the size of the write rather
+   * than of the Session's history (VC-1075). Re-checking every older pair on
+   * every write grew with a Session's age and could only fail a write over
+   * corruption it did not cause.
+   */
   assertReceiptEventPairs(): void {
     this.assertOpen();
-    for (const sessionId of this.#touchedSessionIds) {
+    for (const receiptId of this.#pairedReceiptIds) {
       const unpaired = prepared(
         this.db,
         `SELECT r.id
            FROM session_command_receipts r
            JOIN session_commands c ON c.id = r.command_id
            LEFT JOIN session_events e ON e.id = r.receipt_event_id
-          WHERE r.session_id = @sessionId
+          WHERE r.id = @receiptId
             AND (r.receipt_event_id IS NULL
                  OR e.id IS NULL
                  OR e.session_id <> r.session_id
@@ -840,23 +864,25 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
                  OR e.sequence <> r.sequence
                  OR e.recorded_at <> r.recorded_at)
           LIMIT 1`,
-      ).get({ sessionId }) as unknown;
+      ).get({ receiptId }) as unknown;
       if (unpaired !== undefined) {
         throw new Error(
           `Receipt ${readString(rowValue(unpaired, "id", "receipt"), "receipt id")} has no matching event`,
         );
       }
+    }
+    for (const eventId of this.#receiptEventIds) {
       const orphanEvent = prepared(
         this.db,
         `SELECT e.id
            FROM session_events e
            LEFT JOIN session_command_receipts r
              ON r.id = json_extract(e.payload, '$.receipt.id')
-          WHERE e.session_id = @sessionId
+          WHERE e.id = @eventId
             AND json_extract(e.payload, '$.kind') = 'command.receipt.recorded'
             AND (r.id IS NULL OR r.session_id <> e.session_id OR r.command_id <> e.command_id)
           LIMIT 1`,
-      ).get({ sessionId }) as unknown;
+      ).get({ eventId }) as unknown;
       if (orphanEvent !== undefined) {
         throw new Error(
           `Receipt event ${readString(rowValue(orphanEvent, "id", "receipt event"), "receipt event id")} has no matching receipt`,
