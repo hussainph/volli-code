@@ -315,7 +315,10 @@ export function createSessionRuntimeLifecycle<Services>(options: {
               ? Promise.reject(
                   new Error("The Session runtime is unavailable during boot recovery."),
                 )
-              : runtime.reconcile(input),
+              : // No one is waiting on the boot sweep: a binding it rebuilds keeps
+                // the queue's bound, not a direct door's ceiling, and the close
+                // that ends this launch ends the wait (VC-1072).
+                runtime.reconcile({ ...input, boot: { signal: closingSignal.signal } }),
           projectIds:
             options.projectIds?.() ?? listProjects(database.db).map((project) => project.id),
           newId: randomUUID,

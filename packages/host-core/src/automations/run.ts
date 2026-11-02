@@ -35,7 +35,7 @@ import {
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
-import { attachRefusal } from "../session-runtime/attach-refusal";
+import { attachRefusal, attachStopped } from "../session-runtime/attach-refusal";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import {
   StructuredSessionsError,
@@ -509,10 +509,15 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
         // said here, and the Session itself carries the failure Attention that
         // makes it `error` for VC-133's notification rule
         // (`session-runtime.ts`'s `#failAttach`).
-        log("automation run could not attach its session", {
-          runId: run.id,
-          reason: attachRefusal(attached.receipt),
-        });
+        // A stop that reached the Session first is someone's choice, not a
+        // failed attach (VC-1072): said as that, and its delivery stays owed
+        // to the next start the same way.
+        log(
+          attachStopped(attached.receipt)
+            ? "automation run session was stopped before it finished starting"
+            : "automation run could not attach its session",
+          { runId: run.id, reason: attachRefusal(attached.receipt) },
+        );
         return;
       }
       await resumeDeliveryForSession(run.sessionId);

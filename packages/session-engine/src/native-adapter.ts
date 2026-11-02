@@ -40,6 +40,12 @@ export interface NativeAttachmentSpec {
       }
     /** The earlier attachment's binding exists but is not one this build can read. */
     | { attachmentId: string; unreadable: string };
+  /**
+   * Marks the end of one of the adapter's own attach stages (VC-1072), for the
+   * attach's timing report. Diagnostics only: it never throws, and an adapter
+   * that never calls it reports its whole attach as one stage.
+   */
+  markStage?: (stage: string) => void;
 }
 
 export type NativeMessageDelivery = "queue" | "steer" | "replace";

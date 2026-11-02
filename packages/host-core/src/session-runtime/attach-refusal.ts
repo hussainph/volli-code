@@ -1,4 +1,5 @@
 import type { CommandReceipt } from "@volli/shared";
+import { ATTACH_CANCELLED_CODE } from "@volli/session-engine";
 
 /**
  * Why an attach was not ready, in words, from the receipt it answered with.
@@ -13,6 +14,15 @@ import type { CommandReceipt } from "@volli/shared";
  */
 export function attachRefusal(receipt: CommandReceipt | null): string {
   if (receipt === null) return "the attach reported no receipt";
+  if (attachStopped(receipt)) return "it was stopped before it finished starting";
   if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
   return `the attach is ${receipt.status}`;
+}
+
+/**
+ * Whether a start did not finish because a stop reached it first (VC-1072):
+ * not a failure, but the outcome someone asked for, and worded as one.
+ */
+export function attachStopped(receipt: CommandReceipt | null): boolean {
+  return receipt?.status === "rejected" && receipt.code === ATTACH_CANCELLED_CODE;
 }

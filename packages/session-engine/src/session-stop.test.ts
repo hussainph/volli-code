@@ -273,6 +273,29 @@ describe("shared stop acts", () => {
     });
   });
 
+  it("abandons a start still attaching before the durable stop, then acts on what is left (VC-1072)", async () => {
+    const starting = projection();
+    const opened = projection({ attachments: [openAttachment()] });
+    const { ports: p, submit, command } = byIdPorts([starting]);
+    const abandonDirectStart = vi.fn(async () => true);
+    const runtime = { ...p.runtime, abandonDirectStart };
+    const reread = vi.fn(async () => opened);
+
+    const outcome = await stopResolvedSession({ ...p, runtime }, starting, reread, acts);
+
+    expect(abandonDirectStart).toHaveBeenCalledExactlyOnceWith(TARGET);
+    expect(abandonDirectStart.mock.invocationCallOrder[0]).toBeLessThan(
+      submit.mock.invocationCallOrder[0]!,
+    );
+    // The start won the race and opened: it is released like any live one.
+    expect(outcome).toMatchObject({ previouslyStopped: false, released: true });
+    expect(command).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        command: { kind: "adapter.release", attachmentId: "attachment-1" },
+      }),
+    );
+  });
+
   it("reports every non-accepted runtime receipt and handles completed receipts", async () => {
     const target = projection({ attachments: [openAttachment()], turnActive: true });
     const cases = [

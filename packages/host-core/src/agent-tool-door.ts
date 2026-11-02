@@ -536,11 +536,17 @@ async function startSessionTool(
         `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
         started.state === "ready"
           ? `It is attached and its kickoff turn has been submitted; it runs on its own from here.${watched}`
-          : // The attach's own diagnosis, never a bare "needs recovery" (VC-659):
-            // the caller is usually the one placed to fix what refused it.
-            started.kickoff === "held"
-            ? `It was created but its attachment failed, so its kickoff is held as its first message: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app, and the retry sends the kickoff.${watched}`
-            : `It was created but its attachment failed, so no kickoff was submitted: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app.`,
+          : // A stop that reached it first is what someone asked for, and is
+            // said as that rather than as a failure to fix (VC-1072).
+            started.stopped === true
+            ? started.kickoff === "held"
+              ? `It was stopped before it finished starting, so its kickoff is held as its first message and is sent when it is started again.${watched}`
+              : "It was stopped before it finished starting, so no kickoff was submitted."
+            : // The attach's own diagnosis, never a bare "needs recovery" (VC-659):
+              // the caller is usually the one placed to fix what refused it.
+              started.kickoff === "held"
+              ? `It was created but its attachment failed, so its kickoff is held as its first message: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app, and the retry sends the kickoff.${watched}`
+              : `It was created but its attachment failed, so no kickoff was submitted: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app.`,
       ].join("\n"),
     };
   } catch (error) {

@@ -300,6 +300,16 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    */
   const rosterSizes = new Map<string, number>();
   /**
+   * How many Sessions the latest {@link SessionEngine.listAttachedSessions}
+   * folded (VC-1072): the other working set the cache serves. The budget read
+   * walks every Session holding an open attachment, across every project, and
+   * a cache sized only to the project rosters someone happened to list evicts
+   * part of it on every read — refolding thousands of Sessions on the host's
+   * event loop at each Session start on a profile that has them.
+   */
+  let attachedRoster = 0;
+
+  /**
    * The decoded checkpoint of each Session a fact was recently recorded for,
    * advanced past that fact (VC-1076). Insertion-ordered, so the first key is
    * the least recently written Session. See {@link HotCheckpoint}.
@@ -409,9 +419,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    * cache does nothing. Trimming afterwards means a listing over the limit
    * re-folds only its overflow on the next visit, not the whole roster.
    *
-   * The limit is the sum of every project's latest `all` count, so it is
-   * never below the roster that listings walk, and nothing live is evicted
-   * once every project has been listed whole. The cache stays resident
+   * The limit is the sum of every project's latest `all` count and the
+   * latest attached-Session count, so it is never below the roster that
+   * listings walk or the set the budget read walks, and nothing live is
+   * evicted once every project has been listed whole. A Session counted in
+   * both is counted twice, which only loosens the bound. The cache stays resident
    * between listings with one frozen row per listed Session, so its memory
    * grows with the roster and not with how often the roster is listed.
    *
@@ -424,7 +436,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const evictListingFolds = (): void => {
     let rosters = 0;
     for (const size of rosterSizes.values()) rosters += size;
-    const limit = Math.max(SESSION_LISTING_CACHE_LIMIT, rosters);
+    const limit = Math.max(SESSION_LISTING_CACHE_LIMIT, rosters + attachedRoster);
     for (const oldest of listingFolds.keys()) {
       if (listingFolds.size <= limit) break;
       listingFolds.delete(oldest);
@@ -1150,6 +1162,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       const rows = await ports.ledger.transaction((transaction) =>
         transaction.listAttachedSessions(),
       );
+      attachedRoster = rows.length;
       const projections: SessionProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         if (from > 0) await yieldToHost();

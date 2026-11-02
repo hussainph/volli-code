@@ -2598,6 +2598,57 @@ describe("startSession", () => {
     await handle.close();
   });
 
+  it("marks each attach stage in order, the execution-env factory's own among them (VC-1072)", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const stages: string[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+      executionEnvFactory: async (workspacePath, _identity, markStage) => {
+        markStage?.("concurrency-budget");
+        return { cwd: workspacePath, cleanup: async () => undefined } as unknown as ExecutionEnv;
+      },
+    });
+
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      markAttachStage: (stage) => stages.push(stage),
+    });
+
+    expect(stages).toEqual([
+      "catalog-ready",
+      "sidecar-ready",
+      "history-read",
+      "native-route",
+      "recovery-notices",
+      "concurrency-budget",
+      "execution-env",
+      "tools-built",
+      "agent-ready",
+    ]);
+    await handle.close();
+  });
+
+  it("attaches whatever a stage marker throws (VC-1072)", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      markAttachStage: () => {
+        throw new Error("diagnostics are down");
+      },
+    });
+
+    expect(attachment.observations).toEqual([
+      expect.objectContaining({ kind: "attachment", state: "started" }),
+    ]);
+    await handle.close();
+  });
+
   it.each([
     { api: "openai-completions" },
     { api: "openai-responses" },

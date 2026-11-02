@@ -56,7 +56,7 @@ import type {
 
 import type { SessionStartedNotice } from "@volli/shared";
 import type { SessionRuntime } from "@volli/session-engine";
-import { attachRefusal } from "./attach-refusal";
+import { attachRefusal, attachStopped } from "./attach-refusal";
 import type { AutoTitleRequest } from "./auto-title";
 import type { TicketSessionDelegation } from "./delegation-policy";
 import type { Sessions, SessionModelOverride } from "./sessions";
@@ -151,6 +151,12 @@ export type StartSessionResult = {
        * so a door hands that on rather than a bare "needs recovery".
        */
       attachFailure: string;
+      /**
+       * A stop reached the Session before it finished starting (VC-1072): an
+       * outcome someone asked for, which a door words as that, not as a
+       * failure. Absent for every attach that failed on its own.
+       */
+      stopped?: true;
       /**
        * Where the kickoff went (VC-799). `held`: it waits in the Session's
        * queue for its next ready attach. `unsent`: it could not be held, which
@@ -279,6 +285,7 @@ export async function startSessionOperation(
       : {
           state: "needs-recovery" as const,
           attachFailure: attachRefusal(started.receipt),
+          ...(attachStopped(started.receipt) ? { stopped: true as const } : {}),
           kickoff: held,
         }),
     model: started.model,

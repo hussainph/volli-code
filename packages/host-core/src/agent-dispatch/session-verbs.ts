@@ -26,6 +26,7 @@ import {
   sessionInterruptionDetail,
   shortSessionId,
   redactPayloadSecrets,
+  isAttachTimeoutAttention,
   isProcessLossWarning,
 } from "@volli/shared";
 import type {
@@ -603,6 +604,9 @@ export function sessionPeekAttention(
   attention: SessionAttention,
   projection: { turnActive: boolean; liveExecutor: { id: string } | null },
 ): { message: string; recovery: string | null } {
+  // An attach that ran out of time keeps the kind older builds clear on attach,
+  // and says what it is rather than "Runtime stopped" (VC-1072).
+  if (isAttachTimeoutAttention(attention)) return { message: "Start timed out", recovery: "Retry" };
   const copy = PEEK_ATTENTION[attention.kind];
   return !projection.turnActive &&
     isProcessLossWarning(attention, projection.liveExecutor?.id ?? null)
