@@ -53,7 +53,10 @@ export const GITHUB_APP_VARIABLES = [
 ] as const;
 
 /** Whether `value` counts as set for `name`, by the rule `readGithubConfig` applies. */
-export function isGithubVariableSet(name: string, value: string | undefined): boolean {
+export function isGithubVariableSet(
+  name: (typeof GITHUB_APP_VARIABLES)[number],
+  value: string | undefined,
+): boolean {
   const trimmed = (value ?? "").trim();
   return name === GITHUB_ENV.webhookSecrets
     ? parseWebhookSecrets(trimmed).length > 0
@@ -85,12 +88,7 @@ export function readGithubConfig(): GithubAppConfig | null {
   // Convex sets `CONVEX_SITE_URL` on every deployment.
   const siteUrl = read("CONVEX_SITE_URL");
   if (
-    appId === "" ||
-    slug === "" ||
-    clientId === "" ||
-    clientSecret === "" ||
-    privateKey === "" ||
-    webhookSecrets.length === 0 ||
+    GITHUB_APP_VARIABLES.some((name) => !isGithubVariableSet(name, process.env[name])) ||
     siteUrl === ""
   ) {
     return null;

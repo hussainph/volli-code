@@ -758,8 +758,8 @@ Registering an App (once per environment):
    account** for a dev App.
 8. Create it; note the App id, client id and slug; generate a client secret and a private key;
    set the variables above with `npx convex env set`, then delete the local key files.
-9. Check: `npx convex run health:deploymentChecks '{}'` passes (it names any of the six
-   still unset), and an unsigned `POST https://<deployment>.convex.site/github/webhook`
+9. Check: `npx convex run health:deploymentChecks '{}'` reports none of the six as
+   `incomplete`, and an unsigned `POST https://<deployment>.convex.site/github/webhook`
    answers `401` (`503` means the deployment still reads the App as unset).
 
 Rotation: add the new key or secret on GitHub, update the variable (for the
