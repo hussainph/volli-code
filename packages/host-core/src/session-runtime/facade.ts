@@ -5,11 +5,11 @@
  * Callers expose these captured services only through lifecycle.ready().
  */
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   acceptsImageInputIn,
   applySkillModes,
+  displayTicketId,
   globalSkillsDir,
   projectSkillsDir,
   resolveDefaultModel,
@@ -25,7 +25,9 @@ import { recordSessionStartedOnce } from "../db/events-repo";
 import { createModelAutoSelect } from "../decision/auto-select";
 import type { HostDecisions } from "../decision/host-decisions";
 import { loadSkills } from "../skills";
-import { readRepoInstructions } from "../repo-instructions";
+import { readRepoInstructions, readTicketRepoInstructions } from "../repo-instructions";
+import { runGitCapturingAsync } from "../worktree/git";
+import { worktreeHomeDir } from "../worktree-runtime";
 import { createPeekSummarizer } from "../session-control/peek-summary";
 import { createAutoTitler } from "./auto-title";
 import { readModelAccessDefaults } from "./model-access-preferences";
@@ -139,9 +141,11 @@ function assembleSessionServices(options: {
               injectedNames,
             );
           },
-          // The workspace this Session will run in, as far as birth can know
-          // it: a Ticket's isolated checkout once it exists, else the project
-          // root — which is also where a fresh worktree will be cut from.
+          // The working copy this Session will run in (VC-1055): the project
+          // root for a Project, Board or no-worktree Session; for a worktree
+          // Ticket its checkout when it exists, else the git ref the first
+          // attach will cut that checkout from — never the main checkout's
+          // disk, whose edits and branch the new checkout will not have.
           instructions: async (projectId, ticketId) => {
             const project = getProjectById(sessionDb, projectId);
             if (!project) return null;
@@ -149,13 +153,19 @@ function assembleSessionServices(options: {
               options.projectPath === undefined ? project.path : options.projectPath(projectId);
             if (root === null) return null;
             const ticket = ticketId === null ? undefined : getTicket(sessionDb, ticketId);
-            const worktree =
-              ticket?.usesWorktree === true && ticket.worktreePath !== null
-                ? ticket.worktreePath
-                : null;
-            return readRepoInstructions(
-              worktree !== null && existsSync(worktree) ? worktree : root,
-            );
+            if (ticket === undefined) return readRepoInstructions(root);
+            return readTicketRepoInstructions(runGitCapturingAsync, {
+              checkoutPath: root,
+              projectId: project.id,
+              home: worktreeHomeDir(),
+              displayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
+              title: ticket.title,
+              usesWorktree: ticket.usesWorktree,
+              worktreePath: ticket.worktreePath,
+              branch: ticket.branch,
+              baseBranch: ticket.baseBranch,
+              projectBaseBranch: project.baseBranch ?? null,
+            });
           },
           record: async (sessionId, resources) => {
             await sessionEngine.getOrRecordSessionInput({
