@@ -50,6 +50,7 @@ import type * as lib_github_crypto from "../lib/github/crypto.js";
 import type * as lib_github_installations from "../lib/github/installations.js";
 import type * as lib_github_seal from "../lib/github/seal.js";
 import type * as lib_jobs from "../lib/jobs.js";
+import type * as lib_loopback from "../lib/loopback.js";
 import type * as lib_migrationImport from "../lib/migrationImport.js";
 import type * as lib_moveObjectKeys from "../lib/moveObjectKeys.js";
 import type * as lib_objectStore from "../lib/objectStore.js";
@@ -160,6 +161,7 @@ declare const fullApi: ApiFromModules<{
   "lib/github/installations": typeof lib_github_installations;
   "lib/github/seal": typeof lib_github_seal;
   "lib/jobs": typeof lib_jobs;
+  "lib/loopback": typeof lib_loopback;
   "lib/migrationImport": typeof lib_migrationImport;
   "lib/moveObjectKeys": typeof lib_moveObjectKeys;
   "lib/objectStore": typeof lib_objectStore;
