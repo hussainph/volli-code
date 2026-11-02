@@ -138,8 +138,11 @@ export default defineConfig(({ mode, command }) => ({
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
-  // Public origin only. Dev supplies its explicit launch target; flag-off never mounts runner setup.
+  // Public origins only. Dev supplies its explicit launch target; flag-off never mounts runner setup.
   define: {
+    VOLLI_RUNNER_INSTALL_BACKEND_URL: JSON.stringify(
+      command === "serve" ? null : (packagedCloudConfig(process.env)?.backendUrl ?? null),
+    ),
     VOLLI_RUNNER_INSTALL_SITE_URL: JSON.stringify(
       command === "serve" ? null : (packagedCloudConfig(process.env)?.siteUrl ?? null),
     ),

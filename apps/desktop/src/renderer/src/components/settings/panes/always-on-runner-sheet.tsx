@@ -36,6 +36,7 @@ export function AlwaysOnRunnerSheet(props: RunnerSheetProps) {
               token: grant.installToken,
               name,
               server: props.server,
+              site: props.site,
             })}
             label="Copy cloud-init"
           />

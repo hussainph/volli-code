@@ -21,6 +21,7 @@ export interface RunnerSheetProps {
   setup: RunnerSetup;
   appVersion: string;
   server: string | null;
+  site?: string | null;
   onClose(): void;
   restoreFocus?(): void;
 }
@@ -54,6 +55,7 @@ export function AddRunnerSheet(props: RunnerSheetProps) {
               token: grant.installToken,
               name,
               server: props.server,
+              site: props.site,
               variant,
             })}
             label="Copy command"
@@ -69,6 +71,7 @@ export function RunnerInstallSheet({
   setup,
   appVersion,
   server,
+  site,
   onClose,
   restoreFocus,
   title,
@@ -116,7 +119,7 @@ export function RunnerInstallSheet({
   }, [setup, grant, attempt]);
   const create = async () => {
     try {
-      runnerInstallCommand({ appVersion, server, name, token: "validation-only" });
+      runnerInstallCommand({ appVersion, server, site, name, token: "validation-only" });
     } catch {
       setError("Couldn’t prepare the command. Use a runner name without control characters.");
       return;
