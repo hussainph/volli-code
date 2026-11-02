@@ -221,6 +221,87 @@ describe("Session owner views", () => {
     expect(f.a.projectIds()).toEqual(["p"]);
   });
 
+  /**
+   * The scope decides membership; the engine's listing does the folding, from
+   * its cache (VC-1072). Folding each scoped row with `getSession` went around
+   * that cache, so every listing and every concurrency-budget read re-folded
+   * every Session in scope on the host's event loop — seconds per Session start
+   * on a profile with thousands of attached Sessions.
+   */
+  it("folds scoped listings through the engine's listing, never one getSession per row", async () => {
+    const f = setup();
+    const mine = [await f.create(f.local, "mine-1"), await f.create(f.local, "mine-2")];
+    const theirs = await f.create(f.a.engine, "theirs");
+    for (const { session } of [...mine, theirs]) {
+      const start = await f.raw.submit({
+        commandId: `start-${session.id}`,
+        sessionId: session.id,
+        intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+        provenance,
+      });
+      await f.raw.observe({
+        id: `open-${session.id}`,
+        kind: "attachment.opened",
+        sessionId: session.id,
+        commandId: start.command.id,
+        occurredAt: 100,
+        provenance,
+        attachment: {
+          id: `attachment-${session.id}`,
+          sessionId: session.id,
+          adapterId: "terminal",
+          venue: LOCAL_RUNNER,
+          continuity: "fresh",
+          native: { id: null, detail: null },
+          authority: null,
+        },
+      });
+    }
+    const expected = (await f.raw.listSessions({ projectId: "p", scope: "all" }))
+      .map((projection) => projection.session.id)
+      .filter((id) => id !== theirs.session.id);
+    const getSession = vi.spyOn(f.raw, "getSession");
+
+    const listed = await f.local.listSessions({ projectId: "p", scope: "all" });
+    const attached = await f.local.listAttachedSessions();
+
+    expect(listed.map((projection) => projection.session.id)).toEqual(expected);
+    expect(attached.map((projection) => projection.session.id)).toEqual(expected);
+    // The same shared fold a listing hands out, not a second one built per row.
+    expect(attached[0]).toBe(
+      (await f.raw.listAttachedSessions()).find(
+        (projection) => projection.session.id === attached[0]?.session.id,
+      ),
+    );
+    expect(getSession).not.toHaveBeenCalled();
+  });
+
+  it("folds a scoped row the engine's listing has not seen yet on its own", async () => {
+    const f = setup();
+    const born = await f.create(f.local, "born-between-reads");
+    // A Session born between the scope's membership read and the listing's.
+    vi.spyOn(f.raw, "listSessions").mockResolvedValueOnce([]);
+    const getSession = vi.spyOn(f.raw, "getSession");
+
+    const listed = await f.local.listSessions({ projectId: "p", scope: "all" });
+
+    expect(listed.map((projection) => projection.session.id)).toEqual([born.session.id]);
+    expect(getSession).toHaveBeenCalledWith({ sessionId: born.session.id });
+  });
+
+  it("starts no listing for a scope with nothing in it", async () => {
+    const f = setup();
+    await f.create(f.a.engine, "theirs");
+    const listSessions = vi.spyOn(f.raw, "listSessions");
+    const listAttachedSessions = vi.spyOn(f.raw, "listAttachedSessions");
+
+    await expect(f.local.listSessions({ projectId: "p", scope: "all" })).resolves.toEqual([]);
+    await expect(f.local.listAttachedSessions()).resolves.toEqual([]);
+
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(listAttachedSessions).not.toHaveBeenCalled();
+  });
+
   it("selects latest ticket signals and usage BEFORE aggregating, not after", async () => {
     const f = setup();
     const a = await f.create(f.a.engine, "a");
