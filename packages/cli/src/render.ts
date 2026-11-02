@@ -1386,11 +1386,20 @@ function renderPromptBaseline(data: Record<string, unknown>): string | null {
     (section) =>
       `  ${terminalSafeInline(section["id"])}  ~${terminalSafeInline(section["tokens"])} tokens  ${terminalSafeInline(section["chars"])} chars${cacheClassCell(section)}`,
   );
+  // Project-sized, not Volli's (VC-1054): already inside the total, said once
+  // so a reader can tell the repository's file from what Volli composes.
+  const repo = data["repoInstructions"];
+  const repoLine =
+    isRecord(repo) && typeof repo["chars"] === "number" && repo["chars"] > 0
+      ? [
+          `of which repository instructions  ~${terminalSafeInline(repo["tokens"])} tokens  ${terminalSafeInline(repo["chars"])} chars`,
+        ]
+      : [];
   const excluded =
     typeof data["excluded"] === "string"
       ? [`excluded  ${terminalSafeInline(data["excluded"])}`]
       : [];
-  return [header, ...rows, ...excluded].join("\n");
+  return [header, ...repoLine, ...rows, ...excluded].join("\n");
 }
 
 function renderStableLines(command: string, data: unknown, full: boolean): string | null {

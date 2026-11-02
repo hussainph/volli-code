@@ -1645,6 +1645,48 @@ describe("Sessions", () => {
 
       expect(recorded).toEqual([["named", "skills index"]]);
     });
+
+    it("records the repository instructions first, read for the Session's own workspace", async () => {
+      const asked: [string, string | null][] = [];
+      const recorded: string[][] = [];
+      const { sessions: door } = sessions({
+        skills: {
+          resolve: async (_projectId, names) => names.map((name) => ({ name, text: "body" })),
+          index: async () => ({ name: "skills index", text: "index" }),
+          instructions: async (projectId, ticketId) => {
+            asked.push([projectId, ticketId]);
+            return { name: "repository instructions", text: "house rules" };
+          },
+          record: async (_sessionId, resources) => {
+            recorded.push(resources.map((resource) => resource.name));
+          },
+        },
+      });
+
+      await door.start({ ...startInput("operation-repo"), skills: ["named"] });
+
+      expect(asked).toEqual([["project-1", "ticket-1"]]);
+      // Ahead of everything a Session selects, so the project's bytes lead.
+      expect(recorded).toEqual([["repository instructions", "named", "skills index"]]);
+    });
+
+    it("records nothing extra when the workspace has no instruction file", async () => {
+      const recorded: string[][] = [];
+      const { sessions: door } = sessions({
+        skills: {
+          resolve: async () => [],
+          index: async () => ({ name: "skills index", text: "index" }),
+          instructions: async () => null,
+          record: async (_sessionId, resources) => {
+            recorded.push(resources.map((resource) => resource.name));
+          },
+        },
+      });
+
+      await door.start({ ...startInput("operation-no-repo"), ticketId: null });
+
+      expect(recorded).toEqual([["skills index"]]);
+    });
   });
 
   it("never records session_started for a create that refuses before creating", async () => {

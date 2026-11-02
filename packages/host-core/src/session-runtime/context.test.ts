@@ -84,6 +84,36 @@ describe("shared attach context", () => {
     expect(f.resolve).not.toHaveBeenCalled();
   });
 
+  it("composes birth's repository instructions on every attach; a legacy record stays as it was", async () => {
+    const f = fixture();
+    const surface = inputEvent({ kind: "tool-surface", tools: ["read"] });
+    const born = [
+      { name: "repository instructions", text: "From AGENTS.md ... as it read at birth" },
+      { name: "skills index", text: "- a" },
+    ];
+    f.listEvents.mockResolvedValue([
+      surface,
+      inputEvent({ kind: "prompt-resources", resources: born }),
+    ]);
+    f.getOrRecordSessionInput.mockResolvedValue({ kind: "runtime-brief", text: "brief" });
+    // Every re-attach reads the record, never the workspace: same bytes each time.
+    expect((await f.context("s"))?.promptResources).toEqual(born);
+    expect((await f.context("s"))?.promptResources).toEqual(born);
+    // A Session born before the instructions existed keeps exactly its record,
+    // and one with no record at all is never backfilled with them.
+    const legacy = [{ name: "skills index", text: "- a" }];
+    f.listEvents.mockResolvedValue([
+      surface,
+      inputEvent({ kind: "prompt-resources", resources: legacy }),
+    ]);
+    expect((await f.context("s"))?.promptResources).toEqual(legacy);
+    f.listEvents.mockResolvedValue([surface]);
+    expect((await f.context("s"))?.promptResources).toEqual([]);
+    expect(
+      f.getOrRecordSessionInput.mock.calls.some(([{ input }]) => input.kind === "prompt-resources"),
+    ).toBe(false);
+  });
+
   it("replays executable additions separately from the cold declaration and copy epoch", async () => {
     const f = fixture();
     const birth = { kind: "tool-surface", tools: ["read"] };

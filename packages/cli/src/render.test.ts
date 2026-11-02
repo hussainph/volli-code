@@ -2422,6 +2422,23 @@ describe("renderCliSuccess — prompt.baseline", () => {
     expect(() => renderCliSuccess("prompt.baseline", null, { json: false })).not.toThrow();
   });
 
+  it("names the repository instructions' share of the total when there is one", () => {
+    const text = renderCliSuccess(
+      "prompt.baseline",
+      { ...data, repoInstructions: { chars: 46000, tokens: 11500 } },
+      { json: false },
+    );
+    expect(text?.split("\n")[1]).toBe(
+      "of which repository instructions  ~11500 tokens  46000 chars",
+    );
+    // A measured zero, or an older reply without the field, says nothing.
+    for (const repoInstructions of [{ chars: 0, tokens: 0 }, undefined]) {
+      expect(
+        renderCliSuccess("prompt.baseline", { ...data, repoInstructions }, { json: false }),
+      ).not.toContain("repository instructions");
+    }
+  });
+
   it("omits the excluded line when the server names no exclusions", () => {
     const { excluded: _excluded, ...withoutExcluded } = data;
     const text = renderCliSuccess("prompt.baseline", withoutExcluded, { json: false });

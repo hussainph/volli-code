@@ -5,6 +5,7 @@
  * Callers expose these captured services only through lifecycle.ready().
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   acceptsImageInputIn,
@@ -24,6 +25,7 @@ import { recordSessionStartedOnce } from "../db/events-repo";
 import { createModelAutoSelect } from "../decision/auto-select";
 import type { HostDecisions } from "../decision/host-decisions";
 import { loadSkills } from "../skills";
+import { readRepoInstructions } from "../repo-instructions";
 import { createPeekSummarizer } from "../session-control/peek-summary";
 import { createAutoTitler } from "./auto-title";
 import { readModelAccessDefaults } from "./model-access-preferences";
@@ -135,6 +137,24 @@ function assembleSessionServices(options: {
             return skillsIndexResource(
               applySkillModes(read.skills, currentProject.skillModes ?? {}),
               injectedNames,
+            );
+          },
+          // The workspace this Session will run in, as far as birth can know
+          // it: a Ticket's isolated checkout once it exists, else the project
+          // root — which is also where a fresh worktree will be cut from.
+          instructions: async (projectId, ticketId) => {
+            const project = getProjectById(sessionDb, projectId);
+            if (!project) return null;
+            const root =
+              options.projectPath === undefined ? project.path : options.projectPath(projectId);
+            if (root === null) return null;
+            const ticket = ticketId === null ? undefined : getTicket(sessionDb, ticketId);
+            const worktree =
+              ticket?.usesWorktree === true && ticket.worktreePath !== null
+                ? ticket.worktreePath
+                : null;
+            return readRepoInstructions(
+              worktree !== null && existsSync(worktree) ? worktree : root,
             );
           },
           record: async (sessionId, resources) => {
@@ -418,6 +438,9 @@ export function recoveredSessionCommandPorts(
     // The host's live/degraded choice creates engine and skills together.
     // An engine above proves these skills exist; no impossible degraded branch.
     skillsIndex: (projectId: string) => (sessionSkills as SessionSkillPorts).index(projectId, []),
+    // The same port a start records through; this facade always answers it.
+    repoInstructions: (projectId: string, ticketId: string | null) =>
+      (sessionSkills as Required<SessionSkillPorts>).instructions(projectId, ticketId),
     ...(submitKickoffMessage === undefined ? {} : { submitSessionMessage: submitKickoffMessage }),
     ...(autoTitler === null
       ? {}
