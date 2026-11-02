@@ -141,6 +141,7 @@ export * from "./scheduled-resume";
 export * from "./performance-observer";
 export * from "./session-usage";
 export * from "./session-usage-report";
+export * from "./perf-stalls";
 export * from "./session-streak";
 export * from "./working-copy";
 export * from "./session-event-codec";

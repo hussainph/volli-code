@@ -37,6 +37,7 @@ import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { blobsRoot } from "../blob-store";
 import { browserTracesRoot } from "../browser/trace-disk";
 import { profileLogsRoot } from "../log/file-sink";
+import { PERF_STORE_FILE_NAME } from "../perf/store";
 import { globalCommandsRoot } from "../prompt-templates";
 import { RUNNER_OWNER_FILE } from "../headless-runner/owner";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
@@ -646,6 +647,13 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason:
       "Rotating diagnostics from this machine, not user-authored content; a restored host starts its own logs.",
+  },
+  {
+    // Bound to the store's own name, with its WAL and shared-memory files.
+    area: `${PERF_STORE_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "This machine's recorded stalls (VC-1092): bounded diagnostics about this machine's app, not user content; a restored machine records its own.",
   },
   {
     area: "volli.db",

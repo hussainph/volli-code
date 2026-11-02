@@ -1456,6 +1456,13 @@ export interface SupportInfo {
    * report reads exactly as before. Not required.
    */
   cloudRunner?: string;
+  /**
+   * The last day's stalls from this machine's perf store (VC-1092) as one
+   * line: hours observed, then per process the count, total and p95 and its
+   * worst operations by code-owned name — never a Session, a path or a
+   * message. Absent when the store did not open. Not required.
+   */
+  perfStalls?: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;

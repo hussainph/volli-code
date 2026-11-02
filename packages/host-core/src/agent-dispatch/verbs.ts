@@ -49,6 +49,7 @@ import type { AgentVerbContext, AgentVerbHandler, AgentVerbInput } from "./conte
 import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app-verbs";
 import { conflictsVerb } from "./conflicts-verb";
 import { costVerb } from "./cost-verb";
+import { perfCompareVerb, perfStallsVerb, perfTopVerb } from "./perf-verbs";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import { labelMergeVerb } from "./label-verbs";
 import { agentCommandPreflight } from "./preview";
@@ -108,6 +109,9 @@ const AGENT_VERB_HANDLERS: { readonly [Key in SocketServedKey]: AgentVerbHandler
   hook: hookVerb,
   doctor: doctorVerb,
   "prompt.baseline": promptBaselineVerb,
+  "perf.top": perfTopVerb,
+  "perf.stalls": perfStallsVerb,
+  "perf.compare": perfCompareVerb,
 };
 
 /** What a verb's context holds for the service's lifetime: everything but the request's facts. */

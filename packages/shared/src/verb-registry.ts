@@ -43,6 +43,12 @@ import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
+import {
+  PERF_GROUP_LIMITS,
+  PERF_GROUPINGS,
+  PERF_PROCESSES,
+  PERF_STALLS_LIMITS,
+} from "./perf-stalls";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
 import { MAX_SESSION_AWAIT_TARGETS, SESSION_AWAIT_FOR } from "./session-await";
 import { MAX_TICKET_AWAIT_TARGETS, TICKET_AWAIT_FOR } from "./ticket-await";
@@ -2372,6 +2378,163 @@ export const VERB_REGISTRY = [
         kind: "value",
         placeholder: "<p>",
         help: "Resolve against this project instead of the context ladder.",
+      },
+    ],
+  },
+  // The perf store's three reads (VC-1092): the stalls this machine's app
+  // logged, kept bounded in a machine-local store. READ TIER, like `cost`: a
+  // hill-climbing agent asks them in a loop from the shell it already has,
+  // and no Role bundle pays context for them until one does.
+  {
+    key: "perf.top",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "perf.top" },
+    listed: true,
+    referenceOrder: 34.1,
+    group: "App",
+    summary: "Rank this machine's recorded stalls by total stalled time.",
+    example: "volli perf top --since 24h --by operation --process main",
+    notes: [
+      "A stall is a main event-loop block or a renderer long frame or slow input the app logged; the store keeps this machine's, bounded by count and age.",
+      "Groups are ranked by total stalled ms; p50/p95 are nearest-rank over each group's stalls.",
+      "observed is how long the app was running inside the window; per-hour rates divide by it, so windows and builds of different lengths compare.",
+      "Default window: the last 24h. --since takes an RFC 3339 instant or a look-back like 7d, 24h or 90m.",
+      "Main stalls no door or span explains are grouped as unattributed/unattributed.",
+    ],
+    options: [
+      {
+        name: "--since",
+        kind: "value",
+        placeholder: "<when>",
+        help: "Only stalls at or after this instant or look-back.",
+      },
+      {
+        name: "--by",
+        kind: "value",
+        placeholder: "<group>",
+        values: `valid: ${PERF_GROUPINGS.join(", ")}`,
+        help: "Group along one dimension (default operation).",
+      },
+      {
+        name: "--process",
+        kind: "value",
+        placeholder: "<process>",
+        values: `valid: ${PERF_PROCESSES.join(", ")}`,
+        help: "Only stalls in this process.",
+      },
+      {
+        name: "--limit",
+        kind: "value",
+        placeholder: "<n>",
+        help: `Groups to list (default ${PERF_GROUP_LIMITS.default}, at most ${PERF_GROUP_LIMITS.max}).`,
+      },
+    ],
+  },
+  {
+    key: "perf.stalls",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "perf.stalls" },
+    listed: true,
+    referenceOrder: 34.2,
+    group: "App",
+    summary: "List this machine's recorded stalls, newest first.",
+    example: "volli perf stalls --operation volli:board-load --limit 10",
+    notes: [
+      "Each row names its process, door/operation, label and Session when known, duration, and the build that recorded it.",
+      "hint is an unattributed main stall's last door call before it: where to look, never a claim.",
+      "--operation matches an operation alone or door/operation; --version matches a version, a build label, or version+build.",
+    ],
+    options: [
+      {
+        name: "--since",
+        kind: "value",
+        placeholder: "<when>",
+        help: "Only stalls at or after this instant or look-back.",
+      },
+      {
+        name: "--process",
+        kind: "value",
+        placeholder: "<process>",
+        values: `valid: ${PERF_PROCESSES.join(", ")}`,
+        help: "Only stalls in this process.",
+      },
+      { name: "--door", kind: "value", placeholder: "<door>", help: "Only stalls at this door." },
+      {
+        name: "--operation",
+        kind: "value",
+        placeholder: "<op>",
+        help: "Only stalls of this operation.",
+      },
+      {
+        name: "--label",
+        kind: "value",
+        placeholder: "<label>",
+        help: "Only stalls with this interaction label.",
+      },
+      {
+        name: "--version",
+        kind: "value",
+        placeholder: "<build>",
+        help: "Only stalls this build recorded.",
+      },
+      {
+        name: "--limit",
+        kind: "value",
+        placeholder: "<n>",
+        help: `Rows to list (default ${PERF_STALLS_LIMITS.default}, at most ${PERF_STALLS_LIMITS.max}).`,
+      },
+    ],
+  },
+  {
+    key: "perf.compare",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "perf.compare" },
+    listed: true,
+    referenceOrder: 34.3,
+    group: "App",
+    summary: "Compare two builds' stalls, per group, per hour observed.",
+    example: "volli perf compare --version 0.3.0-canary.3 --version 0.3.0-canary.4",
+    notes: [
+      "Takes --version exactly twice: a then b. Each matches a version (every build of it), a build label, or version+build as perf top --by version prints it.",
+      "Rows are ranked by how far b moved from a in stalled ms per hour observed; a negative delta is b stalling less.",
+      "A dev build's label is its git commit; VOLLI_PERF_BUILD=<label> at launch names an experiment instead.",
+    ],
+    options: [
+      {
+        name: "--version",
+        kind: "repeated",
+        placeholder: "<build>",
+        required: true,
+        help: "A build to compare; give it twice.",
+      },
+      {
+        name: "--since",
+        kind: "value",
+        placeholder: "<when>",
+        help: "Only stalls at or after this instant or look-back.",
+      },
+      {
+        name: "--by",
+        kind: "value",
+        placeholder: "<group>",
+        values: `valid: ${PERF_GROUPINGS.join(", ")}`,
+        help: "Group along one dimension (default operation).",
+      },
+      {
+        name: "--process",
+        kind: "value",
+        placeholder: "<process>",
+        values: `valid: ${PERF_PROCESSES.join(", ")}`,
+        help: "Only stalls in this process.",
+      },
+      {
+        name: "--limit",
+        kind: "value",
+        placeholder: "<n>",
+        help: `Groups to list (default ${PERF_GROUP_LIMITS.default}, at most ${PERF_GROUP_LIMITS.max}).`,
       },
     ],
   },
