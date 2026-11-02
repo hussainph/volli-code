@@ -1,0 +1,187 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 106f2b9617fa3b810261e067a3c965f209907af3..a39d55b0dd1dc7ae4603fbad6bfb3f89a6e9b5c7 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -4,7 +4,7 @@ import { calculateCost } from "../models.js";
+ import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { headersToRecord } from "../utils/headers.js";
+-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
++import { parseJsonWithRepair, parseStreamingJson, parseStreamingToolArguments } from "../utils/json-parse.js";
+ import { getPiUserAgent } from "../utils/pi-user-agent.js";
+ import { getProviderEnvValue } from "../utils/provider-env.js";
+ import { retryProviderRequest } from "../utils/provider-retry.js";
+@@ -553,7 +553,7 @@ export const stream = (model, context, options) => {
+                         const block = blocks[index];
+                         if (block && block.type === "toolCall") {
+                             block.partialJson += event.delta.partial_json;
+-                            block.arguments = parseStreamingJson(block.partialJson);
++                            block.arguments = parseStreamingToolArguments(block, block.partialJson);
+                             stream.push({
+                                 type: "toolcall_delta",
+                                 contentIndex: index,
+diff --git a/dist/api/bedrock-converse-stream.js b/dist/api/bedrock-converse-stream.js
+index a7f6d9cbe66546d5d418450809e92cf7289ce4a3..0ce8f7ac4f12acb38dcedb012ea619a5aef85da0 100644
+--- a/dist/api/bedrock-converse-stream.js
++++ b/dist/api/bedrock-converse-stream.js
+@@ -7,7 +7,7 @@ import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+ import { normalizeProviderError } from "../utils/error-body.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { providerHeadersToRecord } from "../utils/headers.js";
+-import { parseStreamingJson } from "../utils/json-parse.js";
++import { parseStreamingJson, parseStreamingToolArguments } from "../utils/json-parse.js";
+ import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.js";
+ import { getProviderEnvValue } from "../utils/provider-env.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+@@ -460,7 +460,7 @@ function handleContentBlockDelta(event, blocks, output, stream) {
+     }
+     else if (delta?.toolUse && block?.type === "toolCall") {
+         block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
+-        block.arguments = parseStreamingJson(block.partialJson);
++        block.arguments = parseStreamingToolArguments(block, block.partialJson);
+         stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
+     }
+     else if (delta?.reasoningContent) {
+diff --git a/dist/api/mistral-conversations.js b/dist/api/mistral-conversations.js
+index fbcc5e25ee6752a9c5461b41fa8544a090a17b3f..c1964334217709126a10335d8eb3f1e469225dff 100644
+--- a/dist/api/mistral-conversations.js
++++ b/dist/api/mistral-conversations.js
+@@ -2,7 +2,7 @@ import { calculateCost, clampThinkingLevel } from "../models.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { shortHash } from "../utils/hash.js";
+ import { headersToRecord } from "../utils/headers.js";
+-import { parseStreamingJson } from "../utils/json-parse.js";
++import { parseStreamingJson, parseStreamingToolArguments } from "../utils/json-parse.js";
+ import { getPiUserAgent } from "../utils/pi-user-agent.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+ import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.js";
+@@ -554,7 +554,7 @@ async function consumeChatStream(model, output, stream, mistralStream, onProvide
+                 ? toolCall.function.arguments
+                 : JSON.stringify(toolCall.function.arguments || {});
+             block.partialArgs = (block.partialArgs || "") + argsDelta;
+-            block.arguments = parseStreamingJson(block.partialArgs);
++            block.arguments = parseStreamingToolArguments(block, block.partialArgs);
+             stream.push({
+                 type: "toolcall_delta",
+                 contentIndex: toolBlocksByKey.get(key),
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index eecd83c753e3b758b8e44628f560b862f8252839..0d2b858225226e670942649ca1ae7f21117cdd30 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -4,7 +4,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { shortHash } from "../utils/hash.js";
+ import { headersToRecord } from "../utils/headers.js";
+-import { parseStreamingJson } from "../utils/json-parse.js";
++import { parseStreamingJson, parseStreamingToolArguments } from "../utils/json-parse.js";
+ import { getPiUserAgent } from "../utils/pi-user-agent.js";
+ import { getProviderEnvValue } from "../utils/provider-env.js";
+ import { retryProviderRequest } from "../utils/provider-retry.js";
+@@ -438,7 +438,7 @@ export const stream = (model, context, options) => {
+                             if (toolCall.function?.arguments) {
+                                 delta = toolCall.function.arguments;
+                                 block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+-                                block.arguments = parseStreamingJson(block.partialArgs);
++                                block.arguments = parseStreamingToolArguments(block, block.partialArgs);
+                             }
+                             else if (toolCall.custom?.input) {
+                                 const nextInput = getCustomToolCallInput(block) + toolCall.custom.input;
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+index f413fe5f2a1abcac39c38bbd4a77b38c349a5918..cf8b04044eb0fc552f2bac4878d9e3510d897b47 100644
+--- a/dist/api/openai-responses-shared.js
++++ b/dist/api/openai-responses-shared.js
+@@ -1,6 +1,6 @@
+ import { calculateCost } from "../models.js";
+ import { shortHash } from "../utils/hash.js";
+-import { parseStreamingJson } from "../utils/json-parse.js";
++import { parseStreamingJson, parseStreamingToolArguments } from "../utils/json-parse.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+ import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.js";
+ import { resolveTranscript, resolveTranscriptTools } from "../utils/transcript.js";
+@@ -548,7 +548,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             if (!slot || slot.block.partialJson === undefined)
+                 continue;
+             slot.block.partialJson += event.delta;
+-            slot.block.arguments = parseStreamingJson(slot.block.partialJson);
++            slot.block.arguments = parseStreamingToolArguments(slot.block, slot.block.partialJson);
+             pushToolCallDelta(slot, event.delta);
+         }
+         else if (event.type === "response.function_call_arguments.done") {
+diff --git a/dist/api/pi-messages.js b/dist/api/pi-messages.js
+index 7da1c45de8a106a68411cf79bec75f553534a1c7..471cec30175207146ef7f91cde25712da01e5937 100644
+--- a/dist/api/pi-messages.js
++++ b/dist/api/pi-messages.js
+@@ -11,7 +11,7 @@
+ import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { headersToRecord, providerHeadersToRecord } from "../utils/headers.js";
+-import { parseStreamingJson } from "../utils/json-parse.js";
++import { parseStreamingToolArguments } from "../utils/json-parse.js";
+ import { getProviderEnvValue } from "../utils/provider-env.js";
+ export class PiMessagesResponseError extends Error {
+     code;
+@@ -156,7 +156,7 @@ function createEventConverter(model) {
+                 const json = `${toolJson.get(event.contentIndex) ?? ""}${event.delta}`;
+                 toolJson.set(event.contentIndex, json);
+                 partial.content[event.contentIndex].arguments =
+-                    parseStreamingJson(json);
++                    parseStreamingToolArguments(partial.content[event.contentIndex], json);
+                 break;
+             }
+             case "toolcall_end":
+diff --git a/dist/utils/json-parse.d.ts b/dist/utils/json-parse.d.ts
+index 6d7935322c2e60d425188d9c4c94809208073fe3..f77cb443386dea93dd8123a408c46cfcf9c2d0a9 100644
+--- a/dist/utils/json-parse.d.ts
++++ b/dist/utils/json-parse.d.ts
+@@ -13,4 +13,12 @@ export declare function parseJsonWithRepair<T>(json: string): T;
+  * @returns Parsed object or empty object if parsing fails
+  */
+ export declare function parseStreamingJson<T = Record<string, unknown>>(partialJson: string | undefined): T;
++/**
++ * Volli patch (VC-1074): the per-delta form of `parseStreamingJson` for a
++ * tool-call block. Returns the block's current `arguments` unchanged when a
++ * re-parse is not yet due.
++ */
++export declare function parseStreamingToolArguments<T = Record<string, unknown>>(block: {
++    arguments: T;
++}, partialJson: string | undefined): T;
+ //# sourceMappingURL=json-parse.d.ts.map
+\ No newline at end of file
+diff --git a/dist/utils/json-parse.js b/dist/utils/json-parse.js
+index 82e105cb676a2f4be16167023243aa73dd8cb2e4..e812f0bc114a280517628c4a402b355f79318084 100644
+--- a/dist/utils/json-parse.js
++++ b/dist/utils/json-parse.js
+@@ -110,4 +110,33 @@ export function parseStreamingJson(partialJson) {
+         }
+     }
+ }
++/*
++ * Volli patch (VC-1074): the providers re-parse a tool call's whole accumulated
++ * argument JSON on every streamed delta, which is quadratic in the argument's
++ * size (a 100 KB `write` costs seconds of synchronous CPU). Below
++ * STREAMING_PARSE_EAGER_CHARS every delta still parses, exactly as upstream;
++ * past it a block's partial arguments are refreshed only once the buffer has
++ * grown by 1/STREAMING_PARSE_GROWTH_DIVISOR since the last parse, so the total
++ * work stays linear. The final parse at `toolcall_end` is never throttled.
++ */
++const STREAMING_PARSE_EAGER_CHARS = 8 * 1024;
++const STREAMING_PARSE_GROWTH_DIVISOR = 8;
++const streamingParsedLengths = new WeakMap();
++/**
++ * Volli patch (VC-1074): the per-delta form of `parseStreamingJson` for a
++ * tool-call block. Returns the block's current `arguments` unchanged when a
++ * re-parse is not yet due.
++ */
++export function parseStreamingToolArguments(block, partialJson) {
++    const length = partialJson ? partialJson.length : 0;
++    if (length > STREAMING_PARSE_EAGER_CHARS) {
++        const parsedLength = streamingParsedLengths.get(block);
++        if (parsedLength !== undefined &&
++            (length - parsedLength) * STREAMING_PARSE_GROWTH_DIVISOR < parsedLength) {
++            return block.arguments;
++        }
++    }
++    streamingParsedLengths.set(block, length);
++    return parseStreamingJson(partialJson);
++}
+ //# sourceMappingURL=json-parse.js.map
