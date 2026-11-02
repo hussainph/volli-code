@@ -306,6 +306,12 @@ export interface AgentCommandServiceOptions {
    * `null` prices no instructions section.
    */
   repoInstructions?: (projectId: string, ticketId: string | null) => Promise<PromptResource | null>;
+  /**
+   * This machine's perf store (VC-1092), which `volli perf` reads. Absent
+   * (a host that runs no stall monitor) or a store that failed to open makes
+   * the perf verbs refuse with `DB_UNAVAILABLE` rather than answer empty.
+   */
+  perfStore?: () => import("../perf/store").PerfStore | null;
 }
 
 /** One operator write, as {@link AgentCommandServiceOptions.onOperatorWrite} reports it. */

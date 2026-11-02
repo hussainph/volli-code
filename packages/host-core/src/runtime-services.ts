@@ -3,7 +3,11 @@ import { LOCAL_RUNNER, type RunnerIdentity } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
-import { piOwnedModelAccess, type PiModelAccess } from "@volli/agent-runtime";
+import {
+  createWorkerWebExtractor,
+  piOwnedModelAccess,
+  type PiModelAccess,
+} from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
 import { createHostDecisions } from "./decision/host-decisions";
 import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
@@ -49,6 +53,8 @@ export function createHostRuntimeServices(
     modelAccess?: PiModelAccess;
     venue?: RunnerIdentity;
     webKeySealing?: WebKeySealingOptions;
+    /** The bundled HTML extraction worker; absent, `web_fetch` parses on this thread. */
+    webExtractWorker?: string | URL;
   },
 ) {
   const modelAccess = options.modelAccess ?? piOwnedModelAccess();
@@ -110,6 +116,11 @@ export function createHostRuntimeServices(
         : { onResult: options.webKeySealing.onResult }),
     }),
   });
-  return { modelAccess, decisions, mcp, webAccess };
+  // One extractor for the host, so its warm worker is shared by every Session.
+  const webExtract =
+    options.webExtractWorker === undefined
+      ? undefined
+      : createWorkerWebExtractor(options.webExtractWorker);
+  return { modelAccess, decisions, mcp, webAccess, webExtract };
 }
 export type HostRuntimeServices = ReturnType<typeof createHostRuntimeServices>;

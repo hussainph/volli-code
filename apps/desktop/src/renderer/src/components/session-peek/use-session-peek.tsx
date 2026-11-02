@@ -397,11 +397,14 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
    * coming, and the card keeps the words for it.
    */
   const adoptChatSession = useChatSessionsStore((store) => store.adoptChatSession);
+  const showChatSession = useChatSessionsStore((store) => store.showChatSession);
   const pinnedSessionId = state.pinned === null ? null : sessionId;
   React.useEffect(() => {
     if (pinnedSessionId === null) return;
     adoptChatSession(pinnedSessionId);
-  }, [adoptChatSession, pinnedSessionId]);
+    // Held while pinned, released on unpin (VC-515): see `showChatSession`.
+    return showChatSession(pinnedSessionId);
+  }, [adoptChatSession, showChatSession, pinnedSessionId]);
   const residentQuestion = useChatSessionsStore((store) =>
     pinnedSessionId === null
       ? null

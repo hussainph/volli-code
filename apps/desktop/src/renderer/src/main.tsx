@@ -27,6 +27,7 @@ import {
   startCloudBoard,
 } from "./lib/boot";
 import { installRendererLogForwarding } from "./lib/renderer-log";
+import { installRendererStallSignals } from "./lib/renderer-stalls";
 import { bindRemoteSessionsWhileCloud } from "@renderer/lib/remote-sessions";
 import { bindCloudSessions } from "@renderer/lib/cloud-sessions";
 import { toastError } from "./lib/toast";
@@ -51,6 +52,8 @@ const INTERRUPT_TOAST_DURATION_MS = 8000;
 async function main() {
   // This window's warnings and errors join main's log (VC-699).
   installRendererLogForwarding();
+  // Its long frames and slow inputs, labelled by interaction (VC-1091).
+  installRendererStallSignals();
   const root = createRoot(document.getElementById("root")!);
 
   // Kick off the Ghostty-config fetch immediately, CONCURRENT with boot() —

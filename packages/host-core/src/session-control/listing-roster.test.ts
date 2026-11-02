@@ -22,10 +22,15 @@ import {
   clipListingText,
   projectSessionListing,
   SESSION_LISTING_LIMIT,
+  SESSION_LISTING_ROWS_CHUNK,
+  sessionListingRowsForRoster,
   ticketSessionListing,
   type SessionListingSources,
 } from "./listing-roster";
 import { insertSession } from "./test-support";
+import { sessionListingRows } from "./listing-row";
+import { readSessionProvenance } from "../db/session-provenance-repo";
+import { readSessionUnread, writeSessionUnread } from "../db/session-read-repo";
 
 const PROJECT = "project";
 let ctx: TestDb;
@@ -86,6 +91,45 @@ describe("the listing's one body", () => {
       "ticket-session",
     ]);
     expect(await ticketSessionListing(sources(), "no-such-ticket")).toEqual([]);
+  });
+});
+
+describe("the rows step's chunks (VC-1076)", () => {
+  it("yields between chunks and builds exactly the rows one pass would", async () => {
+    const count = SESSION_LISTING_ROWS_CHUNK * 2 + 3;
+    for (let index = 0; index < count; index += 1) {
+      insertSession(
+        ctx.db,
+        testSession(PROJECT, index % 2 === 0 ? "ticket" : null, { id: `session-${index}` }),
+      );
+    }
+    writeSessionUnread(ctx.db, "session-7", 1_234);
+    const engine = createTestSessionEngine(ctx.db, { now: () => 500 });
+    const sessions = await engine.listSessions({ projectId: PROJECT, scope: "all" });
+    let yields = 0;
+    const chunked = await sessionListingRowsForRoster(ctx.db, sessions, new Set(), async () => {
+      yields += 1;
+    });
+    expect(yields).toBe(2);
+    expect(chunked).toEqual(
+      sessionListingRows(
+        sessions,
+        (session) =>
+          readSessionProvenance(ctx.db, {
+            sessionId: session.session.id,
+            ticketId: session.session.ticketId,
+          }),
+        new Set(),
+        (session) => readSessionUnread(ctx.db, session.session.id),
+      ),
+    );
+    expect(chunked.find((row) => rowId(row) === "session-7")?.read).toEqual({
+      unreadSince: 1_234,
+    });
+    // The default yield is a real macrotask turn, and changes nothing.
+    await expect(sessionListingRowsForRoster(ctx.db, sessions, new Set())).resolves.toEqual(
+      chunked,
+    );
   });
 });
 

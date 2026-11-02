@@ -401,6 +401,8 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
       durationMs,
       attribution: offCpu ? OFF_CPU : UNATTRIBUTED,
       thresholdMs,
+      // Filed as the roll-up files it; an unattributed line names no door at all.
+      ...(offCpu ? { door: OFF_CPU, operation: "wait" } : {}),
       cpuMs,
       ...block.hint,
       ...(gcMs > 0 ? { gcMs: Math.round(gcMs) } : {}),

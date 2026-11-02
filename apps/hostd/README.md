@@ -487,7 +487,9 @@ volli-hostd-<version>-linux-x64/
   bin/volli-hostd       sh launcher: exec bin/node lib/hostd/hostd.cjs
   bin/volli             sh launcher for the volli CLI bundle
   lib/hostd/            hostd.cjs and its chunks: hostd, every @volli package
-                        and pure-JS dependencies, bundled by `vp pack`
+                        and pure-JS dependencies, bundled by `vp pack`; beside
+                        it web-extract-worker.cjs, the thread web_fetch parses
+                        HTML in
   lib/volli.cjs         the CLI bundle (packages/cli)
   lib/probe-natives.cjs loads and exercises every native under bin/node
   lib/probe-codemode.mjs executes the shipped sandbox worker and QuickJS wasm

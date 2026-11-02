@@ -296,7 +296,13 @@ describe("the main stall monitor", () => {
     blockThenTick(250);
     blockThenTick(0);
     expect(stalls()).toEqual([
-      expect.objectContaining({ attribution: "off-cpu", durationMs: 400, cpuMs: 0 }),
+      expect.objectContaining({
+        attribution: "off-cpu",
+        door: "off-cpu",
+        operation: "wait",
+        durationMs: 400,
+        cpuMs: 0,
+      }),
       expect.objectContaining({ attribution: "off-cpu", durationMs: 300, cpuMs: 100 }),
       expect.objectContaining({ attribution: "unattributed", durationMs: 250 }),
     ]);

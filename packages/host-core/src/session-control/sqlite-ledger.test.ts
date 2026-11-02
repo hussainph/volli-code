@@ -4,6 +4,7 @@ import {
   createSessionProjectionCheckpoint,
   LOCAL_RUNNER,
   roleImpliedByTicket,
+  SESSION_PROJECTION_CHECKPOINT_VERSION,
 } from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
@@ -49,6 +50,20 @@ const provenance = {
 
 function provenanceId(): number {
   return internSessionEventProvenance(ctx.db, JSON.stringify(provenance));
+}
+
+/**
+ * A relaunch's read: a fresh engine over the same ledger. Tests that rewrite
+ * history beneath the insert-only contract use it, because a live engine may
+ * answer from the fold it already holds (VC-1076), exactly as it is entitled
+ * to for history nothing can rewrite.
+ */
+function rereadSession(ledger: SessionLedger, sessionId: string) {
+  return createSessionEngine({
+    ledger,
+    clock: { now: () => 100 },
+    ids: { next: (kind) => `${kind}-reread` },
+  }).getSession({ sessionId });
 }
 
 // The port's guarantees — ordering, rollback, sequences, receipts, signals,
@@ -1154,7 +1169,7 @@ describe("SqliteSessionLedger", () => {
   });
 
   it("rejects an interaction whose prompts or answers are structurally wrong", async () => {
-    const { control, projectId } = setup();
+    const { control, projectId, ledger } = setup();
     const created = await control.createSession({
       commandId: "create-invalid",
       projectId,
@@ -1250,7 +1265,7 @@ describe("SqliteSessionLedger", () => {
           }
         ).payload,
       ) as { interaction?: { prompts: unknown }; resolution?: { answers: unknown } };
-    const project = () => control.getSession({ sessionId: created.session.id });
+    const project = () => rereadSession(ledger, created.session.id);
 
     const opened = read("interaction-opened-invalid");
     opened.interaction!.prompts = "prompt:0";
@@ -1302,7 +1317,7 @@ describe("SqliteSessionLedger", () => {
   });
 
   it("round-trips a cancelled interaction without a resolution and rejects an unknown reason", async () => {
-    const { control, projectId } = setup();
+    const { control, projectId, ledger } = setup();
     const created = await control.createSession({
       commandId: "create-cancelled",
       projectId,
@@ -1390,7 +1405,7 @@ describe("SqliteSessionLedger", () => {
       }),
       "interaction-cancelled",
     );
-    await expect(control.getSession({ sessionId: created.session.id })).rejects.toThrow(
+    await expect(rereadSession(ledger, created.session.id)).rejects.toThrow(
       "reason has an unsupported value",
     );
     ctx.db.pragma("ignore_check_constraints = OFF");
@@ -2213,6 +2228,92 @@ describe("additive birth owner without a Session SQL column", () => {
     expect(ctx.db.prepare("PRAGMA table_info(sessions)").all()).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "owner_user_id" })]),
     );
+  });
+});
+
+describe("birth payload memo (VC-1076)", () => {
+  const request = (commandId: string, ownerUserId: string) => ({
+    commandId,
+    projectId: "project",
+    ticketId: null,
+    role: "project" as const,
+    parentSessionId: null,
+    title: null,
+    requestedSessionId: "reused-session",
+    ownerUserId,
+    provenance,
+  });
+
+  it("keeps nothing a rolled-back transaction read", async () => {
+    const { ledger, control } = setup();
+    let rolled = 0;
+    // A create that reads its own birth and then rolls back must not leave
+    // that birth behind for the id: a retry may be born differently.
+    const failing = createSessionEngine({
+      ledger: {
+        transaction: (work) =>
+          ledger.transaction((transaction) => {
+            work(transaction);
+            expect(transaction.getSession("reused-session")?.ownerUserId).toBe("owner-a");
+            throw new Error("rolled back");
+          }),
+      },
+      clock: { now: () => 100 },
+      ids: { next: (kind) => `${kind}-rolled-${++rolled}` },
+    });
+    await expect(failing.createSession(request("create-a", "owner-a"))).rejects.toThrow(
+      "rolled back",
+    );
+
+    await control.createSession(request("create-b", "owner-b"));
+    expect((await control.getBaseSession({ sessionId: "reused-session" }))?.ownerUserId).toBe(
+      "owner-b",
+    );
+    expect(
+      (await control.listSessions({ projectId: "project", scope: "all" }))[0]?.session,
+    ).toEqual(expect.objectContaining({ id: "reused-session", ownerUserId: "owner-b" }));
+  });
+
+  it("answers repeat reads from the memo, identically", async () => {
+    const { control } = setup();
+    const created = await control.createSession(request("create-memo", "owner-a"));
+    const first = await control.listSessions({ projectId: "project", scope: "all" });
+    // Birth facts are immutable, so the memo may answer instead of the log.
+    // Proved by changing the log beneath it, which production never does.
+    ctx.db
+      .prepare(
+        `UPDATE session_events SET payload = json_set(payload, '$.session.ownerUserId', 'moved')
+          WHERE session_id = ? AND json_extract(payload, '$.kind') = 'session.created'`,
+      )
+      .run(created.session.id);
+    expect((await control.getBaseSession({ sessionId: created.session.id }))?.ownerUserId).toBe(
+      "owner-a",
+    );
+    expect(
+      (await control.listSessions({ projectId: "project", scope: "all" }))[0]?.session,
+    ).toEqual(first[0]?.session);
+  });
+
+  it("replaces a checkpoint row an older build wrote at another schema version on listing", async () => {
+    const { control } = setup();
+    const created = await control.createSession(request("create-version", "owner-a"));
+    await control.listSessions({ projectId: "project", scope: "all" });
+    ctx.db
+      .prepare("UPDATE session_projection_checkpoints SET schema_version = 1 WHERE session_id = ?")
+      .run(created.session.id);
+    // A fresh engine: the first one's listing cache would answer unread.
+    const relaunched = createSessionEngine({
+      ledger: createSqliteSessionLedger(ctx.db),
+      clock: { now: () => 100 },
+      ids: { next: (kind) => `${kind}-relaunched` },
+    });
+    const [folded] = await relaunched.listSessions({ projectId: "project", scope: "all" });
+    expect(
+      ctx.db
+        .prepare("SELECT schema_version FROM session_projection_checkpoints WHERE session_id = ?")
+        .get(created.session.id),
+    ).toEqual({ schema_version: SESSION_PROJECTION_CHECKPOINT_VERSION });
+    expect(await control.getSession({ sessionId: created.session.id })).toEqual(folded);
   });
 });
 

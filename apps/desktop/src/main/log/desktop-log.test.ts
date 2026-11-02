@@ -72,6 +72,23 @@ describe("the main stall threshold", () => {
     expect(text).toContain('"component":"main-stall"');
     expect(text).toContain('"operation":"volli:test-block"');
   });
+
+  it("writes a window's stalls to the same file, beside main's", async () => {
+    const userData = profile();
+    const log = startDesktopLog({ userData, dev: false, env: {} });
+    logs.push(log);
+    log.rendererStalls.write(
+      { id: 3 },
+      {
+        stalls: [{ kind: "frame", operation: "longtask", label: "pane-switch", durationMs: 180 }],
+        dropped: 0,
+      },
+    );
+    await log.flush();
+    const text = readFileSync(log.file.currentFile()!, "utf8");
+    expect(text).toContain('"component":"renderer-stall"');
+    expect(text).toContain('"label":"pane-switch"');
+  });
 });
 
 describe("the desktop's log", () => {

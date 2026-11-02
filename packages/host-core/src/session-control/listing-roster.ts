@@ -21,6 +21,7 @@
  * about who started a Session.
  */
 import type Database from "better-sqlite3";
+import { setImmediate } from "node:timers";
 import {
   SESSION_LISTING_BOUNDS,
   type ListSessionsQuery,
@@ -38,29 +39,56 @@ import { withMainSpan } from "../log/context";
 /** The rows' build, timed after the door's await (VC-1090): it runs outside the door's span. */
 const LISTING_ROWS = { door: "projection", operation: "listing-rows" } as const;
 
-export function sessionListingRowsForRoster(
+/**
+ * How many Sessions one stretch of the rows step reads and builds before the
+ * host gets a turn (VC-1076). The batch reads below are set-based, so a chunk
+ * keeps them that way; measured over a 4,542-Session roster the unchunked step
+ * was one 146 ms block warm and up to 1.4 s cold.
+ */
+export const SESSION_LISTING_ROWS_CHUNK = 512;
+
+export async function sessionListingRowsForRoster(
   db: Database.Database,
   sessions: readonly SessionProjection[],
   liveAttachmentIds: ReadonlySet<string>,
-): SessionListingRow[] {
-  const sessionIds = sessions.map((session) => session.session.id);
-  const provenanceOf = readSessionProvenances(
-    db,
-    sessions.map((session) => ({
-      sessionId: session.session.id,
-      ticketId: session.session.ticketId,
-    })),
-  );
-  // The second per-Session fact a row carries (VC-30), joined here for exactly
-  // the reason provenance is: one set-based read for the whole roster, and the
-  // same answer the push channel reads one Session at a time.
-  const readOf = readSessionUnreads(db, sessionIds);
-  return sessionListingRows(
-    sessions,
-    (session) => provenanceOf(session.session.id),
-    liveAttachmentIds,
-    (session) => readOf(session.session.id),
-  );
+  yieldToHost: () => Promise<void> = yieldToMainProcess,
+): Promise<SessionListingRow[]> {
+  const rows: SessionListingRow[] = [];
+  for (let from = 0; from < sessions.length; from += SESSION_LISTING_ROWS_CHUNK) {
+    // Between chunks, never before the first: a one-chunk roster costs what
+    // it always did.
+    if (from > 0) await yieldToHost();
+    const chunk = sessions.slice(from, from + SESSION_LISTING_ROWS_CHUNK);
+    const provenanceOf = readSessionProvenances(
+      db,
+      chunk.map((session) => ({
+        sessionId: session.session.id,
+        ticketId: session.session.ticketId,
+      })),
+    );
+    // The second per-Session fact a row carries (VC-30), joined here for
+    // exactly the reason provenance is: one set-based read per chunk, and the
+    // same answer the push channel reads one Session at a time.
+    const readOf = readSessionUnreads(
+      db,
+      chunk.map((session) => session.session.id),
+    );
+    rows.push(
+      ...sessionListingRows(
+        chunk,
+        (session) => provenanceOf(session.session.id),
+        liveAttachmentIds,
+        (session) => readOf(session.session.id),
+      ),
+    );
+  }
+  return rows;
+}
+
+function yieldToMainProcess(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 /**

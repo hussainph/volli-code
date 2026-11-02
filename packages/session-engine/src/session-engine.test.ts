@@ -7,6 +7,7 @@ import {
 } from "./index";
 import {
   CHECKPOINT_REFRESH_EVENTS,
+  HOT_CHECKPOINT_LIMIT,
   SESSION_LISTING_CACHE_LIMIT,
   SESSION_LISTING_FOLD_CHUNK,
 } from "./session-engine";
@@ -1589,7 +1590,7 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
-  it("resumes getSession and listSessions from checkpoint tails without mutating reads", async () => {
+  it("resumes getSession and listSessions from checkpoint tails, persisting only full folds", async () => {
     const stored = createInMemorySessionLedger();
     const cursors: Array<number | undefined> = [];
     const auditReads: string[] = [];
@@ -1627,13 +1628,13 @@ describe("SessionEngine creation and explicit commands", () => {
     const first = await plane.listSessions({ projectId: "project-1", scope: "all" });
     expect(cursors).toEqual([undefined]);
     expect(first).toHaveLength(1);
-    await expect(
-      plane.getProjectionCheckpoint({ sessionId: created.session.id }),
-    ).resolves.toBeNull();
-
+    // The listing had to fold the whole log, so it kept the result (VC-1076):
+    // the next launch resumes from here instead of folding it again.
     const events = await plane.listEvents({ sessionId: created.session.id });
     const checkpoint = createSessionProjectionCheckpoint(created.session, events);
-    await plane.saveProjectionCheckpoint(checkpoint);
+    await expect(plane.getProjectionCheckpoint({ sessionId: created.session.id })).resolves.toEqual(
+      checkpoint,
+    );
     await plane.submit({
       commandId: "command-checkpoint-tail",
       sessionId: created.session.id,
@@ -1892,6 +1893,364 @@ describe("SessionEngine creation and explicit commands", () => {
     expect(events.map((event) => event.sequence)).toEqual(events.map((_event, index) => index + 1));
     await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
       liveExecutor: { id: opened.id, native: { id: `native-${facts - 1}` } },
+    });
+  });
+
+  describe("read paths persist the folds they had to do (VC-1076)", () => {
+    /** An in-memory ledger whose checkpoint writes are counted, and can be made to fail. */
+    function countingComposition() {
+      const stored = createInMemorySessionLedger();
+      const saved: number[] = [];
+      let failSaves: Error | null = null;
+      const ledger: SessionLedger = {
+        transaction: (work) =>
+          stored.transaction((transaction) =>
+            work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property !== "saveProjectionCheckpoint") {
+                    return Reflect.get(target, property, receiver);
+                  }
+                  return (checkpoint: SessionProjectionCheckpoint) => {
+                    if (failSaves) throw failSaves;
+                    saved.push(checkpoint.throughSequence);
+                    transaction.saveProjectionCheckpoint(checkpoint);
+                  };
+                },
+              }),
+            ),
+          ),
+      };
+      const reported: unknown[] = [];
+      const plane = createSessionEngine({
+        ledger,
+        clock: { now: () => 100 },
+        ids: ids(),
+        onProjectionCheckpointFailure: (error) => reported.push(error),
+      });
+      return {
+        plane,
+        ledger,
+        saved,
+        reported,
+        failWith: (error: Error | null) => {
+          failSaves = error;
+        },
+      };
+    }
+
+    async function retitle(
+      plane: ReturnType<typeof createSessionEngine>,
+      sessionId: string,
+      times: number,
+    ) {
+      for (let index = 0; index < times; index += 1) {
+        await plane.submit({
+          commandId: `command-retitle-${sessionId}-${index}-${Math.random()}`,
+          sessionId,
+          intent: { kind: "session.retitle", title: `Title ${index}` },
+          provenance: userProvenance,
+        });
+      }
+    }
+
+    it("writes a listing's full fold back, so the next read resumes from it", async () => {
+      const { plane, saved } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-get"));
+      const head = await plane.latestEventSequence({ sessionId: session.id });
+
+      // A plain read never writes: previews promise an untouched database.
+      const folded = await plane.getSession({ sessionId: session.id });
+      expect(saved).toEqual([]);
+
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(saved).toEqual([head]);
+      await expect(plane.getProjectionCheckpoint({ sessionId: session.id })).resolves.toEqual(
+        createSessionProjectionCheckpoint(
+          session,
+          await plane.listEvents({ sessionId: session.id }),
+        ),
+      );
+
+      // Resumed, not refolded, and a usable row is never rewritten by a read.
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toEqual(folded);
+      await plane.listAttachedSessions();
+      expect(saved).toEqual([head]);
+    });
+
+    it("refreshes a row a whole window behind and leaves one inside the window alone", async () => {
+      const { plane, saved } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-window"));
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      const persisted = saved.at(-1)!;
+
+      // `submit` never refreshes the checkpoint, so its tail only grows. A
+      // retitle appends three events: a command, the fact and its receipt.
+      const insideWindow = Math.floor((CHECKPOINT_REFRESH_EVENTS - 1) / 3);
+      await retitle(plane, session.id, insideWindow);
+      await plane.getSession({ sessionId: session.id });
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(saved).toEqual([persisted]);
+
+      await retitle(plane, session.id, 1);
+      const head = await plane.latestEventSequence({ sessionId: session.id });
+      expect(head - persisted).toBeGreaterThanOrEqual(CHECKPOINT_REFRESH_EVENTS);
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(saved).toEqual([persisted, head]);
+      expect(
+        (await plane.getProjectionCheckpoint({ sessionId: session.id }))?.throughSequence,
+      ).toBe(head);
+    });
+
+    it("answers the read and reports when the write-back fails", async () => {
+      const { plane, reported, failWith, saved } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-failure"));
+      const failure = new Error("checkpoint table is read-only");
+      failWith(failure);
+
+      await expect(
+        plane.listSessions({ projectId: "project-1", scope: "all" }),
+      ).resolves.toHaveLength(1);
+      expect(reported).toEqual([failure]);
+      expect(saved).toEqual([]);
+      await expect(plane.getProjectionCheckpoint({ sessionId: session.id })).resolves.toBeNull();
+    });
+
+    it("lists the same projections from the row a listing persisted", async () => {
+      const { plane, saved, ledger } = countingComposition();
+      const { session } = await plane.createSession(createRequest("command-persist-same"));
+      await retitle(plane, session.id, 30);
+      const query: ListSessionsQuery = { projectId: "project-1", scope: "all" };
+      const first = await plane.listSessions(query);
+      expect(saved).toHaveLength(1);
+      // A fresh engine (a relaunch) resumes from the persisted row instead.
+      const relaunched = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      expect(await relaunched.listSessions(query)).toEqual(first);
+      expect(saved).toHaveLength(1);
+    });
+  });
+
+  describe("hot checkpoints for Sessions recording facts (VC-1076)", () => {
+    function hotComposition() {
+      const stored = createInMemorySessionLedger();
+      const rowReads: string[] = [];
+      let rollBackNext = false;
+      let ticketDeleted = false;
+      const ledger: SessionLedger = {
+        transaction: (work) =>
+          stored.transaction((transaction) => {
+            const value = work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property === "getProjectionCheckpoint") {
+                    return (sessionId: string) => {
+                      rowReads.push(sessionId);
+                      return transaction.getProjectionCheckpoint(sessionId);
+                    };
+                  }
+                  if (property === "getSession") {
+                    return (sessionId: string) => {
+                      const session = transaction.getSession(sessionId);
+                      return session && ticketDeleted ? { ...session, ticketId: null } : session;
+                    };
+                  }
+                  return Reflect.get(target, property, receiver);
+                },
+              }),
+            );
+            if (rollBackNext) {
+              rollBackNext = false;
+              throw new Error("rolled back");
+            }
+            return value;
+          }),
+      };
+      const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      return {
+        plane,
+        ledger,
+        rowReads,
+        rollBack: () => {
+          rollBackNext = true;
+        },
+        deleteTicket: () => {
+          ticketDeleted = true;
+        },
+      };
+    }
+
+    async function liveSession(plane: ReturnType<typeof createSessionEngine>, commandId: string) {
+      const { session } = await plane.createSession(createRequest(commandId));
+      const opened = attachment(session.id, `attachment-${commandId}`);
+      await plane.observe({
+        id: `observation-${commandId}-opened`,
+        sessionId: session.id,
+        occurredAt: 200,
+        provenance: adapterProvenance,
+        kind: "attachment.opened",
+        attachment: opened,
+      });
+      let index = 0;
+      const fact = () =>
+        plane.observe({
+          id: `observation-${commandId}-${index}`,
+          sessionId: session.id,
+          occurredAt: 300 + index,
+          provenance: adapterProvenance,
+          attachmentId: opened.id,
+          kind: "attachment.native_referenced",
+          native: { id: `native-${index++}`, detail: null },
+        });
+      return { session, fact };
+    }
+
+    it("records facts without re-reading the checkpoint row, and folds to the same answer", async () => {
+      const { plane, ledger, rowReads } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-facts");
+      rowReads.length = 0;
+      // Past a refresh window, so the durable row is rewritten under the cache.
+      for (let index = 0; index < CHECKPOINT_REFRESH_EVENTS + 10; index += 1) await fact();
+      expect(rowReads).toEqual([]);
+
+      const hot = await plane.getSession({ sessionId: session.id });
+      expect(rowReads).toEqual([]);
+      // A fresh engine reads the durable row and log; the answers agree.
+      const cold = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      expect(await cold.getSession({ sessionId: session.id })).toEqual(hot);
+      expect(
+        (await cold.getProjectionCheckpoint({ sessionId: session.id }))?.throughSequence,
+      ).toBeGreaterThanOrEqual(CHECKPOINT_REFRESH_EVENTS);
+    });
+
+    it("hands getSession a copy the cache does not share", async () => {
+      const { plane } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-copy");
+      await fact();
+      const first = await plane.getSession({ sessionId: session.id });
+      (first as unknown as { attachments: unknown[] }).attachments.length = 0;
+      (first!.session as unknown as { title: string | null }).title = "mutated";
+      const second = await plane.getSession({ sessionId: session.id });
+      expect(second?.attachments).toHaveLength(1);
+      expect(second?.session.title).toBe("Durable Session");
+    });
+
+    it("keeps nothing hot from a fact whose transaction rolled back", async () => {
+      const { plane, rowReads, rollBack } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-rollback");
+      await fact();
+      rollBack();
+      await expect(fact()).rejects.toThrow("rolled back");
+      rowReads.length = 0;
+      await fact();
+      // The cache held the head before the rolled-back fact, which is still
+      // the head, so it answered; the rolled-back fact is nowhere.
+      expect(rowReads).toEqual([]);
+      const events = await plane.listEvents({ sessionId: session.id });
+      expect(events.map((event) => event.sequence)).toEqual(events.map((_e, index) => index + 1));
+      expect((await plane.getSession({ sessionId: session.id }))?.liveExecutor?.native).toEqual({
+        id: "native-2",
+        detail: null,
+      });
+    });
+
+    it("misses when another verb appended, the base row moved, or the row was replaced", async () => {
+      const { plane, rowReads, deleteTicket } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-miss");
+      await fact();
+
+      await plane.submit({
+        commandId: "command-hot-retitle",
+        sessionId: session.id,
+        intent: { kind: "session.retitle", title: "Retitled" },
+        provenance: userProvenance,
+      });
+      rowReads.length = 0;
+      await fact();
+      expect(rowReads).toEqual([session.id]);
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+        session: { title: "Retitled" },
+      });
+
+      deleteTicket();
+      rowReads.length = 0;
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+        session: { ticketId: null },
+      });
+      expect(rowReads).toEqual([session.id]);
+
+      await fact();
+      rowReads.length = 0;
+      const events = await plane.listEvents({ sessionId: session.id });
+      await plane.saveProjectionCheckpoint(createSessionProjectionCheckpoint(session, events));
+      await fact();
+      expect(rowReads).toEqual([session.id]);
+    });
+
+    it("never lets a commit that resolves late replace a newer hot checkpoint", async () => {
+      const stored = createInMemorySessionLedger();
+      const rowReads: string[] = [];
+      let delayNext = false;
+      const ledger: SessionLedger = {
+        transaction: (work) => {
+          const delayed = delayNext;
+          delayNext = false;
+          const settled = stored.transaction((transaction) =>
+            work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property !== "getProjectionCheckpoint") {
+                    return Reflect.get(target, property, receiver);
+                  }
+                  return (sessionId: string) => {
+                    rowReads.push(sessionId);
+                    return transaction.getProjectionCheckpoint(sessionId);
+                  };
+                },
+              }),
+            ),
+          );
+          return delayed
+            ? settled.then((value) => new Promise((resolve) => setTimeout(() => resolve(value), 5)))
+            : settled;
+        },
+      };
+      const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      const { session, fact } = await liveSession(plane, "hot-late");
+      delayNext = true;
+      const late = fact();
+      await fact();
+      await late;
+      rowReads.length = 0;
+      await fact();
+      expect(rowReads).toEqual([]);
+      const events = await plane.listEvents({ sessionId: session.id });
+      expect(await plane.getSession({ sessionId: session.id })).toEqual(
+        createSessionProjectionCheckpoint(session, events).projection,
+      );
+    });
+
+    it("keeps at most HOT_CHECKPOINT_LIMIT Sessions hot, evicting the least recently written", async () => {
+      const { plane, rowReads } = hotComposition();
+      const live: Awaited<ReturnType<typeof liveSession>>[] = [];
+      for (let index = 0; index <= HOT_CHECKPOINT_LIMIT; index += 1) {
+        live.push(await liveSession(plane, `hot-bound-${index}`));
+      }
+      rowReads.length = 0;
+      await live.at(-1)!.fact();
+      expect(rowReads).toEqual([]);
+      await live[0]!.fact();
+      expect(rowReads).toEqual([live[0]!.session.id]);
+    });
+
+    it("lets a listing fold a hot Session without reading its row", async () => {
+      const { plane, rowReads } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-listing");
+      await fact();
+      rowReads.length = 0;
+      const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(rowReads).toEqual([]);
+      expect(row).toEqual(await plane.getSession({ sessionId: session.id }));
+      expect(Object.isFrozen(row)).toBe(true);
     });
   });
 

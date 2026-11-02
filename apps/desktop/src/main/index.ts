@@ -355,7 +355,9 @@ import {
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { hostLogger } from "@volli/host-core/log";
 import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { startDesktopPerfStore } from "./log/perf-store";
 import { registerRendererLogForwarding } from "./log/renderer-log";
+import { registerRendererStallForwarding } from "./log/renderer-stall";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Harness mode (VC-703): inert unless VOLLI_HARNESS=1, which only
@@ -435,6 +437,19 @@ if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 const ownsAppProfile = acquireVolliAppProfile(app);
+// The bounded, machine-local store of every stall the log records (VC-1092),
+// read by `volli perf` and the support report. Opened first so its sink sees
+// the log's first stall; null when this instance does not own the profile or
+// the file will not open.
+const desktopPerf = ownsAppProfile
+  ? startDesktopPerfStore({
+      userData: app.getPath("userData"),
+      version: app.getVersion(),
+      dev: isDev,
+      env: process.env,
+      appPath: app.getAppPath(),
+    })
+  : null;
 // One structured, correlated log for main, the in-process host and the
 // renderer (VC-699): rotating JSON lines in this profile's own log directory.
 // Only the instance that owns the profile writes there.
@@ -443,6 +458,7 @@ const desktopLog = ownsAppProfile
       userData: app.getPath("userData"),
       dev: isDev,
       env: process.env,
+      ...(desktopPerf === null ? {} : { sinks: [desktopPerf.sink] }),
       // A smoke's captured boot reads main's lines off the terminal in any build.
       terminal: isDev || isSmokeBootCapture(process.env),
     })
@@ -757,6 +773,7 @@ const appStartup = app.whenReady().then(async () => {
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
   logPowerTransitions(powerMonitor);
   registerRendererLogForwarding(ipcMain);
+  if (desktopLog !== null) registerRendererStallForwarding(ipcMain, desktopLog.rendererStalls);
   // Fixed before any window opens; the future embedded supervisor supplies the same descriptor.
   let rendererSources: readonly string[] = [];
   const serveRendererAsset = async (request: Request): Promise<Response> => {
@@ -1068,6 +1085,8 @@ const appStartup = app.whenReady().then(async () => {
       },
     },
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
+    // web_fetch parses HTML in this worker rather than on Electron main.
+    webExtractWorker: join(__dirname, "web-extract-worker.cjs"),
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
@@ -1565,10 +1584,14 @@ const appStartup = app.whenReady().then(async () => {
   // The pictures a transcript card shows (VC-238): live captures bounded in
   // memory, model-requested screenshots also on disk under userData — never
   // the Blob store, whose Session links become the next turn's input.
+  // Both disks write off main's turn (VC-1082); an accepted quit waits for
+  // what they still hold (`settleBackgroundWork` below).
+  const browserPictureSink = browserPictureDisk(browserPicturesRoot(app.getPath("userData")));
+  const browserTraceSink = browserTraceDisk(browserTracesRoot(app.getPath("userData")));
   const browserPictures = new BrowserPictureStore({
     createId: randomUUID,
     now: Date.now,
-    persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+    persist: browserPictureSink,
   });
   // App shortcuts out of a focused Browser page (VC-301): the host delivers,
   // the handler map's `browserShortcuts.*` entries subscribe and hand focus back.
@@ -1612,7 +1635,7 @@ const appStartup = app.whenReady().then(async () => {
       createId: randomUUID,
       now: Date.now,
       frameOf: (pictureId) => browserPictures.copyOf(pictureId),
-      persist: browserTraceDisk(browserTracesRoot(app.getPath("userData"))),
+      persist: browserTraceSink,
     }),
     // The holder's name for the pill and the cursor label (VC-239), from the
     // Session's own projection. A launch with no runtime has no Sessions to
@@ -1649,7 +1672,11 @@ const appStartup = app.whenReady().then(async () => {
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
     settleBackgroundWork: async () => {
-      await restore?.settled();
+      await Promise.all([
+        restore?.settled(),
+        browserPictureSink.settled(),
+        browserTraceSink.settled(),
+      ]);
     },
     terminalQuit: prepareTerminalQuit,
     createSessionRpc,
@@ -3289,6 +3316,8 @@ const appStartup = app.whenReady().then(async () => {
     // Counts, reasons and error class names only (VC-926).
     bootRecovery: () => runner.bootRecovery(),
     cloudRunner: () => macRunner?.snapshot() ?? null,
+    // Counts, durations and code-owned operation names only (VC-1092).
+    perfStalls: () => desktopPerf?.store ?? null,
   });
 
   try {
@@ -3384,6 +3413,8 @@ const appStartup = app.whenReady().then(async () => {
                   }),
             }),
             doctorRepair: repairSessionEnvironment,
+            // `volli perf` reads this machine's stalls (VC-1092).
+            perfStore: () => desktopPerf?.store ?? null,
           }).execute
         : async () =>
             ({

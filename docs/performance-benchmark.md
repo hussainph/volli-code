@@ -2,6 +2,8 @@
 
 The repeatable desktop matrix measures production behavior with a generated,
 real-scale database. It does not enable product optimizations.
+To find and track stalls in the app you actually run, use `volli perf`
+([performance-signals.md](performance-signals.md)).
 
 > Compare runs only on the same machine, in the same power/thermal state, with
 > the same preset, seed, build, repetition count and load arm.
@@ -198,3 +200,23 @@ device/macOS, preset/seed, event distribution, warm-up, worker count and duratio
 A fixture or instrumentation change invalidates an unmatched historical baseline.
 Use a before/after pair on the same machine rather than absolute numbers from a
 different environment.
+
+## Concurrent chat streams
+
+The matrix above draws one live ChatPlane. What N open chats cost while one to
+three of them stream is priced separately, in the renderer's unit suite:
+`apps/desktop/src/renderer/src/stores/chat-multi-stream.bench.test.ts` runs the
+real chat store, real `ChatSessionClient`s and the real shared frame scheduler
+over 10, 50 and 200 resident chats against a 5,034-Session project listing,
+feeding token overlays to 1–3 of them for 300 frames.
+
+```sh
+cd apps/desktop && vp test run src/renderer/src/stores/chat-multi-stream.bench.test.ts
+```
+
+It gates the shape and prints the clock: every frame is **one** store write
+however many clients streamed into it, and the only per-write walk over the
+resident set is the sidebar's project-scoped one — the closed ⌘K palette and
+the usage rail's settle signal read nothing proportional to the open chats.
+Times are jsdom store-and-selector cost only; React's renders those writes
+schedule are not in them.

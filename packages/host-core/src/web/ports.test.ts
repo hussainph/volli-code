@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vite-plus/test";
+import { createSafeWebFetch, type WebExtractor } from "@volli/agent-runtime";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { ResolvedWebAccess } from "./settings";
 import { webPortsFor, webSearchProviderFor } from "./ports";
+
+vi.mock("@volli/agent-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@volli/agent-runtime")>();
+  return { ...original, createSafeWebFetch: vi.fn(original.createSafeWebFetch) };
+});
 
 const KEY = "BSA-super-secret-brave-key-42";
 
@@ -33,6 +39,20 @@ describe("what a Session is offered", () => {
       expect(typeof ports.webFetch).toBe("function");
       expect(typeof ports.webSearch).toBe("function");
     }
+  });
+
+  it("reads HTML where the host says to, and on this thread when it says nowhere", () => {
+    const extract: WebExtractor = vi.fn(async () => ({
+      text: "",
+      extracted: false,
+      truncated: false,
+    }));
+    vi.mocked(createSafeWebFetch).mockClear();
+
+    webPortsFor(brave, extract);
+    webPortsFor(brave);
+
+    expect(vi.mocked(createSafeWebFetch).mock.calls).toEqual([[{ extract }], [{}]]);
   });
 });
 
