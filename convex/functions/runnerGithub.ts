@@ -15,7 +15,9 @@
  *
  * The token itself comes from `mintGithubToken` (`githubTokens.ts`): handed
  * out until 30 minutes before it expires, refreshed under a lease. Only the
- * access token leaves; the refresh token never does.
+ * access token leaves; the refresh token never does. Before it leaves, the
+ * route checks with that token that Volli is installed on the repository's
+ * GitHub account (`github_not_installed` otherwise; see `runnerHttp.ts`).
  */
 
 import { ConvexError, v } from "convex/values";
@@ -30,7 +32,7 @@ import {
 import type { Doc } from "./_generated/dataModel.js";
 import { internalQuery, type QueryCtx } from "./_generated/server";
 import { requireRunner, type CallingRunner } from "./lib/runnerAuth";
-import { projectRepoOf, runnerProject } from "./lib/runnerContext";
+import { projectRepoOf, repoRemoteUrl, runnerProject } from "./lib/runnerContext";
 
 /** How many of a Session's newest jobs are searched for the lease that is starting it. */
 const STARTING_JOB_SCAN = 32;
@@ -135,11 +137,16 @@ export const authorizeToken = internalQuery({
   handler: async (
     ctx,
     args,
-  ): Promise<{ ownerUserId: string; identity: RunnerGitIdentity | null }> => {
+  ): Promise<{
+    ownerUserId: string;
+    identity: RunnerGitIdentity | null;
+    /** The repository's remote (`repoRemoteUrl`), or `null` when none is known. */
+    remoteUrl: string | null;
+  }> => {
     const caller = await requireRunner(ctx);
     const projectId = await claimedProject(ctx, caller, args.claim as RunnerGithubTokenClaim);
     const project = await runnerProject(ctx, caller, projectId);
-    await projectRepoOf(ctx, project, args.projectRepoId);
+    const repo = await projectRepoOf(ctx, project, args.projectRepoId);
     const connection = await ctx.db
       .query("githubConnections")
       .withIndex("by_user", (q) => q.eq("userId", caller.ownerUserId))
@@ -147,6 +154,7 @@ export const authorizeToken = internalQuery({
     return {
       ownerUserId: caller.ownerUserId,
       identity: connection === null ? null : gitIdentityOf(connection),
+      remoteUrl: repoRemoteUrl(repo),
     };
   },
 });

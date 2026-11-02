@@ -268,7 +268,12 @@ describe("runner-managed clones", { timeout: REAL_GIT_TIMEOUT_MS }, () => {
       },
       {
         ok: false as const,
-        error: { code: "github_not_connected" as const, message: "no", resetAt: null },
+        error: {
+          code: "github_not_connected" as const,
+          message: "no",
+          resetAt: null,
+          account: null,
+        },
       },
     ];
     const credentials = managedCloneCredentials({ get: async () => answers.shift()! });

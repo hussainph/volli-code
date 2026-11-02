@@ -68,6 +68,7 @@ export {
 export {
   askGitCredentialDaemon,
   createGitCredentialBroker,
+  GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG,
   runnerSessionGitEnv,
   serveGitCredentials,
   type GitCredentialBroker,
