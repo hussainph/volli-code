@@ -358,6 +358,13 @@ log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or
 - **Cheap, and never fatal.** The level check runs before anything is built;
   the file sink only queues on the caller's stack, and a disk failure disables
   it with one warning.
+- **Main stalls are logged** (`startMainStallMonitor`, `log/stall`; VC-1073).
+  While it runs, every door's synchronous span is timed (two clock reads) and
+  one over the threshold (200 ms) writes a `main-stall` `main stall` line in
+  that call's own trace; event-loop lag no door explains is logged as
+  `attribution: "unattributed"` with the last door call as a hint, never its
+  trace. An hourly `main stall load` line rolls up the count, loop-delay
+  p95/max and the top operations. The desktop starts it with its log.
 - **No bare console.** Production code in host-core and Electron main logs only
   through a host logger; `src/log/no-console.test.ts` (and its twin in
   `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and

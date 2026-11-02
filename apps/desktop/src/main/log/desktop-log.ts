@@ -9,6 +9,10 @@
  * - **In the terminal** too in a dev build, as readable lines.
  * - **Levels:** `VOLLI_LOG_LEVEL` when set; otherwise `debug` in a dev build
  *   (every hop, for the end-to-end view) and `info` in a packaged one.
+ * - **Main stalls** (VC-1073): while the log is installed, every event-loop
+ *   block in main over 200 ms (`VOLLI_MAIN_STALL_MS` when set) writes a
+ *   `main-stall` line naming the door and operation that held it, and an
+ *   hourly roll-up (`startMainStallMonitor`).
  *
  * Nothing here is visible to a person using the app: no window, no setting.
  */
@@ -20,6 +24,7 @@ import {
   installHostLog,
   profileLogsRoot,
   reportToStderr,
+  startMainStallMonitor,
   teeSinks,
   type LogRing,
   type LogSink,
@@ -55,6 +60,15 @@ export interface DesktopLogOptions {
   readonly terminal?: boolean;
 }
 
+/** `VOLLI_MAIN_STALL_MS` as a threshold: a positive integer, or the monitor's default. */
+export function mainStallThresholdMs(
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  const raw = env["VOLLI_MAIN_STALL_MS"];
+  if (raw === undefined || !/^[1-9][0-9]*$/.test(raw)) return undefined;
+  return Number(raw);
+}
+
 /** The profile's log directory. */
 export function desktopLogDirectory(userData: string): string {
   return profileLogsRoot(userData);
@@ -81,6 +95,8 @@ export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
   const sinks: LogSink[] = [file, ring, ...(options.sinks ?? [])];
   if (options.terminal ?? options.dev) sinks.push(consoleSink(options.console));
   const undo = installHostLog({ level, sink: teeSinks(...sinks) });
+  const thresholdMs = mainStallThresholdMs(options.env);
+  const stalls = startMainStallMonitor(thresholdMs === undefined ? {} : { thresholdMs });
   return {
     directory,
     level,
@@ -92,6 +108,7 @@ export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
         new Promise<void>((resolve) => setTimeout(resolve, deadlineMs).unref()),
       ]),
     async close() {
+      stalls.stop();
       undo();
       await file.close();
     },
