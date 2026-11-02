@@ -27,6 +27,7 @@ import {
   type ListSessionsQuery,
   type SessionListingPage,
   type SessionListingRow,
+  type SessionListingProjection,
   type SessionProjection,
 } from "@volli/shared";
 
@@ -45,7 +46,7 @@ export const SESSION_LISTING_ROWS_CHUNK = 512;
 
 export async function sessionListingRowsForRoster(
   db: Database.Database,
-  sessions: readonly SessionProjection[],
+  sessions: readonly SessionListingProjection[],
   liveAttachmentIds: ReadonlySet<string>,
   yieldToHost: () => Promise<void> = yieldToMainProcess,
 ): Promise<SessionListingRow[]> {
@@ -93,7 +94,7 @@ function yieldToMainProcess(): Promise<void> {
  */
 export interface SessionListingSources {
   readonly db: Database.Database;
-  readonly listSessions: (query: ListSessionsQuery) => Promise<readonly SessionProjection[]>;
+  readonly listSessions: (query: ListSessionsQuery) => Promise<readonly SessionListingProjection[]>;
   readonly liveAttachmentIds: () => ReadonlySet<string>;
 }
 

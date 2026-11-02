@@ -31,7 +31,7 @@ import { SESSION_READ_VERBS } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
-  SessionProjection,
+  SessionListingProjection,
   SessionReadVerb,
   SessionRecord,
 } from "@volli/shared";
@@ -126,8 +126,8 @@ export function rosterLoaders(
   sessionEngine: SessionEngine,
   projects: readonly { readonly id: string }[],
 ): Pick<AgentVerbContext, "loadProjections" | "loadSessions"> {
-  let projectionsPromise: Promise<readonly SessionProjection[]> | null = null;
-  const loadProjections = (): Promise<readonly SessionProjection[]> => {
+  let projectionsPromise: Promise<readonly SessionListingProjection[]> | null = null;
+  const loadProjections = (): Promise<readonly SessionListingProjection[]> => {
     projectionsPromise ??= (async () =>
       (
         await Promise.all(
