@@ -28,6 +28,7 @@ import {
   createSafeWebFetch,
   createWebSearch,
   searxngWebSearchProvider,
+  type WebExtractor,
   type WebSearchProvider,
 } from "@volli/agent-runtime";
 import type { SessionRuntimeSpec } from "@volli/shared";
@@ -67,11 +68,17 @@ export function webSearchProviderFor(access: ResolvedWebAccess): WebSearchProvid
   }
 }
 
-/** The ports for one attachment. `{}` when this profile has configured no web access. */
-export function webPortsFor(access: ResolvedWebAccess): SessionWebPorts {
+/**
+ * The ports for one attachment. `{}` when this profile has configured no web access.
+ *
+ * `extract` is where the fetcher reads HTML: the host's worker-backed
+ * extractor, so a large page is parsed off the thread the host serves from.
+ * Absent, it is parsed on that thread.
+ */
+export function webPortsFor(access: ResolvedWebAccess, extract?: WebExtractor): SessionWebPorts {
   const provider = webSearchProviderFor(access);
   if (provider === null) return {};
-  const fetcher = createSafeWebFetch();
+  const fetcher = createSafeWebFetch(extract === undefined ? {} : { extract });
   const search = createWebSearch({ provider });
   return {
     webFetch: (input) => fetcher.fetch(input),

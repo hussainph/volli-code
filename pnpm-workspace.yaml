@@ -157,6 +157,14 @@ patchedDependencies:
   # main's memory for the length of its deadline. Upstream bounds the VM heap
   # but not what the host accumulates from it. Absent, upstream behavior.
   "@earendil-works/pi-codemode@1.0.0": patches/@earendil-works__pi-codemode@1.0.0.patch
+  # Stops the providers re-parsing a tool call's whole accumulated argument
+  # JSON on every streamed delta (VC-1074). Upstream's per-delta
+  # `parseStreamingJson` is quadratic in the argument's size and runs
+  # synchronously on Electron main: a 100 KB `write` cost seconds of CPU. Past
+  # 8 KiB a block's partial `arguments` refresh only after 1/8 growth, so the
+  # work stays linear; smaller calls and every `toolcall_end` parse exactly as
+  # upstream, and event shapes are unchanged.
+  "@earendil-works/pi-ai@1.0.0": patches/@earendil-works__pi-ai@1.0.0.patch
 
 peerDependencyRules:
   allowAny:

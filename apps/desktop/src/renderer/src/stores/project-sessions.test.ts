@@ -2,6 +2,7 @@ import {
   EMPTY_SESSION_USAGE_SUMMARY,
   PERSON_STARTED,
   type ChatSessionRecord,
+  type ModelSelection,
   type SessionListingRow,
   type SessionRecord,
 } from "@volli/shared";
@@ -16,6 +17,7 @@ import {
   projectSessionListingPending,
   sessionReadOf,
   sessionTitleOf,
+  createSessionActivityIntake,
   subscribeProjectSessionActivity,
   unreadSessionIds,
   useProjectSessionsStore,
@@ -526,7 +528,8 @@ describe("project-sessions store", () => {
     expect(list).toHaveBeenCalledTimes(3);
   });
 
-  it("folds a pushed notice through the app-wide subscription", () => {
+  it("folds a pushed notice through the app-wide subscription, on the next frame", () => {
+    vi.useFakeTimers();
     const off = vi.fn();
     let push: ((notice: SessionActivityNotice) => void) | null = null;
     const onActivity = vi.fn((callback: (notice: SessionActivityNotice) => void) => {
@@ -548,10 +551,27 @@ describe("project-sessions store", () => {
       }),
     );
 
+    // Batched (VC-1078): a new Session lands with the frame, not mid-burst.
+    expect(useProjectSessionsStore.getState().byProject.p1?.chat).toEqual([]);
+    vi.advanceTimersByTime(100);
     expect(useProjectSessionsStore.getState().byProject.p1?.chat).toEqual([chatRecord()]);
+
+    // Unsubscribing applies what is still pending rather than losing it.
+    push!(
+      notice({
+        kind: "chat",
+        record: chatRecord({ activity: "working" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      }),
+    );
     unsubscribe();
     expect(off).toHaveBeenCalledTimes(1);
+    expect(useProjectSessionsStore.getState().byProject.p1?.chat).toEqual([
+      chatRecord({ activity: "working" }),
+    ]);
     useProjectSessionsStore.setState({ byProject: {} });
+    vi.useRealTimers();
   });
 
   it("repoints a terminal row's running harness, and holds identity when nothing moved", async () => {
@@ -922,5 +942,276 @@ describe("the unread axis", () => {
     );
 
     expect(merged.read).toEqual({ c1: { unreadSince: 1 } });
+  });
+});
+
+describe("batched activity (VC-1078)", () => {
+  const pushedChat = (overrides: Partial<ChatSessionRecord> = {}): SessionListingRow => ({
+    kind: "chat",
+    record: chatRecord(overrides),
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  });
+  const terminalRow = (overrides: Partial<SessionRecord> = {}): SessionListingRow => ({
+    kind: "terminal",
+    record: record(overrides),
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  });
+  const run = {
+    kind: "automation",
+    automationRunId: null,
+    automationName: "Nightly sweep",
+  } as const;
+
+  function seeded(rows: Partial<ProjectSessionRows> = {}) {
+    const store = createProjectSessionsStore();
+    store.setState({
+      byProject: {
+        p1: {
+          terminal: [record()],
+          chat: [chatRecord(), chatRecord({ sessionId: "c2" })],
+          provenance: {},
+          read: {},
+          ...rows,
+        },
+      },
+      listingState: { p1: "loaded" },
+    });
+    return store;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("folds a burst in one write, keeping every row that did not move", () => {
+    const store = seeded();
+    const before = store.getState().byProject.p1!;
+    const writes = vi.fn();
+    store.subscribe(writes);
+
+    store
+      .getState()
+      .applyActivities([
+        notice(pushedChat({ lastActivityAt: 2 })),
+        notice(pushedChat({ lastActivityAt: 3 })),
+        notice(terminalRow({ title: "Renamed" })),
+      ]);
+
+    expect(writes).toHaveBeenCalledTimes(1);
+    const after = store.getState().byProject.p1!;
+    // The later row for a Session wins, in place.
+    expect(after.chat.map((chat) => chat.lastActivityAt)).toEqual([3, 1]);
+    expect(after.chat[1]).toBe(before.chat[1]);
+    expect(after.terminal[0]?.title).toBe("Renamed");
+    expect(after.provenance).toBe(before.provenance);
+    expect(after.read).toBe(before.read);
+  });
+
+  it("writes nothing for a row that says what the store already holds", () => {
+    const store = seeded();
+    const before = store.getState().byProject;
+
+    // A structured clone: equal, never identical.
+    store
+      .getState()
+      .applyActivities([
+        notice(pushedChat()),
+        notice({ ...terminalRow(), provenance: { kind: "user" } }),
+      ]);
+    store.getState().applyActivities([]);
+
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("folds marks and read stamps only where they move", () => {
+    const store = seeded({ provenance: { c2: run }, read: { c2: { unreadSince: 5 } } });
+    const before = store.getState().byProject.p1!;
+
+    store.getState().applyActivities([
+      notice({
+        ...pushedChat({ sessionId: "c2" }),
+        provenance: { ...run },
+        read: { unreadSince: 5 },
+      }),
+    ]);
+    expect(store.getState().byProject.p1).toBe(before);
+
+    store
+      .getState()
+      .applyActivities([notice({ ...pushedChat(), provenance: run, read: { unreadSince: 9 } })]);
+    const after = store.getState().byProject.p1!;
+    expect(after.provenance).toEqual({ c1: run, c2: run });
+    expect(after.read).toEqual({ c1: { unreadSince: 9 }, c2: { unreadSince: 5 } });
+    // Records untouched, so their arrays keep their identity too.
+    expect(after.chat).toBe(before.chat);
+    expect(after.terminal).toBe(before.terminal);
+
+    store
+      .getState()
+      .applyActivities([
+        notice({ ...pushedChat({ sessionId: "c2" }), read: { unreadSince: null } }),
+      ]);
+    expect(store.getState().byProject.p1?.read).toEqual({ c1: { unreadSince: 9 } });
+  });
+
+  it("moves a Session across the two lists in either direction", () => {
+    const store = seeded();
+
+    store.getState().applyActivities([notice(terminalRow({ id: "c2" }))]);
+    expect(store.getState().byProject.p1?.chat.map((chat) => chat.sessionId)).toEqual(["c1"]);
+    expect(store.getState().byProject.p1?.terminal.map((row) => row.id)).toEqual(["s1", "c2"]);
+
+    store.getState().applyActivities([notice(pushedChat({ sessionId: "s1" }))]);
+    expect(store.getState().byProject.p1?.terminal.map((row) => row.id)).toEqual(["c2"]);
+    expect(store.getState().byProject.p1?.chat.map((chat) => chat.sessionId)).toEqual(["c1", "s1"]);
+  });
+
+  it("keeps a seeded project with no read map resting when nothing is unread", () => {
+    const store = seeded({ read: undefined });
+    store.getState().applyActivities([notice(pushedChat({ activity: "working" }))]);
+    expect(store.getState().byProject.p1?.read).toEqual({});
+  });
+
+  it("drops notices for an unlisted project and keeps other projects' identities", () => {
+    const store = seeded();
+    const before = store.getState().byProject;
+
+    store.getState().applyActivities([notice(pushedChat({ projectId: "p2" }), "p2")]);
+    expect(store.getState().byProject).toBe(before);
+
+    store
+      .getState()
+      .applyActivities([
+        notice(pushedChat({ projectId: "p2" }), "p2"),
+        notice(pushedChat({ activity: "working" })),
+      ]);
+    expect(store.getState().byProject.p2).toBeUndefined();
+    expect(store.getState().byProject.p1?.chat[0]?.activity).toBe("working");
+  });
+
+  describe("the intake", () => {
+    it("holds a recency-only push for a second, coalescing per Session", () => {
+      vi.useFakeTimers();
+      const store = seeded();
+      const writes = vi.fn();
+      store.subscribe(writes);
+      const intake = createSessionActivityIntake(store);
+
+      for (let at = 2; at <= 10; at += 1) intake.push(notice(pushedChat({ lastActivityAt: at })));
+      intake.push(notice(pushedChat({ sessionId: "c2", lastActivityAt: 4 })));
+      vi.advanceTimersByTime(999);
+      expect(writes).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect(store.getState().byProject.p1?.chat.map((chat) => chat.lastActivityAt)).toEqual([
+        10, 4,
+      ]);
+      // A repeat push says nothing new, and writes nothing when it lands.
+      intake.push(notice(pushedChat({ lastActivityAt: 10 })));
+      vi.advanceTimersByTime(1_000);
+      expect(writes).toHaveBeenCalledTimes(1);
+    });
+
+    it("lands a material change on the next animation frame, carrying held recency along", () => {
+      vi.useFakeTimers();
+      const frames: FrameRequestCallback[] = [];
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        vi.fn((callback: FrameRequestCallback) => frames.push(callback)),
+      );
+      const cancel = vi.fn();
+      vi.stubGlobal("cancelAnimationFrame", cancel);
+      const store = seeded();
+      const intake = createSessionActivityIntake(store);
+
+      intake.push(notice(pushedChat({ sessionId: "c2", lastActivityAt: 7 })));
+      intake.push(notice(pushedChat({ activity: "working" })));
+      intake.push(notice(pushedChat({ activity: "working", title: "Renamed" })));
+      expect(frames).toHaveLength(1);
+
+      frames[0]!(0);
+      const chats = store.getState().byProject.p1!.chat;
+      expect(chats.map((chat) => [chat.activity, chat.title, chat.lastActivityAt])).toEqual([
+        ["working", "Renamed", 1],
+        ["idle", "Plan the migration", 7],
+      ]);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      // Both timers were stood down by the flush.
+      vi.advanceTimersByTime(1_000);
+      expect(store.getState().byProject.p1!.chat).toBe(chats);
+    });
+
+    it("still lands a material change where no frame runs", () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("requestAnimationFrame", undefined);
+      const store = seeded();
+      const intake = createSessionActivityIntake(store);
+
+      // No baseline for p2, a Session the rows never saw, and a mark that
+      // moved: each is material on its own.
+      intake.push(notice(pushedChat({ projectId: "p2" }), "p2"));
+      intake.push(notice(pushedChat({ sessionId: "c3" })));
+      intake.push(notice({ ...pushedChat({ sessionId: "c2" }), provenance: run }));
+      intake.push(notice({ ...terminalRow(), read: { unreadSince: 3 } }));
+      vi.advanceTimersByTime(100);
+
+      const rows = store.getState().byProject.p1!;
+      expect(rows.chat.map((chat) => chat.sessionId)).toEqual(["c1", "c2", "c3"]);
+      expect(rows.provenance).toEqual({ c2: run });
+      expect(rows.read).toEqual({ s1: { unreadSince: 3 } });
+    });
+
+    it("treats a changed terminal record as material and a flush with nothing pending as nothing", () => {
+      vi.useFakeTimers();
+      const store = seeded();
+      const writes = vi.fn();
+      store.subscribe(writes);
+      const intake = createSessionActivityIntake(store);
+
+      intake.flush();
+      expect(writes).not.toHaveBeenCalled();
+
+      intake.push(notice(terminalRow({ endedAt: 5 })));
+      vi.advanceTimersByTime(100);
+      expect(store.getState().byProject.p1?.terminal[0]?.endedAt).toBe(5);
+
+      intake.push(notice(terminalRow({ endedAt: 5, lastActivityAt: 6 })));
+      intake.dispose();
+      expect(store.getState().byProject.p1?.terminal[0]?.lastActivityAt).toBe(6);
+      expect(writes).toHaveBeenCalledTimes(2);
+    });
+
+    it("compares nested values by what they say", () => {
+      vi.useFakeTimers();
+      const model = {
+        providerId: "anthropic",
+        modelId: "sonnet",
+        reasoningLevel: "medium",
+      } as const;
+      const store = seeded({ chat: [chatRecord({ model })] });
+      const before = store.getState().byProject.p1!;
+      const intake = createSessionActivityIntake(store);
+
+      intake.push(notice(pushedChat({ model: { ...model } })));
+      intake.flush();
+      expect(store.getState().byProject.p1).toBe(before);
+
+      // Shapes that only look alike are not alike.
+      const odd = (value: unknown) => notice(pushedChat({ model: value as ModelSelection }));
+      for (const value of [
+        [model.providerId, model.modelId, model.reasoningLevel],
+        { providerId: "anthropic", modelId: "sonnet" },
+        { providerId: "anthropic", modelId: "sonnet", effort: "medium" },
+      ]) {
+        store.setState({ byProject: { p1: before } });
+        intake.push(odd(value));
+        vi.advanceTimersByTime(100);
+        expect(store.getState().byProject.p1?.chat[0]?.model).toEqual(value);
+      }
+    });
   });
 });

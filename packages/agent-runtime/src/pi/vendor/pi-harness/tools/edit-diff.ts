@@ -424,7 +424,202 @@ export function generateDiffString(
   newContent: string,
   contextLines = 4,
 ): { diff: string; firstChangedLine: number | undefined } {
-  const parts = Diff.diffLines(oldContent, newContent);
+  return renderDiffString(
+    Diff.diffLines(oldContent, newContent),
+    oldContent,
+    newContent,
+    contextLines,
+  );
+}
+
+/**
+ * How long the edit tool may spend comparing a file, and how many changed
+ * lines a comparison may hold (VC-1074). jsdiff's line diff is O((N+M)·D) and
+ * runs synchronously on the host's main thread: scattered changes across a
+ * 20k-line file took seconds. Past either bound the edit still lands; only its
+ * diff is summarized.
+ */
+export const EDIT_DIFF_BOUNDS: EditDiffBounds = { timeoutMs: 100, maxEditLength: 20_000 };
+
+export interface EditDiffBounds {
+  /** Wall time shared by every comparison of one edit. */
+  timeoutMs: number;
+  /** Most inserted plus removed lines one comparison may report. */
+  maxEditLength: number;
+}
+
+export interface EditDiffInput {
+  path: string;
+  /** The file as read, BOM and line endings included. */
+  original: string;
+  /** The file as written. */
+  written: string;
+  /** `original` without its BOM, LF-normalized: what the display diff shows. */
+  oldView: string;
+  /** `written` without its BOM, LF-normalized. */
+  newView: string;
+}
+
+export interface EditDiffResult {
+  diff: string;
+  /** Byte-faithful unified patch; absent when the comparison was bounded out. */
+  patch?: string;
+  firstChangedLine: number | undefined;
+}
+
+/**
+ * The edit tool's display diff and patch from one bounded line diff.
+ *
+ * The display diff compares the LF views. When the file has neither a BOM nor
+ * a CR, those views are the bytes themselves, so the same comparison also
+ * yields the patch, exactly as `generateUnifiedPatch` would have written it.
+ * Otherwise the patch needs its own comparison of the bytes, inside what is
+ * left of the same time budget. Either comparison running out of budget
+ * leaves a summary instead of a diff, and no patch.
+ */
+export function generateEditDiff(
+  input: EditDiffInput,
+  bounds: EditDiffBounds = EDIT_DIFF_BOUNDS,
+): EditDiffResult {
+  const deadline = Date.now() + bounds.timeoutMs;
+  const parts = Diff.diffLines(input.oldView, input.newView, {
+    timeout: bounds.timeoutMs,
+    maxEditLength: bounds.maxEditLength,
+  });
+  if (parts === undefined) return boundedOutDiff(input.oldView, input.newView);
+  const display = renderDiffString(parts, input.oldView, input.newView, 4);
+
+  if (input.original === input.oldView && input.written === input.newView) {
+    return { ...display, patch: unifiedPatchFromParts(input.path, parts, 4) };
+  }
+  const remaining = deadline - Date.now();
+  const patch =
+    remaining > 0
+      ? Diff.createTwoFilesPatch(
+          input.path,
+          input.path,
+          input.original,
+          input.written,
+          undefined,
+          undefined,
+          {
+            context: 4,
+            headerOptions: Diff.FILE_HEADERS_ONLY,
+            timeout: remaining,
+            maxEditLength: bounds.maxEditLength,
+          },
+        )
+      : undefined;
+  return patch === undefined ? display : { ...display, patch };
+}
+
+function boundedOutDiff(oldView: string, newView: string): EditDiffResult {
+  const limit = Math.min(oldView.length, newView.length);
+  let index = 0;
+  while (index < limit && oldView.charCodeAt(index) === newView.charCodeAt(index)) index++;
+  let line = 1;
+  for (
+    let at = newView.indexOf("\n");
+    at !== -1 && at < index;
+    at = newView.indexOf("\n", at + 1)
+  ) {
+    line++;
+  }
+  return {
+    diff: "(diff omitted: the change is too large to compare)",
+    firstChangedLine: line,
+  };
+}
+
+/** A line diff's text as lines, each keeping its LF; the last may have none. */
+function partLines(value: string): string[] {
+  const lines = value.split("\n");
+  const last = lines.pop()!;
+  const result = lines.map((line) => `${line}\n`);
+  if (last !== "") result.push(last);
+  return result;
+}
+
+/**
+ * The unified patch `Diff.createTwoFilesPatch` writes with `FILE_HEADERS_ONLY`
+ * for the comparison `parts` describes: hunks of changed lines with up to
+ * `context` unchanged lines either side, merged when the unchanged run
+ * between them is at most twice that, and a no-newline marker after a final
+ * line without one.
+ */
+function unifiedPatchFromParts(path: string, parts: Diff.ChangeObject<string>[], context: number) {
+  const hunks: Diff.StructuredPatchHunk[] = [];
+  let hunk: Diff.StructuredPatchHunk | undefined;
+  let oldLine = 1;
+  let newLine = 1;
+  let previousUnchanged: string[] = [];
+
+  const close = (trailing: string[]) => {
+    hunk!.lines.push(...trailing.map((line) => ` ${line}`));
+    hunk!.oldLines += trailing.length;
+    hunk!.newLines += trailing.length;
+    hunks.push(hunk!);
+    hunk = undefined;
+  };
+
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    const lines = partLines(part.value);
+    if (part.added || part.removed) {
+      if (hunk === undefined) {
+        const leading = previousUnchanged.slice(Math.max(0, previousUnchanged.length - context));
+        hunk = {
+          oldStart: oldLine - leading.length,
+          oldLines: leading.length,
+          newStart: newLine - leading.length,
+          newLines: leading.length,
+          lines: leading.map((line) => ` ${line}`),
+        };
+      }
+      const sign = part.added ? "+" : "-";
+      hunk.lines.push(...lines.map((line) => `${sign}${line}`));
+      if (part.added) {
+        hunk.newLines += lines.length;
+        newLine += lines.length;
+      } else {
+        hunk.oldLines += lines.length;
+        oldLine += lines.length;
+      }
+      continue;
+    }
+    if (hunk !== undefined) {
+      const isLast = index === parts.length - 1;
+      if (lines.length <= context * 2 && !isLast) {
+        hunk.lines.push(...lines.map((line) => ` ${line}`));
+        hunk.oldLines += lines.length;
+        hunk.newLines += lines.length;
+      } else {
+        close(lines.slice(0, context));
+      }
+    }
+    previousUnchanged = lines;
+    oldLine += lines.length;
+    newLine += lines.length;
+  }
+  if (hunk !== undefined) close([]);
+
+  for (const each of hunks) {
+    each.lines = each.lines.flatMap((line) =>
+      line.endsWith("\n") ? [line.slice(0, -1)] : [line, "\\ No newline at end of file"],
+    );
+  }
+  return Diff.formatPatch(
+    { oldFileName: path, newFileName: path, oldHeader: undefined, newHeader: undefined, hunks },
+    Diff.FILE_HEADERS_ONLY,
+  );
+}
+
+function renderDiffString(
+  parts: Diff.ChangeObject<string>[],
+  oldContent: string,
+  newContent: string,
+  contextLines: number,
+): { diff: string; firstChangedLine: number | undefined } {
   const output: string[] = [];
 
   const oldLines = oldContent.split("\n");

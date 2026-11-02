@@ -757,18 +757,37 @@
  * which the rule above has already remapped onto the title's ink tier, so the
  * sweep survives the sidebar's token remap in either appearance.
  *
- * The peak is `aria-hidden` and duplicates the title, so it must never be
- * reachable: `pointer-events: none` plus the parent's own truncation. Under
- * reduced motion it is dropped outright rather than parked mid-sweep — a frozen
- * highlight halfway along a word reads as a rendering bug, not as stillness. */
-@keyframes session-title-sweep {
+ * PAID FOR ON THE COMPOSITOR (VC-1078), the way the transcript's
+ * `.chat-shimmer` below is. This used to animate `mask-position`, which is a
+ * main-thread repaint of every working row's glyphs on every frame — and a
+ * band of running Sessions is exactly when the main thread has the least to
+ * spare. Now the masked BAND moves (`transform`) and the bright copy inside it
+ * runs the exact inverse translation, so the words stand still while the
+ * highlight crosses them. The band is one period wider than the title and
+ * travels one period per cycle, so the repeating mask reads as the same
+ * endless sweep it was. Change one keyframe and you must change its mirror, or
+ * the bright copy drifts off the words it lights.
+ *
+ * The band duplicates the title, so it must never be reachable: `aria-hidden`
+ * in the markup, `pointer-events: none` here, and the parent's own clipping.
+ * Under reduced motion it is dropped outright rather than parked mid-sweep — a
+ * frozen highlight halfway along a word reads as a rendering bug, not as
+ * stillness. */
+@keyframes session-title-sweep-band {
   from {
-    -webkit-mask-position: 0 center;
-    mask-position: 0 center;
+    transform: translateX(0);
   }
   to {
-    -webkit-mask-position: calc(-1 * var(--session-sweep-period)) center;
-    mask-position: calc(-1 * var(--session-sweep-period)) center;
+    transform: translateX(calc(-1 * var(--session-sweep-period)));
+  }
+}
+
+@keyframes session-title-sweep-ink {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(var(--session-sweep-period));
   }
 }
 
@@ -783,13 +802,12 @@
   color: color-mix(in oklab, var(--sidebar-foreground) 68%, transparent);
 }
 
-.session-title-sweep > .session-title-peak {
+.session-title-sweep > .session-title-band {
   position: absolute;
-  inset: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--sidebar-foreground);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% + var(--session-sweep-period));
   pointer-events: none;
   -webkit-mask-image: linear-gradient(
     90deg,
@@ -813,13 +831,27 @@
   mask-size: var(--session-sweep-period) 100%;
   -webkit-mask-repeat: repeat-x;
   mask-repeat: repeat-x;
-  animation: session-title-sweep 3.5s linear infinite;
+  animation: session-title-sweep-band 3.5s linear infinite;
+}
+
+/* Exactly the title's own box: the band is one period wider, and the copy must
+ * truncate where the title underneath it does. */
+.session-title-band > .session-title-peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% - var(--session-sweep-period));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sidebar-foreground);
+  animation: session-title-sweep-ink 3.5s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-title-sweep > .session-title-peak {
-    animation: none;
-    opacity: 0;
+  .session-title-sweep > .session-title-band {
+    display: none;
   }
 }
 
@@ -898,11 +930,11 @@
 
 /* The transcript's own sweep — the sidebar's effect, paid for differently.
  *
- * The row above animates `mask-position`, which is a repaint of the glyphs on
- * every frame. That is affordable for one sidebar row; it is not affordable on
- * a chat surface that is streaming, where the frames this would take are the
- * frames the answer needs. So the band here MOVES rather than the mask under
- * it: `transform` is the only property the compositor can advance on its own,
+ * The row above used to animate `mask-position`, which is a repaint of the
+ * glyphs on every frame — not affordable on a chat surface that is streaming,
+ * where the frames this would take are the frames the answer needs, and since
+ * VC-1078 not on the sidebar either. So the band here MOVES rather than the
+ * mask under it: `transform` is the only property the compositor can advance on its own,
  * and a translated layer is rastered once for the whole sweep.
  *
  * The words must stay put while the band crosses them, so `-ink` runs the exact

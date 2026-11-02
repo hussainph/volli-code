@@ -54,6 +54,7 @@ import {
   sessionProvenanceOf,
   type ChatSessionRecord,
   type ChatWaitingReason,
+  type DataChangeKind,
   type HarnessId,
   type SessionActivitySource,
   type SessionActivityState,
@@ -1042,7 +1043,9 @@ export function buildActiveSessionListing(
    * carries after its `session:` / `chat:` prefix.
    */
   const isUnread = (rowId: string): boolean =>
-    unreadSessionIds.has(rowId.slice(rowId.indexOf(":") + 1));
+    // Most projects have nothing unread, and this is asked of every row more
+    // than once per build — so the empty set answers without cutting the id.
+    unreadSessionIds.size > 0 && unreadSessionIds.has(rowId.slice(rowId.indexOf(":") + 1));
 
   const activeEntries: ActiveEntry[] = [];
   const previousById = new Map<string, PreviousCandidate>();
@@ -1435,4 +1438,102 @@ export function buildActiveSessionListing(
   previous.sort((a, b) => b.endedOrQuietAt - a.endedOrQuietAt);
 
   return { active: activeEntries.map((entry) => entry.row), previous, nextBoundaryAt };
+}
+
+/** Whether two Previous rows draw the same thing; `target` is rebuilt per build, so it is compared by value. */
+function samePreviousRow(left: PreviousSessionRow, right: PreviousSessionRow): boolean {
+  return (
+    left.id === right.id &&
+    left.ticket === right.ticket &&
+    left.title === right.title &&
+    left.kind === right.kind &&
+    left.harnessId === right.harnessId &&
+    left.endedOrQuietAt === right.endedOrQuietAt &&
+    left.activity === right.activity &&
+    left.provenance === right.provenance &&
+    left.cleaned === right.cleaned &&
+    sameTarget(left.target, right.target)
+  );
+}
+
+function sameTarget(left: ActiveSessionTarget | null, right: ActiveSessionTarget | null): boolean {
+  if (left === null || right === null) return left === right;
+  switch (left.kind) {
+    case "terminal":
+      return (
+        right.kind === "terminal" && left.tabId === right.tabId && left.paneId === right.paneId
+      );
+    case "chat":
+      return (
+        right.kind === "chat" && left.tabId === right.tabId && left.sessionId === right.sessionId
+      );
+    case "session-detail":
+      return (
+        right.kind === "session-detail" &&
+        left.projectId === right.projectId &&
+        left.sessionId === right.sessionId
+      );
+  }
+}
+
+/**
+ * The Previous band of a new build, holding the last build's identities where
+ * nothing moved (VC-1078).
+ *
+ * The builder is pure and mints every row afresh, but most rebuilds — a
+ * running Session's newer stamp, a terminal's output — change nothing in
+ * Previous, which at owner scale holds thousands of rows. Everything the view
+ * derives from the band (its ticket groups, its age clock, the peek's index)
+ * is memoised on the array, so handing back the SAME array when every row is
+ * equal is what keeps one Active row's tick from re-walking all of them; when
+ * some rows did move, the unchanged ones keep their objects so their memoised
+ * rows do not redraw.
+ */
+export function holdPreviousRows(
+  held: readonly PreviousSessionRow[],
+  next: readonly PreviousSessionRow[],
+): readonly PreviousSessionRow[] {
+  if (held === next) return held;
+  if (held.length === next.length) {
+    let at = 0;
+    while (at < next.length && samePreviousRow(held[at]!, next[at]!)) at += 1;
+    if (at === next.length) return held;
+  }
+  const heldById = new Map(held.map((row) => [row.id, row]));
+  return next.map((row) => {
+    const prior = heldById.get(row.id);
+    return prior !== undefined && samePreviousRow(prior, row) ? prior : row;
+  });
+}
+
+/**
+ * Whether a planning refresh could have moved a Needs-Review ticket's latest
+ * Session signal, so the sidebar must read them again (VC-1078).
+ *
+ * That read is project-wide and costly at scale, and untargeted refreshes are
+ * frequent, so it is spent only where an answer could differ. A refresh is
+ * skipped when it PROVABLY cannot reach one:
+ *
+ *  - it names another project;
+ *  - it says it was a comment, a working copy or retention change — none of
+ *    which writes a Session signal;
+ *  - it names a ticket that is not in Needs Review, whose signal this band
+ *    does not show.
+ *
+ * Anything it does not say stays possible, so a scope with no hint still reads.
+ */
+export function planningChangeCanMoveSignals(
+  change: {
+    readonly ticketId: string | null;
+    readonly projectId: string | null;
+    readonly kind?: DataChangeKind;
+  },
+  projectId: string,
+  needsReviewIds: readonly string[],
+): boolean {
+  if (change.projectId !== null && change.projectId !== projectId) return false;
+  if (change.kind === "comment" || change.kind === "worktree" || change.kind === "retention") {
+    return false;
+  }
+  return change.ticketId === null || needsReviewIds.includes(change.ticketId);
 }
