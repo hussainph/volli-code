@@ -141,3 +141,22 @@ export const SESSION_ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   stopped: "Stopped",
   interrupted: "Interrupted",
 };
+
+/**
+ * A status dot's state, in words — for a surface that names the state of a tab
+ * it lists rather than painting its dot (a tab group's popover, VC-1052). The
+ * words agree with {@link SESSION_ACTIVITY_LABEL} wherever the two overlap.
+ */
+export const STATUS_DOT_LABEL: Record<StatusDotState, string> = {
+  working: "Working",
+  setup: "Setting up",
+  ready: "Ready",
+  starting: "Starting",
+  waiting: "Waiting for you",
+  error: "Error",
+  idle: "Idle",
+  parked: "Parked",
+  exited: "Exited",
+  stopped: "Stopped",
+  interrupted: "Interrupted",
+};

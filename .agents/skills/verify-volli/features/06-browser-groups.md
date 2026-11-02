@@ -27,11 +27,15 @@ live tabs; keep that safety cap intact when testing many pages.
 2. Open the Activity Island's browser cluster. Verify title-first rows and
    host:port/path beneath each title, with no preview thumbnail.
 3. Press a page row's **Open beside chat**. Verify ONE group chip on the top
-   strip (segments: the chat and the page), two named panes side by side with
-   one resize separator, and a strip of its own on top of each pane.
+   strip — a single tab, the focused member, with a stacked glyph and no
+   segments or count — two named panes side by side with one resize separator,
+   and a strip of its own on top of each pane. Hover the chip (or right-click
+   it): its popover lists the chat and the page, one row each, with the page's
+   host:port/path beneath its title.
 4. Select Board on the top strip: it occupies the whole plane, no separator,
-   no pane strips. Select either segment of the chip: the two panes, their
-   ratio and divider return exactly.
+   no pane strips; the chip now shows the first pane's front. Select the chip,
+   or choose the other member from its popover: the two panes, their ratio and
+   divider return exactly.
 5. With the group shown, press **Open beside chat** on the second page: the
    chat's pane splits again — three panes, still one chip.
 6. Focus the chat's pane, then New chat (⌘T or the strip's New chat): the
@@ -40,9 +44,12 @@ live tabs; keep that safety cap intact when testing many pages.
    Draft: it stays in that pane.
 7. ⌘\ splits the focused pane; its empty pane offers the menu. Close pane
    from that menu: no tab closes.
-8. Right-click the chip: every tab of the group is listed by pane, each pane's
-   front checked. Choose a non-front tab: it comes to the front of its pane.
-   Choose **Ungroup**: the chip goes, every tab stays on the top strip, and the
+8. Hover or right-click the chip: its popover lists every tab of the group,
+   pane by pane in pane order (rows carry `data-pane` and `data-front` for each
+   pane's front; nothing is drawn as a check). Escape closes it. Choose a
+   non-front tab: the popover closes, it comes to the front of its pane, the
+   group is shown and the chip's tab becomes that tab. Choose **Ungroup** at the
+   popover's foot: the chip goes, every tab stays on the top strip, and the
    selected one fills the plane. Reveal a page from the Island with **Show tab**:
    it is SELECTED full width, never pulled into a group.
 9. From the Island, press **Close tab**, then **Undo** within five seconds.
@@ -52,7 +59,7 @@ live tabs; keep that safety cap intact when testing many pages.
     unrelated chat/browser group, and a new untouched Chat Draft opened while a
     group is shown lands in the focused pane.
 11. Switch Appearance between Light and Dark through Settings and repeat the
-    reveal/list checks. Capture screenshots of the group chip, its menu, the
+    reveal/list checks. Capture screenshots of the group chip, its popover, the
     pane strips, browser chrome, and the descriptive list in both appearances.
 
 For the five-second Undo window, a short local script may parse the generation
@@ -84,4 +91,4 @@ The pointer-only gestures — tab-edge grouping on the top strip, centre and
 edge drops on panes, dragging a pane tab up to the top strip to leave its
 group — are covered by `split-view-smoke.mjs`; `volli-drive` has no drag verb.
 Do not claim a gesture was manually driven when only the keyboard split, the
-chip menu or **Open beside chat** was exercised.
+chip popover or **Open beside chat** was exercised.

@@ -149,6 +149,32 @@ export function TabStripSurface({ children }: { children: React.ReactNode }) {
   return <TabStripSurfaceContext.Provider value>{children}</TabStripSurfaceContext.Provider>;
 }
 
+/**
+ * How a tab drawn on someone else's behalf changes its face (VC-1052): a tab
+ * group's chip draws its front tab through the strip's own renderer, so the
+ * chip cannot reach the `Tab` to pass props — the same reason the variant
+ * travels by context. Three things change and nothing else does: the leading
+ * glyph (the chip's stacked glyph, built around the tab's own), the quiet
+ * detail after the label when the tab has none of its own, and a few attributes
+ * on the tab element (its popup's ARIA). The shape, the label, the close and
+ * every handler stay the tab's.
+ */
+export interface TabFace {
+  /** The leading slot, given the tab's own glyph and its state badge (if any). */
+  leading(own: React.ReactNode, state: React.ReactNode | null): React.ReactNode;
+  /** Drawn as the tab's `hint` when the tab passes none. */
+  hint?: string | null;
+  /** Extra attributes for the `role="tab"` element. */
+  attributes?: React.HTMLAttributes<HTMLDivElement>;
+}
+
+const TabFaceContext = React.createContext<TabFace | null>(null);
+
+/** Draws the one tab inside with `face` — see {@link TabFace}. */
+export function TabFaceProvider({ face, children }: { face: TabFace; children: React.ReactNode }) {
+  return <TabFaceContext.Provider value={face}>{children}</TabFaceContext.Provider>;
+}
+
 /** Whether a strip drawn here belongs to a surface-level drag context. */
 export function useTabStripSurface(): boolean {
   return React.useContext(TabStripSurfaceContext);
@@ -871,6 +897,9 @@ function TabShell({
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
   const variant = React.useContext(TabVariantContext);
+  const face = React.useContext(TabFaceContext);
+  // A chip's detail stands in only for a tab that has no qualifier of its own.
+  const shownHint = hint ?? (face?.hint || undefined);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
   // Composed rather than assigned: `props.ref` is already dnd-kit's node ref
@@ -909,13 +938,14 @@ function TabShell({
   // over a strip of short names it would be noise.
   const labelRef = React.useRef<HTMLSpanElement>(null);
   const reveal = useClippedReveal(labelRef);
-  const name = hint === undefined ? label : `${label} · ${hint}`;
+  const name = shownHint === undefined ? label : `${label} · ${shownHint}`;
 
   return (
     <Tooltip {...reveal}>
       <TooltipTrigger asChild>
         <div
           {...props}
+          {...face?.attributes}
           ref={setShell}
           data-slot="tab"
           role="tab"
@@ -1007,7 +1037,12 @@ function TabShell({
             className,
           )}
         >
-          {leading && status !== undefined ? (
+          {face !== null ? (
+            face.leading(
+              leading,
+              status === undefined ? null : <TabStateIcon state={status} badge />,
+            )
+          ) : leading && status !== undefined ? (
             <span
               data-slot="tab-kind-state"
               className="relative mr-1 flex size-5 shrink-0 items-center justify-center"
@@ -1043,7 +1078,7 @@ function TabShell({
               {revealLabel ? <TitleReveal text={label} /> : label}
             </span>
           )}
-          {hint !== undefined && !renamingNow ? (
+          {shownHint !== undefined && !renamingNow ? (
             // Dimmer than the tab's own muted ink so it stays subordinate on an
             // ACTIVE tab too, where the label is at full strength. It used to be a
             // step smaller instead; at one type size for the whole tab, weight of
@@ -1057,7 +1092,7 @@ function TabShell({
               data-testid="tab-hint"
               className="hidden max-w-28 shrink-0 truncate text-muted-foreground/70 @min-[420px]/tab-strip:inline"
             >
-              {hint}
+              {shownHint}
             </span>
           ) : null}
           {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}

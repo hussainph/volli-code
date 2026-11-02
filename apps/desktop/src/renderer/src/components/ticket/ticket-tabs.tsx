@@ -78,6 +78,7 @@ import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore } from "@renderer/stores/sessions";
+import { STATUS_DOT_LABEL } from "@renderer/components/ui/session-activity-status";
 
 export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat" | "browser";
 
@@ -666,16 +667,27 @@ const TICKET_TAB_ICONS = {
 /** What a group chip's menu says about a ticket tab. */
 function ticketTabMenuLabel(tab: TicketTabDescriptor): TabMenuLabel {
   const icon = TICKET_TAB_ICONS[tab.kind];
+  const status = tab.status === undefined ? null : STATUS_DOT_LABEL[tab.status];
   if (tab.browserTabId !== undefined) {
     // Read when the menu opens — see the Home strip's twin.
     const url = useBrowserTabsStore.getState().byId[tab.browserTabId]?.url;
-    return { label: tab.label, icon, detail: url === undefined ? null : browserTabAddress(url) };
+    return {
+      label: tab.label,
+      icon,
+      detail: url === undefined ? null : browserTabAddress(url),
+      status,
+    };
   }
   if (tab.relPath !== undefined) {
     const slash = tab.relPath.lastIndexOf("/");
-    return { label: tab.label, icon, detail: slash <= 0 ? null : tab.relPath.slice(0, slash) };
+    return {
+      label: tab.label,
+      icon,
+      detail: slash <= 0 ? null : tab.relPath.slice(0, slash),
+      status,
+    };
   }
-  return { label: tab.label, icon };
+  return { label: tab.label, icon, status };
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */

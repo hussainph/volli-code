@@ -16,19 +16,78 @@
 }
 
 /*
- * A SUMMARIZED group chip — a group that is not on screen (VC-614). The first
- * pane's front keeps a shortened label; the other panes fold into the chip's
- * `+n` count (`GroupMoreCount`), whose tooltip names them. Unlayered, so it
- * outranks the tab's own `max-w-*` utility.
+ * THE STACKED GLYPH (VC-1052) — a group chip's front glyph on a card, with up
+ * to two members' cards fanned out behind it like a deck: each one further back
+ * is smaller (scaled from its right edge, so its trailing edge and the glyph
+ * drawn there peek past the card in front), nudged up and to the right, and dimmer. The slot widens by one
+ * sliver per card so the label never sits under the deck.
+ *
+ * The one motion: hovering the chip fans the deck a pixel wider, the glance
+ * that says "there is more here" while the popover's intent delay runs. It is a
+ * transform on a 20px glyph, and it goes entirely under reduced motion.
  */
-[data-slot="grouped-tab-chip"][data-compact="true"] [data-testid="tab-hint"] {
-  display: none;
+[data-slot="tab-glyph-stack"] {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  height: 1.25rem;
+  width: 1.25rem;
+  margin-right: 0.25rem;
 }
-[data-slot="grouped-tab-chip"][data-compact="true"] [data-slot="tab-label"] {
-  max-width: 7rem;
+[data-slot="tab-glyph-stack"][data-depth="2"] {
+  width: 1.625rem;
 }
-[data-slot="grouped-tab-chip"][data-compact="true"]
-  [data-slot="grouped-tab-member"]
-  + [data-slot="grouped-tab-member"] {
-  display: none;
+[data-slot="tab-glyph-stack"][data-depth="3"] {
+  width: 2rem;
+}
+[data-slot="tab-glyph-card"] {
+  --layer: 0;
+  --fan: 6px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.375rem;
+  box-shadow: 0 0 0 1px var(--border);
+  transform-origin: right center;
+  transform: translate(calc(var(--layer) * var(--fan)), calc(var(--layer) * -1.5px))
+    scale(calc(1 - var(--layer) * 0.14));
+  transition: transform 160ms var(--ease-out);
+}
+[data-slot="tab-glyph-card"][data-layer="0"] {
+  z-index: 3;
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--shadow-raised);
+}
+/* A card behind shows its glyph at its trailing edge, the part that peeks. */
+[data-slot="tab-glyph-card"][data-layer="1"],
+[data-slot="tab-glyph-card"][data-layer="2"] {
+  justify-content: flex-end;
+  padding-right: 0.125rem;
+}
+[data-slot="tab-glyph-card"][data-layer="1"] {
+  --layer: 1;
+  z-index: 2;
+  opacity: 0.85;
+}
+[data-slot="tab-glyph-card"][data-layer="2"] {
+  --layer: 2;
+  z-index: 1;
+  opacity: 0.6;
+}
+[data-slot="grouped-tab-chip"]:hover [data-slot="tab-glyph-card"] {
+  --fan: 7px;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="tab-glyph-card"] {
+    transition: none;
+  }
+  [data-slot="grouped-tab-chip"]:hover [data-slot="tab-glyph-card"] {
+    --fan: 6px;
+  }
 }
