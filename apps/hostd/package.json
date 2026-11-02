@@ -23,7 +23,7 @@
     "sharp": "0.35.5"
   },
   "devDependencies": {
-    "@trpc/client": "^11.19.0",
+    "@trpc/client": "^11.22.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jsdom": "^30.0.0",
     "@types/node": "catalog:",

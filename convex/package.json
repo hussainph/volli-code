@@ -29,7 +29,7 @@
     "@types/node": "catalog:",
     "@volli/host-core": "workspace:*",
     "@volli/session-engine": "workspace:*",
-    "convex-test": "0.0.65",
+    "convex-test": "0.0.66",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }
