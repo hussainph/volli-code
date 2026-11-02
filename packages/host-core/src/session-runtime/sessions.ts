@@ -138,7 +138,9 @@ export type StructuredSessionCommands = Pick<SessionRuntime, "command">;
  * restart-recovery re-attach months later injects the same bytes this start
  * did — index included.
  *
- * `instructions` is the workspace's repository instruction file (VC-1054),
+ * `instructions` is the workspace's repository instruction file (VC-1054) —
+ * the one the Session's own working copy holds, read from the ref a Ticket's
+ * checkout will be cut from when that checkout does not exist yet (VC-1055) —
  * best-effort like the index and recorded in the same input, FIRST: it is the
  * project's standing material, and ahead of any named skill it keeps the
  * longest prefix every Session in the project shares. Absent on a host that

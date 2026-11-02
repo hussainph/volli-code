@@ -15,7 +15,7 @@ import { recordSessionStartedOnce } from "../db/events-repo";
 import { getComment } from "../db/comments-repo";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { loadSkills } from "../skills";
-import { readRepoInstructions } from "../repo-instructions";
+import { readRepoInstructions, readTicketRepoInstructions } from "../repo-instructions";
 import { createHostAgentToolDoor, createHostAgentWatches } from "../agent-services";
 import {
   createRuntimeSessionFacade,
@@ -51,7 +51,10 @@ vi.mock("../db/events-repo", () => ({ recordSessionStartedOnce: vi.fn() }));
 vi.mock("../db/comments-repo", () => ({ getComment: vi.fn() }));
 vi.mock("../db/automations-repo", () => ({ listAutomationsForProject: vi.fn(() => []) }));
 vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
-vi.mock("../repo-instructions", () => ({ readRepoInstructions: vi.fn() }));
+vi.mock("../repo-instructions", () => ({
+  readRepoInstructions: vi.fn(),
+  readTicketRepoInstructions: vi.fn(),
+}));
 vi.mock("../agent-services", () => ({
   createHostAgentToolDoor: vi.fn(),
   createHostAgentWatches: vi.fn(),
@@ -593,32 +596,54 @@ describe("facade captured ports and capability degradations", () => {
     vi.mocked(getProjectById).mockReturnValue({ path: "/repo", skillModes: { a: "off" } } as never);
     expect(await skills.index("p", [])).toBeNull();
   });
-  it("reads repository instructions from the Session's workspace as birth knows it", async () => {
+  it("reads repository instructions from the Session's own working copy as birth knows it", async () => {
     const f = await fixture();
     const skills = recoveredRuntimeSessionServices(f.ready).sessionSkills!;
     const read = vi.mocked(readRepoInstructions);
     read.mockImplementation(async (dir) => ({ name: "repository instructions", text: dir }));
+    const readTicket = vi.mocked(readTicketRepoInstructions);
+    readTicket.mockImplementation(async (_git, facts) => ({
+      name: "repository instructions",
+      text: `ticket ${facts.displayId}`,
+    }));
     const instructions = async (ticketId: string | null) =>
       (await skills.instructions!("p", ticketId))?.text;
-    vi.mocked(getProjectById).mockReturnValue({ path: "/repo" } as never);
-    // A Board Session, and a Ticket that runs in the main checkout.
-    expect(await instructions(null)).toBe("/repo");
-    vi.mocked(getTicket).mockReturnValue({ usesWorktree: false, worktreePath: null } as never);
-    expect(await instructions("t")).toBe("/repo");
-    // A worktree that exists is the workspace; one not cut yet (or deleted)
-    // falls back to the project root a fresh worktree is cut from.
-    const here = process.cwd();
-    vi.mocked(getTicket).mockReturnValue({ usesWorktree: true, worktreePath: here } as never);
-    expect(await instructions("t")).toBe(here);
-    vi.mocked(getTicket).mockReturnValue({ usesWorktree: true, worktreePath: null } as never);
-    expect(await instructions("t")).toBe("/repo");
-    vi.mocked(getTicket).mockReturnValue({
-      usesWorktree: true,
-      worktreePath: "/nowhere/VC-1-gone",
+    vi.mocked(getProjectById).mockReturnValue({
+      id: "p",
+      path: "/repo",
+      ticketPrefix: "VC",
+      baseBranch: "trunk",
     } as never);
-    expect(await instructions("t")).toBe("/repo");
+    // A Board or Project Session reads the project root.
+    expect(await instructions(null)).toBe("/repo");
     vi.mocked(getTicket).mockReturnValue(undefined);
     expect(await instructions("t")).toBe("/repo");
+    expect(readTicket).not.toHaveBeenCalled();
+    // A Ticket hands its board facts to the one reader that decides between
+    // its checkout, the ref the checkout will be cut from, and the root.
+    vi.mocked(getTicket).mockReturnValue({
+      ticketNumber: 7,
+      title: "Fix it",
+      usesWorktree: true,
+      worktreePath: null,
+      branch: null,
+      baseBranch: "release",
+    } as never);
+    expect(await instructions("t")).toBe("ticket VC-7");
+    expect(readTicket).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        checkoutPath: "/repo",
+        projectId: "p",
+        displayId: "VC-7",
+        title: "Fix it",
+        usesWorktree: true,
+        worktreePath: null,
+        branch: null,
+        baseBranch: "release",
+        projectBaseBranch: "trunk",
+      }),
+    );
     // No project, no instructions — and the baseline's port is the same one.
     vi.mocked(getProjectById).mockReturnValue(undefined);
     expect(await skills.instructions!("p", null)).toBeNull();

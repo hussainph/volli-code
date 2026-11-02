@@ -279,8 +279,9 @@ function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): stri
  * Each row is derived from the root's listing — a file, a symlink, or not in
  * this repo — and only what can actually be read is offered: a file gets
  * Preview and Reveal, a symlink Reveal alone (file reads refuse symlinks), a
- * missing one nothing. No row is marked as the loaded one; see
- * `instruction-files.ts` for who reads which.
+ * missing one nothing. No row is marked as the loaded one — which file a
+ * Chat records depends on its working copy; see `instruction-files.ts` for
+ * who reads which.
  *
  * Inspection only. Nothing here writes, so a read-only (remote) project shows
  * the same rows with the same read actions.
@@ -345,8 +346,8 @@ function InstructionsSection({ project }: { project: Project }) {
         icon={BookOpenIcon}
         hint={
           <>
-            Chats read whichever of these the repo has when the work calls for it; Volli
-            doesn&rsquo;t add them to the prompt. Terminal harnesses load their own: Claude Code
+            Chats start with AGENTS.md in their prompt, or CLAUDE.md when the repo has no AGENTS.md,
+            as the file reads when each Chat starts. Terminal harnesses load their own: Claude Code
             reads CLAUDE.md, Codex, Cursor and OpenCode read AGENTS.md.
           </>
         }
