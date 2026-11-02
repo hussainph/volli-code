@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -293,6 +293,10 @@ describe("runtime attachment assembly", () => {
     const data = Buffer.alloc(50_000, 201).toString("base64");
     const id = native.persistActivityImage!("session", { data, mimeType: "image/png" })!;
     expect(first.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
+    // The disk write leaves the caller's turn (VC-1082); a relaunch reads what landed.
+    await vi.waitFor(() =>
+      expect(existsSync(join(root, "browser-pictures", `${id}.json`))).toBe(true),
+    );
     const second = createRuntimeAssembly(options);
     expect(second.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
     expect(createRuntimeAssembly({ ...options, pictures: second.pictures }).pictures).toBe(
