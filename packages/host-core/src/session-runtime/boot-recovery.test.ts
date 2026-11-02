@@ -1008,6 +1008,47 @@ describe("closeStaleAttachments → the turns a restart resume may continue (VC-
     expect(silent.activityReads).toEqual([]);
   });
 
+  it("reports its turns with the moment unknown when the activity read fails, keeping what it did (VC-1095)", async () => {
+    const target = recorder({
+      p: [session("rebuilt", [pi("pi-1")], true), session("terminal", [attachment({ id: "t-1" })])],
+    });
+    const unreadable = new Error("malformed fact in an old Session");
+    target.engine.latestActivityAt = async () => {
+      throw unreadable;
+    };
+    const onError = vi.fn();
+    const onRecovered = vi.fn();
+    let sequence = 0;
+    // The close already made is still counted, and the turn is still told.
+    await expect(
+      closeStaleAttachments({
+        engine: target.engine,
+        reconcile: target.reconcile,
+        projectIds: ["p"],
+        newId: () => `event-${++sequence}`,
+        now: () => 1_700_000_000_000,
+        onError,
+        onRecovered,
+      }),
+    ).resolves.toBe(1);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(null, unreadable);
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "rebuilt", attachmentId: "pi-1" }],
+      lostAt: null,
+    });
+
+    // A host closing during the failed read tells nothing.
+    let stop = false;
+    const closing = recorder({ p: [session("rebuilt", [pi("pi-1")], true)] });
+    closing.engine.latestActivityAt = async () => {
+      stop = true;
+      throw unreadable;
+    };
+    const cut = recoverySweep(closing, () => stop);
+    await cut.result;
+    expect(cut.onRecovered).not.toHaveBeenCalled();
+  });
+
   it("tells nothing when the host closes while it reads the activity", async () => {
     let stop = false;
     const target = recorder({ p: [session("rebuilt", [pi("pi-1")], true)] });

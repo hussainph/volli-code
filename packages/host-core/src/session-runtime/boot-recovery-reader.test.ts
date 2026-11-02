@@ -249,7 +249,28 @@ describe("createBootRecoveryEngine (VC-1095)", () => {
       await s.cancelAsk("answered-pi", "answered-question");
     });
 
+    await add("every-question-answered", async (s) => {
+      await s.attach("both-pi");
+      await s.ask("both-pi", "both-first");
+      await s.ask("both-pi", "both-second");
+      await s.cancelAsk("both-pi", "both-second");
+      await s.cancelAsk("both-pi", "both-first");
+    });
+
     // Candidates: each a state the sweep acts on.
+    await add("one-of-two-questions-waiting", async (s) => {
+      await s.attach("two-pi");
+      await s.ask("two-pi", "two-first");
+      await s.ask("two-pi", "two-second");
+      await s.cancelAsk("two-pi", "two-second");
+    });
+    await add("asked-again", async (s) => {
+      // A reopening replaces the Interaction its id named.
+      await s.attach("again-pi");
+      await s.ask("again-pi", "again-question");
+      await s.cancelAsk("again-pi", "again-question");
+      await s.ask("again-pi", "again-question");
+    });
     await add("open-terminal", (s) => s.attach("open-term", "terminal"));
     await add("retired-runtime", (s) => s.attach("retired", "opencode"));
     await add("mid-turn", async (s) => {
@@ -286,6 +307,8 @@ describe("createBootRecoveryEngine (VC-1095)", () => {
           "mid-second-turn",
           "stranded-question",
           "another-runners-terminal",
+          "one-of-two-questions-waiting",
+          "asked-again",
         ].map((name) => ids[name]),
       ),
     );
@@ -435,6 +458,23 @@ describe("createBootRecoveryEngine (VC-1095)", () => {
     await expect(w.engine.listSessions({ projectId: w.project.id, scope: "all" })).rejects.toThrow(
       /turnId|attachmentId/,
     );
+
+    // Not a candidate, so the sweep still runs: what it did stands, and the
+    // moment the prior process was last alive is unknown rather than wrong.
+    const lost = await w.session("lost");
+    await lost.attach("lost-pi");
+    await lost.startTurn("lost-pi");
+    const terminal = await w.session("terminal");
+    await terminal.attach("lost-term", "terminal");
+    const swept = await dryRun(reader, [w.project.id]);
+    expect(swept.closed).toBe(1);
+    expect(swept.reconciled).toEqual([{ sessionId: lost.sessionId, attachmentId: "lost-pi" }]);
+    expect(swept.errors).toEqual([
+      expect.objectContaining({ message: expect.stringMatching(/turnId|attachmentId/) }),
+    ]);
+    expect(swept.recovered).toEqual([
+      { turns: [{ sessionId: lost.sessionId, attachmentId: "lost-pi" }], lostAt: null },
+    ]);
   });
 
   it("neither sweeps nor counts a Session outside the launch's scope", async () => {

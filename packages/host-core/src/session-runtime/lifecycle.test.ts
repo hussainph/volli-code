@@ -667,10 +667,20 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     vi.mocked(recovery.closeStaleAttachments).mockImplementationOnce(async (ports) => {
       await ports.reconcile({} as Parameters<typeof ports.reconcile>[0]);
       ports.onError!("attachment", new Error("reconcile failed"));
+      ports.onError!(null, new Error("unreadable fact"));
       return 0;
     });
     await owner.ready();
     expect(f.runtime.reconcile).toHaveBeenCalled();
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover attachment", {
+      attachmentId: "attachment",
+      error: new Error("reconcile failed"),
+    });
+    // Not one attachment's failure: the moment the prior process was last alive.
+    expect(f.options.ports.log.error).toHaveBeenCalledWith(
+      "failed to read when the prior process was last alive",
+      { error: new Error("unreadable fact") },
+    );
     await new Promise<void>((resolve) => setImmediate(resolve));
     const catchUp = vi.mocked(resumptions.catchUpSessionResumptions).mock.calls[0]![2];
     const change = {} as Parameters<typeof catchUp.publish>[0];

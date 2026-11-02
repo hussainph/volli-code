@@ -331,7 +331,9 @@ export function createSessionRuntimeLifecycle<Services>(options: {
               ?.openNativeBindings()
               .some((binding) => binding.attachmentId === attachmentId) ?? false,
           onError: (attachmentId, error) =>
-            ports.log.error("failed to recover attachment", { attachmentId, error }),
+            attachmentId === null
+              ? ports.log.error("failed to read when the prior process was last alive", { error })
+              : ports.log.error("failed to recover attachment", { attachmentId, error }),
           onFailure: ({ sessionId, attachmentId, reason, outcome, error }) => {
             failures.push({ reason, outcome, error: logErrorSummary(error) });
             const fields = { sessionId, attachmentId, reason, outcome, error };

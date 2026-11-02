@@ -19,11 +19,132 @@ import {
   decodeSessionEventPayload,
   movesSessionActivity,
   UnknownSessionEventKindError,
+  type SessionEventPayload,
 } from "@volli/shared";
 
 import { prepared } from "../db/prepared";
 import type { BootRecoveryEngine } from "./boot-recovery";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
+
+/**
+ * What the fold does with a fact of each kind, as far as the three states the
+ * sweep acts on go: whether a turn is active, whether an Interaction is still
+ * waiting, and whether an attachment is open.
+ *
+ * Exhaustive over every payload kind, so a new kind fails to compile until
+ * someone says what it does here. {@link CANDIDATES_SQL}'s kind lists are
+ * built from this map, never typed out beside it: a kind that starts or ends a
+ * turn, or opens or ends an Interaction, is in the query the moment it is
+ * classified. A kind that opens an attachment cannot be added that way:
+ * attachments are read from `session_attachments`, which the ledger writes for
+ * `attachment.opened` alone, and the reader's test pins that set.
+ *
+ * `attachment.closed` and `attachment.failed` end a turn whatever else they
+ * do, and are classified by that. A close's other effect is the
+ * `closed_sequence` mark the ledger writes beside it.
+ */
+const KIND_ROLE = {
+  "turn.started": "starts-turn",
+  "turn.completed": "ends-turn",
+  "turn.interrupted": "ends-turn",
+  "attachment.closed": "ends-turn",
+  "attachment.failed": "ends-turn",
+  "interaction.opened": "opens-interaction",
+  "interaction.resolved": "ends-interaction",
+  "interaction.cancelled": "ends-interaction",
+  "attachment.opened": "opens-attachment",
+  "adapter.observed": "inert",
+  "attention.cleared": "inert",
+  "attention.raised": "inert",
+  "attachment.exited": "inert",
+  "attachment.native_referenced": "inert",
+  "command.receipt.recorded": "inert",
+  "command.recorded": "inert",
+  "context.compacted": "inert",
+  "context.compaction_failed": "inert",
+  "context.reasoning_dropped": "inert",
+  "model.selected": "inert",
+  "run.completed": "inert",
+  "run.started": "inert",
+  "session.archived": "inert",
+  "session.created": "inert",
+  "session.input.recorded": "inert",
+  "session.retitled": "inert",
+  "session.signaled": "inert",
+  "session.stopped": "inert",
+  "session.tools.refreshed": "inert",
+  "transcript.referenced": "inert",
+  "usage.recorded": "inert",
+} as const satisfies Record<SessionEventPayload["kind"], BootRecoveryKindRole>;
+
+type BootRecoveryKindRole =
+  | "starts-turn"
+  | "ends-turn"
+  | "opens-interaction"
+  | "ends-interaction"
+  | "opens-attachment"
+  | "inert";
+
+type KindWith<Role extends BootRecoveryKindRole> = {
+  [Kind in keyof typeof KIND_ROLE]: (typeof KIND_ROLE)[Kind] extends Role ? Kind : never;
+}[keyof typeof KIND_ROLE];
+
+/** The kinds the fold reads in one role, in the map's order. */
+function bootRecoveryKinds<Role extends BootRecoveryKindRole>(
+  role: Role,
+): readonly KindWith<Role>[] {
+  return (Object.keys(KIND_ROLE) as (keyof typeof KIND_ROLE)[]).filter(
+    (kind): kind is KindWith<Role> => KIND_ROLE[kind] === role,
+  );
+}
+
+/** Compiles only when `Actual` is exactly `Expected`. */
+type Exactly<Actual, Expected> = [Actual] extends [Expected]
+  ? [Expected] extends [Actual]
+    ? true
+    : never
+  : never;
+/** Compiles only when every arm of `Payload` carries `Shape`. */
+type Carries<Payload, Shape> = [Payload] extends [Shape] ? true : never;
+
+/**
+ * What the query reads besides the kind lists, each checked against the map.
+ * Attachments come from `session_attachments`, which the ledger writes for
+ * `attachment.opened` alone: a second kind that opens one needs the query and
+ * the ledger's projection changed with it. An Interaction's id is read at
+ * `interaction.id` on an opening and at `interactionId` on an ending.
+ */
+const QUERY_READS: {
+  opensAttachment: Exactly<KindWith<"opens-attachment">, "attachment.opened">;
+  openingId: Carries<
+    Extract<SessionEventPayload, { kind: KindWith<"opens-interaction"> }>,
+    { interaction: { id: string } }
+  >;
+  endingId: Carries<
+    Extract<SessionEventPayload, { kind: KindWith<"ends-interaction"> }>,
+    { interactionId: string }
+  >;
+} = { opensAttachment: true, openingId: true, endingId: true };
+
+/** A kind as an SQL string literal. Kinds are this file's constants, never input. */
+function literal(kind: string): string {
+  return `'${kind.replaceAll("'", "''")}'`;
+}
+
+/** The newest sequence of any of these kinds in Session `s`, 0 when it has none. */
+function latestOf(kinds: readonly string[]): string {
+  // One index-only MAX seek per kind; the leading 0 keeps MAX scalar for one kind.
+  const seeks = kinds.map(
+    (kind) => `COALESCE((SELECT MAX(fact.sequence) FROM session_event_sequence fact
+                 WHERE fact.session_id = s.id AND fact.kind = ${literal(kind)}), 0)`,
+  );
+  return `MAX(0, ${seeks.join(", ")})`;
+}
+
+const OPENING_ID_PATH = QUERY_READS.openingId && "$.interaction.id";
+const ENDING_ID_PATH = QUERY_READS.endingId && "$.interactionId";
+const OPENS_INTERACTION = bootRecoveryKinds("opens-interaction").map(literal).join(", ");
+const ENDS_INTERACTION = bootRecoveryKinds("ends-interaction").map(literal).join(", ");
 
 /**
  * A project's Sessions the sweep could act on, newest first like a listing.
@@ -40,21 +161,28 @@ import { STRUCTURED_ADAPTER_ID } from "./sessions";
  *    with `closed_sequence IS NULL` — the partial `session_attachments_open`
  *    index.
  *  - **An open structured attachment under an active turn** is reconciled.
- *    The fold sets `turnActive` on `turn.started` and clears it on
- *    `turn.completed`, `turn.interrupted`, `attachment.closed` and
- *    `attachment.failed`, so it can be set only when the latest `turn.started`
- *    follows every one of those. Each is an index-only MAX on
+ *    The fold sets `turnActive` only on a kind that starts a turn and clears
+ *    it on each kind that ends one ({@link KIND_ROLE}), so it can be set only
+ *    when the latest start follows every end. Each is an index-only MAX on
  *    `session_event_sequence_match (session_id, kind, sequence)`. That
  *    sequence is the fleet's append order, and within one Session it is the
  *    Session's own order: the ledger appends a Session's event only as its
  *    head plus one, and the trigger numbers the row as it is inserted.
  *  - **An active Interaction** is cancelled, on any structured attachment,
- *    open or not. The fold opens one only on `interaction.opened` and ends it
- *    only on an `interaction.resolved` or `interaction.cancelled` for the same
- *    id that comes later. JSON is read only from those few rows.
+ *    open or not. The fold opens one only on an opening kind and ends it only
+ *    on an ending kind for the same id that comes later, and a reopening
+ *    replaces it, so an id is active exactly when its latest opening follows
+ *    its latest ending. One grouped pass per Session compares the two, reading
+ *    JSON only from those few rows.
  *
- * The venue and adapter of a turn's attachment are left to the fold: a
- * Session another runner holds is kept and then left alone by the sweep.
+ * Wider than the fold in two places, on purpose. The venue and adapter of a
+ * turn's or an Interaction's attachment are left to the fold: a Session another
+ * runner holds is kept and then left alone by the sweep. And an unanswered
+ * Interaction from the retired approval gates (`ask:` / `approval-retry:` ids,
+ * or an `approval` field) is inert in the fold, which decodes it as legacy
+ * evidence, but is kept here: mirroring the codec's retirement rule in SQL
+ * would put a second copy of it where it could drift into a narrower test. Such
+ * a Session is folded at each boot and left alone.
  */
 const CANDIDATES_SQL = `
 SELECT s.id FROM sessions s
@@ -67,34 +195,24 @@ SELECT s.id FROM sessions s
           AND attachment.observed_kind = 'opened'
           AND (
             attachment.adapter_id <> @structured
-            OR COALESCE((
-              SELECT MAX(started.sequence) FROM session_event_sequence started
-               WHERE started.session_id = s.id AND started.kind = 'turn.started'
-            ), 0) > MAX(
-              COALESCE((SELECT MAX(ended.sequence) FROM session_event_sequence ended
-                         WHERE ended.session_id = s.id AND ended.kind = 'turn.completed'), 0),
-              COALESCE((SELECT MAX(ended.sequence) FROM session_event_sequence ended
-                         WHERE ended.session_id = s.id AND ended.kind = 'turn.interrupted'), 0),
-              COALESCE((SELECT MAX(ended.sequence) FROM session_event_sequence ended
-                         WHERE ended.session_id = s.id AND ended.kind = 'attachment.closed'), 0),
-              COALESCE((SELECT MAX(ended.sequence) FROM session_event_sequence ended
-                         WHERE ended.session_id = s.id AND ended.kind = 'attachment.failed'), 0)
-            )
+            OR ${latestOf(bootRecoveryKinds("starts-turn"))}
+               > ${latestOf(bootRecoveryKinds("ends-turn"))}
           )
      )
      OR EXISTS (
-       SELECT 1 FROM session_event_sequence opened_order
-         JOIN session_events opened ON opened.id = opened_order.event_id
-        WHERE opened_order.session_id = s.id AND opened_order.kind = 'interaction.opened'
-          AND NOT EXISTS (
-            SELECT 1 FROM session_event_sequence ended_order
-              JOIN session_events ended ON ended.id = ended_order.event_id
-             WHERE ended_order.session_id = s.id
-               AND ended_order.kind IN ('interaction.resolved', 'interaction.cancelled')
-               AND ended.sequence > opened.sequence
-               AND json_extract(ended.payload, '$.interactionId')
-                   = json_extract(opened.payload, '$.interaction.id')
-          )
+       SELECT 1 FROM (
+         SELECT CASE WHEN fact.kind IN (${OPENS_INTERACTION})
+                     THEN json_extract(event.payload, '${OPENING_ID_PATH}')
+                     ELSE json_extract(event.payload, '${ENDING_ID_PATH}') END AS interaction_id,
+                MAX(CASE WHEN fact.kind IN (${OPENS_INTERACTION}) THEN event.sequence END) AS opened,
+                MAX(CASE WHEN fact.kind IN (${ENDS_INTERACTION}) THEN event.sequence END) AS ended
+           FROM session_event_sequence fact
+           JOIN session_events event ON event.id = fact.event_id
+          WHERE fact.session_id = s.id
+            AND fact.kind IN (${OPENS_INTERACTION}, ${ENDS_INTERACTION})
+          GROUP BY interaction_id
+       ) interaction
+        WHERE interaction.opened > COALESCE(interaction.ended, 0)
      )
    )
  ORDER BY s.created_at DESC, s.id COLLATE BINARY DESC`;

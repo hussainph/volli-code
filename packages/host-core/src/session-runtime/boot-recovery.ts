@@ -117,9 +117,11 @@ export interface BootRecoveryOptions {
   /**
    * One malformed or concurrently-closed attachment must not leave every later
    * stale one falsely open after relaunch, so a failure is reported and the
-   * sweep continues.
+   * sweep continues. `null` names no attachment: the end-of-sweep read of when
+   * the prior process was last alive failed, and the sweep reported its turns
+   * with that moment unknown.
    */
-  onError: (attachmentId: string, error: unknown) => void;
+  onError: (attachmentId: string | null, error: unknown) => void;
   /**
    * Told about every structured attachment whose reconcile failed, with the
    * classified reason and what the sweep did about it — the line a support
@@ -346,10 +348,22 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
     options.onRecovered({ turns: recovered, lostAt: null });
     return closed;
   }
-  const othersLostAt = await options.engine.latestActivityAt({
-    projectIds: options.projectIds,
-    excluding: folded,
-  });
+  // The sweep's closes and reconciles are already durable. A Session that
+  // cannot be read here (a malformed fact) must not turn them into a failed
+  // sweep, so the moment stays unknown and restart resume declines to judge
+  // it (`loss-unknown`), leaving each turn's Resume to the person.
+  let othersLostAt: number | null;
+  try {
+    othersLostAt = await options.engine.latestActivityAt({
+      projectIds: options.projectIds,
+      excluding: folded,
+    });
+  } catch (error) {
+    options.onError(null, error);
+    if (stopping()) return closed;
+    options.onRecovered({ turns: recovered, lostAt: null });
+    return closed;
+  }
   if (stopping()) return closed;
   const lostAt =
     othersLostAt === null || candidatesLostAt === null
