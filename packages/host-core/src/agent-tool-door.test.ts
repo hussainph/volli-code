@@ -416,6 +416,28 @@ describe("session_start through the Agent Tool Surface", () => {
     ]);
   });
 
+  it("says a start a stop reached first was stopped, not that it failed (VC-1072)", async () => {
+    const h = harness({
+      refusedAttach: {
+        id: "receipt-1",
+        commandId: "start-1",
+        status: "rejected",
+        code: "attach_cancelled",
+        detail: "attach_cancelled: the Session was stopped while it was starting.",
+        recordedAt: 10,
+        sequence: 10,
+      },
+    });
+
+    const result = await h.call({ ticket: "VC-1", message: "Fix the flaky auth test" });
+
+    expect(result.details).toMatchObject({ state: "needs-recovery" });
+    expect(result.text).toContain(
+      "It was stopped before it finished starting, so its kickoff is held as its first message and is sent when it is started again.",
+    );
+    expect(result.text).not.toContain("attachment failed");
+  });
+
   it("binds the caller instead of believing one", async () => {
     const h = harness();
 

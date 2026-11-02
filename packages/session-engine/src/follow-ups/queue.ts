@@ -16,8 +16,14 @@ import {
   type StoredSessionFollowUp,
 } from "../session-follow-ups";
 import { canonicalJson } from "../transcript-artifacts";
-import { NativeAttachmentError, type NativeHarnessAdapter } from "../native-adapter";
-import { isAttachWaitTimeout, isAttachWaitTimeoutDetail, withCeiling } from "../ceiling";
+import type { NativeHarnessAdapter } from "../native-adapter";
+import {
+  isAttachWaitTimeout,
+  isAttachWaitTimeoutDetail,
+  QUEUE_ADMISSION_TIMEOUT_MS,
+  queueAdmissionTimeoutError,
+  withCeiling,
+} from "../ceiling";
 import {
   SessionRuntimeConflictError,
   SessionRuntimeCommandConflictError,
@@ -416,13 +422,8 @@ export class FollowUpQueue {
   ): Promise<T> {
     if (!isQueueCommand(commandId)) return operation;
     return withCeiling(operation, {
-      ms: this.ports.followUpAdmissionTimeoutMs ?? 30_000,
-      timeout: () =>
-        new NativeAttachmentError(
-          `queue_admission_timeout: ${stage} did not finish. Check the transcript before retrying.`,
-          "queue_admission_timeout",
-          "adapter_unrecoverable",
-        ),
+      ms: this.ports.followUpAdmissionTimeoutMs ?? QUEUE_ADMISSION_TIMEOUT_MS,
+      timeout: () => queueAdmissionTimeoutError(stage),
       ...(onTimeout === undefined ? {} : { abandon: onTimeout }),
     });
   }

@@ -159,6 +159,44 @@ describe("stopSessionOperation", () => {
     });
   });
 
+  it("abandons a child's start before recording its stop, so the start cannot open over it (VC-1072)", async () => {
+    const starting = projection({
+      pendingExecutorStart: {
+        id: "child:start",
+        sessionId: TARGET,
+        createdAt: 1,
+        intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+        route: null,
+      },
+    });
+    const abandoned = projection({
+      attachments: [openAttachment({ status: "failed", openedAt: null })],
+    });
+    let listed = [starting];
+    const { ports: p, submit, command } = ports([]);
+    (p.sessionEngine.listSessions as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => listed,
+    );
+    const abandonDirectStart = vi.fn(async () => {
+      listed = [abandoned];
+      return true;
+    });
+    p.runtime = { ...p.runtime, abandonDirectStart };
+
+    const outcome = await stopSessionOperation(p, stopInput());
+
+    expect(abandonDirectStart).toHaveBeenCalledExactlyOnceWith(TARGET);
+    expect(abandonDirectStart.mock.invocationCallOrder[0]).toBeLessThan(
+      submit.mock.invocationCallOrder[0]!,
+    );
+    expect(submit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ intent: expect.objectContaining({ kind: "session.stop" }) }),
+    );
+    // Nothing opened, so there is nothing to interrupt or release.
+    expect(command).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ previouslyStopped: false, released: false, failures: [] });
+  });
+
   it("skips the interrupt when no turn is open, and both acts when nothing is attached", async () => {
     const idleAttached = ports([projection({ attachments: [openAttachment()] })]);
     await expect(stopSessionOperation(idleAttached.ports, stopInput())).resolves.toMatchObject({

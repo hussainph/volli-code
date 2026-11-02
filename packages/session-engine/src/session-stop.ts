@@ -8,13 +8,22 @@ import type {
   SessionAttachmentProjection,
 } from "@volli/shared";
 import type { SessionEngine } from "./session-engine";
-import type { SessionRuntime } from "./session-runtime";
+import type { HostedSessionRuntime, SessionRuntime } from "./session-runtime";
 
 /** The person's door reads its target by id rather than resolving a handle. */
 export interface StopSessionByIdPorts {
   sessionEngine: Pick<SessionEngine, "getSession" | "submit">;
-  runtime: Pick<SessionRuntime, "command">;
+  runtime: StopRuntime;
 }
+
+/**
+ * What a stop asks of the runtime: its commands, and to abandon a direct start
+ * still attaching the target (VC-1072). Optional only for a runtime that never
+ * starts one; every runtime that does must answer it, or a start that opens
+ * after a stop would undo it.
+ */
+export type StopRuntime = Pick<SessionRuntime, "command"> &
+  Partial<Pick<HostedSessionRuntime, "abandonDirectStart">>;
 
 /** A refusal the door words for the model. `text` is a complete sentence. */
 export class SuperviseSessionError extends Error {
@@ -70,13 +79,16 @@ export async function stopSessionById(
     if (projection === null) throw new SuperviseSessionError("Unknown session.");
     return projection;
   };
-  const target = await read();
-  if (target.attachments.some((attachment) => attachment.adapterId === "terminal")) {
+  const found = await read();
+  if (found.attachments.some((attachment) => attachment.adapterId === "terminal")) {
     throw new SuperviseSessionError(
       "That is a terminal session; stop addresses structured chat Sessions only.",
     );
   }
-  if (latestStructuredAttachment(target.attachments)?.status !== "open") {
+  // A Session still being started is not idle: there is a start to stop.
+  const abandoned = (await ports.runtime.abandonDirectStart?.(input.sessionId)) === true;
+  const target = abandoned ? await read() : found;
+  if (!abandoned && latestStructuredAttachment(target.attachments)?.status !== "open") {
     throw new SuperviseSessionError(
       `Session ${shortSessionId(input.sessionId)} is not live; there is nothing running to stop.`,
     );
@@ -110,10 +122,16 @@ export async function stopResolvedSession(
   ports: Pick<StopSessionByIdPorts, "runtime"> & {
     sessionEngine: Pick<SessionEngine, "submit">;
   },
-  target: SessionProjection,
+  resolved: SessionProjection,
   reread: () => Promise<SessionProjection>,
   acts: StopActs,
 ): Promise<StopSessionOutcome> {
+  // Before the durable stop, never after: a start that opened after the stop
+  // was written would clear it (VC-1072). Once this returns, the start either
+  // never opens or has opened already and is released below like any other.
+  const target = (await ports.runtime.abandonDirectStart?.(resolved.session.id))
+    ? await reread()
+    : resolved;
   const previouslyStopped = target.stopped !== null;
   let liveTarget = target;
 

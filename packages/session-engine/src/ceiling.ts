@@ -27,8 +27,19 @@ export interface CeilingOptions {
 export async function withCeiling<T>(operation: Promise<T>, options: CeilingOptions): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
+  // Once the operation has settled, or the wait has already given up, nothing
+  // may give up again: a late abort must not release a handle its caller is
+  // about to use, and a timer and an abort together must not abandon twice.
+  let over = false;
+  const end = (): void => {
+    over = true;
+  };
+  // Registered before the race, so it runs before the race's own reaction.
+  operation.then(end, end);
   const ended = new Promise<never>((_resolve, reject) => {
     const giveUp = (error: unknown) => {
+      if (over) return;
+      over = true;
       options.abandon?.();
       reject(error);
     };
@@ -47,6 +58,18 @@ export async function withCeiling<T>(operation: Promise<T>, options: CeilingOpti
   }
 }
 
+/** The queue's admission bound, unless a host configures its own. */
+export const QUEUE_ADMISSION_TIMEOUT_MS = 30_000;
+
+/** The queue's own bound, run out: definitely unsent, retried by the queue. */
+export function queueAdmissionTimeoutError(stage: string): NativeAttachmentError {
+  return new NativeAttachmentError(
+    `queue_admission_timeout: ${stage} did not finish. Check the transcript before retrying.`,
+    "queue_admission_timeout",
+    "adapter_unrecoverable",
+  );
+}
+
 /**
  * A direct door's attach stage that did not finish within its ceiling.
  *
@@ -54,10 +77,12 @@ export async function withCeiling<T>(operation: Promise<T>, options: CeilingOpti
  * next successful attach, and the one the queue drain already reads — and worded
  * for a person by its detail, not its kind: the detail starts with
  * {@link ATTACH_TIMEOUT_CODE}, which `isAttachTimeoutAttention` reads back.
+ * No "; " in the sentence: the queue joins several blockers with one, and that
+ * reader tells a single quoted timeout from a list by it.
  */
 export function attachTimeoutError(stage: string, ms: number): NativeAttachmentError {
   return new NativeAttachmentError(
-    `${ATTACH_TIMEOUT_CODE}: ${stage} did not finish within ${ms / 1000} s. Nothing was sent; Retry starts it again.`,
+    `${ATTACH_TIMEOUT_CODE}: ${stage} did not finish within ${ms / 1000} s. Nothing was sent, and Retry starts it again.`,
     ATTACH_TIMEOUT_CODE,
     "adapter_unrecoverable",
   );
@@ -88,9 +113,6 @@ export function isAttachWaitTimeoutDetail(detail: string | null | undefined): bo
   return WAIT_TIMEOUT_DETAIL.test(detail ?? "");
 }
 
-const WAIT_TIMEOUT_DETAIL = new RegExp(`queue_admission_timeout|${ATTACH_TIMEOUT_CODE}`);
-
-/** Whether a wait ended because the Session was stopped while it was starting. */
-export function isAttachCancelled(error: unknown): error is NativeAttachmentError {
-  return error instanceof NativeAttachmentError && error.code === ATTACH_CANCELLED_CODE;
-}
+// Anchored: the code a bounded wait writes leads its detail. Prose that merely
+// mentions one, or a wrapper that quotes one, is not a wait that ran out.
+const WAIT_TIMEOUT_DETAIL = new RegExp(`^(?:queue_admission_timeout|${ATTACH_TIMEOUT_CODE}):`);

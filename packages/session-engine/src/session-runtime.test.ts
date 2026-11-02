@@ -7066,6 +7066,118 @@ describe("SessionRuntime attach timing (VC-1072)", () => {
     expect(reports[0]?.stages.at(-1)?.stage).toBe("adapter-attached");
   });
 
+  it("does not open an attach whose stop arrives after the executor answered (VC-1072)", async () => {
+    // The stop lands in the one window the wait cannot see: the executor has
+    // answered, and the attach has not yet written `attachment.opened`. The
+    // stage clock's read is the first thing in that window.
+    let armed = false;
+    let sessionId = "";
+    let now = 100;
+    let runtime: HostedSessionRuntime | undefined;
+    class AnsweringAdapter extends FakeAdapter {
+      override async attach(
+        spec: Parameters<NativeHarnessAdapter["attach"]>[0],
+        sink: ObservationSink,
+      ): Promise<BindingHandle> {
+        const handle = await super.attach(spec, sink);
+        armed = true;
+        return handle;
+      }
+    }
+    const adapter = new AnsweringAdapter();
+    const composed = composition({
+      adapter,
+      clock: {
+        now: () => {
+          if (armed) {
+            armed = false;
+            void runtime!.abandonDirectStart(sessionId);
+          }
+          return now++;
+        },
+      },
+    });
+    runtime = composed.runtime;
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    sessionId = created.sessionId;
+
+    const attached = await runtime.command({
+      commandId: "command-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(attached.receipt).toMatchObject({ status: "rejected", code: "attach_cancelled" });
+    expect(adapter.releases).toBe(1);
+    const projection = await composed.engine.getSession({ sessionId });
+    expect(projection?.liveExecutor).toBeNull();
+    expect(projection?.attention.active).toEqual([]);
+    await expect(runtime.abandonDirectStart(sessionId)).resolves.toBe(false);
+  });
+
+  it("abandons an answered attach even when releasing its handle fails (VC-1072)", async () => {
+    let armed = false;
+    let sessionId = "";
+    let now = 100;
+    let runtime: HostedSessionRuntime | undefined;
+    class AnsweringAdapter extends FakeAdapter {
+      override async attach(
+        spec: Parameters<NativeHarnessAdapter["attach"]>[0],
+        sink: ObservationSink,
+      ): Promise<BindingHandle> {
+        const handle = await super.attach(spec, sink);
+        armed = true;
+        return handle;
+      }
+    }
+    const adapter = new AnsweringAdapter();
+    adapter.releaseFailure = new Error("release refused");
+    const composed = composition({
+      adapter,
+      clock: {
+        now: () => {
+          if (armed) {
+            armed = false;
+            void runtime!.abandonDirectStart(sessionId);
+          }
+          return now++;
+        },
+      },
+    });
+    runtime = composed.runtime;
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    sessionId = created.sessionId;
+
+    const attached = await runtime.command({
+      commandId: "command-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(attached.receipt).toMatchObject({ code: "attach_cancelled" });
+    expect(adapter.releaseReasons).toEqual(["adapter_failure"]);
+  });
+
   it("never lets a reporter that throws fail the attach it reports", async () => {
     const { runtime, engine } = composition({
       onAttachTiming: () => {

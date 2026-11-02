@@ -19,6 +19,19 @@ describe("isAttachTimeoutAttention (VC-1072)", () => {
     ).toBe(true);
   });
 
+  it("does not read a timeout quoted by a recovery wrapper, a multi-blocker report or prose", () => {
+    for (const detail of [
+      `Recovery failed: ${timedOut}`,
+      `Retry recovery failed: ${timedOut}`,
+      `Attachment recovery failed: ${timedOut}`,
+      `Queued message is waiting: adapter_unrecoverable: ${timedOut}; configuration_invalid: no model`,
+      `Queued message is waiting: configuration_invalid: x; adapter_unrecoverable: ${timedOut}`,
+      `The provider said: ${timedOut}`,
+    ]) {
+      expect(isAttachTimeoutAttention({ kind: "adapter_unrecoverable", detail })).toBe(false);
+    }
+  });
+
   it("leaves every other stop, and every other kind, as it was", () => {
     expect(isAttachTimeoutAttention({ kind: "adapter_unrecoverable", detail: "Pi exited." })).toBe(
       false,

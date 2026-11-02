@@ -25,13 +25,23 @@ export const ATTACH_TIMEOUT_CODE = "attach_timeout";
 const PREFIX = `${ATTACH_TIMEOUT_CODE}:`;
 
 /**
- * Whether an Attention reports an attach that did not finish in time: the
- * failed attach's own, or the queue's report of a message held behind it,
- * which quotes the attach's detail after the kind it names.
+ * The follow-up queue's report of a message held behind that timeout, exactly
+ * as the queue words a single `adapter_unrecoverable` blocker. Only that form:
+ * a report naming several blockers, and a recovery wrapper that quotes a
+ * timeout ("Recovery failed: …"), are not a start that timed out.
+ */
+const QUEUED_BEHIND_PREFIX = `Queued message is waiting: adapter_unrecoverable: ${PREFIX}`;
+
+/**
+ * Whether an Attention reports a start that did not finish in time: the failed
+ * attach's own, or the queue's report of a message held behind it.
  */
 export function isAttachTimeoutAttention(
   attention: Pick<SessionAttention, "kind" | "detail">,
 ): boolean {
   if (attention.kind !== "adapter_unrecoverable" || attention.detail === null) return false;
-  return attention.detail.startsWith(PREFIX) || attention.detail.includes(`: ${PREFIX}`);
+  return (
+    attention.detail.startsWith(PREFIX) ||
+    (attention.detail.startsWith(QUEUED_BEHIND_PREFIX) && !attention.detail.includes("; "))
+  );
 }

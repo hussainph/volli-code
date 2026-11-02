@@ -63,7 +63,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { SessionEngine, SubmitSessionCommandResult } from "./session-engine";
-import { stopResolvedSession, stopSessionById, type StopSessionOutcome } from "./session-stop";
+import { stopSessionById, type StopSessionOutcome } from "./session-stop";
 import type {
   BindingHandle,
   DeliveryReceipt,
@@ -80,8 +80,9 @@ import { AttachStageClock, type AttachTimingReport } from "./attach-timing";
 import {
   attachCancelledError,
   attachTimeoutError,
-  isAttachCancelled,
   isAttachWaitTimeout,
+  QUEUE_ADMISSION_TIMEOUT_MS,
+  queueAdmissionTimeoutError,
   withCeiling,
 } from "./ceiling";
 import { selectSessionExecutor, type SessionExecutorSlot } from "./executor-slot";
@@ -695,8 +696,21 @@ export interface SessionRuntime {
     onFailure?: (error: unknown) => void,
   ): Promise<() => void>;
   cancelInteraction(request: CancelInteractionRequest): Promise<void>;
-  reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
+  reconcile(input: SessionReconcileInput): Promise<void>;
   close(): Promise<void>;
+}
+
+/** Which binding to reconcile, and for a launch's boot sweep, how to wait on it. */
+export interface SessionReconcileInput {
+  sessionId: string;
+  attachmentId: string;
+  /**
+   * The launch's own sweep, with no person behind it (VC-1072): a binding it
+   * has to rebuild waits under the queue's admission bound rather than a
+   * direct door's ceiling, one stuck executor at a time, and ends early when
+   * `signal` — the host closing — fires.
+   */
+  boot?: { signal?: AbortSignal };
 }
 
 /** One native binding this process holds open: the Session it serves, and where it works. */
@@ -728,6 +742,13 @@ export interface OpenNativeBinding {
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
+  /**
+   * Abandons a direct start still attaching this Session, if there is one
+   * (VC-1072), and waits until it has ended: recorded as failed, or opened if
+   * it got there first. True when there was one. Every stop door asks this
+   * first, so a stop can never be undone by a start that opens after it.
+   */
+  abandonDirectStart(sessionId: string): Promise<boolean>;
   /** Live queue observation without subscribing to or pinning Session history. */
   onFollowUpQueue?(listener: (emission: SessionStreamQueue) => void): () => void;
   /** Host startup/recovery sweep, independent of attached Clients. */
@@ -1122,6 +1143,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
   /** Each Session's direct fresh attach still in flight, for a stop to abandon (VC-1072). */
   readonly #directStarts = new Map<string, DirectStart>();
+  /** Attach commands a stop abandoned, so their end does not wake the queue. */
+  readonly #abandonedStarts = new Set<string>();
   readonly #rehydratingBindings = new Map<string, Promise<BindingRecord>>();
   readonly #inFlight = new Map<string, InFlightCommand>();
   readonly #sessionAdmissionTails = new Map<string, Promise<void>>();
@@ -1447,7 +1470,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       if (
         "sessionId" in request &&
         request.command.kind === "adapter.attach" &&
-        !isQueueCommand(request.commandId)
+        !isQueueCommand(request.commandId) &&
+        // A start a stop abandoned leaves the queue to the stop.
+        !this.#abandonedStarts.delete(request.commandId)
       )
         this.#followUps.schedule(request.sessionId);
       await this.#releaseBindingsAfterClose();
@@ -1696,15 +1721,11 @@ class DefaultSessionRuntime implements SessionRuntime {
       },
       runtime: this,
     };
-    const starting = this.#directStarts.get(request.sessionId);
-    const stop =
-      starting === undefined
-        ? await stopSessionById(ports, {
-            operationId: request.commandId,
-            sessionId: request.sessionId,
-            ...(request.command.reason === undefined ? {} : { reason: request.command.reason }),
-          })
-        : await this.#stopStarting(ports, request, starting);
+    const stop = await stopSessionById(ports, {
+      operationId: request.commandId,
+      sessionId: request.sessionId,
+      ...(request.command.reason === undefined ? {} : { reason: request.command.reason }),
+    });
     // A previously-stopped, still-live target retries only the runtime acts.
     // Return its durable stop acceptance, not a fabricated new stop receipt.
     const projection = await this.#requireSession(request.sessionId);
@@ -1719,43 +1740,6 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (receipt === undefined)
       throw new SessionRuntimeConflictError("Stopped Session has no stop receipt");
     return { ...(await this.#result(request.sessionId, command, receipt)), stop };
-  }
-
-  /**
-   * A stop that reaches a Session while a direct start is still attaching it
-   * (VC-1072).
-   *
-   * There is no open attachment yet, so the ordinary stop would refuse it as
-   * not live, and the start would hold the Session — a second start refused as
-   * pending, the queue waiting behind it — until the start's own ceiling ran
-   * out. Instead the stop is recorded first, as every stop is, and then the
-   * start's wait is abandoned through the same path a timeout takes: the
-   * attach is recorded as failed so it is no longer pending, a binding that
-   * arrives late is released, and no Attention is raised, because a person
-   * chose this. A start that finished before the stop reached it opened
-   * anyway; that attachment is released as any stop releases one.
-   */
-  async #stopStarting(
-    ports: Parameters<typeof stopResolvedSession>[0],
-    request: StopCommandRequest,
-    starting: DirectStart,
-  ): Promise<StopSessionOutcome> {
-    const abandon = async (): Promise<SessionProjection> => {
-      starting.controller.abort(attachCancelledError());
-      await starting.settled;
-      return this.#requireSession(request.sessionId);
-    };
-    const target = await this.#requireSession(request.sessionId);
-    // A Session not yet stopped records its stop first and abandons the start
-    // in the re-read that follows the durable write. One stopped already —
-    // and starting again — has its stop on record, so it abandons at once.
-    return stopResolvedSession(ports, target.stopped === null ? target : await abandon(), abandon, {
-      operationId: request.commandId,
-      by: { kind: "user" },
-      reason: request.command.reason ?? null,
-      name: `Session ${shortSessionId(request.sessionId)}`,
-      provenance: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
-    });
   }
 
   /**
@@ -1904,11 +1888,20 @@ class DefaultSessionRuntime implements SessionRuntime {
   #registerDirectStart(sessionId: string, done: Promise<void>): AbortSignal {
     const start: DirectStart = { controller: new AbortController(), settled: done };
     this.#directStarts.set(sessionId, start);
-    // The engine refuses a second start while this one is pending, and the
-    // pending start clears only as this attach records its end, so nothing
-    // can have replaced this entry by the time it goes.
-    void done.then(() => this.#directStarts.delete(sessionId));
+    void done.then(() => {
+      // Only this start's own entry: a later start may already hold the slot.
+      /* v8 ignore next -- a later start must first see this one's end recorded, which is after its entry clears. */
+      if (this.#directStarts.get(sessionId) === start) this.#directStarts.delete(sessionId);
+    });
     return start.controller.signal;
+  }
+
+  async abandonDirectStart(sessionId: string): Promise<boolean> {
+    const start = this.#directStarts.get(sessionId);
+    if (start === undefined) return false;
+    start.controller.abort(attachCancelledError());
+    await start.settled;
+    return true;
   }
 
   /** Reports one fresh attach's stages, when it got as far as attempting one. */
@@ -2003,17 +1996,10 @@ class DefaultSessionRuntime implements SessionRuntime {
             ? await this.#firstAttachPreparation(preparing, stopped)
             : await this.#directWait(preparing, "workspace preparation", stopped);
     } catch (error) {
-      if (isAttachCancelled(error)) {
-        return this.#failAttach({
-          request,
-          submitted,
-          adapter,
-          location,
-          code: error.code,
-          detail: error.message,
-          attentionKind: error.attentionKind,
-          cancelled: true,
-        });
+      // Whatever ended the wait, a stop that has reached it wins: a ceiling
+      // that ran out in the same moment is not a start that timed out.
+      if (stopped?.aborted === true) {
+        return this.#cancelAttach(request, submitted, adapter, location);
       }
       return this.#failAttach({
         request,
@@ -2089,12 +2075,14 @@ class DefaultSessionRuntime implements SessionRuntime {
           : await this.#directWait(attaching, "executor attach", stopped, abandon);
     } catch (error) {
       sink.discard();
+      if (stopped?.aborted === true) {
+        return this.#cancelAttach(request, submitted, adapter, location, attachmentId);
+      }
       const nativeFailure =
         error instanceof NativeAttachmentError
           ? { code: error.code, attentionKind: error.attentionKind }
           : null;
       return this.#failAttach({
-        ...(isAttachCancelled(error) ? { cancelled: true as const } : {}),
         request,
         submitted,
         adapter,
@@ -2111,6 +2099,16 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
 
     clock.mark("adapter-attached");
+    // The last moment a stop can still win, and nothing is awaited between
+    // this check and the `attachment.opened` write below (VC-1072). A stop
+    // aborts before it writes its own fact, so an attach past this point opens
+    // first and is released by the stop like any live one; one that sees the
+    // abort here never opens, and cannot clear the stop by opening after it.
+    if (stopped?.aborted === true) {
+      sink.discard();
+      await handle.release("adapter_failure").catch((error) => this.#followUps.failure(error));
+      return this.#cancelAttach(request, submitted, adapter, location, attachmentId);
+    }
     try {
       const attachment: SessionAttachment = {
         id: attachmentId,
@@ -2264,6 +2262,33 @@ class DefaultSessionRuntime implements SessionRuntime {
       "executor.start.requested",
     );
     return this.#result(request.sessionId, submitted.command, receipt);
+  }
+
+  /**
+   * A direct start a stop abandoned (VC-1072): recorded as failed, so the start
+   * is no longer pending, and quietly — the stop says why. The queue is not
+   * woken for it: the stop is what holds the queue now.
+   */
+  #cancelAttach(
+    request: AttachCommandRequest,
+    submitted: SubmitSessionCommandResult,
+    adapter: NativeHarnessAdapter,
+    location: SessionLocation,
+    attachmentId?: string,
+  ): Promise<SessionRuntimeCommandResult> {
+    this.#abandonedStarts.add(request.commandId);
+    const cancelled = attachCancelledError();
+    return this.#failAttach({
+      request,
+      submitted,
+      adapter,
+      location,
+      code: cancelled.code,
+      detail: cancelled.message,
+      ...(attachmentId === undefined ? {} : { attachmentId }),
+      attentionKind: cancelled.attentionKind,
+      cancelled: true,
+    });
   }
 
   async #failAttach(input: FailAttachInput): Promise<SessionRuntimeCommandResult> {
@@ -3397,7 +3422,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#cancelInteraction(request);
   }
 
-  async reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
+  async reconcile(input: SessionReconcileInput): Promise<void> {
     this.#assertOpen();
     const projection = await this.#requireSession(input.sessionId);
     this.#assertOpen();
@@ -3410,7 +3435,13 @@ class DefaultSessionRuntime implements SessionRuntime {
     const recoveryAttentionId = `${input.attachmentId}:recovery`;
     let binding: BindingRecord;
     try {
-      binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
+      binding = await this.#bindingForAttachment(
+        input.attachmentId,
+        projection,
+        location,
+        false,
+        input.boot,
+      );
     } catch (error) {
       // Only failure to reconstruct the binding is unrecoverable. A binding
       // that was reconstructed and then had a transient reconcile failure is
@@ -4035,12 +4066,19 @@ class DefaultSessionRuntime implements SessionRuntime {
     projection: SessionProjection,
     location: SessionLocation,
     locationReaffirmed = false,
+    boot?: SessionReconcileInput["boot"],
   ): Promise<BindingRecord> {
     const existing = this.#bindings.get(attachmentId);
     if (existing) return existing;
     const rehydrating = this.#rehydratingBindings.get(attachmentId);
     if (rehydrating) return rehydrating;
-    const promise = this.#rehydrateBinding(attachmentId, projection, location, locationReaffirmed);
+    const promise = this.#rehydrateBinding(
+      attachmentId,
+      projection,
+      location,
+      locationReaffirmed,
+      boot,
+    );
     this.#rehydratingBindings.set(attachmentId, promise);
     try {
       return await promise;
@@ -4057,6 +4095,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     projection: SessionProjection,
     location: SessionLocation,
     locationReaffirmed: boolean,
+    boot: SessionReconcileInput["boot"],
   ): Promise<BindingRecord> {
     const attachment = projection.attachments.find(({ id }) => id === attachmentId);
     // `!attachment` is defence in depth and no longer reachable: `reconcile`
@@ -4080,9 +4119,22 @@ class DefaultSessionRuntime implements SessionRuntime {
     // persisting intent. Do not repeat that check here: a second failure would
     // escape after persistence and recreate the receipt-less command hole. All
     // other cold-binding callers still receive the rehydration guarantee here.
+    // A cold binding's recovery is a whole executor start — on the first
+    // command after a relaunch, its cold reads included — and a person or an
+    // agent is usually behind it, so it waits under the direct door's ceiling
+    // (VC-1072). The launch's own boot sweep has nobody waiting: it keeps the
+    // queue's bound, and stops when the host closes.
+    const recoveryWait = <T>(operation: Promise<T>, stage: string, abandon?: () => void) =>
+      boot === undefined
+        ? this.#directWait(operation, stage, undefined, abandon)
+        : withCeiling(operation, {
+            ms: this.ports.followUpAdmissionTimeoutMs ?? QUEUE_ADMISSION_TIMEOUT_MS,
+            timeout: () => queueAdmissionTimeoutError(stage),
+            ...(abandon === undefined ? {} : { abandon }),
+            ...(boot.signal === undefined ? {} : { signal: boot.signal }),
+          });
     if (!locationReaffirmed)
-      await this.#followUps.admissionWait(
-        `follow-up:${attachmentId}:recovery`,
+      await recoveryWait(
         this.ports.locations.reaffirm(projection.session, directory),
         "binding workspace validation",
       );
@@ -4099,11 +4151,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     let handle: BindingHandle;
     try {
       const attaching = adapter.attach(spec, sink);
-      // A cold binding's recovery is a whole executor start — on the first
-      // command after a relaunch, its cold reads included — and whichever door
-      // asked, a person is usually behind it. It waits under the direct door's
-      // ceiling, not the queue's admission bound (VC-1072).
-      handle = await this.#directWait(attaching, "binding recovery", undefined, () => {
+      handle = await recoveryWait(attaching, "binding recovery", () => {
         sink.discard();
         void attaching.then(
           (late) =>

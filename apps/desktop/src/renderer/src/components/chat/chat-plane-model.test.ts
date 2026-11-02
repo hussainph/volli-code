@@ -950,7 +950,7 @@ describe("sessionBlocker", () => {
     const acted: string[] = [];
     const acts: SessionBlockerActs = { ...ACTS, retryRuntime: () => acted.push("retryRuntime") };
     const detail =
-      "attach_timeout: executor attach did not finish within 180 s. Nothing was sent; Retry starts it again.";
+      "attach_timeout: executor attach did not finish within 180 s. Nothing was sent, and Retry starts it again.";
     const blocker = sessionBlocker(raised(attention("adapter_unrecoverable", detail)), acts, false);
 
     expect(blocker).toMatchObject({
