@@ -97,6 +97,7 @@ export * from "./project-identity";
 export * from "./project-relink";
 export * from "./prompt-template";
 export * from "./prompt-resource";
+export * from "./repo-instructions";
 export * from "./composer-verb";
 export * from "./skill";
 export * from "./slash-name";

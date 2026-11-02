@@ -299,6 +299,13 @@ export interface AgentCommandServiceOptions {
    * report a baseline it knows is missing a section.
    */
   skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
+  /**
+   * The repository instructions a fresh Session would be born with — the SAME
+   * port a start records through (`SessionSkillPorts.instructions`, VC-1054),
+   * so `prompt baseline` prices the file a real start would record. Absent or
+   * `null` prices no instructions section.
+   */
+  repoInstructions?: (projectId: string, ticketId: string | null) => Promise<PromptResource | null>;
 }
 
 /** One operator write, as {@link AgentCommandServiceOptions.onOperatorWrite} reports it. */
