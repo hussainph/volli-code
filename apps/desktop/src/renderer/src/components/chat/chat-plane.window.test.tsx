@@ -186,6 +186,9 @@ function provisionalChatStore(promote: () => Promise<boolean> = async () => true
     title: null,
   });
   store.getState().openChatTab(PROJECT, SESSION);
+  // A Draft whose tab outlives its provisional record is adopted when shown
+  // (VC-515); close it with the others so no client outlives the test.
+  hostStores.push(store);
   return { enqueue, promoteChatSession, store };
 }
 
