@@ -1112,13 +1112,31 @@ export function createSessions(options: SessionsOptions): Sessions {
 
     async start(input) {
       const created = await mint(input);
-      const attached = await attachStructuredSession(
+      const origin = birthOrigin(input);
+      let attached = await attachStructuredSession(
         options.runtime,
         input.operationId,
         created.sessionId,
         "fresh",
-        birthOrigin(input),
+        origin,
       );
+      // An attach that merely outlasted its admission bound ran nothing to
+      // completion: under a busy host its executor was still starting, and the
+      // runtime released whatever it finished late. That is the transient
+      // failure the start retries, once, before handing the Session to a
+      // person (VC-1099). The retry's command id is derived from the start's
+      // own, so a replayed start replays both attempts' receipts rather than
+      // attaching a third time, and the caller's kickoff still waits on the
+      // one answer it gets back here.
+      if (attachTimedOut(attached)) {
+        attached = await attachStructuredSession(
+          options.runtime,
+          `${input.operationId}${START_RETRY_SUFFIX}`,
+          created.sessionId,
+          "fresh",
+          origin,
+        );
+      }
       return { ...attached, model: created.model };
     },
 
@@ -1195,6 +1213,21 @@ async function attachStructuredSession(
     receipt: attached.receipt,
     throughSequence: attached.throughSequence,
   };
+}
+
+/**
+ * The suffix a start's one attach retry derives its operation from, so its
+ * command is `<op>:retry:start` (VC-1099). Durable: a replayed start finds
+ * the retry's receipt under exactly this id; changing it would attach again.
+ */
+const START_RETRY_SUFFIX = ":retry";
+
+/** A start whose attach was refused only for outlasting the admission bound. */
+function attachTimedOut(result: SessionStartResult): boolean {
+  const receipt = result.receipt;
+  return (
+    receipt !== null && receipt.status === "rejected" && receipt.code === "queue_admission_timeout"
+  );
 }
 
 function attachmentReady(result: SessionRuntimeCommandResult): boolean {
