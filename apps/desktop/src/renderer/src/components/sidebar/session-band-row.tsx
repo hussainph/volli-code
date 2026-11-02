@@ -508,8 +508,8 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
                 className={cn("session-row-dim session-title-sweep min-w-0 flex-1 text-ui", title)}
               >
                 {row.title}
-                <span className="session-title-peak" aria-hidden>
-                  {row.title}
+                <span className="session-title-band" aria-hidden>
+                  <span className="session-title-peak">{row.title}</span>
                 </span>
               </span>
             ) : (
