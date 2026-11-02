@@ -40,6 +40,14 @@ const DRAFT_TRACE = flag("draft-trace", null);
 // Optional: Chromium's CPU throttling for the typing window, standing in for a
 // machine whose cores are busy with other work — `--draft-cpu-throttle 4`.
 const DRAFT_CPU_THROTTLE = Number(flag("draft-cpu-throttle", "1"));
+// The chat-switch arm (VC-1100): `--arm reveal` presses a pane's next chat with
+// the others kept mounted behind `<Activity mode="hidden">` (VC-1080).
+const REVEAL_PLANES = Number(flag("reveal-planes", "2"));
+const REVEAL_SWITCHES = Number(flag("reveal-switches", "30"));
+const REVEAL_INTERVAL_MS = Number(flag("reveal-interval", "400"));
+const REVEAL_BALLAST = Number(flag("reveal-ballast", "0"));
+const REVEAL_TRACE = flag("reveal-trace", null);
+const REVEAL_CPU_THROTTLE = Number(flag("reveal-cpu-throttle", "1"));
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -212,6 +220,82 @@ app.whenReady().then(async () => {
     if (DRAFT_TRACE !== null) report.draftTrace = await contentTracing.stopRecording(DRAFT_TRACE);
   }
 
+  /**
+   * Press the cell's "Next chat" button through Chromium's trusted input path,
+   * `REVEAL_SWITCHES` times, each press revealing a kept chat that was drawn
+   * before. Before the timed presses: every plane is shown once (a kept view
+   * is one the reader has seen), and the reader of the first plane scrolls up,
+   * so the check after the run can prove a revealed view still lands where its
+   * reader left it rather than at the bottom.
+   */
+  async function revealArm() {
+    const shown = await run(`window.chatBench.showReveal(${REVEAL_PLANES}, ${REVEAL_BALLAST})`);
+    report.steps.push({ step: "reveal cell shown", nodes: shown.nodes });
+    window.focus();
+    contents.focus();
+    const rect = await run(
+      "(() => { const r = document.querySelector('[data-bench-switch]').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()",
+    );
+    const press = async () => {
+      contents.sendInputEvent({
+        type: "mouseDown",
+        x: rect.x,
+        y: rect.y,
+        button: "left",
+        clickCount: 1,
+      });
+      contents.sendInputEvent({
+        type: "mouseUp",
+        x: rect.x,
+        y: rect.y,
+        button: "left",
+        clickCount: 1,
+      });
+      await sleep(REVEAL_INTERVAL_MS);
+    };
+    // Every plane drawn once, then back to the first.
+    for (let index = 0; index < REVEAL_PLANES; index += 1) await press();
+    const pinned = await run("window.chatBench.revealState()");
+    // A real wheel, not a `scrollTop` write: the bottom lock only lets go for
+    // a reader's own gesture, and only a reader's position is restored.
+    for (let index = 0; index < 15; index += 1) {
+      contents.sendInputEvent({ type: "mouseWheel", x: rect.x, y: 450, deltaX: 0, deltaY: 100 });
+      await sleep(16);
+    }
+    await sleep(REVEAL_INTERVAL_MS);
+    const scrolled = await run("window.chatBench.revealState()");
+    for (let index = 0; index < REVEAL_PLANES; index += 1) await press();
+    report.checks.revealRestore = {
+      pinnedBefore: pinned,
+      scrolledBefore: scrolled,
+      afterRoundTrip: await run("window.chatBench.revealState()"),
+    };
+    // Back to the bottom so every timed reveal is the pinned common case.
+    for (let index = 0; index < 60; index += 1) {
+      contents.sendInputEvent({ type: "mouseWheel", x: rect.x, y: 450, deltaX: 0, deltaY: -200 });
+      await sleep(16);
+    }
+    await sleep(REVEAL_INTERVAL_MS);
+    if (REVEAL_CPU_THROTTLE > 1) {
+      contents.debugger.attach("1.3");
+      await contents.debugger.sendCommand("Emulation.setCPUThrottlingRate", {
+        rate: REVEAL_CPU_THROTTLE,
+      });
+      await sleep(500);
+    }
+    if (!(await run("window.chatBench.startReveal()"))) throw new Error("no reveal switch");
+    if (REVEAL_TRACE !== null) {
+      await contentTracing.startRecording({
+        included_categories: ["devtools.timeline", "disabled-by-default-devtools.timeline"],
+      });
+    }
+    for (let index = 0; index < REVEAL_SWITCHES; index += 1) await press();
+    report.revealSwitch = await run("window.chatBench.stopReveal()");
+    if (REVEAL_TRACE !== null)
+      report.revealTrace = await contentTracing.stopRecording(REVEAL_TRACE);
+    report.checks.revealPinned = await run("window.chatBench.revealState()");
+  }
+
   try {
     await contents.loadURL(`http://127.0.0.1:${port}/index.html`);
     await run("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
@@ -223,6 +307,7 @@ app.whenReady().then(async () => {
     report.steps.push(await sample("empty"));
     await run(`window.chatBench.seed(${SESSIONS}, ${TURNS})`);
     if (ARM === "draft") await draftArm();
+    else if (ARM === "reveal") await revealArm();
     else await transcriptArm();
   } catch (error) {
     report.failure = String(error && error.stack ? error.stack : error);

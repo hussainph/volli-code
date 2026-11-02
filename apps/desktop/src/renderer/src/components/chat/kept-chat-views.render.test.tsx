@@ -10,6 +10,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import { projectSplitView } from "@volli/shared";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 
 import { KEPT_HIDDEN_CHAT_VIEWS, usePaneChatViews, type ChatViewPane } from "./kept-chat-views";
@@ -34,7 +35,7 @@ function Probe({ sessionId }: { sessionId: string }) {
 }
 
 function Pane({ pane }: { pane: ChatViewPane }) {
-  const views = usePaneChatViews([pane]);
+  const views = usePaneChatViews([pane], null);
   return (
     <>
       {views(pane).map((view) => (
@@ -42,6 +43,27 @@ function Pane({ pane }: { pane: ChatViewPane }) {
           <Probe sessionId={view.sessionId} />
         </React.Activity>
       ))}
+    </>
+  );
+}
+
+/**
+ * A whole surface the way Home and the Ticket view draw it: the strip resolved
+ * by the production `projectSplitView`, whose unsplit pane names only its front
+ * tab, and the strip handed over as the solo pane's tabs (VC-1100).
+ */
+function Surface({ tabs, active }: { tabs: readonly string[]; active: string }) {
+  const split = projectSplitView(null, tabs, active, "board");
+  const views = usePaneChatViews(split.panes, split.groupId === null ? tabs : null);
+  return (
+    <>
+      {split.panes.flatMap((pane) =>
+        views(pane).map((view) => (
+          <React.Activity key={view.sessionId} mode={view.shown ? "visible" : "hidden"}>
+            <Probe sessionId={view.sessionId} />
+          </React.Activity>
+        )),
+      )}
     </>
   );
 }
@@ -121,5 +143,22 @@ describe("kept chat views", () => {
     expect(shown.size).toBe(0);
     show("a");
     expect(mounts.get("a")).toBe(1);
+  });
+
+  it("keeps the chat an unsplit surface switched away from (VC-1100)", () => {
+    const surface = (sessionId: string) =>
+      act(() => root.render(<Surface tabs={tabIds} active={chatTabId(sessionId)} />));
+    // The production projection really does resolve the unsplit pane to its
+    // front tab alone — the shape that once dropped every chat on a switch.
+    expect(projectSplitView(null, tabIds, chatTabId("a"), "board").panes).toEqual([
+      expect.objectContaining({ tabIds: [chatTabId("a")] }),
+    ]);
+    surface("a");
+    surface("b");
+    expect(probe("a")?.style.display).toBe("none");
+    surface("a");
+    surface("b");
+    expect(mounts.get("a")).toBe(1);
+    expect(mounts.get("b")).toBe(1);
   });
 });
