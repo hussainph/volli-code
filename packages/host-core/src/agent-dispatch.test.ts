@@ -817,6 +817,9 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
     hook: { harness: "claude-code", event: "turn.started" },
     doctor: {},
     "prompt.baseline": {},
+    "perf.top": {},
+    "perf.stalls": {},
+    "perf.compare": { versions: ["0.3.0", "0.3.1"] },
   };
 
   /**
