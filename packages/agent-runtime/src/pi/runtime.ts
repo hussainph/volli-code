@@ -287,6 +287,8 @@ export interface PiRuntimeHostOptions {
   executionEnvFactory?: (
     workspacePath: string,
     identity: RuntimeSessionIdentity,
+    /** Marks the end of one of the factory's own stages in the attach's timing (VC-1072). */
+    markStage?: (stage: string) => void,
   ) => Promise<ExecutionEnv>;
   /**
    * The wait before an auto-retried attempt, by zero-based attempt number.
@@ -382,6 +384,7 @@ interface PiRuntimeHost {
   executionEnvFactory: (
     workspacePath: string,
     identity: RuntimeSessionIdentity,
+    markStage?: (stage: string) => void,
   ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
   connectivity: ConnectivityPort;
@@ -519,6 +522,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     inspectModelAccess,
     startSession: async (spec) => {
       await host.catalogReady;
+      markAttachStage(spec, "catalog-ready");
       return attachSession(host, spec);
     },
     completeUtility: async (input) => {
@@ -609,6 +613,18 @@ async function runUtilityCompletion(
     throw new UtilityCompletionError("The utility completion returned no text.", usage);
   }
   return { text: trimmed, usage };
+}
+
+/**
+ * Marks the end of one attach stage for the host's timing report (VC-1072).
+ * Diagnostics only: a marker that throws costs the mark, never the attach.
+ */
+function markAttachStage(spec: SessionRuntimeSpec, stage: string): void {
+  try {
+    spec.markAttachStage?.(stage);
+  } catch {
+    // A diagnostic that failed is not an attach that failed.
+  }
 }
 
 /** Pi messages are persisted as JSON; omit optional properties Pi represents as undefined. */
@@ -1728,6 +1744,7 @@ async function attachSession(
             return opened;
           })();
     createdSidecar = inputRecovery === undefined;
+    markAttachStage(spec, "sidecar-ready");
     const sidecarMetadata = sidecar.metadata;
     sidecarPath = sidecarMetadata.path;
     // Resolved once and shared: the handle is the branch's identity, not a
@@ -1926,7 +1943,9 @@ async function attachSession(
     // or points at another endpoint would otherwise send opaque state to a
     // backend that never minted it. Resolved once here and again on model
     // selection, which is when a Session's route is re-decided anyway.
+    markAttachStage(spec, "history-read");
     const nativeRoute = await nativeCompactionAvailable(model, models, spec.signal);
+    markAttachStage(spec, "native-route");
     const replayable = compactionPathForModel(
       conversationPath(withDroppedReasoning(recoveredEntries), conversationReader),
       model,
@@ -2144,7 +2163,11 @@ async function attachSession(
     // prove: an attachment that hands Pi its own environment cannot fail for
     // want of `sandbox-exec`, and a caller who injects a contained environment
     // gets one that is fail-closed at its own `exec`.
-    toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
+    markAttachStage(spec, "recovery-notices");
+    toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity, (stage) =>
+      markAttachStage(spec, stage),
+    );
+    markAttachStage(spec, "execution-env");
     const credentialRedaction = spec.credentialRedaction ?? spec.secret;
     const ownedToolEnv = privateSecretExecution(toolEnv, credentialRedaction);
     // The whole Agent Tool Surface, from the one list that names it.
@@ -2258,6 +2281,7 @@ async function attachSession(
       return { rebuilt, stagedCallable, stagedSurface, stagedCodeMode };
     };
     const initialTools = rebuildTools(spec, false);
+    markAttachStage(spec, "tools-built");
     callableSurface = initialTools.stagedCallable;
     codeModeSurface = initialTools.stagedSurface;
     liveCodeMode = initialTools.stagedCodeMode;
@@ -4273,6 +4297,7 @@ async function attachSession(
     if (isAborted(spec.signal)) {
       onAbort();
     }
+    markAttachStage(spec, "agent-ready");
 
     await observe({
       kind: "attachment",

@@ -1,5 +1,6 @@
 export * from "./session-engine";
 export * from "./native-adapter";
+export type { AttachStageTiming, AttachTimingReport } from "./attach-timing";
 export * from "./executor-slot";
 // Only the addressing convention is public. How a runtime observation becomes a
 // Session fact — the translator and the shape it produces — is this package's

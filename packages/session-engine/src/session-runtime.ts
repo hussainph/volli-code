@@ -75,6 +75,7 @@ import type {
   Reconciliation,
 } from "./native-adapter";
 import { NativeAttachmentError } from "./native-adapter";
+import { AttachStageClock, type AttachTimingReport } from "./attach-timing";
 import { selectSessionExecutor, type SessionExecutorSlot } from "./executor-slot";
 import type { TranslatedObservation, TranslatedObservationSink } from "./observation-translation";
 import {
@@ -219,6 +220,12 @@ export interface SessionRuntimePorts {
    * nothing; whether anything is exported is the sink's own opt-in.
    */
   observability?: ObservabilitySink;
+  /**
+   * Where each fresh executor attach reports the time its stages took, once,
+   * when it opens or fails (VC-1072). Diagnostics only: a reporter that throws
+   * costs the report and nothing else. Absent reports nothing.
+   */
+  onAttachTiming?: (report: AttachTimingReport) => void;
 }
 
 export type SessionClientCommand =
@@ -360,6 +367,13 @@ const ATTACH_FAILURE_ATTENTION_KINDS: Readonly<Record<AttachFailureAttentionKind
   configuration_invalid: true,
   adapter_unrecoverable: true,
 };
+/** One attach's stage clock, and what is known of the attempt once it starts. */
+interface AttachTimingState {
+  clock: AttachStageClock;
+  /** Null until the attach is a fresh one this runtime is making. */
+  attempt: Pick<AttachTimingReport, "adapterId" | "attachmentId" | "firstAttach"> | null;
+}
+
 interface FailAttachInput {
   request: AttachCommandRequest;
   submitted: SubmitSessionCommandResult;
@@ -1778,6 +1792,57 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
+    const clock = new AttachStageClock(() => this.ports.clock.now());
+    const timing: AttachTimingState = { clock, attempt: null };
+    try {
+      const result = await this.#attachStaged(request, projection, location, existed, timing);
+      // A fresh attach ends in exactly one of two receipts: accepted once its
+      // attachment opened, rejected once its failure is recorded.
+      const receipt = result.receipt;
+      this.#reportAttachTiming(
+        request,
+        timing,
+        receipt?.status === "rejected"
+          ? { outcome: "failed", code: receipt.code }
+          : { outcome: "opened" },
+      );
+      return result;
+    } catch (error) {
+      this.#reportAttachTiming(request, timing, { outcome: "failed", code: "attach_threw" });
+      throw error;
+    }
+  }
+
+  /** Reports one fresh attach's stages, when it got as far as attempting one. */
+  #reportAttachTiming(
+    request: AttachCommandRequest,
+    timing: AttachTimingState,
+    end: { outcome: AttachTimingReport["outcome"]; code?: string },
+  ): void {
+    const report = this.ports.onAttachTiming;
+    if (report === undefined || timing.attempt === null) return;
+    const sealed = timing.clock.seal();
+    try {
+      report({
+        sessionId: request.sessionId,
+        commandId: request.commandId,
+        ...timing.attempt,
+        ...end,
+        ...sealed,
+      });
+    } catch {
+      // A diagnostic that failed is not an attach that failed.
+    }
+  }
+
+  async #attachStaged(
+    request: AttachCommandRequest,
+    projection: SessionProjection,
+    location: SessionLocation,
+    existed: boolean,
+    timing: AttachTimingState,
+  ): Promise<SessionRuntimeCommandResult> {
+    const { clock } = timing;
     // A replay keeps the runtime its recorded intent named, which the Engine
     // holds it to; only a fresh attach selects (VC-916).
     const recorded = projection.commands.find(({ id }) => id === request.commandId)?.intent;
@@ -1803,6 +1868,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
 
     if (existed) return this.#recoverReplayedAttach(request, submitted, adapter, location);
+    clock.mark("submitted");
 
     // The directory has to be real before it is bound: an adapter handed one
     // that is not there fails per prompt, deep inside the harness, wearing
@@ -1818,6 +1884,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     const firstAttach =
       !request.commandId.startsWith("follow-up:") &&
       projection.attachments.every(({ openedAt }) => openedAt === null);
+    timing.attempt = { adapterId: adapter.id, attachmentId: null, firstAttach };
     let site: SessionLocation;
     try {
       const preparing = this.ports.locations.prepare(projection.session);
@@ -1847,7 +1914,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
     }
 
+    clock.mark("location-prepared");
     const attachmentId = this.#id("attachment");
+    timing.attempt.attachmentId = attachmentId;
     const carryFrom =
       request.command.continuity === "context_replay"
         ? priorAttachmentContext(projection, adapter.id)
@@ -1873,7 +1942,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
     try {
-      const attaching = adapter.attach(spec, sink);
+      const attaching = adapter.attach({ ...spec, markStage: clock.mark }, sink);
       handle = await this.#followUps.admissionWait(
         `follow-up:${request.commandId}`,
         attaching,
@@ -1910,6 +1979,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
     }
 
+    clock.mark("adapter-attached");
     try {
       const attachment: SessionAttachment = {
         id: attachmentId,
@@ -1934,6 +2004,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         kind: "attachment.opened",
         attachment,
       });
+      clock.mark("opened-recorded");
       const clearedAttachFailures = await Promise.all(
         projection.attention.active
           // `hasOwn`, not `in`: the kind arrives from durable history, and `in`
@@ -1979,6 +2050,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         },
         "executor.start.requested",
       );
+      clock.mark("accepted");
       return this.#result(request.sessionId, submitted.command, receipt);
     } catch (error) {
       if (!this.#bindings.has(attachmentId)) {

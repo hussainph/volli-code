@@ -33,6 +33,7 @@ import {
   SessionRuntimeNotFoundError,
   SESSION_HISTORY_WINDOW,
   SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
+  type AttachTimingReport,
   type BindingHandle,
   type HarnessCommand,
   type HostedSessionRuntime,
@@ -217,6 +218,7 @@ function composition(
     onSubscriberFailure?: (error: unknown) => void;
     onProjectionCheckpointFailure?: (error: unknown) => void;
     observability?: ObservabilitySink;
+    onAttachTiming?: Parameters<typeof createSessionRuntime>[0]["onAttachTiming"];
     /**
      * Where the runtime hears committed events. Absent means what every host
      * composes (VC-790): {@link createCommittedSessionStream} over the engine,
@@ -254,6 +256,7 @@ function composition(
         ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
         : {}),
       ...(options.observability ? { observability: options.observability } : {}),
+      ...(options.onAttachTiming ? { onAttachTiming: options.onAttachTiming } : {}),
       ...(committed ? { committed } : {}),
     }),
   };
@@ -6950,5 +6953,130 @@ describe("the cloud client's transcript artifacts", () => {
       digest: await sha256(runtimeBytes),
       mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
     });
+  });
+});
+
+describe("SessionRuntime attach timing (VC-1072)", () => {
+  /** An adapter that passes two stages of its own, each taking clock time. */
+  class StagedAdapter extends FakeAdapter {
+    constructor(private readonly clock: { at: number }) {
+      super();
+    }
+
+    override async attach(
+      spec: Parameters<NativeHarnessAdapter["attach"]>[0],
+      sink: ObservationSink,
+    ): Promise<BindingHandle> {
+      this.clock.at += 40;
+      spec.markStage?.("runtime-context");
+      this.clock.at += 3_500;
+      spec.markStage?.("concurrency-budget");
+      return super.attach(spec, sink);
+    }
+  }
+
+  it("reports a fresh attach once, with the adapter's own stages in order", async () => {
+    const clock = { at: 1_000 };
+    const reports: AttachTimingReport[] = [];
+    const { runtime } = composition({
+      adapter: new StagedAdapter(clock),
+      clock: { now: () => clock.at },
+      onAttachTiming: (report) => reports.push(report),
+    });
+
+    const sessionId = await createAndAttach(runtime);
+
+    expect(reports).toHaveLength(1);
+    const [report] = reports;
+    expect(report).toMatchObject({
+      sessionId,
+      commandId: "command-attach",
+      adapterId: "fake",
+      firstAttach: true,
+      outcome: "opened",
+      totalMs: 3_540,
+    });
+    expect(report?.attachmentId).toEqual(expect.any(String));
+    expect(report?.stages.map(({ stage }) => stage)).toEqual([
+      "submitted",
+      "location-prepared",
+      "runtime-context",
+      "concurrency-budget",
+      "adapter-attached",
+      "opened-recorded",
+      "accepted",
+    ]);
+    // The stage that held the attach is named by its own time, not a total.
+    expect(report?.stages.find(({ stage }) => stage === "concurrency-budget")).toEqual({
+      stage: "concurrency-budget",
+      ms: 3_500,
+      atMs: 3_540,
+    });
+  });
+
+  it("reports a failed attach with its failure code, and nothing for a replayed one", async () => {
+    const reports: AttachTimingReport[] = [];
+    const adapter = new FakeAdapter();
+    adapter.attachFailure = new NativeAttachmentError(
+      "no model",
+      "PI_CONFIGURATION_INVALID",
+      "configuration_invalid",
+    );
+    const { runtime } = composition({ adapter, onAttachTiming: (report) => reports.push(report) });
+
+    const sessionId = await createAndAttach(runtime);
+    // The same command again is a replay of a recorded outcome, not an attach.
+    await runtime.command({
+      commandId: "command-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ outcome: "failed", code: "PI_CONFIGURATION_INVALID" });
+    expect(reports[0]?.stages.map(({ stage }) => stage)).toEqual([
+      "submitted",
+      "location-prepared",
+    ]);
+  });
+
+  it("reports an attach that threw past its own failure handling, and rethrows it", async () => {
+    const reports: AttachTimingReport[] = [];
+    const base = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => 100 },
+      ids: ids(),
+    });
+    const engine: SessionEngine = {
+      ...base,
+      observe: (observation) =>
+        observation.kind === "attachment.opened"
+          ? Promise.reject(new Error("ledger is gone"))
+          : base.observe(observation),
+    };
+    const { runtime } = composition({
+      engine,
+      committed: false,
+      onAttachTiming: (report) => reports.push(report),
+    });
+
+    await expect(createAndAttach(runtime)).rejects.toThrow("ledger is gone");
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ outcome: "failed", code: "attach_threw" });
+    expect(reports[0]?.stages.at(-1)?.stage).toBe("adapter-attached");
+  });
+
+  it("never lets a reporter that throws fail the attach it reports", async () => {
+    const { runtime, engine } = composition({
+      onAttachTiming: () => {
+        throw new Error("diagnostics are down");
+      },
+    });
+
+    const sessionId = await createAndAttach(runtime);
+
+    const projection = await engine.getSession({ sessionId });
+    expect(projection?.attachments.map(({ status }) => status)).toEqual(["open"]);
   });
 });

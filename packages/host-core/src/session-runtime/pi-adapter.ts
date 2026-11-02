@@ -787,7 +787,9 @@ function piNativeAdapter(
           "adapter_unrecoverable",
         );
       }
+      const mark = spec.markStage ?? noStage;
       const context = await options.resolveRuntimeContext(spec.sessionId);
+      mark("runtime-context");
       if (context === null) {
         // Thrown, not emitted: the runtime discards this attach's sink when the
         // attach rejects, so the error message is the only channel that
@@ -800,6 +802,11 @@ function piNativeAdapter(
         );
       }
       const mcpTools = context.mcpTools ?? [];
+      // The directory the Session Engine prepared is the one to measure: a
+      // worktree ticket's isolated checkout has its own `node_modules`
+      // question, and the main checkout's answer is not it.
+      const workspaceEnvironment = measureWorkspaceEnvironment(spec.directory);
+      mark("workspace-environment");
       const binding = new PiBinding({
         spec,
         sink,
@@ -838,17 +845,18 @@ function piNativeAdapter(
               }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
-        // The directory the Session Engine prepared is the one to measure: a
-        // worktree ticket's isolated checkout has its own `node_modules`
-        // question, and the main checkout's answer is not it.
-        workspaceEnvironment: measureWorkspaceEnvironment(spec.directory),
+        workspaceEnvironment,
         refreshRuntimeContext: options.refreshRuntimeContext,
         releaseRuntimeContext: options.releaseRuntimeContext,
         resolveMcpPort: options.resolveMcpPort,
         resolveWebPorts: options.resolveWebPorts,
       });
+      mark("binding-built");
       try {
-        binding.bind(await runtime.startSession(binding.runtimeSpec()));
+        binding.bind(
+          await runtime.startSession({ ...binding.runtimeSpec(), markAttachStage: mark }),
+        );
+        mark("runtime-started");
       } catch (error) {
         await binding.release("adapter_failure").catch(() => undefined);
         throw new NativeAttachmentError(
@@ -861,6 +869,9 @@ function piNativeAdapter(
     },
   };
 }
+
+/** The marker for an attach nobody is timing. */
+function noStage(): void {}
 
 // Model questions use the shared `askUserInteractionId` derivation. Budget
 // and confirmation permissions use their own durable id prefixes below.

@@ -298,10 +298,17 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           // recovery a spawned PTY gets from `agentSessionEnv`/
           // `ticketSessionEnv` prepending this same directory
           // (`harness-runtime.ts`).
-          executionEnvFactory: async (workspacePath, identity) => {
+          executionEnvFactory: async (workspacePath, identity, markStage = () => undefined) => {
             await options.beforeExecution();
+            markStage("login-path");
             const runtimeContext =
               shells === undefined ? null : await options.resolveRuntimeContext(identity.sessionId);
+            markStage("shell-context");
+            // The machine's share for this Session, read before the environment
+            // is built so its time is its own stage (VC-1072): it is the read
+            // that walks every Session holding an open attachment.
+            const environment = await options.concurrencyEnvFor(identity.sessionId);
+            markStage("concurrency-budget");
             const canMoveBash =
               runtimeContext !== null &&
               (["shell_start", "shell_output", "shell_kill"] as const).every((tool) =>
@@ -349,7 +356,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                 // This Session's concurrency budget (VC-339), computed at attach
                 // from the Sessions working now — under the identity above, which
                 // is what keeps a machine fact from ever posing as who is running.
-                environment: await options.concurrencyEnvFor(identity.sessionId),
+                environment,
                 secretEnvironment: (signal) => secrets.environmentAsync(identity.sessionId, signal),
                 // The execution environment is owned by this attachment and its
                 // cleanup runs on every close path. Revoke there so a copied
