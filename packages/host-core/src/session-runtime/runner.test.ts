@@ -35,6 +35,7 @@ import * as boot from "./boot-recovery";
 import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./lifecycle";
 import * as pi from "./pi-adapter";
 import { createRunnerComposition, type RunnerHostEdge, type RunnerProductStore } from "./runner";
+import type { OpenNativeBinding } from "@volli/session-engine";
 import { createCloudProductStore } from "../cloud-store";
 import { registerSessionNoticeJob } from "../cloud-store/notice-jobs";
 import { ownerGuardedInbox } from "../cloud-store/session-jobs";
@@ -784,7 +785,7 @@ describe("runner composition", () => {
       occurredAt: 3,
       provenance,
       turnId: "turn-1",
-    } as never);
+    });
     // Each read lands past the reader's five-second window, so none is cached.
     let clock = 0;
     vi.spyOn(Date, "now").mockImplementation(() => (clock += 10_000));
@@ -803,10 +804,25 @@ describe("runner composition", () => {
     expect(await hint()).toBe("8");
     expect(getSession.mock.calls).toEqual([[{ sessionId: terminal.id }]]);
 
-    // The chat's binding held by the runtime as well: two working, half each.
-    vi.spyOn(runtime, "openNativeBindings").mockReturnValue([
-      { sessionId: chat.session.id, attachmentId: "chat-attachment" } as never,
+    // The chat's binding held but idle, as every chat messaged since launch
+    // stays: still one working, and the chat is not even folded.
+    const binding: OpenNativeBinding = {
+      sessionId: chat.session.id,
+      attachmentId: "chat-attachment",
+      directory: "/repo",
+      lastProgressAt: 0,
+      inFlightTools: [],
+      turnOpen: false,
+    };
+    const bindings = vi.spyOn(runtime, "openNativeBindings").mockReturnValue([binding]);
+    expect(await hint()).toBe("8");
+    expect(getSession.mock.calls).toEqual([
+      [{ sessionId: terminal.id }],
+      [{ sessionId: terminal.id }],
     ]);
+
+    // Its turn open on that binding: two working, half each.
+    bindings.mockReturnValue([{ ...binding, turnOpen: true }]);
     expect(await hint()).toBe("4");
   });
 

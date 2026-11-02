@@ -164,7 +164,7 @@ export interface LiveHostCore
    * supervisor nobody has asked for: a host that never built one has no
    * terminal running. The concurrency budget's terminal half (VC-1085).
    */
-  readonly liveTerminalSessionIds?: () => ReadonlySet<string>;
+  readonly liveTerminalSessionIds: () => ReadonlySet<string>;
 }
 export type HostCore = LiveHostCore | DegradedHostCore;
 

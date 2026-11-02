@@ -214,7 +214,12 @@ export function registerTerminalIpcHandlers(
       : sessionEngine === null
         ? null
         : createSessionConcurrencyEnvReader({
-            liveSessionIds: () => defaultManager?.liveSessionIds() ?? new Set(),
+            // No structured runtime behind a fixture database: only its PTYs.
+            liveExecutors: () => ({
+              turnSessionIds: new Set(),
+              boundAttachmentIds: new Set(),
+              terminalSessionIds: defaultManager?.liveSessionIds() ?? new Set(),
+            }),
             getSession: (query) => sessionEngine.getSession(query),
           });
   // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production

@@ -2042,12 +2042,17 @@ describe("listAttachedSessions (VC-403)", () => {
     // Every Session's executor held, so only the durable rule decides
     // (the budget itself counts only live executors, VC-1085).
     const fleet = await control.listSessions({ projectId, scope: "all" });
-    const liveSessionIds = new Set(fleet.map((projection) => projection.session.id));
+    const held = {
+      terminalSessionIds: new Set(fleet.map((projection) => projection.session.id)),
+      boundAttachmentIds: new Set(
+        fleet.flatMap((projection) => projection.attachments.map(({ id }) => id)),
+      ),
+    };
     const narrow = workingSessionCount({
       projections: await control.listAttachedSessions(),
-      liveSessionIds,
+      live: held,
     });
-    const whole = workingSessionCount({ projections: fleet, liveSessionIds });
+    const whole = workingSessionCount({ projections: fleet, live: held });
 
     expect(narrow).toBe(whole);
     // Not vacuously equal at zero: the live terminal is counted, the exited one

@@ -517,6 +517,21 @@ describe("SessionRuntime durable boundary invariants", () => {
     expect(runtime.openNativeBindings()[0]!.inFlightTools).toEqual([]);
   });
 
+  // VC-1085: the concurrency budget asks which bindings are mid-turn without
+  // folding a Session, so an idle held binding costs it nothing.
+  it("says whether each live binding has a turn open", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    expect(runtime.openNativeBindings()[0]!.turnOpen).toBe(false);
+
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-1", occurredAt: 400 });
+    expect(runtime.openNativeBindings()[0]!.turnOpen).toBe(true);
+
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-1", occurredAt: 500 });
+    expect(runtime.openNativeBindings()[0]!.turnOpen).toBe(false);
+  });
+
   it("ignores an observation that arrives while shutdown is releasing its binding", async () => {
     const { runtime, adapter } = composition();
     const created = await create(runtime);

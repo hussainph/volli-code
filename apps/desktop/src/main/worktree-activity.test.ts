@@ -50,6 +50,7 @@ function runtimeAt(directory: string, turnActive: boolean) {
         directory,
         lastProgressAt: 0,
         inFlightTools: [],
+        turnOpen: turnActive,
       },
     ],
     projection: vi.fn(async () => ({ projection: { turnActive } })),

@@ -40,6 +40,7 @@ function fakeRuntime(sessions: Record<string, FakeSession>): FakeRuntime {
         attachmentId: session.attachmentId,
         lastProgressAt: 0,
         inFlightTools: [],
+        turnOpen: false,
       }));
     },
     async projection({ sessionId }) {

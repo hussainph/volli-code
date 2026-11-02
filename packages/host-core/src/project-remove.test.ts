@@ -270,6 +270,7 @@ function binding(sessionId: string, directory: string): OpenNativeBinding {
     attachmentId: `attachment-${sessionId}`,
     lastProgressAt: 0,
     inFlightTools: [],
+    turnOpen: false,
   };
 }
 
