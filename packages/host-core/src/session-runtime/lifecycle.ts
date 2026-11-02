@@ -36,6 +36,7 @@ import {
   type BootRecoveryFailure,
   type BootRecoveryReason,
 } from "./boot-recovery";
+import { createBootRecoveryEngine } from "./boot-recovery-reader";
 import { resumeRecoveredTurns, type RestartResumeCloud } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
 import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
@@ -304,7 +305,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       let recoveredTurns = 0;
       try {
         const closedAttachments = await closeStaleAttachments({
-          engine: sessionEngine,
+          engine: createBootRecoveryEngine({
+            db: database.db,
+            engine: sessionEngine,
+            owns: ownsSession,
+          }),
           ...(options.venue === undefined ? {} : { venue: options.venue }),
           ...(options.ownsLegacyRunner === undefined
             ? {}
