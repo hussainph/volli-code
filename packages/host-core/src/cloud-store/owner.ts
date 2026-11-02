@@ -236,6 +236,8 @@ async function projectThroughListing(
   const projections: SessionProjection[] = [];
   let missed = 0;
   for (const row of rows) {
+    // A listing's fold is deep-frozen and shared; a fold made here on its own
+    // is not. Callers treat both as readonly, as `SessionProjection` says.
     const cached = folded.get(row.id);
     if (cached !== undefined) {
       projections.push(cached);
