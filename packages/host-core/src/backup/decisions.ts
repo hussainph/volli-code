@@ -426,6 +426,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "One row, re-established at restore from the metering boundary in the data document; a fresh migration would claim complete coverage.",
   },
   {
+    table: "session_birth_owners",
+    decision: "rebuild",
+    reason:
+      "A cache of each Session's birth owner, kept by triggers on the Session event order: restoring the events the bundle carries refills it, and a Session it misses is read from its birth event.",
+  },
+  {
     table: "migration_history",
     decision: "rebuild",
     reason:

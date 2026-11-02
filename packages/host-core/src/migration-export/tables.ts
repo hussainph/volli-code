@@ -103,6 +103,11 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     reason: "A local projection cache; the backend keeps its own bounded fold.",
   },
   {
+    table: "session_birth_owners",
+    disposition: "runner",
+    reason: "A local roster cache of each Session's birth owner, derived from its birth event.",
+  },
+  {
     table: "session_follow_up_queue",
     disposition: "runner",
     reason: "Release stays a runner decision; preflight requires it settled.",
