@@ -136,6 +136,7 @@ function cardById(page, id) {
   const exact = new RegExp(`^${id}$`);
   return page
     .locator("article")
+    .filter({ visible: true })
     .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
 }
 
@@ -148,7 +149,9 @@ function cardById(page, id) {
  */
 async function columnCount(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+      (div) => div.getClientRects().length > 0,
+    );
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -163,7 +166,9 @@ async function columnCount(page, label) {
 /** The board-column header box for `label`, excluding matching sidebar metadata. */
 async function columnHeaderBox(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+      (div) => div.getClientRects().length > 0,
+    );
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -182,7 +187,9 @@ async function columnHeaderBox(page, label) {
 async function boardStateByColumn(page) {
   return page.evaluate(() => {
     const labels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+      (div) => div.getClientRects().length > 0,
+    );
     const state = {};
     for (const label of labels) {
       const header = headers.find((div) => {
@@ -280,7 +287,9 @@ async function goToBoard(page) {
  */
 async function firstCardIdInColumn(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+      (div) => div.getClientRects().length > 0,
+    );
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -294,7 +303,9 @@ async function firstCardIdInColumn(page, label) {
 async function columnHasCard(page, label, id) {
   return page.evaluate(
     ({ columnLabel, cardId }) => {
-      const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+      const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+        (div) => div.getClientRects().length > 0,
+      );
       const header = headers.find((div) => {
         const first = div.children[0];
         return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -311,7 +322,9 @@ async function columnHasCard(page, label, id) {
 /** Every card id in a board column, top to bottom. */
 async function columnCardIds(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+      (div) => div.getClientRects().length > 0,
+    );
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -481,7 +494,7 @@ async function main() {
         for (const label of statusLabels) {
           labelsPresent[label] = await page.getByText(label, { exact: true }).count();
         }
-        const cardCount = await page.locator("article").count();
+        const cardCount = await page.locator("article").filter({ visible: true }).count();
         const bareState = await page
           .getByText(/Write the first ticket|model provider to start|default model to start/)
           .count();
@@ -544,7 +557,7 @@ async function main() {
         await sleep(1500);
         await goToBoard(page);
 
-        const count = await page.locator("article").count();
+        const count = await page.locator("article").filter({ visible: true }).count();
         const vc1 = cardById(page, "VC-1");
         const vc1Count = await vc1.count();
         const title =
@@ -624,7 +637,8 @@ async function main() {
       const paletteClosed = (await search.count()) === 0;
       await page.keyboard.press("Escape");
       await sleep(300);
-      const boardRestored = (await page.locator("article").count()) === 11;
+      const boardRestored =
+        (await page.locator("article").filter({ visible: true }).count()) === 11;
       const ok = signifier && opened && paletteClosed && boardRestored;
       return {
         ok,
@@ -642,13 +656,13 @@ async function main() {
         const high = page.getByRole("menuitemcheckbox", { name: "High" });
         await high.click();
         await sleep(400);
-        const filtered = await page.locator("article").count();
+        const filtered = await page.locator("article").filter({ visible: true }).count();
         // The checkbox item calls preventDefault on select, so the menu stays
         // open across toggles — no need to reopen it.
         await high.click();
         await page.keyboard.press("Escape");
         await sleep(400);
-        const restored = await page.locator("article").count();
+        const restored = await page.locator("article").filter({ visible: true }).count();
         const ok = filtered >= 1 && filtered < 11 && restored === 11;
         return { ok, detail: `filtered=${filtered} restored=${restored}` };
       },
@@ -664,11 +678,11 @@ async function main() {
         const boardLabel = page.getByRole("menuitemcheckbox", { name: "board", exact: true });
         await boardLabel.click();
         await sleep(400);
-        const filtered = await page.locator("article").count();
+        const filtered = await page.locator("article").filter({ visible: true }).count();
         await boardLabel.click();
         await page.keyboard.press("Escape");
         await sleep(400);
-        const restored = await page.locator("article").count();
+        const restored = await page.locator("article").filter({ visible: true }).count();
         const ok = filtered === 1 && restored === 11;
         return { ok, detail: `filtered=${filtered} restored=${restored}` };
       },
@@ -683,7 +697,11 @@ async function main() {
           backlog: await columnCount(page, "Backlog"),
           doing: await columnCount(page, "Doing"),
         };
-        const cardBox = await page.locator("article").first().boundingBox();
+        const cardBox = await page
+          .locator("article")
+          .filter({ visible: true })
+          .first()
+          .boundingBox();
         const doingHeaderBox = await columnHeaderBox(page, "Doing");
         if (!cardBox || !doingHeaderBox) throw new Error("card or Doing header not found");
         await drag(page, cardBox, { x: doingHeaderBox.x + 20, y: doingHeaderBox.y + 120 });
@@ -883,7 +901,7 @@ async function main() {
 
         let dropped = false;
         for (let dropAttempt = 1; dropAttempt <= 3 && !dropped; dropAttempt += 1) {
-          const card = page.locator("article").first();
+          const card = page.locator("article").filter({ visible: true }).first();
           await card.scrollIntoViewIfNeeded();
           const cardBox = await card.boundingBox();
           if (!cardBox) throw new Error("source card not found");
@@ -947,7 +965,7 @@ async function main() {
         // Check 9's pill drop can retain a duplicate overlay article after the
         // real card lands. Do not let that picture enter the baseline count.
         await waitForDragSettled(page);
-        const before = await page.locator("article").count();
+        const before = await page.locator("article").filter({ visible: true }).count();
         await page.getByRole("button", { name: "New", exact: true }).first().click();
         const title = page.getByPlaceholder("Ticket title…");
         await waitUntil(
@@ -969,7 +987,7 @@ async function main() {
           async () => (await title.count()) === 0,
           { timeout: 3000 },
         );
-        const after = await page.locator("article").count();
+        const after = await page.locator("article").filter({ visible: true }).count();
         const vc12Count = await vc12.count();
         const ok = after === before + 1 && vc12Count === 1;
         return { ok, detail: `before=${before} after=${after} vc12Count=${vc12Count}` };
@@ -1154,7 +1172,7 @@ async function main() {
           Done: await columnCount(page, "Done"),
         };
         // Rows are divs, not <article> — the list view mounts none.
-        const articleCount = await page.locator("article").count();
+        const articleCount = await page.locator("article").filter({ visible: true }).count();
         const rowCount = await page.locator("[data-ticket-row]").count();
         const vc5Row = await page.locator('[data-ticket-id="VC-5"]').count();
         const ok =

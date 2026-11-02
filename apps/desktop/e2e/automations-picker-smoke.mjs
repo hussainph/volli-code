@@ -66,6 +66,7 @@ const windowFor = (page, ticketId) => page.locator(`[data-armed-run-window="${ti
 function cardById(page, id) {
   return page
     .locator("article")
+    .filter({ visible: true })
     .filter({ has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }) });
 }
 

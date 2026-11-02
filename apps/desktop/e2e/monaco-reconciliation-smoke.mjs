@@ -493,9 +493,12 @@ async function main() {
 
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
-    const card = page.locator("article").filter({
-      has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
-    });
+    const card = page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({
+        has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+      });
     await waitUntil("ticket card", async () => (await card.count()) === 1);
     await card.dblclick();
     const aside = page.locator("aside");

@@ -657,7 +657,12 @@ async function caseHideshowTicket(run) {
     // the board card behind Escape can be off-screen on a crowded board.
     await page.getByRole("button", { name: "Home", exact: true }).click();
     await sleep(420);
-    await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick({ timeout: 20000 });
+    await page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({ hasText: "VC-1" })
+      .first()
+      .dblclick({ timeout: 20000 });
     await sleep(520);
     await selectSeededTab(run);
     await sleep(300);

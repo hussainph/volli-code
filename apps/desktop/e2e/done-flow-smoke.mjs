@@ -216,6 +216,7 @@ async function main() {
       const exact = new RegExp(`^${id}$`);
       return page
         .locator("article")
+        .filter({ visible: true })
         .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
     }
 
