@@ -41,6 +41,7 @@ import {
   type ChatSessionSlice,
   type ChatSessionTransport,
   type ChatSessionWrites,
+  type FlushBatch,
   type QueuedMessage,
   type MessageDelivery,
 } from "@volli/session-presentation";
@@ -58,6 +59,8 @@ import {
   type ChatDraft,
 } from "@renderer/stores/chat-drafts";
 import { projectOfSession, rememberSessionProject } from "@renderer/lib/session-project";
+import { listedChatRecord } from "@renderer/lib/listed-chat-record";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { cloudAccountScope } from "@renderer/stores/launch";
@@ -92,6 +95,14 @@ export interface IdleSend extends QueuedMessage {
 }
 
 export interface ChatSessionsState extends ChatSessionWrites {
+  /** Always present here: the shared frame folds every client's flush into one write. */
+  batch: FlushBatch;
+  /**
+   * Counts every change to the set of resident Sessions' lifecycles — a slice
+   * seeded, removed, or moved to another lifecycle. The usage rail's settle
+   * signal reads it instead of joining every slice's lifecycle per write.
+   */
+  settleRevision: number;
   /** Sent bubbles survive view remounts and queue-before-transcript delivery. */
   idleSends: Readonly<Record<string, readonly IdleSend[]>>;
   rememberIdleSend(sessionId: string, message: QueuedMessage, accepted?: boolean): void;
@@ -122,6 +133,14 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * or a project's Workspace is let go of or claimed again.
    */
   rebindChatSessions(projectIds: readonly string[]): void;
+  /**
+   * A view is drawing this Session now (VC-515): the chat plane while its
+   * pane is visible, a peek while it is open. Wakes it if its idle client was
+   * let go, adopts it if it has an open tab nothing has adopted yet, and holds
+   * its client resident until the returned release. A Session no view shows is
+   * a candidate for {@link MAX_HIDDEN_IDLE_CLIENTS}' eviction once it is idle.
+   */
+  showChatSession(sessionId: string, projectId?: string): () => void;
   /** Drops the Session from this surface. The Session itself is untouched. */
   closeChatSession(sessionId: string): void;
   enqueue(sessionId: string, message: QueuedMessage): Promise<MessageDelivery>;
@@ -259,6 +278,25 @@ function blobLinkDrafts(
 }
 
 /**
+ * How many idle chat clients no view is showing stay resident (VC-515).
+ *
+ * Opening a Session from a peek, a notification or a restored tab used to
+ * create a client that lived until its tab closed — and a peek has no tab — so
+ * a long day piled up live streams, each holding a subscription in main and a
+ * per-frame write the moment anything moved. Past this many, the least
+ * recently shown idle ones are let go: the client is disposed and the slice
+ * stays, so the tab keeps its title and transcript and a view showing it again
+ * wakes it with a fresh snapshot, exactly as a rebind does. A Session that is
+ * working, waiting on a question, queued, failed or holding an unsent message
+ * is never let go, and a listing row that says it started working again wakes
+ * it. Below the cap nothing changes at all.
+ */
+const MAX_HIDDEN_IDLE_CLIENTS = 8;
+
+/** How long after a view lets go, or a lifecycle moves, the eviction sweep waits. */
+const RESIDENCY_SWEEP_MS = 2_000;
+
+/**
  * Factory so tests get isolated instances (sessions.ts's convention).
  *
  * `transport` answers per project (VC-713): a Session on a remote host goes
@@ -277,6 +315,14 @@ export function createChatSessionsStore(
     // resident runtime behind the closed tab.
     const closedCreatedDrafts = new Set<string>();
     /**
+     * The slices written inside {@link ChatSessionsState.batch}, and the
+     * Sessions whose held messages to retire once they are published. One
+     * frame's stream flushes from every live client land here and go out as a
+     * single `set` — one map copy and one pass of every subscriber's selector
+     * however many Sessions streamed (VC-515). `null` outside a batch.
+     */
+    let pendingBatch: { slices: Map<string, ChatSessionSlice>; retire: Set<string> } | null = null;
+    /**
      * Every write lands through here, so a Session that has been closed under a
      * command still in flight is a no-op rather than a resurrected slice.
      */
@@ -284,15 +330,32 @@ export function createChatSessionsStore(
       sessionId: string,
       change: (slice: ChatSessionSlice) => ChatSessionSlice,
     ): void => {
+      if (pendingBatch !== null) {
+        const slice = pendingBatch.slices.get(sessionId) ?? get().sessions[sessionId];
+        if (slice === undefined) return;
+        const next = change(slice);
+        if (next !== slice) pendingBatch.slices.set(sessionId, next);
+        return;
+      }
       set((state) => {
         const slice = state.sessions[sessionId];
         if (slice === undefined) return state;
         const next = change(slice);
-        return next === slice ? state : { sessions: { ...state.sessions, [sessionId]: next } };
+        if (next === slice) return state;
+        return {
+          sessions: { ...state.sessions, [sessionId]: next },
+          ...(next.lifecycle === slice.lifecycle
+            ? {}
+            : { settleRevision: state.settleRevision + 1 }),
+        };
       });
     };
 
     const retireAcceptedHeld = (sessionId: string) => {
+      if (pendingBatch !== null) {
+        pendingBatch.retire.add(sessionId);
+        return;
+      }
       const slice = get().sessions[sessionId];
       if (slice === undefined) return;
       const accepted = new Set([
@@ -324,6 +387,113 @@ export function createChatSessionsStore(
         },
       });
 
+    /* ---------------------------------------------------- residency (VC-515) */
+
+    /** Views drawing each Session now, counted: a split can show one twice. */
+    const shown = new Map<string, number>();
+    /**
+     * Sessions by when they were last shown or adopted, least recent first: a
+     * touch re-inserts, so the Set's own insertion order is the LRU order.
+     */
+    const lastUse = new Set<string>();
+    /** Sessions whose slice is kept but whose client was let go. */
+    const dormant = new Set<string>();
+    let sweepTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const touch = (sessionId: string): void => {
+      lastUse.delete(sessionId);
+      lastUse.add(sessionId);
+    };
+
+    /** Nothing in flight a disposed client could lose, and nothing a person is waiting on. */
+    const isIdle = (sessionId: string, slice: ChatSessionSlice): boolean => {
+      const projection = slice.projection;
+      return (
+        projection !== null &&
+        slice.lifecycle === "ready" &&
+        slice.sessionError === null &&
+        !slice.transcript.turnActive &&
+        !projection.turnActive &&
+        projection.interactions.active.length === 0 &&
+        projection.attention.primary === null &&
+        slice.queue.length === 0 &&
+        (get().idleSends[sessionId]?.length ?? 0) === 0 &&
+        (useChatDraftsStore.getState().drafts[sessionId]?.held.length ?? 0) === 0
+      );
+    };
+
+    const sweep = (): void => {
+      sweepTimer = null;
+      const sessions = get().sessions;
+      const candidates = new Set<string>();
+      for (const [sessionId, slice] of Object.entries(sessions)) {
+        if (shown.has(sessionId) || dormant.has(sessionId)) continue;
+        if (getChatClient(sessionId) === undefined || !isIdle(sessionId, slice)) continue;
+        candidates.add(sessionId);
+      }
+      let excess = candidates.size - MAX_HIDDEN_IDLE_CLIENTS;
+      if (excess <= 0) return;
+      watchListing();
+      // Least recently used first. A Session this store never touched (no
+      // adopt, no create) is not in the order and is never let go.
+      for (const sessionId of lastUse) {
+        if (excess === 0) break;
+        if (!candidates.has(sessionId)) continue;
+        disposeChatClient(sessionId);
+        dormant.add(sessionId);
+        excess -= 1;
+      }
+    };
+
+    const scheduleSweep = (): void => {
+      if (sweepTimer !== null) return;
+      sweepTimer = setTimeout(sweep, RESIDENCY_SWEEP_MS);
+    };
+
+    /** A let-go Session back on a fresh client: re-reads its snapshot, keeps its slice. */
+    const wake = (sessionId: string) => {
+      dormant.delete(sessionId);
+      touch(sessionId);
+      const client = attach(sessionId);
+      void client.connect();
+      return client;
+    };
+
+    const forgetResidency = (sessionId: string): void => {
+      dormant.delete(sessionId);
+      lastUse.delete(sessionId);
+    };
+
+    // A lifecycle move (or a slice seeded or removed) can make a hidden
+    // Session idle, or add a client: both are when the cap may be exceeded.
+    api.subscribe((state, previous) => {
+      if (state.settleRevision !== previous.settleRevision) scheduleSweep();
+    });
+
+    // A let-go Session cannot hear its own stream, so the durable listing —
+    // pushed by `volli:session-activity` — is what says it moved: a turn
+    // started (a CLI send, an Automation) or a question opened. Only a
+    // listing write with something let go does any work. Subscribed on the
+    // first let-go rather than at creation: the listing store's module graph
+    // reaches back into this one, so it is not yet defined while this
+    // module's own singleton is built.
+    let watchingListing = false;
+    const watchListing = (): void => {
+      if (watchingListing) return;
+      watchingListing = true;
+      useProjectSessionsStore.subscribe((state, previous) => {
+        if (dormant.size === 0 || state.byProject === previous.byProject) return;
+        for (const sessionId of dormant) {
+          const row = listedChatRecord(state.byProject, sessionId);
+          const slice = get().sessions[sessionId];
+          if (row === null || slice === undefined) continue;
+          const title = slice.projection?.session.title;
+          const renamed = row.title !== "" && title != null && row.title !== title;
+          if (row.activity === "working" || row.activity === "waiting" || renamed) wake(sessionId);
+        }
+      });
+    };
+
     /**
      * Seed one resident slice and start its Session: stream open, executor
      * attaching. Idempotent enough for a replayed promotion, which may find
@@ -340,8 +510,12 @@ export function createChatSessionsStore(
      * off the create/promotion critical path, which is VC-16's optimistic open.
      */
     const makeResident = (sessionId: string, ticketId: string | null): void => {
+      touch(sessionId);
       if (get().sessions[sessionId] === undefined) {
-        set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("starting") } }));
+        set((state) => ({
+          sessions: { ...state.sessions, [sessionId]: seedSlice("starting") },
+          settleRevision: state.settleRevision + 1,
+        }));
       }
       // A ticketed refusal is reported by durable Ticket Attention on the
       // projection, so a slice-level error would say the same thing twice. A
@@ -426,6 +600,39 @@ export function createChatSessionsStore(
 
     return {
       sessions: {},
+      settleRevision: 0,
+      batch(run) {
+        if (pendingBatch !== null) {
+          run();
+          return;
+        }
+        const batch = { slices: new Map<string, ChatSessionSlice>(), retire: new Set<string>() };
+        pendingBatch = batch;
+        try {
+          run();
+        } finally {
+          pendingBatch = null;
+          if (batch.slices.size > 0) {
+            set((state) => {
+              let sessions: Record<string, ChatSessionSlice> | null = null;
+              let settled = false;
+              for (const [sessionId, slice] of batch.slices) {
+                const previous = state.sessions[sessionId];
+                // Closed mid-batch: the same no-op an unbatched write is.
+                if (previous === undefined) continue;
+                if (previous.lifecycle !== slice.lifecycle) settled = true;
+                sessions ??= { ...state.sessions };
+                sessions[sessionId] = slice;
+              }
+              if (sessions === null) return state;
+              return settled
+                ? { sessions, settleRevision: state.settleRevision + 1 }
+                : { sessions };
+            });
+          }
+          for (const sessionId of batch.retire) retireAcceptedHeld(sessionId);
+        }
+      },
       idleSends: {},
       rememberIdleSend(sessionId, message, accepted = false) {
         set((state) => {
@@ -626,8 +833,15 @@ export function createChatSessionsStore(
         // durable chat. Opening that view must not manufacture a resident
         // client (and therefore an attach) before its first message promotes it.
         if (useChatDraftsStore.getState().drafts[sessionId]?.provisional !== undefined) return;
-        if (get().sessions[sessionId] !== undefined) return;
-        set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("ready") } }));
+        if (get().sessions[sessionId] !== undefined) {
+          if (dormant.has(sessionId)) wake(sessionId);
+          return;
+        }
+        touch(sessionId);
+        set((state) => ({
+          sessions: { ...state.sessions, [sessionId]: seedSlice("ready") },
+          settleRevision: state.settleRevision + 1,
+        }));
         const client = attach(sessionId);
         void client.connect();
       },
@@ -635,6 +849,9 @@ export function createChatSessionsStore(
       rebindChatSessions(projectIds) {
         const moved = new Set(projectIds);
         for (const sessionId of Object.keys(get().sessions)) {
+          // A let-go Session has no client to re-home; waking it later builds
+          // one on whatever transport its project resolves to then.
+          if (dormant.has(sessionId)) continue;
           const projectId = projectOfSession(sessionId);
           if (projectId === null || !moved.has(projectId)) continue;
           // The old client holds the old owner's transport and stream
@@ -650,19 +867,54 @@ export function createChatSessionsStore(
         }
       },
 
+      showChatSession(sessionId, projectId) {
+        shown.set(sessionId, (shown.get(sessionId) ?? 0) + 1);
+        touch(sessionId);
+        const state = get();
+        if (dormant.has(sessionId)) wake(sessionId);
+        else if (
+          state.sessions[sessionId] === undefined &&
+          Object.values(state.openTabs).some((tabs) => tabs.includes(sessionId))
+        ) {
+          // A tab opened without its Session — Home's relaunch restores every
+          // tab but adopts only the one in front — is adopted when a pane
+          // first shows it. A view with no tab adopts for itself, as before.
+          state.adoptChatSession(sessionId, projectId);
+        }
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          // `Number` rather than a default: a released view always counted itself.
+          const views = Number(shown.get(sessionId)) - 1;
+          if (views > 0) {
+            shown.set(sessionId, views);
+            return;
+          }
+          shown.delete(sessionId);
+          touch(sessionId);
+          scheduleSweep();
+        };
+      },
+
       closeChatSession(sessionId) {
         // The Session's project stays recorded (`lib/session-project`): a
         // later reopen from a roster that has moved on must still know a
         // remote Session is remote (VC-713, B1).
         disposeChatClient(sessionId);
+        forgetResidency(sessionId);
+        pendingBatch?.slices.delete(sessionId);
         set((state) => {
           if (state.sessions[sessionId] === undefined && state.idleSends[sessionId] === undefined)
             return state;
           const sessions = { ...state.sessions };
           const idleSends = { ...state.idleSends };
+          const removed = sessionId in sessions;
           delete sessions[sessionId];
           delete idleSends[sessionId];
-          return { sessions, idleSends };
+          return removed
+            ? { sessions, idleSends, settleRevision: state.settleRevision + 1 }
+            : { sessions, idleSends };
         });
       },
 
@@ -705,7 +957,11 @@ export function createChatSessionsStore(
       },
 
       async enqueue(sessionId, message) {
-        const client = getChatClient(sessionId);
+        const client =
+          getChatClient(sessionId) ??
+          (dormant.has(sessionId) && get().sessions[sessionId] !== undefined
+            ? wake(sessionId)
+            : undefined);
         if (client === undefined) {
           toast.error("Message not queued: Session is no longer open");
           return Promise.resolve("refused");
@@ -1025,7 +1281,11 @@ export function createChatSessionsStore(
         // Retire clients even on a reversible Workspace switch. Its tab
         // metadata and typed Drafts stay keyed by their original owner. Dispose before removing the
         // slices; both loops are synchronous, with no await between them.
-        for (const sessionId of removedSessionIds) disposeChatClient(sessionId);
+        for (const sessionId of removedSessionIds) {
+          disposeChatClient(sessionId);
+          forgetResidency(sessionId);
+          pendingBatch?.slices.delete(sessionId);
+        }
         set((state) => {
           const nextOpenTabs = { ...state.openTabs };
           if (!options?.preserveDrafts)
@@ -1038,7 +1298,9 @@ export function createChatSessionsStore(
           const provisionalActive = { ...state.provisionalActive };
           if (!options?.preserveDrafts)
             for (const ownerId of ownerIds) delete provisionalActive[ownerId];
+          let removed = false;
           for (const sessionId of removedSessionIds) {
+            if (sessionId in sessions) removed = true;
             delete sessions[sessionId];
             delete idleSends[sessionId];
             if (!options?.preserveDrafts) delete rehomedTicketBySession[sessionId];
@@ -1046,6 +1308,7 @@ export function createChatSessionsStore(
           return {
             openTabs: nextOpenTabs,
             sessions,
+            ...(removed ? { settleRevision: state.settleRevision + 1 } : {}),
             idleSends,
             rehomedTicketBySession,
             provisionalActive,

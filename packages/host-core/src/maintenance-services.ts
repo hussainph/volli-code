@@ -1,7 +1,8 @@
 /**
  * Host maintenance (VC-618; owned as one module in VC-627): the spawn ledger,
  * the orphan process sweep, the retention merge-watch, the automatic reap and
- * the one-shot release of terminals a previous launch left parked (VC-833).
+ * the one-shot release of terminals a previous launch left parked (VC-833),
+ * and the one-shot projection checkpoint backfill (VC-1076).
  *
  * {@link createHostMaintenance} is built only over a database that opened, so
  * nothing on it is nullable. Its readers and reclaim seams are read at CALL
@@ -36,6 +37,17 @@ import {
 } from "./process/parked-terminals";
 import { SpawnLedger } from "./process/spawn-ledger";
 import { listWorktreeRefs, listWorktreeHoldersForSessions } from "./db/tickets-repo";
+import { backfillProjectionCheckpoints } from "./session-control/checkpoint-backfill";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("maintenance");
+
+/**
+ * How long after `start()` the projection checkpoint backfill begins (VC-1076):
+ * past the launch's own first listing and attach, which it would otherwise
+ * compete with for the same main thread.
+ */
+export const CHECKPOINT_BACKFILL_DELAY_MS = 15_000;
 
 /** Backup restore and rollback, for a live host and a degraded one alike. */
 export function createDatabaseRecovery(options: {
@@ -77,6 +89,13 @@ export interface HostMaintenanceOptions {
   readonly autoReap?: AutoReapWatchOptions;
   /** Process-table and signal seams for the parked-terminal release; tests only. */
   readonly parkedTerminals?: Pick<ParkedTerminalRecoveryPorts, "processes" | "signal">;
+  /**
+   * Runs the one-shot projection checkpoint backfill (VC-1076) over `db`.
+   * Absent or false, no backfill runs.
+   */
+  readonly checkpointBackfill?: boolean;
+  /** Delay before the backfill starts; tests only. */
+  readonly checkpointBackfillDelayMs?: number;
 }
 
 export interface HostMaintenance {
@@ -91,13 +110,14 @@ export interface HostMaintenance {
    */
   readonly retention: RetentionWatcher;
   /**
-   * Starts the retention poll and the automatic reap, and SIGCONTs once every
-   * terminal tree a previous launch left parked. Idempotent; a no-op after stop.
+   * Starts the retention poll and the automatic reap, SIGCONTs once every
+   * terminal tree a previous launch left parked, and schedules the projection
+   * checkpoint backfill. Idempotent; a no-op after stop.
    */
   start(): void;
   /** Polls retention now (desktop's focus trigger). A no-op after stop. */
   triggerRetention(): void;
-  /** Stops both loops for good. Idempotent. */
+  /** Stops both loops and the backfill for good. Idempotent. */
   stop(): void;
   /**
    * Resolves once neither loop has a poll or reap in flight, and the parked
@@ -127,6 +147,26 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
   let started = false;
   let stopped = false;
   let parkedRelease: Promise<unknown> = Promise.resolve();
+  const backfillAbort = new AbortController();
+  let backfillTimer: ReturnType<typeof setTimeout> | null = null;
+  let backfill: Promise<unknown> = Promise.resolve();
+  const scheduleBackfill = (): void => {
+    backfillTimer = setTimeout(() => {
+      backfillTimer = null;
+      const startedAt = Date.now();
+      backfill = backfillProjectionCheckpoints({ db, signal: backfillAbort.signal }).then(
+        (result) =>
+          log.info("projection checkpoint backfill finished", {
+            ...result,
+            elapsedMs: Date.now() - startedAt,
+          }),
+        // Work no one asked for: its failure is logged, never surfaced.
+        (error: unknown) => log.warn("projection checkpoint backfill failed", { error }),
+      );
+    }, options.checkpointBackfillDelayMs ?? CHECKPOINT_BACKFILL_DELAY_MS);
+    // Never hold a quitting host open for a cache warm-up.
+    backfillTimer.unref();
+  };
   return {
     spawnLedger,
     orphanProcesses,
@@ -145,6 +185,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
         launchedAt,
         ...options.parkedTerminals,
       });
+      if (options.checkpointBackfill === true) scheduleBackfill();
     },
     triggerRetention() {
       if (!stopped) retentionWatch().triggerNow();
@@ -156,6 +197,9 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
       retention?.stop();
       autoReap.stop();
       backups?.stop();
+      if (backfillTimer !== null) clearTimeout(backfillTimer);
+      backfillTimer = null;
+      backfillAbort.abort();
     },
     async settled() {
       await Promise.all([
@@ -163,6 +207,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
         autoReap.settled(),
         parkedRelease,
         backups?.settled(),
+        backfill,
       ]);
     },
   };

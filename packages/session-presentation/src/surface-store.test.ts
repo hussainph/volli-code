@@ -142,3 +142,61 @@ describe("createSurfaceStore", () => {
     expect(notified).toBe(0);
   });
 });
+
+describe("createSurfaceStore batch (VC-515)", () => {
+  it("publishes every slice written inside one batch as one announcement", () => {
+    const store = createSurfaceStore();
+    store.getState().seed("s1", "ready");
+    store.getState().seed("s2", "ready");
+    let announcements = 0;
+    store.subscribe(() => {
+      announcements += 1;
+    });
+
+    store.getState().batch?.(() => {
+      store.getState().setProjection("s1", projection);
+      store
+        .getState()
+        .setProjection("s2", { ...projection, session: { ...projection.session, id: "s2" } });
+      // A later write in the same batch builds on the staged one, not the published one.
+      store.getState().settle("s1", "lost");
+      expect(announcements).toBe(0);
+    });
+
+    expect(announcements).toBe(1);
+    expect(store.getState().sessions["s1"]).toMatchObject({ projection, sessionError: "lost" });
+    expect(store.getState().sessions["s2"]?.projection?.session.id).toBe("s2");
+  });
+
+  it("drops a staged write whose Session was removed before the batch published", () => {
+    const store = createSurfaceStore();
+    store.getState().seed("s1", "ready");
+
+    store.getState().batch?.(() => {
+      store.getState().setProjection("s1", projection);
+      store.getState().remove("s1");
+    });
+
+    expect(store.getState().sessions).toEqual({});
+  });
+
+  it("publishes nothing for a batch that changed nothing", () => {
+    const store = createSurfaceStore();
+    store.getState().seed("s1", "ready");
+    const before = store.getState();
+    let announcements = 0;
+    store.subscribe(() => {
+      announcements += 1;
+    });
+
+    store.getState().batch?.(() => {
+      store.getState().applyStream("s1", [], []);
+      store.getState().applyStream("ghost", [], []);
+      // A batch inside a batch joins it rather than publishing on its own.
+      store.getState().batch?.(() => store.getState().setQueue("s1", [], -1));
+    });
+
+    expect(announcements).toBe(0);
+    expect(store.getState()).toBe(before);
+  });
+});

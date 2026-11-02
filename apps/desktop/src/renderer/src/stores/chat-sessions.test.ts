@@ -13,6 +13,7 @@ import {
   type ChatCommandRequest,
   type ChatSessionRpc,
   type ChatSessionProjection,
+  type ChatSessionSlice,
   type ChatSessionTransport,
   type ChatStreamCursor,
 } from "@volli/session-presentation";
@@ -2817,5 +2818,381 @@ describe("resident idle-send shadows", () => {
     const stable = store.getState();
     store.getState().closeChatSession("provisional");
     expect(store.getState()).toBe(stable);
+  });
+});
+
+/* ------------------------------------------------------------- VC-515 */
+
+const settleMicrotasks = async () => {
+  for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+};
+
+describe("batch (VC-515)", () => {
+  async function twoResident() {
+    const edge = fixture();
+    edge.store.getState().adoptChatSession("s-a", "p1");
+    edge.store.getState().adoptChatSession("s-b", "p1");
+    await settleMicrotasks();
+    return edge;
+  }
+
+  it("publishes every client's write in one frame as one store write", async () => {
+    const { store } = await twoResident();
+    let writes = 0;
+    const stop = store.subscribe(() => {
+      writes += 1;
+    });
+    const revision = store.getState().settleRevision;
+
+    store.getState().batch(() => {
+      store.getState().retitle("s-a", "Alpha");
+      store.getState().retitle("s-b", "Beta");
+      // A second write in the same batch builds on the staged slice.
+      store.getState().retitle("s-a", "Alpha 2");
+      // A batch inside a batch joins it.
+      store.getState().batch(() => store.getState().retitle("s-b", "Beta 2"));
+      // A write that changes nothing stages nothing, and a gone Session none.
+      store.getState().applyStream("s-a", [], []);
+      store.getState().retitle("ghost", "Nobody");
+      expect(writes).toBe(0);
+    });
+    stop();
+
+    expect(writes).toBe(1);
+    expect(store.getState().sessions["s-a"]?.projection?.session.title).toBe("Alpha 2");
+    expect(store.getState().sessions["s-b"]?.projection?.session.title).toBe("Beta 2");
+    // No lifecycle moved, so the usage rail's signal holds still.
+    expect(store.getState().settleRevision).toBe(revision);
+  });
+
+  it("moves the settle signal once when a batched write moves a lifecycle", async () => {
+    const { store } = await twoResident();
+    const revision = store.getState().settleRevision;
+
+    store.getState().batch(() => {
+      store.getState().attaching("s-a");
+      store.getState().attaching("s-b");
+    });
+
+    expect(store.getState().sessions["s-a"]?.lifecycle).toBe("starting");
+    expect(store.getState().settleRevision).toBe(revision + 1);
+  });
+
+  it("publishes nothing for a batch that wrote nothing", async () => {
+    const { store } = await twoResident();
+    const before = store.getState();
+
+    store.getState().batch(() => {
+      store.getState().applyStream("s-a", [], []);
+    });
+
+    expect(store.getState()).toBe(before);
+  });
+
+  it("does not resurrect a Session closed while the batch was open", async () => {
+    const { store } = await twoResident();
+
+    store.getState().batch(() => {
+      store.getState().retitle("s-a", "Alpha");
+      store.getState().retitle("s-b", "Beta");
+      store.getState().closeChatSession("s-a");
+      // Removed under the batch by a write that is not the store's own close.
+      store.setState((state) => {
+        const sessions = { ...state.sessions };
+        delete sessions["s-b"];
+        return { sessions };
+      });
+    });
+
+    expect(store.getState().sessions).toEqual({});
+  });
+
+  it("publishes a staged write that is the only slice left after the others close", async () => {
+    const { store } = await twoResident();
+
+    store.getState().batch(() => {
+      store.getState().retitle("s-b", "Beta");
+      store.setState((state) => {
+        const sessions = { ...state.sessions };
+        delete sessions["s-a"];
+        return { sessions };
+      });
+      store.getState().retitle("s-a", "gone by now");
+    });
+
+    expect(Object.keys(store.getState().sessions)).toEqual(["s-b"]);
+  });
+
+  it("retires accepted held messages only once the batch has published", async () => {
+    const { store } = await twoResident();
+    const message = { id: "held-1", text: "hello" };
+    useChatDraftsStore.getState().holdMessage("s-a", message);
+    useChatDraftsStore
+      .getState()
+      .amendHeldMessage("s-a", "held-1", (held) => ({ ...held, deliveryAccepted: true }));
+
+    store.getState().batch(() => {
+      store
+        .getState()
+        .setQueue(
+          "s-a",
+          [{ id: "held-1", commandId: "c1", message: queuedWireMessage(message), state: "queued" }],
+          1,
+        );
+      // Still held: the queue that accepts it has not been published yet.
+      expect(useChatDraftsStore.getState().drafts["s-a"]?.held).toHaveLength(1);
+    });
+
+    expect(useChatDraftsStore.getState().drafts["s-a"]?.held ?? []).toHaveLength(0);
+  });
+});
+
+describe("the settle signal (VC-515)", () => {
+  it("moves when a slice is seeded, changes lifecycle, or is removed — and not otherwise", async () => {
+    const { store } = fixture();
+    const at = () => store.getState().settleRevision;
+    expect(at()).toBe(0);
+
+    store.getState().adoptChatSession("s-a", "p1");
+    expect(at()).toBe(1);
+    await settleMicrotasks();
+    const afterSnapshot = at();
+    store.getState().retitle("s-a", "Same lifecycle");
+    expect(at()).toBe(afterSnapshot);
+    store.getState().attaching("s-a");
+    expect(at()).toBe(afterSnapshot + 1);
+
+    // An idle-send shadow alone is not a slice: closing it moves nothing.
+    store.getState().rememberIdleSend("only-shadow", { id: "m1", text: "hi" });
+    store.getState().closeChatSession("only-shadow");
+    expect(at()).toBe(afterSnapshot + 1);
+    store.getState().closeChatSession("s-a");
+    expect(at()).toBe(afterSnapshot + 2);
+  });
+
+  it("moves when dropping a project's tabs removes a resident slice, and not for tabs alone", () => {
+    const { store } = fixture();
+    store.getState().openChatTab("p1", "tab-only");
+    store.getState().dropChatTabs(["p1"]);
+    expect(store.getState().settleRevision).toBe(0);
+
+    store.getState().adoptChatSession("s-a", "p1");
+    store.getState().openChatTab("p1", "s-a");
+    store.getState().dropChatTabs(["p1"]);
+    expect(store.getState().settleRevision).toBe(2);
+  });
+});
+
+/** The store's residency cap (`MAX_HIDDEN_IDLE_CLIENTS`), restated: the tests pin its value. */
+const MAX_HIDDEN_IDLE_CLIENTS = 8;
+
+const ids = (count: number, prefix = "r") =>
+  Array.from({ length: count }, (_, index) => `${prefix}${index}`);
+
+/** Runs the residency sweep a hide or a lifecycle move scheduled. */
+const sweepResidency = () => vi.advanceTimersByTime(2_000);
+
+function listing(rows: readonly Partial<ChatSessionRecord>[]) {
+  useProjectSessionsStore.setState({
+    byProject: {
+      p1: {
+        terminal: [],
+        provenance: {},
+        chat: rows.map(
+          (row) =>
+            ({
+              projectId: "p1",
+              ticketId: null,
+              title: "",
+              activity: "idle",
+              ...row,
+            }) as ChatSessionRecord,
+        ),
+      },
+    },
+  });
+}
+
+describe("chat client residency (VC-515)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    useProjectSessionsStore.setState({ byProject: {} });
+  });
+
+  /** `count` Sessions adopted in order, every snapshot answered: all idle, none shown. */
+  async function residents(count: number) {
+    vi.useFakeTimers();
+    const edge = fixture();
+    const sessionIds = ids(count);
+    for (const sessionId of sessionIds) edge.store.getState().adoptChatSession(sessionId, "p1");
+    await settleMicrotasks();
+    for (const sessionId of sessionIds) {
+      expect(edge.store.getState().sessions[sessionId]?.projection).not.toBeNull();
+    }
+    const sweep = sweepResidency;
+    const live = () => sessionIds.filter((sessionId) => getChatClient(sessionId) !== undefined);
+    return { ...edge, sessionIds, sweep, live };
+  }
+
+  it("keeps every client while the hidden idle ones are within the cap", async () => {
+    const { sweep, live, sessionIds } = await residents(MAX_HIDDEN_IDLE_CLIENTS);
+    sweep();
+    expect(live()).toEqual(sessionIds);
+  });
+
+  it("lets the least recently used hidden idle clients go, keeping their slices", async () => {
+    const { store, sweep, live, sessionIds } = await residents(MAX_HIDDEN_IDLE_CLIENTS + 3);
+
+    sweep();
+
+    expect(live()).toEqual(sessionIds.slice(3));
+    for (const sessionId of sessionIds) expect(store.getState().sessions[sessionId]).toBeDefined();
+  });
+
+  it("wakes a let-go Session when a view shows it, and lets another go when it is hidden again", async () => {
+    const { store, sweep, live, subscriptions } = await residents(MAX_HIDDEN_IDLE_CLIENTS + 1);
+    sweep();
+    expect(getChatClient("r0")).toBeUndefined();
+    const subscribed = subscriptions.length;
+
+    const release = store.getState().showChatSession("r0", "p1");
+    await settleMicrotasks();
+    expect(getChatClient("r0")).toBeDefined();
+    expect(subscriptions.length).toBe(subscribed + 1);
+    // A second view, then the first leaving: still shown.
+    const second = store.getState().showChatSession("r0", "p1");
+    release();
+    release();
+    sweep();
+    expect(getChatClient("r0")).toBeDefined();
+
+    second();
+    sweep();
+    expect(getChatClient("r0")).toBeDefined();
+    expect(live()).not.toContain("r1");
+  });
+
+  it("never lets go of a shown, busy, unsent or failed Session, or one not yet described", async () => {
+    const { store, sweep, live } = await residents(MAX_HIDDEN_IDLE_CLIENTS + 12);
+    const hold = store.getState().showChatSession("r0");
+    const patch = (sessionId: string, change: (slice: ChatSessionSlice) => ChatSessionSlice) =>
+      store.setState((state) => ({
+        sessions: { ...state.sessions, [sessionId]: change(state.sessions[sessionId]!) },
+      }));
+    patch("r1", (slice) => ({ ...slice, lifecycle: "working" }));
+    store.getState().settle("r2", "stream lost");
+    patch("r3", (slice) => ({ ...slice, transcript: { ...slice.transcript, turnActive: true } }));
+    patch("r4", (slice) => ({ ...slice, projection: { ...slice.projection!, turnActive: true } }));
+    patch("r5", (slice) => ({
+      ...slice,
+      projection: {
+        ...slice.projection!,
+        interactions: { active: [{ id: "ask" }], resolved: [] },
+      } as unknown as ChatSessionProjection,
+    }));
+    patch("r6", (slice) => ({
+      ...slice,
+      projection: {
+        ...slice.projection!,
+        attention: { active: [], primary: { id: "attention" } },
+      } as unknown as ChatSessionProjection,
+    }));
+    patch("r7", (slice) => ({ ...slice, queue: [{ id: "q", text: "queued" }] }));
+    store.getState().rememberIdleSend("r8", { id: "m", text: "sent" });
+    useChatDraftsStore.getState().holdMessage("r9", { id: "h", text: "held" });
+    patch("r10", (slice) => ({ ...slice, projection: null }));
+
+    sweep();
+
+    // Eight hidden idle survivors of nine (r11…r19): only r11 is let go.
+    expect(live()).toEqual(ids(MAX_HIDDEN_IDLE_CLIENTS + 12).filter((id) => id !== "r11"));
+    hold();
+  });
+
+  it("wakes a let-go Session when its listing row starts working, waits, or is renamed", async () => {
+    const { store, sweep } = await residents(MAX_HIDDEN_IDLE_CLIENTS + 8);
+    sweep();
+    expect(["r0", "r1", "r2", "r3"].map(getChatClient)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    const title = store.getState().sessions["r3"]?.projection?.session.title;
+
+    // Two let-go slices no live view could have made: one gone, one undescribed.
+    store.setState((state) => {
+      const sessions: Record<string, ChatSessionSlice> = {
+        ...state.sessions,
+        r7: { ...state.sessions["r7"]!, projection: null },
+      };
+      delete sessions["r6"];
+      return { sessions };
+    });
+    // An unrelated write to the listing store moves nothing.
+    useProjectSessionsStore.setState({ listingState: { p1: "loaded" } });
+    listing([
+      { sessionId: "r0", activity: "working" },
+      { sessionId: "r1", activity: "waiting" },
+      { sessionId: "r2", title: "Renamed from the CLI" },
+      { sessionId: "r3", title: title ?? "" },
+      { sessionId: "r5" },
+      { sessionId: "r6", title: "Renamed" },
+      { sessionId: "r7", title: "Renamed" },
+    ]);
+
+    expect(getChatClient("r0")).toBeDefined();
+    expect(getChatClient("r1")).toBeDefined();
+    expect(getChatClient("r2")).toBeDefined();
+    expect(getChatClient("r3")).toBeUndefined();
+    // Let go and staying so: unnamed by the listing, an untitled row, a slice
+    // since removed, a slice with no title to compare.
+    for (const sessionId of ["r4", "r5", "r6", "r7"]) {
+      expect(getChatClient(sessionId)).toBeUndefined();
+    }
+  });
+
+  it("wakes a let-go Session for an adopt or a queued message", async () => {
+    const { store, sweep } = await residents(MAX_HIDDEN_IDLE_CLIENTS + 2);
+    sweep();
+    expect(getChatClient("r0")).toBeUndefined();
+    expect(getChatClient("r1")).toBeUndefined();
+
+    store.getState().adoptChatSession("r0");
+    expect(getChatClient("r0")).toBeDefined();
+
+    const delivery = store.getState().enqueue("r1", { id: "m1", text: "hello" });
+    expect(getChatClient("r1")).toBeDefined();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(delivery).resolves.not.toBe("refused");
+  });
+
+  it("leaves a let-go Session asleep through a rebind, and forgets it on close", async () => {
+    const { store, sweep, subscriptions } = await residents(MAX_HIDDEN_IDLE_CLIENTS + 1);
+    sweep();
+    const subscribed = subscriptions.length;
+
+    store.getState().rebindChatSessions(["p1"]);
+    expect(getChatClient("r0")).toBeUndefined();
+    await settleMicrotasks();
+    expect(subscriptions.length).toBe(subscribed + MAX_HIDDEN_IDLE_CLIENTS);
+
+    store.getState().closeChatSession("r0");
+    store.getState().adoptChatSession("r0", "p1");
+    expect(store.getState().sessions["r0"]).toMatchObject({ lifecycle: "ready", projection: null });
+  });
+
+  it("adopts an open tab nothing adopted when a pane first shows it, and nothing without a tab", () => {
+    const { store, subscriptions } = fixture();
+    store.getState().openChatTab("p1", "restored");
+
+    const releaseTab = store.getState().showChatSession("restored", "p1");
+    const releaseLoose = store.getState().showChatSession("no-tab", "p1");
+
+    expect(store.getState().sessions["restored"]).toMatchObject({ lifecycle: "ready" });
+    expect(store.getState().sessions["no-tab"]).toBeUndefined();
+    releaseTab();
+    releaseLoose();
+    expect(subscriptions).toEqual([]);
   });
 });

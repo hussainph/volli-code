@@ -298,6 +298,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   const shells = new BackgroundShellHost({
     redactOutput: (text) => input.secrets.store.redact(text),
     redactNoticeOutput: (text) => input.secrets.store.redactPartial(text),
+    noticeRedactionVersion: () => input.secrets.store.redactionVersion,
     onNotice: (notice) => lifecycle.relayShellNotice(notice),
     // The host's live work counts running shells (VC-577) off the same feed
     // a client gets, so the two can never disagree about one shell.
@@ -364,6 +365,9 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     modelAccess: runtimeServices?.modelAccess ?? null,
     decisions: runtimeServices?.decisions ?? null,
     webAccess: runtimeServices?.webAccess ?? null,
+    ...(runtimeServices?.webExtract === undefined
+      ? {}
+      : { webExtract: runtimeServices.webExtract }),
     mcpSettings: runtimeServices?.mcp ?? null,
     mcpDispatch,
     codeMode,

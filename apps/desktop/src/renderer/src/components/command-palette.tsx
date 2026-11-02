@@ -66,6 +66,7 @@ import {
 } from "@renderer/stores/project-sessions";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
+import { paletteResidentTitlesSelector } from "@renderer/stores/chat-session-selectors";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
@@ -190,16 +191,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
   const ticketsByProject = useBoardStore((state) => state.ticketsByProject);
   const sessionsByOwner = useSessionsStore((state) => state.byOwner);
-  const residentChatTitles = useChatSessionsStore(
-    useShallow((state) => {
-      const titles: Record<string, string> = {};
-      for (const [sessionId, slice] of Object.entries(state.sessions)) {
-        const title = slice.projection?.session.title;
-        if (title !== null && title !== undefined) titles[sessionId] = title;
-      }
-      return titles;
-    }),
-  );
+  // Gated on `open` (VC-515): the palette is mounted for the app's whole life,
+  // and a closed one walking every resident Session per streamed frame was
+  // paying for rows nobody could see.
+  const residentChatTitles = useChatSessionsStore(useShallow(paletteResidentTitlesSelector(open)));
   /**
    * Every tracked project's durable Session rows, read from the shared cache
    * (VC-385).

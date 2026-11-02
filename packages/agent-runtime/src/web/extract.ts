@@ -35,11 +35,12 @@ import TurndownService from "turndown";
  * the thread for 34 seconds, and 256 KiB of the same shape for over 90. That
  * page passes a 2 MiB byte bound without noticing it.
  *
- * This matters more than it would in a worker. `webPortsFor` builds the fetcher
- * in Electron's main process, which also owns SQLite, the IPC bridge, the
- * `volli` CLI socket and every terminal — and extraction is synchronous, so no
- * deadline, timer or abort signal can interrupt it once it starts. A bound that
- * is not enforced before the work begins is not enforced at all.
+ * Extraction is synchronous, so no timer or abort signal on the thread running
+ * it can interrupt it once it starts. A host runs it in a worker thread
+ * (`extract-worker.ts`), where a deadline terminates the worker instead; these
+ * bounds still decide how much work a page may ask for before that deadline is
+ * reached, and on a host that names no worker they are the only bound there is.
+ * A bound that is not enforced before the work begins is not enforced at all.
  */
 export const WEB_EXTRACT_LIMITS = {
   /**
@@ -319,8 +320,8 @@ function endOfSubtree(folded: string, name: string, from: number): number {
  * tag, and both used to fold the entire document to get one — inside the scan
  * loop, once per element. That made the scan quadratic in the size of the
  * document while bounding nothing: measured, 2 MiB of `<script></script>` pairs
- * held this thread for 59 seconds. Extraction is synchronous and runs in
- * Electron's main process, so neither the fetch deadline nor an abort signal
+ * held this thread for 59 seconds. Extraction is synchronous and then ran on
+ * Electron's main thread, so neither the fetch deadline nor an abort signal
  * could interrupt it — the whole app was frozen for the duration.
  *
  * Folded over `[A-Z]` rather than with `toLowerCase()`, because every offset

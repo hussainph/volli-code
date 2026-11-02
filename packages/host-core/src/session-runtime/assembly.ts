@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { BrowserPictureStore } from "../browser/picture-store";
 import { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
-import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime";
+import type { PiModelAccess, CodeModeSandboxAssets, WebExtractor } from "@volli/agent-runtime";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import {
   createSessionExecutorSlot,
@@ -98,6 +98,8 @@ export interface RuntimeAssemblyOptions {
   modelAccess: PiModelAccess | null;
   decisions: HostDecisions | null;
   webAccess: WebAccessSettings | null;
+  /** Where `web_fetch` parses HTML; absent, on this thread. */
+  webExtract?: WebExtractor;
   mcpSettings: McpSettingsService | null;
   mcpDispatch: HostMcpDispatch;
   codeMode: HostCodeMode;
@@ -531,7 +533,10 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           // recorded capability rejects recovery, while newly enabled ports are
           // ignored. This is the only attach path that reads the stored key,
           // and it hands it straight to the provider constructor.
-          resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
+          resolveWebPorts:
+            webAccess === null
+              ? undefined
+              : () => webPortsFor(webAccess.resolve(), options.webExtract),
           // The Session's Browser capability, composed at attach over the one
           // host: the registry decides which tabs the scope may see, and the
           // CDP wire is each tab's app-private debugger — never a debug port.
