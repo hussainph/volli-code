@@ -355,6 +355,7 @@ import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { hostLogger } from "@volli/host-core/log";
 import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
 import { registerRendererLogForwarding } from "./log/renderer-log";
+import { registerRendererStallForwarding } from "./log/renderer-stall";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Harness mode (VC-703): inert unless VOLLI_HARNESS=1, which only
@@ -756,6 +757,7 @@ const appStartup = app.whenReady().then(async () => {
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
   logPowerTransitions(powerMonitor);
   registerRendererLogForwarding(ipcMain);
+  if (desktopLog !== null) registerRendererStallForwarding(ipcMain, desktopLog.rendererStalls);
   // Fixed before any window opens; the future embedded supervisor supplies the same descriptor.
   let rendererSources: readonly string[] = [];
   const serveRendererAsset = async (request: Request): Promise<Response> => {

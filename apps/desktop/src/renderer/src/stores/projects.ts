@@ -43,6 +43,7 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
+import { markInteraction } from "@renderer/lib/renderer-stalls";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 import { forgetProjectSessions } from "@renderer/terminal/session-lifecycle";
@@ -875,6 +876,7 @@ export function createProjectsStore(
       select(id) {
         const { projects, selectedProjectId } = get();
         if (!projects.some((project) => project.id === id)) return;
+        markInteraction("workspace-switch");
         set({ selectedProjectId: id, pendingRemoteSelection: null });
         persistSelection(id);
         announceSelection(selectedProjectId, id);

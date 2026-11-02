@@ -365,6 +365,14 @@ log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or
   `attribution: "unattributed"` with the last door call as a hint, never its
   trace. An hourly `main stall load` line rolls up the count, loop-delay
   p95/max and the top operations. The desktop starts it with its log.
+- **Renderer stalls land beside them** (VC-1091). Desktop main, not
+  host-core, writes them: each window's Long Animation Frames and Event Timing
+  entries over 100 ms arrive in batches on `volli:renderer-stalls`, are read
+  against `@volli/shared`'s closed vocabulary (`readRendererStallBatch`:
+  interaction `label`, `operation`, durations, the longest script as file +
+  function) and written as `renderer-stall` `renderer stall` lines with
+  `door: "renderer"` and the window id; an hourly `renderer stall load` line
+  rolls them up on the same cadence (`apps/desktop/src/main/log/renderer-stall.ts`).
 - **No bare console.** Production code in host-core and Electron main logs only
   through a host logger; `src/log/no-console.test.ts` (and its twin in
   `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and

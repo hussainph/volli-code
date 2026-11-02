@@ -821,6 +821,10 @@ export default defineConfig(({ mode, command }) => ({
         // The db modules, including export.ts, are protected by
         // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
+        // Renderer stall signals (VC-1091): which interaction a stall is
+        // charged to, how batches are bounded, and what main lets into the log.
+        "src/lib/renderer-stalls.ts",
+        "**/src/main/log/renderer-stall.ts",
         "**/src/main/experiments.ts",
         // Sign-ins on a remote host (VC-702): the relay that binds this Mac's
         // loopback for one request, "Send from this Mac" (a key leaving this

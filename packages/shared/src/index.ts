@@ -54,6 +54,7 @@ export * from "./credential-stream-redaction";
 export * from "./json-redaction";
 export * from "./secret-name";
 export * from "./structured-log";
+export * from "./renderer-stall";
 export * from "./model-auto-select";
 export * from "./model-mark-color";
 export * from "./model-access-sign-in";
