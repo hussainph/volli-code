@@ -364,6 +364,9 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     modelAccess: runtimeServices?.modelAccess ?? null,
     decisions: runtimeServices?.decisions ?? null,
     webAccess: runtimeServices?.webAccess ?? null,
+    ...(runtimeServices?.webExtract === undefined
+      ? {}
+      : { webExtract: runtimeServices.webExtract }),
     mcpSettings: runtimeServices?.mcp ?? null,
     mcpDispatch,
     codeMode,

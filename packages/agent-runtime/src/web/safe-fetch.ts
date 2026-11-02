@@ -35,7 +35,7 @@ import {
   type WebTargetRuleId,
 } from "@volli/shared";
 
-import { extractReadableMarkdown } from "./extract";
+import { extractInProcess, WebExtractError, type WebExtractor } from "./extract-worker";
 import {
   GITHUB_API_HOST,
   githubDirectoryFor,
@@ -525,6 +525,12 @@ export interface SafeWebFetchOptions {
    * than in the twenty real seconds the product waits. Production passes none.
    */
   limits?: WebFetchLimits;
+  /**
+   * Where HTML extraction runs. A host passes a worker-backed extractor
+   * (`createWorkerWebExtractor`) so a large page cannot hold its own thread;
+   * absent, extraction runs on the calling thread.
+   */
+  extract?: WebExtractor;
 }
 
 /**
@@ -698,7 +704,7 @@ function contentType(response: IncomingMessage): { media: string; charset: strin
  * budget on the `<head>` before the article began, which on a documentation
  * site is a table of contents and nothing else.
  */
-function document(
+async function document(
   requestedUrl: string,
   target: AdmittedWebTarget,
   url: URL,
@@ -706,7 +712,9 @@ function document(
   body: Buffer,
   limits: WebFetchLimits,
   rewrite: GithubRead | undefined,
-): SafeWebFetchResult {
+  extract: WebExtractor,
+  signal: AbortSignal,
+): Promise<SafeWebFetchResult> {
   // A rewrite speaks for GitHub only when GitHub is what answered. If the
   // rewritten URL redirected to some other public host, that host's bytes are
   // its own — a JSON array from anywhere else is not a listing "through
@@ -759,12 +767,28 @@ function document(
     // Extraction is bounded, but it is a parser and two converters over hostile
     // markup, and a bound is a claim about the shapes we thought of. A page that
     // finds a way to make one of them throw gets a named refusal rather than an
-    // exception crossing the boundary — this runs in Electron's main process,
-    // where an unhandled throw is the whole app rather than one fetch.
+    // exception crossing the boundary — this runs in the host's own process,
+    // where an unhandled throw is the whole app rather than one fetch. A host
+    // passes a worker-backed `extract`, so the parse itself runs off this
+    // thread and its deadline can actually stop it.
     let extracted;
     try {
-      extracted = extractReadableMarkdown(decoded, target.url);
-    } catch {
+      extracted = await extract({ html: decoded, url: target.url, signal });
+    } catch (error) {
+      // A worker past its deadline was terminated mid-parse, and a withdrawn
+      // read stopped the same way; both are about time, not the page.
+      if (error instanceof WebExtractError && error.reason === "timeout") {
+        throw new WebFetchRefusal(
+          "fetch.timeout",
+          `${named(target.hostname)} served a page that took too long to read.`,
+        );
+      }
+      if (error instanceof WebExtractError && error.reason === "cancelled") {
+        throw new WebFetchRefusal(
+          "fetch.cancelled",
+          `The request to ${named(target.hostname)} was cancelled.`,
+        );
+      }
       throw new WebFetchRefusal(
         "fetch.unreadable",
         `${named(target.hostname)} served a document Volli could not read.`,
@@ -916,6 +940,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
   const resolve = options.resolve ?? resolveWebAddresses;
   const open = options.open ?? openWebRequest;
   const limits = options.limits ?? WEB_FETCH_LIMITS;
+  const extract = options.extract ?? extractInProcess;
 
   /**
    * Admit, resolve and pin one URL, then read what is at the end of it.
@@ -1129,22 +1154,17 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
           chunks.push(chunk);
         });
         response.on("end", () => {
-          try {
-            settle({
-              outcome: "document",
-              document: document(
-                requestedUrl,
-                target,
-                url,
-                response,
-                Buffer.concat(chunks),
-                limits,
-                rewrite,
-              ),
-            });
-          } catch (error) {
-            refuse(error);
-          }
+          document(
+            requestedUrl,
+            target,
+            url,
+            response,
+            Buffer.concat(chunks),
+            limits,
+            rewrite,
+            extract,
+            signal,
+          ).then((read) => settle({ outcome: "document", document: read }), refuse);
         });
       });
 

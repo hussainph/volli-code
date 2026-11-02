@@ -162,6 +162,26 @@ describe("runtime attachment assembly", () => {
     await assembled.sessionRuntime?.close();
   });
 
+  it("hands each attachment's web_fetch the host's HTML extractor", async () => {
+    const options = await fixture();
+    vi.spyOn(options.webAccess!, "resolve").mockReturnValue({
+      configured: true,
+      provider: "brave",
+      apiKey: "fixture-key",
+    });
+    const fetcher = vi.spyOn(agentRuntime, "createSafeWebFetch");
+    const extract: agentRuntime.WebExtractor = vi.fn(async () => ({
+      text: "",
+      extracted: false,
+      truncated: false,
+    }));
+    const assembled = createRuntimeAssembly({ ...options, webExtract: extract });
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    expect(typeof native.resolveWebPorts?.().webFetch).toBe("function");
+    expect(fetcher).toHaveBeenCalledWith({ extract });
+    await assembled.sessionRuntime?.close();
+  });
+
   it.each(["execute", "background shell"] as const)(
     "wires %s credential reads through environmentAsync with the Session and signal",
     async (door) => {

@@ -894,6 +894,9 @@ export default defineConfig(({ mode, command }) => ({
         "automatic-backup-worker": "src/main/automatic-backup-worker.ts",
         "restore-worker": "src/main/restore-worker.ts",
         "migration-export-worker": "src/main/cloud-move/export-worker.ts",
+        // web_fetch's HTML extraction (jsdom → Readability → Turndown), so a
+        // large page is parsed off the thread that serves the app.
+        "web-extract-worker": "src/main/web-extract-worker.ts",
       },
       format: "cjs",
       outDir: "dist-electron",

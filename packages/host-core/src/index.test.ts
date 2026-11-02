@@ -693,10 +693,17 @@ describe("createHostCore composition", () => {
     const supplyModels = vi.fn(() => modelAccess);
     const webKeySealing = { keyring: null, mayUnlockUnattended: vi.fn(() => false) };
     const venue = vi.fn(() => ({ id: "cloud-host", kind: "remote" as const }));
+    const webExtractWorker = new URL("file:///web-extract-worker.cjs");
     const core = live(
       compose(
         { log: { error: vi.fn() } },
-        { ...headlessOptions(dataDir()), modelAccess: supplyModels, venue, webKeySealing },
+        {
+          ...headlessOptions(dataDir()),
+          modelAccess: supplyModels,
+          venue,
+          webKeySealing,
+          webExtractWorker,
+        },
       ),
     );
     expect(supplyModels).not.toHaveBeenCalled();
@@ -711,6 +718,7 @@ describe("createHostCore composition", () => {
       machinePaths: core.machinePaths,
       modelAccess,
       webKeySealing,
+      webExtractWorker,
       venue: { id: "cloud-host", kind: "remote" },
     });
   });
