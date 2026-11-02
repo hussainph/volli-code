@@ -40,7 +40,12 @@ import {
   type WorkingCopyEntry,
 } from "@renderer/stores/working-copy";
 
-export function ChatEmptyState({
+/**
+ * Memoised because of where it sits: an empty chat is a Draft being typed
+ * into, and its plane re-renders for reasons that are not this drawing's
+ * (VC-1079). Its props are two ids, so the memo is exact.
+ */
+export const ChatEmptyState = React.memo(function ChatEmptyState({
   projectId,
   ticketId,
 }: {
@@ -88,7 +93,7 @@ export function ChatEmptyState({
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * The working copy drawing, or the space it will take.
