@@ -1,5 +1,5 @@
 import { readInteractionPrompts, redactPayloadSecrets } from "@volli/shared";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionListingProjection } from "@volli/shared";
 
 /**
  * Pending questions, independent of the transcript window. Normalize legacy
@@ -8,7 +8,7 @@ import type { SessionProjection } from "@volli/shared";
  * credential metadata. Scrub before rendering, without truncating or flattening
  * multiline prose; the CLI renderer owns its terminal-safe trust envelope.
  */
-export function pendingSessionQuestions(projection: SessionProjection | undefined) {
+export function pendingSessionQuestions(projection: SessionListingProjection | undefined) {
   return (projection?.interactions.active ?? [])
     .filter((interaction) => interaction.kind === "question")
     .map((interaction) => ({

@@ -42,6 +42,7 @@ import type {
   SessionLedgerIds,
   SessionLedgerTransaction,
   SessionObservation,
+  SessionListingProjection,
   SessionProjection,
   SessionProjectionCheckpoint,
   SessionUsageReport,
@@ -148,7 +149,8 @@ export interface SessionEngine {
    */
   getBaseSession(query: GetSessionQuery): Promise<Session | null>;
   /**
-   * Every Session in scope, projected.
+   * Every Session in scope, projected — each row without its command and
+   * receipt history (VC-848), which `getSession` keeps.
    *
    * Each row is folded atomically, but the listing as a whole is not one
    * snapshot across Sessions: rows are members as of one instant, and their
@@ -156,7 +158,7 @@ export interface SessionEngine {
    * why that is sound; callers only need to know not to read a cross-Session
    * invariant out of two rows of one listing.
    */
-  listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
+  listSessions(query: ListSessionsQuery): Promise<readonly SessionListingProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
   /**
    * Every Session holding an open attachment, across every project, folded.
@@ -166,11 +168,11 @@ export interface SessionEngine {
    * with a long history is thousands of folds for a number bounded by how many
    * things are actually attached. This folds the narrowed set the ledger
    * selects — see {@link SessionLedgerTransaction.listAttachedSessions} for why
-   * the Sessions it drops provably cannot be working — and returns ordinary
-   * projections, so the caller counts them with exactly the code that counts a
+   * the Sessions it drops provably cannot be working — and returns listing
+   * rows, so the caller counts them with exactly the code that counts a
    * listing rather than a parallel rule that can drift from it.
    */
-  listAttachedSessions(): Promise<readonly SessionProjection[]>;
+  listAttachedSessions(): Promise<readonly SessionListingProjection[]>;
   /**
    * When Sessions were started, across every project — the practice chart's
    * whole input. Stamps rather than Sessions, so a 26-week window costs one
@@ -453,7 +455,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const listingProjection = (
     transaction: SessionLedgerTransaction,
     session: Session,
-  ): SessionProjection => {
+  ): SessionListingProjection => {
     // Metadata only: no payload decoded, no provenance joined, no checkpoint
     // JSON parsed. That is what makes asking cheaper than answering.
     const head = transaction.latestEventSequence(session.id);
@@ -465,7 +467,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     }
     const { stored, shared } = loadStored(transaction, session);
     if (!shared) persistReadFold(transaction, stored, reportCheckpointFailure);
-    const projection = frozenProjectionCopy(stored.checkpoint.projection);
+    const projection = frozenListingCopy(stored.checkpoint.projection);
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
     return projection;
@@ -1114,7 +1116,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       // Only the whole roster sizes the cache. A Ticket's scope is a subset of
       // its project's, so counting it as well would count Sessions twice.
       if (query.scope === "all") rosterSizes.set(query.projectId, rows.length);
-      const projections: SessionProjection[] = [];
+      const projections: SessionListingProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         // Between chunks, never after the last one: a turn nobody needs is
         // still a turn the caller waits for.
@@ -1150,7 +1152,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       const rows = await ports.ledger.transaction((transaction) =>
         transaction.listAttachedSessions(),
       );
-      const projections: SessionProjection[] = [];
+      const projections: SessionListingProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         if (from > 0) await yieldToHost();
         const chunk = rows.slice(from, from + SESSION_LISTING_FOLD_CHUNK);
@@ -1281,7 +1283,8 @@ const defaultYieldToHost = (): Promise<void> =>
  *
  * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
  * deliberately extreme one — 450 events carrying 150 commands and their
- * receipts (VC-388).
+ * receipts (VC-388). Rows no longer hold commands or receipts (VC-848), so
+ * neither grows with a Session's history any more.
  */
 export const SESSION_LISTING_CACHE_LIMIT = 256;
 
@@ -1304,9 +1307,30 @@ interface ListingFold {
   /**
    * The cache's own deep-frozen copy, shared by every caller that lists this
    * Session while the entry survives. See {@link frozenProjectionCopy} for why
-   * it is a copy and not the folded object itself.
+   * it is a copy and not the folded object itself, and
+   * {@link frozenListingCopy} for what it leaves out.
    */
-  projection: SessionProjection;
+  projection: SessionListingProjection;
+}
+
+/**
+ * The listing row the cache keeps (VC-848): a {@link frozenProjectionCopy} of
+ * the folded projection without its `commands` and `receipts`.
+ *
+ * The cache is resident for as long as the host runs, one row per listed
+ * Session, and those two arrays hold every command the Session ever received
+ * and its receipt. Measured on a real 5,087-Session profile
+ * (`e2e/bench/listing-row-weight-vc848.mjs`), they were 9.3 KB of a 14.4 KB
+ * row — 46 of 72 MB for the whole roster; without them the cache held 20 MB
+ * for the same roster. Of the listing's readers, only two ever looked at
+ * them, each about one or a few Sessions, and both now read those through
+ * `getSession`: a watch's check on a start still pending, and a resume's
+ * superseded rule over its Ticket's siblings. Leaving them out of the copy
+ * also skips copying them.
+ */
+function frozenListingCopy(projection: SessionProjection): SessionListingProjection {
+  const { commands: _commands, receipts: _receipts, ...row } = projection;
+  return frozenProjectionCopy(row);
 }
 
 /**
