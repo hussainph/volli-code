@@ -2,7 +2,7 @@ import type {
   SessionAttachmentProjection,
   SessionNativeDetail,
   SessionNativeReference,
-  SessionProjection,
+  SessionListingProjection,
 } from "@volli/shared";
 import type { HarnessId, SessionLaunchKind, SessionPlacement, SessionRecord } from "@volli/shared";
 import { isSessionLaunchKind, isSessionPlacement, parseHarnessId } from "@volli/shared";
@@ -80,7 +80,7 @@ export function readTerminalAttachmentDetail(
  * it is about, rather than as a predicate each listing has to remember: the
  * renderer's two listings remembered it and the CLI socket's did not.
  */
-export function terminalSessionRecord(projection: SessionProjection): SessionRecord | null {
+export function terminalSessionRecord(projection: SessionListingProjection): SessionRecord | null {
   const attachment = latestTerminalAttachment(projection.attachments);
   if (attachment === null) return null;
   // A terminal attachment whose native detail is unreadable (absent, or written

@@ -13,6 +13,7 @@ export {
   mintSpanId,
   mintTraceId,
   withLogContext,
+  withMainSpan,
   withRootLogContext,
   withTrace,
 } from "../log/context";

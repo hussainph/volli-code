@@ -66,7 +66,11 @@ const windowFor = (page, ticketId) => page.locator(`[data-armed-run-window="${ti
 function cardById(page, id) {
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }) });
+
+    .filter({
+      visible: true,
+      has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }),
+    });
 }
 
 /** A column's own root, hit-tested by the picker exactly as the pointer is. */

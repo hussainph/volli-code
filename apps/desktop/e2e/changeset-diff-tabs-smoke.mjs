@@ -330,9 +330,12 @@ async function main() {
       page.evaluate(() => document.querySelector("[data-volli-surface]") !== null),
     );
 
-    const card = page.locator("article").filter({
-      has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
-    });
+    const card = page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({
+        has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+      });
     await waitUntil("card", async () => (await card.count()) === 1);
     await card.dblclick();
     await waitUntil("detail", async () => (await page.getByRole("tablist").count()) >= 1);

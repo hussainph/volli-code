@@ -80,6 +80,7 @@ vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
     value,
     onChange,
     ariaLabel,
+    savePolicy,
     ref,
   }: ComponentProps<typeof MonacoDocumentEditor>) {
     // The title's Enter hands focus to the body through this handle.
@@ -91,6 +92,7 @@ vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
     return (
       <textarea
         aria-label={ariaLabel}
+        data-save-policy={savePolicy ?? "autosave"}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -194,6 +196,16 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   adoptLaunch(LOCAL_LAUNCH);
 });
+
+/**
+ * The body's text lives in the draft cache from the keystroke it is typed in, so
+ * its document must never count as unsaved, or ⌘Q asks about it (VC-1094).
+ */
+it("hands the body editor the draft save policy", () => {
+  const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Ticket description"]');
+  expect(body?.dataset["savePolicy"]).toBe("draft");
+});
+
 async function click(text: string) {
   await act(async () =>
     [...host.querySelectorAll("button")].find((el) => el.textContent === text)!.click(),

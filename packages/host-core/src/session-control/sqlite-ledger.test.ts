@@ -2313,7 +2313,11 @@ describe("birth payload memo (VC-1076)", () => {
         .prepare("SELECT schema_version FROM session_projection_checkpoints WHERE session_id = ?")
         .get(created.session.id),
     ).toEqual({ schema_version: SESSION_PROJECTION_CHECKPOINT_VERSION });
-    expect(await control.getSession({ sessionId: created.session.id })).toEqual(folded);
+    // A listing row is the Session's projection without its history (VC-848).
+    const full = await control.getSession({ sessionId: created.session.id });
+    expect(full).not.toBeNull();
+    const { commands: _commands, receipts: _receipts, ...listed } = full!;
+    expect(folded).toEqual(listed);
   });
 });
 

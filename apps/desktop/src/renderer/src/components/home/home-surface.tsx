@@ -119,6 +119,7 @@ import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle
 import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { usePaneChatViews } from "@renderer/components/chat/kept-chat-views";
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
@@ -446,6 +447,9 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const visibleTabIds = split.panes.flatMap((pane) =>
     pane.activeTabId === null ? [] : [pane.activeTabId],
   );
+  // The chats each pane cell draws: its front one, and the last few it showed
+  // kept mounted behind it (VC-1080, `chat/kept-chat-views.ts`).
+  const paneChatViews = usePaneChatViews(split.panes);
 
   // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for Home. The chord resolves which surface is in
   // front for itself, so this instance stands down while a Ticket view has
@@ -911,33 +915,42 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             onDirtyChange={fileWorkspace.handleDirtyChange}
           />
         ) : null}
-        {chatSessionId !== null && visible ? (
-          // Keyed by Session — the client, the fold and the queue are resident
-          // (@volli/session-presentation's registry), so a remount costs nothing
-          // and carries nothing over. Which is exactly why a chat may live in a
-          // pane cell while a terminal may not.
-          //
-          // AND WHY IT LEAVES WITH THE SURFACE (VC-338). Home's box is hidden,
-          // not unmounted, so that no live terminal is ever torn down — but a
-          // chat plane standing behind Settings or another nav page is a
-          // transcript's worth of DOM that nobody can see, for every Home chat
-          // in front of a pane. Nothing is lost by dropping it: the stream, the
-          // fold and the queue are in the registry, the half-typed message is in
-          // `chat-drafts.ts`, and the reading position is in
-          // `transcript-window.ts`. A terminal has none of that and keeps its
-          // box; a chat is a projection and can be redrawn.
-          <ChatPlane
-            key={chatSessionId}
-            sessionId={chatSessionId}
-            projectId={selected.id}
-            // Ticketless by construction: Home hosts the project's OWN
-            // Sessions, which is what makes their working copy the main checkout.
-            ticketId={null}
-            onOpenFile={openProjectFile}
-            visible={visible}
-            onOpenSession={openProjectSession}
-          />
-        ) : null}
+        {visible
+          ? // Keyed by Session — the client, the fold and the queue are
+            // resident (@volli/session-presentation's registry), so a view
+            // carries nothing a remount could lose. The front chat is shown;
+            // the last few this pane showed stay mounted behind `<Activity
+            // mode="hidden">` (VC-1080), so going back to one reveals the tree
+            // it already drew instead of re-parsing its transcript. Hidden,
+            // every effect of the view is torn down — it does not count as
+            // shown to the chat store, holds no subscription and answers no
+            // shortcut — and they all come back on reveal, as on a mount.
+            //
+            // AND WHY THEY LEAVE WITH THE SURFACE (VC-338). Home's box is
+            // hidden, not unmounted, so that no live terminal is ever torn
+            // down — but a chat plane standing behind Settings or another nav
+            // page is a transcript's worth of DOM that nobody can see. Nothing
+            // is lost by dropping it: the stream, the fold and the queue are in
+            // the registry, the half-typed message is in `chat-drafts.ts`, and
+            // the reading position is in `transcript-window.ts`. A terminal has
+            // none of that and keeps its box; a chat is a projection and can be
+            // redrawn.
+            paneChatViews(pane).map((view) => (
+              <React.Activity key={view.sessionId} mode={view.shown ? "visible" : "hidden"}>
+                <ChatPlane
+                  sessionId={view.sessionId}
+                  projectId={selected.id}
+                  // Ticketless by construction: Home hosts the project's OWN
+                  // Sessions, which is what makes their working copy the main
+                  // checkout.
+                  ticketId={null}
+                  onOpenFile={openProjectFile}
+                  visible={visible}
+                  onOpenSession={openProjectSession}
+                />
+              </React.Activity>
+            ))
+          : null}
         {paneBrowserTab !== undefined ? (
           // The native view is attached over this cell's own rectangle, and the
           // main-process host attaches any number of tabs at once (tab-host,
@@ -1059,54 +1072,64 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         visibleTabIds={visibleTabIds}
         rail={rail}
         plane={
-          selected === null || ticketTakesOver ? null : zenSessionId !== null ? (
-            // Zen: the focused Session takes the whole plane, and the grid is
-            // not rendered at all — so every other pane's anchor is unpublished
-            // and its terminal stops being drawn, without unmounting.
-            <div className="relative flex min-h-0 flex-1 flex-col">
-              <TerminalPaneAnchor tabId={zenSessionId} ownerId={selected.id} />
-            </div>
-          ) : (
-            <SplitViewGrid
-              view={split}
-              renderStrip={(pane) =>
-                // Every pane of a shown group draws its own stack — a pane of
-                // one tab too, so that tab can be dragged out or closed. An
-                // empty pane needs no band of chrome over its menu.
-                pane.tabIds.length === 0 || selectedId === null ? null : (
-                  <HomeTabs
-                    label={paneStripLabel(pane)}
-                    projectId={selectedId}
-                    tabIds={pane.tabIds}
-                    activeTabId={pane.activeTabId ?? ""}
-                    terminalTabs={terminalTabs}
-                    chatIds={openChatIds}
-                    fileTabs={fileTabs}
-                    browserTabs={browserTabs}
-                    dirtyFilePaths={fileWorkspace.dirtyPaths}
-                    onSelect={handleSelect}
-                    onClose={handleClose}
-                    onRename={handleRename}
-                    onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
-                    onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
-                    onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
-                    onTakeOut={
-                      pane.activeTabId === null
-                        ? undefined
-                        : () => ungroupLocalTab(pane.activeTabId!)
-                    }
-                  />
-                )
-              }
-              renderContent={paneContent}
-              renderOverlay={(pane) => <SplitDropZones paneId={pane.id} />}
-              onFocusPane={(paneId) => {
-                if (selectedId !== null) focusHomePane(selectedId, paneId);
-              }}
-              onResizeSplit={(splitId, ratio) => {
-                if (selectedId !== null) setHomeSplitRatio(selectedId, splitId, ratio);
-              }}
-            />
+          selected === null ? null : (
+            // Hidden, not unmounted, while a Ticket view has taken Home over
+            // (VC-1080): the Board, Home's chats and its editors keep the tree
+            // they drew, so returning from a ticket reveals them instead of
+            // re-deriving every column. `<Activity mode="hidden">` tears every
+            // effect inside down meanwhile — anchors unpublish, subscriptions
+            // and key handlers detach — exactly as the unmount it replaces did.
+            <React.Activity mode={ticketTakesOver ? "hidden" : "visible"}>
+              {zenSessionId !== null ? (
+                // Zen: the focused Session takes the whole plane, and the grid is
+                // not rendered at all — so every other pane's anchor is unpublished
+                // and its terminal stops being drawn, without unmounting.
+                <div className="relative flex min-h-0 flex-1 flex-col">
+                  <TerminalPaneAnchor tabId={zenSessionId} ownerId={selected.id} />
+                </div>
+              ) : (
+                <SplitViewGrid
+                  view={split}
+                  renderStrip={(pane) =>
+                    // Every pane of a shown group draws its own stack — a pane of
+                    // one tab too, so that tab can be dragged out or closed. An
+                    // empty pane needs no band of chrome over its menu.
+                    pane.tabIds.length === 0 || selectedId === null ? null : (
+                      <HomeTabs
+                        label={paneStripLabel(pane)}
+                        projectId={selectedId}
+                        tabIds={pane.tabIds}
+                        activeTabId={pane.activeTabId ?? ""}
+                        terminalTabs={terminalTabs}
+                        chatIds={openChatIds}
+                        fileTabs={fileTabs}
+                        browserTabs={browserTabs}
+                        dirtyFilePaths={fileWorkspace.dirtyPaths}
+                        onSelect={handleSelect}
+                        onClose={handleClose}
+                        onRename={handleRename}
+                        onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
+                        onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
+                        onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
+                        onTakeOut={
+                          pane.activeTabId === null
+                            ? undefined
+                            : () => ungroupLocalTab(pane.activeTabId!)
+                        }
+                      />
+                    )
+                  }
+                  renderContent={paneContent}
+                  renderOverlay={(pane) => <SplitDropZones paneId={pane.id} />}
+                  onFocusPane={(paneId) => {
+                    if (selectedId !== null) focusHomePane(selectedId, paneId);
+                  }}
+                  onResizeSplit={(splitId, ratio) => {
+                    if (selectedId !== null) setHomeSplitRatio(selectedId, splitId, ratio);
+                  }}
+                />
+              )}
+            </React.Activity>
           )
         }
       />

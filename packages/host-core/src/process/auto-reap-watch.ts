@@ -20,6 +20,7 @@
 import type { OrphanProcessService } from "./orphan-processes";
 import type { LogFields } from "../log/logger";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const reapLog = hostLogger("orphan-processes");
 
@@ -90,8 +91,9 @@ export function createAutoReapWatch(
   return {
     start() {
       if (interval !== null) return;
-      first = setTimeout(() => void tick(), firstDelayMs);
-      interval = setInterval(() => void tick(), intervalMs);
+      const timedTick = () => withMainSpan({ door: "timer", operation: "orphan-auto-reap" }, tick);
+      first = setTimeout(timedTick, firstDelayMs);
+      interval = setInterval(timedTick, intervalMs);
       // Neither timer may hold the app open: this is housekeeping, and an
       // Electron main process that cannot quit because of it would be a worse
       // bug than the one it cleans up after.

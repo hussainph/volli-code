@@ -2,6 +2,8 @@
 
 The repeatable desktop matrix measures production behavior with a generated,
 real-scale database. It does not enable product optimizations.
+To find and track stalls in the app you actually run, use `volli perf`
+([performance-signals.md](performance-signals.md)).
 
 > Compare runs only on the same machine, in the same power/thermal state, with
 > the same preset, seed, build, repetition count and load arm.
@@ -153,21 +155,30 @@ profile. The built-renderer assertion rejects dev-server runs.
    rather than listing. Both are populated from the generation clock (above).
 7. **Ticket switch:** pre-open both workspaces, then time switching existing tabs
    until heading/editor are visible and accept focus, not a first open.
-8. **Board render:** until published held-ticket count equals the fixture and
+8. **Chat tab switch:** in the long chat's Ticket view, open a second chat
+   beside it, make one warm round trip, then time pressing the long chat's tab
+   until it is selected and its transcript is visible. Pressed and polled inside
+   the page each frame; a chat a pane keeps mounted behind another (VC-1080) is
+   in the document while hidden, so readiness requires it on screen.
+9. **Board return:** with the board drawn once, open the long chat's ticket from
+   its card, then time Escape until the board is on screen again with its held
+   count and a visible card. A Home plane kept hidden behind the Ticket view
+   (VC-1080) is in the document, so readiness requires it on screen.
+10. **Board render:** until published held-ticket count equals the fixture and
    every nonempty column paints a card. Count held tickets versus mounted cards;
    a windowed DOM is not the entire board.
-9. **Column scroll:** drive the fullest column end-to-end in 60 frame-spaced
-   steps. Compare frame times, not just gesture duration; fail if none scrolls.
-10. **Board filter:** apply Priority to an already-drawn board until held count
+11. **Column scroll:** drive the fullest column end-to-end in 60 frame-spaced
+    steps. Compare frame times, not just gesture duration; fail if none scrolls.
+12. **Board filter:** apply Priority to an already-drawn board until held count
     decreases. Restore unfiltered state afterwards. This measures derivation
     over held tickets, not only mounted cards.
-11. **RPC:** one native preload/session-RPC projection round trip in renderer.
-12. **Workspace switch:** a one-ticket second project is added through the
+13. **RPC:** one native preload/session-RPC projection round trip in renderer.
+14. **Workspace switch:** a one-ticket second project is added through the
     app's own `projects.create` (the fixture keeps one project, so its bytes do
     not change). After one warm round trip, ⌘N back to the fixture's project
     until its board holds every ticket and has painted; the light direction is
     `toLightMs`. ⌘N is the path that marks `workspace-switch`.
-13. **Fleet storm:** VC-1078's activity storm (`sidebar-store-bench.mjs`) in the
+15. **Fleet storm:** VC-1078's activity storm (`sidebar-store-bench.mjs`) in the
     real app: `--storm-sessions` Sessions (default 16, spread over the fixture)
     each call `sessions.setRead` every `--storm-interval-ms` (60) for
     `--storm-duration-ms` (4,000), scheduled up front so a slow app falls behind.
@@ -177,14 +188,13 @@ profile. The built-renderer assertion rejects dev-server runs.
     board is in front. Latency is first push to last answer painted; samples
     also record `stormLagMs`, the setRead round-trip p95 and how many activity
     notices arrived (none fails the sample). Use `--preset owner` for owner scale.
-14. **Draft typing under load:** a fixed 47-key draft typed into a `+ Chat`
+16. **Draft typing under load:** a fixed 47-key draft typed into a `+ Chat`
     composer on the long chat's ticket (fixture Sessions have no live executor,
-    so their composers are disabled), 40 ms apart, while a storm of the same shape runs. `keyToPaintMs`
-    is each key's `keydown` to the task after the next frame.
+    so their composers are disabled), 40 ms apart, while a storm of the same shape runs.
+    `keyToPaintMs` is each key's `keydown` to the task after the next frame.
 
-Chat-tab switch and return-to-board-from-a-ticket arms are VC-1080's
-(`chat_tab_switch`, `board_return`); they take their stall signals the same way
-as every arm here.
+Chat-tab switch and board return (VC-1080) take their stall signals the same
+way as every other arm.
 
 Report nearest-rank p50/p95 and population variance. Renderer memory uses
 `app.getAppMetrics()` working set. Long-task counts are per-sample, not a raw

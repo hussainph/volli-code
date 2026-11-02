@@ -87,6 +87,7 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
+import { onRawIpc } from "./raw-ipc";
 import {
   applyQuietAppPolicy,
   hideDockForMenuBar,
@@ -354,6 +355,7 @@ import {
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { hostLogger } from "@volli/host-core/log";
 import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { startDesktopPerfStore } from "./log/perf-store";
 import { registerRendererLogForwarding } from "./log/renderer-log";
 import { registerRendererStallForwarding } from "./log/renderer-stall";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
@@ -435,6 +437,19 @@ if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 const ownsAppProfile = acquireVolliAppProfile(app);
+// The bounded, machine-local store of every stall the log records (VC-1092),
+// read by `volli perf` and the support report. Opened first so its sink sees
+// the log's first stall; null when this instance does not own the profile or
+// the file will not open.
+const desktopPerf = ownsAppProfile
+  ? startDesktopPerfStore({
+      userData: app.getPath("userData"),
+      version: app.getVersion(),
+      dev: isDev,
+      env: process.env,
+      appPath: app.getAppPath(),
+    })
+  : null;
 // One structured, correlated log for main, the in-process host and the
 // renderer (VC-699): rotating JSON lines in this profile's own log directory.
 // Only the instance that owns the profile writes there.
@@ -443,6 +458,7 @@ const desktopLog = ownsAppProfile
       userData: app.getPath("userData"),
       dev: isDev,
       env: process.env,
+      ...(desktopPerf === null ? {} : { sinks: [desktopPerf.sink] }),
       // A smoke's captured boot reads main's lines off the terminal in any build.
       terminal: isDev || isSmokeBootCapture(process.env),
     })
@@ -2107,7 +2123,7 @@ const appStartup = app.whenReady().then(async () => {
   // What each window is showing, for the focused-target rule. A `send`: it
   // flips on every navigation, needs no reply, and main's copy is advisory —
   // a report that never arrives costs one duplicate alert.
-  ipcMain.on(
+  onRawIpc(
     "volli:notification-active-target" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {
       const window = BrowserWindow.fromWebContents(event.sender);
@@ -2421,7 +2437,7 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
 
-  ipcMain.on(
+  onRawIpc(
     "volli:unsaved-documents" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
       recordUnsavedDocuments(args[0]);
@@ -2550,7 +2566,7 @@ const appStartup = app.whenReady().then(async () => {
   // The draft flush-and-ack barrier (VC-577): menu-bar entry and a system
   // shutdown ask each renderer to save its drafts before a window goes.
   const clientStateFlush = createClientStateFlush({ newRequestId: () => randomUUID() });
-  ipcMain.on(
+  onRawIpc(
     "volli:client-state-flushed" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
       clientStateFlush.acknowledge(args[0]);
@@ -3300,6 +3316,8 @@ const appStartup = app.whenReady().then(async () => {
     // Counts, reasons and error class names only (VC-926).
     bootRecovery: () => runner.bootRecovery(),
     cloudRunner: () => macRunner?.snapshot() ?? null,
+    // Counts, durations and code-owned operation names only (VC-1092).
+    perfStalls: () => desktopPerf?.store ?? null,
   });
 
   try {
@@ -3395,6 +3413,8 @@ const appStartup = app.whenReady().then(async () => {
                   }),
             }),
             doctorRepair: repairSessionEnvironment,
+            // `volli perf` reads this machine's stalls (VC-1092).
+            perfStore: () => desktopPerf?.store ?? null,
           }).execute
         : async () =>
             ({

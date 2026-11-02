@@ -65,6 +65,8 @@ const INTERACTIONS = Object.freeze([
   ["new_terminal", "New terminal session"],
   ["sidebar_toggle", "Sidebar open/close frame times"],
   ["ticket_switch", "Switch between Ticket views"],
+  ["chat_tab_switch", "Switch between two open chat tabs"],
+  ["board_return", "Return to board from a Ticket view"],
   ["board_render", "Board render"],
   ["board_scroll", "Board column scroll"],
   ["board_filter", "Board filter apply"],
@@ -264,6 +266,8 @@ export function aggregateInteraction(id, label, samples) {
     "openMs",
     "closeMs",
     "settleLatencyMs",
+    "inputToPaintMs",
+    "rendererCpuMs",
     "scrollDistancePx",
     "streamedCharacters",
     "liveCodeBlocks",
@@ -486,7 +490,9 @@ async function startCapture(page) {
       started: performance.now(),
       frames: [],
       longTasks: [],
+      inputs: [],
       observer: null,
+      inputObserver: null,
     };
     const observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) capture.longTasks.push(entry.duration);
@@ -496,6 +502,21 @@ async function startCapture(page) {
       capture.observer = observer;
     } catch {
       observer.disconnect();
+    }
+    // Event Timing (VC-1080): a trusted input's duration runs from the input to
+    // the next paint after its handlers — React's discrete-event render and
+    // commit included — so it is the switch as a person feels it, without the
+    // harness's own polling in it.
+    const inputObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.startTime >= capture.started) capture.inputs.push(entry.duration);
+      }
+    });
+    try {
+      inputObserver.observe({ type: "event", durationThreshold: 16, buffered: false });
+      capture.inputObserver = inputObserver;
+    } catch {
+      inputObserver.disconnect();
     }
     const pump = (stamp) => {
       if (!capture.active) return;
@@ -516,6 +537,10 @@ async function stopCapture(page) {
     const capture = window.vc353Capture;
     capture.active = false;
     capture.observer?.disconnect();
+    for (const entry of capture.inputObserver?.takeRecords() ?? []) {
+      if (entry.startTime >= capture.started) capture.inputs.push(entry.duration);
+    }
+    capture.inputObserver?.disconnect();
     const frameTimesMs = capture.frames
       .slice(1)
       .map((value, index) => value - capture.frames[index]);
@@ -534,17 +559,43 @@ async function stopCapture(page) {
       refreshIntervalMs,
       droppedFrames,
       longTasksMs: capture.longTasks,
+      // The slowest input in the window. Event Timing reports nothing under its
+      // 16 ms floor (and rounds to 8 ms), so an input it did not report is
+      // recorded AT the floor: within one frame, not unmeasured.
+      inputToPaintMs: Math.max(16, ...capture.inputs),
     };
   });
 }
 
+/**
+ * The window renderer's cumulative CPU time, in milliseconds, or null where
+ * Electron does not report it. A difference of two readings is what one
+ * interaction cost the renderer in CPU, which — unlike its wall-clock latency —
+ * barely moves when other processes are competing for the machine.
+ */
+async function rendererCpuMs(app) {
+  return app.evaluate(({ app: electronApp, BrowserWindow }) => {
+    const pid = BrowserWindow.getAllWindows()[0]?.webContents.getOSProcessId();
+    const metric = electronApp.getAppMetrics().find((entry) => entry.pid === pid);
+    const seconds = metric?.cpu.cumulativeCPUUsage;
+    return typeof seconds === "number" ? seconds * 1_000 : null;
+  });
+}
+
 async function measured(page, app, action, ready) {
+  const cpuBefore = await rendererCpuMs(app);
   await startCapture(page);
   try {
     await action();
     await ready();
     await settleFrames(page);
-    return { ...(await stopCapture(page)), rendererRssMb: await rendererRssMb(app) };
+    const capture = await stopCapture(page);
+    const cpuAfter = await rendererCpuMs(app);
+    return {
+      ...capture,
+      rendererCpuMs: cpuBefore === null || cpuAfter === null ? null : cpuAfter - cpuBefore,
+      rendererRssMb: await rendererRssMb(app),
+    };
   } catch (error) {
     await stopCapture(page).catch(() => null);
     throw error;
@@ -910,6 +961,182 @@ async function measureTicketSwitch(page, app, targetTitle, targetDisplayId) {
 }
 
 /**
+ * Whether a transcript is drawn on screen: a visible `role="log"` holding at
+ * least one turn. A hidden plane kept mounted behind another tab (VC-1080) is in
+ * the document too, so presence alone would answer before the switch landed.
+ */
+async function waitForShownTranscript(page, timeout = 60_000) {
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll('[role="log"]')).some(
+        (log) =>
+          log instanceof HTMLElement &&
+          log.offsetParent !== null &&
+          log.querySelector(".is-user, .is-assistant") !== null,
+      ),
+    undefined,
+    { timeout },
+  );
+}
+
+const TICKET_STRIP_TABS = '[role="tablist"][aria-label="Ticket tabs"] [role="tab"]';
+
+/** The index of the Ticket strip's selected tab, or -1. */
+async function selectedTicketTabIndex(page) {
+  return page.evaluate(
+    (selector) =>
+      Array.from(document.querySelectorAll(selector)).findIndex(
+        (tab) => tab.getAttribute("aria-selected") === "true",
+      ),
+    TICKET_STRIP_TABS,
+  );
+}
+
+/**
+ * Select the Ticket strip's tab at `index` and wait for it to be in front. By
+ * position, not label: a chat tab reads "Chat" until its Session's title lands,
+ * so two chat tabs can share a label for a while.
+ */
+async function selectTicketTabAt(page, index) {
+  await page.locator(TICKET_STRIP_TABS).nth(index).click();
+  await page.waitForFunction(
+    ({ selector, wanted }) =>
+      document.querySelectorAll(selector)[wanted]?.getAttribute("aria-selected") === "true",
+    { selector: TICKET_STRIP_TABS, wanted: index },
+    { timeout: 30_000 },
+  );
+}
+
+/**
+ * Switching from a second chat tab back to the long chat (VC-1080).
+ *
+ * The pair is the long-chat Session and a fresh chat opened beside it in the
+ * same Ticket view. One round trip runs before the capture so the measured
+ * switch is a RETURN to a chat that has already been drawn once — the case a
+ * kept-alive view answers and a remount pays for in full (markdown parse,
+ * highlight, scroll restore). Readiness is the long chat's tab selected and its
+ * transcript visible.
+ */
+async function measureChatTabSwitch(page, app, displayId, longChatTitle) {
+  await clickTicketBody(page, displayId);
+  const row = page.getByText(longChatTitle, { exact: true }).first();
+  await row.waitFor({ state: "visible", timeout: 30_000 });
+  await row.click();
+  await waitForShownTranscript(page, 120_000);
+  const longIndex = await selectedTicketTabIndex(page);
+  if (longIndex < 0) throw new Error("chat_tab_switch: the long chat opened no tab");
+  const before = await page.locator(TICKET_STRIP_TABS).count();
+  await tabStripNewChatButton(page, TICKET_TAB_STRIP).click();
+  await page.waitForFunction(
+    ({ selector, count, previous }) => {
+      const tabs = Array.from(document.querySelectorAll(selector));
+      const selected = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+      return tabs.length > count && selected >= 0 && selected !== previous;
+    },
+    { selector: TICKET_STRIP_TABS, count: before, previous: longIndex },
+    { timeout: 30_000 },
+  );
+  const otherIndex = await selectedTicketTabIndex(page);
+  // The warm round trip: long chat drawn once more, then the other tab in front.
+  await selectTicketTabAt(page, longIndex);
+  await waitForShownTranscript(page);
+  await settleFrames(page);
+  await selectTicketTabAt(page, otherIndex);
+  await settleFrames(page);
+  // A trusted click, so Event Timing sees it; readiness is polled inside the
+  // page once per frame rather than through Playwright's retry backoff
+  // (0/20/50/100 ms), which would otherwise be most of a number this small.
+  return measured(
+    page,
+    app,
+    () => page.locator(TICKET_STRIP_TABS).nth(longIndex).click(),
+    () =>
+      page.waitForFunction(
+        ({ selector, wanted }) =>
+          document.querySelectorAll(selector)[wanted]?.getAttribute("aria-selected") === "true" &&
+          Array.from(document.querySelectorAll('[role="log"]')).some(
+            (log) =>
+              log instanceof HTMLElement &&
+              log.offsetParent !== null &&
+              log.querySelector(".is-user, .is-assistant") !== null,
+          ),
+        { selector: TICKET_STRIP_TABS, wanted: longIndex },
+        { timeout: 30_000, polling: "raf" },
+      ),
+  );
+}
+
+/**
+ * Escape out of a Ticket view back to the board it was opened from (VC-1080).
+ *
+ * The board is put in front and drawn first, then the long-chat ticket is
+ * opened from its card, so the measured return is to a board this launch has
+ * already built — the path a kept-alive Home plane answers by revealing it and
+ * an unmounted one answers by rebuilding every column. Escape is the product's
+ * own way back; focus is parked on the body so no field claims the key.
+ */
+async function measureBoardReturn(page, app, ticketCount, displayId) {
+  await page.getByRole("button", { name: "Home", exact: true }).first().click();
+  if (
+    await tabStrip(page, TICKET_TAB_STRIP)
+      .isVisible()
+      .catch(() => false)
+  ) {
+    await page.evaluate(() => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    });
+    await page.keyboard.press("Escape");
+  }
+  const boardTab = tabStrip(page, "Home tabs").getByRole("tab", { name: "Board", exact: true });
+  if (await boardTab.isVisible().catch(() => false)) await boardTab.click();
+  await waitForShownBoard(page, ticketCount);
+  await settleFrames(page);
+  await openTicket(page, displayId);
+  await settleFrames(page);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  // Readiness polled inside the page, once per frame, for the reason the chat
+  // switch gives; the full board check runs after the window closes.
+  const sample = await measured(
+    page,
+    app,
+    () => page.keyboard.press("Escape"),
+    () =>
+      page.waitForFunction(
+        (expected) => {
+          const board = document.querySelector("[data-board-ticket-count]");
+          if (!(board instanceof HTMLElement) || board.offsetParent === null) return false;
+          if (Number(board.getAttribute("data-board-ticket-count")) !== expected) return false;
+          return Array.from(document.querySelectorAll("[data-board-ticket-slot]")).some(
+            (slot) => slot instanceof HTMLElement && slot.offsetParent !== null,
+          );
+        },
+        ticketCount,
+        { timeout: 60_000, polling: "raf" },
+      ),
+  );
+  await waitForShownBoard(page, ticketCount);
+  return { ...sample, ...(await boardMountCounts(page)) };
+}
+
+/** {@link waitForBoard}, and the board on screen rather than kept hidden behind a Ticket view. */
+async function waitForShownBoard(page, ticketCount) {
+  await waitForBoard(page, ticketCount);
+  await page.waitForFunction(
+    () => {
+      const board = document.querySelector("[data-board-ticket-count]");
+      if (!(board instanceof HTMLElement) || board.offsetParent === null) return false;
+      return Array.from(document.querySelectorAll("[data-board-ticket-slot]")).some(
+        (slot) => slot instanceof HTMLElement && slot.offsetParent !== null,
+      );
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+}
+
+/**
  * What the board is actually holding in the DOM right now (VC-316).
  *
  * `boardTickets` is what the columns HOLD and `mountedCards` is what they have
@@ -1177,6 +1404,9 @@ async function fullAppIteration({
     const newChat = await measure("new_chat", "new chat", () =>
       measureNewChat(page, app, manifest.longChat.displayId),
     );
+    const chatTabSwitch = await measure("chat_tab_switch", "chat tab switch", () =>
+      measureChatTabSwitch(page, app, manifest.longChat.displayId, manifest.longChat.title),
+    );
     const terminal = await measure("new_terminal", "new terminal", () =>
       measureNewTerminal(page, app, join(profile, "terminal-ready.txt")),
     );
@@ -1203,6 +1433,9 @@ async function fullAppIteration({
     }
     const rpc = await measure("rpc_round_trip", "RPC", () =>
       measureRpc(page, app, manifest.longChat.sessionId),
+    );
+    const boardReturn = await measure("board_return", "board return", () =>
+      measureBoardReturn(page, app, manifest.counts.tickets, manifest.longChat.displayId),
     );
     const board = await measure("board_render", "board render", () =>
       measureBoardRender(page, app, manifest.counts.tickets),
@@ -1269,6 +1502,8 @@ async function fullAppIteration({
         new_terminal: terminal,
         sidebar_toggle: sidebar,
         ticket_switch: ticketSwitch,
+        chat_tab_switch: chatTabSwitch,
+        board_return: boardReturn,
         board_render: board,
         board_scroll: boardScroll,
         board_filter: boardFilter,
@@ -1909,6 +2144,12 @@ export function markdown(report) {
       if (summary.mountedCards !== undefined) {
         lines.push(
           `| ${arm.name} | ↳ mounted cards / held | ${summary.mountedCards?.p50 ?? "—"} / ${summary.boardTickets?.p50 ?? "—"} | ${summary.mountedCards?.p95 ?? "—"} / ${summary.boardTickets?.p95 ?? "—"} | — | — | — | — | — |`,
+        );
+      }
+      if (interaction.id === "chat_tab_switch" || interaction.id === "board_return") {
+        lines.push(
+          `| ${arm.name} | ↳ input to next paint | ${summary.inputToPaintMs?.p50 ?? "—"} ms | ${summary.inputToPaintMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
+          `| ${arm.name} | ↳ renderer CPU | ${summary.rendererCpuMs?.p50 ?? "—"} ms | ${summary.rendererCpuMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
         );
       }
       if (interaction.id === "sidebar_toggle") {

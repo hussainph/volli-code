@@ -428,6 +428,32 @@ describe("whole-report validation and Markdown", () => {
     expect(validateBenchmarkReport(report)).toBe(report);
   });
 
+  /**
+   * VC-1080 — the keep-alive arms report the switch as Event Timing saw it,
+   * beside the harness latency that also holds Playwright's own wait.
+   */
+  it("reports input-to-paint for the chat tab switch and board return arms", () => {
+    const report = benchmarkReport();
+    report.config.streamOnly = false;
+    report.config.interactions = ["chat_tab_switch", "board_return"];
+    report.arms[0].interactions = [
+      aggregateInteraction("chat_tab_switch", "Switch between two open chat tabs", [
+        streamSample({ latencyMs: 90, inputToPaintMs: 40 }),
+        streamSample({ latencyMs: 110, inputToPaintMs: 56 }),
+      ]),
+      aggregateInteraction("board_return", "Return to board from a Ticket view", [
+        streamSample({ latencyMs: 80, inputToPaintMs: 16 }),
+        streamSample({ latencyMs: 95, inputToPaintMs: 24 }),
+      ]),
+    ];
+    report.arms[0].chatWindow = null;
+
+    expect(validateBenchmarkReport(report)).toBe(report);
+    const output = markdown(report);
+    expect(output).toContain("| idle | ↳ input to next paint | 40 ms | 56 ms |");
+    expect(output).toContain("| idle | ↳ input to next paint | 16 ms | 24 ms |");
+  });
+
   it("accepts zero latency samples and renders the report contract", () => {
     const report = benchmarkReport();
     report.arms[0].interactions[0] = aggregateInteraction(

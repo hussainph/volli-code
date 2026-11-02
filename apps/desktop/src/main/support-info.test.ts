@@ -20,11 +20,14 @@ vi.mock("electron", () => ({
 import { writeUpdateChannel } from "./auto-update";
 import { openTestDb, type TestDb } from "@volli/host-core/testing";
 import { writeSecret } from "@volli/host-core/db";
+import { openPerfStore } from "@volli/host-core/perf";
 import {
   collectSupportInfo,
+  collectSupportReport,
   describeBootRecovery,
   describeCloudRunner,
   describeLastUpdateCheck,
+  describePerfStalls,
   registerSupportIpcHandlers,
   type SupportInfoDeps,
 } from "./support-info";
@@ -404,5 +407,72 @@ describe("describeCloudRunner", () => {
     });
     expect(removed).toBe("removed (credential_reuse) · 0 updates waiting");
     expect(removed).not.toContain("danas-mac");
+  });
+});
+
+describe("the stall summary (VC-1092)", () => {
+  const HOUR = 3_600_000;
+  const NOW = Date.UTC(2026, 10, 1, 12);
+
+  it("adds one line from the perf store: hours observed, counts, totals and worst operations", async () => {
+    const clock = { now: NOW - 2 * HOUR };
+    const store = openPerfStore({
+      path: ":memory:",
+      version: "0.3.0",
+      now: () => clock.now,
+      every: () => () => {},
+    });
+    if (store === null) throw new Error("no store");
+    const stall = {
+      process: "main",
+      kind: "door",
+      door: "ipc",
+      operation: "volli:board-load",
+    } as const;
+    store.record({ ...stall, at: NOW - HOUR, durationMs: 400, sessionId: "0123abcd-secret" });
+    store.record({ ...stall, at: NOW - HOUR, durationMs: 300 });
+    // Older than the report's day: not counted.
+    store.record({ ...stall, at: NOW - 30 * HOUR, durationMs: 9_000 });
+    clock.now = NOW;
+    const info = await collectSupportReport(
+      deps({ database: () => testDb(), perfStalls: () => store, now: () => NOW }),
+    );
+    store.close();
+    expect(Object.keys(info).toSorted()).toEqual([...ALLOWLIST, "perfStalls"].toSorted());
+    expect(info.perfStalls).toBe(
+      "last 24h, 2h observed: main 2 stalls, 700 ms, p95 400 ms (ipc/volli:board-load ×2 700 ms); renderer none",
+    );
+    expect(info.perfStalls).not.toContain("0123abcd");
+    // No store, no line.
+    expect(
+      collectSupportInfo(deps({ database: () => testDb(), perfStalls: () => null })),
+    ).not.toHaveProperty("perfStalls");
+    // The window ends now by the wall clock when no clock is pinned.
+    const live = openPerfStore({ path: ":memory:", version: "0.3.0", every: () => () => {} });
+    const report = await collectSupportReport(
+      deps({ database: () => testDb(), perfStalls: () => live }),
+    );
+    live?.close();
+    expect(report.perfStalls).toMatch(/^last 24h, 0h observed: main none; renderer none$/);
+  });
+
+  it("says one stall in the singular", () => {
+    expect(
+      describePerfStalls({
+        since: 0,
+        observedMs: 90 * 60_000,
+        processes: [
+          {
+            process: "renderer",
+            stalls: 1,
+            stallMs: 1_250,
+            p95Ms: 1_250,
+            top: [{ key: "renderer/keydown", count: 1, totalMs: 1_250 }],
+          },
+        ],
+      }),
+    ).toBe(
+      "last 24h, 1.5h observed: renderer 1 stall, 1,250 ms, p95 1,250 ms (renderer/keydown ×1 1,250 ms)",
+    );
   });
 });

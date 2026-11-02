@@ -336,7 +336,7 @@ function cardById(page, displayId) {
   const exact = new RegExp(`^${displayId}$`);
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
+    .filter({ visible: true, has: page.locator("span.font-mono", { hasText: exact }) });
 }
 
 async function openTicketViaCard(page, displayId) {

@@ -19,6 +19,7 @@ import { breatheShouldWake, isParkCandidate, treeIsCpuQuiet } from "@volli/share
 import type { TerminalIoResult } from "@volli/shared";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("park");
 
@@ -410,7 +411,7 @@ export class ParkController {
     if (!this.deps.config.enabled) return;
     if (this.sweepTimer !== null) return;
     this.sweepTimer = setInterval(() => {
-      void this.sweep();
+      void withMainSpan({ door: "timer", operation: "pty-park-sweep" }, () => this.sweep());
     }, this.deps.config.sweepIntervalMs);
     // Never let the sweep keep the process alive at quit.
     this.sweepTimer.unref();

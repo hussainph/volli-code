@@ -575,7 +575,11 @@ async function expandPreviousBand() {
 
 /** Open VLT-14 from the board, which is where the right rail lives. */
 async function openHeroTicket() {
-  const card = page.locator("article").filter({ hasText: "VLT-14" }).first();
+  const card = page
+    .locator("article")
+    .filter({ visible: true })
+    .filter({ hasText: "VLT-14" })
+    .first();
   if ((await card.count()) === 0) {
     const row = page.getByText(TICKETS[0].title, { exact: false }).first();
     if ((await row.count()) === 0) return { ok: false, detail: "VLT-14 is not on the board" };

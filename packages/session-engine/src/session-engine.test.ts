@@ -29,6 +29,7 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjectionCheckpoint,
+  SessionProjection,
   SessionProjectionEvent,
   SessionUsage,
   UnstampedCommandReceipt,
@@ -67,6 +68,13 @@ function createRequest(commandId = "command-create") {
     title: "Durable Session",
     provenance: userProvenance,
   };
+}
+
+/** A full projection as a listing row carries it: without its command history (VC-848). */
+function withoutHistory(projection: SessionProjection | null) {
+  if (projection === null) return null;
+  const { commands: _commands, receipts: _receipts, ...row } = projection;
+  return row;
 }
 
 function attachment(sessionId: string, id = "attachment-1"): SessionAttachment {
@@ -2249,7 +2257,7 @@ describe("SessionEngine creation and explicit commands", () => {
       rowReads.length = 0;
       const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
       expect(rowReads).toEqual([]);
-      expect(row).toEqual(await plane.getSession({ sessionId: session.id }));
+      expect(row).toEqual(withoutHistory(await plane.getSession({ sessionId: session.id })));
       expect(Object.isFrozen(row)).toBe(true);
     });
   });
@@ -2291,15 +2299,22 @@ describe("SessionEngine creation and explicit commands", () => {
     ]);
     const listedLater = all.find(({ session: listed }) => listed.id === ticketLater.session.id);
     expect(listedLater?.session.title).toBe("Projected title");
+    // A listing row leaves the command history out (VC-848); the Session's own
+    // read still carries it.
+    expect(listedLater).not.toHaveProperty("commands");
+    expect(listedLater).not.toHaveProperty("receipts");
+    const later = await plane.getSession({ sessionId: ticketLater.session.id });
+    // Everything else on the row is the Session's own projection, field for field.
+    expect(listedLater).toEqual(withoutHistory(later));
     expect(
-      listedLater?.commands.some(
+      later?.commands.some(
         (sessionCommand) =>
           sessionCommand.intent.kind === "session.retitle" &&
           sessionCommand.intent.title === "Projected title",
       ),
     ).toBe(true);
     expect(
-      listedLater?.receipts.some(
+      later?.receipts.some(
         (receipt) => receipt.status === "completed" && receipt.result.kind === "session.retitled",
       ),
     ).toBe(true);
@@ -4912,7 +4927,8 @@ function interningComposition() {
   };
   let now = 100;
   const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
-  return { plane, interned };
+  const relaunch = () => createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+  return { plane, interned, relaunch };
 }
 
 /**
@@ -4927,6 +4943,21 @@ function interningComposition() {
  * still has to hold for code which gets past the type (`any`, a structured
  * clone across an RPC seam, plain JavaScript).
  */
+/** One structured attachment, so a listed row holds an object inside an array. */
+async function openAttachment(
+  plane: ReturnType<typeof createSessionEngine>,
+  sessionId: string,
+): Promise<void> {
+  await plane.observe({
+    id: `observation-${sessionId}-opened`,
+    sessionId,
+    occurredAt: 200,
+    provenance: adapterProvenance,
+    kind: "attachment.opened",
+    attachment: attachment(sessionId),
+  });
+}
+
 describe("listSessions cached projections are frozen (VC-393)", () => {
   it("throws when a caller mutates a top-level field of a returned row", async () => {
     const { plane } = composition();
@@ -4942,13 +4973,14 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
 
   it("throws when a caller mutates a nested object or array of a returned row", async () => {
     const { plane } = composition();
-    await plane.createSession(createRequest("command-freeze-nested"));
+    const created = await plane.createSession(createRequest("command-freeze-nested"));
+    await openAttachment(plane, created.session.id);
 
     const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
 
     expect(() => {
       // @ts-expect-error -- a nested array.
-      row.commands.push(row.commands[0]);
+      row.attachments.push(row.attachments[0]);
     }).toThrow(TypeError);
     // The nested OBJECT is frozen too, not merely the array it holds: a
     // container that recursed into its children but skipped itself would pass
@@ -4972,26 +5004,29 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
    */
   it("throws when a caller mutates an object inside an array of a returned row", async () => {
     const { plane } = composition();
-    await plane.createSession(createRequest("command-freeze-element"));
+    const created = await plane.createSession(createRequest("command-freeze-element"));
+    await openAttachment(plane, created.session.id);
 
     const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
 
-    // The create wrote a real command, so this element is populated data
+    // The attach wrote a real attachment, so this element is populated data
     // rather than an empty-array technicality.
-    expect(row.commands).toHaveLength(1);
+    expect(row.attachments).toHaveLength(1);
+    const [opened] = row.attachments;
     expect(() => {
-      // @ts-expect-error -- an element of a nested array.
-      row.commands[0].id = "rewritten";
+      // An element of a nested array.
+      (opened as { id: string }).id = "rewritten";
     }).toThrow(TypeError);
-    // Deeper than the `readonly` modifiers reach: a command's INTENT has
-    // mutable fields, so from here down the runtime freeze is the only guard
-    // left, and it has to hold all the way to the leaves.
-    expect(Object.isFrozen(row.commands[0].intent)).toBe(true);
+    // Deeper than the `readonly` modifiers reach: an attachment's native
+    // DETAIL is an open record, so from here down the runtime freeze is the
+    // only guard left, and it has to hold all the way to the leaves.
+    const detail = opened.native?.detail as Record<string, unknown>;
+    expect(Object.isFrozen(detail)).toBe(true);
     expect(() => {
-      row.commands[0].intent.kind = "session.archive";
+      detail.native = false;
     }).toThrow(TypeError);
-    expect(row.commands[0].id).toBe("command-freeze-element");
-    expect(row.commands[0].intent.kind).toBe("session.create");
+    expect(opened.id).toBe("attachment-1");
+    expect(detail.native).toBe(true);
   });
 
   it("keeps serving the original values after a rejected mutation attempt", async () => {
@@ -5052,24 +5087,29 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
    * a copy so that it cannot.
    */
   it("freezes nothing the ledger owns, so a ledger that caches its reads is safe", async () => {
-    const { plane, interned } = interningComposition();
-    await plane.createSession(createRequest("command-freeze-contagion"));
+    const { plane, interned, relaunch } = interningComposition();
+    const created = await plane.createSession(createRequest("command-freeze-contagion"));
+    await openAttachment(plane, created.session.id);
 
-    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // A fresh engine, so the row is folded from the ledger's events rather
+    // than from the checkpoint the attach left hot (VC-1076).
+    const [row] = await relaunch().listSessions({ projectId: "project-1", scope: "all" });
     expect(Object.isFrozen(row)).toBe(true);
 
     const recorded = [...interned.values()].find(
-      (event) => event.payload.kind === "command.recorded",
+      (event) => event.payload.kind === "attachment.opened",
     );
-    expect(recorded?.payload.kind).toBe("command.recorded");
-    const ledgerCommand =
-      recorded?.payload.kind === "command.recorded" ? recorded.payload.command : undefined;
+    expect(recorded?.payload.kind).toBe("attachment.opened");
+    const ledgerNative =
+      recorded?.payload.kind === "attachment.opened"
+        ? recorded.payload.attachment.native
+        : undefined;
 
-    // The row reports the same command, by value...
-    expect(row.commands[0]).toEqual(ledgerCommand);
+    // The row reports the same native reference, by value...
+    expect(row.attachments[0]?.native).toEqual(ledgerNative);
     // ...but does not hold the ledger's object, and left it untouched.
-    expect(row.commands[0]).not.toBe(ledgerCommand);
-    expect(Object.isFrozen(ledgerCommand)).toBe(false);
+    expect(row.attachments[0]?.native).not.toBe(ledgerNative);
+    expect(Object.isFrozen(ledgerNative)).toBe(false);
     for (const event of interned.values()) {
       expect(Object.isFrozen(event)).toBe(false);
       expect(Object.isFrozen(event.payload)).toBe(false);

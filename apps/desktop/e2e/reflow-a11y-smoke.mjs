@@ -736,7 +736,12 @@ try {
   try {
     await page.getByRole("button", { name: "Home", exact: true }).click();
     await sleep(900);
-    await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick({ timeout: 15000 });
+    await page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({ hasText: "VC-1" })
+      .first()
+      .dblclick({ timeout: 15000 });
     await sleep(900);
     await page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab").last().click();
     await sleep(900);

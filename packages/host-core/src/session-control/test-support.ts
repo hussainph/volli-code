@@ -233,12 +233,10 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
       createdAt: session.created_at,
     },
     status: "open",
-    commands: [],
     resumptions: [],
     latestTurnId: null,
     latestTurnOrigin: null,
     resumedAfterStop: false,
-    receipts: [],
     pendingExecutorStart: null,
     attachments: [
       {

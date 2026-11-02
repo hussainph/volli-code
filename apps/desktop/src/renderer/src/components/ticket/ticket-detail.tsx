@@ -21,6 +21,7 @@ import {
 import { renameChatSession } from "@renderer/chat/rename";
 import { BrowserPaneAnchor } from "@renderer/components/browser/resident-browser-panes";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
+import { usePaneChatViews } from "@renderer/components/chat/kept-chat-views";
 import {
   planTabClose,
   resolveTabClose,
@@ -1060,6 +1061,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   const tabIds = tabs.map((tab) => tab.id);
   const overlaid = splitView === null ? null : overlaySplitView(splitView);
   const split = projectSplitView(overlaid, tabIds, activeTab.id, BODY_TAB_ID);
+  const paneChatViews = usePaneChatViews(split.panes);
   const paneStrips = partitionPaneTabs(split, tabs);
   // The top strip: ordinary tabs, and one chip per group (VC-614).
   const groups = stripTabGroups(overlaid, split, tabIds);
@@ -1277,8 +1279,9 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   // property dropdown or the label editor's text field can still dismiss
   // itself on Escape without also closing the whole view. Board's own
   // Escape-deselect listener is inert while this view is mounted — board.tsx
-  // isn't rendered at all (home-surface.tsx swaps the two) — so the two never
-  // fire off the same keypress.
+  // is hidden behind `<Activity mode="hidden">` (home-surface.tsx, VC-1080),
+  // which tears its effects and their listeners down — so the two never fire
+  // off the same keypress.
   //
   // While terminal-focused, Escape is left entirely alone so it reaches the
   // PTY (Claude Code interrupts on it; vim and friends lean on it). Exit from
@@ -1478,7 +1481,6 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
         />
       );
     }
-    const chatSessionId = tab.kind === "chat" ? parseChatTabId(tab.id) : null;
     const paneBrowserTab =
       tab.kind === "browser" && tab.browserTabId !== undefined
         ? browserTabs.find((candidate) => candidate.tabId === tab.browserTabId)
@@ -1565,18 +1567,21 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               a GPU-owning terminal is never unmounted, and a chat needs nothing
               of the sort — its stream, fold and queue live in the registry
               client, which outlives this view either way. */}
-          {chatSessionId !== null ? (
-            <ChatPlane
-              key={chatSessionId}
-              sessionId={chatSessionId}
-              projectId={ticket.projectId}
-              ticketId={ticket.id}
-              onOpenFile={openFile}
-              // A delegate row's child inherits this Ticket, so it opens as
-              // one of this Ticket's own chats (VC-9).
-              onOpenSession={activateChat}
-            />
-          ) : null}
+          {/* The front chat, and the last few this pane showed kept mounted
+              but hidden behind it (VC-1080, `chat/kept-chat-views.ts`). */}
+          {paneChatViews(pane).map((view) => (
+            <React.Activity key={view.sessionId} mode={view.shown ? "visible" : "hidden"}>
+              <ChatPlane
+                sessionId={view.sessionId}
+                projectId={ticket.projectId}
+                ticketId={ticket.id}
+                onOpenFile={openFile}
+                // A delegate row's child inherits this Ticket, so it opens as
+                // one of this Ticket's own chats (VC-9).
+                onOpenSession={activateChat}
+              />
+            </React.Activity>
+          ))}
           {paneBrowserTab !== undefined ? (
             // The native view is attached over this cell's own rectangle, and
             // the main-process host attaches any number of tabs at once (VC-238)

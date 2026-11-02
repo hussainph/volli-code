@@ -79,7 +79,11 @@ console.log("scratch:", scratch, "\n");
 function cardById(page, id) {
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }) });
+
+    .filter({
+      visible: true,
+      has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }),
+    });
 }
 
 let app = null;

@@ -1490,12 +1490,19 @@ export function isMonacoEditable(state) {
 
 // ---- board DOM readers -----------------------------------------------------
 
-/** The single board `<article>` whose mono id span equals `id` exactly. */
+/**
+ * The single board `<article>` whose mono id span equals `id` exactly, on a
+ * board that is ON SCREEN. Visible-only since VC-1080: Home's plane (the board
+ * included) stays mounted, hidden behind React `<Activity>`, while a Ticket
+ * view is up, so an unscoped match would answer "the board is back" before it
+ * is. Every board-card locator and column-header reader in these smokes is
+ * scoped the same way, for the same reason.
+ */
 export function cardById(page, id) {
   const exact = new RegExp(`^${id}$`);
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
+    .filter({ visible: true, has: page.locator("span.font-mono", { hasText: exact }) });
 }
 
 /**
@@ -1506,7 +1513,9 @@ export function cardById(page, id) {
  */
 export async function columnCount(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+      (div) => div.getClientRects().length > 0,
+    );
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -1522,7 +1531,9 @@ export async function columnCount(page, label) {
 export async function columnHasCard(page, label, id) {
   return page.evaluate(
     ({ columnLabel, cardId }) => {
-      const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+      const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
+        (div) => div.getClientRects().length > 0,
+      );
       const header = headers.find((div) => {
         const first = div.children[0];
         return first?.tagName === "SPAN" && first.textContent === columnLabel;

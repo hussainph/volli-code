@@ -103,6 +103,38 @@ describe("stall lines", () => {
     expect(parsed.unreadableLines).toBe(1);
   });
 
+  it("files VC-1090's attributions under their own door and operation", () => {
+    const parsed = parseStallLines([
+      [
+        mainLine(0, 300, {
+          attribution: "span",
+          door: "runtime",
+          operation: "pi.turn",
+          sessionId: "s",
+        }),
+        mainLine(1, 250, {
+          attribution: "aggregate",
+          door: "broadcast",
+          operation: "session-activity",
+          spanCount: 40,
+        }),
+        mainLine(2, 220, { attribution: "gc", door: "gc", operation: "major" }),
+        mainLine(3, 210, { attribution: "off-cpu", door: "off-cpu", operation: "wait" }),
+      ].join("\n"),
+    ]);
+    expect(parsed.main.map((stall) => [stall.attribution, stall.door, stall.operation])).toEqual([
+      ["span", "runtime", "pi.turn"],
+      ["aggregate", "broadcast", "session-activity"],
+      ["gc", "gc", "major"],
+      ["off-cpu", "off-cpu", "wait"],
+    ]);
+    const signals = armSignals([repetitionSignals(parsed, [])], {
+      summarize,
+      mainStallThresholdMs: 200,
+    });
+    expect(signals.main.unattributedShare).toBe(0);
+  });
+
   it("puts each main stall in the window it landed in, with the probe's grace", () => {
     const { main } = parseStallLines([LOG]);
     const byWindow = mainStallsByWindow(main, [

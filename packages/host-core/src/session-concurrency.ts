@@ -24,7 +24,7 @@
 import { availableParallelism } from "node:os";
 
 import { VOLLI_CONCURRENCY_HINT_ENV, concurrencyBudget, concurrencyBudgetEnv } from "@volli/shared";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionListingProjection } from "@volli/shared";
 
 import { chatSessionRecord, terminalSessionRecord } from "./session-control";
 
@@ -41,7 +41,7 @@ export interface WorkingSessionsInput {
    * fleet here is still correct and the count is the same — the narrowing
    * removes a provably-zero set, never a working Session.
    */
-  projections: readonly SessionProjection[];
+  projections: readonly SessionListingProjection[];
   /**
    * The Session being started, excluded from its own count. Its record may
    * already exist by the time its environment is assembled, and counting it
@@ -124,7 +124,7 @@ export interface SessionConcurrencyPorts {
    * ALL projects, because load is a fact about the machine: a build in another
    * project's Session competes for exactly the same cores.
    */
-  listAttachedSessions(): Promise<readonly SessionProjection[]>;
+  listAttachedSessions(): Promise<readonly SessionListingProjection[]>;
 }
 
 /** A Session start's per-call input to a reader — everything but the fleet itself. */
@@ -194,10 +194,10 @@ export function createSessionConcurrencyEnvReader(
   const ttlMs = options.ttlMs ?? DEFAULT_CONCURRENCY_ENV_TTL_MS;
   const now = options.now ?? Date.now;
 
-  let cached: { projections: readonly SessionProjection[]; expiresAt: number } | null = null;
-  let inFlight: Promise<readonly SessionProjection[]> | null = null;
+  let cached: { projections: readonly SessionListingProjection[]; expiresAt: number } | null = null;
+  let inFlight: Promise<readonly SessionListingProjection[]> | null = null;
 
-  const read = (): Promise<readonly SessionProjection[]> => {
+  const read = (): Promise<readonly SessionListingProjection[]> => {
     if (cached !== null && cached.expiresAt > now()) {
       return Promise.resolve(cached.projections);
     }

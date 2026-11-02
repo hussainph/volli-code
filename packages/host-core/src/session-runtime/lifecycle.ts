@@ -26,6 +26,7 @@ import {
   createScheduledResumeHost,
   createSessionWatchdog,
   createSuspendClock,
+  ticketSessionProjections,
 } from "../session-control";
 import type { AgentObservability } from "../observability/settings";
 import { relayShellNotices } from "../shell/shell-notices";
@@ -234,8 +235,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       ? createScheduledResumeHost({
           candidates: async () => listScheduledResumeSessionIds(database.db).filter(ownsSession),
           projection: async (sessionId) => (await runtime.projection({ sessionId })).projection,
-          ticketSessions: ({ projectId, ticketId }) =>
-            sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
+          ticketSessions: (query) => ticketSessionProjections(sessionEngine, query),
           command: (request) => runtime.command(request),
           notify: (request) => ports.attention.deliver(request),
         })
@@ -457,8 +457,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     return resumeRecoveredTurns(
       {
         projection: async (sessionId) => (await hosted.projection({ sessionId })).projection,
-        ticketSessions: ({ projectId, ticketId }) =>
-          engine.listSessions({ projectId, scope: "ticket", ticketId }),
+        ticketSessions: (query) => ticketSessionProjections(engine, query),
         resumeBoundary: (input) => hosted.resumeBoundary(input),
         pendingTurnStarts: () => hosted.pendingTurnStarts(),
         command: (request) => hosted.command(request),
