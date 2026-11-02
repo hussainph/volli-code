@@ -508,6 +508,9 @@ export function ComposerForm({
             ticketId: COMPOSER_DRAFT_TICKET_ID,
           }}
           viewId="composer:body"
+          // The draft cache (draft.ts) keeps every edit, so the body is never
+          // unsaved work; see DocumentSavePolicy.
+          savePolicy="draft"
           value={body}
           onChange={setBody}
           placeholder="Add description…"
