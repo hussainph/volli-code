@@ -177,9 +177,16 @@ One convention for what a module asks for and what it is (VC-632):
   minute to fifteen, a changed row or a running check reads at once or every
   minute, a committed ticket event that can move a retention answer (move,
   archive, worktree or PR change, signal) wakes it and reads that ticket,
-  focus refreshes anything read over a minute ago, a reclaim never rests on a
-  skipped discovery, and the trim backfill asks a finished worktree again only
-  when its ticket, Keep pin or trim settings change or the memo lapses. It
+  focus refreshes anything read over a minute ago (at most one focus cycle
+  per minute, VC-1077), a reclaim never rests on a skipped discovery, and the
+  trim backfill asks a finished worktree again only when its ticket, Keep pin
+  or trim settings change or the memo lapses. A project whose repository has
+  no git remote is left out of PR discovery for an hour after `gh` says so,
+  unless a committed change names one of its tickets. Each cycle that changes
+  anything publishes one `data-changed` per ticket it changed, scoped to that
+  ticket and project — never an untargeted one. The trim's tree walk and
+  removal run on a worker thread with synchronous `fs` (`worktree/trim-walk.ts`),
+  so a `node_modules` costs the host thread no file-system callbacks. It
   logs each cycle's `gh` reads, trim checks and wall time at debug, and an
   hourly `retention load` summary at info.
 - **Backup.** Formats, redactions, credential exclusions and the
