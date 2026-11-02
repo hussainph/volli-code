@@ -7010,7 +7010,6 @@ describe("SessionRuntime attach timing (VC-1072)", () => {
     expect(report?.stages.find(({ stage }) => stage === "concurrency-budget")).toEqual({
       stage: "concurrency-budget",
       ms: 3_500,
-      atMs: 3_540,
     });
   });
 

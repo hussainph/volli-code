@@ -75,10 +75,10 @@ export interface HostSessionRuntimeOptions {
   observability?: ObservabilitySink;
 }
 
-/** Composes the transport-neutral Session runtime with the desktop's durable executor. */
 /** Attach timing is a Session fact's companion, so it is filed beside them. */
 const attachLog = hostLogger("session");
 
+/** Composes the transport-neutral Session runtime with the desktop's durable executor. */
 export function createHostSessionRuntime(options: HostSessionRuntimeOptions): HostedSessionRuntime {
   const now = options.now ?? Date.now;
   const nextId = options.nextId ?? randomUUID;

@@ -15,14 +15,12 @@
  * rather than reopening a run already reported.
  */
 
-/** One stage, as the time since the previous mark and since the attach began. */
+/** One stage, as the time since the previous mark. */
 export interface AttachStageTiming {
   /** The stage that just finished, e.g. `runtime-context` or `sidecar-ready`. */
   stage: string;
   /** Milliseconds this stage took: since the previous mark, or since the start. */
   ms: number;
-  /** Milliseconds from the start of the attach to the end of this stage. */
-  atMs: number;
 }
 
 /** One attach, reported once when it opens or fails. */
@@ -58,7 +56,7 @@ export class AttachStageClock {
   readonly mark = (stage: string): void => {
     if (this.#reported) return;
     const at = this.#now();
-    this.#stages.push({ stage, ms: at - this.#last, atMs: at - this.#startedAt });
+    this.#stages.push({ stage, ms: at - this.#last });
     this.#last = at;
   };
 

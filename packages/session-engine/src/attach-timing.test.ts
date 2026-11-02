@@ -14,8 +14,8 @@ describe("AttachStageClock (VC-1072)", () => {
     expect(clock.seal()).toEqual({
       totalMs: 3_525,
       stages: [
-        { stage: "submitted", ms: 5, atMs: 5 },
-        { stage: "concurrency-budget", ms: 3_500, atMs: 3_505 },
+        { stage: "submitted", ms: 5 },
+        { stage: "concurrency-budget", ms: 3_500 },
       ],
     });
   });
