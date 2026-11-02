@@ -770,3 +770,47 @@ describe("the Previous band's cap (VC-116)", () => {
     expect(reachButton("Show more")).not.toBeNull();
   });
 });
+
+describe("ActiveSessions attention signals (VC-1078)", () => {
+  const withReview = (): Ticket[] => [
+    ticket("t1", "needs_review", 0),
+    ticket("t2", "todo", 1),
+    ticket("t3", "doing", 0),
+  ];
+
+  it("re-reads only for a refresh that could move a shown signal", async () => {
+    useBoardStore.getState().hydrate({ [PROJECT.id]: withReview() }, { [PROJECT.id]: [] });
+    await mount();
+    expect(latestSignals).toHaveBeenCalledTimes(1);
+
+    // A wholesale hydrate that left the Needs Review column as it was.
+    await act(async () => {
+      useBoardStore.getState().hydrate({ [PROJECT.id]: withReview() }, { [PROJECT.id]: [] });
+    });
+    expect(latestSignals).toHaveBeenCalledTimes(1);
+
+    // Changes that provably write no Session signal this band shows.
+    for (const change of [
+      { kind: "comment" as const },
+      { kind: "worktree" as const },
+      { kind: "retention" as const },
+      { projectId: "another-project" },
+      { ticketId: "t2", projectId: PROJECT.id },
+    ]) {
+      await act(async () => {
+        useBoardStore.getState().notePlanningChange(change);
+      });
+    }
+    expect(latestSignals).toHaveBeenCalledTimes(1);
+
+    // Untargeted, or naming the ticket in review: either may have moved one.
+    await act(async () => {
+      useBoardStore.getState().notePlanningChange({});
+    });
+    expect(latestSignals).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      useBoardStore.getState().notePlanningChange({ ticketId: "t1", kind: "ticket" });
+    });
+    expect(latestSignals).toHaveBeenCalledTimes(3);
+  });
+});

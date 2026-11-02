@@ -664,6 +664,7 @@ describe("refreshPlanningData", () => {
       version: beforeChange + 1,
       ticketId: null,
       projectId: "p1",
+      kind: "ticket",
     });
   });
 
@@ -944,6 +945,7 @@ describe("refreshPlanningData", () => {
         version: before + 1,
         ticketId: "t1",
         projectId: "p1",
+        kind: "comment",
       });
     });
 

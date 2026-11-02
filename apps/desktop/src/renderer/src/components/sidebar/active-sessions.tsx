@@ -27,6 +27,8 @@ import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import {
   buildActiveSessionListing,
+  holdPreviousRows,
+  planningChangeCanMoveSignals,
   capPreviousEntries,
   groupPreviousByTicket,
   isProjectSessionRowSelected,
@@ -103,6 +105,7 @@ const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
 const EMPTY_EXPANDED: readonly string[] = [];
+const EMPTY_PREVIOUS_ROWS: readonly PreviousSessionRow[] = [];
 
 type SessionsStoreState = ReturnType<typeof useSessionsStore.getState>;
 type ChatSessionsStoreState = ReturnType<typeof useChatSessionsStore.getState>;
@@ -257,6 +260,22 @@ function provisionalChatDraftSelector(
  * "inside".
  */
 const SESSION_GROUP_NEST = "mx-0 ml-2 gap-1 py-0 pr-0 pl-2";
+
+/**
+ * One object per distinct row vendor (VC-1078). `ActiveBandRow` and
+ * `PreviousBandRow` are memoised, and a vendor minted afresh per render was a
+ * new prop on every row every time the band rebuilt — so each rebuild redrew
+ * every drawn row whether or not it had moved. A vendor is a pure function of
+ * its key, and the keys are a handful of providers and harnesses.
+ */
+const VENDORS = new Map<string, SessionRowVendor>();
+function internedVendor(key: string, make: () => SessionRowVendor): SessionRowVendor {
+  const held = VENDORS.get(key);
+  if (held !== undefined) return held;
+  const vendor = make();
+  VENDORS.set(key, vendor);
+  return vendor;
+}
 
 /** Re-indexes the batched durable Session projection for the pure listing model. */
 function indexSignalsByTicket(
@@ -477,9 +496,21 @@ export function ActiveSessions({
   // Bumped to force a re-read on the coarse timer below, without pretending
   // anything about the inputs changed.
   const [refreshTick, setRefreshTick] = React.useState(0);
-  const needsReviewIds = React.useMemo(
-    () => tickets.filter((ticket) => ticket.status === "needs_review").map((ticket) => ticket.id),
+  // Keyed on its CONTENT (VC-1078): every board hydrate mints a new `tickets`
+  // array, and an id list that changed identity with it read as "the
+  // Needs-Review set moved" and re-ran the project-wide signal read for a
+  // board where nothing entered or left the column.
+  const needsReviewKey = React.useMemo(
+    () =>
+      tickets
+        .filter((ticket) => ticket.status === "needs_review")
+        .map((ticket) => ticket.id)
+        .join("\u0000"),
     [tickets],
+  );
+  const needsReviewIds = React.useMemo<readonly string[]>(
+    () => (needsReviewKey === "" ? [] : needsReviewKey.split("\u0000")),
+    [needsReviewKey],
   );
 
   // The BASELINE read, and only that. A window that has just opened has missed
@@ -569,9 +600,10 @@ export function ActiveSessions({
   // Two triggers, deduped to at most one fetch per render:
   //   • the needs-review SET changed (a ticket entered/left the column) → always
   //     reload, since the set of tickets whose signals we show is different now;
-  //   • a planning refresh whose scope is untargeted OR names a ticket we're
-  //     already showing → reload; a refresh for any OTHER ticket can't touch our
-  //     attention rows, so skip it.
+  //   • a planning refresh that could have moved a signal we show → reload;
+  //     one that provably cannot (another project, another ticket, a comment,
+  //     working copy or retention change) is skipped — see
+  //     `planningChangeCanMoveSignals`.
   // Tracking both previous values (rather than two effects) stops a refresh that
   // ALSO moved the set from firing the reload twice. The ids ref starts `null` so
   // the first run always loads (mount), whatever the initial version.
@@ -587,11 +619,9 @@ export function ActiveSessions({
       return;
     }
     if (!versionChanged) return;
-    if (planningChange.ticketId !== null && !needsReviewIds.includes(planningChange.ticketId)) {
-      return;
-    }
+    if (!planningChangeCanMoveSignals(planningChange, project.id, needsReviewIds)) return;
     loadAttentionSignals();
-  }, [needsReviewIds, planningChange, loadAttentionSignals]);
+  }, [needsReviewIds, planningChange, loadAttentionSignals, project.id]);
 
   // There is no poll here any more — `volli:session-activity` pushes a Session's
   // row the moment its history moves, whether this section is on screen or not,
@@ -634,55 +664,65 @@ export function ActiveSessions({
     () => new Set(Object.keys(provisionalDrafts)),
     [provisionalDrafts],
   );
-  const titledChatSessions = React.useMemo(
-    () =>
-      chatSessions
-        // A create that landed but has not transferred every Draft-owned Blob
-        // is still presented as one Draft row, never duplicated as a Session.
-        .filter((record) => !provisionalIds.has(record.sessionId))
-        .map((record) =>
-          Object.assign({}, record, {
-            title: residentChatTitles[record.sessionId] ?? record.title,
-          }),
-        ),
-    [chatSessions, provisionalIds, residentChatTitles],
-  );
+  const titledChatSessions = React.useMemo(() => {
+    // A create that landed but has not transferred every Draft-owned Blob
+    // is still presented as one Draft row, never duplicated as a Session.
+    const listed =
+      provisionalIds.size === 0
+        ? chatSessions
+        : chatSessions.filter((record) => !provisionalIds.has(record.sessionId));
+    // Only a record whose resident title differs is copied (VC-1078): the
+    // rest keep the store's objects, so a roster of thousands is not
+    // re-allocated for the handful of chats this window holds open.
+    return listed.map((record) => {
+      const title = residentChatTitles[record.sessionId];
+      return title === undefined || title === record.title
+        ? record
+        : Object.assign({}, record, { title });
+    });
+  }, [chatSessions, provisionalIds, residentChatTitles]);
 
-  const listing = React.useMemo(
-    () =>
-      buildActiveSessionListing({
-        tickets,
-        containers,
-        projectContainer,
-        signalsByTicket,
-        records,
-        chatSessions: titledChatSessions,
-        lastOutputAt,
-        parkState,
-        harness,
-        statusEnteredAt,
-        provenance: sessionProvenance,
-        unreadSessionIds: unread,
-        filter: sessionListingFilter(filter),
-        now: listingNow,
-      }),
-    [
+  /**
+   * The last build's Previous band, so the next one can hand back the same
+   * array when nothing in it moved (`holdPreviousRows`, VC-1078).
+   */
+  const heldPrevious = React.useRef<readonly PreviousSessionRow[]>(EMPTY_PREVIOUS_ROWS);
+  const listing = React.useMemo(() => {
+    const built = buildActiveSessionListing({
       tickets,
       containers,
       projectContainer,
       signalsByTicket,
       records,
-      titledChatSessions,
+      chatSessions: titledChatSessions,
       lastOutputAt,
       parkState,
       harness,
       statusEnteredAt,
-      sessionProvenance,
-      unread,
-      filter,
-      listingNow,
-    ],
-  );
+      provenance: sessionProvenance,
+      unreadSessionIds: unread,
+      filter: sessionListingFilter(filter),
+      now: listingNow,
+    });
+    const previous = holdPreviousRows(heldPrevious.current, built.previous);
+    return previous === built.previous ? built : { ...built, previous };
+  }, [
+    tickets,
+    containers,
+    projectContainer,
+    signalsByTicket,
+    records,
+    titledChatSessions,
+    lastOutputAt,
+    parkState,
+    harness,
+    statusEnteredAt,
+    sessionProvenance,
+    unread,
+    filter,
+    listingNow,
+  ]);
+  heldPrevious.current = listing.previous;
 
   /**
    * The Active band's held order (D7).
@@ -1068,12 +1108,23 @@ export function ActiveSessions({
    * `data-peek-row`), and so are its ports: opening one has to reach the same
    * `activate` a click does, which takes the listing row itself.
    */
-  const listingRows = React.useMemo(() => {
-    const rows = new Map<string, ActiveSessionRow | PreviousSessionRow>();
-    for (const row of activeRows) rows.set(row.id, row);
-    for (const row of listing.previous) rows.set(row.id, row);
-    return rows;
-  }, [activeRows, listing.previous]);
+  const activeRowsById = React.useMemo(
+    () => new Map(activeRows.map((row) => [row.id, row])),
+    [activeRows],
+  );
+  // Indexed on its own (VC-1078): Previous is the band with thousands of rows,
+  // and `holdPreviousRows` keeps its identity through every rebuild that does
+  // not move it, so an Active row ticking does not re-index the whole roster.
+  const previousRowsById = React.useMemo(
+    () => new Map(listing.previous.map((row) => [row.id, row])),
+    [listing.previous],
+  );
+  /** A Previous row wins a shared id, as it did when the two were one map. */
+  const listingRowOf = React.useCallback(
+    (rowId: string): ActiveSessionRow | PreviousSessionRow | undefined =>
+      previousRowsById.get(rowId) ?? activeRowsById.get(rowId),
+    [activeRowsById, previousRowsById],
+  );
 
   /** Which model a chat Session runs — the provider its mark is drawn from (D4). */
   const chatModels = React.useMemo(() => {
@@ -1095,30 +1146,42 @@ export function ActiveSessions({
        */
       source?: string;
     }): SessionRowVendor => {
-      if (row.kind !== "chat") return sessionRowVendor(row);
+      if (row.kind !== "chat") {
+        return internedVendor(`terminal\u0000${row.harnessId ?? ""}\u0000${row.source ?? ""}`, () =>
+          sessionRowVendor(row),
+        );
+      }
       const sessionId = peekSessionId(row.id);
       const model = sessionId === null ? null : (chatModels.get(sessionId) ?? null);
-      if (model === null) return sessionRowVendor(row);
+      if (model === null) return internedVendor("chat", () => sessionRowVendor(row));
       // The provider's own id is the label. There is no catalog to ask here —
       // `providerLabelOf` needs the model-access client, which this band does
       // not hold — and the id IS that function's own fallback, so the mark
       // names the vendor rather than inventing a display name for it.
-      return { providerId: model.providerId, providerLabel: model.providerId };
+      return internedVendor(`model\u0000${model.providerId}`, () => ({
+        providerId: model.providerId,
+        providerLabel: model.providerId,
+      }));
     },
     [chatModels],
   );
 
-  /** What the card needs about a row, for both bands and for a folder's Sessions. */
-  const peekRows = React.useMemo(() => {
-    const rows = new Map<string, SessionPeekRow>();
-    const add = (
+  /**
+   * What the card needs about a row, for both bands and for a folder's
+   * Sessions — answered on demand and remembered for as long as its inputs
+   * hold (VC-1078). It used to be a map built over every row of both bands on
+   * every rebuild, thousands of entries for the handful a card ever asks about.
+   */
+  const rowOf = React.useMemo(() => {
+    const answered = new Map<string, SessionPeekRow | undefined>();
+    const peekRowOf = (
       row: ActiveSessionRow | PreviousSessionRow,
       kind: "chat" | "terminal",
       state: ReturnType<typeof sessionActivityDotState> | null,
       at: number | null,
-    ): void => {
+    ): SessionPeekRow | undefined => {
       const sessionId = peekSessionId(row.id);
-      if (sessionId === null) return;
+      if (sessionId === null) return undefined;
       // …with the row's own source where it has one, so a Session's card and
       // its row cannot name the same shell two different things.
       const vendor = vendorOf({
@@ -1127,7 +1190,7 @@ export function ActiveSessions({
         harnessId: row.harnessId,
         ...("source" in row ? { source: row.source } : {}),
       });
-      rows.set(row.id, {
+      return {
         rowId: row.id,
         sessionId,
         title: row.title,
@@ -1140,26 +1203,34 @@ export function ActiveSessions({
         unread: unread.has(sessionId),
         model: chatModels.get(sessionId) ?? null,
         provenance: row.provenance,
-      });
+      };
     };
-    for (const row of activeRows) {
-      add(
-        row,
-        row.target?.kind === "chat" ? "chat" : "terminal",
-        sessionActivityDotState(row.activity, { attention: row.attention !== null }),
-        row.lastActivityAt,
+    const answer = (rowId: string): SessionPeekRow | undefined => {
+      const previous = previousRowsById.get(rowId);
+      if (previous !== undefined) {
+        return peekRowOf(
+          previous,
+          previous.kind,
+          previous.activity === "interrupted" ? "interrupted" : "idle",
+          previous.endedOrQuietAt > 0 ? previous.endedOrQuietAt : null,
+        );
+      }
+      const active = activeRowsById.get(rowId);
+      if (active === undefined) return undefined;
+      return peekRowOf(
+        active,
+        active.target?.kind === "chat" ? "chat" : "terminal",
+        sessionActivityDotState(active.activity, { attention: active.attention !== null }),
+        active.lastActivityAt,
       );
-    }
-    for (const row of listing.previous) {
-      add(
-        row,
-        row.kind,
-        row.activity === "interrupted" ? "interrupted" : "idle",
-        row.endedOrQuietAt > 0 ? row.endedOrQuietAt : null,
-      );
-    }
-    return rows;
-  }, [activeRows, chatModels, listing.previous, unread, vendorOf]);
+    };
+    return (rowId: string): SessionPeekRow | undefined => {
+      if (answered.has(rowId)) return answered.get(rowId);
+      const row = answer(rowId);
+      answered.set(rowId, row);
+      return row;
+    };
+  }, [activeRowsById, chatModels, previousRowsById, unread, vendorOf]);
 
   /**
    * The band's own keyboard order and its folders (D8), from what it is about
@@ -1217,7 +1288,7 @@ export function ActiveSessions({
         // Activation ALONE: the port adds the read, so a row opened from its
         // card and a row clicked in the band cannot disagree about it.
         openRow(rowId) {
-          const row = listingRows.get(rowId);
+          const row = listingRowOf(rowId);
           if (row !== undefined) activate(row);
         },
         openTicket(ticketId) {
@@ -1230,10 +1301,9 @@ export function ActiveSessions({
           void setSessionRead(project.id, sessionId, nowUnread);
         },
       }),
-    [activate, listingRows, openTicketView, project.id, setSessionRead],
+    [activate, listingRowOf, openTicketView, project.id, setSessionRead],
   );
 
-  const rowOf = React.useCallback((rowId: string) => peekRows.get(rowId), [peekRows]);
   const ticketOf = React.useCallback(
     (ticketId: string) => tickets.find((candidate) => candidate.id === ticketId),
     [tickets],
