@@ -101,6 +101,11 @@ const SECOND_ROW = `[data-testid="ticket-files-row"][data-path="${SECOND_FILE}"]
  * Visible cells only, in reading order. A shown group's cell draws its OWN
  * strip (its stack, front selected); the one full-width cell draws none, and
  * then holds the top strip's selected tab.
+ *
+ * "Visible" is meant literally: while a Ticket view has taken Home over, Home's
+ * own plane stays mounted behind `<Activity mode="hidden">` (VC-1080) — its
+ * grid, its `root` cell and all — so a document-wide read would see that
+ * hidden plane's cells beside the ticket's (VC-1102).
  */
 function readPanes(page) {
   return page.evaluate(() => {
@@ -108,6 +113,7 @@ function readPanes(page) {
       '[data-slot="split-view-tab-bar"] [role="tab"][aria-selected="true"]',
     );
     return Array.from(document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]'))
+      .filter((cell) => cell.checkVisibility())
       .toSorted((first, second) => {
         const a = first.getBoundingClientRect();
         const b = second.getBoundingClientRect();
@@ -152,11 +158,14 @@ function readPanes(page) {
 async function hasOneTopStrip(page, label = "Ticket tabs") {
   return page.evaluate((name) => {
     const bars = document.querySelectorAll('[data-slot="split-view-tab-bar"]');
-    const cells = document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]');
-    const stripped = Array.from(cells).filter(
+    // The plane in front only — Home's hidden one stays mounted (see readPanes).
+    const cells = Array.from(
+      document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]'),
+    ).filter((cell) => cell.checkVisibility());
+    const stripped = cells.filter(
       (cell) => cell.querySelector(':scope > [data-slot="tab-strip"]') !== null,
     ).length;
-    const empties = Array.from(cells).filter(
+    const empties = cells.filter(
       (cell) => cell.querySelector('[data-slot="pane-empty-state"]') !== null,
     ).length;
     return (
@@ -208,7 +217,7 @@ function topTabAny(page, label) {
  */
 async function draggableTab(page, label) {
   const inPane = page
-    .locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]')
+    .locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]:visible')
     .getByRole("tab", { name: label, exact: true })
     .first();
   return (await inPane.count()) > 0 ? inPane : topTab(page, label);
@@ -315,7 +324,7 @@ function readFocus(page) {
 /** A menu row inside the focused (empty) pane. */
 function paneMenuRow(page, label) {
   return page.locator(
-    `[data-slot="split-view-pane"][data-focused="true"] [data-slot="pane-empty-row"][aria-label="${label}"]`,
+    `[data-slot="split-view-pane"][data-focused="true"] [data-slot="pane-empty-row"][aria-label="${label}"]:visible`,
   );
 }
 
@@ -405,7 +414,7 @@ function readSurfaceStrip(page) {
 /** The box of one pane cell, as the pointer sees it. */
 async function paneBox(page, paneId) {
   const box = await page
-    .locator(`[data-slot="split-view-pane"][data-pane-id="${paneId}"]`)
+    .locator(`[data-slot="split-view-pane"][data-pane-id="${paneId}"]:visible`)
     .first()
     .boundingBox();
   if (box === null) throw new Error(`no bounding box for pane ${paneId}`);
@@ -843,7 +852,7 @@ async function main() {
         // The zones are a render away from the announcement, not a tick.
         await waitUntil(
           "the panes to offer their zones",
-          async () => (await page.locator('[data-slot="split-drop-zones"]').count()) > 0,
+          async () => (await page.locator('[data-slot="split-drop-zones"]:visible').count()) > 0,
           { timeout: 4000 },
         );
 
