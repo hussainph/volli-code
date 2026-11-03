@@ -247,8 +247,12 @@ function V2Row({
   const expandable = Boolean(output && !error);
   const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
   const open = userOpen ?? (running && Boolean(output));
-  const lines = output?.split("\n") ?? [];
-  const hidden = Math.max(0, lines.length - 6);
+  const outputRef = React.useRef<HTMLPreElement>(null);
+  const followTail = React.useRef(true);
+  React.useLayoutEffect(() => {
+    const element = outputRef.current;
+    if (running && followTail.current && element) element.scrollTop = element.scrollHeight;
+  }, [open, output, running]);
   const meta = liveSeconds !== undefined && running ? `${liveSeconds}s` : row.meta;
   return (
     <div className="min-w-0 text-ui">
@@ -300,17 +304,17 @@ function V2Row({
         </pre>
       ) : null}
       {open && output && !error ? (
-        <div className="ml-6">
-          <pre className="max-h-48 overflow-auto rounded-md border border-border bg-muted/30 p-2 font-mono text-ui whitespace-pre-wrap">
-            {lines.slice(-6).join("\n")}
-          </pre>
-          {hidden ? (
-            <div className="py-1 text-muted-foreground">
-              +{hidden} {hidden === 1 ? "line" : "lines"} · model saw{" "}
-              {part.toolCallId === longOutput.toolCallId ? "less" : "all"}
-            </div>
-          ) : null}
-        </div>
+        <pre
+          ref={outputRef}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            followTail.current =
+              element.scrollHeight - element.scrollTop - element.clientHeight <= 1;
+          }}
+          className="ml-6 max-h-48 overflow-auto rounded-md border border-border bg-muted/30 p-2 font-mono text-ui whitespace-pre-wrap"
+        >
+          {output}
+        </pre>
       ) : null}
     </div>
   );
