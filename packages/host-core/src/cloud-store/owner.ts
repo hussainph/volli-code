@@ -222,7 +222,12 @@ function sessionReader(engine: SessionEngine, ledger: SessionLedger): SessionRea
     const projections: SessionListingProjection[] = [];
     for (let index = 0; index < sessions.length; index += 1) {
       if (index > 0 && index % SESSION_LISTING_FOLD_CHUNK === 0) await setImmediate();
-      const projection = await engine.getSessionListing({ sessionId: sessions[index]!.id });
+      // The old scoped listing was read-only. Building its in-memory cache
+      // must not add one checkpoint write/commit per cold Session to main.
+      const projection = await engine.getSessionListing({
+        sessionId: sessions[index]!.id,
+        persistCheckpoint: false,
+      });
       if (projection !== null) projections.push(projection);
     }
     return projections;

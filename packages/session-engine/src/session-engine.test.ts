@@ -5249,6 +5249,18 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
 });
 
 describe("getSessionListing: one Session's listing row (VC-1101)", () => {
+  it("can build the shared listing cache without cold-path checkpoint writes", async () => {
+    const { plane, ledger } = composition();
+    const { session } = await plane.createSession(createRequest("read-only-listing"));
+    const query = { sessionId: session.id, persistCheckpoint: false };
+    expect(await ledger.transaction((tx) => tx.getProjectionCheckpoint(session.id))).toBeNull();
+    const first = await plane.getSessionListing(query);
+    expect(first?.session.id).toBe(session.id);
+    expect(await plane.getSessionListing(query)).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(await ledger.transaction((tx) => tx.getProjectionCheckpoint(session.id))).toBeNull();
+  });
+
   it("answers the row a listing folds, from the same cache, until the log moves", async () => {
     const { plane } = composition();
     const created = await plane.createSession(createRequest("command-one-row"));

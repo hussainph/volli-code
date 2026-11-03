@@ -159,8 +159,14 @@ export interface SessionEngine {
    * What comes back is deep-frozen and shared, exactly as a listing's rows,
    * and like a listing (unlike `getSession`) a fold it had to do is written
    * back to the durable checkpoint (VC-1076), so the next read is a hit.
+   * Bulk scoped readers may set `persistCheckpoint: false` to build the same
+   * in-memory listing cache without adding cold-path writes; the normal fact
+   * cadence still persists checkpoints. This keeps their first listing as
+   * read-only as the full-projection reads they replace.
    */
-  getSessionListing(query: GetSessionQuery): Promise<SessionListingProjection | null>;
+  getSessionListing(
+    query: GetSessionQuery & { readonly persistCheckpoint?: boolean },
+  ): Promise<SessionListingProjection | null>;
   /**
    * Every Session in scope, projected — each row without its command and
    * receipt history (VC-848), which `getSession` keeps.
@@ -338,12 +344,14 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const loadStored = (
     transaction: SessionLedgerTransaction,
     session: Session,
+    knownHead?: number,
   ): { stored: StoredSessionProjection; shared: boolean } => {
     const hot = hotCheckpoints.get(session.id);
     if (
       hot !== undefined &&
       sameSession(hot.session, session) &&
-      hot.stored.checkpoint.throughSequence === transaction.latestEventSequence(session.id)
+      hot.stored.checkpoint.throughSequence ===
+        (knownHead ?? transaction.latestEventSequence(session.id))
     ) {
       hotCheckpoints.delete(session.id);
       hotCheckpoints.set(session.id, hot);
@@ -470,6 +478,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const listingProjection = (
     transaction: SessionLedgerTransaction,
     session: Session,
+    persistCheckpoint = true,
   ): SessionListingProjection => {
     // Metadata only: no payload decoded, no provenance joined, no checkpoint
     // JSON parsed. That is what makes asking cheaper than answering.
@@ -480,8 +489,10 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       listingFolds.set(session.id, cached);
       return cached.projection;
     }
-    const { stored, shared } = loadStored(transaction, session);
-    if (!shared) persistReadFold(transaction, stored, reportCheckpointFailure);
+    // The head above was read in this transaction; reuse it for the hot
+    // checkpoint check instead of seeking the same metadata twice on a miss.
+    const { stored, shared } = loadStored(transaction, session, head);
+    if (!shared && persistCheckpoint) persistReadFold(transaction, stored, reportCheckpointFailure);
     const projection = frozenListingCopy(stored.checkpoint.projection);
     // Same rule as the hot checkpoints: a fold read inside a caller's outer
     // transaction may include that transaction's uncommitted appends.
@@ -1107,7 +1118,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async getSessionListing(query) {
       const projection = await ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
-        return session ? listingProjection(transaction, session) : null;
+        return session ? listingProjection(transaction, session, query.persistCheckpoint) : null;
       });
       // One row, not a scan: trimming now cannot evict a row this read needs.
       evictListingFolds();

@@ -144,7 +144,9 @@ describe("Session owner views", () => {
           });
         return pointRead(query);
       });
+      const changesBefore = f.db.prepare("SELECT total_changes() AS n").get();
       const first = await engine.listSessions({ projectId: "p", scope: "ticket", ticketId: "t" });
+      expect(f.db.prepare("SELECT total_changes() AS n").get()).toEqual(changesBefore);
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(maxConsecutiveReads).toBeLessThanOrEqual(8);
       const again = await engine.listSessions({ projectId: "p", scope: "all" });
@@ -157,7 +159,9 @@ describe("Session owner views", () => {
       expect(countRead.mock.calls).toEqual(
         Array.from({ length: 3 }, () => [{ projectId: "p", scope: "all" }]),
       );
-      expect(listingRead).not.toHaveBeenCalledWith({ sessionId: foreign.session.id });
+      expect(listingRead).not.toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: foreign.session.id }),
+      );
       expect(again[0]).toBe(first[0]);
       expect(first[0]).not.toHaveProperty("commands");
       expect(first[0]).not.toHaveProperty("receipts");
@@ -549,7 +553,9 @@ describe("Session owner views", () => {
       }),
     ).rejects.toBeInstanceOf(SessionOwnerError);
     expect(read).not.toHaveBeenCalledWith({ sessionId: restored.session.id });
-    expect(listingRead).not.toHaveBeenCalledWith({ sessionId: restored.session.id });
+    expect(listingRead).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: restored.session.id }),
+    );
     expect(f.a.projectIds()).toEqual([]);
   });
 
@@ -589,7 +595,9 @@ describe("Session owner views", () => {
     expect((await f.a.engine.reportUsage({ scope: { kind: "all" } })).total.knownCostUsd).toBe(3);
     expect(await f.a.engine.getBaseSession({ sessionId: foreign.session.id })).toBeNull();
     expect(read).not.toHaveBeenCalledWith({ sessionId: foreign.session.id });
-    expect(listingRead).not.toHaveBeenCalledWith({ sessionId: foreign.session.id });
+    expect(listingRead).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: foreign.session.id }),
+    );
     await expect(
       f.a.engine.submit({
         commandId: "foreign-write",
