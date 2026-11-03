@@ -88,9 +88,9 @@ const opencode = (weekly: number): ModelAccessProvider =>
     limits(win("weekly", "weekly", "Weekly", weekly, 4 * DAY, 10_080)),
   );
 
-/** The one metered account with no mark of its own. */
-const xai = (weekly: number): ModelAccessProvider =>
-  provider("xai", "xAI", limits(win("weekly", "weekly", "Weekly", weekly, 4 * DAY, 10_080)));
+/** A metered account whose provider has no mark of its own. */
+const unmarked = (weekly: number): ModelAccessProvider =>
+  provider("radius", "Radius", limits(win("weekly", "weekly", "Weekly", weekly, 4 * DAY, 10_080)));
 
 let container: HTMLElement | null = null;
 let root: Root | null = null;
@@ -202,9 +202,9 @@ describe("UsageLimitsIcon", () => {
     expect(quietRing(host).present).toBe(false);
   });
 
-  it("falls back to a bare letter for the one provider with no mark", async () => {
-    const host = await read(xai(53));
-    expect(figures(host)).toContain("X");
+  it("falls back to a bare letter for a provider with no mark", async () => {
+    const host = await read(unmarked(53));
+    expect(figures(host)).toContain("R");
   });
 
   it("draws OpenCode's own mark, which a round letter could not stand in for", async () => {

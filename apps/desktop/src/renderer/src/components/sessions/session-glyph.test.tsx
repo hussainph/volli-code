@@ -108,7 +108,9 @@ describe("the name and the logo", () => {
 
   it("draws a provider with no mark of its own as its lettermark", () => {
     // `ModelMark`'s fallback, reached through us: the initial of the label.
-    expect(markup({ state: "idle", providerId: "xai", providerLabel: "xAI" })).toContain(">X<");
+    expect(markup({ state: "idle", providerId: "radius", providerLabel: "Radius" })).toContain(
+      ">R<",
+    );
   });
 });
 
