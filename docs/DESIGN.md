@@ -384,7 +384,9 @@ and moving re-anchor them without remounting.
 splitting the chat's pane when the chat is already grouped. The Activity Island
 lists page titles over host:port and path; it does not embed a thumbnail or a
 pinned preview, and **Show tab** only selects. A close removes the row
-immediately and offers Undo before native destruction.
+immediately and offers Undo before native destruction. **Hide to Island**
+(`ArrowSquareIn`, the Island's reveal glyph turned inward) ends a Session tab's
+address row and sends it back headless; a person's own tab never shows it.
 
 `⌘\` / `⇧⌘\` split the focused pane (a full-width tab becomes a group of two)
 and open an empty pane whose menu offers New chat, New terminal, New browser,

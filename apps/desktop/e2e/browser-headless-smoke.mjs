@@ -1,7 +1,7 @@
 /**
  * Acceptance smoke for headless agent Browser Tabs (VC-238, driven from the
  * Activity Island since VC-268), against the BUILT app:
- * headless → open beside chat → close/Undo → show and group → close.
+ * headless → open beside chat → close/Undo → show and group → hide → close.
  *
  * A Session-owned tab is born headless — in no strip, attached to no window —
  * and the only place a person sees it is the chat that owns it: the island
@@ -20,7 +20,9 @@
  *   4. Show tab SELECTS it — full width while it is ordinary, never pulled into
  *      a group. A tab-edge drop onto the person's tab groups the two browsers,
  *      attaching both native views together, and Show tab then shows that
- *      group. The compatibility hide bridge still preserves agent state;
+ *      group. Hide to Island, in the browser's own chrome (VC-1118), takes it
+ *      back out of the strip and its group, headless with its page and owner,
+ *      and the Island offers Open beside chat again, which brings it back;
  *   5. Close removes the row immediately, destroys the tab after five seconds,
  *      and leaves the other Session's tab and the person's tab alone.
  *
@@ -154,6 +156,14 @@ async function showBeside(page, tabId, label) {
   if (label === "Show tab") await row.click();
   else await reveal.click();
   await page.keyboard.press("Escape");
+}
+
+/** The reveal the tab's Island row offers right now, read from a pinned card. */
+async function islandRevealLabel(page, tabId) {
+  const row = await pinTabsCard(page, tabId);
+  const label = await row.getAttribute("aria-label");
+  await page.keyboard.press("Escape");
+  return label;
 }
 
 /** Close hides immediately, offers Undo, and destroys only after that window. */
@@ -501,7 +511,7 @@ async function main() {
 
   await must(
     4,
-    "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; hiding keeps ownership",
+    "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; Hide to Island takes it out of the strip and group, and Open beside chat brings it back",
     async () => {
       await selectStripTab(page, chatStripTabAny(page, sessionId));
       const groupId = await activeGroup(page).getAttribute("data-group-id");
@@ -561,21 +571,46 @@ async function main() {
           : null,
       );
       const before = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
-      // Hide is no longer a miniature-preview control. Retain its compatibility
-      // bridge assertion separately from the person's reversible Close journey.
-      const hidden = await page.evaluate(
-        (tabId) => window.api.browser.setPresentation({ tabId, presentation: "headless" }),
-        agentTabId,
+      const panesBefore = await page.locator('[data-slot="split-view-pane"][data-pane-id]').count();
+      // The way back (VC-1118): the agent's own chrome, and only the agent's —
+      // the person's browser beside it offers no such control.
+      const hide = page.getByRole("button", { name: "Hide to Island", exact: true });
+      const hideControls = await hide.count();
+      await hide.click();
+      const mine = await waitUntil(
+        "the tab to leave the strip and its group and return headless",
+        async () => {
+          const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
+          const attached = await attachedViews(app);
+          return found?.presentation === "headless" &&
+            (await browserStripTabs(page).count()) === 1 &&
+            (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) ===
+              panesBefore - 1 &&
+            !attached.includes(agentUrl) &&
+            attached.includes(personUrl)
+            ? found
+            : null;
+        },
       );
-      if (!hidden.ok) throw new Error(hidden.error);
-      const mine = await waitUntil("the tab to leave the strip and return headless", async () => {
-        const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
-        return found?.presentation === "headless" &&
-          (await browserStripTabs(page).count()) === 1 &&
-          !(await attachedViews(app)).includes(agentUrl)
-          ? found
-          : null;
-      });
+      // The group it left is still the one on screen, chat and all, so the
+      // Island above the chat lists the tab again with its first reveal.
+      const offered = await islandRevealLabel(page, agentTabId);
+      await showBeside(page, agentTabId, "Open beside chat");
+      const back = await waitUntil(
+        "Open beside chat to bring the hidden tab back beside its chat",
+        async () => {
+          const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
+          return found?.presentation === "tab" &&
+            (await attachedViews(app)).includes(agentUrl) &&
+            (await browserStripTabs(page).count()) === 2 &&
+            (await activeGroup(page)
+              .locator(`[data-pair-target-id="chat:${sessionId}"]`)
+              .count()) === 1
+            ? found
+            : null;
+        },
+        { timeout: 20000 },
+      );
       return {
         ok:
           grouped !== false &&
@@ -583,11 +618,15 @@ async function main() {
           groupId !== null &&
           groupId === reusedGroupId &&
           marks.toSorted().join(",") === "session,user" &&
+          hideControls === 1 &&
           mine.ownerSessionId === sessionId &&
           mine.generation === before.generation &&
           mine.url === before.url &&
+          offered === "Open beside chat: Agent Fixture" &&
+          back.ownerSessionId === sessionId &&
+          back.generation === before.generation &&
           (await preview(page).count()) === 0,
-        detail: `grouped=${grouped} selected=${selected} marks=${JSON.stringify(marks)} reusedGroup=${groupId === reusedGroupId} both=${JSON.stringify(both)} presentation=${mine.presentation}`,
+        detail: `grouped=${grouped} selected=${selected} marks=${JSON.stringify(marks)} reusedGroup=${groupId === reusedGroupId} both=${JSON.stringify(both)} hideControls=${hideControls} presentation=${mine.presentation} offered=${JSON.stringify(offered)} back=${back.presentation}`,
       };
     },
   );
