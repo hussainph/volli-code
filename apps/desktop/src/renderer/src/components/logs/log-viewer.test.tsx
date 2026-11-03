@@ -115,7 +115,7 @@ describe("the dev log viewer", () => {
       ).click(),
     );
     expect(container.querySelector("pre")?.textContent).toContain(TRACE);
-    // Source and component remain inspectable when their columns fold away.
+    // The disclosure carries source and component in full, wherever they truncate.
     expect(container.querySelector("pre")?.textContent).toContain('"source": "This Mac"');
     expect(container.querySelector("pre")?.textContent).toContain('"component": "rpc"');
     act(() =>
@@ -123,6 +123,51 @@ describe("the dev log viewer", () => {
     );
     expect(rows()).toHaveLength(3);
     act(() => unregister());
+  });
+
+  it("searches through one named field, and folds source and component under a narrow row", () => {
+    const mac = fakeSource("this-mac", "This Mac");
+    const box = fakeSource("box", "Box");
+    const unregister = registerRemoteLogSource(box.source);
+    act(() => root.render(<LogViewer local={mac.source} />));
+    mac.push([entry(1, "2026-10-07T00:00:01.000Z", { component: "rpc", msg: "rpc call" })]);
+    box.push([entry(2, "2026-10-07T00:00:02.000Z", { component: "hostd", msg: "serving" })]);
+    settle();
+
+    // The one search field carries its own accessible name, not just a placeholder.
+    const search = container.querySelectorAll<HTMLInputElement>('input[aria-label="Search logs"]');
+    expect(search).toHaveLength(1);
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => {
+      setValue.call(search[0], "serving");
+      search[0]!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(rows()).toHaveLength(1);
+
+    // The row names its machine and component even where their columns fold
+    // away (container queries do not apply here, so both copies are present;
+    // each hides at the width where its own column shows).
+    const row = container.querySelector('[data-testid="log-row"]')!;
+    const folded = row.querySelector(".col-span-full > span")!;
+    expect(folded.className).toContain("@4xl/logs:hidden");
+    expect(folded.textContent).toBe("Boxhostd");
+    const foldedComponent = folded.querySelector("button")!;
+    expect(foldedComponent.className).toContain("@2xl/logs:hidden");
+    act(() => foldedComponent.click());
+    expect(button("component: hostd")).toBeDefined();
+
+    // One machine: the source buttons already say whose lines these are, so
+    // a narrow row folds only its component.
+    act(() => unregister());
+    act(() =>
+      (container.querySelector('[aria-label="Clear filters"]') as HTMLButtonElement).click(),
+    );
+    const rpc = [...container.querySelectorAll('[data-testid="log-row"]')].find((candidate) =>
+      candidate.textContent?.includes("rpc call"),
+    )!;
+    const only = rpc.querySelector(".col-span-full > span")!;
+    expect(only.className).toContain("@2xl/logs:hidden");
+    expect(only.textContent).toBe("rpc");
   });
 
   it("pauses the view while lines keep arriving, and says a source failed", () => {

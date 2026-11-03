@@ -213,11 +213,14 @@ function LogRow({
   line,
   sourceLabel,
   showSource,
+  foldSource,
   onFilter,
 }: {
   line: ViewerLine;
   sourceLabel: string;
   showSource: boolean;
+  /** Name the machine under a narrow row: only when the stream holds more than one. */
+  foldSource: boolean;
   onFilter(field: "traceId" | "sessionId" | "ticketId" | "component", value: string): void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -259,6 +262,31 @@ function LogRow({
           {record.msg}
         </button>
         <span className="col-span-full flex flex-wrap gap-1">
+          {/* A narrow pane folds the Component and Source columns under the
+              message instead of dropping them: in a stream that interleaves
+              several machines, a line that no longer names its machine (or
+              its component) is ambiguous. Each folded value hides at the width
+              where its own column appears, so a row says each once. */}
+          <span
+            className={cn(
+              "mr-1 flex min-w-0 items-baseline gap-2 text-label text-muted-foreground",
+              foldSource ? "@4xl/logs:hidden" : "@2xl/logs:hidden",
+            )}
+          >
+            {foldSource ? (
+              <span className="truncate" title={sourceLabel}>
+                {sourceLabel}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="truncate text-left hover:text-foreground @2xl/logs:hidden"
+              title={record.component}
+              onClick={() => onFilter("component", record.component)}
+            >
+              {record.component}
+            </button>
+          </span>
           {ROW_ID_FIELDS.map((field) => {
             const value = record[field];
             if (typeof value !== "string") return null;
@@ -284,7 +312,7 @@ function LogRow({
         <pre className="overflow-x-auto bg-muted/30 px-2 py-1 whitespace-pre-wrap text-muted-foreground">
           {JSON.stringify(
             {
-              // Narrow panes fold these columns away; the disclosure keeps
+              // A column or its folded line can truncate; the disclosure keeps
               // their full values available alongside the record's fields.
               ...(showSource ? { source: sourceLabel } : {}),
               component: record.component,
@@ -331,6 +359,7 @@ function LogRows({
             line={line}
             sourceLabel={labels.get(line.source) ?? line.source}
             showSource={showSource}
+            foldSource={showSource && labels.size > 1}
             onFilter={onFilter}
           />
         ))}
