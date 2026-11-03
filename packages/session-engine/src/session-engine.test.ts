@@ -2044,12 +2044,14 @@ describe("SessionEngine creation and explicit commands", () => {
       const rowReads: string[] = [];
       let rollBackNext = false;
       let ticketDeleted = false;
+      let enclosed = false;
       const ledger: SessionLedger = {
         transaction: (work) =>
           stored.transaction((transaction) => {
             const value = work(
               new Proxy(transaction, {
                 get(target, property, receiver) {
+                  if (property === "enclosed") return enclosed;
                   if (property === "getProjectionCheckpoint") {
                     return (sessionId: string) => {
                       rowReads.push(sessionId);
@@ -2083,6 +2085,9 @@ describe("SessionEngine creation and explicit commands", () => {
         },
         deleteTicket: () => {
           ticketDeleted = true;
+        },
+        enclose: (value: boolean) => {
+          enclosed = value;
         },
       };
     }
@@ -2159,6 +2164,36 @@ describe("SessionEngine creation and explicit commands", () => {
         id: "native-2",
         detail: null,
       });
+    });
+
+    // An enclosed transaction settles before its caller's outer transaction
+    // decides, so nothing it read or wrote may be remembered as committed
+    // (VC-1098). host-core's SQLite suite rolls a real outer transaction back.
+    it("remembers nothing from an enclosed transaction", async () => {
+      const { plane, rowReads, enclose } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-enclosed");
+      await fact();
+      enclose(true);
+      await fact();
+      enclose(false);
+      rowReads.length = 0;
+      await fact();
+      // The enclosed fact moved the head past the hot entry and left none of
+      // its own, so this fact had to read the durable row.
+      expect(rowReads).toEqual([session.id]);
+
+      // Writing the row drops the hot entry without moving the head, so a
+      // listing fold must read the row, and a kept listing fold would answer.
+      const events = await plane.listEvents({ sessionId: session.id });
+      await plane.saveProjectionCheckpoint(createSessionProjectionCheckpoint(session, events));
+      enclose(true);
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      enclose(false);
+      rowReads.length = 0;
+      // The enclosed listing kept no fold, so this one folds again.
+      const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(rowReads).toEqual([session.id]);
+      expect(row).toEqual(withoutHistory(await plane.getSession({ sessionId: session.id })));
     });
 
     it("misses when another verb appended, the base row moved, or the row was replaced", async () => {

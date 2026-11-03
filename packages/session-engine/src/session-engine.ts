@@ -468,6 +468,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     const { stored, shared } = loadStored(transaction, session);
     if (!shared) persistReadFold(transaction, stored, reportCheckpointFailure);
     const projection = frozenListingCopy(stored.checkpoint.projection);
+    // Same rule as the hot checkpoints: a fold read inside a caller's outer
+    // transaction may include that transaction's uncommitted appends.
+    if (transaction.enclosed === true) return projection;
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
     return projection;
@@ -653,7 +656,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async observe(observation) {
       let hot: HotCheckpoint | null = null;
+      let enclosed = false;
       const recorded = await ports.ledger.transaction((transaction) => {
+        enclosed = transaction.enclosed === true;
         const session = transaction.getSession(observation.sessionId);
         if (!session) throw new SessionEngineNotFoundError(observation.sessionId);
         // No whole-log read here (VC-356). Recording one fact used to list every
@@ -824,7 +829,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         return event;
       });
       // Committed: only now may the advanced checkpoint answer a later read.
-      if (hot !== null) rememberHotCheckpoint(hot);
+      // An enclosed transaction has not committed when it settles: the
+      // caller's outer transaction can still roll the fact back, and a hot
+      // entry at its cursor would then answer for whatever fact reaches that
+      // sequence next (VC-1098). Skipping it costs one durable-row read.
+      if (hot !== null && !enclosed) rememberHotCheckpoint(hot);
       return recorded;
     },
 
