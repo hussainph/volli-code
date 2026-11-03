@@ -346,8 +346,8 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
       .map(([kind, parts]) => kindPhrase(kind, parts))
       .join(", ")
       .replace(/^./, (character) => character.toUpperCase());
-    const streaming = tools.some((row) => isRowActive(row.part));
-    segments.push({ text: streaming ? `${phrase}…` : phrase, tone: "neutral" });
+    // In progress is the header's spinner to say, never trailing punctuation.
+    segments.push({ text: phrase, tone: "neutral" });
   }
 
   const failed = tools.filter((row) => row.part.state === "output-error").length;
@@ -1120,11 +1120,23 @@ export function splitPath(value: string): { directory: string; basename: string 
 
 /* ---------------------------------------------------------------- reasoning */
 
-// Anchored to the part, not to any line: a provider emits one summary per
-// reasoning part (OpenAI gives each `summary_index` its own part), so the
-// promotable header is always at position zero. With the `m` flag this promoted
-// whatever bold phrase happened to open a later line mid-thought.
+// Pi joins OpenAI's successive summaries into one reasoning channel. Only a
+// thought that starts with a summary heading opts in: ordinary bold emphasis
+// elsewhere must not become a status. A complete standalone paragraph heading
+// advances the status; an unfinished heading keeps the last complete one.
 const FIRST_BOLD = /^\s*\*\*([^*\n]+)\*\*/;
+const SUMMARY_HEADING = /(?:^|\n\s*\n)\s*\*\*([^*\n]+)\*\*(?=\s*(?:\n|$))/g;
+
+function latestReasoningHeading(text: string): string | null {
+  const first = FIRST_BOLD.exec(text)?.[1]?.trim();
+  if (!first) return null;
+  let heading = first;
+  for (const match of text.matchAll(SUMMARY_HEADING)) {
+    const candidate = match[1]?.trim();
+    if (candidate) heading = candidate;
+  }
+  return heading;
+}
 
 export interface ReasoningStatus {
   verb: string;
@@ -1152,14 +1164,13 @@ export function reasoningStatus(
 ): ReasoningStatus {
   // `??` would keep a blank capture: `**  **` trims to "" and renders a status
   // line with a duration and no words at all.
-  const matched = FIRST_BOLD.exec(text)?.[1]?.trim();
-  const header = matched !== undefined && matched.length > 0 ? matched : null;
+  const header = latestReasoningHeading(text);
   const elapsed = notableDuration(options.durationMs ?? null);
   // A live thought carries no number. Its duration is not known yet, and a
   // counter pinned beside a verb that is still being written is exactly the
   // layout fight the reference apps document avoiding — the number is a receipt
   // for a finished thought, not a progress bar for a running one.
-  if (options.streaming) return { verb: header ?? "Thinking…", meta: null };
+  if (options.streaming) return { verb: header ?? "Thinking", meta: null };
   if (header) return { verb: header, meta: elapsed };
   return { verb: elapsed ? `Thought for ${elapsed}` : "Thought", meta: null };
 }

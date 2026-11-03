@@ -2493,7 +2493,10 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       // is the progress the reader actually sees.
       const summary = container?.querySelector(".is-assistant button[aria-expanded]");
       expect(summary).not.toBeNull();
-      expect(summary?.textContent).toContain("…");
+      // In flight wears the shared spinner beside the count, never an ellipsis.
+      expect(summary?.textContent).toContain("Using 1 tool");
+      expect(summary?.textContent).not.toContain("…");
+      expect(summary?.querySelector("svg.animate-spin")).not.toBeNull();
       expectMark(status, true);
 
       // The provider leaves the old thought marked streaming. Segmentation,
