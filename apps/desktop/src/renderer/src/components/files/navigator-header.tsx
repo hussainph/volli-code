@@ -88,8 +88,8 @@ export function FilesNavigatorHeader({
     >
       <div className="flex min-h-7 items-center gap-1">
         {cwd === "" ? (
-          <span className="flex min-w-0 flex-1 items-center gap-1 font-mono text-ui text-muted-foreground">
-            <FolderOpenIcon aria-hidden className="size-3 shrink-0" />
+          <span className="flex min-w-0 flex-1 items-center gap-1 text-ui font-medium text-foreground">
+            <FolderOpenIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
             <span className="truncate">{root}</span>
           </span>
         ) : (

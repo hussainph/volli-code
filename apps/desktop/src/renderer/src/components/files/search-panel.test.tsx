@@ -100,6 +100,13 @@ function rows(selector: string): Element[] {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   onOpenMatch.mockReset();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
 });
 
 afterEach(async () => {
@@ -161,6 +168,8 @@ describe("what the page draws", () => {
 
     const files = rows('[data-testid="file-search-file"]');
     expect(files).toHaveLength(1);
+    expect(rows('[role="tree"]')).toHaveLength(1);
+    expect(rows('[data-testid="file-search-folder"]')[0]?.textContent).toBe("src");
     expect(files[0]?.getAttribute("data-path")).toBe("src/app.ts");
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
     expect(document.querySelector("mark")?.textContent).toBe("needle");
@@ -200,7 +209,11 @@ describe("what the page draws", () => {
     expect(snippet?.classList.contains("flex")).toBe(true);
     expect(snippet?.classList.contains("min-w-0")).toBe(true);
     expect(snippet?.classList.contains("overflow-hidden")).toBe(true);
-    expect(snippet?.classList.contains("whitespace-nowrap")).toBe(true);
+    // Flex text runs must retain spaces at the highlight boundary: otherwise
+    // `const needle = 1` is painted as `constneedle= 1` despite correct textContent.
+    expect(snippet?.classList.contains("whitespace-pre")).toBe(true);
+    expect(before?.classList.contains("whitespace-pre")).toBe(true);
+    expect(after?.classList.contains("whitespace-pre")).toBe(true);
     expect(snippet?.classList.contains("truncate")).toBe(false);
     expect(hit?.classList.contains("shrink-0")).toBe(true);
     expect(before?.classList.contains("min-w-0")).toBe(true);
@@ -275,6 +288,22 @@ describe("what the page draws", () => {
 });
 
 describe("what a click does", () => {
+  it("lands on a result reached through the shared tree keyboard cursor", async () => {
+    await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
+    await type("needle");
+    const tree = document.querySelector('[role="tree"]')!;
+    await act(async () => {
+      tree.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    });
+    // Let the End cursor render before activating its match.
+    await act(async () =>
+      tree.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(onOpenMatch).toHaveBeenCalledWith("src/app.ts");
+    expect(
+      takeFileReveal(fileRevealKey({ projectId: "p1", ticketId: "t1", relPath: "src/app.ts" })),
+    ).toEqual({ line: 12, column: 7, length: 6 });
+  });
   it("opens the file as a preview and asks that editor to land on the match", async () => {
     await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
     await type("needle");
@@ -313,7 +342,7 @@ describe("the summary line, as pure text", () => {
 
   it("names the query it is still searching for", () => {
     expect(searchSummaryLine({ pending: "needle", outcome: null, failed: false })).toBe(
-      "Searching “needle”…",
+      "Searching “needle”",
     );
   });
 
@@ -472,7 +501,7 @@ describe("a query typed over an answer, before the debounce elapses", () => {
 
     await typeOnly("needle");
 
-    expect(summaryText()).toBe("Searching “needle”…");
+    expect(summaryText()).toBe("Searching “needle”");
     expect(rows('[data-testid="file-search-pending"]')).toHaveLength(1);
   });
 

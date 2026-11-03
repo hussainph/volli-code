@@ -281,8 +281,22 @@ describe("TicketFilesPanel", () => {
     Object.defineProperty(window, "api", {
       configurable: true,
       value: {
-        fs: { listDirectory },
-        files: { listExternalApps: async () => ({ ok: true, apps: [] }) },
+        worktree: { onChanged: () => () => {} },
+        files: {
+          listExternalApps: async () => ({ ok: true, apps: [] }),
+          index: async (scope: { projectId: string; ticketId?: string }) => {
+            const result: ListDirectoryResult = await listDirectory(scope);
+            return result.ok
+              ? {
+                  ok: true,
+                  files: result.entries
+                    .filter((entry) => entry.kind === "file")
+                    .map((entry) => ({ relPath: entry.name, kind: "other", artifact: false })),
+                  truncated: false,
+                }
+              : result;
+          },
+        },
         attachments: {
           list: async () => ({ ok: true, blobs: [...blobs] }),
           attach,
@@ -483,8 +497,11 @@ describe("TicketFilesPanel", () => {
 
       await show(WITH_WORKTREE);
 
-      expect(listDirectory).toHaveBeenLastCalledWith("/worktrees/VC-406/src/renderer");
-      expect(drawn('[data-testid="ticket-files-up"]')).toHaveLength(1);
+      expect(listDirectory).toHaveBeenLastCalledWith({
+        projectId: "project-1",
+        ticketId: "ticket-1",
+      });
+      expect(drawn('[data-testid="file-tree-up"]')).toHaveLength(1);
       expect(document.querySelector("input")?.value).toBe("rail");
       expect(drawn('[data-testid="ticket-files-row"]')).toHaveLength(1);
 
@@ -525,7 +542,7 @@ describe("TicketFilesPanel", () => {
       expect(before?.isConnected).toBe(false);
       expect(drawn('[data-testid="ticket-files-row"]')).toHaveLength(0);
       expect(document.body.textContent).not.toContain("README.md");
-      expect(drawn('[data-testid="ticket-files-loading"]')).toHaveLength(1);
+      expect(drawn('[data-testid="file-tree-loading"]')).toHaveLength(1);
     });
 
     it("lets a listing the old ticket left in flight write nothing here", async () => {
