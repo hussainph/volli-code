@@ -238,7 +238,8 @@ the static ladder: where the blur is not composited, what shows through must sta
 a ghost, never legible text. A command list inside a floating surface shares that surface.
 Never nest backdrop filters, exceed 24px blur or leave glass over live terminals
 or Browser Tab webviews. Contain panel paint; keep tooltip arrows and chrome
-focus rings unclipped. Animate only transform or opacity on blurred floats.
+focus rings unclipped, and portal submenus out of their parent float, which
+would otherwise clip them (they keep the nested solid fill). Animate only transform or opacity on blurred floats.
 
 Reduce transparency and Increase contrast replace every material with its
 opaque semantic fill. Browsers without backdrop-filter get opaque materials.
