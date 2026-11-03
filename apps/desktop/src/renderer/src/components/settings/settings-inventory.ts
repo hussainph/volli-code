@@ -109,10 +109,11 @@ export const SETTINGS_ROWS: Readonly<Record<string, readonly string[]>> = {
     "Progress and local copies",
     "Go back to local",
   ],
-  "app:web": ["Provider", "Instance", "API key"],
+  "app:web": ["Search providers", "Provider", "Instance", "API key"],
   "app:integrations": ["Open files in"],
   "app:storage": [
     "Keep Done worktrees for",
+    "Unused files",
     "Orphaned worktrees",
     "Orphaned logs",
     "Saved tool output",
