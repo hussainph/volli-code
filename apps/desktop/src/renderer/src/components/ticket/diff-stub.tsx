@@ -1,4 +1,5 @@
 import { baseNameOf } from "@volli/shared";
+import { FileMagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/FileMagnifyingGlass";
 
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
@@ -15,10 +16,15 @@ export function DiffStub({
 }) {
   return (
     <div data-testid="ticket-diff-stub" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-      <p className="text-ui font-medium text-foreground">{stubReason}</p>
-      <p className="text-ui text-muted-foreground">{baseNameOf(path)}</p>
+      <FileMagnifyingGlassIcon aria-hidden className="size-8 text-muted-foreground" />
+      <h2 className="text-heading font-semibold text-foreground wrap-anywhere">{stubReason}</h2>
+      <p className="max-w-full font-mono text-ui text-muted-foreground wrap-anywhere" title={path}>
+        {baseNameOf(path)}
+      </p>
       {previousPath !== null ? (
-        <p className="text-ui text-muted-foreground/70">← {previousPath}</p>
+        <p className="max-w-full font-mono text-ui text-muted-foreground wrap-anywhere">
+          ← {previousPath}
+        </p>
       ) : null}
     </div>
   );

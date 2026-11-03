@@ -43,6 +43,9 @@ function fakeSource(id: string, label: string) {
     push(entries: HostLogEntry[], gap = false) {
       act(() => handlers?.onLines(entries, gap));
     },
+    reconnect() {
+      act(() => handlers?.onStatus("connecting", "Reconnecting"));
+    },
     fail(detail: string) {
       act(() => handlers?.onStatus("failed", detail));
     },
@@ -51,8 +54,13 @@ function fakeSource(id: string, label: string) {
 
 let container: HTMLDivElement;
 let root: Root;
+const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
 beforeEach(() => {
   vi.useFakeTimers();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -61,6 +69,10 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  if (scrollDescriptor)
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollDescriptor);
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
 });
 
 const rows = () =>
@@ -95,11 +107,22 @@ describe("the dev log viewer", () => {
       "Trace 4bf92f35… · 2 lines · This Mac → Box · 1.00 s",
     );
     // A row opens to its fields.
-    act(() => (container.querySelector('[aria-expanded="false"]') as HTMLButtonElement).click());
+    act(() =>
+      (
+        container.querySelector(
+          '[data-testid="log-row"] [aria-expanded="false"]',
+        ) as HTMLButtonElement
+      ).click(),
+    );
     expect(container.querySelector("pre")?.textContent).toContain(TRACE);
-    act(() => button("Clear").click());
+    // Source and component remain inspectable when their columns fold away.
+    expect(container.querySelector("pre")?.textContent).toContain('"source": "This Mac"');
+    expect(container.querySelector("pre")?.textContent).toContain('"component": "rpc"');
+    act(() =>
+      (container.querySelector('[aria-label="Clear filters"]') as HTMLButtonElement).click(),
+    );
     expect(rows()).toHaveLength(3);
-    unregister();
+    act(() => unregister());
   });
 
   it("pauses the view while lines keep arriving, and says a source failed", () => {
@@ -114,11 +137,49 @@ describe("the dev log viewer", () => {
     expect(rows()).toHaveLength(1);
     mac.fail("bridge gone");
     expect(button("This Mac").title).toBe("bridge gone");
-    act(() => {
-      const level = container.querySelector('[data-choice="error"]') as HTMLButtonElement;
-      level.click();
-    });
+    act(() => (container.querySelector('[aria-label="Filter logs"]') as HTMLButtonElement).click());
+    act(() =>
+      (document.querySelector('[aria-label="Minimum level"]') as HTMLButtonElement).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      ),
+    );
+    act(() =>
+      (
+        [...document.querySelectorAll('[role="option"]')].find(
+          (option) => option.textContent === "Error",
+        ) as HTMLElement
+      ).click(),
+    );
     expect(container.textContent).toContain("No lines match.");
+  });
+
+  it("shows only the fault when no logs landed, and retries only the failed source", () => {
+    const mac = fakeSource("this-mac", "This Mac");
+    const box = fakeSource("box", "Box");
+    const localStart = vi.spyOn(mac.source, "start");
+    const remoteStart = vi.spyOn(box.source, "start");
+    const unregister = registerRemoteLogSource(box.source);
+    act(() => root.render(<LogViewer local={mac.source} />));
+    mac.fail("bridge gone");
+    expect(container.textContent).toContain("Couldn't read This Mac logs");
+    expect(container.textContent).not.toContain("No lines yet.");
+    act(() => button("Retry").click());
+    expect(localStart).toHaveBeenCalledTimes(2);
+    expect(remoteStart).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("Couldn't read This Mac logs");
+    mac.push([entry(1, "2026-10-07T00:00:01.000Z")]);
+    settle();
+    expect(rows()).toHaveLength(1);
+    act(() => unregister());
+  });
+
+  it("draws a connecting source with a spinner, not a ready dot", () => {
+    const mac = fakeSource("this-mac", "This Mac");
+    act(() => root.render(<LogViewer local={mac.source} />));
+    mac.reconnect();
+    settle();
+    expect(button("This Mac").querySelector('svg[role="status"]')).not.toBeNull();
+    expect(button("This Mac").querySelector('svg[aria-label="Loading"]')).not.toBeNull();
   });
 
   it("shows one operation's lines under a fixed filter", () => {

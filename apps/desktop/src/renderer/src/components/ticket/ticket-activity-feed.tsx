@@ -47,6 +47,13 @@ import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
 import { guardWrite, readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
+import { Badge } from "@renderer/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+} from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -208,7 +215,7 @@ function AuthorChip({ actor, label }: { actor: string; label: string }) {
       )}
       aria-hidden
     >
-      {label.charAt(0).toUpperCase()}
+      {isAgentActor(actor) ? <RobotIcon className="size-3" /> : label.charAt(0).toUpperCase()}
     </span>
   );
 }
@@ -273,14 +280,15 @@ function CommentBlock({
   return (
     <li
       className={cn(
-        "rounded-lg border border-border bg-card px-4 py-2",
+        "overflow-hidden rounded-container border border-border bg-card",
         optimistic && "opacity-60",
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-4 py-2">
         <AuthorChip actor={comment.actor} label={author} />
         <span className="text-ui font-medium text-foreground">{author}</span>
-        <span className="text-ui text-muted-foreground">
+        {isAgentActor(comment.actor) && <Badge variant="accent">Agent</Badge>}
+        <span className="text-label text-muted-foreground">
           {relativeTime(comment.createdAt, now)}
           {comment.updatedAt > comment.createdAt ? " · edited" : ""}
         </span>
@@ -321,7 +329,7 @@ function CommentBlock({
       </div>
 
       {editing ? (
-        <div className="mt-2 flex flex-col gap-2">
+        <div className="flex flex-col gap-2 p-4">
           <textarea
             autoFocus
             value={draft}
@@ -354,7 +362,7 @@ function CommentBlock({
       ) : (
         // Read view clamps (VC-99): a verbose agent comment collapses to the
         // policy cap with a fade + Show more, instead of stretching the feed.
-        <div className="mt-1">
+        <div className="p-4">
           <ClampedMarkdown source={comment.body} />
         </div>
       )}
@@ -444,6 +452,8 @@ function Composer({
  */
 export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const ticketId = ticket.id;
+  const [filter, setFilter] = React.useState("All");
+  React.useEffect(() => setFilter("All"), [ticketId]);
   const canWrite = useCanWrite(ticket.projectId);
   const entry = useTicketActivityStore((state) => state.byTicket[ticketId]);
   const listingState = useTicketActivityStore((state) => state.listingState[ticketId]);
@@ -577,7 +587,20 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   // a failed one, and only the former earns the empty sentence.
   const pending = listingState === undefined || listingState === "loading";
   const failed = listingState === "failed";
-  const feed = buildActivityFeed(events, comments);
+  const filteredComments = comments.filter(
+    (comment) =>
+      filter === "All" ||
+      filter === "Comments" ||
+      (filter === "Agent" && isAgentActor(comment.actor)),
+  );
+  const filteredEvents = events.filter(
+    (event) =>
+      filter === "All" ||
+      (filter === "Agent" && isAgentActor(event.actor)) ||
+      (filter === "Status changes" && event.payload.kind === "status_changed") ||
+      (filter === "Commits" && event.payload.kind === "worktree_committed"),
+  );
+  const feed = buildActivityFeed(filteredEvents, filteredComments);
   const [expandedBunches, setExpandedBunches] = React.useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -595,10 +618,40 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
               ],
         ),
   );
+  const filters = [
+    { label: "All", icon: ChatCircleIcon },
+    { label: "Comments", icon: NotePencilIcon },
+    { label: "Agent", icon: RobotIcon },
+    { label: "Status changes", icon: ArrowRightIcon },
+    { label: "Commits", icon: GitCommitIcon },
+  ];
 
   return (
     <section className="flex flex-col gap-4 border-t border-border pt-6">
-      <SectionHeading as="h3">Activity</SectionHeading>
+      <div className="flex items-center justify-between gap-2">
+        <SectionHeading as="h3">Activity</SectionHeading>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" aria-label={`Filter activity: ${filter}`}>
+              <ChatCircleIcon />
+              {filter}
+              <CaretDownIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {filters.map(({ label, icon: Icon }) => (
+              <DropdownMenuCheckboxItem
+                key={label}
+                checked={filter === label}
+                onCheckedChange={() => setFilter(label)}
+              >
+                <Icon />
+                {label}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
       {pending ? (
         // The cache has no landed baseline for this ticket yet (VC-383). This
@@ -625,7 +678,9 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
           Couldn&apos;t load activity.
         </p>
       ) : feed.length === 0 ? (
-        <p className={EMPTY_INLINE}>No activity yet.</p>
+        <p className={EMPTY_INLINE}>
+          {filter === "All" ? "No activity yet." : "No matching activity."}
+        </p>
       ) : (
         <ul className="flex flex-col gap-2">
           {feed.map((item) =>

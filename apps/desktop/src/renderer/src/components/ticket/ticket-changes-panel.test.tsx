@@ -251,7 +251,7 @@ describe("TicketChangesList markup", () => {
     expect(html).not.toContain("No changes vs base");
   });
 
-  it("renders updated awareness as visible text with an accessible explanation", () => {
+  it("renders compact updated awareness with an accessible explanation", () => {
     const html = render([
       {
         ...toChangeListRow(file({ path: "src/ticket.tsx" }), EMPTY_CHANGE_RECENCY_STATE),
@@ -260,7 +260,8 @@ describe("TicketChangesList markup", () => {
       },
     ]);
 
-    expect(html).toContain(">Updated<");
+    expect(html).toContain('<span class="sr-only">Updated</span>');
+    expect(html).toContain('title="Updated since you last opened this file"');
     expect(html).toContain('aria-label="Updated since you last opened this file"');
   });
 });
