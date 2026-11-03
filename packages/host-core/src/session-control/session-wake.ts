@@ -201,6 +201,12 @@ export function createSessionWakeBus(
         () => engine.getSession(query),
       ),
     getBaseSession: (query) => engine.getBaseSession(query),
+    // The listing fold one row at a time (VC-1101): timed like `getSession`.
+    getSessionListing: (query) =>
+      withMainSpan(
+        { door: "projection", operation: "get-session-listing", sessionId: query.sessionId },
+        () => engine.getSessionListing(query),
+      ),
     listSessions: (query) => engine.listSessions(query),
     countSessions: (query) => engine.countSessions(query),
     listAttachedSessions: () => engine.listAttachedSessions(),

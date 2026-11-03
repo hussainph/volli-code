@@ -28,7 +28,6 @@ import {
   type SessionListingPage,
   type SessionListingRow,
   type SessionListingProjection,
-  type SessionProjection,
 } from "@volli/shared";
 
 import { readSessionProvenance, readSessionProvenances } from "../db/session-provenance-repo";
@@ -261,12 +260,17 @@ export function boundedSessionListing(
 export async function sessionListingNotice(
   ports: {
     db: Database.Database;
-    getSession: (input: { sessionId: string }) => Promise<SessionProjection | null>;
+    /**
+     * The Engine's one-row listing read (VC-1101), not `getSession`: the row
+     * is the one a listing folds, from the listing's own cache, so a receipt
+     * flip on a Session whose log has not moved decodes and copies nothing.
+     */
+    getSessionListing: (input: { sessionId: string }) => Promise<SessionListingProjection | null>;
     liveAttachmentIds: () => ReadonlySet<string>;
   },
   sessionId: string,
 ): Promise<{ projectId: string; ticketId: string | null; row: SessionListingRow } | null> {
-  const projection = await ports.getSession({ sessionId });
+  const projection = await ports.getSessionListing({ sessionId });
   if (projection === null) return null;
   const row = sessionListingRow(
     projection,

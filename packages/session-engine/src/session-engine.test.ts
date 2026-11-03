@@ -5189,6 +5189,42 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
   });
 });
 
+describe("getSessionListing: one Session's listing row (VC-1101)", () => {
+  it("answers the row a listing folds, from the same cache, until the log moves", async () => {
+    const { plane } = composition();
+    const created = await plane.createSession(createRequest("command-one-row"));
+    const query = { sessionId: created.session.id };
+
+    const one = await plane.getSessionListing(query);
+    const [listed] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // The SAME shared, frozen object a listing hands out: one fold, one cache.
+    expect(listed).toBe(one);
+    expect(Object.isFrozen(one)).toBe(true);
+    // No command or receipt history: the listing shape, not getSession's.
+    expect(one).not.toHaveProperty("commands");
+    expect(one).not.toHaveProperty("receipts");
+    // And the row folds the same state getSession does.
+    const { commands: _commands, receipts: _receipts, ...full } = (await plane.getSession(query))!;
+    expect(one).toEqual(full);
+    await expect(plane.getSessionListing(query)).resolves.toBe(one);
+
+    await plane.submit({
+      commandId: "command-one-row-retitle",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+    const moved = await plane.getSessionListing(query);
+    expect(moved).not.toBe(one);
+    expect(moved?.session.title).toBe("Moved on");
+  });
+
+  it("answers null for a Session the ledger does not have", async () => {
+    const { plane } = composition();
+    await expect(plane.getSessionListing({ sessionId: "never-minted" })).resolves.toBeNull();
+  });
+});
+
 describe("Session birth owner and atomic machine-state hook", () => {
   it("stamps the birth owner, inherits it for a child, and rejects changing it on replay without widening command intent", async () => {
     const { plane } = composition();
