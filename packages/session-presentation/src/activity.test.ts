@@ -1903,14 +1903,15 @@ describe("state-true titles", () => {
   });
 
   it("puts a known non-zero exit in the sentence, whichever way it was recorded", () => {
-    // Stamped by the harness on a call it calls a success (a killed shell).
+    // Stamped on a call the harness calls a success: the glyph agrees with
+    // the title, not with the harness.
     const stamped = describeActivity(
       tool("run-command", {
         input: { command: "pnpm dev" },
         descriptor: { outcome: { ...emptyOutcome, exitCode: 143 } },
       }),
     );
-    expect(stamped).toMatchObject({ verb: "", object: "pnpm dev", status: "done" });
+    expect(stamped).toMatchObject({ verb: "", object: "pnpm dev", status: "failed" });
     expect(stamped.after).toBe("exited with code 143");
     // Pi's bash records it only as its failure's last line.
     const piPart = tool("run-command", {
@@ -1939,7 +1940,16 @@ describe("state-true titles", () => {
       describeActivity(
         tool("run-command", { descriptor: { outcome: { ...emptyOutcome, exitCode: 2 } } }),
       ),
-    ).toMatchObject({ verb: "Exited with code 2", object: null, after: null });
+    ).toMatchObject({ verb: "Exited with code 2", object: null, after: null, status: "failed" });
+    // A denial outranks whatever exit was recorded.
+    expect(
+      describeActivity(
+        tool("run-command", {
+          state: "output-denied",
+          descriptor: { outcome: { ...emptyOutcome, exitCode: 1 } },
+        }),
+      ).status,
+    ).toBe("denied");
     // A live command has no exit to report yet, whatever the descriptor says.
     expect(
       rowTitle(
@@ -1950,6 +1960,63 @@ describe("state-true titles", () => {
         }),
       ),
     ).toBe("Running pnpm build");
+  });
+
+  it("says a deliberate background stop stopped, whatever its signal's exit", () => {
+    const stop = (state: DynamicToolUIPart["state"], exitCode: number | null) =>
+      tool("run-command", {
+        state,
+        toolName: "shell_kill",
+        input: { shellId: "sh-1" },
+        descriptor: {
+          ...subjectOf("pnpm dev (background · killed)"),
+          outcome: { ...emptyOutcome, exitCode },
+        },
+      });
+    expect(describeActivity(stop("output-available", 143))).toMatchObject({
+      verb: "Stopped",
+      object: "pnpm dev (background · killed)",
+      after: null,
+      status: "done",
+    });
+    expect(rowTitle(stop("input-available", null))).toBe("Stopping pnpm dev (background · killed)");
+    expect(describeActivity(stop("output-error", null))).toMatchObject({
+      verb: "Failed to stop",
+      status: "failed",
+    });
+    // A read of a shell that exited on a signal carries no stop mark: nothing
+    // says the stop was asked for, so it is a non-zero exit like any other.
+    expect(
+      describeActivity(
+        tool("run-command", {
+          descriptor: {
+            ...subjectOf("pnpm dev (background · read)"),
+            outcome: { ...emptyOutcome, exitCode: 143 },
+          },
+        }),
+      ),
+    ).toMatchObject({ after: "exited with code 143", status: "failed" });
+  });
+
+  it("counts and opens a bundle by the status its rows show", () => {
+    const miss = tool("run-command", {
+      state: "output-error",
+      input: { command: "rg seam" },
+      errorText: "Command exited with code 1",
+    });
+    const exited = tool("run-command", {
+      input: { command: "pnpm lint" },
+      descriptor: { outcome: { ...emptyOutcome, exitCode: 1 } },
+    });
+    const missOnly = bundleOf(segmentMessageParts([miss], "miss"));
+    expect(bundleSummary(missOnly)).toEqual([{ text: "Ran 1 command", tone: "neutral" }]);
+    expect(bundleNeedsAttention(missOnly)).toBe(false);
+    const withExit = bundleOf(segmentMessageParts([miss, exited], "exit"));
+    expect(bundleSummary(withExit)).toEqual([
+      { text: "Ran 2 commands", tone: "neutral" },
+      { text: "1 failed", tone: "danger" },
+    ]);
+    expect(bundleNeedsAttention(withExit)).toBe(true);
   });
 
   it("reads a search that exits 1 as one that found nothing, not one that failed", () => {

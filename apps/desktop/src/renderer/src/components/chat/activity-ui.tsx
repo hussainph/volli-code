@@ -1092,7 +1092,7 @@ function useVisibleBundleProgress(
  * *at the same left edge*: no indent, no rule, no second column. The list simply
  * got longer, and the caret is what says why.
  *
- * Open state is derived — `userOpen ?? needsAttention` — so restoring a session
+ * Open state is derived — `userOpen ?? bundleNeedsAttention` — so restoring a session
  * fires no transitions at boot, and a bundle holding a failure is open before
  * anyone asks. A pending approval never reaches here; it left the bundle
  * upstream, because the one thing that blocks the reader must not be behind a

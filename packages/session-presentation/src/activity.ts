@@ -70,11 +70,6 @@ export type ChatSegment =
   | { kind: "text"; part: Extract<MessagePart, { type: "text" }>; key: string }
   | { kind: "bundle"; rows: BundleRow[]; key: string };
 
-/** Outcomes a bundle must not swallow silently. */
-export function needsAttention(state: DynamicToolUIPart["state"]): boolean {
-  return state === "output-error" || state === "output-denied";
-}
-
 /**
  * Reads a descriptor, or synthesizes one from the raw part when the harness has
  * not stamped `volli.activity` yet. The synthetic descriptor is deliberately
@@ -303,9 +298,18 @@ export function isBundleStreaming(rows: readonly BundleRow[]): boolean {
   return rows.some((row) => (row.kind === "reasoning" ? row.streaming : isRowActive(row.part)));
 }
 
-/** A failure or a denial inside the bundle, which is reason enough to open it. */
+/**
+ * A failure or a denial inside the bundle, which is reason enough to open it.
+ * Judged by the status each row shows, so a bundle opens for exactly the rows
+ * whose titles say something went wrong: a command that exited non-zero
+ * does, a search that found nothing does not.
+ */
 export function bundleNeedsAttention(rows: readonly BundleRow[]): boolean {
-  return bundleToolRows(rows).some((row) => needsAttention(row.part.state));
+  return bundleToolRows(rows).some((row) => isAlarming(describeActivity(row.part).status));
+}
+
+function isAlarming(status: ActivityStatus): boolean {
+  return status === "failed" || status === "denied";
 }
 
 /**
@@ -359,8 +363,10 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
     segments.push({ text: streaming ? `${phrase}…` : phrase, tone: "neutral" });
   }
 
-  const failed = tools.filter((row) => row.part.state === "output-error").length;
-  const denied = tools.filter((row) => row.part.state === "output-denied").length;
+  // Counted from the status each row shows, so the summary and its rows agree.
+  const statuses = tools.map((row) => describeActivity(row.part).status);
+  const failed = statuses.filter((status) => status === "failed").length;
+  const denied = statuses.filter((status) => status === "denied").length;
   if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
   if (denied > 0) segments.push({ text: `${denied} denied`, tone: "danger" });
   if (notRun > 0) segments.push({ text: `${notRun} not run`, tone: "muted" });
@@ -624,6 +630,18 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     // asked to run. Prefer that source so a stale or abbreviated descriptor can
     // never hide the actual bash invocation from the person reviewing it.
     const object = commandInput(context.input) ?? context.descriptor.subject.label;
+    if (isShellStop(context.descriptor)) {
+      // A deliberate stop ends a command with a signal's exit (143), and that
+      // is what was asked for: the row says it stopped, never that it failed.
+      return {
+        verb: tensed(STOP_VERBS, context.status),
+        object,
+        openPath: null,
+        meta: durationMeta(context),
+        metaTone: "muted",
+        detail: outputDetail(context),
+      };
+    }
     const exitCode = isSettled(context.status) ? commandExitCode(context) : null;
     if (exitCode !== null && isSearchMiss(object, exitCode)) {
       // A search that found nothing exits 1, and that is an answer: the row
@@ -936,8 +954,12 @@ const PAGE_INPUT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set(["press", 
  * without this the row would wear a tick over the two outcomes a person most
  * needs to see.
  *
- * Commands: a search that exits 1 has found nothing, which Pi's bash reports
- * as an error like any other non-zero exit. It is an answer, not a failure.
+ * Commands: a known non-zero exit is a failure even when the harness handed
+ * the call back as a success, so the glyph says what the title says
+ * (`pnpm lint exited with code 1`). Two exits are not: a search that exits 1
+ * has found nothing, which Pi's bash reports as an error like any other
+ * non-zero exit — an answer, not a failure — and a background shell stopped on
+ * purpose exits with its signal's code because it was asked to.
  *
  * Only once the call has settled; a live row's status is always the harness's.
  */
@@ -947,12 +969,17 @@ function presentedStatus(context: ActivityContext): ActivityStatus {
   if (facet !== null) {
     return facet.refusal !== null || facet.error !== null ? "failed" : context.status;
   }
-  if (context.descriptor.kind === "run-command" && context.status === "failed") {
-    const exitCode = commandExitCode(context);
-    const command = commandInput(context.input) ?? context.descriptor.subject.label;
-    if (exitCode !== null && isSearchMiss(command, exitCode)) return "done";
+  if (
+    context.descriptor.kind !== "run-command" ||
+    context.status === "denied" ||
+    isShellStop(context.descriptor)
+  ) {
+    return context.status;
   }
-  return context.status;
+  const exitCode = commandExitCode(context);
+  if (exitCode === null || exitCode === 0) return context.status;
+  const command = commandInput(context.input) ?? context.descriptor.subject.label;
+  return isSearchMiss(command, exitCode) ? "done" : "failed";
 }
 
 function browseFacts(context: ActivityContext): ActivityFacts {
@@ -1068,6 +1095,20 @@ function commandExitCode(context: ActivityContext): number | null {
   if (recorded !== null) return recorded;
   const match = /(?:^|\n)Command exited with code (\d+)\s*$/.exec(context.errorText ?? "");
   return match?.[1] === undefined ? null : Number(match[1]);
+}
+
+const STOP_VERBS: ActivityVerbs = { base: "stop", running: "Stopping", done: "Stopped" };
+
+/**
+ * The marker agent-runtime puts on a background-shell kill's subject
+ * (`SHELL_MARKERS` in `pi/activity.ts`): the one row that is a deliberate stop
+ * rather than a command's own ending. A read of a shell that exited with a
+ * signal's code carries no such mark, and is judged by its exit like any other.
+ */
+const SHELL_STOP_MARKER = "(background · killed)";
+
+function isShellStop(descriptor: ActivityDescriptor): boolean {
+  return descriptor.subject.label?.endsWith(SHELL_STOP_MARKER) === true;
 }
 
 /**
