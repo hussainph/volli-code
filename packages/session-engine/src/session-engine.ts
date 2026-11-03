@@ -149,6 +149,19 @@ export interface SessionEngine {
    */
   getBaseSession(query: GetSessionQuery): Promise<Session | null>;
   /**
+   * One Session's listing projection — the row {@link listSessions} would
+   * fold for it, from the same per-Session fold cache (VC-1101).
+   *
+   * For a caller that re-publishes ONE listing row while nothing in the
+   * Session's log moved (a read receipt): an unmoved Session answers from the
+   * cache with a base-row read and a head read, where `getSession` decodes the
+   * checkpoint and copies the whole projection, command history included.
+   * What comes back is deep-frozen and shared, exactly as a listing's rows,
+   * and like a listing (unlike `getSession`) a fold it had to do is written
+   * back to the durable checkpoint (VC-1076), so the next read is a hit.
+   */
+  getSessionListing(query: GetSessionQuery): Promise<SessionListingProjection | null>;
+  /**
    * Every Session in scope, projected — each row without its command and
    * receipt history (VC-848), which `getSession` keeps.
    *
@@ -1087,6 +1100,16 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async getBaseSession(query) {
       return ports.ledger.transaction((transaction) => transaction.getSession(query.sessionId));
+    },
+
+    async getSessionListing(query) {
+      const projection = await ports.ledger.transaction((transaction) => {
+        const session = transaction.getSession(query.sessionId);
+        return session ? listingProjection(transaction, session) : null;
+      });
+      // One row, not a scan: trimming now cannot evict a row this read needs.
+      evictListingFolds();
+      return projection;
     },
 
     /**

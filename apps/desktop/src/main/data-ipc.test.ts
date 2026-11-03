@@ -3048,6 +3048,33 @@ describe("volli:session-read-set (VC-30)", () => {
     expect(notice.row).not.toHaveProperty("read");
   });
 
+  it("folds no projection: the row is the listing's own, from its cache (VC-1101)", async () => {
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
+    const sessionId = await chatSession(sessionEngine, null);
+    const getSession = vi.spyOn(sessionEngine, "getSession");
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    dataChangedSends.length = 0;
+
+    const marked = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: true,
+    });
+
+    expect(marked.ok).toBe(true);
+    // A receipt moves no ledger fact, so a click never pays a whole fold.
+    expect(getSession).not.toHaveBeenCalled();
+    const notice = dataChangedSends.find((send) => send.channel === "volli:session-activity")
+      ?.payload as SessionActivityNotice;
+    // The pushed row is exactly the row the listing fetch now returns.
+    const listed = await invoke<Promise<SessionsResult>>("volli:session-list", {
+      projectId: notice.projectId,
+    });
+    expect(listed.ok && listed.sessions.find((row) => rowId(row) === sessionId)).toEqual(
+      notice.row,
+    );
+  });
+
   it("refuses a Session the ledger does not have, and publishes nothing", async () => {
     const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     handlers.clear();

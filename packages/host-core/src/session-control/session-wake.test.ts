@@ -95,6 +95,7 @@ function writingEngine(db: TestDb["db"]): {
     },
     getSession: unusedRead,
     getBaseSession: unusedRead,
+    getSessionListing: unusedRead,
     listSessions: unusedRead,
     listAttachedSessions: unusedRead,
     countSessions: unusedRead,
@@ -308,6 +309,7 @@ describe("the Session wake bus", () => {
     const reads = {
       getSession: vi.fn(),
       getBaseSession: vi.fn(),
+      getSessionListing: vi.fn(),
       listSessions: vi.fn(),
       countSessions: vi.fn(),
       listSessionStarts: vi.fn(),
@@ -322,6 +324,7 @@ describe("the Session wake bus", () => {
     // compile error here instead of a silently missing forward.
     void bus.engine.getSession({ sessionId: "s" });
     void bus.engine.getBaseSession({ sessionId: "s" });
+    void bus.engine.getSessionListing({ sessionId: "s" });
     void bus.engine.listSessions({} as never);
     void bus.engine.countSessions({} as never);
     void bus.engine.listSessionStarts({} as never);

@@ -169,6 +169,8 @@ function scopedEngine(
       (await visible(query.sessionId)) ? reader.getSession(query) : null,
     getBaseSession: async (query) =>
       (await visible(query.sessionId)) ? reader.getBaseSession(query) : null,
+    getSessionListing: async (query) =>
+      (await visible(query.sessionId)) ? reader.getSessionListing(query) : null,
     listSessions: (query) => reader.listSessions(query),
     countSessions: (query) => reader.countSessions(query),
     listAttachedSessions: () => reader.listAttachedSessions(),
@@ -192,6 +194,7 @@ type SessionReader = Pick<
   SessionEngine,
   | "getBaseSession"
   | "getSession"
+  | "getSessionListing"
   | "listSessions"
   | "countSessions"
   | "listAttachedSessions"
@@ -216,6 +219,7 @@ function sessionReader(engine: SessionEngine, ledger: SessionLedger): SessionRea
   return {
     getBaseSession: (query) => ledger.transaction((tx) => tx.getSession(query.sessionId)),
     getSession: (query) => engine.getSession(query),
+    getSessionListing: (query) => engine.getSessionListing(query),
     listSessions: async (query) =>
       project(await ledger.transaction((tx) => tx.listSessions(query))),
     countSessions: (query) => ledger.transaction((tx) => tx.countSessions(query)),
