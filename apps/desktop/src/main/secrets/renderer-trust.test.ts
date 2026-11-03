@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
+// Resolve the shared main-process teardown before timed assertions begin.
+import "../broadcast";
 import { PACKAGED_RENDERER_ENTRY_URL } from "../app-protocol";
 import { isSecretRenderer } from "./renderer-trust";
 

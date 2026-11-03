@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { resolveExperiments, type Project } from "@volli/shared";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
+import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { settingsGroups } from "./settings-groups";
 import { configureGroups } from "./configure-groups";
@@ -58,6 +59,30 @@ it("switches App and project scopes and picks a project without retargeting the 
         .click(),
     );
     expect(host.querySelector('[aria-current="page"]')!.textContent).toBe("General");
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+  }
+});
+it("follows the sidebar's selected project in the Configure compatibility route", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  Element.prototype.scrollTo = vi.fn();
+  useProjectsStore.setState({
+    projects: [project, { ...project, id: "p2", name: "Second project" }],
+    selectedProjectId: "p1",
+  });
+  const host = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(host);
+  try {
+    act(() => root.render(<ConfigurePage />));
+    expect(
+      host.querySelector('[aria-label="Settings scope"] button[aria-pressed="true"]')?.textContent,
+    ).toContain("First project");
+    act(() => useProjectsStore.setState({ selectedProjectId: "p2" }));
+    expect(
+      host.querySelector('[aria-label="Settings scope"] button[aria-pressed="true"]')?.textContent,
+    ).toContain("Second project");
+    expect(host.querySelector('[aria-current="page"]')?.textContent).toBe("Overview");
   } finally {
     act(() => root.unmount());
     host.remove();

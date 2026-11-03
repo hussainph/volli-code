@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { SettingsProjectWelcome } from "@renderer/components/settings/settings-scope";
+import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
@@ -10,6 +10,7 @@ import { SessionEnvironmentAlert } from "@renderer/components/session-environmen
 import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
+import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
@@ -69,11 +70,8 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
         ) : selected === null && projectCount === 0 ? (
           <EmptyProjectsState />
         ) : selected === null ? (
-          <div className="flex-1 px-12 py-8">
-            <SettingsProjectWelcome
-              hasProjects
-              onOpen={() => useUiStore.getState().setSettingsOpen(true, "project:sessions")}
-            />
+          <div className={cn("flex-1", EMPTY_PAGE)}>
+            <p className="text-sm text-muted-foreground">Select a project</p>
           </div>
         ) : activeNav === "configure" ? (
           <ConfigurePage />
@@ -98,8 +96,24 @@ function EmptyProjectsState() {
   const pickAndAdd = useAddProject();
 
   return (
-    <div data-empty-projects-state className="flex flex-1 items-center justify-center px-12 py-8">
-      <SettingsProjectWelcome hasProjects={false} onOpen={() => void pickAndAdd()} />
+    <div
+      data-empty-projects-state
+      className={cn("empty-projects-canvas relative flex-1 overflow-hidden", EMPTY_PAGE)}
+    >
+      <div className="relative z-10 flex max-w-sm flex-col items-center">
+        {/* The frame is the glyph plus its inset — 20 + 8 + 8 — so a bigger
+            or smaller icon moves the box instead of overflowing a fixed one. */}
+        <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2 shadow-raised">
+          <FolderPlusIcon className="size-5 text-muted-foreground" />
+        </div>
+        <h1 className="text-title font-semibold">Add your first project</h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Pick a folder with a git repo.
+        </p>
+        <Button className="mt-6 app-region-no-drag" onClick={() => void pickAndAdd()}>
+          Add Project…
+        </Button>
+      </div>
     </div>
   );
 }

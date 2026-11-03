@@ -280,11 +280,16 @@ describe("SessionsPane's instruction files", () => {
     await renderPane(vi.fn().mockResolvedValue(CATALOG));
 
     expect(api.fs.listDirectory).toHaveBeenCalledWith(PROJECT.path);
-    // One line in the product's voice; harness-by-harness detail is not copy.
+    // The copy matches the runtime's prompt-file precedence.
     expect(document.body.textContent).toContain(
-      "Agents read these from the repo; Volli doesn\u2019t add them to chat prompts.",
+      "Chats start with AGENTS.md in their prompt, or CLAUDE.md when the repo has no AGENTS.md",
     );
-    expect(document.body.textContent).not.toContain("Claude Code reads");
+    expect(document.body.textContent).toContain(
+      "as the file reads when each Chat starts. Terminal harnesses load their own",
+    );
+    expect(document.body.textContent).toContain(
+      "Claude Code reads CLAUDE.md, Codex, Cursor and OpenCode read AGENTS.md.",
+    );
     expect(row("AGENTS.md").textContent).toContain("not in this repo");
     expect(row("CLAUDE.md").textContent).toContain("not in this repo");
     expect(action("Preview AGENTS.md")).toBeNull();

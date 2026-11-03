@@ -55,10 +55,16 @@ async function measure(page) {
   });
 }
 
+// Configure and Settings share one shell and one rail, named "Settings
+// categories"; the scope switch at the top of the rail says which half is
+// showing. Project scope is the one where "All projects" is not pressed.
+const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
+
 const openConfigure = async (page, category) => {
   await page.getByRole("button", { name: "Configure", exact: true }).first().click();
-  await page.getByRole("navigation", { name: "Configure categories" }).waitFor();
-  await page.getByRole("button", { name: category, exact: true }).click();
+  const nav = settingsRail(page);
+  await nav.getByRole("button", { name: "All projects", pressed: false }).waitFor();
+  await nav.getByRole("button", { name: category, exact: true }).click();
   await page.locator("table").first().waitFor();
 };
 
@@ -127,8 +133,13 @@ try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.waitForTimeout(300);
     await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-    await page.getByRole("navigation", { name: "Settings categories" }).waitFor();
-    await page.getByRole("button", { name: "Models", exact: true }).click();
+    const nav = settingsRail(page);
+    await nav.waitFor();
+    // Settings reopens on the last page shown, which after check 1 is the
+    // project's Skills; Models lives in the app-wide scope.
+    await nav.getByRole("button", { name: "All projects", exact: true }).click();
+    await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
+    await nav.getByRole("button", { name: "Models", exact: true }).click();
     // Attached, not `waitFor()`'s default visibility: check 4 leaves the window
     // 520px tall and this asks for 1440x900 back, which a smaller runner
     // display clamps — the table is then laid out but scrolled out of view and

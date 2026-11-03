@@ -1,4 +1,3 @@
-import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Settings → Models → Decision model, and the project's override in
  * Configure → Sessions (VC-478).
@@ -76,6 +75,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Notice } from "@renderer/components/ui/notice";
 import { Segmented } from "@renderer/components/ui/segmented";
 import {

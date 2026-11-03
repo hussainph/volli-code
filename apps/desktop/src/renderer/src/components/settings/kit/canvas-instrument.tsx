@@ -46,10 +46,8 @@ interface GrabOffset {
  * `CLICK_SLOP` is what makes a press and a drag two gestures rather than one:
  * nothing moves until the pointer has travelled that far, and a release before
  * it does is reported to `onClick` instead — an orb is PROMOTED by a press and
- * MOVED by a drag, two things one control has to be able to do. (The grain
- * dial was this hook's second user until the owner traded it for a fader;
- * `onClick` stays optional because omitting it is what "a press means nothing
- * here" looks like.)
+ * MOVED by a drag, two things one control has to be able to do.
+ * `onClick` is optional for controls that respond only to dragging.
  *
  * `onSettle` fires once at the end of any gesture that actually moved, which is
  * the editor's single settlement per drag — every intermediate frame is a

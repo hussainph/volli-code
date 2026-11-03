@@ -10,7 +10,7 @@
  *     `Canvas` (1–3 positioned stops + vibrancy + grain) and an `Appearance`
  *     (light | dark | auto), each independently overridable per workspace. So
  *     the canvas is seeded by AUTHORING one through the real editor on
- *     Settings → Appearance (swatch, vibrancy, grain, a dragged stop), and the
+ *     Settings → Appearance (hex, vibrancy, grain, a dragged stop), and the
  *     appearance by the Mode control beside it.
  *   • THE WINDOW BACKGROUND IS NOT `--background` ANY MORE. It is the canvas's
  *     BASE FILL (`windowBackground` → `baseFillHex`), and with a canvas armed
@@ -410,13 +410,21 @@ const settledWindowBackground = (app, expected) =>
 
 // ---- navigation -------------------------------------------------------------
 
+/**
+ * The one rail Settings and Configure share. Its scope switch sits at the top:
+ * "All projects" pressed is the app-wide scope, unpressed is the project's.
+ */
+const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
+
 /** Opens Settings → Appearance from the sidebar footer. */
 async function openAppearanceSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  await page
-    .getByRole("navigation", { name: "Settings categories" })
-    .getByRole("button", { name: "Appearance", exact: true })
-    .click();
+  const nav = settingsRail(page);
+  // Settings reopens on the last page shown, which can be a project's
+  // Appearance; the app-wide one is in the other scope.
+  await nav.getByRole("button", { name: "All projects", exact: true }).click();
+  await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
+  await nav.getByRole("button", { name: "Appearance", exact: true }).click();
   // Assert on a CONTROL, never on helper copy — the copy is free to be rewritten
   // (and this branch already stripped a pass of it).
   await page.getByTestId("appearance-mode").waitFor();
@@ -425,10 +433,9 @@ async function openAppearanceSettings(page) {
 /** Configure → Appearance for whichever project is selected. */
 async function openProjectAppearance(page) {
   await page.getByRole("button", { name: "Configure", exact: true }).click();
-  await page
-    .getByRole("navigation", { name: "Configure categories" })
-    .getByRole("button", { name: "Appearance", exact: true })
-    .click();
+  const nav = settingsRail(page);
+  await nav.getByRole("button", { name: "All projects", pressed: false }).waitFor();
+  await nav.getByRole("button", { name: "Appearance", exact: true }).click();
   // Present in every state of the pane, and only once this project's scope has
   // hydrated (it renders a loading note with a Retry button until then). The
   // mode chip floats on the always-mounted editor pad post-VC-111.
@@ -451,7 +458,13 @@ const segment = (page, testId, choice) =>
 const canvasRevert = (page) =>
   page
     .getByTestId("project-appearance-canvas-row")
-    .getByRole("button", { name: /^Reset Canvas to the app-wide value/ });
+    .getByRole("button", { name: /^Reset Canvas to the global value/ });
+
+/** The revert opens a small popover; its one action is what clears the row. */
+async function revertCanvas(page) {
+  await canvasRevert(page).click();
+  await page.getByRole("button", { name: "Revert to global default", exact: true }).click();
+}
 
 /** One step up on the Terminal section's font-size stepper — one overlay write. */
 async function stepTerminalFontSize(page) {
@@ -461,42 +474,60 @@ async function stepTerminalFontSize(page) {
 // ---- the canvas editor ------------------------------------------------------
 
 /**
- * Sets the editor's native 0–1 track (Vibrancy) to an exact value and settles it.
+ * Sets one of the editor's 0–1 dials (Vibrancy, Grain) to an exact value and
+ * settles it.
  *
- * The native value setter plus a bubbling `input` event, rather than a mouse
- * drag on the track: React's `onChange` IS the `input` event, so this is the
- * same signal a drag produces, and it is the only way to land on an exact value
- * — a click on the track lands wherever the thumb geometry puts it, and the
- * assertion would have to be a tolerance instead of a number. The drag gesture
- * itself is exercised on the PAD, where position is the thing being tested.
+ * The dials are ARIA sliders driven from the keyboard: Home/End jump to 0/1 and
+ * each arrow moves one hundredth, which is the only way to land on an exact
+ * value — a drag lands wherever the pointer geometry puts it, and the assertion
+ * would have to be a tolerance instead of a number. The drag gesture itself is
+ * exercised on the PAD, where position is the thing being tested.
  *
- * `blur()` is the settle: `UnitSlider` writes on pointerup, keyup or blur, and a
- * synthetic input event produces none of the first two. It has to be FOCUSED
- * first or `blur()` is a no-op — React's `onBlur` rides `focusout`, which an
- * unfocused element never dispatches, and the observed failure is a preview that
- * paints and is never written.
+ * Arrows are held (repeated keydowns, one keyup) so the dial previews every
+ * step and writes once: the dial settles on keyup and on blur.
  */
 async function setSlider(page, label, value) {
   const slider = page.getByRole("slider", { name: label, exact: true });
-  await slider.evaluate((element, next) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    element.focus();
-    setter?.call(element, next);
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    element.blur();
-  }, value);
+  const target = Math.round(Number(value) * 100);
+  const fromTop = target >= 50;
+  const arrow = fromTop ? "ArrowDown" : "ArrowUp";
+  const steps = fromTop ? 100 - target : target;
+  await slider.scrollIntoViewIfNeeded();
+  await slider.focus();
+  await page.keyboard.press(fromTop ? "End" : "Home");
+  if (steps > 0) {
+    for (let i = 0; i < steps; i += 1) await page.keyboard.down(arrow);
+    await page.keyboard.up(arrow);
+  }
+  await slider.blur();
 }
 
 /**
- * Authors a canvas through the REAL editor: a preset swatch and both faders.
+ * Commits a primary colour through the editor's hex field as ONE discrete edit.
  *
- * Grain and vibrancy are matching native ranges flanking the pad. Both
- * unit values go through `setSlider`: previews on every `input`, one write on
- * settle.
+ * The value and the Enter that settles it are dispatched in the same task, so
+ * the preview and the write land inside one style recalc — the same property a
+ * single click on a colour has, which check 21's paint trace relies on.
+ */
+async function commitPrimaryHex(page, hex) {
+  const field = page.getByRole("textbox", { name: "Primary colour hex" });
+  await field.scrollIntoViewIfNeeded();
+  await field.evaluate((element, next) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(element, next);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  }, hex);
+}
+
+/**
+ * Authors a canvas through the REAL editor: the primary hex and both dials.
+ *
+ * Grain and vibrancy are matching dials beside the pad. Both unit values go
+ * through `setSlider`: previews on every step, one write on settle.
  */
 async function authorCanvas(page, { hex, vibrancy, grain }) {
-  await page.getByRole("button", { name: hex, exact: true }).first().click();
+  await commitPrimaryHex(page, hex);
   await waitUntil(`the canvas to adopt ${hex}`, async () => {
     const stored = await storedGlobalCanvas(page);
     return stored?.stops[stored.primaryIndex]?.hex === hex;
@@ -1241,7 +1272,7 @@ cursor-style = block
     const before = await storedTheme(page);
     const untouchedOnOpen = (before.projects[projectAId]?.canvas ?? null) === null;
 
-    await page.getByRole("button", { name: WORKSPACE_HEX, exact: true }).first().click();
+    await commitPrimaryHex(page, WORKSPACE_HEX);
     projectBackground = await waitUntil(
       "the workspace canvas to repaint",
       async () => {
@@ -1326,7 +1357,7 @@ cursor-style = block
       await watchBackgroundPaints(page);
       await watchScopeRepaint(page);
 
-      await page.getByRole("button", { name: REGLOBAL_HEX, exact: true }).first().click();
+      await commitPrimaryHex(page, REGLOBAL_HEX);
       const globalCanvas = await waitUntil("the global canvas to change", async () => {
         const stored = await storedTheme(page);
         return stored.canvas?.stops[stored.canvas.primaryIndex]?.hex === REGLOBAL_HEX
@@ -1340,7 +1371,7 @@ cursor-style = block
       const stored = await storedTheme(page);
       // At most ONE excursion is tolerated, and measured runs show zero. The
       // editor's every-edit-previews-first contract (canvas-editor.tsx)
-      // deliberately outranks both scopes, so pressing a swatch on the app-wide
+      // deliberately outranks both scopes, so committing a colour on the app-wide
       // editor could in principle flash the picked canvas over a workspace
       // override — but `commit()` runs the preview and the write in ONE task, so
       // the whole excursion is inside a single style recalc and never reaches a
@@ -1363,7 +1394,7 @@ cursor-style = block
 
   await attempt(22, "Inherit puts the workspace back on the app-wide canvas", async () => {
     await openProjectAppearance(page);
-    await canvasRevert(page).click();
+    await revertCanvas(page);
     const stored = await waitUntil("the workspace row to clear", async () => {
       const state = await storedTheme(page);
       return state.projects[projectAId]?.canvas === null ? state : null;

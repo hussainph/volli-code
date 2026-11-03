@@ -168,7 +168,10 @@ describe("Configure → Skills", () => {
       container.remove();
       vi.unstubAllGlobals();
     }
-  });
+    // A full client mount of the table (a Select and two tooltip actions per
+    // row) and then the dialog's rendered markdown: no loop, but more than the
+    // default 5s budget on a machine shared with other test runs.
+  }, 20_000);
 
   describe("ruled", () => {
     const tdd = skills[0]!;

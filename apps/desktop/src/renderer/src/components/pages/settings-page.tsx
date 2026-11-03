@@ -1,5 +1,5 @@
-import { SettingsNavigation } from "@renderer/components/settings/settings-navigation";
 /** One Settings surface. Legacy Configure entry points deep-link into project scope. */
+import { SettingsNavigation } from "@renderer/components/settings/settings-navigation";
 import * as React from "react";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { hasAccountEnrollment, useExperimentsStore } from "@renderer/stores/experiments";
@@ -60,7 +60,15 @@ export function SettingsPage({
   );
   const scope = activeKey.startsWith(PROJECT_PREFIX) ? "project" : "app";
   const appGroups = React.useMemo(
-    () => settingsGroups(initialSignInProviderId, { logs, hosts, moves: hosts, account, runners, experiments }),
+    () =>
+      settingsGroups(initialSignInProviderId, {
+        logs,
+        hosts,
+        moves: hosts,
+        account,
+        runners,
+        experiments,
+      }),
     [initialSignInProviderId, logs, hosts, account, runners, experiments],
   );
   const projectGroups = React.useMemo<readonly PrefGroup[]>(
