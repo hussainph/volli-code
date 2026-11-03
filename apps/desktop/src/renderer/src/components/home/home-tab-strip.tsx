@@ -147,7 +147,7 @@ export interface HomeTabListProps {
   onReorder?(movedId: string, ids: readonly string[]): void;
   /** Double-click / Keep Open on a preview File tab. */
   onPinFile(relPath: string): void;
-  /** "Close Others" on a File tab — closes every OTHER File tab, guards included. */
+  /** "Close others" on a File tab — closes every OTHER File tab, guards included. */
   onCloseOtherFiles(relPath: string): void;
 }
 
@@ -497,7 +497,7 @@ function BoardTab({
  * These are main-checkout files, opened out of the same `FileWorkspaceState`
  * reducer ticket File tabs share, and this tab carries its own menu: the two
  * Copy Path items, Word Wrap, then Keep Open (disabled once pinned, so the menu
- * keeps one shape), Close, Close Others. The ticket strip differs because a
+ * keeps one shape), Close, Close others. The ticket strip differs because a
  * pinned ticket File tab has no menu at all, which would leave Home's keyboard
  * users with no route to Close.
  */
@@ -562,7 +562,7 @@ function HomeFileTab({
           Close
         </ContextMenuItem>
         <ContextMenuItem icon={XSquareIcon} onSelect={onCloseOthers}>
-          Close Others
+          Close others
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

@@ -37,7 +37,7 @@ describe("WorkspaceDependenciesNotice", () => {
       />,
     );
 
-    expect(html).toContain("Running yarn install…");
+    expect(html).toContain("Running yarn install");
     // One per action: nothing here can be pressed twice into the same shell.
     expect(html.match(/disabled=""/g)).toHaveLength(3);
   });

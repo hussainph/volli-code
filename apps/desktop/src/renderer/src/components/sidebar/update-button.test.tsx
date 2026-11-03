@@ -6,7 +6,7 @@ import {
 } from "@volli/shared";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { UpdateUiState } from "../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -28,8 +28,10 @@ const ERROR_STATE: UpdateUiState = {
 
 let container: HTMLDivElement;
 let root: Root;
+let originalApi: PropertyDescriptor | undefined;
 
 beforeEach(() => {
+  originalApi = Object.getOwnPropertyDescriptor(window, "api");
   useUpdateStore.setState({ state: null, dialogOpen: false, promptedVersions: [] });
   container = document.createElement("div");
   document.body.append(container);
@@ -40,6 +42,8 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   useUpdateStore.setState({ state: null });
+  if (originalApi) Object.defineProperty(window, "api", originalApi);
+  else Reflect.deleteProperty(window, "api");
 });
 
 describe("UpdateButton failure copy", () => {
@@ -70,7 +74,7 @@ describe("UpdateButton failure copy", () => {
 
     const summary = summarizeUpdateFailure(raw ?? UPDATE_FAILURE_FALLBACK).replace(/\.$/u, "");
     const prefix = "Update check failed: ";
-    const suffix = summary.endsWith("…") ? " Select to retry." : ". Select to retry.";
+    const suffix = summary.endsWith("…") ? " Select for details." : ". Select for details.";
     const label = button!.getAttribute("aria-label");
     const tooltip = document.querySelector('[role="tooltip"]')?.textContent;
     expect(label).toBe(`${prefix}${summary}${suffix}`);
@@ -89,4 +93,50 @@ describe("UpdateButton failure copy", () => {
       expect(summary).toBe(UPDATE_FAILURE_FALLBACK);
     }
   });
+});
+
+describe("UpdateButton actions", () => {
+  it("opens a failure notice without retrying, then retries explicitly", async () => {
+    const check = vi.fn(async () => ({ ok: true }));
+    Object.defineProperty(window, "api", { configurable: true, value: { updates: { check } } });
+    useUpdateStore.setState({ state: { ...ERROR_STATE, error: "Network is offline." } });
+    await act(async () => {
+      root.render(
+        <TooltipProvider>
+          <UpdateButton />
+        </TooltipProvider>,
+      );
+    });
+    await act(async () => container.querySelector("button")!.click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Network is offline.");
+    expect(check).not.toHaveBeenCalled();
+    const retry = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Retry update check",
+    );
+    expect(retry).toBeDefined();
+    await act(async () => retry!.click());
+    expect(check).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it.each(["checking", "downloading"] as const)(
+    "does not request another check while %s",
+    async (phase) => {
+      const check = vi.fn(async () => ({ ok: true }));
+      Object.defineProperty(window, "api", { configurable: true, value: { updates: { check } } });
+      useUpdateStore.setState({ state: { ...ERROR_STATE, phase, error: null } });
+      await act(async () => {
+        root.render(
+          <TooltipProvider>
+            <UpdateButton />
+          </TooltipProvider>,
+        );
+      });
+      const button = container.querySelector("button")!;
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      await act(async () => button.click());
+      expect(check).not.toHaveBeenCalled();
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    },
+  );
 });

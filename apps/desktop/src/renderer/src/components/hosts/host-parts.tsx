@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * The drawings the host surfaces share, ported from the VC-615 lab kit
  * (`lab/remote-host/parts.tsx` on PR #745): the host's tile, text that
@@ -222,28 +223,11 @@ export function ProgressLine({ value, label }: { value: number; label: string })
 /** A running step's mark: a ring with one arc turning. */
 export function ActiveStepMark() {
   return (
-    <svg
+    <Spinner
       aria-hidden
-      viewBox="0 0 16 16"
-      className="size-4 shrink-0 animate-spin text-foreground [animation-duration:900ms] motion-reduce:animate-none"
-    >
-      <circle
-        cx="8"
-        cy="8"
-        r="6"
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity="0.15"
-        strokeWidth="1.75"
-      />
-      <path
-        d="M8 2 a6 6 0 0 1 6 6"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-      />
-    </svg>
+      role="presentation"
+      className="shrink-0 text-foreground [animation-duration:900ms] motion-reduce:animate-none"
+    />
   );
 }
 

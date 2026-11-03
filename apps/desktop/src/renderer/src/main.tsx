@@ -8,6 +8,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage } from "@volli/shared";
 import { toast } from "sonner";
+import { PauseCircleIcon, PlayCircleIcon } from "@phosphor-icons/react";
 
 import App from "./App";
 import { BootErrorPanel } from "./components/boot-error-panel";
@@ -128,6 +129,7 @@ async function main() {
     );
     const target = model.target;
     toast(model.message, {
+      icon: <PauseCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       ...(target === null
         ? {}
@@ -154,6 +156,7 @@ async function main() {
     const model = sessionStartToastModel(notice);
     const target = model.target;
     toast(model.message, {
+      icon: <PlayCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       action: {
         label: "Open session",

@@ -44,6 +44,7 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import { useCanSendSession } from "@renderer/lib/cloud-session-read-only";
 import { launchStore } from "@renderer/stores/launch";
+import { ButtonGroup } from "@renderer/components/ui/button-group";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -74,19 +75,19 @@ const CHORD = { chat: "⌘T", terminal: "⌥⌘T" } as const;
  */
 export type NewSessionPlacement = "strip" | "rail" | "empty";
 
-/** Pill scale, emphasis and label per room. */
+/** Control scale, emphasis and label per room. */
 const DRAWING = {
-  // A tab strip: h-6 beside h-7/h-8 tabs, ghost so the tabs stay the loud thing.
-  strip: { size: "sm", caret: "icon-sm", variant: "ghost", label: "Chat" },
+  // Quiet outline lift beside the tabs.
+  strip: { size: "sm", caret: "icon-sm", variant: "outline", label: "Chat" },
   // The 300px ticket rail's Sessions header: one step down, level with a
-  // text-label heading.
-  rail: { size: "xs", caret: "icon-xs", variant: "ghost", label: "Chat" },
+  // group heading.
+  rail: { size: "xs", caret: "icon-xs", variant: "outline", label: "Chat" },
   // The only affordance on an empty surface, so it is solid and says what it
   // does rather than naming a kind among tabs that no longer exist.
   empty: { size: "sm", caret: "icon-sm", variant: "default", label: "New chat" },
 } as const satisfies Record<
   NewSessionPlacement,
-  { size: "sm" | "xs"; caret: "icon-sm" | "icon-xs"; variant: "ghost" | "default"; label: string }
+  { size: "sm" | "xs"; caret: "icon-sm" | "icon-xs"; variant: "outline" | "default"; label: string }
 >;
 
 /** What every row in either menu needs, and nothing about how it is drawn. */
@@ -178,7 +179,7 @@ export function NewSessionControl({
 }: {
   /**
    * The project a new Session would run in. While its host cannot serve
-   * (VC-576) the whole control stands down, greyed as in the lab.
+   * (VC-576) the whole control stands down.
    */
   projectId: string | null;
   /** A Session of either kind is already booting. */
@@ -262,21 +263,10 @@ export function NewSessionControl({
     <div className="inline-flex min-w-0 items-center gap-1">
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          {/* The press-scale sits on the WRAPPER, not on each half: `:active`
-            matches an ancestor of the pressed element, so the whole pill
-            depresses as one object. Halves scaling independently would open a
-            seam mid-press, which reads as two buttons that happen to touch —
-            the exact thing this shape is trying not to be. Disabled dims here
-            too (and the halves cancel their own `disabled:opacity-50`, which
-            would otherwise multiply into an unreadable 25%). */}
-          <div
+          <ButtonGroup
             {...readOnlyMark(canWrite)}
             className={cn(
-              // `transition-transform` already covers `scale` (v4 expands it to
-              // transform,translate,scale,rotate), so only the reduced-motion
-              // cancel had to change: `transform: none` cannot cancel a `scale`
-              // declaration. See the press note in `ui/button.tsx`.
-              "inline-flex shrink-0 items-center rounded-full transition-transform duration-100 ease-out active:scale-[0.97] motion-reduce:scale-100!",
+              "shrink-0 rounded-control",
               disabled && "pointer-events-none opacity-50",
               className,
             )}
@@ -289,12 +279,7 @@ export function NewSessionControl({
               aria-label="New chat"
               {...(shortcuts ? { "aria-keyshortcuts": "Meta+T" } : {})}
               onClick={onNewChat}
-              // `scale-100!`, not `scale-100`: both halves' opt-out and the
-              // Button's own `active:scale-[0.97]` land on the same element at
-              // the same (0,1,1), and Tailwind emits the arbitrary value last —
-              // so the plain cancel lost, and each half depressed inside the
-              // wrapper that was already depressing.
-              className="rounded-r-none pr-1 active:scale-100! disabled:opacity-100"
+              className="disabled:opacity-100"
             >
               {/* Outline, the baseline. The Button's own size rule draws this at
                 14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier
@@ -303,7 +288,6 @@ export function NewSessionControl({
               <PlusIcon />
               {drawing.label}
             </Button>
-            <span aria-hidden className="h-3 w-px bg-border" />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -314,11 +298,8 @@ export function NewSessionControl({
                   // Not "other session kinds" any more: a Browser Tab is not a
                   // Session, and this menu now holds both.
                   aria-label="Other things to open"
-                  // Narrower than a stock icon button: this segment holds one
-                  // 12px caret and exists to be SEEN, not aimed at — the whole
-                  // menu is also on right-click, so a tab strip pays the smallest
-                  // width that still says "there is another kind".
-                  className="group w-4! rounded-l-none px-0 active:scale-100! disabled:opacity-100"
+                  // Keep an icon-sized target; the shared group owns the seam.
+                  className="group px-0 disabled:opacity-100"
                 >
                   <CaretDownIcon
                     weight="bold"
@@ -331,15 +312,19 @@ export function NewSessionControl({
                   />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align={align} onCloseAutoFocus={handleCloseAutoFocus}>
+              <DropdownMenuContent
+                className="min-w-52"
+                align={align}
+                onCloseAutoFocus={handleCloseAutoFocus}
+              >
                 {items}
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
+          </ButtonGroup>
         </ContextMenuTrigger>
         {/* The same items on right-click, so turning to the caret is a
           convenience and never the only route. */}
-        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+        <ContextMenuContent className="min-w-52" onCloseAutoFocus={handleCloseAutoFocus}>
           {newSessionMenuRows("context", {
             shortcuts,
             onNewChat,

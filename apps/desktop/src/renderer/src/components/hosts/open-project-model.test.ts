@@ -130,8 +130,8 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
       "Cloned into /srv/volli on the host, then added.",
     );
     expect(sourceHint({ kind: "git", gitUrl: "u" }, true)).toBe("Cloned on the host, then added.");
-    expect(creatingLine({ kind: "git", gitUrl: "u" }, "box")).toBe("Cloning on box…");
-    expect(creatingLine({ kind: "path", path: "/a" }, "box")).toBe("Adding it on box…");
+    expect(creatingLine({ kind: "git", gitUrl: "u" }, "box")).toBe("Cloning on box");
+    expect(creatingLine({ kind: "path", path: "/a" }, "box")).toBe("Adding on box");
   });
 
   it("words a call that threw", () => {

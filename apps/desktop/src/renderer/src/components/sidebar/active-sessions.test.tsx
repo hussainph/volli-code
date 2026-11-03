@@ -304,6 +304,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     await mount();
 
     expect(loading().length).toBe(2);
+    expect(container?.querySelector("[data-next-action]")).toBeNull();
     expect(bandText("active")).not.toContain("No active sessions");
     expect(bandText("previous")).not.toContain("Nothing yet");
 
@@ -321,6 +322,8 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(loading().length).toBe(0);
     expect(bandText("active")).toContain("No active sessions");
     expect(bandText("previous")).toContain("Nothing yet");
+    expect(container?.querySelector('[data-next-action="active"]')).not.toBeNull();
+    expect(container?.querySelector('[data-next-action="previous"]')).not.toBeNull();
   });
 
   it("stands both skeletons down when the project listing fails, without either false empty", async () => {
@@ -333,6 +336,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(bandText("previous")).not.toContain("Nothing yet");
     expect(bandText("active")).toContain("Couldn't load sessions.");
     expect(bandText("previous")).toContain("Couldn't load sessions.");
+    expect(container?.querySelector("[data-next-action]")).toBeNull();
   });
 
   it("names a host that grants no Sessions, once, instead of either empty (VC-713, B3)", async () => {
@@ -344,6 +348,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
       expect(bandText("active")).not.toContain("No active sessions");
       expect(bandText("previous")).not.toContain(reason);
       expect(bandText("previous")).not.toContain("Nothing yet");
+      expect(container?.querySelector("[data-next-action]")).toBeNull();
     } finally {
       useRemoteSessionAvailabilityStore.setState({ unavailable: {} });
     }
@@ -708,6 +713,28 @@ describe("the Previous band's cap (VC-116)", () => {
     ).toBe(String(PREVIOUS_BAND_LIMIT * 2 + 5));
     expect(reachButton("Show more")).not.toBeNull();
     expect(reachButton("Show less")).toBeNull();
+  });
+
+  it("draws its reach actions as the shared ghost sm Button, restating none of its scale", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT * 2 + 5);
+    await mount();
+    await pressReach("Show more");
+
+    for (const label of ["Show more", "Show less"] as const) {
+      const button = reachButton(label);
+      expect(button?.dataset.slot).toBe("button");
+      expect(button?.dataset.variant).toBe("ghost");
+      expect(button?.dataset.size).toBe("sm");
+      // The control scale owns height, type and the icon gap; the band only
+      // mutes the ink.
+      const classes = button?.className.split(/\s+/) ?? [];
+      expect(classes).toContain("text-muted-foreground");
+      expect(classes).not.toContain("h-6");
+      expect(classes).not.toContain("gap-1.5");
+      expect(classes).not.toContain("w-auto");
+      expect(classes).not.toContain("text-sm");
+      expect(button?.closest('[data-sidebar="menu-button"]')).toBeNull();
+    }
   });
 
   it("widens a page at a time, and collapses back to the cap, keeping focus in the band", async () => {

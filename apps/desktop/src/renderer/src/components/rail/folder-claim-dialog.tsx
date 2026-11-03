@@ -94,6 +94,7 @@ export function FolderClaimDialog() {
                 <Button
                   key={candidate.id}
                   variant="outline"
+                  className="h-auto justify-start py-2 text-left"
                   disabled={busy}
                   onClick={() =>
                     void choose(async () => {
@@ -107,14 +108,18 @@ export function FolderClaimDialog() {
                   }
                 >
                   <ArrowsLeftRightIcon />
-                  This is {candidate.name}
-                  <span className="truncate text-ui text-muted-foreground">{candidate.path}</span>
+                  <span className="flex min-w-0 flex-col gap-1">
+                    <span>Relink {candidate.name}</span>
+                    <span className="truncate font-mono text-label text-muted-foreground">
+                      {candidate.path}
+                    </span>
+                  </span>
                 </Button>
               ))}
             </div>
 
             <DialogFooter>
-              <Button variant="ghost" disabled={busy} onClick={() => dismiss()}>
+              <Button variant="outline" disabled={busy} onClick={() => dismiss()}>
                 Cancel
               </Button>
               <Button disabled={busy} onClick={() => void choose(addAsNew)}>

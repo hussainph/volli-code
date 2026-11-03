@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * The title bar's host chip and its switcher (VC-576; VC-615 flows 5–6,
  * ported from the lab's `#host-health`).
@@ -227,15 +228,15 @@ export function HostSwitcher({
       ))}
       {addHostOffered ? (
         <MenuAction
-          icon={PlusIcon}
+          icon={addActivity?.status === "running" ? Spinner : PlusIcon}
           label={
             addActivity === null
               ? "Add a host…"
               : addActivity.status === "running"
-                ? `Adding ${addActivity.name}…`
+                ? `Adding ${addActivity.name}`
                 : addActivity.status === "done"
                   ? `${addActivity.name} added — view…`
-                  : `Adding ${addActivity.name} — needs attention…`
+                  : `Adding ${addActivity.name} — needs attention`
           }
           onAct={() => {
             onDone();
@@ -307,7 +308,7 @@ function MenuAction({
   label,
   onAct,
 }: {
-  icon: typeof PlusIcon;
+  icon: typeof PlusIcon | typeof Spinner;
   label: string;
   onAct: () => void;
 }) {

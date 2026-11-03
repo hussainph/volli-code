@@ -1,5 +1,7 @@
 import * as React from "react";
 import type { Project } from "@volli/shared";
+import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { Spinner } from "@renderer/components/ui/spinner";
 
 import {
   AlertDialog,
@@ -54,6 +56,7 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
   // Busy foreground processes across the project's live sessions, filled in when
   // the (fail-open) probe resolves — the dialog renders immediately regardless.
   const [busyProcesses, setBusyProcesses] = React.useState<string[]>([]);
+  const [removing, setRemoving] = React.useState(false);
   // The structured Sessions and background shells the host also stops (VC-796),
   // read from what this window already holds.
   const openTurns = useProjectSessionsStore((state) =>
@@ -96,10 +99,26 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
             ))}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-muted/30 px-2 py-2">
+          <FolderOpenIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 font-mono text-ui [overflow-wrap:anywhere]">{project.path}</span>
+        </div>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={() => removeProject(project.id)}>
-            Remove
+          <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={removing}
+            onClick={(event) => {
+              event.preventDefault();
+              if (removing) return;
+              setRemoving(true);
+              void removeProject(project.id)
+                .then(() => onOpenChange(false))
+                .finally(() => setRemoving(false));
+            }}
+          >
+            {removing ? <Spinner /> : null}
+            {removing ? "Removing" : "Remove project"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
