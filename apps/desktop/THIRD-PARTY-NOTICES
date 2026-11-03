@@ -13172,7 +13172,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-7. VENDORED SOURCES (5)
+7. VENDORED SOURCES (6)
 =========================================================================================================
 
 Third-party source copied into this repository rather than installed. Each entry
@@ -13232,6 +13232,39 @@ licence is asserted for it. What is known and what is missing:
   than a packaging fact, so this entry records it and asserts nothing;
   apps/desktop/notices/README.md carries it as an open item for the separate licensing
   review.
+
+=========================================================================================================
+Source: Lobe Icons provider logomarks (Groq, xAI, Together, Cerebras, Fireworks)
+Paths: apps/desktop/src/renderer/src/components/models/model-identity.tsx
+Upstream: https://github.com/lobehub/lobe-icons (packages/static-svg/icons)
+SPDX: MIT
+Evidence:
+  The five path strings in model-identity.tsx marked `lobe-icons, MIT` are copied
+  verbatim from the upstream static SVGs (VC-617). The other marks there come from
+  simple-icons, CC0-1.0, which needs no notice.
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 =========================================================================================================
 Source: Pi 0.99.2 harness compatibility sources

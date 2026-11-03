@@ -38,6 +38,16 @@ export const MODEL_MARK_TINTS = {
   cloudflare: "#C09060",
   xiaomi: "#C08A62",
   openrouter: "#8BA3B0",
+  // Brand-adjacent, muted alternatives to the saturated vendor colours.
+  nvidia: "#8BA66F",
+  groq: "#BF8A72",
+  together: "#7A95C2",
+  cerebras: "#B89770",
+  fireworks: "#9B86BD",
+  minimax: "#BA8294",
+  bedrock: "#BF9468",
+  baseten: "#7FA38C",
+  antgroup: "#7A93C2",
   /**
    * The neutral, for marks every vendor renders monochrome (Copilot's goggles,
    * Vercel's triangle, Cursor's cube). A tint invented for them would be a

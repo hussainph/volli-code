@@ -11,7 +11,7 @@ describe("CopyReportDialog", () => {
   it("keeps the trigger disabled until the complete report is ready", () => {
     const html = renderToStaticMarkup(<CopyReportDialog report={report} availability="loading" />);
 
-    expect(html).toContain("Preparing report…");
+    expect(html).toContain("Preparing report");
     expect(html).toContain("disabled");
     expect(html).not.toContain("Report preview");
   });

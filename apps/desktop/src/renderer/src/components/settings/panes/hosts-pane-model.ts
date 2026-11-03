@@ -26,7 +26,7 @@ export function hostHealth(host: HostRecord): HostHealth {
       return { state: "ready", label: "Online" };
     case "connecting":
     case "reconnecting":
-      return { state: "working", label: "Connecting" };
+      return { state: "starting", label: "Connecting" };
     case "offline":
       return { state: "exited", label: "Offline" };
     case "version-skewed":
@@ -55,7 +55,7 @@ export interface HostFact {
   readonly full?: string;
 }
 
-/** A host key fingerprint's short form, as the lab shows it: "q3Zt 9fK1 x0mV". */
+/** A host key fingerprint's short form: "q3Zt 9fK1 x0mV". */
 export function shortFingerprint(fingerprint: string): string {
   const body = fingerprint.replace(/^SHA256:/u, "");
   return (body.slice(0, 12).match(/.{1,4}/gu) ?? []).join(" ");

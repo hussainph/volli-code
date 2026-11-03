@@ -217,6 +217,16 @@ function orphanSection(): HTMLElement {
   return section;
 }
 
+/** The Notice live region whose message contains `text` — announced, and never holding a control. */
+function announcedNotice(text: string): HTMLElement {
+  const match = [
+    ...orphanSection().querySelectorAll<HTMLElement>('[role="status"][aria-live="polite"]'),
+  ].find((node) => node.textContent?.includes(text));
+  if (!match) throw new Error(`no announced notice containing ${text}`);
+  expect(match.querySelector("button")).toBeNull();
+  return match;
+}
+
 function findByText(text: string, scope: ParentNode = orphanSection()): HTMLElement {
   const match = [...scope.querySelectorAll("button")].find((node) =>
     node.textContent?.includes(text),
@@ -302,6 +312,12 @@ describe("Storage → Orphaned worktrees", () => {
     // A stale record cleanup will NOT prune, and a project it could not read.
     expect(text).toContain("not owned by this database");
     expect(text).toContain("worktrees couldn't be listed: index.lock exists");
+    // A failure, so it is drawn as one: an announced error Notice with the
+    // scan as its recovery, not an ordinary row with a clipped message.
+    const unreadable = announcedNotice("worktrees couldn't be listed");
+    expect(
+      findByText("Scan again", unreadable.closest("[class*='rounded-container']")!),
+    ).toBeTruthy();
     // The retention window and the archive policy are both stated.
     expect(text).toContain("Unused folders become eligible after 14 day(s)");
     expect(text).toContain("An orphan has no ticket to archive");
@@ -427,6 +443,9 @@ describe("Storage → Orphaned worktrees", () => {
     expect(text).toContain("Cleanup finished with problems");
     expect(text).toContain("git refused: worktree is locked");
     expect(findByText("Scan again")).toBeTruthy();
+    expect(announcedNotice("Cleanup finished with problems").textContent).toContain(
+      "Each one is listed below with its reason.",
+    );
   });
 
   // The recovery acceptance, on the surface a person actually looks at: a run

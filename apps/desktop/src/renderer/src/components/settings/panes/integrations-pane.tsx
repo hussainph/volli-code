@@ -10,6 +10,8 @@
  * surface reads.
  */
 import * as React from "react";
+import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
+import { AppGlyph } from "../kit/app-glyph";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 
 import type { ExternalApp } from "../../../../../ipc/contract";
@@ -19,9 +21,7 @@ import type { ExternalAppDiscovery } from "@renderer/components/files/external-a
 import {
   AsyncSection,
   CONTROL_W,
-  ItemRow,
   PrefRow,
-  Provenance,
   type AsyncState,
 } from "@renderer/components/settings/kit";
 import {
@@ -81,9 +81,9 @@ export function IntegrationsPane() {
     <AsyncSection
       title="External apps"
       icon={PlugsIcon}
-      hint={<>Volli offers these apps whenever you open a file or a worktree.</>}
+      hint={<>Choose where files and worktrees open outside Volli.</>}
       before={
-        <PrefRow label="Open files in" htmlFor="open-files-in">
+        <PrefRow label="Open files in" icon={FileCodeIcon} htmlFor="open-files-in">
           <Select
             value={selectedValue}
             onValueChange={(value) => {
@@ -102,7 +102,10 @@ export function IntegrationsPane() {
               <SelectItem value={ASK_EVERY_TIME_VALUE}>Ask every time</SelectItem>
               {apps.map((app) => (
                 <SelectItem key={app.id} value={app.id}>
-                  {app.label}
+                  <span className="flex items-center gap-2">
+                    <AppGlyph name={app.label} />
+                    {app.label}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -113,17 +116,7 @@ export function IntegrationsPane() {
       isEmpty={(availableApps) => availableApps.length === 0}
       empty="Volli found no supported apps on this Mac."
     >
-      {(availableApps) => (
-        <>
-          {availableApps.map((app) => (
-            <ItemRow
-              key={app.id}
-              name={app.label}
-              badges={<Provenance>{app.kind === "terminal" ? "Terminal" : "Editor"}</Provenance>}
-            />
-          ))}
-        </>
-      )}
+      {() => null}
     </AsyncSection>
   );
 }

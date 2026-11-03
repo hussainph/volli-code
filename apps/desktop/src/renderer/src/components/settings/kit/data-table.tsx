@@ -38,6 +38,9 @@ import {
   SelectValue,
 } from "@renderer/components/ui/select";
 import { cn } from "@renderer/lib/utils";
+import { Checkbox } from "@renderer/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 
 import { Empty } from "./async-section";
 import { CONTROL_W } from "./control-width";
@@ -84,6 +87,18 @@ export interface TableFilter {
 const ROW_H = 36;
 const HEAD_H = 32;
 
+/**
+ * The width of a hidden-header column of `count` glyph actions (`RowAction`),
+ * measured from what the column holds rather than guessed: each action's
+ * square default-rung target, the cell's `gap-2` between them, and the cell's
+ * `px-2` inset on either side. The same three tokens draw the cell, so a
+ * change to the control rung or the cell's spacing moves this with it.
+ */
+export function actionsColumnWidth(count: number): string {
+  const gaps = Math.max(0, count - 1);
+  return `calc(${count} * var(--spacing-control-default) + ${gaps * 2 + 4} * var(--spacing))`;
+}
+
 export function DataTable<T>({
   items,
   keyOf,
@@ -98,6 +113,8 @@ export function DataTable<T>({
   empty,
   noResults = "Nothing matches.",
   label,
+  selection,
+  minWidth = 560,
 }: {
   items: readonly T[];
   keyOf: (item: T) => string;
@@ -145,6 +162,14 @@ export function DataTable<T>({
   noResults?: string;
   /** The table's accessible name. */
   label: string;
+  /** Selection is controlled and bulk actions receive only the visible selected set. */
+  selection?: {
+    keys: ReadonlySet<string>;
+    onChange(keys: ReadonlySet<string>): void;
+    labelOf(item: T): string;
+  };
+  /** Keep columns legible in narrow windows; the body scrolls horizontally instead of overlapping. */
+  minWidth?: number;
 }) {
   const [ownQuery, setOwnQuery] = React.useState("");
   const effectiveQuery = query ?? ownQuery;
@@ -160,6 +185,32 @@ export function DataTable<T>({
   const withheld = matched.length - shown.length;
   const roving = useRovingRows(shown.length);
 
+  const selected = selection ? shown.filter((item) => selection.keys.has(keyOf(item))) : matched;
+  const selectedCount = selection
+    ? shown.filter((item) => selection.keys.has(keyOf(item))).length
+    : 0;
+  const tableColumns: readonly Column<T>[] = selection
+    ? [
+        {
+          key: "__selection",
+          header: "Select",
+          width: "2.5rem",
+          cell: (item) => (
+            <Checkbox
+              aria-label={`Select ${selection.labelOf(item)}`}
+              checked={selection.keys.has(keyOf(item))}
+              onCheckedChange={(checked) => {
+                const next = new Set(selection.keys);
+                if (checked) next.add(keyOf(item));
+                else next.delete(keyOf(item));
+                selection.onChange(next);
+              }}
+            />
+          ),
+        },
+        ...columns,
+      ]
+    : columns;
   const fill = rows === "fill";
   // The sticky header lives inside the same scroll box and would otherwise eat
   // a row — `rows={8}` was showing seven.
@@ -176,13 +227,13 @@ export function DataTable<T>({
         // of the row. The field itself is the compact w-56 object the provider
         // list carries on its header rail: one search grammar everywhere,
         // never the full-width bar that read as the table's first row.
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 p-2">
           {search && query === undefined ? (
             <TableSearch value={ownQuery} placeholder={placeholder} onChange={setOwnQuery} />
           ) : (
             <span />
           )}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* ONE control replaces N pills. The provenance a reader wanted to
                 scan for is now something they can filter to. */}
             {filter ? (
@@ -199,7 +250,7 @@ export function DataTable<T>({
                 </SelectContent>
               </Select>
             ) : null}
-            {bulk?.(matched)}
+            {bulk?.(selected)}
           </div>
         </div>
       ) : null}
@@ -213,19 +264,19 @@ export function DataTable<T>({
           box allowed to flex to zero shows a header and no rows at all. With a
           floor it keeps three rows and the PAGE scrolls instead. */}
       <div
-        className={cn("overflow-y-auto", fill && "min-h-0 flex-1")}
+        className={cn("overflow-auto", fill && "min-h-0 flex-1")}
         style={fill ? { minHeight: 3 * ROW_H + HEAD_H } : { maxHeight: maxBodyHeight }}
       >
-        <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
+        <table className="w-full border-collapse" style={{ tableLayout: "fixed", minWidth }}>
           <caption className="sr-only">{label}</caption>
           <colgroup>
-            {columns.map((column) => (
+            {tableColumns.map((column) => (
               <col key={column.key} style={{ width: column.width }} />
             ))}
           </colgroup>
           <thead className="sticky top-0 z-10 bg-card">
             <tr>
-              {columns.map((column) => (
+              {tableColumns.map((column) => (
                 <th
                   key={column.key}
                   scope="col"
@@ -234,13 +285,34 @@ export function DataTable<T>({
                     // eyebrow belongs to a section, not a column — using it
                     // here made eight rows of data look like a spreadsheet
                     // embedded in a settings page.
-                    "h-8 border-b border-border/50 px-2 text-ui font-normal text-muted-foreground",
+                    "h-8 border-b border-border/50 px-2 text-ui font-semibold text-foreground",
                     column.align === "end" ? "text-right" : "text-left",
                   )}
                 >
-                  <span className={column.headerHidden ? "sr-only" : undefined}>
-                    {column.header}
-                  </span>
+                  {column.key === "__selection" && selection ? (
+                    <Checkbox
+                      aria-label="Select all visible rows"
+                      checked={
+                        shown.length > 0 && selectedCount === shown.length
+                          ? true
+                          : selectedCount > 0
+                            ? "indeterminate"
+                            : false
+                      }
+                      onCheckedChange={(checked) => {
+                        const next = new Set(selection.keys);
+                        for (const item of shown) {
+                          if (checked) next.add(keyOf(item));
+                          else next.delete(keyOf(item));
+                        }
+                        selection.onChange(next);
+                      }}
+                    />
+                  ) : (
+                    <span className={column.headerHidden ? "sr-only" : undefined}>
+                      {column.header}
+                    </span>
+                  )}
                 </th>
               ))}
             </tr>
@@ -259,11 +331,11 @@ export function DataTable<T>({
                 }}
                 className="border-t border-border/50 outline-none first:border-t-0 hover:bg-accent/40 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               >
-                {columns.map((column) => (
+                {tableColumns.map((column) => (
                   <td
                     key={column.key}
                     className={cn(
-                      "h-9 px-2 text-sm",
+                      "h-9 px-2 py-2 text-ui",
                       column.align === "end" ? "text-right" : "text-left",
                     )}
                   >
@@ -313,7 +385,7 @@ export function TableSearch({
   onChange: (value: string) => void;
 }) {
   return (
-    <InputGroup className="w-56">
+    <InputGroup className="w-56 max-w-full">
       <InputGroupAddon>
         <MagnifyingGlassIcon />
       </InputGroupAddon>
@@ -336,12 +408,19 @@ export function TableSearch({
  * cannot recover is worse than a wrapped one. This is the content itself on
  * hover, not a tutorial tooltip. A cell whose children are not a bare string
  * (a name with a glyph beside it) passes the same text as `title` itself.
+ *
+ * `reveal` upgrades that hover-only title to the shared `ValueReveal`: a
+ * focus stop whose accessible name and tooltip carry the whole value, so a
+ * clipped NAME — the column a reader scans the table by — is readable from
+ * the keyboard too. Pass it for an identity column; a quiet attribute column
+ * can keep the title.
  */
 export function Cell({
   children,
   title,
   muted,
   strong,
+  reveal,
 }: {
   children: React.ReactNode;
   /** The full text on hover, for a cell whose children are not a bare string. */
@@ -353,13 +432,42 @@ export function Cell({
    * description read as one grey run and the eye has no landing point per row.
    */
   strong?: boolean;
+  /** What the value IS (`Skill`), to reveal it whole through `ValueReveal`. */
+  reveal?: string;
 }) {
+  const full = title ?? (typeof children === "string" ? children : undefined);
+  const className = cn(
+    "min-w-0 truncate",
+    muted && "text-muted-foreground",
+    strong && "font-medium",
+  );
+  if (reveal !== undefined && full !== undefined) {
+    return (
+      <ValueReveal term={reveal} full={full} side="top" className={cn(className, "text-left")}>
+        {children}
+      </ValueReveal>
+    );
+  }
   return (
-    <span
-      title={title ?? (typeof children === "string" ? children : undefined)}
-      className={cn("min-w-0 truncate", muted && "text-muted-foreground", strong && "font-medium")}
-    >
+    <span title={full} className={className}>
       {children}
     </span>
+  );
+}
+
+/** Full authored descriptions are one click or keyboard press away, never native-title-only. */
+export function DescriptionCell({ children }: { children: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        className="min-w-0 truncate text-left text-ui text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`Read description: ${children}`}
+      >
+        {children}
+      </PopoverTrigger>
+      <PopoverContent className="max-w-[calc(100vw-2rem)] text-ui" align="start">
+        {children}
+      </PopoverContent>
+    </Popover>
   );
 }

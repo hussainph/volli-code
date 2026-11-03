@@ -1,3 +1,5 @@
+import { CanvasInstrument } from "../kit/canvas-instrument";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
@@ -6,7 +8,7 @@ import { resolveAppearance, type Project } from "@volli/shared";
 
 import { fallbackTerminalThemeLabel, revealPath } from "@renderer/components/theme/appearance-rows";
 import { OverrideControl, PrefRow, PrefSection } from "@renderer/components/settings/kit";
-import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
+import { AppearanceModeChoice } from "@renderer/components/theme/canvas-editor";
 import { describeAppearance } from "@renderer/components/theme/canvas-editor-model";
 import {
   projectTerminalChoice,
@@ -22,34 +24,6 @@ import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { resolveThemeSurface } from "@renderer/theme/apply";
 
-/**
- * Configure → Appearance: one project's per-surface theming (#69).
- *
- * Handoff: same UI slop pass as appearance-settings.tsx — see AGENTS.md.
- *
- * Every surface starts on **Inherit** (#72: per-project theming is off by
- * default), which is the ABSENCE of a stored value rather than a stored
- * "inherit" marker, so a project that has been reset reads exactly like one that
- * was never touched.
- *
- * The terminal surface has no **Custom** any more (VC-413). Entering Custom used
- * to open a picker over a theme catalog vendored out of Ghostty.app; with no
- * catalog there is nothing for a project to pick, and Volli will not write a
- * theme name into a file the user owns just to have something to show. What the
- * row does instead is report the resolved theme and, when this project's own
- * overlay is what set it — by hand, in the file below — offer the revert that
- * removes the key.
- *
- * The app surface is TWO tri-states rather than one, because a project's
- * gradient and its light/dark choice are two independent columns on its row
- * (migration 014) and either can be overridden alone. Both are authored by the
- * same canvas editor the global page mounts, scoped here.
- *
- * The terminal is the one surface with no store setter, by design: its source
- * of truth is the project's ghostty overlay FILE, so this writes the overlay
- * and adopts the appearance main resolves back (#67 — and Inherit REMOVES the
- * key rather than writing a default over the user's own config).
- */
 export function ProjectAppearanceSettings({ project }: { project: Project }) {
   const inScope = useThemeStore((state) => state.projectId === project.id);
 
@@ -73,7 +47,7 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
         {/* A note and a button are not a row, so nothing else spaces them. */}
         <div className="flex flex-col items-start gap-2">
           <p className="text-ui leading-5 text-muted-foreground">
-            Loading this project&rsquo;s appearance…
+            <LoadingLabel>Loading this project&rsquo;s appearance</LoadingLabel>
           </p>
           <Button
             variant="outline"
@@ -93,18 +67,12 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
   // B a gesture that was aimed at project A.
   return (
     <>
-      <ProjectAppThemeSection key={project.id} project={project} />
-      <ProjectTerminalThemeSection key={project.id} projectId={project.id} />
+      <ProjectAppThemeSection key={`app:${project.id}`} project={project} />
+      <ProjectTerminalThemeSection key={`terminal:${project.id}`} projectId={project.id} />
     </>
   );
 }
 
-/**
- * The project's own theming columns (migration 014), as the theme store's
- * scope descriptor. Read off the project ROW rather than fetched: the row
- * already arrived in the bootstrap payload, and a second read path would be a
- * second answer to "what is this project's canvas?".
- */
 function projectScope(project: Project) {
   return {
     projectId: project.id,
@@ -113,28 +81,6 @@ function projectScope(project: Project) {
   };
 }
 
-/**
- * This project's mode and its own gradient — the SAME PICKER the global page
- * mounts, wearing this project's scope.
- *
- * ONE SECTION, TWO SCOPES, and that is the whole subtlety. The two settings
- * stay genuinely independent: a project may pin dark while inheriting the
- * gradient, or take its own gradient and still follow the app-wide mode.
- *
- * TOUCHING THE PICKER IS THE OVERRIDE — there is no "Give this project its
- * own" gate to press first (that was exactly the enter-a-mode step
- * `kit/override.tsx` retired everywhere else). The editor mounts on the
- * project's EFFECTIVE canvas (its own, else the app-wide one); the first edit
- * previews from there and the commit writes the project row, which is what
- * creates the override (`commitPreview` → `setProjectCanvas`). Divergence is
- * then said once per scope, in the override grammar: the mode's revert rides
- * the pad chip beside the control it reverts, and the canvas gets one quiet
- * row below the editor that EXISTS only while a project canvas does.
- *
- * The editor's own preview mechanism is scope-aware, so a drag here paints
- * this window and commits to this project's `projects` row — the global
- * canvas is never touched by it.
- */
 function ProjectAppThemeSection({ project }: { project: Project }) {
   const own = useThemeStore((state) => state.projectOverride?.canvas ?? null);
   const globalCanvas = useThemeStore((state) => state.globalCanvas);
@@ -161,63 +107,55 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
   };
 
   return (
-    <PrefSection title="App theme" icon={PaletteIcon}>
-      <CanvasEditor
+    <PrefSection title="Theme" icon={PaletteIcon}>
+      <PrefRow
+        label="Mode"
+        description={appearance === null ? "Global default" : "Project override"}
+      >
+        <OverrideControl
+          label="Mode"
+          inheritedValue={inherited}
+          overridden={appearance !== null}
+          onRevert={() => writeMode(null)}
+        >
+          <AppearanceModeChoice
+            iconOnly
+            value={mode}
+            testId="project-appearance-mode"
+            onChange={writeMode}
+          />
+        </OverrideControl>
+      </PrefRow>
+      <CanvasInstrument
         scope={scope}
         canvas={resolveThemeSurface(own, globalCanvas).value}
         resolved={resolved}
-        mode={
-          <OverrideControl
-            label="Mode"
-            inheritedValue={inherited}
-            overridden={appearance !== null}
-            onRevert={() => writeMode(null)}
-          >
-            <AppearanceModeChoice
-              iconOnly
-              value={mode}
-              testId="project-appearance-mode"
-              onChange={writeMode}
-            />
-          </OverrideControl>
-        }
       />
 
-      {own === null ? null : (
-        <PrefRow label="Canvas" align="center" testId="project-appearance-canvas-row">
+      {
+        <PrefRow
+          label="Canvas"
+          description={own === null ? "Global default" : "Project override"}
+          testId="project-appearance-canvas-row"
+        >
           <OverrideControl
             label="Canvas"
-            inheritedValue="the app-wide canvas"
-            overridden
+            inheritedValue="the global canvas"
+            overridden={own !== null}
             onRevert={() => {
               void useThemeStore.getState().setProjectCanvas(project.id, null);
             }}
           >
-            <span className="text-ui text-muted-foreground">This project&rsquo;s own</span>
+            <span className="text-ui text-muted-foreground">
+              {own === null ? "Global default" : "Project override"}
+            </span>
           </OverrideControl>
         </PrefRow>
-      )}
+      }
     </PrefSection>
   );
 }
 
-/**
- * Terminal surface: this project's ghostty overlay.
- *
- * There is no store setter here on purpose — the value lives in a FILE, one
- * layer below Volli's global overlay and the user's own config, and main hands
- * back the freshly-resolved chain so the provenance chip updates without a
- * second round trip (#67). Inherit REMOVES the key: the project overlay is the
- * last layer, so leaving a key behind would pin the terminal to whatever Volli
- * last wrote instead of letting the config chain win again.
- *
- * WHAT THIS SECTION CAN STILL DO, after the catalog left (VC-413): report, and
- * revert. "Is this project overriding its terminal theme?" is still answered
- * honestly — from the resolved chain's PROVENANCE, so a key the user hand-wrote
- * into this project's overlay counts exactly like one Volli wrote, which is what
- * #68 promised. The revert is still a key REMOVAL. What is gone is the only
- * thing that needed a catalog: choosing a name from a list.
- */
 function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
   const terminal = useThemeStore((state) => state.terminal);
   // The fallback palette carries a name per mode, so the label has to follow the
@@ -253,7 +191,11 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
       icon={TerminalWindowIcon}
       hint={<>Volli writes an overlay file. It never edits your Ghostty config.</>}
     >
-      <PrefRow label={rows.theme.label} testId="project-appearance-terminal-row">
+      <PrefRow
+        label={rows.theme.label}
+        description={rows.theme.sourceLabel}
+        testId="project-appearance-terminal-row"
+      >
         <OverrideControl
           label="Terminal theme"
           inheritedValue={shown}

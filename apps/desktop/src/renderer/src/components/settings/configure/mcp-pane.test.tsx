@@ -224,10 +224,10 @@ describe("the server table", () => {
     const table = document.body.querySelector("table")!;
     expect(table.querySelector("caption")?.textContent).toBe("MCP servers");
     expect([...table.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual([
+      "Enabled",
       "Server",
       "Tools",
       "Status",
-      "Enabled",
       "Actions",
     ]);
     expect(table.querySelectorAll('th[scope="col"]')).toHaveLength(5);
@@ -235,9 +235,9 @@ describe("the server table", () => {
     expect(rows).toHaveLength(2);
     for (const row of rows) {
       expect(row.querySelectorAll("td")).toHaveLength(5);
-      expect(row.children[0]?.querySelector('button[aria-label^="Open"]')).not.toBeNull();
-      expect(row.children[1]?.querySelector('button[aria-label^="Choose"]')).not.toBeNull();
-      expect(row.children[3]?.querySelector('[role="switch"]')).not.toBeNull();
+      expect(row.children[1]?.querySelector('button[aria-label^="Open"]')).not.toBeNull();
+      expect(row.children[2]?.querySelector('button[aria-label^="Choose"]')).not.toBeNull();
+      expect(row.children[0]?.querySelector('[role="switch"]')).not.toBeNull();
       expect(row.children[4]?.querySelector('button[aria-label^="More"]')).not.toBeNull();
     }
     await click(labelled("Choose Fixture tools"));
@@ -397,6 +397,25 @@ describe("the server table", () => {
   });
 });
 
+describe("server read recovery", () => {
+  for (const rejected of [false, true]) {
+    it(`shows a failed read without an empty state and retries (${rejected ? "rejection" : "result"})`, async () => {
+      const list = vi.fn().mockResolvedValue({ ok: true, servers: [record()], operations: [] });
+      if (rejected) list.mockRejectedValueOnce(new Error("Database is busy."));
+      else list.mockResolvedValueOnce({ ok: false, error: "Database is busy." });
+      await render({ list });
+      expect(text()).toContain("Couldn't read MCP servers");
+      expect(text()).toContain("Database is busy.");
+      expect(text()).not.toContain("No MCP servers yet.");
+      await click(button("Retry"));
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(list).toHaveBeenLastCalledWith({ projectId: project.id });
+      expect(text()).toContain("Fixture");
+      expect(text()).not.toContain("Couldn't read MCP servers");
+    });
+  }
+});
+
 describe("opening a server", () => {
   it("shows its tools with descriptions, grouped and selectable, and saves tools alone without connecting", async () => {
     const saved = record({
@@ -423,7 +442,7 @@ describe("opening a server", () => {
     expect(dialog().textContent).toContain("list_items does a thing");
     expect(dialog().textContent).toContain("Read-only");
     expect(dialog().textContent).toContain("Can make changes");
-    expect(dialog().textContent).toContain("1 of 3 on");
+    expect(dialog().textContent).toContain("1 of 3 selected");
     // The filter, not the first button, has the caret: a long list is started there.
     expect(document.activeElement).toBe(dialog().querySelector('input[type="search"]'));
     expect(button("Save", dialog()).disabled).toBe(true);
@@ -991,11 +1010,11 @@ describe("sign-in and credentials (VC-470)", () => {
       if (surface === "saved dialog") await click(labelled("Open Sentry"));
       const scope = surface === "row" ? document.body : dialog();
       await click(button("Sign in", scope));
-      expect(text()).toContain(surface === "row" ? "Signing in…" : "Waiting for the browser");
+      expect(text()).toContain(surface === "row" ? "Signing in" : "Waiting for the browser");
 
       await act(async () => pending.reject(new Error("IPC unavailable")));
 
-      expect(text()).not.toContain("Signing in…");
+      expect(text()).not.toContain("Signing in");
       expect(text()).not.toContain("Waiting for the browser");
       expect(scope.querySelector('[role="alert"]')?.textContent).toBe(
         "Could not sign in. Try again.",
@@ -1028,7 +1047,7 @@ describe("sign-in and credentials (VC-470)", () => {
     });
 
     await click(button("Sign in"));
-    expect(text()).toContain("Signing in…");
+    expect(text()).toContain("Signing in");
     await click(button("Cancel"));
     expect(cancelSignIn).toHaveBeenCalledWith({ projectId: project.id, serverId: "remote-1" });
     expect(document.body.querySelector('[role="alert"]')).toBeNull();
@@ -1262,6 +1281,8 @@ describe("recent activity (VC-380)", () => {
 
   it("says when the list itself could not be read", async () => {
     await render({ list: vi.fn(async () => ({ ok: false as const, error: "No database." })) });
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe("No database.");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("No database.");
+    expect(text()).not.toContain("No MCP servers yet.");
+    expect(button("Retry")).toBeDefined();
   });
 });

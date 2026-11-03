@@ -1,10 +1,11 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /** Credential inventory is metadata-only; replacement is a write-only IPC. */
 import * as React from "react";
 import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import type { Project } from "@volli/shared";
 import type { CredentialStatus, SecretMetadata } from "../../../../../ipc/secrets";
 
-import { Empty, PrefSection, SectionAction } from "@renderer/components/settings/kit";
+import { AsyncSection, DataTable, Cell, SectionAction } from "@renderer/components/settings/kit";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,12 +18,32 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
+import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
+import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@renderer/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@renderer/components/ui/dropdown-menu";
 import { toastError } from "@renderer/lib/toast";
 
 export function SecretsPane({ project }: { project: Project }) {
   const [secrets, setSecrets] = React.useState<readonly SecretMetadata[]>([]);
   const [credentials, setCredentials] = React.useState<CredentialStatus | null>(null);
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [editing, setEditing] = React.useState<SecretMetadata | null>(null);
+  const [revoking, setRevoking] = React.useState<SecretMetadata | null>(null);
+  const revokeLatch = React.useRef(false);
+  const [busy, setBusy] = React.useState(false);
   const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
 
   React.useEffect(() => {
@@ -41,7 +62,6 @@ export function SecretsPane({ project }: { project: Project }) {
       } catch {
         if (!current) return;
         setStatus("error");
-        toastError("Couldn't load credentials.");
       }
     })();
     return () => {
@@ -49,40 +69,181 @@ export function SecretsPane({ project }: { project: Project }) {
     };
   }, [project.id, revision]);
 
+  async function revoke() {
+    if (!revoking || revokeLatch.current) return;
+    revokeLatch.current = true;
+    setBusy(true);
+    try {
+      const result = await window.api.secrets.revoke(revoking.id);
+      if (!result.ok) throw new Error("Refused");
+      setRevoking(null);
+      refresh();
+    } catch {
+      toastError("Couldn't revoke the credential.");
+    } finally {
+      revokeLatch.current = false;
+      setBusy(false);
+    }
+  }
   return (
-    <PrefSection
-      title="Secrets"
-      icon={KeyIcon}
-      action={<SectionAction label="Refresh" onAct={refresh} />}
-    >
-      {credentials !== null && LOCKED_LINE[credentials.state] !== undefined ? (
-        <LockedCredentials
-          line={REASON_LINE[credentials.reason ?? ""] ?? LOCKED_LINE[credentials.state]!}
-          resettable={
-            credentials.state !== "refused" &&
-            credentials.reason !== "busy" &&
-            credentials.reason !== "lock-unusable"
-          }
-          onChanged={refresh}
-        />
-      ) : null}
-      {status === "loading" ? (
-        <Empty>Loading credentials…</Empty>
-      ) : status === "error" ? (
-        <Empty>Couldn't load credentials. Refresh to try again.</Empty>
-      ) : secrets.length === 0 ? (
-        <Empty>No saved credentials</Empty>
-      ) : (
-        secrets.map((secret) => <SecretRow key={secret.id} secret={secret} onChanged={refresh} />)
-      )}
-    </PrefSection>
+    <>
+      <AsyncSection
+        title="Secrets"
+        icon={KeyIcon}
+        action={status === "ready" ? <SectionAction label="Refresh" onAct={refresh} /> : undefined}
+        state={
+          status === "loading"
+            ? { status: "loading" }
+            : status === "error"
+              ? { status: "error", message: "Couldn't load credentials.", onRetry: refresh }
+              : { status: "ready", data: secrets }
+        }
+        before={
+          credentials !== null && LOCKED_LINE[credentials.state] !== undefined ? (
+            <LockedCredentials
+              line={REASON_LINE[credentials.reason ?? ""] ?? LOCKED_LINE[credentials.state]!}
+              resettable={
+                credentials.state !== "refused" &&
+                credentials.reason !== "busy" &&
+                credentials.reason !== "lock-unusable"
+              }
+              onChanged={refresh}
+            />
+          ) : undefined
+        }
+      >
+        {(items) => (
+          <DataTable
+            label="Saved credentials"
+            items={items}
+            keyOf={(s) => s.id}
+            minWidth={600}
+            empty="No saved credentials"
+            columns={[
+              { key: "name", header: "Name", cell: (s) => <Cell strong>{s.name}</Cell> },
+              {
+                key: "scope",
+                header: "Scope",
+                width: "6rem",
+                cell: (s) => <Cell muted>{scopeLabel(s)}</Cell>,
+              },
+              {
+                key: "used",
+                header: "Last used",
+                width: "9rem",
+                cell: (s) => (
+                  <Cell muted>
+                    {s.lastUsedAt === null ? "Never" : new Date(s.lastUsedAt).toLocaleString()}
+                  </Cell>
+                ),
+              },
+              {
+                key: "value",
+                header: "Value",
+                width: "8rem",
+                cell: (s) => (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Replace ${s.name}`}
+                    onClick={() => setEditing(s)}
+                  >
+                    <span className="font-mono">••••••••</span>
+                  </Button>
+                ),
+              },
+              {
+                key: "actions",
+                header: "Actions",
+                headerHidden: true,
+                width: "2.5rem",
+                align: "end",
+                cell: (s) => (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label={`More actions for ${s.name}`}
+                      >
+                        <DotsThreeIcon />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setEditing(s)}>
+                        <PencilSimpleIcon />
+                        Replace
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setRevoking(s)}>
+                        <TrashIcon />
+                        Revoke…
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ),
+              },
+            ]}
+          />
+        )}
+      </AsyncSection>
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Replace {editing?.name}</DialogTitle>
+            <DialogDescription>
+              Only the new value is sent. Saved values are never revealed.
+            </DialogDescription>
+          </DialogHeader>
+          {editing && (
+            <SecretEditor
+              key={editing.id}
+              secret={editing}
+              onChanged={() => {
+                setEditing(null);
+                refresh();
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={revoking !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) setRevoking(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke {revoking?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Agents using this {revoking ? scopeLabel(revoking).toLowerCase() : "saved"} credential
+              will need you to enter it again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <Button variant="destructive" disabled={busy} onClick={() => void revoke()}>
+              {busy ? <LoadingLabel>Revoking</LoadingLabel> : "Revoke"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
+}
+function scopeLabel(secret: SecretMetadata) {
+  return { session: "Session", project: "Project", always: "Always" }[secret.scope];
 }
 
 /** One line per state that keeps stored secrets out of use (VC-641). */
 const LOCKED_LINE: Partial<Record<CredentialStatus["state"], string>> = {
   locked: "Saved secrets are locked.",
-  refused: "Saved secrets are refused: their key file is not private.",
+  refused: "Saved secrets can't be used until their key file is private.",
   corrupt: "Saved secrets can't be read.",
 };
 
@@ -93,7 +254,7 @@ const LOCKED_LINE: Partial<Record<CredentialStatus["state"], string>> = {
  */
 const REASON_LINE: Partial<Record<string, string>> = {
   busy: "Saved secrets are busy in another Volli process.",
-  "lock-unusable": "Saved secrets can't be used: their lock file needs fixing.",
+  "lock-unusable": "Saved secrets can't be used until their lock file is repaired.",
 };
 
 function LockedCredentials({
@@ -155,7 +316,7 @@ function LockedCredentials({
           <AlertDialogHeader>
             <AlertDialogTitle>Reset saved secrets?</AlertDialogTitle>
             <AlertDialogDescription>
-              Project and Always secrets are set aside, not deleted, and you enter them again.
+              This sets aside saved Project and Always secrets. You will need to enter them again.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -176,12 +337,17 @@ function LockedCredentials({
   );
 }
 
-function SecretRow({ secret, onChanged }: { secret: SecretMetadata; onChanged: () => void }) {
+function SecretEditor({ secret, onChanged }: { secret: SecretMetadata; onChanged: () => void }) {
   const input = React.useRef<HTMLInputElement>(null);
   const latch = React.useRef(false);
   const [busy, setBusy] = React.useState(false);
   const fieldId = React.useId();
-  const scope = { session: "Session", project: "Project", always: "Always" }[secret.scope];
+  React.useEffect(() => {
+    const field = input.current;
+    return () => {
+      if (field) field.value = "";
+    };
+  }, []);
 
   async function act(kind: "replace" | "revoke"): Promise<void> {
     if (latch.current) return;
@@ -211,45 +377,27 @@ function SecretRow({ secret, onChanged }: { secret: SecretMetadata; onChanged: (
   }
 
   return (
-    <div
-      data-slot="secret-inventory-row"
-      className="flex flex-col gap-2 border-b border-border px-4 py-4 last:border-b-0"
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void act("replace");
+      }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="break-words text-ui font-medium">{secret.name}</p>
-          <p className="text-label text-muted-foreground">
-            Scope: {scope} · Last used:{" "}
-            {secret.lastUsedAt === null ? "Never" : new Date(secret.lastUsedAt).toLocaleString()}
-          </p>
-        </div>
-        <Button type="button" variant="outline" disabled={busy} onClick={() => void act("revoke")}>
-          Revoke
-        </Button>
-      </div>
-      <form
-        className="flex flex-wrap items-center gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void act("replace");
-        }}
-      >
-        <label htmlFor={fieldId} className="text-ui">
-          Replacement credential
-        </label>
-        <Input
-          ref={input}
-          id={fieldId}
-          type="password"
-          className="w-64"
-          autoComplete="off"
-          spellCheck={false}
-          disabled={busy}
-        />
-        <Button type="submit" disabled={busy}>
-          Replace
-        </Button>
-      </form>
-    </div>
+      <label htmlFor={fieldId} className="text-ui font-medium">
+        Replacement credential
+      </label>
+      <Input
+        ref={input}
+        id={fieldId}
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        disabled={busy}
+      />
+      <Button type="submit" disabled={busy}>
+        {busy ? <LoadingLabel>Replacing</LoadingLabel> : "Replace"}
+      </Button>
+    </form>
   );
 }

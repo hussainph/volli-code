@@ -13,6 +13,9 @@ import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { Notice } from "@renderer/components/ui/notice";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 
 import { PrefSection } from "./pref-section";
@@ -24,12 +27,18 @@ export type AsyncState<T> =
   | { status: "ready"; data: T };
 
 /** The skeleton a first read draws. Uses the repo's primitive. */
-function LoadingRows({ rows = 3 }: { rows?: number }) {
+function LoadingRows({ label, rows = 3 }: { label: string; rows?: number }) {
   return (
-    <div className="flex flex-col gap-2 py-4" aria-live="polite" aria-busy>
-      <span className="sr-only">Loading…</span>
+    <div className="flex flex-col divide-y divide-border" {...loadingRegionProps(label)}>
+      <span className="sr-only">Loading</span>
       {Array.from({ length: rows }, (_, index) => (
-        <Skeleton key={index} className="h-8 w-full rounded-lg" />
+        <div key={index} className="flex min-h-16 items-center justify-between gap-6 px-4 py-4">
+          <div className="w-2/3 space-y-2">
+            <Skeleton className="h-4 w-2/5" />
+            <Skeleton className="h-3 w-3/4" />
+          </div>
+          <Skeleton className="h-6 w-20" />
+        </div>
       ))}
     </div>
   );
@@ -44,18 +53,23 @@ function LoadingRows({ rows = 3 }: { rows?: number }) {
  */
 function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div role="alert" className="flex items-center gap-2 py-4 text-ui">
-      <WarningIcon aria-hidden className="size-4 shrink-0 text-destructive" />
-      <span className="min-w-0 flex-1 text-muted-foreground">{message}</span>
-      <Button size="xs" variant="outline" onClick={onRetry}>
-        Try again
-      </Button>
-    </div>
+    <Notice
+      tone="error"
+      icon={WarningIcon}
+      title={message}
+      className="m-4"
+      announce
+      actions={
+        <Button size="xs" variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      }
+    />
   );
 }
 
 export function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="py-6 text-center text-ui text-muted-foreground">{children}</p>;
+  return <p className={`${EMPTY_INLINE} px-4`}>{children}</p>;
 }
 
 export function AsyncSection<T>({
@@ -79,7 +93,7 @@ export function AsyncSection<T>({
   /**
    * Passed through to {@link PrefSection}. Only the READY branch fills — a
    * spinner or an error stretched down a tall column reads as a broken page,
-   * and the empty state centres better in the space it actually needs.
+   * and all in-flow states stay left-aligned in their section column.
    */
   fill?: boolean;
   state: AsyncState<T>;
@@ -96,7 +110,7 @@ export function AsyncSection<T>({
       fill={fill && state.status === "ready" && !isEmpty?.(state.data)}
     >
       {before}
-      {state.status === "loading" ? <LoadingRows /> : null}
+      {state.status === "loading" ? <LoadingRows label={title} /> : null}
       {state.status === "error" ? (
         <ErrorRow message={state.message} onRetry={state.onRetry} />
       ) : null}

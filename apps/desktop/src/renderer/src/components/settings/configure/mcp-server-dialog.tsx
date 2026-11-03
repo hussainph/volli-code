@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * One server, start to finish: how Volli reaches it, whether it needs a
  * person to sign in, and which of its tools new Sessions get — with one Save.
@@ -576,7 +577,10 @@ export function McpServerDialog({
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
           <section aria-label="Connection" className="flex shrink-0 flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-label text-muted-foreground uppercase">Connection</h3>
+              <h3 className="flex items-center gap-2 text-ui font-medium">
+                <GlobeIcon aria-hidden className="size-4 text-muted-foreground" />
+                Connection
+              </h3>
               {editing ? null : (
                 <Button
                   size="xs"
@@ -636,7 +640,10 @@ export function McpServerDialog({
 
           {showTools ? (
             <section aria-label="Tools" className="flex min-h-72 flex-1 flex-col gap-2">
-              <h3 className="text-label text-muted-foreground uppercase">Tools for new Sessions</h3>
+              <h3 className="flex items-center gap-2 text-ui font-medium">
+                <TerminalWindowIcon aria-hidden className="size-4 text-muted-foreground" />
+                Tools for new Sessions
+              </h3>
               <McpToolPicker
                 serverName={draft.name.trim().length > 0 ? draft.name : suggested}
                 tools={catalog}
@@ -692,11 +699,11 @@ export function McpServerDialog({
               )
             ) : editing ? (
               <Button size="sm" disabled={busy !== null || !ready} onClick={() => void connect()}>
-                {busy === "connect" ? "Connecting…" : "Connect"}
+                {busy === "connect" ? <LoadingLabel>Connecting</LoadingLabel> : "Connect"}
               </Button>
             ) : (
               <Button size="sm" disabled={!canSave} onClick={() => void save()}>
-                {busy === "save" ? "Saving…" : saveLabel}
+                {busy === "save" ? <LoadingLabel>Saving</LoadingLabel> : saveLabel}
               </Button>
             )}
           </div>
@@ -745,13 +752,15 @@ function ConnectionSummary({
       access.signIn !== "not-applicable" ? (
         <div className="flex items-center justify-between gap-2 text-ui">
           <span className="text-muted-foreground">
-            {waiting
-              ? "Waiting for the browser…"
-              : access.signIn === "signed-in"
-                ? "Signed in with OAuth"
-                : access.signIn === "needs-sign-in"
-                  ? "Needs sign-in"
-                  : "Not signed in"}
+            {waiting ? (
+              <LoadingLabel>Waiting for the browser</LoadingLabel>
+            ) : access.signIn === "signed-in" ? (
+              "Signed in with OAuth"
+            ) : access.signIn === "needs-sign-in" ? (
+              "Needs sign-in"
+            ) : (
+              "Not signed in"
+            )}
           </span>
           {waiting ? (
             <Button size="xs" variant="outline" onClick={onCancel}>
@@ -953,9 +962,9 @@ function ConnectResult({
   return (
     <div className="text-ui text-muted-foreground" role="status">
       {busy === "connect" ? (
-        "Connecting…"
+        <LoadingLabel>Connecting</LoadingLabel>
       ) : waiting ? (
-        <Health state="starting">Waiting for the browser…</Health>
+        <Health state="starting">Waiting for the browser</Health>
       ) : blocked?.kind === "sign-in" ? (
         <Health state="waiting">This server needs you to sign in</Health>
       ) : blocked?.kind === "credential" ? (

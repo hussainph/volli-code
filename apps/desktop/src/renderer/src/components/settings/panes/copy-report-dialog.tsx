@@ -1,3 +1,5 @@
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
 
 import { Button } from "@renderer/components/ui/button";
@@ -45,17 +47,34 @@ export function CopyReportPreview({
 }) {
   return (
     <>
-      <pre
-        aria-label="Report preview"
-        tabIndex={0}
-        className="max-h-64 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-4 font-mono text-ui whitespace-pre-wrap focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-      >
-        {report}
-      </pre>
+      <div className="space-y-4">
+        <ul aria-label="Report includes" className="space-y-2 text-ui">
+          {[
+            "Build and release channel",
+            "Connection and environment checks",
+            "Local paths and runtime details",
+          ].map((label) => (
+            <li key={label} className="flex items-center gap-2">
+              <CheckCircleIcon aria-hidden className="size-4 text-muted-foreground" />
+              {label}
+            </li>
+          ))}
+        </ul>
+        <details>
+          <summary className="cursor-default text-ui text-muted-foreground">Preview report</summary>
+          <pre
+            aria-label="Report preview"
+            tabIndex={0}
+            className="mt-2 max-h-64 overflow-auto rounded-container border border-border bg-muted p-4 font-mono text-ui whitespace-pre-wrap focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {report}
+          </pre>
+        </details>
+      </div>
 
       {availability === "loading" ? (
         <p role="status" className="text-ui text-muted-foreground">
-          Preparing the complete report…
+          <LoadingLabel>Preparing the complete report</LoadingLabel>
         </p>
       ) : null}
 
@@ -92,11 +111,11 @@ export function CopyReportCopyButton({
 }) {
   const label =
     availability === "loading"
-      ? "Preparing report…"
+      ? "Preparing report"
       : availability === "unavailable"
         ? "Report unavailable"
         : copyState === "copying"
-          ? "Copying…"
+          ? "Copying"
           : copyState === "copied"
             ? "Copied"
             : copyState === "failed"
@@ -109,7 +128,11 @@ export function CopyReportCopyButton({
       disabled={availability !== "ready" || copyState === "copying"}
       onClick={onCopy}
     >
-      {label}
+      {availability === "loading" || copyState === "copying" ? (
+        <LoadingLabel>{label}</LoadingLabel>
+      ) : (
+        label
+      )}
     </Button>
   );
 }
@@ -166,7 +189,7 @@ export function CopyReportDialog({
 
   const triggerLabel =
     availability === "loading"
-      ? "Preparing report…"
+      ? "Preparing report"
       : availability === "unavailable"
         ? "Report unavailable"
         : "Copy report…";
@@ -175,7 +198,7 @@ export function CopyReportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
         <Button size="sm" variant="outline" disabled={availability !== "ready"}>
-          {triggerLabel}
+          {availability === "loading" ? <LoadingLabel>{triggerLabel}</LoadingLabel> : triggerLabel}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-xl">

@@ -4,19 +4,10 @@
  * CLAUDE.md ("UI copy: let controls talk"): no row descriptions, no tutorial
  * tooltips, no contrast lectures.
  *
- * Ported from `lab/scratches/canvas.tsx`, which is where the interaction was
- * designed: the pad is a MINIMAP (a stop's position on it is where its pool
- * lands in the window, so it carries the window's 16:10 proportions or it lies
- * about the one thing it exists to show), pressing an orb promotes it and
- * dragging it moves it, and the swatch page follows the primary rather than
- * being seeded from it once.
- *
- * What did NOT come across is the lab's two-mode `CHROME` table. That editor was
- * a translucent card floating ON the gradient and had to answer light and dark
- * itself; this one lives inside Settings' own opaque card, where the app's
- * tokens already do. Its six tuning dials did not come across either — lift,
- * card tint, surface spread, shadow, text weight and the seam are settled and
- * now live in `ARC_SETTLED`, so they are no longer settings.
+ * The pad is a minimap: each stop's position locates its colour pool in the
+ * window, so it uses the window's 16:10 proportions. Pressing an orb promotes
+ * it, dragging moves it, and the swatch page follows the primary colour.
+ * Settings' semantic tokens provide the surrounding surface in both modes.
  *
  * ## The two faders
  *
@@ -120,12 +111,8 @@ const FADER_FOOT = 22;
 const PAD_WIDTH = (SLIDER_SQUIGGLE_WIDTH + FADER_FOOT) * PAD_RATIO;
 
 /**
- * The lab's orb sizes, and a promotion that is a 1.6× jump.
- *
- * Kept at the lab's absolute numbers even though this pad is roughly twice its
- * width: an orb is a grab target and a colour sample, and neither of those wants
- * to scale with the container. The first port shrank them to 22/34 and the pad
- * read as a map of pinheads.
+ * Fixed-size grab targets double as colour samples; the primary is 1.6× larger.
+ * Neither target scales with the container.
  */
 const ORB_SIZE = 28;
 const PRIMARY_ORB_SIZE = 44;
@@ -417,6 +404,9 @@ function GradientPad({
 
 /**
  * A quiet translucent chip for a control FLOATING ON THE PAD.
+ *
+ * Only for controls without a fill of their own (the ghost −/+ pair): the
+ * appearance segments are lifted buttons and float bare.
  *
  * The pad paints the user's own gradient, which can be any colour at all, so
  * a floating control cannot borrow the pad as its surface — white glyphs
@@ -971,8 +961,11 @@ export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: 
             {/* Overlays are SIBLINGS of the pad, absolutely placed, so the
                 pad's own group semantics stay a group of colour stops. */}
             {mode ? (
-              <div className="absolute top-2 left-1/2 -translate-x-1/2">
-                <PadChip>{mode}</PadChip>
+              // No chip: the appearance segments carry their own lifted
+              // fills, so they already read on any canvas. A chip behind
+              // them would be a second surface around controls that have one.
+              <div className="pointer-events-auto absolute top-2 left-1/2 -translate-x-1/2">
+                {mode}
               </div>
             ) : null}
             <div className="absolute bottom-2 left-1/2 -translate-x-1/2">

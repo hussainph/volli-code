@@ -8,39 +8,35 @@
  * entries, list entries drawn as settings, and no way to scan either.
  */
 import type * as React from "react";
+import type { Icon } from "@phosphor-icons/react";
 
 import { ListRow } from "@renderer/components/ui/list-row";
 import { cn } from "@renderer/lib/utils";
-
-import { InfoHint } from "./info-hint";
+import { AppGlyph, isAppName } from "./app-glyph";
 
 export function PrefRow({
   label,
+  icon: Icon,
   htmlFor,
   hint,
   description,
-  align = "center",
   testId,
   children,
 }: {
   label: string;
+  icon?: Icon;
   htmlFor?: string;
-  /** The `(i)`. Preferred over `description` everywhere. */
+  /** Optional edge-case detail. Essential meaning belongs in `description`. */
   hint?: React.ReactNode;
   /**
-   * Prose under the label. **Reserved for trust boundaries** — where the app
-   * takes an irreversible action, which is CLAUDE.md's own carve-out. Two uses
-   * on both surfaces combined: retention's automatic deletion, and Authority's
-   * enforcement rows (VC-285), where the audit found the outcome of a posture —
-   * whether calls are refused at all — living in a popover nobody opened. A
-   * boundary a person cannot see is not a boundary they agreed to. If you are
-   * reaching for this to explain an ordinary control, you want `hint`.
+   * One concise line explaining the setting's outcome, visible without opening a hint.
    *
    * A node rather than a string, so a row can emphasize the sentence that
    * carries the consequence and keep the qualification quiet beside it. Nothing
    * here may be a block element: it renders inside a `<p>`.
    */
   description?: React.ReactNode;
+  /** @deprecated Controls are always centred on the complete label block. */
   align?: "center" | "start";
   testId?: string;
   children: React.ReactNode;
@@ -48,25 +44,24 @@ export function PrefRow({
   return (
     <div
       data-testid={testId}
+      data-slot="pref-row"
       className={cn(
-        "flex justify-between gap-6 border-t border-border/50 py-4 first:border-t-0 first:pt-0 last:pb-0",
-        align === "center" ? "items-center" : "items-start",
+        "@container/pref-row flex min-h-16 flex-wrap justify-between gap-x-6 gap-y-2 border-t border-border/50 px-4 py-4 first:border-t-0",
+        "items-center",
       )}
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1">
-          {/* The hint is a SIBLING of the label, never a child: a `<button>`
-              inside a `<label htmlFor>` toggles the control it names. */}
-          <label htmlFor={htmlFor} data-slot="pref-row-label" className="block text-sm font-medium">
+      <div className="min-w-40 flex-1">
+        <div className="flex items-center gap-2">
+          {Icon ? <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : null}
+          <label htmlFor={htmlFor} data-slot="pref-row-label" className="block text-ui font-medium">
             {label}
           </label>
-          {hint ? <InfoHint label={label}>{hint}</InfoHint> : null}
         </div>
-        {description ? (
-          <p className="mt-1 text-ui leading-5 text-muted-foreground">{description}</p>
+        {description || hint ? (
+          <p className="mt-1 text-ui leading-5 text-muted-foreground">{description ?? hint}</p>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2">{children}</div>
+      <div className="flex max-w-full flex-wrap items-center gap-2">{children}</div>
     </div>
   );
 }
@@ -99,15 +94,18 @@ export function ItemRow({
   return (
     <ListRow
       density={meta ? "two-line" : "row"}
-      leading={leading}
+      leading={leading ?? (isAppName(name) ? <AppGlyph name={name} /> : undefined)}
       primary={name}
       primaryTrailing={badges}
       secondary={meta}
       actions={
-        children ? <div className="flex shrink-0 items-center gap-2">{children}</div> : undefined
+        children ? (
+          <div className="flex max-w-full flex-wrap items-center gap-2">{children}</div>
+        ) : undefined
       }
       onActivate={onOpen ?? null}
       data-testid={testId}
+      data-slot="pref-row"
     />
   );
 }

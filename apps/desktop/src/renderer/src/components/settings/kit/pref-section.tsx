@@ -1,25 +1,11 @@
-/**
- * A section, and the two shapes an action on one can take.
- *
- * ONE HEADER GRAMMAR for every section on both surfaces: icon · title ·
- * optional `(i)` · at most one action. The audit found sections with a
- * description, sections with two actions, sections with a segmented control
- * parked in the header — three different objects wearing the same name.
- *
- * There is deliberately **no `description` prop**. CLAUDE.md forbids
- * explanatory text under a section header, and an earlier pass of this
- * redesign added thirteen of them anyway. A rule you cannot express is a rule
- * you cannot break: what a section needs to say goes in an {@link InfoHint}
- * beside its title, which the reader opens or ignores.
- */
+/** Shared settings section: an outside heading and one grouped body. */
 import type * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 
 import { Button } from "@renderer/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
-
-import { InfoHint } from "./info-hint";
 
 export function PrefSection({
   title,
@@ -31,7 +17,7 @@ export function PrefSection({
 }: {
   title: string;
   icon?: PhosphorIcon;
-  /** The `(i)`. A node, not a string, so it can carry a link. */
+  /** Visible section context. A node so it can carry a link. */
   hint?: React.ReactNode;
   action?: React.ReactNode;
   /**
@@ -43,36 +29,27 @@ export function PrefSection({
   children: React.ReactNode;
 }) {
   return (
-    // One fill, no border, no internal rules. This card already sits inside
-    // the app shell's framed content card, and a frame here is what turns a
-    // pane into boxes inside boxes: a bordered card holding a bordered table
-    // holding a bordered search field.
-    <section className={cn("rounded-lg bg-card px-4 py-4", fill && "flex min-h-0 flex-1 flex-col")}>
-      {/* The rule under the header is DELIBERATE and drawn here, and the
-          wrapper below is what keeps it to ONE line.
-
-          A row draws `border-t` with `first:border-t-0`, which only suppresses
-          the top rule when the row is genuinely its parent's first child. With
-          the rows as direct children of this `<section>`, THIS header is the
-          first child, `first:` matched nothing, and every section drew the
-          header's rule and the first row's rule eight pixels apart. */}
-      {/* `items-center`, not `items-start`: an action can be taller than the
-          title line (the provider list parks a search field here), and
-          top-aligning it left the field visibly off the title's axis. */}
-      <div className="mb-2 flex items-center justify-between gap-4 border-b border-border/50 pb-2">
+    <section className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}>
+      {/* A heading and its actions share an axis outside the framed row group. */}
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           {Icon ? <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : null}
-          <h2 data-slot="pref-section-title" className="min-w-0 truncate text-sm font-semibold">
+          <h2 data-slot="pref-section-title" className="min-w-0 text-ui font-medium">
             {title}
           </h2>
-          {hint ? <InfoHint label={title}>{hint}</InfoHint> : null}
         </div>
         {action}
       </div>
-      {/* Rows live in their own box so `first:` has something true to say. */}
-      {/* `|| undefined` so a non-filling section emits no `class` at all rather
-          than an empty one — `cn(false)` returns "". */}
-      <div className={cn(fill && "flex min-h-0 flex-1 flex-col") || undefined}>{children}</div>
+      {hint ? <div className="text-ui text-muted-foreground">{hint}</div> : null}
+      {/* A direct first row suppresses its top rule against the group's border. */}
+      <div
+        className={cn(
+          "rounded-container border border-border bg-card",
+          fill && "flex min-h-0 flex-1 flex-col",
+        )}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -89,6 +66,9 @@ export function SectionAction({
   disabled?: boolean;
   onAct?: () => void;
 }) {
+  if (/^refresh\b/i.test(label)) {
+    return <SectionIconAction label={label} icon={Icon} disabled={disabled} onAct={onAct} />;
+  }
   return (
     <Button size="xs" variant="ghost" disabled={disabled} onClick={onAct}>
       {Icon ? <Icon /> : null}
@@ -113,14 +93,19 @@ export function SectionIconAction({
   onAct?: () => void;
 }) {
   return (
-    <Button
-      size="icon-xs"
-      variant="ghost"
-      aria-label={label}
-      disabled={disabled ?? busy}
-      onClick={onAct}
-    >
-      <Icon className={busy ? "animate-spin" : undefined} />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={label}
+          disabled={disabled || busy}
+          onClick={onAct}
+        >
+          <Icon className={busy ? "animate-spin motion-reduce:animate-none" : undefined} />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }

@@ -61,12 +61,7 @@ export function UnavailableNotice({
   meanwhile?: React.ReactNode;
 }) {
   return (
-    <Notice
-      icon={WrenchIcon}
-      tone="neutral"
-      title={`${what} aren't available yet.`}
-      detail={meanwhile ?? "This page previews the controls. You can't change them yet."}
-    />
+    <Notice icon={WrenchIcon} tone="neutral" title={`${what} cannot be used.`} detail={meanwhile} />
   );
 }
 

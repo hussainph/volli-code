@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * New command — one of the things this redesign *adds*, so it owes a real
  * design rather than a button that goes nowhere.
@@ -148,7 +149,7 @@ export function NewCommandDialog({
 
           <div className="flex flex-col gap-1">
             <label htmlFor="cmd-desc" className="text-ui">
-              Description
+              Description <span className="text-muted-foreground">(optional)</span>
             </label>
             <Input
               id="cmd-desc"
@@ -186,8 +187,8 @@ export function NewCommandDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="project">This project — .volli/commands</SelectItem>
-                <SelectItem value="personal">Personal — available everywhere</SelectItem>
+                <SelectItem value="project">This project</SelectItem>
+                <SelectItem value="personal">Personal</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -206,7 +207,7 @@ export function NewCommandDialog({
             </Button>
           </DialogClose>
           <Button size="sm" disabled={!canSave} onClick={() => void create()}>
-            {saving ? "Creating…" : "Create"}
+            {saving ? <LoadingLabel>Creating</LoadingLabel> : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>

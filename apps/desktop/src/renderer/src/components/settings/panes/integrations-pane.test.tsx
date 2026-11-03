@@ -110,7 +110,7 @@ describe("IntegrationsPane", () => {
 
     expect(text()).toContain(SCAN_FAILED);
     expect(text()).not.toContain(NO_APPS);
-    expect(container?.querySelector("[role='alert']")).not.toBeNull();
+    expect(container?.querySelector("[role='status']")).not.toBeNull();
     // One recovery action, not one per row.
     expect(
       [...(container?.querySelectorAll("button") ?? [])].filter(
@@ -123,8 +123,8 @@ describe("IntegrationsPane", () => {
     await act(async () => tryAgain().click());
 
     expect(main.listExternalApps.mock.calls.length).toBeGreaterThan(before);
-    expect(text()).toContain("Terminal");
     expect(text()).not.toContain(SCAN_FAILED);
+    expect(container?.querySelector("[data-slot=list-row]")).toBeNull();
   });
 
   it("keeps showing the chosen default while a scan is failing", async () => {
@@ -155,8 +155,8 @@ describe("IntegrationsPane", () => {
 
     await open();
 
-    expect(text()).toContain("Terminal");
-    expect(text()).toContain("Zed");
     expect(text()).not.toContain(NO_APPS);
+    expect(container?.querySelector("[data-slot=list-row]")).toBeNull();
+    expect(container?.querySelector("#open-files-in")).not.toBeNull();
   });
 });

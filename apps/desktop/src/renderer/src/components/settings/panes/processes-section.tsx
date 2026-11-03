@@ -34,6 +34,7 @@ import {
   type AsyncState,
 } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Switch } from "@renderer/components/ui/switch";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
@@ -153,7 +154,11 @@ export function RunningProcessesSection() {
         <>
           <PrefRow label="No Session owns">
             <span className="text-ui text-muted-foreground">
-              {processSummary(state.status === "loading", inventory)}
+              {state.status === "loading" ? (
+                <LoadingLabel>Looking</LoadingLabel>
+              ) : (
+                processSummary(false, inventory)
+              )}
             </span>
             <Button
               size="xs"

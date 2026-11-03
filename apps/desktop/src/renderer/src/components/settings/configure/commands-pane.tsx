@@ -13,9 +13,10 @@ import * as React from "react";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
 import type { Project, PromptTemplate } from "@volli/shared";
 
-import { AsyncSection, Cell, DataTable } from "@renderer/components/settings/kit";
+import { AsyncSection, Cell, DataTable, DescriptionCell } from "@renderer/components/settings/kit";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
 
+import { MarkdownCommandDialog } from "./markdown-command-dialog";
 import { NewCommandDialog } from "./new-command-dialog";
 
 export function CommandsPane({ project }: { project: Project }) {
@@ -27,7 +28,12 @@ export function CommandsPane({ project }: { project: Project }) {
       title="Commands"
       icon={CommandIcon}
       hint={<>Type the name in any composer. Project commands override personal ones.</>}
-      action={<NewCommandDialog projectId={project.id} onCreated={reload} />}
+      action={
+        <div className="flex flex-wrap gap-2">
+          <MarkdownCommandDialog projectId={project.id} onCreated={reload} />
+          <NewCommandDialog projectId={project.id} onCreated={reload} />
+        </div>
+      }
       fill
       state={state}
       isEmpty={(data) => data.templates.length === 0}
@@ -83,7 +89,9 @@ function CommandsTable({
         {
           key: "description",
           header: "Description",
-          cell: (command) => <Cell muted>{command.description || "No description"}</Cell>,
+          cell: (command) => (
+            <DescriptionCell>{command.description || "No description"}</DescriptionCell>
+          ),
         },
         {
           key: "source",

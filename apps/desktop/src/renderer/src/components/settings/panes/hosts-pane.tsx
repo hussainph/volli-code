@@ -1,16 +1,14 @@
 /**
- * Settings → Hosts (VC-700 PR 3; VC-615 flow 7, ported from the lab's
- * `#host-manage`): the hosts this Mac knows, and one host's page — its name
+ * Settings → Hosts: the hosts this Mac knows, and one host's page — its name
  * (this Mac's label for it), its facts, its projects, the devices paired to
  * it, and Forget.
  *
- * Built from the settings kit over `ui/list-row.tsx`, as the lab was. The
+ * Built from the settings kit over `ui/list-row.tsx`. The
  * host health comes from the engine-projected HostRecord link, even with no
  * projects open here; the registry's facts from the
  * remote-hosts store; the paired devices are read from the host over SSH
  * when its page opens, never cached. Forget is the one irreversible action,
- * so it is the one confirm. Revoking another device is VC-575's (pairing),
- * and the lab's "Pair a phone…" with it.
+ * so it is the one confirm. Device pairing and revocation live in their own flow.
  *
  * Shown only with `cloud` on: the category does not exist otherwise.
  */
@@ -37,7 +35,6 @@ import { openAddHostSheet } from "@renderer/components/hosts/host-entry";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 import { EASE_OUT, HostGlyph, SwapText } from "@renderer/components/hosts/host-parts";
-import { hostBadge } from "@renderer/components/hosts/host-surface-model";
 import {
   AsyncSection,
   CONTROL_W,
@@ -334,14 +331,16 @@ function HostRow({
     <ListRow
       data-host-row=""
       density="two-line"
-      leading={<HostGlyph os={remote.os} badge={record === undefined ? null : hostBadge(record)} />}
+      leading={<HostGlyph os={remote.os} />}
       primary={remote.name}
       secondary={
-        <span className="block truncate text-ui text-muted-foreground/70">
-          <SwapText>{hostRowMeta(remote, projects)}</SwapText>
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui text-muted-foreground">
+          <span className="min-w-0 truncate">
+            <SwapText>{hostRowMeta(remote, projects)}</SwapText>
+          </span>
+          {health === null ? null : <Health state={health.state}>{health.label}</Health>}
         </span>
       }
-      trailing={health === null ? undefined : <Health state={health.state}>{health.label}</Health>}
       actions={
         <>
           {record?.link.status === "offline" ? (
@@ -419,20 +418,18 @@ function HostPage({
           </TooltipTrigger>
           <TooltipContent side="top">All hosts</TooltipContent>
         </Tooltip>
-        <HostGlyph
-          os={remote.os}
-          size="md"
-          badge={record === undefined ? null : hostBadge(record)}
-        />
+        <HostGlyph os={remote.os} size="md" />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold">
             <SwapText>{remote.name}</SwapText>
           </h2>
-          <p className="truncate text-ui text-muted-foreground">
-            <SwapText>{hostRowMeta(remote, projects)}</SwapText>
-          </p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui text-muted-foreground">
+            <span className="min-w-0 truncate">
+              <SwapText>{hostRowMeta(remote, projects)}</SwapText>
+            </span>
+            {health === null ? null : <Health state={health.state}>{health.label}</Health>}
+          </div>
         </div>
-        {health === null ? null : <Health state={health.state}>{health.label}</Health>}
         {record?.link.status === "offline" ? (
           <Button
             size="xs"
@@ -450,7 +447,9 @@ function HostPage({
         {hostFacts(remote).map((fact) => (
           <PrefRow key={fact.label} label={fact.label} hint={fact.hint}>
             {fact.full === undefined ? (
-              <span className="truncate text-ui text-muted-foreground">{fact.value}</span>
+              <span className="max-w-40 wrap-anywhere text-right text-ui text-muted-foreground">
+                {fact.value}
+              </span>
             ) : (
               <FullValue short={fact.value} full={fact.full} label={fact.label} />
             )}
@@ -528,13 +527,15 @@ function NameRow({
   return (
     <PrefRow label="Name" hint="What this Mac calls it. The host’s own name doesn’t change.">
       {readOnly ? (
-        <span className="truncate text-ui text-muted-foreground">{host.name}</span>
+        <span className="max-w-40 wrap-anywhere text-right text-ui text-muted-foreground">
+          {host.name}
+        </span>
       ) : editing ? (
         <InlineRename
           size="field"
           value={host.name}
           ariaLabel="Host name"
-          className={cn(CONTROL_W.md, "h-7 text-ui")}
+          className={cn(CONTROL_W.md, "h-7 max-w-40 text-ui")}
           onCommit={(next) => {
             setEditing(false);
             remoteHosts()
@@ -549,13 +550,13 @@ function NameRow({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="group/name -mr-2 flex h-7 items-center gap-2 rounded-full px-2 text-ui text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          className="group/name -mr-2 flex min-h-7 max-w-40 items-center gap-2 rounded-full px-2 text-ui text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <PencilSimpleIcon
             aria-hidden
             className="size-3.5 opacity-0 transition-opacity group-hover/name:opacity-100 group-focus-visible/name:opacity-100"
           />
-          {host.name}
+          <span className="min-w-0 wrap-anywhere text-right">{host.name}</span>
           <span className="sr-only">Rename</span>
         </button>
       )}
@@ -683,7 +684,11 @@ function DevicesSection({ host }: { host: RemoteHost }) {
             key={device.deviceId}
             name={
               <span
-                className={cn(device.revokedAt !== null && "text-muted-foreground line-through")}
+                title={device.name}
+                className={cn(
+                  "min-w-0 truncate text-ui font-medium",
+                  device.revokedAt !== null && "text-muted-foreground line-through",
+                )}
               >
                 {device.name}
               </span>

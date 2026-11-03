@@ -22,15 +22,10 @@ import {
   type Project,
 } from "@volli/shared";
 
-import { ProjectDecisionModelRow } from "@renderer/components/pages/decision-model-settings";
-import {
-  availableModelsByProvider,
-  offerableModels,
-  preferredReasoning,
-} from "@renderer/components/pages/model-access-settings";
+import { ProjectDecisionModelRow } from "../panes/decision-model-pane";
+import { offerableModels } from "@renderer/components/pages/model-access-settings";
 import {
   AsyncSection,
-  CONTROL_W,
   ItemRow,
   OverrideControl,
   PrefRow,
@@ -41,17 +36,10 @@ import {
   type AsyncState,
 } from "@renderer/components/settings/kit";
 import { MODELS_CATEGORY_KEY } from "@renderer/components/settings/settings-groups";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@renderer/components/ui/select";
+import { ModelControl } from "../kit/model-control";
+import { Skeleton } from "@renderer/components/ui/skeleton";
+import { Notice } from "@renderer/components/ui/notice";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
-import { ModelName } from "@renderer/components/models/model-identity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -123,19 +111,6 @@ export function SessionsPane({ project }: { project: Project }) {
     };
   }, [catalogAttempt, inspect]);
 
-  const selectedModel =
-    model === null
-      ? null
-      : (availableModels.find(
-          (candidate) =>
-            candidate.providerId === model.providerId && candidate.modelId === model.modelId,
-        ) ?? null);
-  const modelValue = selectedModel === null ? "" : modelKey(selectedModel);
-  const reasoningValue =
-    model !== null && selectedModel?.reasoningLevels.includes(model.reasoningLevel)
-      ? model.reasoningLevel
-      : "";
-  const hasOfferableModels = modelCatalogStatus === "ready" && availableModels.length > 0;
   const modelCatalogAction =
     modelCatalogStatus === "error" ? (
       <SectionAction label="Try again" onAct={() => setCatalogAttempt((attempt) => attempt + 1)} />
@@ -178,10 +153,13 @@ export function SessionsPane({ project }: { project: Project }) {
           htmlFor="project-session-model"
           align="start"
           testId="project-session-model"
+          description={
+            model === null ? "Global default for new chats." : "Project override for new chats."
+          }
         >
           <OverrideControl
             label="Model"
-            inheritedValue="the app-wide default"
+            inheritedValue="the global default"
             overridden={model !== null}
             onRevert={() => void save(null)}
           >
@@ -190,68 +168,24 @@ export function SessionsPane({ project }: { project: Project }) {
              * for both controls beside the label. Stack this one compound
              * value rather than clip its provider identity or the reset.
              */}
-            <div className="flex flex-col items-end gap-2 xl:flex-row xl:items-center">
-              <Select
-                value={modelValue}
-                disabled={saving || !hasOfferableModels}
-                onValueChange={(key) => {
-                  const nextModel = availableModels.find(
-                    (candidate) => modelKey(candidate) === key,
-                  );
-                  if (nextModel === undefined) return;
-                  void save({
-                    providerId: nextModel.providerId,
-                    modelId: nextModel.modelId,
-                    reasoningLevel: preferredReasoning(nextModel, model?.reasoningLevel),
-                  });
-                }}
-              >
-                <SelectTrigger id="project-session-model" className={CONTROL_W.lg}>
-                  <SelectValue
-                    placeholder={modelPickerPlaceholder(modelCatalogStatus, availableModels.length)}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableModelsByProvider(availableModels, providers).map((group) => (
-                    <SelectGroup key={group.providerId}>
-                      <SelectLabel>{group.providerLabel}</SelectLabel>
-                      {group.models.map((availableModel) => (
-                        <SelectItem key={modelKey(availableModel)} value={modelKey(availableModel)}>
-                          <ModelName
-                            model={availableModel}
-                            models={availableModels}
-                            providers={providers}
-                          />
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={reasoningValue}
-                disabled={saving || !hasOfferableModels || selectedModel === null}
-                onValueChange={(next) => {
-                  if (model === null || selectedModel === null) return;
-                  const reasoningLevel = selectedModel.reasoningLevels.find(
-                    (level) => level === next,
-                  );
-                  if (reasoningLevel === undefined) return;
-                  void save({ ...model, reasoningLevel });
-                }}
-              >
-                <SelectTrigger className={CONTROL_W.sm} aria-label="Reasoning level">
-                  <SelectValue placeholder="Level" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(selectedModel?.reasoningLevels ?? []).map((level) => (
-                    <SelectItem key={level} value={level}>
-                      {level}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {modelCatalogStatus === "loading" ? (
+              <Skeleton className="h-8 w-80" role="status" aria-label="Loading models" />
+            ) : modelCatalogStatus === "error" ? (
+              <Notice tone="error" title="Couldn't read models" />
+            ) : modelCatalogStatus === "unavailable" ? (
+              <span className="text-ui text-muted-foreground">
+                Models are unavailable on this host.
+              </span>
+            ) : (
+              <ModelControl
+                models={availableModels}
+                providers={providers}
+                selection={model}
+                inherit="Global default"
+                disabled={saving}
+                onChange={(next) => void save(next)}
+              />
+            )}
           </OverrideControl>
         </PrefRow>
         <ProjectDecisionModelRow project={project} onSaved={adoptProject} />
@@ -260,17 +194,6 @@ export function SessionsPane({ project }: { project: Project }) {
       <InstructionsSection project={project} />
     </>
   );
-}
-
-function modelPickerPlaceholder(status: ModelCatalogStatus, modelCount: number): string {
-  if (status === "loading") return "Loading models…";
-  if (status === "error") return "Couldn't load models";
-  if (status === "unavailable") return "Model Access unavailable";
-  return modelCount === 0 ? "No signed-in models" : "From Settings → Models";
-}
-
-function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): string {
-  return JSON.stringify([model.providerId, model.modelId]);
 }
 
 /**

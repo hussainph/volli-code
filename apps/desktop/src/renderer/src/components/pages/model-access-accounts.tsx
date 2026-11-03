@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * The Accounts half of Model Access: which providers this profile can reach,
  * and the sign-in that changes the answer.
@@ -339,7 +340,7 @@ function ProviderAccount({
           <>
             {provider.hasStoredCredential ? (
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => void signOut()}>
-                {signingOut ? "Signing out…" : "Sign out"}
+                {signingOut ? <LoadingLabel>Signing out</LoadingLabel> : "Sign out"}
               </Button>
             ) : null}
             <SignInControl

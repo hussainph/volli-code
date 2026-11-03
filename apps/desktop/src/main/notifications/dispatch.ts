@@ -162,6 +162,11 @@ export function createNotificationDispatcher(
         // coming, so holding it would be a leak with no symptom but memory.
         if (retained !== null) live.delete(retained);
         onError(error);
+        ports.onDeliveryFailure({
+          producer: request.producer,
+          message:
+            error instanceof Error ? error.message : "The system did not deliver the notification.",
+        });
         return { delivered: false, reason: "failed" };
       }
     },
