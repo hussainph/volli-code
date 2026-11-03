@@ -1,4 +1,3 @@
-import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * VC-30 — the Session peek's card: what a row says when you rest on it.
  *
@@ -15,7 +14,7 @@ import { Spinner } from "@renderer/components/ui/spinner";
  *     questions, redirection, refusal and the submission latch that makes
  *     "exactly one of them happens" true (plan §1.3, §0.6).
  *   • NO UNDO, in any form (plan §3.2, amendment A4). Send is the composer's
- *     Send: one press, `Sending…`, then `Sent` for ~2s and the card closes; a
+ *     Send: one press, `Sending` with a spinner, then `Sent` for ~2s and the card closes; a
  *     failure keeps the words with a `Try again`.
  *   • A PEEK NEVER READS (D6). There is no read side effect anywhere in this
  *     file: it says `Unread` and leaves the dot alone. Only opening, replying,
@@ -27,7 +26,6 @@ import { Spinner } from "@renderer/components/ui/spinner";
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -54,6 +52,7 @@ import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Skeleton } from "@renderer/components/ui/skeleton";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
@@ -278,20 +277,6 @@ function Summary({
 }) {
   const summary = content === null ? null : (content.summary ?? peekSummaryOf(content.entries));
   const state = loading ? "loading" : summary === null || failed ? "unavailable" : "ready";
-  const [expandedSummary, setExpandedSummary] = React.useState<string | null>(null);
-  const expanded = summary !== null && expandedSummary === summary;
-  const [overflowing, setOverflowing] = React.useState(false);
-  const prose = React.useRef<HTMLParagraphElement>(null);
-  const summaryId = React.useId();
-  React.useLayoutEffect(() => {
-    const node = prose.current;
-    if (!node || expanded) return;
-    const measure = () => setOverflowing(node.scrollHeight > node.clientHeight + 1);
-    measure();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(node);
-    return () => observer?.disconnect();
-  }, [summary, expanded, state]);
   return (
     <CardBlock icon={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}>
       <div className="text-muted-foreground" data-summary-state={state} aria-busy={loading}>
@@ -304,32 +289,11 @@ function Summary({
         ) : state === "unavailable" ? (
           <p>Summary unavailable</p>
         ) : (
-          <>
-            <p
-              ref={prose}
-              id={summaryId}
-              data-peek-summary=""
-              className={cn(
-                "whitespace-pre-wrap [overflow-wrap:anywhere]",
-                !expanded && "line-clamp-5",
-              )}
-            >
-              {summary}
-            </p>
-            {overflowing ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                className="mt-1"
-                aria-expanded={expanded}
-                aria-controls={summaryId}
-                onClick={() => setExpandedSummary(expanded ? null : summary)}
-              >
-                <CaretDownIcon className={cn("size-3", expanded && "rotate-180")} weight="bold" />
-                {expanded ? "Show less" : "Show summary"}
-              </Button>
-            ) : null}
-          </>
+          // VC-473: the whole summary, unclamped; the card's body scroller is
+          // what bounds it, so its end stays reachable without a click.
+          <p data-peek-summary="" className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {summary}
+          </p>
         )}
       </div>
     </CardBlock>
