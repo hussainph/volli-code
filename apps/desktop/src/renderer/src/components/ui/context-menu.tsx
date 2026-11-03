@@ -85,23 +85,30 @@ function ContextMenuSubTrigger({
   );
 }
 
+/**
+ * Portaled, never drawn inside its parent: `material-floating` contains paint
+ * (and its blur is a containing block), so a submenu left in the parent's DOM
+ * is clipped to the parent's box — open, focusable and invisible.
+ */
 function ContextMenuSubContent({
   className,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
   return (
-    <ContextMenuPrimitive.SubContent
-      data-slot="context-menu-sub-content"
-      className={cn(
-        MENU_SURFACE,
-        "material-floating",
-        MENU_SURFACE_PAD,
-        MENU_SURFACE_MOTION,
-        "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
-        className,
-      )}
-      {...props}
-    />
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.SubContent
+        data-slot="context-menu-sub-content"
+        className={cn(
+          MENU_SURFACE,
+          "material-floating",
+          MENU_SURFACE_PAD,
+          MENU_SURFACE_MOTION,
+          "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+          className,
+        )}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
   );
 }
 

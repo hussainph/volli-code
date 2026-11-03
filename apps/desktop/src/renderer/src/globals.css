@@ -1708,7 +1708,10 @@ article.bg-card {
   -webkit-backdrop-filter: blur(20px) saturate(1.5);
   contain: paint;
 }
+/* A submenu is portaled out of its parent (contain:paint would clip it), but it
+ * still opens over that parent: it keeps the nested float's solid fill. */
 .material-floating .material-floating,
+[data-slot$="menu-sub-content"].material-floating,
 [cmdk-dialog] .material-floating,
 .material-floating [cmdk-dialog] {
   background: var(--material-solid-fill);
