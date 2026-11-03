@@ -1327,11 +1327,11 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
   function hideBrowser(tab: TicketTabDescriptor): void {
     if (tab.browserTabId === undefined) return;
-    void hideBrowserTab(browserApi, tab.browserTabId)
-      .then(() => dropBrowserTab(tab))
-      .catch((reason: unknown) => {
+    void hideBrowserTab(browserApi, tab.browserTabId, () => dropBrowserTab(tab)).catch(
+      (reason: unknown) => {
         toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
-      });
+      },
+    );
   }
 
   /**

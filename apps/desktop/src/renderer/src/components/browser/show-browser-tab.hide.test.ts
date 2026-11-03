@@ -114,9 +114,11 @@ describe("hideBrowserTab", () => {
         error: "Only a Session's Browser Tab can be hidden or previewed",
       })),
     };
-    await expect(hideBrowserTab(api, "b")).rejects.toThrow(
+    const leaveStrip = vi.fn();
+    await expect(hideBrowserTab(api, "b", leaveStrip)).rejects.toThrow(
       "Only a Session's Browser Tab can be hidden or previewed",
     );
+    expect(leaveStrip).not.toHaveBeenCalled();
     expect(homeStrip()).toEqual(["b"]);
     expect(islandRow()).toMatchObject({ promoted: true, surface: "tab" });
   });
@@ -129,8 +131,7 @@ describe("leaveHomeStrip after a hide", () => {
     workspace.setHomeActiveTab(PROJECT, "browser:b");
     expect(groupForTab(home()?.homeSplitView ?? null, "browser:b")).not.toBeNull();
 
-    await hideBrowserTab(bridge(), "b");
-    leaveHomeStrip(PROJECT, "b");
+    await hideBrowserTab(bridge(), "b", () => leaveHomeStrip(PROJECT, "b"));
 
     expect(home()?.homeSplitView ?? null).toBeNull();
     expect(home()?.homeActiveTab).toBe("chat:s");
@@ -142,8 +143,7 @@ describe("leaveHomeStrip after a hide", () => {
     workspace.setHomeActiveTab(PROJECT, "chat:s");
     workspace.setHomeActiveTab(PROJECT, "browser:b");
 
-    await hideBrowserTab(bridge(), "b");
-    leaveHomeStrip(PROJECT, "b");
+    await hideBrowserTab(bridge(), "b", () => leaveHomeStrip(PROJECT, "b"));
 
     expect(home()?.homeActiveTab).toBe("chat:s");
     expect(home()?.homeSplitView ?? null).toBeNull();
@@ -152,8 +152,7 @@ describe("leaveHomeStrip after a hide", () => {
   it("falls back to the Board when nothing else was visited", async () => {
     useProjectUiStore.getState().setHomeActiveTab(PROJECT, "browser:b");
 
-    await hideBrowserTab(bridge(), "b");
-    leaveHomeStrip(PROJECT, "b");
+    await hideBrowserTab(bridge(), "b", () => leaveHomeStrip(PROJECT, "b"));
 
     expect(home()?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
   });
@@ -165,8 +164,7 @@ describe("leaveHomeStrip after a hide", () => {
     const workspace = useProjectUiStore.getState();
     workspace.groupHomeTabs(PROJECT, "chat:s", "browser:b", "right");
     workspace.setHomeActiveTab(PROJECT, "browser:b");
-    await hideBrowserTab(api, "b");
-    leaveHomeStrip(PROJECT, "b");
+    await hideBrowserTab(api, "b", () => leaveHomeStrip(PROJECT, "b"));
 
     await showBrowserTab(api, "b", "beside-owner");
 

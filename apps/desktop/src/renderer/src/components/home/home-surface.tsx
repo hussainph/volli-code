@@ -616,11 +616,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const hideBrowser = React.useCallback(
     (tabId: string) => {
       if (selectedId === null) return;
-      void hideBrowserTab(browserApi, tabId)
-        .then(() => leaveHomeStrip(selectedId, tabId))
-        .catch((reason: unknown) => {
+      void hideBrowserTab(browserApi, tabId, () => leaveHomeStrip(selectedId, tabId)).catch(
+        (reason: unknown) => {
           toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
-        });
+        },
+      );
     },
     [browserApi, selectedId],
   );

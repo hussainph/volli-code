@@ -95,22 +95,25 @@ export function leaveHomeStrip(projectId: string, tabId: string): void {
  * screen, with its owner, page and hold untouched, so the agent keeps driving
  * it and the Island's row offers **Open beside chat** once more.
  *
- * Only the host half. The strip and any tab group the tab sat in are the
- * calling surface's to tidy, through the same step its close takes
- * ({@link leaveHomeStrip} on Home), because only that surface knows which tab
- * its selection should fall back to.
+ * The strip and any tab group the tab sat in are the calling surface's to
+ * tidy, through the same step its close takes ({@link leaveHomeStrip} on
+ * Home), because only that surface knows which tab its selection should fall
+ * back to. Run that step in this continuation, so a stale-tab effect cannot
+ * reset selection between the browser store update and the workspace cleanup.
  * Throws on a refusal (a person's own tab, or one that is gone), so the
  * surface can surface it.
  */
 export async function hideBrowserTab(
   api: Pick<BrowserApi, "setPresentation">,
   tabId: string,
+  leaveStrip?: () => void,
 ): Promise<void> {
   const result = await api.setPresentation({ tabId, presentation: "headless" });
   if (!result.ok) throw new Error(result.error);
   // Before the surface tidies up: its fallback selection reads the strip from
   // this store, which must no longer list the tab.
   useBrowserTabsStore.getState().receive(result.tab);
+  leaveStrip?.();
 }
 
 /**
