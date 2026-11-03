@@ -40,8 +40,8 @@ describe("MarkdownViewToggle", () => {
   });
 
   it("marks the view in front as pressed", () => {
-    expect(draw("source", PLAIN)).toContain('aria-pressed="true" data-choice="source"');
-    expect(draw("document", PLAIN)).toContain('aria-pressed="true" data-choice="document"');
+    expect(draw("source", PLAIN)).toMatch(/aria-pressed="true"[^>]*data-choice="source"/);
+    expect(draw("document", PLAIN)).toMatch(/aria-pressed="true"[^>]*data-choice="document"/);
   });
 
   it("offers only the editable pair for a file Document view can show", () => {
@@ -70,7 +70,7 @@ describe("MarkdownViewToggle", () => {
     expect(refused).toContain("YAML frontmatter (line 1) renders as a heading");
 
     const previewing = draw("preview", RAW_HTML);
-    expect(previewing).toContain('aria-pressed="true" data-choice="preview"');
+    expect(previewing).toMatch(/aria-pressed="true"[^>]*data-choice="preview"/);
     expect(previewing).toContain("Read-only preview");
     expect(previewing.toLowerCase()).toContain("unsupported html");
     // The refusal it stopped repeating is still one hover away.
