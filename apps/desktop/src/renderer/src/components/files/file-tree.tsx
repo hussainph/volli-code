@@ -252,6 +252,9 @@ export function FileTree({
                 ? FolderOpen
                 : Folder;
             const target = { projectId, ticketId, relPath: path };
+            // The paperclip is drawn for sighted eyes only; the name and the
+            // hover text say what it means, as the flat list's row once did.
+            const referenced = !row.match && file?.referenced === true;
             return (
               <ContextMenu key={key}>
                 <ContextMenuTrigger asChild>
@@ -259,7 +262,11 @@ export function FileTree({
                     id={rowId(key)}
                     role="treeitem"
                     aria-label={
-                      row.match ? `${path}, line ${row.match.line}: ${row.match.text}` : path
+                      row.match
+                        ? `${path}, line ${row.match.line}: ${row.match.text}`
+                        : referenced
+                          ? `${path}, referenced`
+                          : path
                     }
                     aria-level={depth + 1}
                     aria-posinset={row.position}
@@ -280,7 +287,7 @@ export function FileTree({
                     data-line={row.match?.line}
                     data-path={path}
                     data-kind={row.match ? "match" : file ? "file" : "directory"}
-                    title={row.match ? row.match.text : path}
+                    title={row.match ? row.match.text : referenced ? `Referenced · ${path}` : path}
                     className={cn(
                       "absolute inset-x-0 flex cursor-default select-none items-center gap-2 rounded-row px-2 text-ui hover:bg-accent/50",
                       selected === path && "bg-primary/10",
@@ -363,7 +370,7 @@ export function FileTree({
                         <PathLabel label={node.label} query={query} />
                       </span>
                     )}
-                    {!row.match && file?.referenced && (
+                    {referenced && (
                       <Paperclip aria-hidden className="size-3 shrink-0 text-muted-foreground" />
                     )}
                   </div>

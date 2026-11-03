@@ -183,6 +183,26 @@ describe("virtual file tree", () => {
     expect(container.querySelectorAll('[role="treeitem"]')).toHaveLength(1);
     expect(folder).toHaveBeenLastCalledWith("");
   });
+  it("names a referenced row as referenced, not only with its paperclip", async () => {
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <FileTree
+            projectId="p"
+            entries={[{ path: "keep.ts", referenced: true }, { path: "plain.ts" }]}
+            onOpen={vi.fn()}
+            onPin={vi.fn()}
+          />
+        </TooltipProvider>,
+      ),
+    );
+    const referenced = container.querySelector('[data-path="keep.ts"]')!;
+    expect(referenced.getAttribute("aria-label")).toBe("keep.ts, referenced");
+    expect(referenced.getAttribute("title")).toBe("Referenced · keep.ts");
+    const plain = container.querySelector('[data-path="plain.ts"]')!;
+    expect(plain.getAttribute("aria-label")).toBe("plain.ts");
+    expect(plain.getAttribute("title")).toBe("plain.ts");
+  });
   it("keeps the inline rename inert and the empty tree's draft reachable", async () => {
     const open = vi.fn();
     const controls: FileNavigatorControls = {
