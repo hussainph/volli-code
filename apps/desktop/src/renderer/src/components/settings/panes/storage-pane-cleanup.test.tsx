@@ -11,7 +11,7 @@ import type {
   WorktreeOrphansResult,
 } from "../../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
-import { StoragePane } from "./storage-pane";
+import { StorageOverviewPane } from "./storage-pane";
 
 // The build-artifact section reads its setting on mount over the Session RPC
 // client (`worktree.trimSettings`, VC-608).
@@ -20,6 +20,26 @@ vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
     worktree: {
       trimSettings: {
         query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+    // The Storage page's backups section; idle, so it adds nothing to assert.
+    backups: {
+      status: {
+        query: async () => ({ revision: "b", running: false, lastBackup: null, notice: null }),
+      },
+      restoreStatus: {
+        query: async () => ({
+          revision: "r",
+          phase: "idle",
+          bundles: [],
+          selectedFile: null,
+          projects: [],
+          checkpoints: 0,
+          paused: false,
+          problems: [],
+          credentialsMessage: null,
+          previousProfile: null,
+        }),
       },
     },
   }),
@@ -199,14 +219,28 @@ afterEach(() => {
 });
 
 async function mountPane(): Promise<void> {
+  await mountPage();
+  await openReview();
+}
+
+async function mountPage(): Promise<void> {
   await act(async () => {
     // The provider the app shell supplies: the row actions are tooltip buttons.
     root?.render(
       <TooltipProvider>
-        <StoragePane />
+        <StorageOverviewPane />
       </TooltipProvider>,
     );
   });
+}
+
+/** The orphan list lives on the page's Review cleanup sheet. */
+async function openReview(): Promise<void> {
+  const review = [...document.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "Review cleanup",
+  );
+  if (!review) throw new Error("no Review cleanup button");
+  await act(async () => review.click());
 }
 
 function orphanSection(): HTMLElement {
@@ -290,15 +324,18 @@ function interruptedRun(overrides: Partial<OrphanCleanupRun> = {}): OrphanCleanu
 
 describe("Storage → Orphaned worktrees", () => {
   it("asks for a read-only scan on mount, never a cleanup", async () => {
-    await mountPane();
+    // The page alone reads nothing from the orphan list.
+    await mountPage();
+    expect(orphans).not.toHaveBeenCalled();
 
+    await openReview();
     expect(orphans).toHaveBeenCalledWith({});
     expect(cleanupOrphans).not.toHaveBeenCalled();
   });
 
   it("lists candidates as proposals, keeps as keeps, and stale records as records", async () => {
     await mountPane();
-    const text = container?.textContent ?? "";
+    const text = document.body.textContent ?? "";
 
     expect(text).toContain("eligible for cleanup since");
     expect(text).toContain("Branch volli/VC-1-x would stay in git");
@@ -439,7 +476,7 @@ describe("Storage → Orphaned worktrees", () => {
     expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining("finished with problems"));
     expect(toast.success).not.toHaveBeenCalled();
     // The failed path, its reason, and a way back are all on the surface.
-    const text = container?.textContent ?? "";
+    const text = document.body.textContent ?? "";
     expect(text).toContain("Cleanup finished with problems");
     expect(text).toContain("git refused: worktree is locked");
     expect(findByText("Scan again")).toBeTruthy();
@@ -455,7 +492,7 @@ describe("Storage → Orphaned worktrees", () => {
     orphans.mockResolvedValueOnce({ ...scanned, runs: [interruptedRun()] });
 
     await mountPane();
-    const text = container?.textContent ?? "";
+    const text = document.body.textContent ?? "";
 
     expect(text).toContain("Interrupted cleanup");
     expect(text).toContain("1 completed, 1 never attempted");
@@ -493,7 +530,7 @@ describe("Storage → Orphaned worktrees", () => {
     });
 
     await mountPane();
-    const text = container?.textContent ?? "";
+    const text = document.body.textContent ?? "";
 
     expect(text).toContain("may or may not have taken effect");
   });
@@ -533,7 +570,7 @@ describe("Storage → Orphaned worktrees", () => {
     });
 
     await mountPane();
-    const text = container?.textContent ?? "";
+    const text = document.body.textContent ?? "";
 
     // Metadata items are history too — a pruned record is a completed act.
     expect(text).toContain("/wt/record");
@@ -573,7 +610,7 @@ describe("Storage → Orphaned worktrees", () => {
     });
 
     await mountPane();
-    const text = container?.textContent ?? "";
+    const text = document.body.textContent ?? "";
 
     expect(text).toContain("Interrupted cleanup");
     expect(text).toContain("1 failed");
@@ -606,7 +643,7 @@ describe("Storage → Orphaned worktrees", () => {
       input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     });
 
-    const text = container?.textContent ?? "";
+    const text = document.body.textContent ?? "";
     expect(text).toContain("Scan is out of date");
     expect(text).toContain("changed from 14 to 30 day(s)");
     // And the destructive door is closed until it has been scanned again.

@@ -66,3 +66,48 @@ it("reads real refs, keeps the stored branch visible and explicitly saves the sc
     vi.unstubAllGlobals();
   }
 });
+
+it.each(["refused", "rejected"])(
+  "keeps a %s branch read on screen with a retry",
+  async (failure) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const branches = vi.fn().mockResolvedValue({
+      ok: true,
+      branches: ["trunk", "feature"],
+      current: "trunk",
+      remotes: [],
+      fetchedAt: null,
+    });
+    if (failure === "refused") branches.mockResolvedValueOnce({ ok: false, error: "Unavailable" });
+    else branches.mockRejectedValueOnce(new Error("Unavailable"));
+    vi.stubGlobal("api", { worktree: { branches } });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <WorktreesPane project={project} />
+          </TooltipProvider>,
+        ),
+      );
+      expect(host.querySelector('[role="status"]')?.textContent).toContain(
+        "Couldn’t read branches",
+      );
+      expect(host.querySelector<HTMLButtonElement>("#project-base-branch")?.disabled).toBe(true);
+      await act(async () =>
+        Array.from(host.querySelectorAll("button"))
+          .find((button) => button.textContent === "Retry branch read")!
+          .click(),
+      );
+      expect(branches).toHaveBeenCalledTimes(2);
+      expect(host.textContent).not.toContain("Couldn’t read branches");
+      expect(host.querySelector<HTMLButtonElement>("#project-base-branch")?.disabled).toBe(false);
+      expect(host.querySelector("#project-base-branch")?.textContent).toBe("trunk");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  },
+);

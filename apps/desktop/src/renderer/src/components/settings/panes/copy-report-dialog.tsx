@@ -1,5 +1,6 @@
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import * as React from "react";
 
 import { Button } from "@renderer/components/ui/button";
@@ -35,7 +36,7 @@ export async function copyReportToClipboard(
   }
 }
 
-/** The scrollable payload and its honest clipboard verdict, shared with the state gallery. */
+/** The report payload and its clipboard verdict. */
 export function CopyReportPreview({
   report,
   copyState,
@@ -79,15 +80,15 @@ export function CopyReportPreview({
       ) : null}
 
       {availability === "unavailable" ? (
-        <p role="alert" className="text-ui text-destructive">
-          Couldn&rsquo;t prepare the complete report. Re-check and try again.
-        </p>
+        <Notice
+          tone="error"
+          announce
+          title="Couldn’t prepare the complete report. Re-check and try again."
+        />
       ) : null}
 
       {availability === "ready" && copyState === "failed" ? (
-        <p role="alert" className="text-ui text-destructive">
-          Couldn&rsquo;t copy the report. Try again.
-        </p>
+        <Notice tone="error" announce copyText="" title="Couldn’t copy the report. Try again." />
       ) : null}
 
       {availability === "ready" && copyState === "copied" ? (

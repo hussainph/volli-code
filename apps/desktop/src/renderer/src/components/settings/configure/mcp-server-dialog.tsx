@@ -54,6 +54,7 @@ import {
   DialogTitle,
 } from "@renderer/components/ui/dialog";
 import { Input } from "@renderer/components/ui/input";
+import { Notice } from "@renderer/components/ui/notice";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { Health } from "@renderer/components/settings/kit";
@@ -570,7 +571,7 @@ export function McpServerDialog({
             </DialogDescription>
           )}
           {health?.fix === "retry" && !connectedHere ? (
-            <p className="text-ui text-destructive">{health.detail}</p>
+            <Notice tone="error" title={health.detail ?? health.label} />
           ) : null}
         </DialogHeader>
 
@@ -667,9 +668,7 @@ export function McpServerDialog({
                   : null}
               </span>
             ) : (
-              <p role="alert" className="text-ui text-destructive">
-                {error}
-              </p>
+              <Notice tone="error" announce data-testid="mcp-error" title={error} />
             )}
           </div>
           <div className="flex shrink-0 justify-end gap-2">

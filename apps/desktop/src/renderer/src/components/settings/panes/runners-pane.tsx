@@ -27,7 +27,13 @@ import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import type { ThisMacRunnerSnapshot } from "@volli/shared";
 import { runnerPlaceAvailability } from "@volli/shared/cloud";
 
-import { Empty, Health, PrefSection, SectionAction } from "@renderer/components/settings/kit";
+import {
+  AsyncSection,
+  Empty,
+  Health,
+  PrefSection,
+  type AsyncState,
+} from "@renderer/components/settings/kit";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,6 +56,7 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { ListRow } from "@renderer/components/ui/list-row";
+import { Notice } from "@renderer/components/ui/notice";
 import { toastError } from "@renderer/lib/toast";
 
 import { cloudLaunchNow } from "@renderer/stores/launch";
@@ -125,37 +132,50 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
   });
   const snapshot = thisMac.kind === "ready" ? thisMac.value : null;
 
-  const failed = runners.kind === "failed" || thisMac.kind === "failed";
-  // The section's one action: Retry, after a failed read.
-  const action = failed ? <SectionAction label="Retry" onAct={retry} /> : undefined;
+  // Either failed read offers the one retry, which reads both again.
+  const list: AsyncState<readonly RunnerRow[]> =
+    runners.kind === "loading"
+      ? { status: "loading" }
+      : runners.kind === "failed"
+        ? { status: "error", message: runners.message, onRetry: retry }
+        : { status: "ready", data: runners.value };
 
   return (
     <>
       {snapshot === null ? null : <ThisMacBlocked snapshot={snapshot} commands={commands} />}
-      <PrefSection title="Runners" icon={HardDrivesIcon} action={action}>
-        {runners.kind === "loading" ? (
-          <Empty>Loading runners…</Empty>
-        ) : runners.kind === "failed" ? (
-          <Empty>{runners.message}</Empty>
-        ) : (
-          <>
-            {thisMac.kind === "failed" ? (
-              <p role="alert" className="text-ui text-destructive">
-                {thisMac.message}
-              </p>
-            ) : null}
-            <RunnerList
-              rows={runners.value}
-              snapshot={snapshot}
-              commands={commands}
-              onRemove={(runner, isThisMac) => {
-                setRemoving({ runner, thisMac: isThisMac });
-                setConfirming(true);
-              }}
+      <AsyncSection
+        title="Runners"
+        icon={HardDrivesIcon}
+        state={list}
+        before={
+          // A failed list read already offers the retry that reads this Mac again.
+          thisMac.kind === "failed" && runners.kind !== "failed" ? (
+            <Notice
+              tone="error"
+              title={thisMac.message}
+              className="m-4"
+              announce
+              actions={
+                <Button size="xs" variant="outline" onClick={retry}>
+                  Try again
+                </Button>
+              }
             />
-          </>
+          ) : null
+        }
+      >
+        {(rows) => (
+          <RunnerList
+            rows={rows}
+            snapshot={snapshot}
+            commands={commands}
+            onRemove={(runner, isThisMac) => {
+              setRemoving({ runner, thisMac: isThisMac });
+              setConfirming(true);
+            }}
+          />
         )}
-      </PrefSection>
+      </AsyncSection>
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
@@ -257,21 +277,22 @@ function ThisMacBlocked({
   if (recovery === null) return null;
   return (
     <PrefSection title="This Mac" icon={LaptopIcon}>
-      <div className="flex items-center justify-between gap-6" data-testid="this-mac-blocked">
-        <p
-          role={recovery.failed ? "alert" : "status"}
-          className={recovery.failed ? "text-ui text-destructive" : "text-ui text-muted-foreground"}
-        >
-          {snapshot.message ?? (recovery.failed ? "This Mac couldn’t be added." : "Removed.")}
-        </p>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => act(commands.addThisMac, "Couldn’t add this Mac")}
-        >
-          {recovery.label}
-        </Button>
-      </div>
+      <Notice
+        data-testid="this-mac-blocked"
+        tone={recovery.failed ? "error" : "neutral"}
+        title={snapshot.message ?? (recovery.failed ? "This Mac couldn’t be added." : "Removed.")}
+        className="m-4"
+        announce
+        actions={
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => act(commands.addThisMac, "Couldn’t add this Mac")}
+          >
+            {recovery.label}
+          </Button>
+        }
+      />
     </PrefSection>
   );
 }

@@ -34,6 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Input } from "@renderer/components/ui/input";
+import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
   SelectContent,
@@ -358,12 +359,16 @@ function SignInPanel({
     >
       {event !== null ? <SignInEventView event={event} /> : null}
       {failure !== null ? (
-        <div className="flex items-start justify-between gap-4">
-          <p className="text-ui leading-5 text-destructive">{failure}</p>
-          <Button size="sm" variant="ghost" onClick={onDismissFailure}>
-            Dismiss
-          </Button>
-        </div>
+        <Notice
+          tone="error"
+          announce
+          title={failure}
+          actions={
+            <Button size="sm" variant="ghost" onClick={onDismissFailure}>
+              Dismiss
+            </Button>
+          }
+        />
       ) : prompt !== null ? (
         <SignInPromptView
           prompt={prompt}

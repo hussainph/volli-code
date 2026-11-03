@@ -284,12 +284,7 @@ export function McpPane({ project }: { project: Project }) {
         }
       >
         {error === null ? null : (
-          <p
-            role="alert"
-            className="mb-2 rounded-md bg-destructive/10 px-4 py-2 text-ui text-destructive"
-          >
-            {error}
-          </p>
+          <Notice tone="error" announce data-testid="mcp-error" className="mb-2" title={error} />
         )}
         {readError !== null ? (
           <Notice

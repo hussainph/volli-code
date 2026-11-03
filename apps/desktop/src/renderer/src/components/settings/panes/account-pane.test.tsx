@@ -161,7 +161,7 @@ describe("Settings → Account", () => {
   it("checks first, then offers GitHub and Google, and sends the one pressed", async () => {
     const tier = standIn();
     act(() => root.render(<AccountPane rpc={tier.rpc} />));
-    expect(container.textContent).toContain("Checking your sign-in…");
+    expect(container.textContent).toContain("Checking your sign-in");
     tier.push(SIGNED_OUT);
     expect(container.textContent).toContain("Continue with GitHub");
     acceptAgreement();
@@ -172,13 +172,13 @@ describe("Settings → Account", () => {
     });
 
     tier.push({ ...SIGNED_OUT, state: "signing-in", signingInWith: "google" });
-    expect(container.textContent).toContain("Waiting for the browser…");
+    expect(container.textContent).toContain("Waiting for the browser");
     expect(button("Continue with GitHub").disabled).toBe(true);
     act(() => button("Cancel").click());
     expect(tier.rpc.account.cancelSignIn.mutate).toHaveBeenCalledOnce();
 
     tier.push({ ...SIGNED_OUT, failure: "Sign-in was declined in the browser." });
-    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+    expect(container.querySelector("[role=status]")?.textContent).toBe(
       "Sign-in was declined in the browser.",
     );
   });
@@ -242,7 +242,7 @@ describe("Settings → Account", () => {
       failure: "Couldn't reach Volli Cloud. Your sign-in is kept.",
     });
     expect(container.textContent).toContain("Offline");
-    expect(container.querySelector("[role=alert]")).toBeNull();
+    expect(container.querySelector("[role=status]")).toBeNull();
     expect(button("Delete account…").disabled).toBe(true);
 
     tier.push({
@@ -251,7 +251,7 @@ describe("Settings → Account", () => {
       failure: "Volli Cloud didn't accept this sign-in. Sign out and sign in again.",
     });
     expect(container.textContent).toContain("Not accepted");
-    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+    expect(container.querySelector("[role=status]")?.textContent).toBe(
       "Volli Cloud didn't accept this sign-in. Sign out and sign in again.",
     );
 
@@ -269,10 +269,10 @@ describe("Settings → Account", () => {
 
     tier.fail(new Error("The subscription's source failed"));
     expect(container.textContent).toContain("The subscription's source failed");
-    act(() => button("Retry").click());
+    act(() => button("Try again").click());
     expect(tier.rpc.account.subscribe.subscribe).toHaveBeenCalledTimes(2);
     expect(tier.unsubscribe).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("Checking your sign-in…");
+    expect(container.textContent).toContain("Checking your sign-in");
   });
 
   it("surfaces a command that failed", async () => {
@@ -365,7 +365,7 @@ describe("Settings → Account → GitHub", () => {
     expect(tier.rpc.account.githubConnect.mutate).toHaveBeenCalledOnce();
 
     tier.github({ ...GITHUB_NONE, waiting: "connect" });
-    expect(button("Waiting for the browser…").disabled).toBe(true);
+    expect(button("Waiting for the browser").disabled).toBe(true);
     act(() => button("Cancel").click());
     expect(tier.rpc.account.githubCancel.mutate).toHaveBeenCalledOnce();
 
@@ -373,7 +373,7 @@ describe("Settings → Account → GitHub", () => {
       ...GITHUB_NONE,
       failure: "This GitHub account is connected to another Volli account.",
     });
-    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+    expect(container.querySelector("[role=status]")?.textContent).toBe(
       "This GitHub account is connected to another Volli account.",
     );
   });
@@ -407,7 +407,7 @@ describe("Settings → Account → GitHub", () => {
 
     // The control says it is waiting; no sentence under the list does.
     tier.github({ ...GITHUB_ACTIVE, waiting: "install" });
-    expect(button("Waiting for the browser…").disabled).toBe(true);
+    expect(button("Waiting for the browser").disabled).toBe(true);
     expect(container.querySelector("[role=status]")).toBeNull();
     act(() => button("Cancel").click());
     expect(tier.rpc.account.githubCancel.mutate).toHaveBeenCalledOnce();
@@ -461,7 +461,7 @@ describe("Settings → Account → GitHub", () => {
     tier.push(SIGNED_IN);
     tier.githubFail(new Error("The GitHub stream closed."));
     expect(container.textContent).toContain("The GitHub stream closed.");
-    act(() => button("Retry").click());
+    act(() => button("Try again").click());
     expect(tier.rpc.account.githubSubscribe.subscribe).toHaveBeenCalledTimes(2);
     expect(container.textContent).not.toContain("The GitHub stream closed.");
 
@@ -503,7 +503,7 @@ describe("Settings → Account → GitHub", () => {
     tier.push(SIGNED_IN);
     tier.github({ ...GITHUB_NONE, state: "failed", failure: "Couldn't reach Volli Cloud." });
     expect(container.textContent).toContain("Couldn't reach Volli Cloud.");
-    act(() => button("Retry").click());
+    act(() => button("Try again").click());
     expect(tier.rpc.account.githubSubscribe.subscribe).toHaveBeenCalledTimes(2);
 
     tier.github(GITHUB_ACTIVE);

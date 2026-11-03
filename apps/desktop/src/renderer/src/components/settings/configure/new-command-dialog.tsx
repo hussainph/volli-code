@@ -31,6 +31,7 @@ import {
   DialogTrigger,
 } from "@renderer/components/ui/dialog";
 import { Input } from "@renderer/components/ui/input";
+import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
   SelectContent,
@@ -193,11 +194,7 @@ export function NewCommandDialog({
             </Select>
           </div>
 
-          {refusal ? (
-            <p role="alert" className="text-ui text-destructive">
-              {refusal}
-            </p>
-          ) : null}
+          {refusal ? <Notice tone="error" announce title={refusal} /> : null}
         </div>
 
         <DialogFooter>

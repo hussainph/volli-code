@@ -1,5 +1,6 @@
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -120,35 +121,18 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 const CONFIRM_BELOW_DAYS = 7;
 const RETENTION_DAYS_ERROR = "Enter a whole number of days, at least 1.";
 
-export function StoragePane() {
+/**
+ * Settings → Storage. The page keeps the cleanup details behind a reviewed
+ * maintenance sheet. The database and its export are not here: Settings
+ * mounts them under Privacy & data (`PrivacyDataPane`).
+ */
+export function StorageOverviewPane() {
   // The retention window is what every eligibility date in the orphan list was
-  // measured against, so the two halves of this pane are not independent
+  // measured against, so retention and the orphan list are not independent
   // (VC-284): committing a new window makes the list on screen a
   // statement about a policy that no longer exists. Retention says so, and the
   // orphan list refuses to act on a stale proposal until it has been scanned
   // again — main supersedes the revision from its own side at the same moment.
-  const [retentionDays, setRetentionDays] = React.useState<number | null>(null);
-  return (
-    <>
-      <RetentionSection onDays={setRetentionDays} />
-      {/* Processes come before the two file sweeps: a running `next dev` is
-          costing memory right now, while an orphaned folder is costing disk
-          nobody is waiting on (VC-341). */}
-      <RunningProcessesSection />
-      {/* Then the artifacts a finished worktree is still carrying (VC-340):
-          bigger than the orphan list and cheaper to act on, since a trim keeps
-          every checkout where it is. */}
-      <BuildArtifactsSection />
-      <PiSessionLogsSection />
-      <OrphansSection retentionDays={retentionDays} />
-      <ProfileBackupsSection />
-      <DatabaseSection />
-    </>
-  );
-}
-
-/** The normal page keeps cleanup details behind a reviewed maintenance sheet. */
-export function StorageOverviewPane() {
   const [retentionDays, setRetentionDays] = React.useState<number | null>(null);
   const [open, setOpen] = React.useState(false);
   const [summary, setSummary] = React.useState<string | null>(null);
@@ -229,7 +213,12 @@ export function StorageOverviewPane() {
           />
         )}
       </PrefSection>
+      {/* Processes come before the file sweeps: a running `next dev` is
+          costing memory right now, while an orphaned folder is costing disk
+          nobody is waiting on (VC-341). */}
       <RunningProcessesSection />
+      {/* Local profile backups and their restore. */}
+      <ProfileBackupsSection />
       <Dialog
         open={open}
         onOpenChange={(next) => {
@@ -244,9 +233,14 @@ export function StorageOverviewPane() {
               Scan each kind of file before choosing what to remove.
             </DialogDescription>
           </DialogHeader>
-          <BuildArtifactsSection />
-          <PiSessionLogsSection />
-          <OrphansSection retentionDays={retentionDays} />
+          <DialogBody className="flex flex-col gap-4">
+            {/* The artifacts a finished worktree is still carrying come first
+                (VC-340): bigger than the orphan list and cheaper to act on,
+                since a trim keeps every checkout where it is. */}
+            <BuildArtifactsSection />
+            <PiSessionLogsSection />
+            <OrphansSection retentionDays={retentionDays} />
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </>
@@ -846,32 +840,41 @@ function PiSessionLogsSection() {
   );
 }
 
+/**
+ * The local database: its size, where it lives, and the JSON data export.
+ *
+ * A failed size read stays on the section as an error with its retry rather
+ * than a toast, so "Unavailable" is never left without a reason or a way back.
+ */
 export function DatabaseSection() {
   const [sizeBytes, setSizeBytes] = React.useState<number | null>(null);
   const [sizeLoaded, setSizeLoaded] = React.useState(false);
+  const [sizeError, setSizeError] = React.useState<string | null>(null);
   const [revealing, setRevealing] = React.useState(false);
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
+  const reads = useLatestAsync();
+
+  const loadSize = React.useCallback(async () => {
+    const token = reads.claim();
+    setSizeLoaded(false);
+    setSizeError(null);
+    try {
+      const result = await window.api.database();
+      if (!reads.isCurrent(token)) return;
+      if (result.ok) setSizeBytes(result.sizeBytes);
+      else setSizeError(result.error);
+    } catch (error) {
+      if (reads.isCurrent(token)) setSizeError(errorMessage(error));
+    } finally {
+      if (reads.isCurrent(token)) setSizeLoaded(true);
+    }
+  }, [reads]);
 
   React.useEffect(() => {
-    let cancelled = false;
-    void window.api
-      .database()
-      .then((result) => {
-        if (cancelled) return;
-        if (result.ok) setSizeBytes(result.sizeBytes);
-        else toastError(`Couldn't load database size: ${result.error}`);
-        setSizeLoaded(true);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        toastError(`Couldn't load database size: ${errorMessage(error)}`);
-        setSizeLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void loadSize();
+    return () => reads.invalidate();
+  }, [loadSize, reads]);
 
   async function revealDatabase(): Promise<void> {
     if (revealing) return;
@@ -882,7 +885,9 @@ export function DatabaseSection() {
         toastError(`Couldn't reveal database: ${result.error}`);
         return;
       }
+      reads.invalidate();
       setSizeBytes(result.sizeBytes);
+      setSizeError(null);
       setSizeLoaded(true);
     } catch (error) {
       toastError(`Couldn't reveal database: ${errorMessage(error)}`);
@@ -900,7 +905,9 @@ export function DatabaseSection() {
         toastError(`Couldn't export data: ${result.error}`);
         return;
       }
+      reads.invalidate();
       setSizeBytes(result.sizeBytes);
+      setSizeError(null);
       setSizeLoaded(true);
     } catch (error) {
       toastError(`Couldn't export data: ${errorMessage(error)}`);
@@ -926,17 +933,29 @@ export function DatabaseSection() {
       >
         <PrefRow label="Size">
           <span className="text-ui text-muted-foreground">
-            {sizeLoaded ? (
-              sizeBytes === null ? (
-                "Unavailable"
-              ) : (
-                formatFileSize(sizeBytes)
-              )
-            ) : (
+            {!sizeLoaded ? (
               <LoadingLabel>Loading</LoadingLabel>
+            ) : sizeError !== null || sizeBytes === null ? (
+              "Unavailable"
+            ) : (
+              formatFileSize(sizeBytes)
             )}
           </span>
         </PrefRow>
+        {sizeError === null ? null : (
+          <Notice
+            tone="error"
+            title="Couldn't read the database size"
+            detail={sizeError}
+            announce
+            className="m-4"
+            actions={
+              <Button size="xs" variant="outline" onClick={() => void loadSize()}>
+                Try again
+              </Button>
+            }
+          />
+        )}
         <PrefRow label={DATA_EXPORT_ACTION_LABEL}>
           <Button size="xs" variant="outline" onClick={() => setExportOpen(true)}>
             Export…

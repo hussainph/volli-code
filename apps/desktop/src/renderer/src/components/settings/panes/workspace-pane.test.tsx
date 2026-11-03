@@ -172,7 +172,7 @@ const mount = (h = harness()) => {
 describe("Workspace sections", () => {
   it("loads, then lists the Workspace, your role, members and policy without empty invite sections", () => {
     const h = mount();
-    expect(text()).toContain("Loading members…");
+    expect(text()).toContain("Loading members");
     h.ready();
     expect(document.querySelector<HTMLInputElement>("#workspace-name")?.value).toBe("Acme");
     for (const label of ["Your role", "Dana", "Robin", "Make everything shared", "Who can invite"])
@@ -457,12 +457,12 @@ describe("Invitations", () => {
 });
 
 describe("Read failures, offline and scope changes", () => {
-  it("shows read errors with Retry and resubscribes all sections", async () => {
+  it("shows read errors with Try again and resubscribes all sections", async () => {
     const h = mount();
     h.ready();
     act(() => h.cloud.fail("members:list", args, refusal("forbidden", "Access changed")));
     expect(text()).toContain("Access changed");
-    await click("Retry");
+    await click("Try again");
     expect(h.cloud.watchers("members:list", args)).toBe(1);
     h.answer("members:list", [owner]);
     expect(text()).toContain("Just you so far.");

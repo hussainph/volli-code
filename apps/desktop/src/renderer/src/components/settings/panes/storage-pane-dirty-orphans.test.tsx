@@ -16,13 +16,33 @@ import type {
 } from "../../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
-import { StoragePane } from "./storage-pane";
+import { StorageOverviewPane } from "./storage-pane";
 
 vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
   sessionRpcClient: () => ({
     worktree: {
       trimSettings: {
         query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+    // The Storage page's backups section; idle, so it adds nothing to assert.
+    backups: {
+      status: {
+        query: async () => ({ revision: "b", running: false, lastBackup: null, notice: null }),
+      },
+      restoreStatus: {
+        query: async () => ({
+          revision: "r",
+          phase: "idle",
+          bundles: [],
+          selectedFile: null,
+          projects: [],
+          checkpoints: 0,
+          paused: false,
+          problems: [],
+          credentialsMessage: null,
+          previousProfile: null,
+        }),
       },
     },
   }),
@@ -156,10 +176,16 @@ async function mountPane(): Promise<void> {
   await act(async () => {
     root?.render(
       <TooltipProvider>
-        <StoragePane />
+        <StorageOverviewPane />
       </TooltipProvider>,
     );
   });
+  // The orphan list lives on the page's Review cleanup sheet.
+  const review = [...document.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "Review cleanup",
+  );
+  if (!review) throw new Error("no Review cleanup button");
+  await act(async () => review.click());
 }
 
 /**

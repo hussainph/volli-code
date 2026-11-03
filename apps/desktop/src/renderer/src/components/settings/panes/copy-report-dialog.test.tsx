@@ -19,7 +19,8 @@ describe("CopyReportDialog", () => {
   it("shows a refused clipboard write as a failure, never a copied verdict", () => {
     const html = renderToStaticMarkup(<CopyReportPreview report={report} copyState="failed" />);
 
-    expect(html).toContain('role="alert"');
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain("Copy error");
     expect(html).toContain("copy the report. Try again.");
     expect(html).not.toContain("Report copied.");
   });

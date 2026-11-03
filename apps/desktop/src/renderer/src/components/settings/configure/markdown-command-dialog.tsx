@@ -5,6 +5,7 @@ import { isWritablePromptTemplateName } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import {
   Dialog,
   DialogContent,
@@ -88,11 +89,7 @@ export function MarkdownCommandDialog({
           placeholder="review"
           disabled={busy}
         />
-        {error && (
-          <p role="alert" className="text-ui text-destructive">
-            {error}
-          </p>
-        )}
+        {error && <Notice tone="error" announce title={error} />}
         <DialogFooter>
           <Button variant="outline" disabled={busy || !valid} onClick={() => void create()}>
             {busy ? <LoadingLabel>Creating</LoadingLabel> : "Create and open"}

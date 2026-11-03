@@ -13,6 +13,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
   SelectContent,
@@ -102,14 +103,21 @@ export function WorktreesPane({ project }: { project: Project }) {
               ))}
             </SelectContent>
           </Select>
-          {status === "loading" ? (
-            <LoadingLabel>Reading branches</LoadingLabel>
-          ) : status === "error" ? (
-            <Button size="sm" variant="outline" onClick={reload}>
-              Retry branch read
-            </Button>
-          ) : null}
+          {status === "loading" ? <LoadingLabel>Reading branches</LoadingLabel> : null}
         </PrefRow>
+        {status === "error" ? (
+          <Notice
+            className="m-4"
+            tone="error"
+            announce
+            title="Couldn’t read branches"
+            actions={
+              <Button size="sm" variant="outline" onClick={reload}>
+                Retry branch read
+              </Button>
+            }
+          />
+        ) : null}
         <div className="space-y-2 border-t border-border px-4 py-4" data-slot="pref-row">
           <label
             data-slot="pref-row-label"

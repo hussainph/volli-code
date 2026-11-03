@@ -7,6 +7,7 @@ import { ShareNetworkIcon } from "@phosphor-icons/react/dist/csr/ShareNetwork";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import {
   canInviteAs,
   canReissueInvite,
@@ -52,6 +53,8 @@ import {
 } from "@renderer/components/ui/dialog";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
 import { toastError } from "@renderer/lib/toast";
@@ -70,20 +73,42 @@ const facts = (workspaceId: string, member: Member): MembershipFacts => ({
   status: member.status,
 });
 
+/** A failed read, with its retry beside it. Retry resubscribes every section. */
+function ReadFailed({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <Notice
+      tone="error"
+      icon={WarningIcon}
+      title={message}
+      className="m-4"
+      announce
+      actions={
+        <Button size="xs" variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      }
+    />
+  );
+}
+
 function ReadState<T>({
   view,
   loading,
   offline,
+  onRetry,
   children,
 }: {
   view: Loaded<T>;
   loading: string;
   offline: boolean;
+  onRetry: () => void;
   children: (value: T) => React.ReactNode;
 }) {
-  if (view.kind === "failed") return <Empty>{view.message}</Empty>;
+  if (view.kind === "failed") return <ReadFailed message={view.message} onRetry={onRetry} />;
   if (view.kind === "loading")
-    return <Empty>{offline ? "Volli Cloud is offline." : loading}</Empty>;
+    return (
+      <Empty>{offline ? "Volli Cloud is offline." : <LoadingLabel>{loading}</LoadingLabel>}</Empty>
+    );
   return children(view.value);
 }
 
@@ -116,10 +141,6 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
       : ROLES.filter((role) => canInviteAs(actor, actor.workspaceId, actor, role, policy.value));
   const canLeave =
     actor !== null && decideMemberChange(actor, actor, { kind: "leave" }, activeOwners) === null;
-  const failed = [workspace, members, policy, invites, mine, viewer].some(
-    (view) => view.kind === "failed",
-  );
-  const retry = failed ? <SectionAction label="Retry" onAct={state.retry} /> : undefined;
   const perform = async (run: () => Promise<unknown>) => {
     if (pending.current) return;
     pending.current = true;
@@ -145,11 +166,16 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
 
   return (
     <>
-      <PrefSection title="Workspace" icon={BuildingsIcon} action={retry}>
+      <PrefSection title="Workspace" icon={BuildingsIcon}>
         {workspaceId === null ? (
           <Empty>No Workspace selected.</Empty>
         ) : (
-          <ReadState view={workspace} loading="Loading Workspace…" offline={readOnly}>
+          <ReadState
+            view={workspace}
+            loading="Loading Workspace"
+            offline={readOnly}
+            onRetry={state.retry}
+          >
             {(value) => (
               <>
                 <PrefRow label="Name" htmlFor="workspace-name">
@@ -174,7 +200,14 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                 <PrefRow label="Your role">
                   <span className="text-ui">{roleLabel(value.role)}</span>
                 </PrefRow>
-                <PrefRow label="Membership">
+                <PrefRow
+                  label="Membership"
+                  description={
+                    actor?.role === "owner" && !canLeave
+                      ? "Make someone else an owner before leaving."
+                      : undefined
+                  }
+                >
                   <Button
                     variant="outline"
                     size="sm"
@@ -184,20 +217,15 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                     Leave…
                   </Button>
                 </PrefRow>
-                {actor?.role === "owner" && !canLeave ? (
-                  <p className="text-ui text-muted-foreground">
-                    Make someone else an owner before leaving.
-                  </p>
-                ) : null}
               </>
             )}
           </ReadState>
         )}
-        {viewer.kind === "failed" ? <Empty>{viewer.message}</Empty> : null}
+        {viewer.kind === "failed" ? (
+          <ReadFailed message={viewer.message} onRetry={state.retry} />
+        ) : null}
         {readOnly && workspace.kind === "ready" ? (
-          <p role="status" className="text-ui text-muted-foreground">
-            {CLOUD_READ_ONLY}
-          </p>
+          <Notice announce tone="warning" className="m-4" title={CLOUD_READ_ONLY} />
         ) : null}
       </PrefSection>
       {workspaceId !== null ? (
@@ -215,7 +243,12 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
               ) : undefined
             }
           >
-            <ReadState view={members} loading="Loading members…" offline={readOnly}>
+            <ReadState
+              view={members}
+              loading="Loading members"
+              offline={readOnly}
+              onRetry={state.retry}
+            >
               {(value) => (
                 <>
                   {value.map((member) => {
@@ -300,7 +333,12 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
           </PrefSection>
           {invites.kind !== "ready" || invites.value.length > 0 ? (
             <PrefSection title="Invites" icon={EnvelopeIcon}>
-              <ReadState view={invites} loading="Loading invites…" offline={readOnly}>
+              <ReadState
+                view={invites}
+                loading="Loading invites"
+                offline={readOnly}
+                onRetry={state.retry}
+              >
                 {(value) =>
                   value.map((invite) => (
                     <ListRow
@@ -355,7 +393,12 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
             </PrefSection>
           ) : null}
           <PrefSection title="Sharing" icon={ShareNetworkIcon}>
-            <ReadState view={policy} loading="Loading sharing…" offline={readOnly}>
+            <ReadState
+              view={policy}
+              loading="Loading sharing"
+              offline={readOnly}
+              onRetry={state.retry}
+            >
               {(value) => (
                 <>
                   <PrefRow label="Make everything shared" htmlFor="workspace-share-all">
@@ -391,7 +434,12 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
       ) : null}
       {mine.kind !== "ready" || mine.value.length > 0 ? (
         <PrefSection title="Invitations to you" icon={EnvelopeIcon}>
-          <ReadState view={mine} loading="Loading invitations…" offline={readOnly}>
+          <ReadState
+            view={mine}
+            loading="Loading invitations"
+            offline={readOnly}
+            onRetry={state.retry}
+          >
             {(value) =>
               value.map((invite) => (
                 <ListRow

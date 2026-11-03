@@ -100,14 +100,19 @@ describe("Storage backup restore", () => {
         { id: "b", name: "Beta", directory: null },
       ],
     };
-    mocks.choose.mockResolvedValue(mapped);
-    mocks.start.mockResolvedValue({
+    const ready: ProfileRestoreStatus = {
       ...mapped,
       revision: "next",
       phase: "ready",
       credentialsMessage: "Backups never carry credentials.",
       previousProfile: "/profile/.volli-replaced-123",
-    });
+    };
+    // The host's projection follows each accepted command, so the 1 s status
+    // poll reads the same phase back however slowly this test runs.
+    let host = idle;
+    mocks.status.mockImplementation(async () => host);
+    mocks.choose.mockImplementation(async () => (host = mapped));
+    mocks.start.mockImplementation(async () => (host = ready));
     await mount();
     expect(container.textContent).toContain("Verified");
     expect(container.textContent).toContain("Kept for move");
@@ -137,9 +142,10 @@ describe("Storage backup restore", () => {
     await mount();
     await act(async () => button("Restore…").click());
     expect(mocks.choose).toHaveBeenCalledWith({});
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "archive: Bundle is not a gzip archive",
+    const problem = [...document.querySelectorAll('[role="status"]')].find((node) =>
+      node.textContent?.includes("Couldn't restore this backup"),
     );
+    expect(problem?.textContent).toContain("Bundle is not a gzip archive");
     mocks.choose.mockRejectedValue(new Error("file unavailable"));
     await act(async () => button("Choose backup…").click());
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't restore: file unavailable");
@@ -150,17 +156,23 @@ describe("Storage backup restore", () => {
     await mount();
     await act(async () => button("Restore…").click());
     expect(document.querySelector('progress[aria-label="Restore progress"]')).toBeTruthy();
-    expect(document.body.textContent).toContain("12 checkpoints");
+    expect(document.body.textContent).toContain("Preparing restore · 12 checkpoints");
+    expect(document.body.textContent).not.toContain("Preparing restore…");
     await act(async () => button("Cancel restore").click());
     expect(mocks.cancel).toHaveBeenCalledWith({ expectedRevision: "r" });
     expect(document.body.textContent).toContain("current profile is unchanged");
   });
-  it("shows an unavailable local restore rather than an empty inventory", async () => {
-    mocks.status.mockRejectedValue(new Error("Restart in local mode to restore a backup."));
+  it("shows an unavailable local restore rather than an empty inventory, and retries", async () => {
+    mocks.status.mockRejectedValueOnce(new Error("Restart in local mode to restore a backup."));
     await mount();
     expect(button("Restore…").disabled).toBe(true);
-    expect(document.querySelector('[role="status"]')?.textContent).toContain(
-      "Restart in local mode",
-    );
+    const announced = document.querySelector('[role="status"]');
+    expect(announced?.textContent).toContain("Couldn't read restore status");
+    expect(announced?.textContent).toContain("Restart in local mode");
+
+    await act(async () => button("Try again").click());
+    expect(button("Restore…").disabled).toBe(false);
+    expect(container.textContent).toContain("bundle.tar.gz");
+    expect(container.textContent).not.toContain("Couldn't read restore status");
   });
 });
