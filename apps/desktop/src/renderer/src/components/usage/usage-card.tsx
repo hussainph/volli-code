@@ -1,36 +1,5 @@
-/**
- * The rail's usage surface — one framed card wearing the repository card's own
- * frame, with a hero figure and rows that reveal the rest on demand (VC-203).
- *
- * WHY THIS FILE EXISTS. The two usage blocks were drawn as `rounded-row border-
- * border bg-card` panels under a section heading, which is the treatment
- * the old checkout card used for a single fact — while the repository card one block up
- * the same rail is a `rounded-xl` framed surface of seamed rows on the sidebar's
- * own border and background. Two containers, two radii, two border tokens and
- * two background tokens for two blocks that sit ten pixels apart, and the usage
- * one blended into the rail while the repository one read as an object. The
- * frame here is the repository card's, spelled from the same constants, so the
- * rail has two surfaces that are plainly the same kind of thing.
- *
- * WHY EVERY ROW IS A POPOVER TRIGGER. The blocks used to print everything they
- * knew: a hero figure, a basis sentence, a bar, a caption, three ranked model
- * names, a "+N more", and a session tally — eight lines before the reader has
- * asked anything, of which one is the number they came for. That is the bulk
- * complaint, and a collapse would only have hidden the good line along with the
- * rest. So the card keeps the three things that are worth unprompted pixels —
- * the figure, the picture, and the one caption that reads the picture — and
- * every other fact moves behind the row it belongs to. Model names, operation
- * counts, cost basis and per-session rankings are all answers to a question,
- * and a question needs somewhere to be asked rather than a line to sit on.
- *
- * The caret is the affordance, and it is the repository branch row's caret at
- * the same size in the same ink: a reader who has opened that row already knows
- * what this one does.
- *
- * NOTHING HERE READS A STORE. Same reason the blocks beside it do not — see
- * `usage-rail.tsx`. These are props-in drawings so the UI lab can mount the
- * real card against fixture operations.
- */
+/** Props-in usage cards and breakdowns. Tokens lead the Instrument face; costs keep
+ * their coverage qualifier. The colour bar opens class details independently. */
 import type * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -48,13 +17,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { UsageBar, UsageClassRows } from "@renderer/components/usage/usage-bar";
-import { formatTokens } from "@volli/session-presentation";
+import { UsageTokenCount, tokenCountLabel } from "./usage-token-count";
 import { cn } from "@renderer/lib/utils";
 import {
   formatCachedShare,
   formatUsageCost,
   totalUsageTokens,
-  usageBasisLine,
   usageCostParts,
   type UsageGroupRow,
 } from "@renderer/usage/usage-format";
@@ -81,7 +49,10 @@ export function UsageCard({
   className?: string;
 }) {
   return (
-    <section data-testid={testId} className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN, className)}>
+    <section
+      data-testid={testId}
+      className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN, "usage-instrument", className)}
+    >
       {children}
     </section>
   );
@@ -122,93 +93,21 @@ export function UsageCostFigure({
   );
 }
 
-/**
- * The card's face at ONE ROW: the figure at the left, a caption that gives
- * way, and the caret (VC-406).
- *
- * The Ticket rail's card used to open with the hero below — an 18px figure, the
- * bar and a caption, then a seamed row for the Sessions — and at ~120px it was
- * the tallest object on a page whose most-read block is a list of Sessions.
- * Cost is a fact the user glances at, not a surface they work in, so the
- * face is now the height of any other row in the rail and everything the hero
- * carried (the bar, its legend, the cached share, the basis sentence, the
- * per-Session ranking) is one press behind it, in one popover rather than two.
- *
- * The figure leads and never truncates; the caption is the elastic member and
- * gives way first — a price losing a digit is a worse loss than a token count
- * losing its last letters, and at the rail's 240px floor one of them has to.
- */
-export function UsageCardFace({
-  name,
-  summary,
-  icon: Icon,
-  testId,
-  children,
-}: {
-  /** What the figure is about, for the accessible name — never drawn. */
-  name: string;
-  summary: SessionUsageSummary;
-  icon: PhosphorIcon;
-  testId?: string;
-  /** The popover body: everything the figure is made of. */
-  children: React.ReactNode;
-}) {
-  const cost = formatUsageCost(summary);
-  const tokens = totalUsageTokens(summary);
+/** Tokens lead; money gives way to a second line before either value clips. */
+export function UsageSummaryFigure({ summary }: { summary: SessionUsageSummary }) {
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-testid={testId}
-          aria-label={`${name} ${cost ?? ""} — open breakdown`}
-          className={cn(RAIL_CARD_ROW, "min-h-8 py-2 hover:bg-accent/50")}
-        >
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <UsageCostFigure
-            summary={summary}
-            className="shrink-0 text-ui font-medium text-foreground"
-          />
-          {/* Tokens, never cost — a second dollar figure on the face would be
-              a second total, and the cached share stays behind the row so a
-              reader cannot set it beside the money and read it as a share of
-              spend (`usage/usage-format.ts`). */}
-          <span className="min-w-0 flex-1 truncate text-right text-ui text-muted-foreground tabular-nums">
-            {tokens > 0 ? `${formatTokens(tokens)} tokens` : ""}
-          </span>
-          <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent aria-label={name} align="start" side="left" className={USAGE_POPOVER}>
-        {children}
-      </PopoverContent>
-    </Popover>
+    <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+      <UsageTokenCount
+        tokens={totalUsageTokens(summary)}
+        unit
+        className="whitespace-nowrap text-ui font-semibold text-foreground"
+      />
+      <UsageCostFigure summary={summary} className="text-ui text-muted-foreground" />
+    </span>
   );
 }
 
-/**
- * The card's face: the figure, the picture, and the one line that reads it.
- *
- * THREE THINGS, and the order is the reading order — what it cost, how the
- * tokens divided, what that division was made of. The basis sentence that used
- * to sit between the first two is gone from the face and lives in this row's own
- * popover: it qualifies the figure rather than adding to it, the tilde on the
- * figure already carries the consequence, and at rail width it wrapped to two
- * lines more often than not.
- *
- * The bar and the caption both drop when nothing carried tokens — a provider can
- * price a call without breaking it down, and an empty track is a picture of
- * nothing.
- *
- * THE CARET RIDES THE CAPTION, not the figure's line. Parked opposite the money
- * it sat at the far end of an otherwise empty row, reading as a stray glyph
- * rather than as this block's affordance; and a caret set immediately beside a
- * price reads as a value you can change, which this one is not. On the caption
- * line it is the same size and the same ink as the words it ends, which is what
- * a quiet "there is more behind this" should look like. It stays when the
- * caption does not, so the affordance never depends on a provider having broken
- * its tokens down.
- */
+/** One token-led header and a noninteractive bar inside its inspection trigger. */
 export function UsageCardHero({
   name,
   cost,
@@ -226,34 +125,24 @@ export function UsageCardHero({
   children: React.ReactNode;
 }) {
   const tokens = totalUsageTokens(summary);
-  const cached = formatCachedShare(summary);
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
           data-testid={testId}
-          aria-label={`${name} ${cost} — open breakdown`}
+          aria-label={`${name} ${tokenCountLabel(tokens)}, ${cost} — open breakdown`}
           className={cn(
             "flex w-full flex-col gap-2 px-4 pt-4 pb-2 text-left",
             USAGE_CARD_PRESSABLE,
           )}
         >
-          {/* text-heading, not text-title: the rail's widest content box is
-              268px and the ticket title is the only 24px text in the app. */}
-          <UsageCostFigure summary={summary} className="text-heading text-foreground" />
-          {tokens > 0 ? <UsageBar summary={summary} /> : null}
-          <span className="flex w-full items-center justify-between gap-2">
-            {/* Tokens and cache, never cost — the bar divides tokens, and a
-                dollar figure on this line would invite reading the cached share
-                as a share of spend. It is close to the opposite. */}
-            <span className="min-w-0 truncate text-ui text-muted-foreground tabular-nums">
-              {tokens > 0
-                ? `${formatTokens(tokens)} tokens${cached === null ? "" : ` · ${cached} cached`}`
-                : ""}
-            </span>
+          <span className="flex w-full flex-wrap items-baseline gap-2">
+            <UsageTokenCount tokens={tokens} unit className="flex-1 text-heading font-semibold" />
+            <UsageCostFigure summary={summary} className="text-ui text-muted-foreground" />
             <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
           </span>
+          {tokens > 0 ? <UsageBar summary={summary} interactive={false} /> : null}
         </button>
       </PopoverTrigger>
       {/* Radix gives its content `role="dialog"`, and a dialog with no
@@ -314,20 +203,8 @@ export function UsageCardRow({
   );
 }
 
-/**
- * What a figure IS, in words — the popover body behind a hero or a scoped row.
- *
- * The basis sentence, the bar's legend at full precision, the total those
- * classes add up to, and the cached share named rather than abbreviated. This is
- * where the notation stops being one glyph of hedge and becomes a claim someone
- * can check (`usage/usage-format.ts` carries the reasoning for the glyph).
- *
- * THE TOTAL IS A ROW, not a sum the reader is left to do. The face carries it in
- * the caption, but a row's popover has no face above it — and the Session block
- * this replaced reported `Tokens 610k` as one of its three lines, so dropping it
- * here would have retired a fact rather than progressively revealing it. Under
- * the legend rather than over it: it is what those four rows come to.
- */
+/** Class counts, their total, cached share and any scope-specific attribution.
+ * Cost retains its coverage qualifier; exact token counts remain on each value. */
 export function UsageBreakdown({
   title,
   summary,
@@ -336,19 +213,13 @@ export function UsageBreakdown({
 }: {
   title: string;
   summary: SessionUsageSummary;
-  /**
-   * Draw the token bar above its legend. ON where the face does not already
-   * show it (the Ticket rail's one-row card, VC-406), OFF where the popover
-   * opens off a face that does (Home's hero) — the same picture twice, ten
-   * pixels apart, is not a breakdown.
-   */
+  /** Draw the class bar only when the containing face does not already show it. */
   picture?: boolean;
   /** Anything this scope adds under the legend — a ranking, a tally. */
   children?: React.ReactNode;
 }) {
   const cost = formatUsageCost(summary);
   const cached = formatCachedShare(summary);
-  const basis = usageBasisLine(summary);
   const tokens = totalUsageTokens(summary);
   return (
     <div className="flex flex-col gap-4">
@@ -359,14 +230,13 @@ export function UsageBreakdown({
             <UsageCostFigure summary={summary} className="text-ui text-foreground" />
           )}
         </div>
-        {basis === null ? null : <p className="text-ui text-muted-foreground">{basis}</p>}
       </div>
 
       <div className="flex flex-col gap-2">
         {picture ? <UsageBar summary={summary} /> : null}
         <UsageClassRows summary={summary} />
         {tokens > 0 ? (
-          <UsageBreakdownFact label="Total tokens" value={formatTokens(tokens)} />
+          <UsageBreakdownFact label="Total tokens" value={<UsageTokenCount tokens={tokens} />} />
         ) : null}
         {cached === null ? null : <UsageBreakdownFact label="Cached input share" value={cached} />}
       </div>
@@ -395,7 +265,7 @@ export function UsageRankList({
   if (rows.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
-      <SectionHeading as="p">{heading}</SectionHeading>
+      <SectionHeading as="h3">{heading}</SectionHeading>
       <dl className="flex flex-col gap-2">
         {rows.map((row) => (
           <UsageRankRow key={row.key} row={row} />

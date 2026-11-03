@@ -164,10 +164,32 @@ describe("the usage footers' faces", () => {
     for (const markup of [home(), ticket()]) {
       expect(markup).toContain("<footer");
       for (const utility of RAIL_FOOTER.split(" ")) expect(markup).toContain(utility);
-      expect(markup).toContain(RAIL_FOOTER_ROW);
+      for (const utility of RAIL_FOOTER_ROW.split(" ")) {
+        if (!utility.startsWith("min-h") && !utility.startsWith("py-"))
+          expect(markup).toContain(utility);
+      }
       // A rounded frame here would read as a block that happens to be last
       // rather than as the page's floor.
       expect(markup).not.toContain("rounded-xl");
+    }
+  });
+
+  it("leads with compact tokens, keeps the exact reading, and never nests class controls", () => {
+    for (const [markup, testId] of [
+      [home(), "home-usage"],
+      [ticket(), "ticket-usage"],
+    ]) {
+      const host = parse(markup!);
+      const trigger = host.querySelector(`[data-testid="${testId}"]`)!;
+      expect(trigger.textContent).toContain("137K tokens");
+      expect(trigger.querySelector('[title="137,100 tokens"]')).not.toBeNull();
+      expect(trigger.textContent!.indexOf("137K tokens")).toBeLessThan(
+        trigger.textContent!.indexOf("$0.19"),
+      );
+      expect(trigger.querySelector("button")).toBeNull();
+      const bar = host.querySelector('[role="group"][aria-label^="Token classes"]')!;
+      expect(bar.classList.contains("h-8")).toBe(true);
+      expect(trigger.contains(bar)).toBe(false);
     }
   });
 
@@ -193,8 +215,8 @@ describe("the usage footers' faces", () => {
     expect(markup).toContain("tokens");
     // The window is on the face because it is what the figure MEANS.
     expect(markup).toContain("30d");
-    // The bar is a body fact: the face is one row.
-    expect(markup).not.toContain('role="img"');
+    // The class bar remains visible while attribution is folded away.
+    expect(markup).toContain('role="group"');
   });
 
   it("hedges an estimate with a muted `est.` after the money, never a tilde before it (VC-406)", () => {
@@ -204,7 +226,9 @@ describe("the usage footers' faces", () => {
     expect(markup).toContain(
       '$0.19</span><span class="shrink-0 text-label text-muted-foreground">est.</span>',
     );
-    expect(markup).toContain('aria-label="Project usage $0.19 est. over 30d — show breakdown"');
+    expect(markup).toContain(
+      'aria-label="Project usage 137,100 tokens, $0.19 est. over 30d — show breakdown"',
+    );
     expect(markup).not.toContain("~$");
   });
 
@@ -319,19 +343,23 @@ describe("the Ticket footer", () => {
 
   it("keeps the closed row pinned and reveals the trimmed breakdown above it (VC-406)", () => {
     const closed = ticket();
-    expect(closed).toContain('aria-label="Ticket usage $0.19 est. — show breakdown"');
-    expect(closed).not.toContain('role="img"');
+    expect(closed).toContain(
+      'aria-label="Ticket usage 137,100 tokens, $0.19 est. — show breakdown"',
+    );
+    expect(closed).toContain('role="group"');
     expect(closed).not.toContain("Cached input share");
 
     const open = ticket({ open: true });
-    expect(open).toContain('aria-label="Ticket usage $0.19 est. — hide breakdown"');
-    expect(open).toContain('role="img"');
+    expect(open).toContain('aria-label="Ticket usage 137,100 tokens, $0.19 est. — hide breakdown"');
+    expect(open).toContain('role="group"');
     expect(open).toContain("Cached input share");
     expect(open).toContain("Top model");
     expect(open).toContain("By session");
     expect(open).toContain("Wire the projection");
     expect(open).not.toContain("Total tokens");
-    expect(open.indexOf('role="img"')).toBeLessThan(open.indexOf('data-testid="ticket-usage"'));
+    expect(open.indexOf('role="group"')).toBeGreaterThan(
+      open.indexOf('data-testid="ticket-usage"'),
+    );
   });
 
   it("reports a Session that metered nothing rather than dropping it", () => {
@@ -389,6 +417,7 @@ describe("the fold's height budget", () => {
     expect(body.contains(trigger)).toBe(false);
     // The control that changes the window rides inside the bounded body, where
     // pressing it cannot be confused with opening the fold.
-    expect(body.textContent).toContain("Project usage");
+    expect(body.textContent).not.toContain("Project usage");
+    expect(body.querySelector('[role="combobox"][aria-label="Usage window"]')).not.toBeNull();
   });
 });

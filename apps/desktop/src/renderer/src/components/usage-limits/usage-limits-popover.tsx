@@ -51,6 +51,7 @@ import {
   type UsageLimitAccount,
 } from "@renderer/components/usage-limits/accounts";
 import { AccountUsage, type UsageWindowPin } from "@renderer/components/usage-limits/account-usage";
+import { ProviderGlyph } from "./provider-glyph";
 import {
   usageIconLabel,
   usageIconReading,
@@ -225,8 +226,8 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
           <UsageLimitsIcon reading={glyph} />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="center" className="w-80 p-0">
-        <div className="flex items-center justify-between gap-2 border-b border-border/50 px-2 py-1">
+      <PopoverContent aria-label="Usage limits" align="center" className="w-80 p-0">
+        <div className="usage-instrument flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2">
           <span className="text-ui font-medium">Usage limits</span>
           <Button
             variant="ghost"
@@ -236,10 +237,12 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
             disabled={busy}
             onClick={() => void load(true)}
           >
-            <ArrowClockwiseIcon />
+            {busy ? <Spinner /> : <ArrowClockwiseIcon />}
           </Button>
         </div>
-        <ReadingView reading={reading} now={now} pin={pin} />
+        <div className="max-h-96 overflow-y-auto overscroll-contain px-2">
+          <ReadingView reading={reading} now={now} pin={pin} />
+        </div>
       </PopoverContent>
     </Popover>
   );
@@ -306,7 +309,8 @@ function AccountItem({
   return (
     <AccordionItem value={account.providerId}>
       <AccordionTrigger className="group">
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex min-w-0 items-center gap-2">
+          <ProviderGlyph id={providerId} label={account.label} />
           <span className="min-w-0 truncate text-ui font-medium">{account.label}</span>
           {/* A mark, not a control: the pins that change it are the rows
               inside, and a second button in a trigger would be a button in a

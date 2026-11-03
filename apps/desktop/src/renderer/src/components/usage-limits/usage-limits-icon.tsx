@@ -41,6 +41,7 @@ import type { ReactNode } from "react";
 import type { UsageTone } from "@volli/shared";
 
 import { providerMark } from "@renderer/components/models/model-identity";
+import type { ProviderArtwork } from "./provider-glyph";
 import {
   usageIconWindows,
   type UsageAccountReading,
@@ -220,7 +221,7 @@ function QuietRing({ dashed }: { dashed: boolean }) {
       strokeWidth={1.1}
       strokeLinecap="round"
       strokeDasharray={dashed ? "1.8 2.6" : undefined}
-      className="stroke-current text-muted-foreground/45"
+      className="stroke-current text-muted-foreground"
     />
   );
 }
@@ -311,7 +312,7 @@ function markBox(viewBox: string): { x: number; y: number; w: number; h: number 
  */
 function AccountMark({ account }: { account: UsageAccountReading | null }) {
   if (account === null) return null;
-  const mark = providerMark(account.providerId);
+  const mark: ProviderArtwork | null = providerMark(account.providerId);
   const quiet = cn("text-muted-foreground", MOTION);
   if (mark === null) {
     return (
@@ -339,9 +340,15 @@ function AccountMark({ account }: { account: UsageAccountReading | null }) {
       // right to left, as SVG applies them.
       transform={`translate(${MID} ${MID}) scale(${scale}) translate(${-(x + w / 2)} ${-(y + h / 2)})`}
       className={quiet}
+      fillRule={mark.fillRule}
     >
-      {mark.paths.map((path) => (
-        <path key={path.slice(0, 24)} d={path} fill="currentColor" />
+      {mark.paths.map((path, index) => (
+        <path
+          key={path.slice(0, 24)}
+          d={path}
+          fill="currentColor"
+          clipRule={mark.clipRules?.[index]}
+        />
       ))}
     </g>
   );
@@ -487,6 +494,12 @@ export function UsageLimitsIcon({ reading }: { reading: UsageIconReading }) {
     return (
       <Glyph>
         <QuietRing dashed={reading.kind === "unread"} />
+        {reading.kind === "failed" ? (
+          <g data-usage-fault="" className="text-destructive">
+            <path d="M12 6v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="12" cy="18" r="1" fill="currentColor" />
+          </g>
+        ) : null}
       </Glyph>
     );
   }
