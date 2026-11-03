@@ -141,8 +141,11 @@ export class SqliteSessionLedger implements SessionLedger {
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
     let appended: readonly SessionEvent[] = [];
     // Only a top-level transaction's reads may be memoized: a nested one's
-    // commit is a savepoint release that its caller can still roll back.
-    const births = this.db.inTransaction ? null : new Map<string, BirthOwner>();
+    // commit is a savepoint release that its caller can still roll back. The
+    // transaction says so (`enclosed`), so the engine's hot checkpoints keep
+    // the same rule (VC-1098).
+    const enclosed = this.db.inTransaction;
+    const births = enclosed ? null : new Map<string, BirthOwner>();
     const settled = settleTransaction(this.db, () => {
       let open = true;
       const transaction = new SqliteSessionLedgerTransaction(
@@ -150,6 +153,7 @@ export class SqliteSessionLedger implements SessionLedger {
         () => open,
         this.scope,
         births,
+        enclosed,
       );
       try {
         const value = work(transaction);
@@ -232,6 +236,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     private readonly scope?: SqliteSessionLedgerScope,
     /** Birth owners read here, kept by the ledger once this commits; null keeps none. */
     private readonly births: Map<string, BirthOwner> | null = null,
+    /** Runs inside a transaction the ledger does not own; see `SessionLedgerTransaction.enclosed`. */
+    readonly enclosed: boolean = false,
   ) {
     this.scopeBindings = { ...scope?.bindings };
   }
@@ -851,6 +857,17 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       invalidMessage: "Session projection checkpoint is invalid",
     });
     const encoded = encodeSessionJson(checkpoint);
+    // `updated_at` is the Session's latest `recorded_at` (or its creation time
+    // when it has no events), and every build has written it that way. The
+    // maximum over the whole log reads every event row of the Session — on a
+    // 14.8k-event Session, ~700 ms cold and ~4 ms warm, paid by the first
+    // checkpoint refresh after launch and then every refresh, on Electron
+    // main (VC-1098). An existing row already holds that maximum as of its
+    // own write, which covered every event through its cursor, so only the
+    // events after its cursor can raise it: the same value, read from the
+    // tail through the `(session_id, sequence)` index. A row at cursor 0 may
+    // hold the creation-time fallback rather than a `recorded_at`, so it
+    // takes the whole-log answer, which for it is the same short read.
     prepared(
       this.db,
       `INSERT INTO session_projection_checkpoints
@@ -858,6 +875,12 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
        VALUES (
          @sessionId, @schemaVersion, @throughSequence, @checkpoint, @digest,
          COALESCE(
+           (SELECT MAX(c.updated_at, COALESCE(
+                     (SELECT MAX(e.recorded_at) FROM session_events e
+                       WHERE e.session_id = @sessionId AND e.sequence > c.through_sequence),
+                     c.updated_at))
+              FROM session_projection_checkpoints c
+             WHERE c.session_id = @sessionId AND c.through_sequence > 0),
            (SELECT MAX(recorded_at) FROM session_events WHERE session_id = @sessionId),
            (SELECT created_at FROM sessions WHERE id = @sessionId)
          )

@@ -131,14 +131,24 @@ export interface PaneChatView {
  * the chat views its cell should draw, in the pane's own tab order — a stable
  * order, so a switch never moves a kept view's DOM node (which would reset its
  * scroller).
+ *
+ * `soloTabIds` is the surface's whole tab order while the view is NOT split
+ * (`groupId === null`), and `null` while it is. An unsplit view resolves to one
+ * pane holding only its front tab (`projectSplitView` in `@volli/shared`), so a
+ * pane's own `tabIds` cannot say which other chats are still open there: read
+ * alone, the chat a switch left would look closed and be dropped on the same
+ * render — every switch in an unsplit Home or Ticket view would rebuild the
+ * transcript it returned to (VC-1100). The solo pane holds every surface tab.
  */
 export function usePaneChatViews(
   panes: readonly ChatViewPane[],
+  soloTabIds: readonly string[] | null,
 ): (pane: ChatViewPane) => readonly PaneChatView[] {
+  const tabsOf = (pane: ChatViewPane): readonly string[] => soloTabIds ?? pane.tabIds;
   const shown: ChatViewPlace[] = [];
   const present: ChatViewPlace[] = [];
   for (const pane of panes) {
-    for (const tabId of pane.tabIds) {
+    for (const tabId of tabsOf(pane)) {
       const sessionId = parseChatTabId(tabId);
       if (sessionId !== null) present.push({ paneId: pane.id, sessionId });
     }
@@ -150,7 +160,7 @@ export function usePaneChatViews(
     (pane: ChatViewPane) => {
       const front = pane.activeTabId === null ? null : parseChatTabId(pane.activeTabId);
       const views: PaneChatView[] = [];
-      for (const tabId of pane.tabIds) {
+      for (const tabId of soloTabIds ?? pane.tabIds) {
         const sessionId = parseChatTabId(tabId);
         if (sessionId === null || views.some((view) => view.sessionId === sessionId)) continue;
         if (sessionId === front) views.push({ sessionId, shown: true });
@@ -161,6 +171,6 @@ export function usePaneChatViews(
       }
       return views;
     },
-    [isKept],
+    [isKept, soloTabIds],
   );
 }

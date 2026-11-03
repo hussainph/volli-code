@@ -449,7 +449,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   );
   // The chats each pane cell draws: its front one, and the last few it showed
   // kept mounted behind it (VC-1080, `chat/kept-chat-views.ts`).
-  const paneChatViews = usePaneChatViews(split.panes);
+  const paneChatViews = usePaneChatViews(
+    split.panes,
+    split.groupId === null ? orderedTabIds : null,
+  );
 
   // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for Home. The chord resolves which surface is in
   // front for itself, so this instance stands down while a Ticket view has

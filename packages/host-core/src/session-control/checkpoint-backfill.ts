@@ -27,15 +27,27 @@
  *
  * Main-thread budget: candidates are found a page at a time, and the host is
  * given a macrotask turn whenever a slice of work has run for
- * {@link BACKFILL_SLICE_MS}. One Session's fold cannot be split, so a single
- * enormous Session can still hold one slice longer — the same cost its first
- * listing would have paid, paid once and in the background.
+ * {@link BACKFILL_SLICE_MS}. A Session's log is read and folded
+ * {@link BACKFILL_FOLD_PAGE} events at a time too, each page in its own
+ * transaction, resuming from the checkpoint the previous page left
+ * (`advanceSessionProjection`, the same step the engine takes for every fact).
+ * Reading the log is most of a fold's cost — on a measured 14.8k-event
+ * Session, ~400 ms cold against ~9 ms for the fold itself — so one large
+ * Session no longer holds the main thread for its whole history at once
+ * (VC-1098; a single such block measured 2.2–2.8 s on a loaded machine).
+ *
+ * Splitting across transactions is sound because events are insert-only: a
+ * page read later sees the same prefix plus, at most, facts appended since,
+ * which the next page folds. The row is written in the transaction that read
+ * the last page, so its cursor is never past that transaction's head.
  */
 import type Database from "better-sqlite3";
 import {
+  advanceSessionProjection,
   createSessionProjectionCheckpoint,
   SESSION_PROJECTION_CHECKPOINT_VERSION,
 } from "@volli/shared";
+import type { SessionProjectionCheckpoint } from "@volli/shared";
 
 import { setImmediate } from "node:timers";
 import { prepared } from "../db/prepared";
@@ -49,6 +61,9 @@ export const BACKFILL_SLICE_MS = 8;
 
 /** How many Sessions one candidate read considers. */
 const BACKFILL_PAGE = 256;
+
+/** How many events of one Session's log one transaction reads and folds. */
+export const BACKFILL_FOLD_PAGE = 256;
 
 export interface CheckpointBackfillPorts {
   readonly db: Database.Database;
@@ -115,17 +130,31 @@ export async function backfillProjectionCheckpoints(
       if (signal?.aborted) break;
       candidates += 1;
       try {
-        await ledger.transaction((transaction) => {
-          const session = transaction.getSession(row.id);
-          // Gone since the page was read: its project was deleted.
-          if (session === null) return;
-          transaction.saveProjectionCheckpoint(
-            createSessionProjectionCheckpoint(
-              session,
-              transaction.listProjectionEvents({ sessionId: session.id }),
-            ),
-          );
-        });
+        let checkpoint: SessionProjectionCheckpoint | null = null;
+        for (;;) {
+          const more = await ledger.transaction((transaction) => {
+            const session = transaction.getSession(row.id);
+            // Gone since the page was read: its project was deleted.
+            if (session === null) return false;
+            const events = transaction.listProjectionEvents({
+              sessionId: session.id,
+              afterSequence: checkpoint?.throughSequence ?? 0,
+              limit: BACKFILL_FOLD_PAGE,
+            });
+            checkpoint =
+              checkpoint === null
+                ? createSessionProjectionCheckpoint(session, events)
+                : advanceSessionProjection(checkpoint, events, session);
+            // A short page is this transaction's head: write the row here.
+            if (events.length < BACKFILL_FOLD_PAGE) {
+              transaction.saveProjectionCheckpoint(checkpoint);
+              return false;
+            }
+            return true;
+          });
+          if (!more) break;
+          await yieldIfDue();
+        }
         if (isCurrent.get(row.id, SESSION_PROJECTION_CHECKPOINT_VERSION) !== undefined) {
           refreshed += 1;
         }
