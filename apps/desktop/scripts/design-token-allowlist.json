@@ -6,6 +6,108 @@
       "rule": "radius-arbitrary",
       "contains": "rounded-[2px]",
       "reason": "The context meter's 1%-wide heat cells (and the legend's matching 8px swatch) are far below the ladder's smallest rung — `rounded-sm` (8px) would render them as circles. 2px is a hairline softening specific to this data visualization, not a surface radius; if a micro rung ever joins the ladder, move these onto it and retire this entry. Recorded while unblocking CI for VC-20 (the check had not run on the VC-33 merge that introduced them)."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/automation-editor.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "<label className=\"flex flex-col gap-1 text-label text-muted-foreground uppercase\">",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The schedule popover's Hour and Minute field labels are uppercase `text-label`; field labels stay sentence case at the UI rung (`SectionHeading as=\"span\"`), so drop `uppercase` and take the field-label recipe."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/automation-editor.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "<h2 className=\"text-label text-muted-foreground uppercase\">",
+      "reason": "Pre-existing; retire in the VC-617 sweep. `SectionLabel` is a hand-rolled eyebrow `h2`; replace it with `SectionHeading` (sentence case, `text-ui` semibold), or cut the label where it repeats the field below it."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/automations-page.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "<h2 className=\"text-label text-muted-foreground uppercase\">{group.label}</h2>",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The per-project group header is an uppercase eyebrow; group headers are `text-ui` semibold sentence case, so render it as `SectionHeading`."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/activity-island-ui.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "truncate text-label font-medium text-muted-foreground uppercase",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The Activity Island card heading is an uppercase eyebrow; a card heading is a compact subhead, so render it as `SectionHeading as=\"h3\"` (sentence case, `text-ui` semibold) and keep the truncation."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/empty/board-visual.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "truncate text-center text-label uppercase text-muted-foreground",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The empty-state board illustration uppercases the status names under its bars; these are chart labels, not headings, so drop `uppercase` and print the statuses as `TICKET_STATUS_LABELS` spells them."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/session-path-comparison.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "\"text-label uppercase\",",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The comparison card's title is an uppercase `text-label` eyebrow; render it as a compact subhead (`SectionHeading as=\"h3\"`) and keep the tone colour on the card frame."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-server-dialog.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "<h3 className=\"text-label text-muted-foreground uppercase\">",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The MCP server dialog's Connection and Tools section titles are uppercase eyebrows; render both as `SectionHeading as=\"h3\"` (sentence case)."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-tool-picker.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "text-label text-muted-foreground uppercase\">{group.label}</span>",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The tool picker's read-only / can-make-changes group labels are uppercase eyebrows; group headers are `text-ui` semibold sentence case (`SectionHeading as=\"span\"`)."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-tool-picker.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "<span className=\"shrink-0 text-label text-destructive uppercase\">Destructive</span>",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The per-tool Destructive marker is an uppercase span; a status mark is a `Badge` (destructive role), sentence case."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/rail-panel-parts.tsx",
+      "rule": "eyebrow-uppercase",
+      "contains": "flex items-center gap-1 rounded-sm uppercase outline-none",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The foldable rail section trigger adds `uppercase` inside a `SECTION_HEADING` h2, so a foldable heading (Sessions) reads as an eyebrow while the non-foldable ones beside it are sentence-case `SectionHeading`; drop `uppercase` (and rename the caret's `placement=\"eyebrow\"`)."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/board-list-view.tsx",
+      "rule": "material-hand-rolled-blur",
+      "contains": "sticky top-0 z-10 flex items-center gap-2 bg-muted/30 px-gutter py-1 backdrop-blur-sm",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The list view's sticky status header blurs the rows scrolling under it; a sticky band is not a floating surface, so give it a static material (`material-regular`) and no backdrop filter."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/chat-plane.tsx",
+      "rule": "material-hand-rolled-blur",
+      "contains": "ConversationScrollButton className=",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The jump-to-latest button hand-rolls `bg-background/70 backdrop-blur-md` at the call site; its material belongs to the `ui/ai-elements/conversation` primitive (`material-floating`), so the call site passes position only."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/command-palette.tsx",
+      "rule": "material-hand-rolled-blur",
+      "contains": "overlayClassName=\"fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]\"",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The palette's scrim blurs the window under a dialog that already carries `material-floating`'s blur, which nests two backdrop filters; the overlay is plain `bg-scrim`, so drop the override and take the primitive's default."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/files/quick-open.tsx",
+      "rule": "material-hand-rolled-blur",
+      "contains": "overlayClassName=\"fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]\"",
+      "reason": "Pre-existing; retire in the VC-617 sweep. Same as the command palette: the quick-open scrim's blur nests under the dialog's own `material-floating` blur; use the primitive's plain `bg-scrim` overlay."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sessions/session-split-layout.tsx",
+      "rule": "material-hand-rolled-blur",
+      "contains": "border border-border/50 bg-background/70 text-muted-foreground shadow-raised backdrop-blur-sm",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The terminal-focus button floats over live terminal scrollback, where DESIGN.md bans glass; give it an opaque control material (an outline `Button` or `material-solid`) instead of a blur."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor.tsx",
+      "rule": "material-hand-rolled-blur",
+      "contains": "rounded-full bg-background/60 p-0.5 backdrop-blur-sm",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The canvas pad's floating control chip hand-rolls glass; take `material-floating` (one blur, opaque under Reduce transparency) rather than spelling the blur here."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/rail-mode-tabs.tsx",
+      "rule": "material-hand-rolled-blur",
+      "contains": "sticky top-0 z-20 shrink-0 bg-sidebar/70 pt-4 pb-4 backdrop-blur-xl",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The rail's sticky page switcher blurs at 24px over the scroller; a sticky band is not a floating surface, so give it a static material (`material-clear` / `material-regular` on `--sidebar`) and no backdrop filter."
     }
   ]
 }

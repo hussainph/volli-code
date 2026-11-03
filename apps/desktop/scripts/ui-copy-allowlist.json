@@ -1,0 +1,587 @@
+{
+  "note": "Recorded exceptions to check-ui-copy.mjs. An entry excuses one rule in one file wherever the offending text or its source line contains `contains`. Every entry needs a reason, and an entry that stops matching FAILS the check — retiring these is part of finishing the sweep that made them unnecessary.",
+  "entries": [
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/cloud-pending-runs.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Starting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/cloud-run-history.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Starting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/archive-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/composer-branch.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Reading branches…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/composer-footer.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Reading automations…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/boot-error-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking whether backup recovery is available…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/boot-error-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/boot-error-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Downloading",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/boot-error-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "restarting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/boot-error-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Restoring the last backup that checks clean…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/chat-plane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading Session owner…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/chat-plane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Queuing…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/chat-plane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Sending…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/compaction-boundary-ui.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Compacting context on its own…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/compaction-boundary-ui.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Compacting context…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/runner-picker-start-status.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Confirming start on",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/runner-picker-start-status.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Starting on",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/runner-picker.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading runners…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/running-bash-control.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Moving…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/secret-card.tsx",
+      "rule": "markup-native-select",
+      "contains": "<select",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The credential request's Scope picker hand-styles a native select; use `ui/select` at the `sm` control rung, keeping the field's label association."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/cloud-moves.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Reading moves…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/preflight.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking projects…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/preflight.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Starting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/preflight.tsx",
+      "rule": "markup-native-select",
+      "contains": "<select",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The move sheet's Workspace picker is a native select; use `ui/select` so it rides the control ladder and the menu recipe."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/progress.tsx",
+      "rule": "copy-banned-word",
+      "contains": "Unlocks the local copy",
+      "reason": "Kept: a literal lock, not marketing. Rolling a Volli Cloud move back makes the read-only local copy writable again, and \"unlocks\" is the plain word for that. The banned word is the empty-praise sense (\"unlock productivity\")."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/progress.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Working…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/files/search-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Searching “",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/files/search-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Searching…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/home/home-rail-footer.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Reading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/host-chip.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "`Adding ${addActivity.name}…`",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The add-host chip's running label: `LoadingLabel` (or the chip's icon slot as a Spinner) and no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/host-chip.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "needs attention…",
+      "reason": "Kept for now, not loading: the ellipsis says the chip opens the add-host sheet, the dialog-opening use DESIGN.md allows. It matches only because the label starts with \"Adding\"; the progress label two lines above is the sweep item. Retire with it if the label is reworded."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/open-project-sheet.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Reading",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A `Spinner` already sits beside this line; drop the ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/agent-observability-settings.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/appearance-settings.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading fonts…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/decision-model-settings.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/decision-model-settings.tsx",
+      "rule": "markup-settings-description",
+      "contains": "effective.kind === \"cloud\"",
+      "reason": "Kept: the trust-boundary carve-out `PrefRow` documents (AGENTS.md \"let controls talk\" exceptions). It discloses what this project's decision model sends to a cloud provider, and only when it does; a boundary behind an (i) is one nobody agreed to."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/experimental-settings.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/experimental-settings.tsx",
+      "rule": "markup-settings-description",
+      "contains": "description={experiment.description}",
+      "reason": "Pre-existing; retire in the VC-617 sweep. Each experiment's explanation is ordinary prose under a switch, not a trust boundary: move it into the row's `hint` (the (i)), or cut what the label already says."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/model-access-accounts.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Signing out…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/project-appearance-settings.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading this project’s appearance…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/web-access-settings.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/workspace-switcher.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading Workspaces…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/session-environment-alert.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Fixing…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/session-peek/session-peek-card.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Sending…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sessions/session-detail-panel.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading this session’s record…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/content-preview-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A screen-reader-only announcement beside a Skeleton: say it without the ellipsis (or let `loading-region` announce the busy state)."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-credentials-editor.tsx",
+      "rule": "markup-native-select",
+      "contains": "<select",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The credential-kind pickers (header/env values and the OAuth client secret) share a hand-styled `KIND_SELECT` native select; use `ui/select`, or `Segmented` since each offers two values."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading MCP servers…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-server-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Connecting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-server-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Saving…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/mcp-server-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Waiting for the browser…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/new-command-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Creating…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/secrets-pane.tsx",
+      "rule": "copy-banned-word",
+      "contains": "Couldn't unlock saved secrets.",
+      "reason": "Kept: a literal lock, not marketing. Saved secrets sit behind a lock the person opens, and this is the failure toast for that action."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/secrets-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading credentials…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/sessions-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading models…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/kit/async-section.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A screen-reader-only announcement beside a Skeleton: say it without the ellipsis (or let `loading-region` announce the busy state)."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/about-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/about-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Fixing…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/account-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking your sign-in…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/account-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Waiting for the browser…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/add-runner-sheet.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Creating…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/add-runner-sheet.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Waiting for it to come online…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/add-runner-sheet.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Waiting for the box…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/add-runner-sheet.tsx",
+      "rule": "markup-native-select",
+      "contains": "<select",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The install-command variant picker is a native select; use `ui/select` (or `Segmented` for its three fixed values)."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/always-on-runner-sheet.tsx",
+      "rule": "markup-native-select",
+      "contains": "<select",
+      "reason": "Pre-existing; retire in the VC-617 sweep. The provider picker is a native select; use `ui/select`."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/backup-restore.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking backup…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/backup-restore.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Preparing restore…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/backup-restore.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Restarting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/copy-report-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Copying…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/copy-report-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Preparing report…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/copy-report-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Preparing the complete report…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/link-runner-sheet.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/profile-backups-section.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Backing up…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/profile-backups-section.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/runners-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading runners…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Cleaning up…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Deleting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Exporting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Scanning…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Trimming…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "markup-settings-description",
+      "contains": "Volli removes the folder and keeps the branch",
+      "reason": "Kept: the trust-boundary carve-out `PrefRow` documents. Done-worktree retention deletes folders automatically, and what is deleted must not sit behind a disclosure."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/updates-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/updates-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A Select placeholder while its options load: a disabled trigger with `Spinner`, no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/workspace-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading invitations…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/workspace-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading invites…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/workspace-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading members…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/workspace-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading sharing…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/workspace-pane.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading Workspace…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sidebar/update-button.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Checking for updates…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/diff-view.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading diff…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/file-view.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/ticket-repository-summary.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Loading…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A first-read placeholder: hold the content's own shape with `Skeleton` / `ListRowSkeleton`, or use `LoadingLabel` where there is no shape to hold; no ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/ticket-repository-summary.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Recreating…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/update/update-install-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "checking what's running…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/update/update-install-dialog.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Restarting…",
+      "reason": "Pre-existing; retire in the VC-617 sweep. A busy action's label: keep the action's own words and swap its leading icon for `Spinner` while it runs, instead of a progress caption with an ellipsis."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/workspace-dependencies-offer.tsx",
+      "rule": "copy-loading-ellipsis",
+      "contains": "Running",
+      "reason": "Pre-existing; retire in the VC-617 sweep. An in-flight status line: `LoadingLabel` (Spinner + the sentence, no ellipsis); keep the Notice/status role and its announcement."
+    }
+  ]
+}

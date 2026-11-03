@@ -52,12 +52,32 @@ const SKIP_DIRS = new Set(["lab"]);
 
 const SOURCE_EXTENSIONS = [".ts", ".tsx"];
 
+/** The renderer's own source, as a repo-relative prefix. */
+const RENDERER_SRC = "apps/desktop/src/renderer/src/";
+
+/**
+ * The primitives' home. A floating surface's material is drawn HERE, once, and
+ * reached through the primitive, so this is the one place a blur may be spelled.
+ */
+const UI_PRIMITIVES = `${RENDERER_SRC}components/ui/`;
+
+/**
+ * A test draws nothing. The renderer rules below skip tests, because the tests
+ * that mention these utilities are the guard's allies (`section-heading.test`
+ * asserting that no `uppercase` is drawn) or prose a class-list shape cannot
+ * tell apart ("accepts uppercase P (shift-less caps)").
+ */
+const isRendererSource = (path) => path.startsWith(RENDERER_SRC) && !/\.test\.tsx?$/.test(path);
+
 /**
  * One banned utility family.
  *
  * `match` receives a class token with its variants already stripped (see
  * {@link baseUtility}), so a rule never has to spell `hover:` or `dark:` and
  * cannot miss a banned utility merely because it arrived behind a variant.
+ *
+ * `appliesTo`, when present, receives the file's repo-relative path and narrows
+ * the rule to part of the tree; a rule without it applies everywhere scanned.
  */
 const RULES = [
   {
@@ -149,6 +169,34 @@ const RULES = [
     // focus recipe lives in `ui/field-classes.ts`.
     summary: "loud focus ring — the focus recipe lives in ui/field-classes.ts",
     match: (base) => /^ring-\[3px\]$/.test(base),
+  },
+  {
+    id: "eyebrow-uppercase",
+    // DESIGN.md "No eyebrows": names for sections someone navigates or folds
+    // are sentence-case headings, never uppercase, and `text-label` (the rung
+    // these were always paired with) is compact metadata, not a section name.
+    // `SectionHeading` is the answer for a heading, and a heading that repeats
+    // what follows is deleted rather than restyled. Scoped to the renderer's
+    // source; `normal-case` (a reset) is a different utility and untouched.
+    summary: "uppercase draws an eyebrow — sentence case via SectionHeading, or cut it",
+    appliesTo: isRendererSource,
+    match: (base) => base === "uppercase",
+  },
+  {
+    id: "material-hand-rolled-blur",
+    // DESIGN.md "Materials": a floating surface takes `material-floating` from
+    // its primitive — one 20px blur with `saturate(1.5)`, opaque under Reduce
+    // transparency and where backdrop-filter is unsupported. A blur spelled at
+    // a call site gets none of that, nests under the primitive's own (a sticky
+    // header inside a popover), and lands over live terminals and Browser Tab
+    // webviews where glass is banned. `components/ui/` is where the material is
+    // drawn, so it is the one place exempt. The `-none` resets REMOVE a filter
+    // and are untouched, like `shadow-none`.
+    summary: "hand-rolled backdrop blur — take material-floating from the primitive",
+    appliesTo: (path) => isRendererSource(path) && !path.startsWith(UI_PRIMITIVES),
+    match: (base) =>
+      /^backdrop-(?:blur|filter)(?:-(?!none$).+)?$/.test(base) ||
+      /^\[(?:-webkit-)?backdrop-filter:/.test(base),
   },
 ];
 
@@ -332,6 +380,7 @@ function violations(path, source) {
     for (const token of tokens) {
       const base = baseUtility(token);
       for (const rule of RULES) {
+        if (rule.appliesTo && !rule.appliesTo(path)) continue;
         if (rule.match(base)) {
           found.push({ path, line, token, rule: rule.id, content: lines[line - 1] ?? "" });
         }
@@ -418,6 +467,9 @@ function main() {
  * matching decisions, so they live beside the matcher.
  */
 function selfTest() {
+  // Path-scoped rules need a fixture that lives where they apply; a case may
+  // name another path as its third element.
+  const DEFAULT_FIXTURE_PATH = `${RENDERER_SRC}components/fixture.tsx`;
   const cases = [
     // The bans.
     ['"rounded-2xl border"', ["radius-stock-2xl"]],
@@ -478,11 +530,41 @@ function selfTest() {
     ['<p>Don\'t</p>\nconst a = "rounded-2xl";', ["radius-stock-2xl"]],
     // A template literal's substitution is a hole, not a token.
     ["`flex ${active ? on : off} rounded-2xl`", ["radius-stock-2xl"]],
+    // Eyebrows: any uppercase in the renderer, behind a variant too.
+    ['"text-label text-muted-foreground uppercase"', ["eyebrow-uppercase"]],
+    ['"md:uppercase tracking-wide"', ["eyebrow-uppercase"]],
+    ['"uppercase"', ["eyebrow-uppercase"]],
+    // The reset and the other case transforms are not eyebrows.
+    ['"normal-case lowercase capitalize"', []],
+    // Prose naming the eyebrow is not a class list.
+    ['"an uppercase eyebrow"', []],
+    // Outside the renderer, and in its tests, the rule does not apply.
+    ['"text-label uppercase"', [], "apps/desktop/src/main/fixture.ts"],
+    ['"uppercase"', [], `${RENDERER_SRC}components/ui/section-heading.test.tsx`],
+    ['"backdrop-blur-sm"', [], `${RENDERER_SRC}components/board/board.test.tsx`],
+    // Hand-rolled blurs, every spelling, outside components/ui/.
+    ['"sticky top-0 bg-sidebar/70 backdrop-blur-xl"', ["material-hand-rolled-blur"]],
+    ['"fixed inset-0 bg-scrim backdrop-blur-[2px]"', ["material-hand-rolled-blur"]],
+    ['"backdrop-blur"', ["material-hand-rolled-blur"]],
+    ['"supports-[backdrop-filter]:backdrop-blur-md"', ["material-hand-rolled-blur"]],
+    ['"backdrop-filter bg-card/50"', ["material-hand-rolled-blur"]],
+    ['"[backdrop-filter:blur(8px)] bg-card"', ["material-hand-rolled-blur"]],
+    ['"[-webkit-backdrop-filter:blur(8px)] bg-card"', ["material-hand-rolled-blur"]],
+    // Resets remove a blur; a material class is the answer, not a violation.
+    ['"backdrop-blur-none backdrop-filter-none material-floating"', []],
+    // Neighbouring utilities that only share a prefix.
+    ['"backdrop-saturate-150 backdrop-opacity-50 blur-sm"', []],
+    // The primitives draw the material, so they may spell it.
+    [
+      '"bg-popover/80 backdrop-blur-xl"',
+      [],
+      "apps/desktop/src/renderer/src/components/ui/popover.tsx",
+    ],
   ];
 
   let failures = 0;
-  for (const [source, expected] of cases) {
-    const actual = violations("fixture.tsx", source).map(({ rule }) => rule);
+  for (const [source, expected, path = DEFAULT_FIXTURE_PATH] of cases) {
+    const actual = violations(path, source).map(({ rule }) => rule);
     const same =
       actual.length === expected.length && expected.every((rule, index) => actual[index] === rule);
     if (!same) {

@@ -381,6 +381,12 @@ jobs:
       #   check:design-tokens  — self-tests its matcher, then fails on any
       #                          off-ladder utility not recorded in
       #                          scripts/design-token-allowlist.json.
+      #   check:ui-copy        — self-tests its matcher, then parses the
+      #                          renderer's .tsx and fails on off-system copy
+      #                          or markup (loading ellipses, banned words,
+      #                          rendered URLs, native <select>, settings
+      #                          descriptions, duotone icons) not recorded in
+      #                          scripts/ui-copy-allowlist.json.
       #   check:node-version   — self-tests the dev-preflight's range matcher
       #                          (VC-76): an engines.node shape the matcher
       #                          cannot read fails HERE, instead of silently
@@ -399,6 +405,7 @@ jobs:
         run: |
           vp run --filter @volli/desktop check:theme-css
           vp run --filter @volli/desktop check:design-tokens
+          vp run --filter @volli/desktop check:ui-copy
           vp run --filter @volli/desktop check:node-version
           vp run --filter @volli/desktop check:vendored-themes
 
