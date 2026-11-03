@@ -58,12 +58,12 @@ export function AttachmentThumb({
           aria-label={`${attachment.label} · ${detail}`}
           className="flex size-full flex-col justify-between rounded-md border border-border/70 bg-muted/40 p-1.5"
         >
-          <span className="text-[10px] font-medium tracking-wide text-muted-foreground">
+          <span className="text-label font-medium text-muted-foreground">
             {fileTypeLabel(attachment.originalName, attachment.mime)}
           </span>
           {/* Two lines of the name, clipped. Enough to tell two PDFs apart,
               which is all this tile has to do. */}
-          <span className="line-clamp-2 break-all text-[10px] leading-tight text-foreground/80">
+          <span className="line-clamp-2 break-all text-label text-foreground/70">
             {attachment.originalName}
           </span>
         </div>

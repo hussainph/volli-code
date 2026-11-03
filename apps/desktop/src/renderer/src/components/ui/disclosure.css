@@ -1,0 +1,36 @@
+/* Radix Presence retains a closing disclosure until its exit finishes.
+   Height is deliberate here: the surrounding layout must resize with the body. */
+.disclosure-content {
+  overflow: hidden;
+}
+.disclosure-content[data-state="open"] {
+  animation: disclosure-open 200ms var(--ease-out);
+}
+.disclosure-content[data-state="closed"] {
+  animation: disclosure-close 200ms var(--ease-out);
+}
+@keyframes disclosure-open {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--disclosure-height);
+    opacity: 1;
+  }
+}
+@keyframes disclosure-close {
+  from {
+    height: var(--disclosure-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-content[data-state] {
+    animation: none;
+  }
+}

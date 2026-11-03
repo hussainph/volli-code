@@ -184,7 +184,7 @@ export default defineConfig(({ mode, command }) => ({
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
-      { extends: true, test: { name: "renderer" } },
+      { extends: true, test: { name: "renderer", setupFiles: ["test-setup.ts"] } },
       // NOT extends: main tests need no plugins; a fresh entry avoids
       // inheriting root src/renderer. It takes the renderer's alias alone
       // (below). @volli/shared resolves via workspace link.

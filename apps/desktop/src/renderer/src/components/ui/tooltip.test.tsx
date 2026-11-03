@@ -25,6 +25,14 @@ let container: HTMLElement | null = null;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -61,6 +69,11 @@ describe("Tooltip", () => {
     expect(label).not.toBeNull();
     expect(label?.className).toContain("pointer-events-none");
     expect(label?.className).toContain("select-none");
+    const arrow = label?.querySelector('[data-slot="tooltip-arrow"]');
+    expect(arrow?.getAttribute("width")).toBe("8");
+    expect(arrow?.getAttribute("height")).toBe("4");
+    expect(arrow?.getAttribute("class")).toContain("fill-popover");
+    expect(arrow?.getAttribute("class")).toContain("stroke-border-strong");
   });
 
   it("still lets a caller ask for the hover grace back", async () => {

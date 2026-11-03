@@ -103,7 +103,7 @@ export function HarnessTrustDialog() {
                   above them, and this whole block is one quotation of what the
                   harness declared about itself. */}
               {manifest.claimedEvents.map((event) => (
-                <Badge key={event} mono className="text-ui">
+                <Badge key={event} className="font-mono text-ui">
                   {event}
                 </Badge>
               ))}

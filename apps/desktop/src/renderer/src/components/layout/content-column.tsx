@@ -8,7 +8,9 @@ import { cn } from "@renderer/lib/utils";
  * they must not wrap in this.
  */
 export function ContentColumn({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("mx-auto w-full max-w-content px-gutter", className)} {...props} />;
+  return (
+    <div className={cn("mx-auto min-w-0 w-full max-w-content px-gutter", className)} {...props} />
+  );
 }
 
 /**
@@ -25,5 +27,7 @@ export function ContentColumn({ className, ...props }: React.ComponentProps<"div
  * wide window and compress to the gutter floor on a narrow one.
  */
 export function WorkbenchColumn({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("mx-auto w-full max-w-workbench px-gutter", className)} {...props} />;
+  return (
+    <div className={cn("mx-auto min-w-0 w-full max-w-workbench px-gutter", className)} {...props} />
+  );
 }

@@ -49,14 +49,7 @@ function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimiti
   return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
 }
 
-/**
- * No arrow, and therefore a real gap. The bubble is a one-line label that
- * already points at its trigger by hanging off it; a 10px rotated square is a
- * second shape to keep aligned, re-cornered and re-colored on four sides, and
- * it bought nothing the position was not already saying. With the arrow gone
- * the detachment has to be spelled: 6px, the same the popover takes, so a label
- * and a surface leaving the same rail read as one family.
- */
+/** The small pointer uses the same surface and edge ink as its label. */
 const TOOLTIP_SIDE_OFFSET = 6;
 
 function TooltipContent({
@@ -103,12 +96,18 @@ function TooltipContent({
           // under it, and it can be selected as if it were prose. This one is
           // transparent to the pointer the way a `<label>` painted over a
           // control would be expected to be.
-          "pointer-events-none z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control bg-foreground px-4 py-1 text-ui text-balance text-background shadow-overlay ease-out select-none fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=instant-open]:animate-none",
+          "material-floating pointer-events-none z-50 w-fit max-w-[calc(100vw-2rem)] break-words origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control border border-border bg-popover px-2 py-1 text-ui text-balance text-foreground shadow-overlay ease-out select-none fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=instant-open]:animate-none",
           className,
         )}
         {...props}
       >
         {children}
+        <TooltipPrimitive.Arrow
+          data-slot="tooltip-arrow"
+          width={8}
+          height={4}
+          className="fill-popover stroke-border-strong"
+        />
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   );

@@ -183,8 +183,8 @@ describe("the property rows", () => {
     const status = query<HTMLButtonElement>('[data-testid="ticket-rail-property-status"]');
     const priority = query<HTMLButtonElement>('[data-testid="ticket-rail-property-priority"]');
     // The app's own compact trigger: 28px tall, sized to its label.
-    expect(status.className).toContain("h-7");
-    expect(priority.className).toContain("h-7");
+    expect(status.className).toContain("min-h-control-default");
+    expect(priority.className).toContain("min-h-control-default");
     // The value is the only thing the row spends ink on.
     expect(status.textContent).toContain("Todo");
     expect(priority.textContent).toContain("Medium");

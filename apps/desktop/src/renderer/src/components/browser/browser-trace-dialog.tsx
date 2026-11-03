@@ -92,7 +92,7 @@ export function BrowserTraceDialog({
       <DialogContent
         data-browser-trace-dialog=""
         aria-describedby={undefined}
-        className="flex h-[80vh] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
+        className="flex h-[80vh] max-h-none max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
       >
         {request === null ? null : (
           <TraceReplay

@@ -44,9 +44,12 @@ describe("DiffControlBand", () => {
   });
 
   it("marks the chosen presentation pressed", () => {
-    expect(draw("side-by-side", true)).toContain('aria-pressed="true" data-choice="side-by-side"');
-    expect(draw("side-by-side", true)).toContain('aria-pressed="false" data-choice="inline"');
-    expect(draw("inline", true)).toContain('aria-pressed="true" data-choice="inline"');
+    // Icon segments also carry a title; attribute adjacency is not state.
+    expect(draw("side-by-side", true)).toMatch(
+      /aria-pressed="true"[^>]*data-choice="side-by-side"/,
+    );
+    expect(draw("side-by-side", true)).toMatch(/aria-pressed="false"[^>]*data-choice="inline"/);
+    expect(draw("inline", true)).toMatch(/aria-pressed="true"[^>]*data-choice="inline"/);
   });
 
   it("states word wrap as a pressed state rather than two buttons", () => {
@@ -76,7 +79,7 @@ describe("DiffControlBand in a pane too narrow for two columns", () => {
     // The ATTRIBUTE, not the word: every button carries `disabled:` variants in
     // its class list, which is styling for a state none of these are in.
     expect(narrow).not.toContain('disabled=""');
-    expect(narrow).toContain('aria-pressed="true" data-choice="side-by-side"');
+    expect(narrow).toMatch(/aria-pressed="true"[^>]*data-choice="side-by-side"/);
   });
 
   it("says the pane is why, in the pane, and not only on hover", () => {

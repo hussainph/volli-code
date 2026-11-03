@@ -67,7 +67,7 @@ export function ContentPreviewDialog({
     >
       <DialogContent
         data-testid="content-preview-dialog"
-        className="flex h-[70vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+        className="flex h-[70vh] max-h-none flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
       >
         <DialogHeader className="shrink-0 gap-1 border-b border-border/50 py-4 pr-12 pl-4">
           <DialogTitle className="break-words">{title}</DialogTitle>

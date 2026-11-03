@@ -31,6 +31,29 @@ describe("Notice", () => {
     });
   }
 
+  it("centres the icon on the first title line in either layout, with or without details", () => {
+    for (const layout of ["row", "stack"] as const) {
+      for (const detail of [undefined, "More context"]) {
+        const html = renderToStaticMarkup(
+          <Notice layout={layout} title="Read failed" detail={detail} />,
+        );
+        expect(html).toContain('data-slot="notice-icon" class="flex h-5 shrink-0 items-center"');
+        expect(html).not.toContain("mt-1 size-4");
+      }
+    }
+  });
+
+  it("centres row actions against a two-line message", () => {
+    const html = renderToStaticMarkup(
+      <Notice
+        title="Update ready"
+        detail="Installs when you quit."
+        actions={<button>Restart now</button>}
+      />,
+    );
+    expect(html).toContain('class="flex max-w-full flex-wrap items-center gap-2 self-center"');
+  });
+
   it("stays silent unless a site asks to announce", () => {
     const html = renderToStaticMarkup(<Notice title="Showing the first 1 MiB." />);
 
@@ -60,15 +83,15 @@ describe("Notice", () => {
     expect(alone).not.toContain("text-foreground");
     expect(withDetail).toContain("font-medium text-foreground");
     // On a fault the block's own ink IS the message.
-    expect(fault).not.toContain("text-foreground");
+    expect(fault).not.toContain('class="font-medium text-foreground"');
   });
 
-  it("holds a truncating notice to one line and keeps the full text on hover", () => {
+  it("clamps a narrow notice to two lines and keeps the full text on hover", () => {
     const html = renderToStaticMarkup(
       <Notice truncate title="Updates paused" hoverTitle="fatal: not a git repository" />,
     );
 
-    expect(html).toContain("truncate");
+    expect(html).toContain("line-clamp-2");
     expect(html).toContain('title="fatal: not a git repository"');
   });
 

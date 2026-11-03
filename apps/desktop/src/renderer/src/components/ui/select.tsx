@@ -13,7 +13,6 @@ import {
   MENU_INDICATOR_MARK,
   MENU_LABEL,
   MENU_ROW,
-  MENU_ROW_INDICATED,
   MENU_ROW_STATE,
   MENU_SEPARATOR,
   MENU_SURFACE,
@@ -47,7 +46,7 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "flex w-fit items-center justify-between gap-2 rounded-control border border-border bg-transparent px-4 text-ui whitespace-nowrap shadow-raised transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-7 data-[size=sm]:h-6 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:bg-border/30 dark:hover:bg-border/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "flex w-fit items-center justify-between gap-1 rounded-control border border-border-strong control-material bg-card px-control-pad-default pr-2 text-ui whitespace-nowrap shadow-control hover:shadow-control-hover active:shadow-control-pressed transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-control-default data-[size=sm]:h-control-sm data-[size=sm]:px-1 data-[size=sm]:leading-4 [[data-slot=button-group][data-orientation=horizontal]_&]:h-auto [[data-slot=button-group][data-orientation=horizontal]_&]:self-stretch *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 hover:bg-accent hover:[--control-fill:var(--accent)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
         // No caret speaks for a closed trigger, so unlike the text fields it
         // keeps the keyboard ring — button.tsx's quiet recipe, not a field one.
         "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring",
@@ -77,6 +76,7 @@ function SelectContent({
         data-slot="select-content"
         className={cn(
           MENU_SURFACE,
+          "material-floating",
           MENU_SURFACE_FADE,
           "relative overflow-x-hidden overflow-y-auto",
           // Everything below the fade is popper-only, and not as a style
@@ -136,15 +136,13 @@ function SelectItem({
       className={cn(
         MENU_ROW,
         MENU_ROW_STATE,
-        MENU_ROW_INDICATED,
-        "w-full *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "w-full gap-1 [&>[data-slot=select-item-indicator]]:order-last [&>[data-slot=select-item-indicator]]:ml-auto [&>[data-slot=select-item-indicator]]:shrink-0 [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2",
         className,
       )}
       {...props}
     >
-      {/* Before the text, not after it: the `*:[span]:last:` rule above dresses
-          the ItemText's span, which only stays last while the indicator leads. */}
-      <span data-slot="select-item-indicator" className={MENU_INDICATOR}>
+      {/* The mark occupies only its own width plus the tight row gap. */}
+      <span data-slot="select-item-indicator" className={cn(MENU_INDICATOR, "static")}>
         <SelectPrimitive.ItemIndicator>
           <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
         </SelectPrimitive.ItemIndicator>

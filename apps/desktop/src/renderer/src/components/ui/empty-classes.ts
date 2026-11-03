@@ -45,4 +45,4 @@ export const EMPTY_PAGE =
  * are the same statement at the same scale, and were the same string by
  * accident in four places already.
  */
-export const EMPTY_INLINE = "py-4 text-center text-ui text-muted-foreground";
+export const EMPTY_INLINE = "py-4 text-left text-ui text-muted-foreground";

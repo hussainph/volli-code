@@ -52,7 +52,7 @@ function AlertDialogContent({
         data-slot="alert-dialog-content"
         data-size={size}
         className={cn(
-          "group/alert-dialog-content fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-container border bg-background p-4 shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[size=sm]:max-w-xs data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[size=default]:sm:max-w-lg",
+          "material-floating group/alert-dialog-content fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100svh-2rem)] w-full overflow-y-auto overscroll-contain max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-container border bg-background p-4 text-ui shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[size=sm]:max-w-[min(20rem,calc(100vw-2rem))] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[size=default]:sm:max-w-lg",
           className,
         )}
         {...props}
@@ -66,7 +66,7 @@ function AlertDialogHeader({ className, ...props }: React.ComponentProps<"div">)
     <div
       data-slot="alert-dialog-header"
       className={cn(
-        "grid grid-rows-[auto_1fr] place-items-center gap-1 text-center has-data-[slot=alert-dialog-media]:grid-rows-[auto_auto_1fr] has-data-[slot=alert-dialog-media]:gap-x-4 sm:group-data-[size=default]/alert-dialog-content:place-items-start sm:group-data-[size=default]/alert-dialog-content:text-left sm:group-data-[size=default]/alert-dialog-content:has-data-[slot=alert-dialog-media]:grid-rows-[auto_1fr]",
+        "grid min-w-0 grid-cols-1 gap-2 text-left has-data-[slot=alert-dialog-media]:grid-cols-[auto_minmax(0,1fr)] has-data-[slot=alert-dialog-media]:[&>[data-slot=alert-dialog-description]]:col-span-full",
         className,
       )}
       {...props}
@@ -78,10 +78,7 @@ function AlertDialogFooter({ className, ...props }: React.ComponentProps<"div">)
   return (
     <div
       data-slot="alert-dialog-footer"
-      className={cn(
-        "flex flex-col-reverse gap-2 group-data-[size=sm]/alert-dialog-content:grid group-data-[size=sm]/alert-dialog-content:grid-cols-2 sm:flex-row sm:justify-end",
-        className,
-      )}
+      className={cn("flex flex-wrap justify-end gap-2", className)}
       {...props}
     />
   );
@@ -94,10 +91,7 @@ function AlertDialogTitle({
   return (
     <AlertDialogPrimitive.Title
       data-slot="alert-dialog-title"
-      className={cn(
-        "text-heading font-semibold sm:group-data-[size=default]/alert-dialog-content:group-has-data-[slot=alert-dialog-media]/alert-dialog-content:col-start-2",
-        className,
-      )}
+      className={cn("text-heading font-semibold break-words", className)}
       {...props}
     />
   );
@@ -121,11 +115,8 @@ function AlertDialogMedia({ className, ...props }: React.ComponentProps<"div">) 
     <div
       data-slot="alert-dialog-media"
       className={cn(
-        // 36px, the app's largest non-control glyph well (the project tile) —
-        // not shadcn's 64. A dialog that leads with an icon four times the
-        // height of the line beside it is illustration, and this is a control
-        // surface.
-        "mb-1 inline-flex size-9 items-center justify-center rounded-control bg-muted sm:group-data-[size=default]/alert-dialog-content:row-span-2 *:[svg:not([class*='size-'])]:size-4",
+        // An action glyph beside the title, not a decorative icon tile.
+        "flex h-6 items-center text-muted-foreground *:[svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}

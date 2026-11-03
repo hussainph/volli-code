@@ -94,9 +94,10 @@ function ContextMenuSubContent({
       data-slot="context-menu-sub-content"
       className={cn(
         MENU_SURFACE,
+        "material-floating",
         MENU_SURFACE_PAD,
         MENU_SURFACE_MOTION,
-        "max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
+        "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
         className,
       )}
       {...props}
@@ -114,9 +115,10 @@ function ContextMenuContent({
         data-slot="context-menu-content"
         className={cn(
           MENU_SURFACE,
+          "material-floating",
           MENU_SURFACE_PAD,
           MENU_SURFACE_MOTION,
-          "max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
+          "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
           className,
         )}
         {...props}

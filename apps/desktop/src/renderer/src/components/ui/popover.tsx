@@ -3,6 +3,8 @@
 import * as React from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+
 import { cn } from "@renderer/lib/utils";
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
@@ -109,7 +111,7 @@ function PopoverContent({
           // loses the specificity fight with `data-[state=open]:animate-in`
           // without it. The full argument is on MENU_SURFACE_FADE in
           // `ui/menu-classes.ts`, which every overlay in this folder follows.
-          "z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-1 text-foreground shadow-overlay ease-out outline-hidden motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          "material-floating z-50 max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-4 text-ui text-foreground shadow-overlay ease-out outline-hidden [&>div:has(>[data-slot=popover-header])]:gap-2 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           className,
         )}
         {...props}
@@ -130,4 +132,30 @@ function PopoverContent({
   );
 }
 
-export { Popover, PopoverTrigger, PopoverAnchor, PopoverContent };
+/** Bind the heading to its content; the panel still owns the 16px edge inset. */
+function PopoverHeader({ className, ...props }: React.ComponentProps<typeof SectionHeading>) {
+  return (
+    <SectionHeading
+      as="h3"
+      data-slot="popover-header"
+      className={cn("mb-2", className)}
+      {...props}
+    />
+  );
+}
+
+/** Bleed the scroll box, not its rows, to the panel edge. */
+function PopoverScrollBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="popover-scroll-body"
+      className={cn(
+        "-mx-4 -mb-4 max-h-60 overflow-y-auto overscroll-contain px-4 pb-4 [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&>div]:gap-1 [&>div>div]:gap-2",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Popover, PopoverTrigger, PopoverAnchor, PopoverContent, PopoverHeader, PopoverScrollBody };

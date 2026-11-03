@@ -187,12 +187,20 @@ export function ValueReveal({
   contentClassName?: string;
   children: React.ReactNode;
 }) {
+  const [valueFont, setValueFont] = React.useState<string>();
+  function inheritValueFont(event: React.SyntheticEvent<HTMLButtonElement>) {
+    const button = event.currentTarget;
+    const value = button.firstElementChild ?? button;
+    setValueFont(getComputedStyle(value).fontFamily);
+  }
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           type="button"
           data-slot="value-reveal"
+          onPointerEnter={inheritValueFont}
+          onFocus={inheritValueFont}
           // The alternatives were both worse. `tabIndex` on a span puts a stop
           // in the tab order that AT announces as nothing in particular, and
           // wrapping a 60-character value turns a caption into a paragraph.
@@ -205,8 +213,14 @@ export function ValueReveal({
           {children}
         </button>
       </TooltipTrigger>
-      <TooltipContent side={side} className={cn("font-mono", contentClassName)}>
-        {reveal ?? `${term} · ${full}`}
+      <TooltipContent side={side} className={contentClassName} style={{ fontFamily: valueFont }}>
+        {reveal ?? (
+          <>
+            <span className="font-sans font-medium">{term}</span>
+            {" · "}
+            <span style={{ fontFamily: valueFont }}>{full}</span>
+          </>
+        )}
       </TooltipContent>
     </Tooltip>
   );

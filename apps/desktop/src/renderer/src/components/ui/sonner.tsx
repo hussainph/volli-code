@@ -6,6 +6,7 @@ import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle"
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
+import { cn } from "@renderer/lib/utils";
 import { useResolvedAppearance } from "@renderer/lib/resolved-appearance";
 
 // Sonner needs the mode as a PROP — it swaps its own internal variables rather
@@ -13,7 +14,7 @@ import { useResolvedAppearance } from "@renderer/lib/resolved-appearance";
 // appearance is read in JS instead of expressed as a token. The surface colors
 // below stay tokens regardless, so `theme` only decides the parts sonner keeps
 // to itself (its shadow and its close button).
-const Toaster = ({ ...props }: ToasterProps) => {
+const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
   const appearance = useResolvedAppearance();
 
   return (
@@ -30,7 +31,23 @@ const Toaster = ({ ...props }: ToasterProps) => {
         info: <InfoIcon weight="fill" className="size-4" />,
         warning: <WarningCircleIcon weight="fill" className="size-4" />,
         error: <XCircleIcon weight="fill" className="size-4" />,
-        loading: <SpinnerGapIcon weight="bold" className="size-4 animate-spin" />,
+        loading: (
+          <SpinnerGapIcon
+            weight="bold"
+            className="size-4 animate-spin motion-reduce:animate-none"
+          />
+        ),
+      }}
+      toastOptions={{
+        ...toastOptions,
+        classNames: {
+          ...toastOptions?.classNames,
+          toast: cn("material-floating", toastOptions?.classNames?.toast),
+          description: cn("!text-muted-foreground", toastOptions?.classNames?.description),
+          actionButton: cn("!cursor-default", toastOptions?.classNames?.actionButton),
+          cancelButton: cn("!cursor-default", toastOptions?.classNames?.cancelButton),
+          closeButton: cn("!cursor-default", toastOptions?.classNames?.closeButton),
+        },
       }}
       style={
         {
