@@ -1052,8 +1052,8 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   /**
    * The strip, projected onto the panes that draw it (VC-202).
    *
-   * An UNSPLIT workspace resolves a single pane holding the whole strip, whose
-   * front tab is the one that would have been in front anyway — so the grid
+   * An UNSPLIT workspace resolves a single pane holding only its front tab,
+   * the one that would have been in front anyway — so the grid
    * below draws today's plane and the split path is never a second rendering
    * path. `activeTab.id` rather than `activeTabId` because the fallback above
    * is exactly what a pane should show when the record names nothing live.
@@ -1061,7 +1061,9 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   const tabIds = tabs.map((tab) => tab.id);
   const overlaid = splitView === null ? null : overlaySplitView(splitView);
   const split = projectSplitView(overlaid, tabIds, activeTab.id, BODY_TAB_ID);
-  const paneChatViews = usePaneChatViews(split.panes);
+  // Unsplit, that pane names only its front tab, so the chats it keeps are
+  // looked up in the whole strip (VC-1100).
+  const paneChatViews = usePaneChatViews(split.panes, split.groupId === null ? tabIds : null);
   const paneStrips = partitionPaneTabs(split, tabs);
   // The top strip: ordinary tabs, and one chip per group (VC-614).
   const groups = stripTabGroups(overlaid, split, tabIds);

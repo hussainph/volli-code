@@ -38,6 +38,19 @@
  * `--draft-planes` (transcripts beside the Draft), `--draft-keys`, and
  * `--draft-trace <file>` (a Chromium trace of the typing window, for
  * attributing style, layout and paint) are its other knobs.
+ *
+ * `--arm reveal` (VC-1100) presses a pane's next chat with the others kept
+ * mounted behind `<Activity mode="hidden">` (VC-1080), through the same trusted
+ * input path, and reports React's commit per press, click-to-paint latency and
+ * — with `--reveal-trace <file>` — the renderer main thread's style, layout,
+ * paint and script time across the presses:
+ *
+ *   node apps/desktop/e2e/chat-window-bench.mjs --arm reveal --sessions 2 \
+ *     --turns 2000 --reveal-switches 30 --reveal-trace /tmp/reveal.json
+ *
+ * `--reveal-planes`, `--reveal-interval`, `--reveal-ballast` and
+ * `--reveal-cpu-throttle` are its other knobs. The run also checks a revealed
+ * chat's reader lands where they left it (`checks.revealRestore`).
  */
 import { spawn } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
@@ -70,6 +83,12 @@ const PASSTHROUGH = [
   "draft-key-interval",
   "draft-trace",
   "draft-cpu-throttle",
+  "reveal-planes",
+  "reveal-switches",
+  "reveal-interval",
+  "reveal-ballast",
+  "reveal-trace",
+  "reveal-cpu-throttle",
 ]
   .filter((name) => args.includes(`--${name}`))
   .flatMap((name) => [`--${name}`, flag(name, "")]);
@@ -96,6 +115,53 @@ function stats(values) {
   const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
   const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
   return `n=${sorted.length} mean=${mean.toFixed(2)} p50=${at(0.5).toFixed(2)} p95=${at(0.95).toFixed(2)} max=${sorted.at(-1).toFixed(2)}`;
+}
+
+/**
+ * A Chromium trace as renderer main-thread milliseconds per lifecycle phase.
+ * The main thread is the busiest `CrRendererMain`; `forced*` is the share of
+ * style/layout that script asked for synchronously (nested inside a call)
+ * rather than the frame's own pass.
+ */
+const round = (value) => Math.round(value * 10) / 10;
+
+async function traceSummary(file) {
+  const parsed = JSON.parse(await readFile(file, "utf8"));
+  const events = Array.isArray(parsed) ? parsed : parsed.traceEvents;
+  const busy = new Map();
+  const mains = new Set();
+  for (const event of events) {
+    const thread = `${event.pid}:${event.tid}`;
+    if (event.ph === "M" && event.name === "thread_name" && event.args?.name === "CrRendererMain") {
+      mains.add(thread);
+    }
+    if (event.ph === "X") busy.set(thread, (busy.get(thread) ?? 0) + (event.dur ?? 0));
+  }
+  const main = [...mains].toSorted((a, b) => (busy.get(b) ?? 0) - (busy.get(a) ?? 0))[0];
+  const complete = events
+    .filter((event) => `${event.pid}:${event.tid}` === main && event.ph === "X")
+    .toSorted((a, b) => a.ts - b.ts || b.dur - a.dur);
+  const phases = ["FunctionCall", "UpdateLayoutTree", "Layout", "PrePaint", "Paint", "Layerize"];
+  const totals = Object.fromEntries(phases.map((name) => [name, 0]));
+  const forced = { UpdateLayoutTree: 0, Layout: 0 };
+  let styleElements = 0;
+  const stack = [];
+  for (const event of complete) {
+    while (stack.length > 0 && stack.at(-1).ts + stack.at(-1).dur <= event.ts) stack.pop();
+    const inScript = stack.some((open) => open.name === "FunctionCall");
+    if (event.name in totals && !(event.name === "FunctionCall" && inScript)) {
+      totals[event.name] += event.dur / 1000;
+    }
+    if (event.name in forced && inScript) forced[event.name] += event.dur / 1000;
+    if (event.name === "UpdateLayoutTree") styleElements += event.args?.elementCount ?? 0;
+    stack.push(event);
+  }
+  return {
+    ...Object.fromEntries(Object.entries(totals).map(([name, ms]) => [name, round(ms)])),
+    forcedStyle: round(forced.UpdateLayoutTree),
+    forcedLayout: round(forced.Layout),
+    styleElements,
+  };
 }
 
 const electron = (await import(join(APP, "node_modules", "electron", "index.js"))).default;
@@ -238,6 +304,26 @@ if (match?.groups?.json === undefined) {
     console.log(
       `  long tasks         ${typing.longTasksMs?.length ?? 0} (${longTotal.toFixed(0)} ms total)`,
     );
+  }
+  if (report.revealSwitch !== undefined) {
+    const reveal = report.revealSwitch;
+    console.log(`\nchat switch, kept views revealed (${reveal.nodes} DOM nodes):`);
+    console.log(`  click handler ms   ${stats(reveal.handlerMs)}`);
+    console.log(`  click->paint ms    ${stats(reveal.latencyMs)}`);
+    const longTotal = (reveal.longTasksMs ?? []).reduce((sum, value) => sum + value, 0);
+    console.log(
+      `  long tasks         ${reveal.longTasksMs?.length ?? 0} (${longTotal.toFixed(0)} ms total)`,
+    );
+    if (report.revealTrace !== undefined) {
+      const summary = await traceSummary(report.revealTrace);
+      const presses = reveal.handlerMs?.length || 1;
+      console.log(`  main thread, ms per press (trace ${report.revealTrace}):`);
+      for (const [name, ms] of Object.entries(summary)) {
+        const value =
+          name === "styleElements" ? Math.round(ms / presses) : (ms / presses).toFixed(1);
+        console.log(`    ${name.padEnd(18)} ${value}`);
+      }
+    }
   }
   if (report.errors?.length > 0) console.log("console errors:", report.errors.slice(0, 5));
   if (report.failure !== undefined) {
