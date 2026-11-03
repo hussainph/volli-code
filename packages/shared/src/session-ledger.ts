@@ -2389,6 +2389,16 @@ function sameSessionCommandIntent(
  * Adding a verb that rewrites a row breaks every such reader.
  */
 export interface SessionLedgerTransaction {
+  /**
+   * True when this transaction runs inside one the ledger does not own (in
+   * SQLite, a savepoint under a caller's outer transaction). Its promise then
+   * settles when the savepoint is released, and the outer transaction can
+   * still roll everything back afterwards. A caller that remembers what a
+   * transaction wrote once it settles (the engine's hot checkpoints) must not
+   * remember it from an enclosed one. Absent or false: settling is
+   * committing.
+   */
+  readonly enclosed?: boolean;
   /** The stored row as inserted. Only its events change what a Session shows. */
   getSession(sessionId: string): Session | null;
   /** Returns immutable base Sessions ordered by creation time descending, then id descending. */
