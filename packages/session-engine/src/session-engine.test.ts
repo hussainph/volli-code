@@ -4697,6 +4697,30 @@ describe("listSessions over a project roster (VC-388)", () => {
     },
   );
 
+  it(
+    "sizes point-listing retention from a metadata-only whole-project count",
+    { timeout: 120_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      const sessions: Session[] = [];
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        sessions.push(
+          (await plane.createSession(createRequest(`counted-roster-${index}`))).session,
+        );
+      }
+      folded.length = 0;
+      expect(await plane.countSessions({ projectId: "project-1", scope: "all" })).toBe(
+        sessions.length,
+      );
+      expect(folded).toEqual([]);
+      for (const session of sessions) await plane.getSessionListing({ sessionId: session.id });
+      expect(folded).toHaveLength(sessions.length);
+      folded.length = 0;
+      for (const session of sessions) await plane.getSessionListing({ sessionId: session.id });
+      expect(folded).toEqual([]);
+    },
+  );
+
   /**
    * The `volli session list` shape: every project listed at once, each roster
    * under the floor and their sum over it. The bound is the SUM of the
