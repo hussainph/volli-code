@@ -446,6 +446,18 @@ describe("the compact model and effort control", () => {
  * selection to find out what it had been.
  */
 describe("reading the whole selected model without changing it", () => {
+  it("renders provider group names with sentence-case section-heading type", async () => {
+    await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS });
+    const heading = Array.from(document.querySelectorAll("[cmdk-group-heading]")).find(
+      (node) => node.textContent === "Anthropic",
+    );
+    expect(heading).toBeDefined();
+    const classes = heading?.closest("[cmdk-group]")?.className ?? "";
+    expect(classes).toContain("[&_[cmdk-group-heading]]:text-ui");
+    expect(classes).not.toContain("uppercase");
+    expect(classes).not.toContain("tracking-");
+  });
+
   it("leads the open list with the tier, the model and the provider, in full", async () => {
     await renderPill({
       view: "all",

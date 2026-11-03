@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * VC-30 — the Session peek's card: what a row says when you rest on it.
  *
@@ -26,6 +27,7 @@
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -81,7 +83,8 @@ export const PEEK_FRAME =
  * rung on a popover, off the spacing ladder by measurement and recorded in
  * `docs/DESIGN.md`: 8 halves the edge, 16 costs a line of the summary fold.
  */
-export const CARD_HEADER = "flex shrink-0 items-start gap-2 border-b border-border p-3";
+export const CARD_HEADER =
+  "flex shrink-0 items-start gap-2 p-3 relative after:absolute after:bottom-0 after:left-[10%] after:w-4/5 after:border-b after:border-border";
 /**
  * The header's text column: 2px down, so a 20px first line centres on the 24px
  * mark, and a 2px join that binds the title to its own meta line. Both measured
@@ -131,7 +134,7 @@ export function FolderStrip({ ticketLabel, onBack }: { ticketLabel: string; onBa
   return (
     <div
       data-peek-strip=""
-      className="flex shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-3 py-1 text-muted-foreground"
+      className="flex shrink-0 items-center gap-1 relative after:absolute after:bottom-0 after:left-[10%] after:w-4/5 after:border-b after:border-border bg-muted/30 px-3 py-1 text-muted-foreground"
     >
       {onBack === undefined ? (
         <span className={cn("inline-flex h-5 items-center", crumb)}>
@@ -275,6 +278,20 @@ function Summary({
 }) {
   const summary = content === null ? null : (content.summary ?? peekSummaryOf(content.entries));
   const state = loading ? "loading" : summary === null || failed ? "unavailable" : "ready";
+  const [expandedSummary, setExpandedSummary] = React.useState<string | null>(null);
+  const expanded = summary !== null && expandedSummary === summary;
+  const [overflowing, setOverflowing] = React.useState(false);
+  const prose = React.useRef<HTMLParagraphElement>(null);
+  const summaryId = React.useId();
+  React.useLayoutEffect(() => {
+    const node = prose.current;
+    if (!node || expanded) return;
+    const measure = () => setOverflowing(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(node);
+    return () => observer?.disconnect();
+  }, [summary, expanded, state]);
   return (
     <CardBlock icon={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}>
       <div className="text-muted-foreground" data-summary-state={state} aria-busy={loading}>
@@ -287,9 +304,32 @@ function Summary({
         ) : state === "unavailable" ? (
           <p>Summary unavailable</p>
         ) : (
-          <p data-peek-summary="" className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-            {summary}
-          </p>
+          <>
+            <p
+              ref={prose}
+              id={summaryId}
+              data-peek-summary=""
+              className={cn(
+                "whitespace-pre-wrap [overflow-wrap:anywhere]",
+                !expanded && "line-clamp-5",
+              )}
+            >
+              {summary}
+            </p>
+            {overflowing ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="mt-1"
+                aria-expanded={expanded}
+                aria-controls={summaryId}
+                onClick={() => setExpandedSummary(expanded ? null : summary)}
+              >
+                <CaretDownIcon className={cn("size-3", expanded && "rotate-180")} weight="bold" />
+                {expanded ? "Show less" : "Show summary"}
+              </Button>
+            ) : null}
+          </>
         )}
       </div>
     </CardBlock>
@@ -525,7 +565,7 @@ export function SessionPeekCard({
         </CardBlock>
       ) : null}
       {transcript || canReply ? (
-        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-3 py-2">
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 relative before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border bg-muted/30 px-3 py-2">
           {transcript ? (
             <Button
               data-view-conversation=""
@@ -551,9 +591,13 @@ export function SessionPeekCard({
                 size="sm"
                 disabled={message.trim() === "" || send.kind === "sending" || send.kind === "sent"}
               >
-                <PaperPlaneTiltIcon />
+                {send.kind === "sending" ? (
+                  <Spinner aria-label="Sending" />
+                ) : (
+                  <PaperPlaneTiltIcon />
+                )}
                 {send.kind === "sending"
-                  ? "Sending…"
+                  ? "Sending"
                   : send.kind === "failed"
                     ? "Try again"
                     : "Send"}

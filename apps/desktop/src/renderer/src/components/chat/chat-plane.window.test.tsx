@@ -951,7 +951,7 @@ describe("host-owned rows with cloud off", () => {
         '[aria-label="Remove queued message: host follow-up"]',
       ) ?? null;
     const actions = container?.querySelector<HTMLButtonElement>(
-      '[aria-label="Queued message actions: host follow-up"]',
+      '[aria-label="Edit queued message: host follow-up"]',
     );
     expect(remove()?.disabled).toBe(false);
     expect(actions?.disabled).toBe(false);
@@ -993,16 +993,11 @@ describe("host-owned rows with cloud off", () => {
             .click(),
         );
       } else {
-        const trigger = container!.querySelector<HTMLButtonElement>(
-          '[aria-label="Queued message actions: host follow-up"]',
-        )!;
         await act(async () =>
-          trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+          container!
+            .querySelector<HTMLButtonElement>('[aria-label="Edit queued message: host follow-up"]')!
+            .click(),
         );
-        const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-          (node) => node.textContent?.includes("Edit message"),
-        )!;
-        await act(async () => item.click());
       }
       await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
       await vi.waitFor(() => expect(store.getState().idleSends[SESSION]).toBeUndefined());
@@ -1116,20 +1111,13 @@ describe("host-owned rows with cloud off", () => {
       sizeBytes: 9,
     };
 
-    /** Opens the row's actions menu the way a keyboard does, and picks Edit. */
+    /** The one-action menu is now a direct pencil button. */
     async function editFromMenu(text: string): Promise<void> {
-      const trigger = container?.querySelector<HTMLButtonElement>(
-        `[aria-label="Queued message actions: ${text}"]`,
+      const button = container?.querySelector<HTMLButtonElement>(
+        `[aria-label="Edit queued message: ${text}"]`,
       );
-      if (trigger === null || trigger === undefined) throw new Error("expected row actions");
-      await act(async () =>
-        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
-      );
-      const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-        (node) => node.textContent?.includes("Edit message"),
-      );
-      if (item === undefined) throw new Error("expected Edit message");
-      await act(async () => item.click());
+      if (!button) throw new Error("expected Edit message");
+      await act(async () => button.click());
     }
 
     async function mountWithTyping(state: HostQueueRow["state"]) {
@@ -2197,9 +2185,7 @@ describe("VC-758 visible timeline regressions", () => {
     await mountPlane(store);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
-    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Sending");
     const working = () =>
       [...(container?.querySelectorAll('[role="status"]') ?? [])].find((node) =>
         node.textContent?.includes("Working"),
@@ -2605,7 +2591,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     expect(user.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(user.compareDocumentPosition(mark()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await advanceProgressTime(1_000);
-    expect(container?.textContent).not.toContain("Sending…");
+    expect(container?.textContent).not.toContain("Sending");
     await ingest(store, [
       committed(
         3,
@@ -2750,9 +2736,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       .holdMessage(SESSION, { id: message.id, text: "Still waiting", delivery: "send" });
     await mountPlane(store);
     await advanceProgressTime(600);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
-    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Sending");
     await ingest(store, [
       frame(
         1,
@@ -2841,9 +2825,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     await advanceProgressTime(299);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(1);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Queuing…",
-    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Queuing");
   });
 
   it.each(["reasoning", "text", "tool"] as const)(

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { activityDescriptor } from "@volli/session-presentation";
 import { Button } from "@renderer/components/ui/button";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
@@ -219,7 +220,7 @@ export function RunningBashReason() {
   const call = React.useContext(RunningBashCallContext);
   if (call === null || !call.visible || call.inlineReason === null) return null;
   return (
-    <p className="py-1 text-label text-muted-foreground whitespace-pre-wrap break-words">
+    <p className="py-1 text-ui text-muted-foreground whitespace-pre-wrap break-words">
       {call.inlineReason}
     </p>
   );
@@ -244,7 +245,7 @@ function RunningBashButton() {
         aria-keyshortcuts="Control+Shift+B"
         onClick={() => void move()}
       >
-        {pending ? "Moving…" : "Move to background"}
+        {pending ? <LoadingLabel>Moving</LoadingLabel> : "Move to background"}
       </Button>
     </span>
   );

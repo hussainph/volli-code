@@ -23,12 +23,12 @@
 import * as React from "react";
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
+import { MagicWandIcon } from "@phosphor-icons/react/dist/csr/MagicWand";
+import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { GearIcon } from "@phosphor-icons/react/dist/csr/Gear";
-import { NoteIcon } from "@phosphor-icons/react/dist/csr/Note";
+import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
 import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -201,19 +201,22 @@ export const ComposerPicker = React.memo(function ComposerPicker({
 /**
  * One glyph per verb, because the glyph names the ACT and not the category —
  * the category is already the group heading's job. Two arrows closing onto one
- * line is a history collapsed into a summary; the pill's own caret is the model
- * list, so typing `/model` and clicking the pill wear the same mark; arrows in
- * a circle re-read the disk.
+ * line is a history collapsed into a summary; a processor names model selection;
+ * arrows in a circle re-read the disk. Skills carry a wand and authored
+ * artifacts a writing glyph, distinct from files and terminal commands.
  *
  * A `Record` on the closed name union rather than a `switch`: add a verb and
  * this fails to compile naming the verb that has no glyph. The switch this
  * replaced could not do that — it sat inside an `if` in a function with more
  * to return, so a missing arm just fell through.
  */
-const VERB_ICONS: Record<ComposerVerbName, React.ComponentType<{ className?: string }>> = {
+const VERB_ICONS: Record<
+  ComposerVerbName,
+  React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>
+> = {
   compact: ArrowsInLineVerticalIcon,
   copy: CopyIcon,
-  model: CaretUpDownIcon,
+  model: CpuIcon,
   reload: ArrowsClockwiseIcon,
   settings: GearIcon,
   login: SignInIcon,
@@ -228,13 +231,15 @@ const VERB_ICONS: Record<ComposerVerbName, React.ComponentType<{ className?: str
 function RowIcon({ row }: { row: ComposerPickerRow }) {
   if (row.kind === "verb") {
     const VerbIcon = VERB_ICONS[row.verb.name];
-    return <VerbIcon className="size-3.5 shrink-0" />;
+    return <VerbIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
   }
-  if (row.kind === "command") return <TerminalWindowIcon className="size-3.5 shrink-0" />;
-  if (row.kind === "skill") return <BookOpenIcon className="size-3.5 shrink-0" />;
+  if (row.kind === "command")
+    return <TerminalWindowIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
+  if (row.kind === "skill")
+    return <MagicWandIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
   return row.artifact ? (
-    <NoteIcon className="size-3.5 shrink-0" />
+    <NotePencilIcon aria-hidden className="size-4 shrink-0 text-foreground" />
   ) : (
-    <FileIcon className="size-3.5 shrink-0" />
+    <FileIcon aria-hidden className="size-4 shrink-0 text-foreground" />
   );
 }

@@ -289,7 +289,25 @@ describe("identity", () => {
 });
 
 describe("the summary", () => {
-  it("shows the full generated summary in non-shrinking blocks inside the scroller", () => {
+  it("expands a clipped summary and collapses it again without losing its text", () => {
+    const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200);
+    const visible = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(100);
+    render({ content: content({ summary: "A long summary. ".repeat(80) }) });
+    const disclosure = [...container.querySelectorAll("button")].find((node) =>
+      node.textContent?.includes("Show summary"),
+    )!;
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    act(() => disclosure.click());
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("[data-peek-summary]")?.classList.contains("line-clamp-5")).toBe(
+      false,
+    );
+    act(() => disclosure.click());
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    height.mockRestore();
+    visible.mockRestore();
+  });
+  it("bounds the generated preview to five lines and retains its whole text in the scroller", () => {
     const summary = Array.from(
       { length: 12 },
       (_, index) => `Step ${index + 1}: the gutter now tracks the viewport without lag.`,
@@ -300,7 +318,7 @@ describe("the summary", () => {
     });
     const prose = container.querySelector("[data-peek-summary]");
     expect(prose?.textContent).toBe(summary);
-    expect(prose?.className).not.toMatch(/line-clamp|truncate|overflow-hidden/);
+    expect(prose?.classList.contains("line-clamp-5")).toBe(true);
     expect(prose?.classList.contains("whitespace-pre-wrap")).toBe(true);
     const body = prose?.closest(".overflow-y-auto");
     expect(body).not.toBeNull();
@@ -311,22 +329,19 @@ describe("the summary", () => {
     expect(container.querySelector<HTMLElement>("[data-peek-card]")?.style.maxHeight).toBe("240px");
   });
 
-  it.each([undefined, null])(
-    "shows the full durable-tail fallback when summary is %s",
-    (summary) => {
-      const text = "The gutter tracks the viewport. ".repeat(80);
-      render({
-        content: content({
-          summary,
-          entries: [{ at: NOW, role: "assistant", text, tools: [] }],
-        }),
-      });
-      const prose = container.querySelector("[data-peek-summary]");
-      expect(prose?.textContent).toBe(text);
-      expect(prose?.className).not.toMatch(/line-clamp|truncate|overflow-hidden/);
-      expect(prose?.closest(".overflow-y-auto")).not.toBeNull();
-    },
-  );
+  it.each([undefined, null])("bounds the durable-tail fallback when summary is %s", (summary) => {
+    const text = "The gutter tracks the viewport. ".repeat(80);
+    render({
+      content: content({
+        summary,
+        entries: [{ at: NOW, role: "assistant", text, tools: [] }],
+      }),
+    });
+    const prose = container.querySelector("[data-peek-summary]");
+    expect(prose?.textContent).toBe(text);
+    expect(prose?.classList.contains("line-clamp-5")).toBe(true);
+    expect(prose?.closest(".overflow-y-auto")).not.toBeNull();
+  });
 
   it("prefers the generated summary over the transcript fallback", () => {
     render({ content: content({ summary: "The gutter fix is ready for review." }) });

@@ -760,7 +760,14 @@ export function MonacoFileEditor({
       <div
         ref={hostRef}
         data-monaco-status="loading"
-        className={cn(SURFACE_CLASS[surface], "min-h-0 w-full flex-1 overflow-hidden")}
+        className={cn(
+          SURFACE_CLASS[surface],
+          "min-h-0 w-full flex-1 overflow-hidden",
+          // Monaco emits literal current-line fills after theme application;
+          // the source plane must use the semantic alias, not that literal.
+          surface === "source" &&
+            "[&_.current-line]:!bg-[var(--vscode-editor-lineHighlightBackground)]",
+        )}
       />
     </div>
   );

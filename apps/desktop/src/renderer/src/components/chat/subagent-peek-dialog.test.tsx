@@ -25,6 +25,12 @@ import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { SubagentPeekDialog, type SubagentPeekDialogProps } from "./subagent-peek-dialog";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
+vi.mock("@renderer/lib/use-model-catalogue", () => ({
+  useModelCatalogue: () => ({
+    models: [{ providerId: "anthropic", modelId: "sonnet-4.5", label: "Claude Sonnet 4.5" }],
+    providers: [{ id: "anthropic", label: "Anthropic" }],
+  }),
+}));
 const CHILD = "s-child";
 const PROJECTION: SessionPresentationProjection = {
   session: {
@@ -172,7 +178,16 @@ describe("SubagentPeekDialog", () => {
     });
     const node = dialog()!;
     expect(node.textContent).toContain("Grep the tests");
-    expect(node.querySelector("[data-session-peek-state]")?.textContent).toBe("done · tab");
+    const identity = node.querySelector("[data-agent-model]");
+    expect(identity?.textContent).toContain("Claude Sonnet 4.5");
+    expect(identity?.textContent).not.toContain("anthropic");
+    expect(identity?.className).toContain("flex-wrap");
+    expect(identity?.querySelector('[data-slot="model-name"]')?.closest("[data-agent-model]")).toBe(
+      identity,
+    );
+    expect(node.querySelector("[data-session-peek-state]")?.textContent).toBe("Done");
+    expect(node.querySelector("[data-session-peek-state] svg")).not.toBeNull();
+    expect(node.querySelector('[data-slot="dialog-title"]')?.className).toContain("text-heading");
     expect(node.textContent).toContain("Find the flaky test.");
     expect(node.textContent).toContain("It is auth.test.ts.");
     expect(node.querySelector("textarea")).not.toBeNull();
@@ -246,6 +261,8 @@ describe("SubagentPeekDialog", () => {
     const policy = dialog()?.querySelector("[data-agent-model]");
     expect(policy?.textContent).toContain("o5-mini");
     expect(policy?.textContent).toContain("Extra high");
+    // Unknown durable IDs retain their provider instead of guessing a label.
+    expect(policy?.textContent).toContain("openai");
   });
 
   it("draws no policy in the header for a child that has not recorded one", async () => {
@@ -253,8 +270,26 @@ describe("SubagentPeekDialog", () => {
     await render({ ...props(agent({ model: null })), store });
 
     expect(dialog()?.querySelector("[data-agent-model]")).toBeNull();
-    expect(dialog()?.querySelector("[data-session-peek-state]")?.textContent).toBe("working");
+    expect(dialog()?.querySelector("[data-session-peek-state]")?.textContent).toBe("Working");
+    expect(
+      dialog()?.querySelector("[data-session-peek-state] svg")?.classList.contains("animate-spin"),
+    ).toBe(true);
   });
+
+  it.each(["failed", "waiting", "stopped"] as const)(
+    "draws a state glyph and sentence-case %s label",
+    async (state) => {
+      await render({ ...props(agent({ state })), store: chatStore() });
+      const node = dialog()?.querySelector("[data-session-peek-state]");
+      expect(node?.querySelector("svg")).not.toBeNull();
+      expect(node?.textContent).toBe(
+        state === "waiting" ? "Needs you" : state.charAt(0).toUpperCase() + state.slice(1),
+      );
+      expect(node?.querySelector("svg")?.classList.contains("text-destructive")).toBe(
+        state === "failed",
+      );
+    },
+  );
 
   it("preserves the child's draft across close and reopen", async () => {
     const store = chatStore();

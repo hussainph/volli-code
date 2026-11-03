@@ -13,6 +13,7 @@ import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { UsersThreeIcon } from "@phosphor-icons/react/dist/csr/UsersThree";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { StopCircleIcon } from "@phosphor-icons/react/dist/csr/StopCircle";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 
 import {
@@ -38,8 +39,15 @@ const GLYPH_CLASS = "size-3.5 shrink-0";
 function SubagentNoticeGlyph({ state }: { state: SubagentNotice["state"] }) {
   switch (state) {
     case "completed":
-    case "stopped":
       return <UsersThreeIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />;
+    case "stopped":
+      return (
+        <StopCircleIcon
+          aria-hidden
+          className={cn(GLYPH_CLASS, "text-muted-foreground")}
+          weight="fill"
+        />
+      );
     case "interrupted":
     case "timed-out":
       return (
@@ -75,7 +83,7 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
       <div className="flex min-w-0 items-center gap-2 text-ui">
         <SubagentNoticeGlyph state={notice.state} />
         <span className="min-w-0 truncate font-medium">{copy.headline}</span>
-        <span className="shrink-0 text-muted-foreground">{copy.state}</span>
+        <span className="sr-only">{copy.state}</span>
         <Separator aria-hidden className="min-w-4 flex-1" />
         {onOpenSession === undefined || childSessionId === null ? null : (
           <Button
@@ -91,9 +99,6 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
           </Button>
         )}
       </div>
-      {historicalNote.length > 0 ? (
-        <p className="truncate text-ui text-muted-foreground/70">{historicalNote}</p>
-      ) : null}
     </div>
   );
 });
@@ -130,9 +135,7 @@ export const WatchNoticeRow = React.memo(function WatchNoticeRow({
         <span className="min-w-0 truncate font-medium">{copy.headline}</span>
         <Separator aria-hidden className="min-w-4 flex-1" />
       </div>
-      {copy.lines.length > 1 ? (
-        <p className="truncate text-ui text-muted-foreground/70">{copy.lines.join(" · ")}</p>
-      ) : null}
+      {copy.lines.length > 1 ? <span className="sr-only">{copy.lines.join(" · ")}</span> : null}
     </div>
   );
 });
@@ -140,8 +143,8 @@ export const WatchNoticeRow = React.memo(function WatchNoticeRow({
 /**
  * A background shell the Session started exited, or printed the line it asked
  * to be told about (VC-495). Quiet on purpose, like the other host rows: the
- * state word carries the outcome, and a non-zero exit or a signal is not
- * drawn louder here — the Activity Island's shell cluster is the loud place.
+ * glyph carries the outcome; only a stop or failure uses a filled exception.
+ * The state remains in the accessible receipt and hover text.
  */
 export const ShellNoticeRow = React.memo(function ShellNoticeRow({
   notice,
@@ -154,9 +157,16 @@ export const ShellNoticeRow = React.memo(function ShellNoticeRow({
       className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground"
       title={`${copy.headline} — ${copy.state}. ${copy.note}`}
     >
-      <TerminalWindowIcon aria-hidden className={GLYPH_CLASS} />
+      {notice.event === "exited" && notice.byPerson ? (
+        <StopCircleIcon aria-hidden className={GLYPH_CLASS} weight="fill" />
+      ) : notice.event === "exited" &&
+        ((notice.code !== null && notice.code !== 0) || notice.signal !== null) ? (
+        <XCircleIcon aria-hidden className={cn(GLYPH_CLASS, "text-destructive")} weight="fill" />
+      ) : (
+        <TerminalWindowIcon aria-hidden className={GLYPH_CLASS} />
+      )}
       <span className="min-w-0 truncate font-medium text-foreground">{copy.headline}</span>
-      <span className="shrink-0">{copy.state}</span>
+      <span className="sr-only">{copy.state}</span>
       <Separator aria-hidden className="min-w-4 flex-1" />
       <span className="min-w-0 truncate text-muted-foreground/70">{copy.note}</span>
     </div>

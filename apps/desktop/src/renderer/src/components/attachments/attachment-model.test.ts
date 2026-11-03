@@ -102,12 +102,14 @@ describe("fileTypeLabel", () => {
     expect(fileTypeLabel("Archive.TAR.gz", "application/gzip")).toBe("GZ");
   });
 
-  it("falls back to the media subtype when there is no extension", () => {
-    expect(fileTypeLabel("Makefile", "text/plain")).toBe("PLAIN");
+  it("names extensionless text and unknown files without exposing MIME jargon", () => {
+    expect(fileTypeLabel("Makefile", "text/plain")).toBe("Text");
     // A dotfile has no extension — the dot at index 0 does not start one.
-    expect(fileTypeLabel(".env", "text/plain")).toBe("PLAIN");
+    expect(fileTypeLabel(".env", "text/plain")).toBe("Text");
     // Nor does a trailing dot.
-    expect(fileTypeLabel("weird.", "text/plain")).toBe("PLAIN");
+    expect(fileTypeLabel("weird.", "text/plain")).toBe("Text");
+    expect(fileTypeLabel("Download", "application/octet-stream")).toBe("File");
+    expect(fileTypeLabel("Photo", "image/png")).toBe("PNG");
   });
 
   it("never renders a blank card label", () => {
