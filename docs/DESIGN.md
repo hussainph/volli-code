@@ -352,17 +352,29 @@ something. The UI lab (`renderer/lab/`) is a scratch space and is not held to th
 
 A split belongs to a **tab group**, not to the whole work area (VC-614). Home
 and each Ticket keep ONE top strip for ordinary tabs and every group: a group
-is one chip with a seam between its segments, and each segment is one pane's
-front tab. Selecting a segment shows the group with that pane focused;
-selecting an ordinary tab restores a full-width plane, and the chip brings the
-group back with its ratios, stacks and fronts. The focused pane's front has a
-fine primary underline inside the chip.
+is one chip shaped like any other tab, drawing the group's front — the focused
+member while the group is shown, else the first pane's front — behind a
+**stacked glyph** (VC-1052): the front's own glyph on a card, with up to two
+members' cards fanned up and to the right behind it, each smaller and dimmer.
+The stack is the only mark that the chip holds more; there are no segments and
+no `+n`. Selecting the chip shows the group; selecting an ordinary tab restores
+a full-width plane, and the chip brings the group back with its ratios, stacks
+and fronts.
+
+**Hovering the chip lists the whole group** in a glass popover (`bg-popover/85`,
+`backdrop-blur-lg`, `rounded-xl`, `shadow-overlay`): a header naming the
+front, then one two-line row per tab in pane order — glyph, title, the detail
+that tells like tabs apart, and the tab's state when the strip knows it — with
+**Ungroup** behind a separator. It opens after a short intent delay and keeps
+a grace on leave so the pointer can travel into it; hover never takes focus.
+A press on the stack, a press on a chip already showing its group, a
+right-click, and ArrowDown (or Enter/Space when shown) open the same list.
 
 A group has two or more panes, each a stack of tabs with **its own folder
 strip** above it — a pane of one tab too, so its tab can always be closed,
 renamed or dragged. A tab opened while a group is shown joins the focused
-pane's stack, in front. Right-click the chip for the whole group, pane by pane
-(each front checked) and **Ungroup**. A tab dropped on a top-strip tab's left
+pane's stack, in front. Choosing a row of the chip's list brings that tab to
+the front of its pane. A tab dropped on a top-strip tab's left
 or right edge groups beside it; a pane's centre stacks, its edges split; a
 pane's tab dropped on the top strip leaves its group. Nothing here closes a
 tab: a pane emptied by a move collapses, and a group left with one pane

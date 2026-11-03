@@ -55,6 +55,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
+import { STATUS_DOT_LABEL } from "@renderer/components/ui/session-activity-status";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 
@@ -306,8 +307,19 @@ function reorderFor({ tabs, groups, onReorder }: HomeTabListProps) {
 /** What a group chip's menu says about a Home tab. */
 function homeTabMenuLabel(tab: HomeTabDescriptor): TabMenuLabel {
   if (tab.kind === "board") return { label: "Board", icon: KanbanIcon };
-  if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalWindowIcon };
-  if (tab.kind === "chat") return { label: tab.title, icon: ChatCircleIcon };
+  if (tab.kind === "terminal") {
+    // The same reading the terminal tab's own dot makes; a parked tab's moon
+    // has no dot, so its word is said here instead.
+    const state = terminalTabState(tab.tab, useSessionsStore.getState().parkState);
+    return {
+      label: tab.tab.title,
+      icon: TerminalWindowIcon,
+      status: STATUS_DOT_LABEL[terminalTabDot(state) ?? "parked"],
+    };
+  }
+  if (tab.kind === "chat") {
+    return { label: tab.title, icon: ChatCircleIcon, status: STATUS_DOT_LABEL[tab.status] };
+  }
   if (tab.kind === "browser") {
     // Read when the menu opens: the address is the line that tells fifteen
     // localhost tabs apart, and the strip's descriptor does not carry it.

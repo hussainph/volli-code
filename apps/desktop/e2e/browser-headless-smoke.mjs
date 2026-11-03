@@ -48,7 +48,7 @@ import {
   tabStrip,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
-import { selectStripTab } from "./lib/strip-tabs.mjs";
+import { readChipRows, selectStripTab } from "./lib/strip-tabs.mjs";
 
 const PROJECT = { id: "browser-headless-smoke-project", name: "Headless Smoke", prefix: "HB" };
 
@@ -74,22 +74,73 @@ async function startFixtureServer() {
   };
 }
 
-// The TOP strip holds ordinary tabs and one chip per group, whose segments are
-// each pane's front tab; a shown group's panes also draw strips of their own,
-// so every probe here is scoped to the top strip.
+// The TOP strip holds ordinary tabs and one chip per group (VC-1052). A chip
+// draws ONE tab, the group's front — its focused member while shown, else its
+// first pane's front — and carries that tab's `data-pair-target-id`; its other
+// members are only rows of its popover (`data-tab-id`). A shown group's panes
+// also draw strips of their own, so every probe here is scoped to the top strip.
 const browserStripTabs = (page) => tabStrip(page, HOME_TAB_STRIP).getByTestId("home-browser-tab");
-/** A chat's top-strip tab. Identity survives auto-title and SessionGlyph names. */
+/**
+ * A chat's top-strip tab: an ordinary tab, or a chip whose front it is.
+ * Identity survives auto-title and SessionGlyph names.
+ */
 const chatStripTab = (page, sessionId) =>
   tabStrip(page, HOME_TAB_STRIP)
     .locator(`[data-pair-target-id="chat:${sessionId}"]`)
     .getByRole("tab");
-/** {@link chatStripTab}, including a segment folded into a summarized chip's +n. */
-const chatStripTabAny = (page, sessionId) =>
-  tabStrip(page, HOME_TAB_STRIP)
-    .locator(`[data-pair-target-id="chat:${sessionId}"]`)
-    .getByRole("tab", { includeHidden: true });
+const groupChips = (page) =>
+  tabStrip(page, HOME_TAB_STRIP).locator('[data-slot="grouped-tab-chip"]');
 const activeGroup = (page) =>
   tabStrip(page, HOME_TAB_STRIP).locator('[data-slot="grouped-tab-chip"][data-active="true"]');
+
+/** The shown group's members, from its chip's popover rows (`[]` with none shown). */
+async function activeGroupRows(page) {
+  if ((await activeGroup(page).count()) === 0) return [];
+  return readChipRows(page, activeGroup(page).first());
+}
+
+/**
+ * How many Browser Tabs the top strip HOLDS: its ordinary browser tabs, plus
+ * every group's browser members (popover rows `browser:<id>`), whichever
+ * member a chip happens to front.
+ */
+async function stripBrowserCount(page) {
+  const ordinary = await browserStripTabs(page).evaluateAll(
+    (tabs) => tabs.filter((tab) => tab.closest('[data-slot="grouped-tab-chip"]') === null).length,
+  );
+  let grouped = 0;
+  for (const groupId of await groupChips(page).evaluateAll((chips) =>
+    chips.map((chip) => chip.getAttribute("data-group-id")),
+  )) {
+    const rows = await readChipRows(
+      page,
+      groupChips(page).and(page.locator(`[data-group-id="${groupId}"]`)),
+    );
+    grouped += rows.filter((row) => row.id?.startsWith("browser:")).length;
+  }
+  return ordinary + grouped;
+}
+
+/**
+ * Whether the shown group is the chat's, three panes wide (three pane fronts),
+ * with the chat still the front of its pane and the agent's browser a member.
+ */
+async function besideChat(page, sessionId, agentTabId) {
+  const rows = await activeGroupRows(page);
+  return (
+    rows.filter((row) => row.front).length === 3 &&
+    rows.some((row) => row.id === `chat:${sessionId}` && row.front) &&
+    rows.some((row) => row.id === `browser:${agentTabId}`)
+  );
+}
+
+/** Select the owning chat's tab: on the strip, or from its group chip's popover. */
+const selectChat = (page, sessionId) =>
+  selectStripTab(
+    page,
+    { tab: chatStripTab(page, sessionId), id: `chat:${sessionId}` },
+    { strip: tabStrip(page, HOME_TAB_STRIP) },
+  );
 /** How many shown panes draw a strip of their own. */
 const paneStrips = (page) =>
   page.locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]').count();
@@ -202,7 +253,7 @@ async function ungroupByDrag(page, paneTab) {
  * its composer, the only place a headless tab is reached from — is on screen.
  */
 async function showOwningChat(page, sessionId) {
-  await selectStripTab(page, chatStripTabAny(page, sessionId));
+  await selectChat(page, sessionId);
   await waitUntil("the chat's Island", async () =>
     (await tabsCluster(page).count()) === 1 ? true : null,
   );
@@ -327,7 +378,7 @@ async function main() {
     "the person's strip tab",
     async () => (await browserStripTabs(page).count()) === 1,
   );
-  await selectStripTab(page, browserStripTabs(page).first());
+  await selectStripTab(page, { tab: browserStripTabs(page) });
   await waitUntil(
     "the person's plane",
     async () => (await attachedViews(app)).includes(personUrl),
@@ -360,10 +411,11 @@ async function main() {
     const chat = result.ok ? result.sessions.find((row) => row.kind === "chat") : undefined;
     return chat?.record.sessionId ?? null;
   });
-  // The chat tab is up once the focused pane's strip holds one. Its name is
-  // deliberately not captured: the Session is named from its first message
-  // moments from now, so a label read here can still be the fallback "Chat"
-  // by the time the tab is clicked below.
+  // The chat tab is up once the group's chip fronts it: its pane is the focused
+  // one, and a shown chip fronts its focused member. Its name is deliberately
+  // not captured: the Session is named from its first message moments from
+  // now, so a label read here can still be the fallback "Chat" by the time the
+  // tab is clicked below.
   await waitUntil("the chat tab", async () =>
     (await chatStripTab(page, sessionId).count()) === 1 ? true : null,
   );
@@ -397,7 +449,9 @@ async function main() {
           ? true
           : null,
       );
-      const stripCount = await browserStripTabs(page).count();
+      // The person's tab is in the group (behind the chat the chip fronts); the
+      // agent's must be in no strip at all.
+      const stripCount = await stripBrowserCount(page);
       const attached = await attachedViews(app);
       return {
         ok:
@@ -424,10 +478,7 @@ async function main() {
           return mine?.presentation === "tab" &&
             attached.includes(agentUrl) &&
             attached.includes(personUrl) &&
-            (await activeGroup(page).getByRole("tab").count()) === 3 &&
-            (await activeGroup(page)
-              .locator(`[data-pair-target-id="chat:${sessionId}"]`)
-              .count()) === 1
+            (await besideChat(page, sessionId, agentTabId))
             ? { mine, attached }
             : null;
         },
@@ -457,10 +508,10 @@ async function main() {
           (await preview(page).count()) === 0 &&
           state.mine.ownerSessionId === sessionId &&
           (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
-          (await browserStripTabs(page).count()) === 2 &&
+          (await stripBrowserCount(page)) === 2 &&
           (await paneStrips(page)) === 3 &&
           beside,
-        detail: `attached=${JSON.stringify(state.attached)} owner=${state.mine.ownerSessionId} strip=${await browserStripTabs(page).count()} paneStrips=${await paneStrips(page)} beside=${beside}`,
+        detail: `attached=${JSON.stringify(state.attached)} owner=${state.mine.ownerSessionId} strip=${await stripBrowserCount(page)} paneStrips=${await paneStrips(page)} beside=${beside}`,
       };
     },
   );
@@ -491,7 +542,7 @@ async function main() {
           restored.generation === before.generation &&
           restored.url === before.url &&
           restored.ownerSessionId === sessionId &&
-          (await browserStripTabs(page).count()) === 2 &&
+          (await stripBrowserCount(page)) === 2 &&
           (await hostTabs(app)).some((tab) => tab.createdBy === "user" && tab.url === personUrl) &&
           (await preview(page).count()) === 0,
         detail: `before=${JSON.stringify(before)} hidden=${JSON.stringify(after)} restored=${JSON.stringify(restored)}`,
@@ -503,7 +554,7 @@ async function main() {
     4,
     "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; hiding keeps ownership",
     async () => {
-      await selectStripTab(page, chatStripTabAny(page, sessionId));
+      await selectChat(page, sessionId);
       const groupId = await activeGroup(page).getAttribute("data-group-id");
       // Close and Undo kept the tab in its pane beside the chat: Show tab shows
       // that group, with the browser's pane in focus.
@@ -516,8 +567,8 @@ async function main() {
       ).catch(() => false);
       // Dragged from its pane's strip up to the top strip, it leaves the group;
       // Show tab now SELECTS it full width and never pulls it back in. The
-      // Island lives above its chat's composer, so the chat's segment is what
-      // brings it back on screen to ask from.
+      // Island lives above its chat's composer, so the chat — chosen from its
+      // group chip's popover — is what brings it back on screen to ask from.
       await ungroupByDrag(page, agentPaneTab(page));
       await showOwningChat(page, sessionId);
       await showBeside(page, agentTabId, "Show tab");
@@ -528,6 +579,9 @@ async function main() {
           (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
           (await attachedViews(app)).includes(agentUrl),
       ).catch(() => false);
+      // Both browsers on the top strip: the agent's ordinary tab, and the
+      // person's as the front of its (unshown) group's chip — its first pane's
+      // front — which is also the tab-edge target the drag below aims at.
       const marks = await browserStripTabs(page).evaluateAll((tabs) =>
         tabs.map((tab) =>
           tab.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
@@ -545,7 +599,7 @@ async function main() {
         return attached.includes(agentUrl) &&
           attached.includes(personUrl) &&
           (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
-          (await activeGroup(page).getByTestId("home-browser-tab").count()) === 2
+          (await activeGroupRows(page)).filter((row) => row.id?.startsWith("browser:")).length === 2
           ? attached
           : null;
       });
@@ -571,8 +625,8 @@ async function main() {
       const mine = await waitUntil("the tab to leave the strip and return headless", async () => {
         const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
         return found?.presentation === "headless" &&
-          (await browserStripTabs(page).count()) === 1 &&
-          !(await attachedViews(app)).includes(agentUrl)
+          !(await attachedViews(app)).includes(agentUrl) &&
+          (await stripBrowserCount(page)) === 1
           ? found
           : null;
       });
