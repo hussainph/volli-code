@@ -182,6 +182,39 @@ it("changes mode without submitting, then commits the selected saved automation"
   });
 });
 
+it("wraps long automation names within their column group and keeps the saved choice intact", async () => {
+  const name = "Review the implementation and report every edge case before moving the ticket";
+  const change = vi.fn();
+  await act(async () =>
+    root.render(
+      <ComposerFooter
+        {...props}
+        onLaunchChange={change}
+        automationOffer={{
+          ...props.automationOffer,
+          groups: [{ ...GROUPS[0]!, automations: [automation("long", name)] }, GROUPS[1]!],
+        }}
+      />,
+    ),
+  );
+  await openMenu();
+  const item = radio(name);
+  const label = item.querySelector(`[title="${name}"]`)!;
+  expect(label.classList.contains("whitespace-normal")).toBe(true);
+  expect(label.classList.contains("break-words")).toBe(true);
+  expect(label.classList.contains("truncate")).toBe(false);
+  expect(item.closest('[data-slot="dropdown-menu-group"]')?.textContent).toContain(
+    "Todo · this column",
+  );
+  expect(item.className).not.toMatch(/\bh-\d/);
+  await act(async () => item.click());
+  expect(change).toHaveBeenCalledExactlyOnceWith({
+    kind: "automation",
+    projectId: "p1",
+    automationId: "long",
+  });
+});
+
 it("can browse launch modes while the title is empty, but cannot commit either way", async () => {
   const create = vi.fn();
   const submit = vi.fn();

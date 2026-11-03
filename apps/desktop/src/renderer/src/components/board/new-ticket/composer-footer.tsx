@@ -10,6 +10,7 @@ import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -229,7 +230,7 @@ export function CreateRunAutomationItems({
     );
   }
   return groups.map((group) => (
-    <div key={group.status}>
+    <DropdownMenuGroup key={group.status}>
       <DropdownMenuLabel>
         {group.label}
         {group.current ? " · this column" : ""}
@@ -237,12 +238,12 @@ export function CreateRunAutomationItems({
       {group.automations.map((automation) => (
         <DropdownMenuRadioItem key={automation.id} value={`automation:${automation.id}`}>
           <LightningIcon />
-          <span className="min-w-0 flex-1 truncate" title={automation.name}>
+          <span className="min-w-0 flex-1 whitespace-normal break-words" title={automation.name}>
             {automation.name}
           </span>
           <OffNote automation={automation} enabledIds={enabledIds} />
         </DropdownMenuRadioItem>
       ))}
-    </div>
+    </DropdownMenuGroup>
   ));
 }

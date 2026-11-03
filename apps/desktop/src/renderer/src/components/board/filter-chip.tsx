@@ -60,7 +60,7 @@ export function FilterChip({ label, icon, options, selected, onToggle }: FilterC
                 {option.icon}
               </span>
             ) : null}
-            {option.label.charAt(0).toUpperCase() + option.label.slice(1)}
+            {option.label}
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>
