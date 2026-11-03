@@ -301,7 +301,7 @@ function LaneRow({
       <kbd
         aria-hidden={digit === null ? true : undefined}
         className={cn(
-          "shrink-0 rounded-sm border border-border px-1 font-mono text-label text-muted-foreground",
+          "shrink-0 rounded-keycap border border-border px-1 font-mono text-label text-muted-foreground",
           digit === null && "invisible",
         )}
       >

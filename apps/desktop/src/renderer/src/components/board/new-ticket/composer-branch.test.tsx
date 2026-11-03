@@ -17,11 +17,19 @@ it("keeps the destination visible when the base branch is wider than Options", (
     /min-w-0 flex-1 justify-start" aria-label="Base branch: fix\/worktree-identity-drift"/,
   );
   expect(html).toContain('class="min-w-0 truncate" title="fix/worktree-identity-drift"');
-  expect(html).toContain('aria-label="Working destination: new worktree"');
+  expect(html).toContain('aria-label="Working destination: New worktree"');
 });
 
 it("only shows the destination when working in the project checkout", () => {
   const html = renderToStaticMarkup(<ComposerBranchRow {...props} usesWorktree={false} />);
   expect(html).not.toContain('aria-label="Base branch:');
-  expect(html).toContain('aria-label="Working destination: project checkout"');
+  expect(html).toContain('aria-label="Working destination: Project checkout"');
+});
+
+it("replaces the branch glyph with a spinner while reading an unknown base", () => {
+  const html = renderToStaticMarkup(<ComposerBranchRow {...props} baseBranch={null} />);
+  expect(html).toContain('aria-label="Base branch: Reading branches"');
+  expect(html).toContain('role="presentation"');
+  expect(html).toContain('title="Reading"');
+  expect(html).not.toContain('title="…"');
 });

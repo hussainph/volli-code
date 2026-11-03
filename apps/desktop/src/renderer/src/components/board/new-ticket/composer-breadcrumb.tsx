@@ -71,7 +71,7 @@ export function ComposerBreadcrumb({
       <div className="ml-auto flex shrink-0 items-center gap-1">
         <Button
           variant="ghost"
-          size="icon-xs"
+          size="icon"
           aria-label={expanded ? "Collapse" : "Expand"}
           onClick={onToggleExpand}
           className="text-muted-foreground hover:text-foreground"
@@ -79,8 +79,8 @@ export function ComposerBreadcrumb({
           {expanded ? <ArrowsInIcon /> : <ArrowsOutIcon />}
         </Button>
         <Button
-          variant="ghost"
-          size="icon-xs"
+          variant="outline"
+          size="icon"
           aria-label="Close"
           onClick={onClose}
           className="text-muted-foreground hover:text-foreground"

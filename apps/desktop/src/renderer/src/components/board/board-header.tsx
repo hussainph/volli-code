@@ -30,9 +30,9 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { cn } from "@renderer/lib/utils";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_PROJECT_UI, useProjectUiStore, type BoardView } from "@renderer/stores/project-ui";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 interface BoardHeaderProps {
   projectId: string;
@@ -108,30 +108,18 @@ function ViewToggle({ projectId }: { projectId: string }) {
   );
   const setBoardView = useProjectUiStore((state) => state.setBoardView);
 
-  const segment = (value: BoardView, label: string, Icon: typeof KanbanIcon) => (
-    <button
-      type="button"
-      aria-label={label}
-      aria-pressed={view === value}
-      onClick={() => setBoardView(projectId, value)}
-      className={cn(
-        // Button-primitive idiom (ui/button.tsx): press/focus feedback for a
-        // hand-rolled control, segmented look unchanged at rest. `scale` is
-        // named in the transition list and cancelled by `scale-100!` under
-        // reduced motion for the reason spelled out there.
-        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,scale,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring",
-        view === value && "bg-accent text-foreground",
-      )}
-    >
-      <Icon className="size-3.5" />
-    </button>
-  );
-
   return (
-    <div className="flex items-center gap-1 rounded-lg border border-border p-1">
-      {segment("board", "Board view", KanbanIcon)}
-      {segment("list", "List view", ListBulletsIcon)}
-    </div>
+    <Segmented
+      ariaLabel="Board layout"
+      value={view}
+      size="sm"
+      iconOnly
+      options={[
+        { key: "board", label: "Board view", icon: KanbanIcon },
+        { key: "list", label: "List view", icon: ListBulletsIcon },
+      ]}
+      onChange={(next) => setBoardView(projectId, next)}
+    />
   );
 }
 

@@ -1,3 +1,5 @@
+import { Spinner } from "@renderer/components/ui/spinner";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
@@ -164,7 +166,11 @@ function BranchListBody({
   // Loading takes the empty geometry too: it holds the same slot a moment
   // earlier, and a different one would make the list jump as the read lands.
   if (state.status === "loading") {
-    return <div className={EMPTY_INLINE}>Reading branches…</div>;
+    return (
+      <div className={EMPTY_INLINE}>
+        <LoadingLabel>Reading branches</LoadingLabel>
+      </div>
+    );
   }
   if (groups.length === 0) {
     return (
@@ -176,7 +182,7 @@ function BranchListBody({
   return <BranchRows groups={groups} value={value} onPick={onPick} />;
 }
 
-function BaseBranchChip({
+export function BaseBranchChip({
   state,
   value,
   onChange,
@@ -218,7 +224,11 @@ function BaseBranchChip({
           size="sm"
           className={cn(composerChipClass(), "min-w-0 flex-1 justify-start")}
         >
-          <GitBranchIcon />
+          {state.status === "loading" && value === null ? (
+            <Spinner aria-hidden role="presentation" />
+          ) : (
+            <GitBranchIcon />
+          )}
           <span className="min-w-0 truncate" title={label.text}>
             {label.text}
           </span>
@@ -266,7 +276,7 @@ function DestinationChip({
   usesWorktree: boolean;
   onChange: (usesWorktree: boolean) => void;
 }) {
-  const label = usesWorktree ? "new worktree" : "project checkout";
+  const label = usesWorktree ? "New worktree" : "Project checkout";
 
   return (
     <DropdownMenu>

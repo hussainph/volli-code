@@ -4,11 +4,9 @@
  * same object at the same weight, and adding a chip cannot quietly introduce a
  * sixth size.
  *
- * It rides `Button size="sm"` (h-6, the pill scale's 24px step from
- * docs/DESIGN.md) and overrides only what makes a chip a chip: an outline
- * instead of a fill, tighter padding, and the meta type step. The row reads as
- * a strip of quiet outlines under the description rather than five buttons.
+ * It rides the default 28px metadata rung. The raised card face is the same
+ * semantic material as the runtime controls below; the Button owns geometry.
  */
 export function composerChipClass(): string {
-  return "border border-border px-2 text-ui font-medium text-muted-foreground";
+  return "border border-border bg-card font-medium text-muted-foreground shadow-raised";
 }

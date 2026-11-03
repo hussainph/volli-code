@@ -27,6 +27,8 @@
  */
 import * as React from "react";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { LightningSlashIcon } from "@phosphor-icons/react/dist/csr/LightningSlash";
+import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import {
   offeredAutomationsForColumn,
   TICKET_STATUS_LABELS,
@@ -144,10 +146,12 @@ function LocalColumnArmingButton({
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="start" className="w-60">
+      <DropdownMenuContent align="start" className="w-80">
         <DropdownMenuLabel>Arrives in {TICKET_STATUS_LABELS[status]}</DropdownMenuLabel>
         {offered.length === 0 ? (
-          <DropdownMenuItem disabled>No automation is offered here</DropdownMenuItem>
+          <div className="px-2 py-4 text-ui text-muted-foreground">
+            No automations in this column
+          </div>
         ) : (
           <DropdownMenuRadioGroup
             value={armed?.id ?? DISARMED}
@@ -166,22 +170,29 @@ function LocalColumnArmingButton({
               });
             }}
           >
-            <DropdownMenuRadioItem value={DISARMED}>No Automation</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value={DISARMED}>
+              <MinusCircleIcon />
+              No automation
+            </DropdownMenuRadioItem>
             {offered.map((automation) => (
-              <DropdownMenuRadioItem key={automation.id} value={automation.id}>
-                {automation.name}
-                {/* An Automation that is switched off on this machine can be
-                    armed — arming is the column's choice and the switch is the
-                    record's — but it will not fire until someone turns it on,
-                    so the row says so. The switch below and the Automations
-                    page both update the same machine-local preference.
-                    (VC-112: a machine fires nothing until someone turns
-                    something on there.) */}
-                {enabledIds.includes(automation.id) ? null : (
-                  <span className="ml-auto shrink-0 text-label text-muted-foreground">
-                    {SWITCHED_OFF_NOTE}
-                  </span>
-                )}
+              <DropdownMenuRadioItem
+                key={automation.id}
+                value={automation.id}
+                title={
+                  enabledIds.includes(automation.id)
+                    ? automation.name
+                    : `${automation.name} · ${SWITCHED_OFF_NOTE}`
+                }
+                aria-label={
+                  enabledIds.includes(automation.id)
+                    ? automation.name
+                    : `${automation.name} · ${SWITCHED_OFF_NOTE}`
+                }
+              >
+                {enabledIds.includes(automation.id) ? <LightningIcon /> : <LightningSlashIcon />}
+                <span className="min-w-0 flex-1 whitespace-normal wrap-anywhere">
+                  {automation.name}
+                </span>
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -193,14 +204,13 @@ function LocalColumnArmingButton({
               checked={enabledIds.includes(armed.id)}
               onCheckedChange={(enabled) => void setEnabled(armed.id, enabled)}
             >
+              <LightningIcon />
               Automatic triggers
             </DropdownMenuCheckboxItem>
           </>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-label font-normal text-muted-foreground">
-          ⌥-drag a ticket to choose an automation
-        </DropdownMenuLabel>
+        <p className="px-2 py-1 text-ui text-muted-foreground">⌥-drag to choose once</p>
         {/* The link, not an editor: authoring lives on the page (VC-112), and
             what a column offers is decided by an Automation's Trigger there. */}
         <DropdownMenuItem

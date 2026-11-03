@@ -44,6 +44,7 @@ import type * as React from "react";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { type Automation } from "@volli/shared";
 
+import { MENU_SEPARATOR } from "@renderer/components/ui/menu-classes";
 import { cn } from "@renderer/lib/utils";
 
 export interface ColumnOfferedPanelProps {
@@ -108,8 +109,8 @@ export function ColumnOfferedPanel({
           trailing={
             expanded && !inert && armedId === automation.id ? (
               <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-                <LightningIcon weight="fill" className="size-3" />
-                default
+                <LightningIcon aria-hidden weight="fill" className="size-3" />
+                Default
               </span>
             ) : null
           }
@@ -127,7 +128,8 @@ export function ColumnOfferedPanel({
         expanded={expanded}
         dashed
       />
-      <div className="border-t border-border px-2 py-1 text-label text-muted-foreground">
+      <div className={MENU_SEPARATOR} />
+      <div className="px-2 py-1 text-label text-muted-foreground">
         {expanded ? "Drop on a choice · Esc cancels" : "Press a digit · Hold ⌥ for drop targets"}
       </div>
     </div>
@@ -167,6 +169,7 @@ function OfferedRow({
       data-offered-row-inert={inert ? "true" : undefined}
       aria-disabled={inert ? "true" : undefined}
       aria-current={chosen ? "true" : undefined}
+      title={label}
       className={cn(
         "flex items-center gap-2 rounded-md border text-left text-ui",
         "transition-[background-color,border-color,color,padding] duration-150 ease-out motion-reduce:transition-none",
@@ -188,7 +191,9 @@ function OfferedRow({
       >
         {digit}
       </kbd>
-      <span className={cn("min-w-0 flex-1 truncate", expanded && "font-medium")}>{label}</span>
+      <span className={cn("min-w-0 flex-1", expanded ? "font-medium wrap-anywhere" : "truncate")}>
+        {label}
+      </span>
       {trailing}
     </div>
   );

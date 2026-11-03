@@ -107,9 +107,10 @@ export function triggerLabel(trigger: AutomationTrigger): string {
  * it, and it leads with `/skill` on purpose: VC-112 asks for a placeholder
  * that "pushes toward `/skill` rather than prose", because the reusable half
  * of an Automation belongs in git as a Skill, where it is reviewed in a pull
- * request and travels between machines on its own.
+ * request and travels between machines on its own. One plain clause, with no
+ * ellipsis or dash: a placeholder is read at a glance.
  */
-export const INSTRUCTIONS_PLACEHOLDER = "/skill … — or @ a file. Keep the prose in the Skill.";
+export const INSTRUCTIONS_PLACEHOLDER = "/skill to run a Skill, or @ to add a file";
 
 /** Where an Automation is listed. The two words the Ownership control uses. */
 export function ownershipLabel(automation: Pick<Automation, "projectId">): string {

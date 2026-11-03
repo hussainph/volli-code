@@ -79,6 +79,7 @@ describe("one attachment affordance", () => {
     expect(html.match(/aria-label="Attach files"/g)).toHaveLength(1);
     expect(html.match(/type="file"/g)).toHaveLength(1);
     expect(html).toContain("multiple");
+    expect(html).toContain("shadow-raised");
     expect(html).not.toContain("Attach file reference");
     expect(html).not.toContain("Search files…");
   });
@@ -169,7 +170,7 @@ it("changes mode without submitting, then commits the selected saved automation"
   expect(document.body.textContent).toContain("Doing");
   await act(async () => radio("Implement").click());
   expect(submit).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Saved runtime");
+  expect(host.textContent).toContain("Saved model");
   expect(host.querySelector('[aria-label^="Model:"]')).toBeNull();
   await act(async () =>
     host.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')!.click(),
