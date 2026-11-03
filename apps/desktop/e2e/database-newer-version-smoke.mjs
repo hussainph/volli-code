@@ -41,9 +41,9 @@ import {
 
 import { installShutdownTrace, sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
 
-const NEWER_TITLE = "This database was created by a newer version of Volli";
+const NEWER_TITLE = "Update Volli to open this database";
 const DAMAGED_TITLE = "Volli couldn't load its data";
-const RESTORE_LABEL = "Restore from the last backup that checks clean";
+const RESTORE_LABEL = "Restore latest clean backup";
 const MIN_READER_KEY = "volli:min-reader-version";
 // Cheap breadcrumbs are automatic in CI; intrusive sampling is diagnostic opt-in.
 const sampleShutdown = process.env.VOLLI_NEWER_DB_SAMPLE === "1";
@@ -294,10 +294,7 @@ async function incompatibleScenario(seedPath, head, future) {
     await run.page.getByRole("heading", { name: NEWER_TITLE, exact: true }).waitFor();
     assert.equal(await run.page.getByRole("heading", { name: DAMAGED_TITLE }).count(), 0);
     await run.page
-      .getByText(
-        "This version can't open it, so nothing was changed. Update Volli, or restore an older backup.",
-        { exact: true },
-      )
+      .getByText("Nothing changed. Update Volli or restore an older backup.", { exact: true })
       .waitFor();
     const boot = await bootstrap(run);
     assert.equal(boot.ok, false, "a refused database must not boot");
@@ -312,7 +309,7 @@ async function incompatibleScenario(seedPath, head, future) {
 
   await check("the refusal offers update, an older backup and quit", async () => {
     // The built smoke app is unpackaged, so it has no updater: the download page stands in.
-    const download = run.page.getByRole("link", { name: "Open the download page", exact: true });
+    const download = run.page.getByRole("link", { name: "Download Volli", exact: true });
     assert.equal(await download.getAttribute("href"), "https://volli.app/download/");
     const listing = await bounded("recovery listing", () =>
       run.page.evaluate(() => window.api.databaseRecovery.list()),
