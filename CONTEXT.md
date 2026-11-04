@@ -503,7 +503,10 @@ Ticket strip), or the compatible legacy `preview` (pinned live above the owning
 chat's composer). A person's tabs are always `tab`. **Open beside chat** promotes
 a Session's tab into the strip and groups it beside its owning chat, splitting
 the chat's Pane when the chat is already in a Tab group; the Island's **Show
-tab** selects it, showing its group if it has one. Neither changes ownership,
+tab** selects it, showing its group if it has one. **Hide to Island**, in a
+Session tab's own browser chrome, is the way back: the tab is headless again,
+leaves the strip and any Tab group as a close would, and the Island offers
+**Open beside chat** once more. None of them changes ownership,
 generation, cookies or what the agent sees. A revealed tab survives its Session.
 The preview representation remains readable but is no longer the default reveal
 path.
