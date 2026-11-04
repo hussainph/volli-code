@@ -335,7 +335,7 @@ function OffBoardLane({ automations }: { automations: readonly Automation[] }) {
         </span>
       </div>
       {automations.length === 0 ? (
-        <p className="px-1 py-1 text-ui text-muted-foreground">Every automation has a column.</p>
+        <p className="px-1 py-1 text-ui text-muted-foreground">None</p>
       ) : (
         automations.map((automation) => (
           <div

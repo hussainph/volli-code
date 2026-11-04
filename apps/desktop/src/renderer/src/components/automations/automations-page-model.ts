@@ -20,7 +20,6 @@
  *    where a person can see that and re-pin.
  */
 import {
-  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   automationOwnership,
   automationTriggerColumns,
   automationTriggerSchedule,
@@ -203,7 +202,7 @@ export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
 /**
  * What an EMPTY history says — or `null` while it does not yet know (VC-297).
  *
- * "Nothing has run this Automation yet" is a claim about the past, and a cache
+ * "No runs yet" is a claim about the past, and a cache
  * that has never been read cannot make it. Each scope is its own read now, so
  * a cold cache is the ordinary state every time the reader picks another
  * record — and answering that with a sentence would state a fact the very next
@@ -211,13 +210,11 @@ export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
  * scoped read (`ticket-rail-automations.tsx`): say nothing until you know.
  *
  * `loaded` therefore means READ, not non-empty. An empty answer that landed is
- * a real answer and gets its sentence; silence gets silence.
+ * a real answer and gets its label; silence gets silence.
  */
-export function historyEmptyCopy(automationId: string | null, loaded: boolean): string | null {
+export function historyEmptyCopy(loaded: boolean): string | null {
   if (!loaded) return null;
-  return automationId === null
-    ? "Nothing has run in this project yet."
-    : "Nothing has run this Automation yet.";
+  return "No runs yet";
 }
 
 /**
@@ -466,16 +463,3 @@ export function nextScheduledRun(input: {
   });
   return { at, label: `Next: ${reading}` };
 }
-
-/**
- * When a due time becomes a Skipped occurrence, said once at the schedule
- * control (VC-298).
- *
- * The grace is the host timer's own constant rather than a number typed here,
- * so the sentence cannot promise a window the scheduler does not keep. A due
- * time outside it is recorded as a Skipped occurrence in Run history, never
- * replayed.
- */
-export const SCHEDULE_SKIPPED_OCCURRENCE_POLICY = `Runs up to ${
-  AUTOMATION_SCHEDULE_LATE_GRACE_MS / 60_000
-} min late; skipped if Volli is closed or the Mac is asleep`;
