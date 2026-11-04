@@ -54,7 +54,8 @@ export function AppearanceSettings() {
       <PrefSection
         title="Terminal"
         icon={TerminalWindowIcon}
-        hint={<>Volli writes an overlay file. It never edits your Ghostty config.</>}
+        // The one-line trust boundary: whose file Volli writes.
+        hint={<>Volli writes an overlay file and never edits your Ghostty config.</>}
       >
         <TerminalThemeRow row={rows.theme} />
         <FontFamilyRow row={rows["font-family"]} />
@@ -92,14 +93,14 @@ function AppThemeSection() {
   const resolved = resolveAppearance(appearance, systemPrefersDark);
 
   // No "Project override" pill when a project's canvas shadows this one — it
-  // would be a status nothing here could act on. The
-  // precedence is published once instead, in the section's (i), and the
-  // project's own Configure page carries the divergence and its revert.
+  // would be a status nothing here could act on. The section names each project
+  // that overrides it as a link, and that project's own Configure page carries
+  // the divergence and its revert.
   return (
     <PrefSection
       title="Theme"
       icon={PaletteIcon}
-      hint={
+      action={
         <OverrideLinks
           projects={projects.filter((p) => p.themeCanvas != null || p.themeAppearance != null)}
           page="appearance"
@@ -187,9 +188,9 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
           families === null ? (
             <LoadingLabel>Loading fonts</LoadingLabel>
           ) : families.length === 0 ? (
-            "No fonts found. Set font-family in the overlay file."
+            "No fonts found"
           ) : (
-            "No matching font."
+            "No matching font"
           )
         }
         families={families ?? []}

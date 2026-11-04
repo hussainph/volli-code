@@ -2,7 +2,7 @@
 /**
  * Settings → Integrations against the three outcomes of an app scan (VC-287).
  *
- * "Volli found no supported apps on this Mac." is a claim about the Mac, so it
+ * "No supported apps found" is a claim about the Mac, so it
  * belongs to exactly one outcome: a scan that ran to the end and found none.
  * A scan that could not run says something else and offers the one recovery.
  */
@@ -21,7 +21,7 @@ import { IntegrationsPane } from "./integrations-pane";
 
 const TERMINAL: ExternalApp = { id: "terminal", label: "Terminal", kind: "terminal" };
 const SCAN_FAILED = "Couldn't check which apps are installed on this Mac.";
-const NO_APPS = "Volli found no supported apps on this Mac.";
+const NO_APPS = "No supported apps found";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
