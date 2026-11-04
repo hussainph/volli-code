@@ -313,7 +313,7 @@ function ListScreen({
         {state.kind === "loading" ? (
           <div className="flex h-16 items-center justify-center gap-2 text-ui text-muted-foreground">
             <Spinner />
-            Reading {host.name}’s projects…
+            Reading {host.name}’s projects
           </div>
         ) : null}
         {rows.length > 0 ? (

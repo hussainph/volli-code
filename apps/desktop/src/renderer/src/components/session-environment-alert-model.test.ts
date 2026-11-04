@@ -159,6 +159,12 @@ describe("sessionEnvironmentMeasurement", () => {
 
     const first = projectEnvironmentReadiness(withNode, { name: "Acme" });
     expect(first?.key).toBe("readiness:Acme:node");
+    // Production uses the stable project id: a rename is not a new fault.
+    const stable = projectEnvironmentReadiness(withNode, { id: "project-a", name: "Acme" });
+    expect(stable?.key).toBe("readiness:project-a:node");
+    expect(projectEnvironmentReadiness(withNode, { id: "project-a", name: "Renamed" })?.key).toBe(
+      stable?.key,
+    );
     // Different project, different facts: neither shares a dismissal.
     expect(projectEnvironmentReadiness(withNode, { name: "Other" })?.key).not.toBe(first?.key);
     expect(projectEnvironmentReadiness(withNodeAndPnpm, { name: "Acme" })?.key).not.toBe(

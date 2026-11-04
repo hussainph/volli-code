@@ -810,12 +810,13 @@ const readFirstPaintTrace = (page) => page.evaluate(() => window.volliFirstPaint
 // ---- per-project scope ------------------------------------------------------
 
 /**
- * The two seeded workspaces. Names chosen for DISTINCT monograms ("AL"/"BE") —
- * the rail tile's accessible name is its monogram, so two projects that
- * initialled the same would make the tile locator ambiguous.
+ * The two seeded workspaces. Names chosen to be DISTINCT — the rail tile's
+ * accessible name is the project's name (its monogram is only the painted
+ * text), so two projects that shared a name would make the tile locator
+ * ambiguous.
  */
-const PROJECT_A = { id: "smoke-canvas-a", name: "Alpha", prefix: "ALP", monogram: "AL" };
-const PROJECT_B = { id: "smoke-canvas-b", name: "Beta", prefix: "BET", monogram: "BE" };
+const PROJECT_A = { id: "smoke-canvas-a", name: "Alpha", prefix: "ALP" };
+const PROJECT_B = { id: "smoke-canvas-b", name: "Beta", prefix: "BET" };
 
 /**
  * One workspace's rail tile. `.and(a real <button>)` because dnd-kit's sortable
@@ -823,7 +824,7 @@ const PROJECT_B = { id: "smoke-canvas-b", name: "Beta", prefix: "BET", monogram:
  * so the name alone matches two elements — and the wrapper does nothing on click.
  */
 const projectTile = (page, project) =>
-  page.getByRole("button", { name: project.monogram, exact: true }).and(page.locator("button"));
+  page.getByRole("button", { name: project.name, exact: true }).and(page.locator("button"));
 
 const selectProject = (page, project) => projectTile(page, project).click();
 

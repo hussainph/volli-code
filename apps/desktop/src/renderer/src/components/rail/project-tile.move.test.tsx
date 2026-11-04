@@ -103,7 +103,7 @@ describe("project menu Move to Volli Cloud", () => {
     const items = [...document.querySelectorAll('[role="menuitem"]')];
     const index = items.findIndex((item) => item.textContent === "Move to Volli Cloud…");
     expect(index).toBeGreaterThan(-1);
-    expect(items[index + 1]?.textContent).toBe("Remove from Volli…");
+    expect(items[index + 1]?.textContent).toBe("Remove from Volli");
     await act(async () => (items[index] as HTMLElement).click());
     expect(useCloudMovesStore.getState().sheet).toEqual(
       expect.objectContaining({ kind: "prepare", projectIds: ["project"] }),

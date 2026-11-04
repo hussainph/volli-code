@@ -654,7 +654,10 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
           // NO `title` (D1). What it carried — the untruncated title, the
           // harness's words, the provenance line — the peek's card says, and a
           // native tooltip would open on top of that card.
-          className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
+          className={cn(
+            "h-auto min-h-8 gap-1.5 py-1 text-ui text-muted-foreground",
+            row.cleaned && "opacity-80",
+          )}
         >
           {/* No `session-row-dim` here: this band is uniformly muted, with no
               dim/promote pairing to join — and that class also names the Active
@@ -767,9 +770,8 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
   /**
    * Whether the Session in front of you is one of this ticket's.
    *
-   * The band reveals that group as well as marking it, so the two normally
-   * show together — the child carries the precise highlight, this one says
-   * which stack it came out of. They come apart in the one state that needs
+   * The collapsed group carries the highlight; once open, the selected child
+   * carries it instead. They come apart in the one state that needs
    * this most: collapse the group by hand and the mark is all that is left
    * pointing at where you are.
    */
@@ -779,7 +781,7 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
   return (
     <SidebarMenuButton
       size="sm"
-      isActive={selected}
+      isActive={selected && !open}
       aria-expanded={open}
       aria-controls={sessionGroupPanelId(ticket.id)}
       // The folder's peek hangs off the BUTTON, not off its `<li>`: that
@@ -790,14 +792,17 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
       onClick={() => onToggle(ticket.id)}
       // No `title`, for the reason the rows above dropped theirs (D1): this row
       // peeks its TICKET, and the card says the id and the title in full.
-      className="h-6 gap-1.5 text-ui"
+      className="h-auto min-h-8 gap-1.5 py-1 text-ui active:scale-100 transition-colors"
     >
       {/* `bold` for the same reason every other glyph in this band takes it:
           at 12px regular draws lighter than the label beside it. */}
       <CaretRightIcon
         weight="bold"
         aria-hidden
-        className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")}
+        className={cn(
+          "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+          open && "rotate-90",
+        )}
       />
       <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
       <span className="min-w-0 flex-1 truncate text-muted-foreground">{ticket.title}</span>
@@ -827,22 +832,18 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
  * The box a band row will take, while the project's listing is being read
  * (VC-383).
  *
- * The same two-line shape at the same `min-h-9` and the same half-step
- * alignments the row above records — the dot on the cap height, the meta line
- * bound to its title — so the rows that replace this land where it stood.
- * VC-383 also records this skeleton's own `pt-0.5` and `gap-1.5`: its shorter
- * 14px/12px bars need the 2px nudge and 6px join to sit in that measured
- * two-line box before real text replaces them. Widths are per row and fixed:
- * the band is waiting, and a placeholder that redraws itself on every mount
- * adds motion to a surface that has none to give. Inert, with no hover fill:
- * there is nothing under it to activate.
+ * The Active row's 52px two-line footprint and 24px Session mark, so real
+ * rows land where their placeholders stood. The shorter bars keep their
+ * measured 6px join. Widths are per row and fixed: the band is waiting, and
+ * redrawing a placeholder adds motion to a surface that has none to give.
+ * Inert, with no hover fill: there is nothing under it to activate.
  */
 export function SessionBandRowSkeleton({ primaryWidth }: { primaryWidth: LoadingBarWidth }) {
   return (
     <SidebarMenuItem aria-hidden>
-      <div className="flex min-h-9 w-full items-start gap-2 rounded-md px-2 py-1">
-        <Skeleton className="mt-1.5 size-2 shrink-0 rounded-full" />
-        <span className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
+      <div className="flex min-h-13 w-full items-center gap-2 rounded-md px-2 py-1.5">
+        <Skeleton className="size-6 shrink-0 rounded-control" />
+        <span className="flex min-w-0 flex-1 flex-col gap-1.5">
           <Skeleton className={cn("h-3.5", primaryWidth)} />
           <Skeleton className="h-3 w-1/3" />
         </span>

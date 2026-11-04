@@ -653,9 +653,12 @@ async function main() {
   assertBuiltRendererLoaded(page);
   // The project already exists in SQLite, so boot deliberately skips the
   // legacy localStorage import (including its selectedProjectId). Select the
-  // actual rail tile instead: its accessible name is the project's monogram,
-  // and the button filter excludes dnd-kit's outer role="button" wrapper.
-  await page.getByRole("button", { name: "BT", exact: true }).and(page.locator("button")).click();
+  // actual rail tile instead: its accessible name is the project's name, and
+  // the button filter excludes dnd-kit's outer role="button" wrapper.
+  await page
+    .getByRole("button", { name: PROJECT.name, exact: true })
+    .and(page.locator("button"))
+    .click();
   await waitUntil("Home tab strip", async () => ((await strip(page).count()) === 1 ? true : null));
 
   await must(

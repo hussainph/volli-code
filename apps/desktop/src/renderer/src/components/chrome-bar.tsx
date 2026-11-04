@@ -76,16 +76,6 @@ export function ChromeBar() {
           <TerminalFocusBreadcrumb />
         ) : (
           <>
-            {/* translate-y-px: the lights' optical center lands at ~18.5px (y:12 +
-          half their ~13px diameter), just below the band's 18px flex center —
-          nudge the trigger down to meet them. */}
-            <div className="app-region-no-drag flex translate-y-px items-center">
-              <ProjectRailToggle />
-              <SidebarTrigger
-                aria-label="Toggle navigation sidebar"
-                title="Toggle navigation sidebar (⌘B)"
-              />
-            </div>
             <NavHistoryButtons />
             {/* Which machine the project in front runs on (VC-576). Nothing
                 with the `cloud` flag off. */}
@@ -198,7 +188,7 @@ function ProjectRailToggle() {
       aria-label={projectRailHidden ? "Show project switcher" : "Hide project switcher"}
       title={`${projectRailHidden ? "Show" : "Hide"} project switcher`}
     >
-      <SidebarIcon />
+      <SidebarIcon className="size-4" />
       <span className="sr-only">Toggle project switcher</span>
     </Button>
   );
@@ -290,17 +280,17 @@ function TerminalFocusExit() {
 }
 
 /**
- * The band's center: the ⌘K pill, and the usage-limits meter beside it
+ * The band's center: both sidebar toggles, the ⌘K pill and the usage-limits meter
  * (VC-350).
  *
- * Absolutely centered so the pair anchors to the WINDOW's midline regardless of
+ * Absolutely centered so the group anchors to the WINDOW's midline regardless of
  * the traffic-light spacer / fullscreen collapse. Overlap math at minWidth
- * 940px (main/index.ts): left chrome occupies ≈110px (78px spacer + trigger);
- * the cluster is 380 + 4 + 24 = 408px wide (pill, gap-1, an `icon-sm` at
- * size-6), so its left edge sits at (940 − 408) / 2 = 266px — still
+ * 940px (main/index.ts): left chrome occupies ≈126px (78px spacer + history);
+ * the cluster is 48 + 4 + 380 + 4 + 24 = 460px wide (toggles, pill, meter at
+ * size-6), so its left edge sits at (940 − 460) / 2 = 240px — still
  * comfortably clear of it.
  *
- * The two are one absolutely-positioned GROUP rather than two independently
+ * The controls are one absolutely-positioned GROUP rather than independently
  * placed controls. The pill is elastic (`max-w-[40vw]`), so anything pinned to
  * where its right edge "is" would drift off it the moment the window narrowed;
  * inside a flex row the meter simply stays beside it at every width.
@@ -313,6 +303,15 @@ function TerminalFocusExit() {
 function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
   return (
     <div className="absolute left-1/2 top-[19px] flex -translate-x-1/2 -translate-y-1/2 items-center gap-1">
+      <div className="app-region-no-drag flex items-center">
+        <ProjectRailToggle />
+        <SidebarTrigger
+          size="icon-sm"
+          className="[&_svg:not([class*='size-'])]:size-4"
+          aria-label="Toggle navigation sidebar"
+          title="Toggle navigation sidebar (⌘B)"
+        />
+      </div>
       <CommandPaletteTrigger onClick={onCommandPalette} />
       <UsageLimitsPopover />
     </div>

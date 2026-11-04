@@ -2852,6 +2852,7 @@ describe("forget", () => {
       markdownDocumentFiles: [],
       markdownPreviewFiles: [],
       dependencyOfferDismissed: false,
+      dismissedReadinessNotices: [],
     });
   });
 
@@ -2885,6 +2886,7 @@ describe("persistence", () => {
       "boardSort",
       "boardView",
       "dependencyOfferDismissed",
+      "dismissedReadinessNotices",
       "homeActiveTab",
       "homeTabOrder",
       "markdownDocumentFiles",
@@ -3492,6 +3494,28 @@ describe("navHistory", () => {
       current: null,
       forward: [],
     });
+  });
+});
+
+describe("readiness notice dismissal", () => {
+  it("retains each measured identity through navigation, remount/relaunch, and project switches", () => {
+    const storage = createMemoryStorage();
+    const store = createProjectUiStore(storage);
+    const key = "readiness:project-a:git,node";
+    store.getState().dismissReadinessNotice("project-a", key);
+    store.getState().dismissReadinessNotice("project-a", key);
+    store.getState().setNav("project-a", "configure");
+    store.getState().setNav("project-a", "home");
+    expect(store.getState().byProject["project-a"]?.dismissedReadinessNotices).toEqual([key]);
+    expect(store.getState().byProject["project-b"]?.dismissedReadinessNotices).toBeUndefined();
+    const remounted = createProjectUiStore(storage);
+    expect(remounted.getState().byProject["project-a"]?.dismissedReadinessNotices).toEqual([key]);
+    // New measurements are news and not covered by an old identity.
+    expect(remounted.getState().byProject["project-a"]?.dismissedReadinessNotices).not.toContain(
+      "readiness:project-a:pnpm",
+    );
+    remounted.getState().forget("project-a");
+    expect(remounted.getState().byProject["project-a"]).toBeUndefined();
   });
 });
 

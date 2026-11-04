@@ -148,7 +148,7 @@ describe("ProjectFolderBanner", () => {
     await renderBanner();
 
     await act(async () => buttonLabelled("Relink…")?.click());
-    await act(async () => buttonLabelled("Choose folder…")?.click());
+    await act(async () => buttonLabelled("Choose folder")?.click());
 
     expect(api.relink).toHaveBeenCalledWith({ id: "p1", path: "/Users/me/code/volli" });
     expect(useProjectsStore.getState().projects).toEqual([
@@ -165,7 +165,7 @@ describe("ProjectFolderBanner", () => {
     expect(container?.textContent).toContain("This project's folder isn't where Volli left it.");
 
     await act(async () => buttonLabelled("Relink…")?.click());
-    await act(async () => buttonLabelled("Choose folder…")?.click());
+    await act(async () => buttonLabelled("Choose folder")?.click());
 
     expect(api.checkFolder).toHaveBeenCalledTimes(2);
     expect(container?.textContent).toBe("");

@@ -9,12 +9,16 @@
  *  - checking   spinner (the click already landed — nothing else to offer)
  *  - downloading spinner + tooltip carrying version and percent
  *  - downloaded  icon + attention dot; click (re)opens the install dialog
- *  - error      destructive tint; the tooltip carries the message, click retries
+ *  - error      destructive tint; click opens expandable details and Retry
  *
  * Renders NOTHING in dev (`supported: false`, mirroring the updater's own
  * `isPackaged` guard) and nothing until main's first snapshot arrives — an
  * icon rendered from a guess would have to lie about at least one state.
  */
+import { useState } from "react";
+import { Button } from "@renderer/components/ui/button";
+import { Notice } from "@renderer/components/ui/notice";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { errorMessage, summarizeUpdateFailure, UPDATE_FAILURE_FALLBACK } from "@volli/shared";
 
@@ -38,19 +42,20 @@ function requestCheck(): void {
 
 function failureLabel(error: string | null): string {
   const summary = summarizeUpdateFailure(error ?? UPDATE_FAILURE_FALLBACK).replace(/\.$/u, "");
-  return `Update check failed: ${summary}${summary.endsWith("…") ? "" : "."} Select to retry.`;
+  return `Update check failed: ${summary}${summary.endsWith("…") ? "" : "."} Select for details.`;
 }
 
 export function UpdateButton() {
   const state = useUpdateStore((store) => store.state);
   const openDialog = useUpdateStore((store) => store.openDialog);
+  const [errorOpen, setErrorOpen] = useState(false);
 
   if (state === null || !state.supported) return null;
 
   const busy = state.phase === "checking" || state.phase === "downloading";
   const label =
     state.phase === "checking"
-      ? "Checking for updates…"
+      ? "Checking for updates"
       : state.phase === "downloading"
         ? `Downloading ${state.targetVersion ?? "update"} (${Math.round(state.percent ?? 0)}%)`
         : state.phase === "downloaded"
@@ -62,42 +67,81 @@ export function UpdateButton() {
             : "Check for updates";
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          data-update-phase={state.phase}
-          // Not `disabled` while busy — a disabled trigger swallows pointer
-          // events and the tooltip is where the download percent lives. The
-          // click is simply inert instead.
-          aria-disabled={busy}
-          onClick={() => {
-            if (busy) return;
-            if (state.phase === "downloaded") {
-              openDialog();
-              return;
-            }
-            requestCheck();
-          }}
-          className={cn(
-            "relative flex size-8 shrink-0 items-center justify-center rounded-md ring-ring outline-hidden",
-            "transition-[transform,background-color,color] duration-100 ease-out",
-            "hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2",
-            "active:scale-[0.97] active:bg-sidebar-accent-veil motion-reduce:scale-100!",
-            state.phase === "error" ? "text-destructive" : "text-sidebar-foreground",
-          )}
+    <Popover
+      open={errorOpen && state.phase === "error"}
+      onOpenChange={(open) => {
+        if (state.phase === "error") setErrorOpen(open);
+      }}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-lg"
+              type="button"
+              aria-label={label}
+              data-update-phase={state.phase}
+              // Not `disabled` while busy — a disabled trigger swallows pointer
+              // events and the tooltip is where the download percent lives. The
+              // click is simply inert instead.
+              aria-disabled={busy}
+              onClick={() => {
+                if (busy || state.phase === "error") return;
+                if (state.phase === "downloaded") {
+                  openDialog();
+                  return;
+                }
+                requestCheck();
+              }}
+              className={cn(
+                "relative shrink-0 hover:bg-sidebar-accent-veil hover:text-foreground",
+                state.phase === "error" ? "text-destructive" : "text-sidebar-foreground",
+              )}
+            >
+              {busy ? <Spinner /> : <DownloadSimpleIcon className="size-4" />}
+              {state.phase === "downloaded" && (
+                // The badge that keeps a dismissed update visible: the attention
+                // tone, because a staged install is a decision waiting on a human
+                // (`status-dot.tsx`'s vocabulary), not a warning.
+                <span
+                  aria-hidden
+                  className="absolute top-1 right-1 size-2 rounded-full bg-attention"
+                />
+              )}
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-sm whitespace-normal [overflow-wrap:anywhere]">
+          {label}
+        </TooltipContent>
+      </Tooltip>
+      {state.phase === "error" ? (
+        <PopoverContent
+          side="top"
+          align="end"
+          className="w-96 max-w-[calc(100vw-2rem)] max-h-96 overflow-y-auto p-2"
         >
-          {busy ? <Spinner /> : <DownloadSimpleIcon className="size-4" />}
-          {state.phase === "downloaded" && (
-            // The badge that keeps a dismissed update visible: the attention
-            // tone, because a staged install is a decision waiting on a human
-            // (`status-dot.tsx`'s vocabulary), not a warning.
-            <span aria-hidden className="absolute top-1 right-1 size-2 rounded-full bg-attention" />
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
+          <Notice
+            tone="error"
+            layout="stack"
+            title="Couldn't check for updates"
+            detail={summarizeUpdateFailure(state.error ?? UPDATE_FAILURE_FALLBACK)}
+            actions={
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setErrorOpen(false);
+                  requestCheck();
+                }}
+              >
+                Retry update check
+              </Button>
+            }
+          />
+        </PopoverContent>
+      ) : null}
+    </Popover>
   );
 }

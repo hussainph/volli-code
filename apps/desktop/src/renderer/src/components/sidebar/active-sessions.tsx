@@ -14,12 +14,13 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { SessionListEmpty } from "./session-list-empty";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import {
   SidebarGroup,
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
@@ -40,6 +41,7 @@ import {
 } from "@renderer/components/sidebar/active-session-listing";
 import {
   DEFAULT_SESSION_BAND_FILTER,
+  isSessionBandFilterNarrowed,
   sessionListingFilter,
   type SessionBandFilter,
 } from "@renderer/components/sidebar/session-band-filter";
@@ -259,7 +261,7 @@ function provisionalChatDraftSelector(
  * session is bracketed by the mark that tree taught this sidebar to mean
  * "inside".
  */
-const SESSION_GROUP_NEST = "mx-0 ml-2 gap-1 py-0 pr-0 pl-2";
+const SESSION_GROUP_NEST = "mx-0 mt-1 ml-2 gap-1 py-1 pr-0 pl-2";
 
 /**
  * One object per distinct row vendor (VC-1078). `ActiveBandRow` and
@@ -1375,7 +1377,11 @@ export function ActiveSessions({
         // unread roster become the false empty VC-383 removed.
         <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
       ) : activeRows.length === 0 ? (
-        <p className={EMPTY_INLINE}>No active sessions</p>
+        isSessionBandFilterNarrowed(filter) ? (
+          <p className={EMPTY_INLINE}>No active sessions</p>
+        ) : (
+          <SessionListEmpty band="active" />
+        )
       ) : (
         <SidebarMenu>
           {activeRows.map((row) => (
@@ -1418,7 +1424,11 @@ export function ActiveSessions({
         sessionsUnavailable !== null ? null : previousEntries.length === 0 && listingFailed ? (
         <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
       ) : previousEntries.length === 0 ? (
-        <p className={EMPTY_INLINE}>Nothing yet</p>
+        isSessionBandFilterNarrowed(filter) ? (
+          <p className={EMPTY_INLINE}>Nothing yet</p>
+        ) : (
+          <SessionListEmpty band="previous" />
+        )
       ) : (
         <SidebarMenu>
           {previousSlice.entries.map((entry) =>
@@ -1528,7 +1538,9 @@ export function ActiveSessions({
  * The Previous band's last row (VC-116): "Show more" while entries sit past the
  * cap, "Show less" once the band has been widened. Plain buttons in the tab
  * order, so Tab reaches them and Enter or Space presses them; they are not
- * Session rows, so the band's arrow-key walk does not stop on them.
+ * Session rows, so the band's arrow-key walk does not stop on them. They are
+ * the shared ghost `sm` action: the control scale owns their height, type and
+ * icon gap, so nothing here restates it.
  *
  * Pressing one can unmount it — the last "Show more" leaves nothing to show,
  * "Show less" leaves nothing to collapse — and focus would then fall to the
@@ -1566,26 +1578,28 @@ function PreviousBandReach({
   return (
     <SidebarMenuItem className="flex gap-1">
       {canShowMore ? (
-        <SidebarMenuButton
+        <Button
           ref={moreRef}
+          variant="ghost"
           size="sm"
           onClick={press(onShowMore)}
-          className="h-6 w-auto gap-1.5 text-ui text-muted-foreground"
+          className="text-muted-foreground"
         >
-          <CaretDownIcon weight="bold" aria-hidden className="size-3 shrink-0" />
+          <CaretDownIcon weight="bold" aria-hidden className="size-3" />
           <span>Show more</span>
-        </SidebarMenuButton>
+        </Button>
       ) : null}
       {canShowLess ? (
-        <SidebarMenuButton
+        <Button
           ref={lessRef}
+          variant="ghost"
           size="sm"
           onClick={press(onShowLess)}
-          className="h-6 w-auto gap-1.5 text-ui text-muted-foreground"
+          className="text-muted-foreground"
         >
-          <CaretUpIcon weight="bold" aria-hidden className="size-3 shrink-0" />
+          <CaretUpIcon weight="bold" aria-hidden className="size-3" />
           <span>Show less</span>
-        </SidebarMenuButton>
+        </Button>
       ) : null}
     </SidebarMenuItem>
   );

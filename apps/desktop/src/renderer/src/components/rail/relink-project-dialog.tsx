@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from "@renderer/components/ui/dialog";
 import { Notice } from "@renderer/components/ui/notice";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 
@@ -102,16 +103,19 @@ export function RelinkProjectDialog({
           <DialogDescription>
             {aftermath === null
               ? folderMissing
-                ? "Volli can't find this project's folder. Choose where it is now — its tickets, settings and history stay with it."
-                : "Choose where this project's folder is now. Its tickets, settings and history stay with it."
-              : "The move is saved. Some of it could not follow on its own:"}
+                ? "Folder not found. Choose its new location to keep your tickets and history."
+                : "Choose a new location. Your tickets and history stay with this project."
+              : "Folder updated. These items need attention:"}
           </DialogDescription>
         </DialogHeader>
 
         {aftermath === null ? (
-          <p className="truncate text-ui text-muted-foreground" title={project.path}>
-            {project.path}
-          </p>
+          <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-muted/30 px-2 py-2">
+            <FolderOpenIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 font-mono text-ui text-foreground [overflow-wrap:anywhere]">
+              {project.path}
+            </span>
+          </div>
         ) : (
           <div className="flex flex-col gap-2">
             {notices.map((notice) => (
@@ -133,8 +137,8 @@ export function RelinkProjectDialog({
                 Cancel
               </Button>
               <Button disabled={busy} onClick={() => void chooseAndRelink()}>
-                <FolderOpenIcon />
-                Choose folder…
+                {busy ? <Spinner /> : <FolderOpenIcon />}
+                {busy ? "Relinking" : "Choose folder"}
               </Button>
             </>
           ) : (

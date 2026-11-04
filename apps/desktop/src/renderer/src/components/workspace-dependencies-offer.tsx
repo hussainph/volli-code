@@ -1,4 +1,5 @@
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { PackageIcon } from "@phosphor-icons/react/dist/csr/Package";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
@@ -151,15 +152,22 @@ export function WorkspaceDependenciesNotice({
   return (
     <Notice
       tone="neutral"
-      icon={PackageIcon}
-      title={running ? `Running ${installCommand}…` : "Dependencies aren't installed yet"}
+      icon={running ? Spinner : PackageIcon}
+      className="[&_p]:font-semibold"
+      title={running ? `Running ${installCommand}` : "Dependencies aren't installed yet"}
       actions={
         <>
-          <Button size="xs" variant="outline" disabled={running} onClick={onRun}>
-            <PlayIcon />
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={running}
+            aria-busy={running}
+            onClick={onRun}
+          >
+            {running ? <Spinner aria-label="Running" /> : <PlayIcon />}
             Run {installCommand}
           </Button>
-          <Button size="xs" variant="ghost" disabled={running} onClick={onConfigureSetup}>
+          <Button size="xs" variant="outline" disabled={running} onClick={onConfigureSetup}>
             <GearSixIcon />
             Set a setup command
           </Button>

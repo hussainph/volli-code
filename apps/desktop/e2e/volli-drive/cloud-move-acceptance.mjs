@@ -259,7 +259,10 @@ try {
     return { sessionId: sessions[0].id, hasWorktree: true };
   });
   await step("Quiet project-menu entry and single-project dry run", async () => {
-    await press("button", "MP", "Shift+F10", { first: true });
+    // The rail tile's accessible name is the project's name; its monogram is
+    // only painted text. dnd-kit's sortable wrapper snapshots unnamed, so the
+    // name matches the one tile button.
+    await press("button", MOVE_PROJECT.name, "Shift+F10");
     await click("menuitem", "Move to Volli Cloud…");
     await assertPreflightCounts();
     await drive("screenshot", { name: "project-menu-preflight" });

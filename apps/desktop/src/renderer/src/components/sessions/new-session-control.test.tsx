@@ -185,7 +185,9 @@ describe("NewSessionControl", () => {
     );
 
     expect(strip).toContain(">Chat<");
-    expect(strip).toContain('data-variant="ghost"');
+    expect(strip).toContain('data-variant="outline"');
+    expect(strip).toContain('role="group"');
+    expect(strip).not.toContain("active:scale-");
     expect(empty).toContain(">New chat<");
     expect(empty).toContain('data-variant="default"');
   });
