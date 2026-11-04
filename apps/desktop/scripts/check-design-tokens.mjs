@@ -64,7 +64,8 @@ const RULES = [
     id: "radius-stock-2xl",
     // 16px, and stock: `@theme inline` overrides sm/md/lg/xl only, so this one
     // reads Tailwind's unauthored 1rem and a change to the ladder cannot move
-    // it. The container rung (`rounded-container`, 20px) is the answer.
+    // it. The container rung (`rounded-container`, 14px) or the ladder's own
+    // `rounded-xl` (16px) is the answer.
     summary: "rounded-2xl is stock Tailwind (16px) and does not ride the radius ladder",
     match: (base) => /^-?rounded(-(?:t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?-2xl$/.test(base),
   },

@@ -4,14 +4,14 @@ import { Checkbox } from "./checkbox";
 
 describe("Checkbox material", () => {
   it.each([false, true, "indeterminate"] as const)(
-    "retains a lifted perimeter in state %s",
+    "keeps a flat bordered box in state %s",
     (checked) => {
       const html = renderToStaticMarkup(<Checkbox checked={checked} aria-label="Include" />);
       expect(html).toContain('role="checkbox"');
       expect(html).toContain(`aria-checked="${checked === "indeterminate" ? "mixed" : checked}"`);
-      expect(html).toContain("control-material");
-      expect(html).toContain("border-border-strong");
-      expect(html).toContain("shadow-control");
+      expect(html).toContain("border-glass-edge");
+      expect(html).not.toContain("shadow-");
+      expect(html).toContain("data-[state=unchecked]:hover:bg-glass-2");
       expect(html).not.toContain("border-primary");
       expect(html).toContain("calc(var(--radius-control) / 2)");
     },
