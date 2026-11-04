@@ -1,3 +1,4 @@
+import { StyleChoice } from "../kit/style-choice";
 import { CanvasInstrument } from "../kit/canvas-instrument";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
@@ -108,6 +109,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
 
   return (
     <PrefSection title="Theme" icon={PaletteIcon}>
+      <StyleChoice projectId={project.id} />
       <PrefRow
         label="Mode"
         description={appearance === null ? "Global default" : "Project override"}

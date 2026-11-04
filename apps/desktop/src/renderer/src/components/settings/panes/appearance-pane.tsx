@@ -1,3 +1,6 @@
+import { StyleChoice } from "../kit/style-choice";
+import { Switch } from "@renderer/components/ui/switch";
+import { useStyleStore } from "@renderer/stores/style";
 import { OverrideLinks } from "../settings-navigation";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { CanvasInstrument } from "../kit/canvas-instrument";
@@ -86,6 +89,8 @@ export function AppearanceSettings() {
 const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
 
 function AppThemeSection() {
+  const motion = useStyleStore((state) => state.motion);
+  const setMotion = useStyleStore((state) => state.setMotion);
   const projects = useProjectsStore((state) => state.projects);
   const canvas = useThemeStore((state) => state.globalCanvas);
   const appearance = useThemeStore((state) => state.globalAppearance);
@@ -107,6 +112,10 @@ function AppThemeSection() {
         />
       }
     >
+      <StyleChoice />
+      <PrefRow label="Motion" htmlFor="appearance-motion">
+        <Switch id="appearance-motion" checked={motion} onCheckedChange={setMotion} />
+      </PrefRow>
       <CanvasInstrument
         scope={GLOBAL_SCOPE}
         canvas={canvas}

@@ -1,4 +1,5 @@
-import "@fontsource-variable/geist-mono/wght.css";
+import "@fontsource/space-mono/400.css";
+import "@fontsource/space-mono/700.css";
 import "@fontsource-variable/mona-sans/wght.css";
 import "@fontsource-variable/mona-sans/wght-italic.css";
 import "./globals.css";
@@ -35,6 +36,7 @@ import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
+import { startStylePreferences } from "./stores/style";
 import { useThemeStore } from "./stores/theme";
 import { useExperimentsStore } from "./stores/experiments";
 import { launchStore } from "./stores/launch";
@@ -98,6 +100,8 @@ async function main() {
     root.render(<BootErrorPanel error={result.error} />);
     return;
   }
+
+  await startStylePreferences();
 
   root.render(
     <StrictMode>

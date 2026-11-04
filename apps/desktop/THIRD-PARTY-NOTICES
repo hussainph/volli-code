@@ -113,8 +113,8 @@ they are listed so the index accounts for every module in the bundle.
   @floating-ui/dom@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/react-dom@2.1.9  MIT  [bundled into a chunk]
   @floating-ui/utils@0.2.12  MIT  [bundled into a chunk]
-  @fontsource-variable/geist-mono@5.3.0  OFL-1.1  [bundled into a chunk]
   @fontsource-variable/mona-sans@5.3.0  OFL-1.1  [bundled into a chunk]
+  @fontsource/space-mono@5.3.0  OFL-1.1  [bundled into a chunk]
   @google/genai@2.21.0  Apache-2.0  [bundled into a chunk]
   @iconify/types@2.0.0  MIT  [bundled into a chunk]
   @iconify/utils@3.1.7  MIT  [bundled into a chunk]
@@ -2862,11 +2862,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: @fontsource-variable/geist-mono@5.3.0
+Packages: @fontsource-variable/mona-sans@5.3.0
 SPDX: OFL-1.1
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
-Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git) GeistMono-Italic[wght].ttf: Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git)
+Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona" MonaSans-Italic[wdth,wght].ttf: Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona"
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -2962,11 +2962,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
 =========================================================================================================
-Packages: @fontsource-variable/mona-sans@5.3.0
+Packages: @fontsource/space-mono@5.3.0
 SPDX: OFL-1.1
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
-Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona" MonaSans-Italic[wdth,wght].ttf: Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona"
+Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Italic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Bold.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-BoldItalic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

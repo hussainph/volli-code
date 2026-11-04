@@ -85,6 +85,7 @@ describe("app_state key registry", () => {
       theme: "client-local stays",
       appearance: "client-local stays",
       "first-paint": "client-local stays",
+      "volli:style": "client-local stays",
       "volli:ui": "client-local stays",
       "volli:workspace": "client-local stays",
       "volli:projects-ui": "client-local stays",
