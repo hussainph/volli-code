@@ -232,7 +232,9 @@ describe("TicketRail's Now page", () => {
     // control. Counted, so a third outline button cannot appear unnoticed.
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
     expect(page).not.toContain("Run once");
-    expect([...page.matchAll(/data-variant="outline"/g)]).toHaveLength(2);
+    // Four outline buttons: the two Properties dropdowns and the compact Chat
+    // split's two halves (`NewSessionControl`'s `rail` drawing).
+    expect([...page.matchAll(/data-variant="outline"/g)]).toHaveLength(4);
     expect(page).not.toContain("shadow-raised");
     // The compact Chat split uses its controls' own fill, not a frame around
     // the whole group. Rail geometry must not silently become strip-sized.
