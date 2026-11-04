@@ -147,6 +147,14 @@ function driver(label, socket) {
       );
       await click("button", "Runner:", { contains: true, first: true });
       await click("menuitemradio", name, { contains: true, first: true });
+      // The modal menu hides the app behind it (`hideOthers`) until its exit
+      // animation unmounts it, so the next control has no name until then.
+      await waitUntil(
+        `${label}: the runner menu has closed`,
+        async () =>
+          controls((await snap()).text, "menuitemradio", name, { contains: true }).length === 0,
+        { timeout: 10_000, interval: 100 },
+      );
     },
     async send(text) {
       await waitUntil(

@@ -73,6 +73,7 @@ import {
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
+import { hideBrowserTab } from "@renderer/components/browser/show-browser-tab";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
 import { SplitDnd } from "@renderer/components/split/split-dnd";
 import {
@@ -1307,6 +1308,33 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   useTicketEntryFocus(projectId, ticket.id);
 
   /**
+   * The workspace half of a Browser Tab leaving this strip once main has
+   * accepted it: closed, or hidden back to its Activity Island (VC-1118).
+   *
+   * The split-view half of a close this store does not own — the same
+   * statement the chat branch of `closeTab` makes. A tab of the group on
+   * screen hands over to its pane's successor; otherwise the reset to the Body
+   * applies only when the departing tab was the one in front.
+   */
+  function dropBrowserTab(tab: TicketTabDescriptor): void {
+    removeTicketTabFromSplit(projectId, ticket.id, tab.id);
+    const active =
+      useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active ??
+      BODY_TAB_ID;
+    if (active === tab.id) setActiveTab(BODY_TAB_ID);
+  }
+
+  /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
+  function hideBrowser(tab: TicketTabDescriptor): void {
+    if (tab.browserTabId === undefined) return;
+    void hideBrowserTab(browserApi, tab.browserTabId, () => dropBrowserTab(tab)).catch(
+      (reason: unknown) => {
+        toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
+      },
+    );
+  }
+
+  /**
    * Close one tab, from whichever pane's strip raised it.
    *
    * The split view's half of a close is only owed by the two kinds this store
@@ -1335,15 +1363,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
             return;
           }
           useBrowserTabsStore.getState().remove(opaqueId);
-          // The split-view half of a close this store does not own — the same
-          // statement the chat branch below makes. A tab of the group on screen
-          // hands over to its pane's successor; otherwise the reset to the Body
-          // applies only when the closed tab was the one in front.
-          removeTicketTabFromSplit(projectId, ticket.id, tab.id);
-          const active =
-            useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active ??
-            BODY_TAB_ID;
-          if (active === tab.id) setActiveTab(BODY_TAB_ID);
+          dropBrowserTab(tab);
         })
         .catch((reason: unknown) => {
           toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
@@ -1594,6 +1614,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               tabId={paneBrowserTab.tabId}
               visible={split.panes.some((visiblePane) => visiblePane.activeTabId === tab.id)}
               onClose={() => closeTab(tab)}
+              onHide={() => hideBrowser(tab)}
             />
           ) : null}
           {tab.kind === "session" ? (

@@ -226,6 +226,68 @@ describe("the main stall monitor", () => {
     });
   });
 
+  it("keeps separate caller tallies for the same inner projection operation", () => {
+    start();
+    for (const [operation, count, ms] of [
+      ["listing", 3, 40],
+      ["resume", 2, 70],
+    ] as const) {
+      for (let i = 0; i < count; i += 1) {
+        withMainSpan({ door: "timer", operation }, () => {
+          withMainSpan({ door: "projection", operation: "get-session" }, () => {
+            clock += ms;
+          });
+        });
+      }
+    }
+    vi.advanceTimersByTime(50);
+    expect(stalls()).toEqual([
+      expect.objectContaining({
+        attribution: "aggregate",
+        operation: "get-session",
+        parentDoor: "timer",
+        parentOperation: "resume",
+        spanCount: 2,
+        spanMs: 140,
+        coveredMs: 260,
+      }),
+    ]);
+  });
+
+  it("names the requesting door after its async roster reader has yielded", async () => {
+    start();
+    await withTrace(null, { door: "agent-socket", operation: "session.list" }, async () => {
+      await Promise.resolve();
+      for (let i = 0; i < 32; i += 1) {
+        withMainSpan({ door: "projection", operation: "get-session" }, () => {
+          clock += 8;
+        });
+      }
+    });
+    vi.advanceTimersByTime(50);
+    expect(stalls()).toEqual([
+      expect.objectContaining({
+        attribution: "aggregate",
+        parentDoor: "agent-socket",
+        parentOperation: "session.list",
+        spanCount: 32,
+        spanMs: 256,
+      }),
+    ]);
+    expect(stalls()[0]).not.toHaveProperty("traceId");
+    await withTrace(null, { door: "ipc", operation: "session.listing" }, async () => {
+      await Promise.resolve();
+      withMainSpan({ door: "projection", operation: "get-session" }, () => {
+        clock += 250;
+      });
+    });
+    expect(stalls()[1]).toMatchObject({
+      attribution: "span",
+      parentDoor: "ipc",
+      parentOperation: "session.listing",
+    });
+  });
+
   it("explains a block mostly spent in garbage collection by the longest pause's kind", () => {
     start();
     clock += 50;

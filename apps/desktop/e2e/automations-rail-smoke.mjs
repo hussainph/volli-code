@@ -362,12 +362,18 @@ try {
     const items = await submenu.innerText();
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
+    // Group labels by line, case-folded: `innerText` follows the label's
+    // text-transform, which is presentation, while the order is the claim.
+    const lines = items.split("\n").map((line) => line.trim().toLowerCase());
+    const ownColumn = lines.indexOf("doing · this ticket");
+    const doneColumn = lines.indexOf("done");
     return {
       ok:
         items.includes("Review sweep") &&
         items.includes("Nightly sweep") &&
         items.includes("Done sweep") &&
-        items.indexOf("DOING · THIS TICKET") < items.indexOf("DONE") &&
+        ownColumn >= 0 &&
+        ownColumn < doneColumn &&
         // A card has nowhere to type an Unbound Run, so it offers none.
         !items.includes("Run once"),
       detail: items.replaceAll("\n", " | ").slice(0, 240),
