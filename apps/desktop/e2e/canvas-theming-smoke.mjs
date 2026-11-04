@@ -430,10 +430,11 @@ async function openAppearanceSettings(page) {
   await page.getByTestId("appearance-mode").waitFor();
 }
 
-/** Configure → Appearance for whichever project is selected. */
+/** Settings → Project → Appearance for whichever project is selected. */
 async function openProjectAppearance(page) {
-  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   const nav = settingsRail(page);
+  await nav.locator('[aria-label="Settings scope"] > div > button').click();
   await nav.getByRole("button", { name: "All projects", pressed: false }).waitFor();
   await nav.getByRole("button", { name: "Appearance", exact: true }).click();
   // Present in every state of the pane, and only once this project's scope has
@@ -1264,7 +1265,7 @@ cursor-style = block
   });
 
   let projectBackground = null;
-  await attempt(17, "Configure → Appearance overrides ONE workspace's canvas", async () => {
+  await attempt(17, "Project → Appearance overrides ONE workspace's canvas", async () => {
     await selectProject(page, PROJECT_A);
     await openProjectAppearance(page);
     // No Custom gate: the editor is already mounted on the EFFECTIVE canvas,

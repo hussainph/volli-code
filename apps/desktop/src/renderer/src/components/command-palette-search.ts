@@ -194,9 +194,11 @@ export function commandPaletteFilter(
   const score = defaultFilter(value, typed, keywords);
   const query = typed.trimEnd().toLowerCase();
   if (value.startsWith(NAVIGATION_ROW_PREFIX)) {
-    return keywords[0] !== undefined && namesCommand(keywords[0], query)
-      ? OUTRIGHT_BONUS + score
-      : score;
+    // A moved pane retains its old name as a search alias. The exact page
+    // title wins over its subpanes for a bare "Settings" query.
+    const named = keywords.some((name) => namesCommand(name, query));
+    const exact = keywords[0] !== undefined && commandWords(keywords[0]) === commandWords(query);
+    return named ? OUTRIGHT_BONUS + (exact ? OUTRIGHT_BONUS : 0) + score : score;
   }
   const ticket = value.startsWith(TICKET_ROW_PREFIX);
   if (!ticket && !value.startsWith(SESSION_ROW_PREFIX)) return score;

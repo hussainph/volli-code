@@ -685,9 +685,9 @@ describe("buildNavigationCommandItems", () => {
       "Home",
       "Board view",
       "List view",
-      "Configure",
-      "Configure → Skills",
-      "Configure → MCP Servers",
+      "Project settings",
+      "Settings → Skills",
+      "Settings → MCP Servers",
       "Settings",
     ]);
     expect(items[0]).toMatchObject({ id: "home", hint: "Alpha" });
@@ -695,9 +695,12 @@ describe("buildNavigationCommandItems", () => {
       id: "configure-pane",
       paneKey: "skills",
       hint: "Alpha",
-      keywords: ["Skills", "skill"],
+      keywords: ["configure", "Configure → Skills", "Skills", "skill"],
     });
-    expect(items[5]).toMatchObject({ paneKey: "mcp", keywords: ["MCP Servers"] });
+    expect(items[5]).toMatchObject({
+      paneKey: "mcp",
+      keywords: ["configure", "Configure → MCP Servers", "MCP Servers"],
+    });
     expect(buildNavigationCommandItems({ name: "Alpha" }).map((item) => item.id)).toEqual([
       "home",
       "board",

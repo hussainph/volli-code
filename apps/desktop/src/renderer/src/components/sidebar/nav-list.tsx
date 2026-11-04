@@ -1,7 +1,6 @@
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { HouseIcon } from "@phosphor-icons/react/dist/csr/House";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
 
 import {
   SidebarGroup,
@@ -24,26 +23,9 @@ const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: PhosphorIcon 
   // concept, so the nav row and the provenance mark are recognisably the
   // same thing (VC-112, "Observability").
   { key: "automations", label: "Automations", icon: LightningIcon },
-  { key: "configure", label: "Configure", icon: SlidersHorizontalIcon },
 ];
 
-/**
- * Primary feature navigation: Home / Automations / Configure. App-wide
- * Settings lives in the sidebar footer.
- *
- * Three rows, and each absence below is a decision rather than a gap: the
- * Sessions page is gone, and its Sessions live inside Home as tabs (VC-54);
- * the Files page is gone too, and Main-checkout file access lives inside Home
- * as File tabs beside them, opened from the Home rail's own Files navigator
- * (VC-121/VC-122).
- *
- * Configure and Automations deliberately stay OUT of Home — the guardrail on
- * this shape is that Home must not become a junk drawer, and VC-112 cites this
- * very comment when it rules that the Automations surface is a nav page rather
- * than a room inside Home. Automations is also the ONLY surface that authors
- * an Automation; the board, the ticket rail and the palette merely run one, so
- * none of them owns a nav row.
- */
+/** Primary feature navigation. Agent configuration lives in the Settings footer. */
 export function NavList() {
   const [activeNav, setActiveNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);

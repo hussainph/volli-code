@@ -1,6 +1,6 @@
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
- * Configure → MCP Servers: a fixed-column server table and bounded audit log.
+ * Settings → MCP Servers: a fixed-column server table and bounded audit log.
  *
  * Identity, tool counts, health and enablement each own a column. Recovery is
  * one action beside a menu, never a wrapping strip. Narrow panes scroll the
@@ -97,7 +97,7 @@ function replaceServer(
     : servers.map((candidate) => (candidate.id === server.id ? server : candidate));
 }
 
-export function McpPane({ project }: { project: Project }) {
+export function McpPane({ project }: { project: Pick<Project, "id"> }) {
   const [servers, setServers] = React.useState<readonly McpServerRecord[]>([]);
   const [operations, setOperations] = React.useState<readonly McpOperationRecord[]>([]);
   const [loading, setLoading] = React.useState(true);

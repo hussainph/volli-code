@@ -76,7 +76,7 @@ async function visibleRowLabels(page) {
 }
 
 /**
- * Settings and Configure share one shell: one rail, named "Settings
+ * App settings and project overrides share one shell: one rail, named "Settings
  * categories", whose header is the scope switch ("All projects" or the
  * project). `scope` is the word a search result prints for that half —
  * "All projects" or "Project" — so a label found only in the other scope's
@@ -151,9 +151,7 @@ try {
   await assertProfileIsolated(app, userDataDir);
   assertBuiltRendererLoaded(page);
 
-  // Configure has no rail without a project, so one is seeded before anything
-  // else — auditing only Settings would leave the surface this ticket changed
-  // most entirely unchecked.
+  // Seed a real project so both file-backed inventories and overrides are audited.
   const repo = await makeGitRepo(scratch, "search-project-");
   await seedProjects(page, [{ id: "search-p1", name: "Search Fixture", path: repo, prefix: "SF" }]);
 
@@ -169,18 +167,11 @@ try {
 
   const last = await auditSurface(page, "Settings", "All projects", 2);
 
-  // Configure needs a project. With none selected the page is an empty state
-  // and there is no rail to audit — correct behaviour, not a failure, so the
-  // surface is audited only when it is actually there.
-  const configure = page.getByRole("button", { name: "Configure", exact: true });
-  if ((await configure.count()) > 0) {
-    await configure.click();
-    // Configure is the same rail in project scope ("All projects" unpressed).
-    await settingsRail(page)
-      .getByRole("button", { name: "All projects", pressed: false })
-      .waitFor();
-    await auditSurface(page, "Configure", "Project", last + 1);
-  }
+  // Audit project overrides as well: moving their entry point must not remove
+  // the searchability assertions previously exercised through Configure.
+  await settingsRail(page).getByRole("button", { name: "Search Fixture", exact: true }).click();
+  await settingsRail(page).getByRole("button", { name: "All projects", pressed: false }).waitFor();
+  await auditSurface(page, "Project settings", "Project", last + 1);
 
   exitCode = summarize();
 } finally {
