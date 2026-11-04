@@ -77,6 +77,15 @@ export function stripBrowserTabs(tabs: readonly BrowserTabState[]): BrowserTabSt
 }
 
 /**
+ * Whether a strip tab can go back to the Activity Island (VC-1118): a
+ * Session's own tab, which its owner's Island lists in any presentation. A
+ * person's tab is always in the strip, and the host refuses to hide one.
+ */
+export function hidesToIsland(tab: Pick<BrowserTabState, "createdBy" | "ownerSessionId">): boolean {
+  return tab.createdBy !== "user" && tab.ownerSessionId !== null;
+}
+
+/**
  * Every tab one chat can answer for: its Session's own and its children's, in
  * whatever presentation, in registry order. The chip counts these; the
  * inventory lists them; a headless tab is visible nowhere else.
