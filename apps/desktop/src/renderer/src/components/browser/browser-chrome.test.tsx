@@ -235,3 +235,23 @@ describe("BrowserChrome holder pill (VC-239)", () => {
     expect(() => pill.onHandBack()).not.toThrow();
   });
 });
+
+describe("BrowserChrome Hide to Island (VC-1118)", () => {
+  it("draws no Hide to Island control unless the surface can send the tab there", () => {
+    const html = renderToStaticMarkup(<BrowserChrome {...props()} />);
+    expect(html).not.toContain("Hide to Island");
+  });
+
+  it("names the control accessibly and routes its press to the surface", () => {
+    let hidden = 0;
+    const html = renderToStaticMarkup(<BrowserChrome {...props({ onHide: () => undefined })} />);
+    expect(html).toContain('aria-label="Hide to Island"');
+
+    const tree = BrowserChrome(props({ onHide: () => (hidden += 1) }));
+    const hide = findElements(tree, Button).find(
+      (button) => button.props["aria-label"] === "Hide to Island",
+    );
+    hide?.props.onClick?.();
+    expect(hidden).toBe(1);
+  });
+});
