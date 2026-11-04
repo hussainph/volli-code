@@ -231,7 +231,7 @@ attachment under their tint. Reuse that variable verbatim; do not copy the stops
 or blur the canvas. Reading surfaces target 7:1 text contrast; regular surfaces
 must clear 4.5:1. Use opaque semantic ink, never a low-alpha grey on clear glass.
 
-`material-floating` gives menus, popovers, dialogs, palettes, toasts and tooltips
+`material-floating` gives menus, submenus, popovers, dialogs, palettes, toasts and tooltips
 a 90% popover tint, a top catch, `shadow-overlay` and one 20px backdrop blur with
 `saturate(1.5)`. Floats sit over arbitrary content, so they keep more tint than
 the static ladder: where the blur is not composited, what shows through must stay
@@ -239,7 +239,8 @@ a ghost, never legible text. A command list inside a floating surface shares tha
 Never nest backdrop filters, exceed 24px blur or leave glass over live terminals
 or Browser Tab webviews. Contain panel paint; keep tooltip arrows and chrome
 focus rings unclipped, and portal submenus out of their parent float, which
-would otherwise clip them (they keep the nested solid fill). Animate only transform or opacity on blurred floats.
+would otherwise clip them. Portaled submenus use the same floating tint and blur.
+Animate only transform or opacity on blurred floats.
 
 Reduce transparency and Increase contrast replace every material with its
 opaque semantic fill. Browsers without backdrop-filter get opaque materials.
