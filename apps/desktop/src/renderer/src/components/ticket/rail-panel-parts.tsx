@@ -725,11 +725,11 @@ export const RAIL_CONTROL = "border-sidebar-border bg-background/30 text-ui shad
  * workspace, which is what makes the pair readable AND themed instead of one
  * or the other.
  */
-export function DiffTotals({ diff }: { diff: DiffStat }) {
+export function DiffTotals({ diff, reading = false }: { diff: DiffStat; reading?: boolean }) {
   return (
     <span className="flex shrink-0 items-center gap-1 font-mono text-ui font-medium tabular-nums">
-      <span className="text-positive">+{diff.insertions}</span>
-      <span className="text-destructive">−{diff.deletions}</span>
+      <span className={reading ? "text-diff-added" : "text-positive"}>+{diff.insertions}</span>
+      <span className={reading ? "text-diff-removed" : "text-destructive"}>−{diff.deletions}</span>
     </span>
   );
 }

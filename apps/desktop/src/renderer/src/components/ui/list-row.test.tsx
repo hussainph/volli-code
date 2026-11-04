@@ -16,6 +16,21 @@ describe("ListRow", () => {
     expect(html).not.toContain("focus-visible:ring-ring/");
   });
 
+  it("shares source-list geometry and accent states without changing ordinary lists", () => {
+    const html = renderToStaticMarkup(
+      <ListRow primary="file.ts" onActivate={vi.fn()} selected variant="source" />,
+    );
+    expect(html).toContain('data-selected="true"');
+    expect(html).toContain("rounded-row");
+    expect(html).toContain("hover:bg-(--accent-tint)");
+    expect(html).toContain("data-[selected=true]:bg-(--accent-selected)");
+    expect(html).not.toContain("border-sidebar-border");
+    const inert = renderToStaticMarkup(
+      <ListRow primary="file.ts" onActivate={null} variant="source" />,
+    );
+    expect(inert).not.toContain("hover:bg");
+  });
+
   it("draws an inert row as a div with no hover fill", () => {
     // A hover tint on a row nothing happens to is a lie the pointer tells —
     // this is the branch the primitive exists to spell once.

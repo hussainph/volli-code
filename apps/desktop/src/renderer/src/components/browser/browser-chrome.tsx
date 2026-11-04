@@ -101,11 +101,11 @@ export function BrowserChrome({
     >
       <div
         data-slot="browser-address-row"
-        className="flex min-w-0 items-center gap-1 overflow-x-auto p-2"
+        className="flex h-control-default min-w-0 items-center gap-0.5 overflow-x-auto px-1"
       >
         <Button
           type="button"
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           aria-label="Back"
           disabled={!tab.canGoBack}
@@ -115,7 +115,7 @@ export function BrowserChrome({
         </Button>
         <Button
           type="button"
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           aria-label="Forward"
           disabled={!tab.canGoForward}
@@ -123,7 +123,13 @@ export function BrowserChrome({
         >
           <ArrowRightIcon />
         </Button>
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="Reload" onClick={onReload}>
+        <Button
+          type="button"
+          variant="toolbar"
+          size="icon-sm"
+          aria-label="Reload"
+          onClick={onReload}
+        >
           {tab.loading ? <Spinner className="size-3.5" /> : <ArrowClockwiseIcon />}
         </Button>
         <form
@@ -140,7 +146,8 @@ export function BrowserChrome({
             placeholder="Enter a URL"
             value={address}
             onChange={(event) => onAddressChange(event.currentTarget.value)}
-            className="min-w-0 bg-card"
+            variant="search"
+            className="h-control-xs min-w-0 bg-card px-2 text-ui"
             spellCheck={false}
           />
         </form>
@@ -154,7 +161,7 @@ export function BrowserChrome({
         ) : null}
         <Button
           type="button"
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           aria-label="Toggle DevTools"
           title="Toggle DevTools"
@@ -170,7 +177,7 @@ export function BrowserChrome({
               <TooltipTrigger asChild>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="toolbar"
                   size="icon-sm"
                   aria-label={HIDE_TO_ISLAND_LABEL}
                   onClick={onHide}

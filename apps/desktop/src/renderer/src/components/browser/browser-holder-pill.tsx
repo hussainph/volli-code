@@ -64,7 +64,7 @@ export function BrowserHolderPill({
               <TooltipTrigger asChild>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="toolbar"
                   size="icon-sm"
                   aria-label="Take over"
                   onClick={onTakeOver}
@@ -78,7 +78,7 @@ export function BrowserHolderPill({
               <TooltipTrigger asChild>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="toolbar"
                   size="icon-sm"
                   aria-label="Ask to leave"
                   onClick={onAskToLeave}
@@ -94,7 +94,7 @@ export function BrowserHolderPill({
             <TooltipTrigger asChild>
               <Button
                 type="button"
-                variant="ghost"
+                variant="toolbar"
                 size="icon-sm"
                 aria-label="Hand back"
                 onClick={onHandBack}

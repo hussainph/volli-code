@@ -153,11 +153,11 @@ export function toChangeListRow(file: ChangeSetFile, recency: ChangeRecencyState
  */
 const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: PhosphorIcon; ink: string }> = {
   modified: { icon: GitDiffIcon, ink: "text-attention" },
-  added: { icon: PlusIcon, ink: "text-positive" },
-  untracked: { icon: PlusIcon, ink: "text-positive" },
+  added: { icon: PlusIcon, ink: "text-diff-added" },
+  untracked: { icon: PlusIcon, ink: "text-diff-added" },
   renamed: { icon: ArrowRightIcon, ink: "text-info" },
-  deleted: { icon: MinusIcon, ink: "text-destructive" },
-  conflicted: { icon: WarningIcon, ink: "text-destructive" },
+  deleted: { icon: MinusIcon, ink: "text-diff-removed" },
+  conflicted: { icon: WarningIcon, ink: "text-diff-removed" },
 };
 
 /** The page's name and its count — the one line both the empty and full list wear. */
@@ -257,7 +257,7 @@ function HeaderAction({
       <TooltipTrigger asChild>
         <Button
           size="icon-sm"
-          variant="ghost"
+          variant="toolbar"
           aria-label={label}
           aria-pressed={pressed}
           onClick={onClick}
@@ -298,6 +298,7 @@ function ChangeRow({
         <TooltipTrigger asChild>
           <ListRow
             density="two-line"
+            variant="source"
             selected={current}
             data-testid="ticket-changes-row"
             data-path={row.path}
@@ -317,7 +318,7 @@ function ChangeRow({
               <ChangeRowLine
                 value={row.filename}
                 lineRef={nameRef}
-                className="min-w-0 flex-1 text-ui font-medium"
+                className="min-w-0 flex-1 font-mono text-ui"
               />
             }
             // The recency mark alone: the status word that used to share this
@@ -337,7 +338,7 @@ function ChangeRow({
               ) : undefined
             }
             secondary={
-              <span className="flex min-w-0 items-baseline text-ui text-muted-foreground/70">
+              <span className="flex min-w-0 items-baseline font-mono text-ui text-muted-foreground">
                 {/* The rename mark is a MARK, so it is pinned outside the line
                     the ellipsis eats into rather than riding in its text. */}
                 {row.renameFrom === null ? null : <span className="shrink-0">←&nbsp;</span>}
@@ -352,8 +353,10 @@ function ChangeRow({
                   <span className="text-muted-foreground">Binary</span>
                 ) : row.insertions === null || row.deletions === null ? null : (
                   <>
-                    <span className="font-mono font-medium text-positive">+{row.insertions}</span>
-                    <span className="font-mono font-medium text-destructive">−{row.deletions}</span>
+                    <span className="font-mono font-medium text-diff-added">+{row.insertions}</span>
+                    <span className="font-mono font-medium text-diff-removed">
+                      −{row.deletions}
+                    </span>
                   </>
                 )}
               </span>
@@ -365,7 +368,7 @@ function ChangeRow({
               <RailRowActions
                 path={row.path}
                 onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
+                className="absolute top-[5px] right-20 z-10 rounded-control bg-(--accent-selected) px-1"
               />
             }
           />
@@ -451,7 +454,7 @@ export function TicketChangesList({
             <p
               data-testid="ticket-changes-truncated"
               data-hidden-count={hiddenCount}
-              className="text-center text-ui text-muted-foreground/70"
+              className="text-center text-ui text-muted-foreground"
             >
               {hiddenCount.toLocaleString()} {hiddenCount === 1 ? "file" : "files"} not shown or
               searched
@@ -493,7 +496,7 @@ export function TicketChangesList({
         <li
           data-testid="ticket-changes-truncated"
           data-hidden-count={hiddenCount}
-          className="px-2 py-1 text-ui text-muted-foreground/70"
+          className="px-2 py-1 text-ui text-muted-foreground"
           role="presentation"
         >
           {hiddenCount.toLocaleString()} more {hiddenCount === 1 ? "file" : "files"} not shown
@@ -753,7 +756,7 @@ export function TicketChangesPanel({
                 />
               )}
               <span className="min-w-1 flex-1" />
-              {total === 0 || diff === null ? null : <DiffTotals diff={diff} />}
+              {total === 0 || diff === null ? null : <DiffTotals diff={diff} reading />}
             </>
           )}
         </div>
@@ -763,6 +766,7 @@ export function TicketChangesPanel({
             value={query}
             onChange={(event) => setView({ cwd: "", filtering: true, query: event.target.value })}
             aria-label="Filter changed files"
+            variant="search"
             placeholder="Filter changed files…"
             className="h-7 text-ui"
           />

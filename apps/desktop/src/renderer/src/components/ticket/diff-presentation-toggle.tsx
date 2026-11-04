@@ -69,7 +69,8 @@ export function WordWrapToggle({ wordWrap, onToggle }: { wordWrap: boolean; onTo
       <TooltipTrigger asChild>
         <Button
           size="icon-sm"
-          variant={wordWrap ? "secondary" : "ghost"}
+          variant="toolbar"
+          className={wordWrap ? "bg-(--accent-selected) text-primary-text" : undefined}
           aria-pressed={wordWrap}
           aria-label="Word wrap"
           data-testid="ticket-diff-word-wrap"
@@ -104,7 +105,7 @@ export function DiffControlBand({
   return (
     <div
       data-testid="ticket-diff-control-band"
-      className="flex shrink-0 items-center gap-1 border-b border-border px-gutter py-1"
+      className="flex min-h-control-default shrink-0 items-center gap-1 border-b border-border bg-background px-1 py-0.5"
     >
       {/* The segmented control keeps showing the CHOICE, never the fit. The
           preference is app-wide and durable; a pane being narrow for a minute
