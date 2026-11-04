@@ -24,25 +24,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/*
- * Prompt materials (VC-335). A quiet writing sheet, an accent-tinted tray,
- * and a directional edge highlight make this a distinct object at rest.
- * No backdrop blur, moving glow, or focus-triggered repaint of the shell.
- * Layers are opaque over --card: transcript text cannot bleed into the draft.
- */
+/* Prompt writing uses a thick sheet inside the regular material frame. */
 @layer components {
   .prompt-surface {
-    border-color: transparent;
-    background:
-      linear-gradient(var(--card), var(--card)) padding-box,
-      linear-gradient(
-          135deg,
-          color-mix(in oklab, var(--primary) 50%, var(--border-strong)),
-          var(--border-strong) 38%,
-          var(--border) 72%,
-          color-mix(in oklab, var(--primary) 30%, var(--border-strong))
-        )
-        border-box;
+    border-color: var(--border-strong);
   }
 
   .prompt-toolbar {
@@ -62,8 +47,8 @@
   .prompt-primary {
     /* Keep the solved foreground/fill pair intact; only the bevel takes ink. */
     box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--primary-foreground) 30%, transparent),
-      var(--shadow-raised);
+      inset 0 1px 0 color-mix(in oklab, var(--primary-foreground) 25%, transparent),
+      0 1px 2px color-mix(in oklab, var(--scrim) 15%, transparent);
   }
 }
 
@@ -81,7 +66,7 @@
  */
 [data-slot="skeleton"],
 [data-monaco-status="loading"] {
-  --skeleton-fill: color-mix(in oklab, var(--accent) 70%, transparent);
+  --skeleton-fill: color-mix(in oklab, var(--foreground) 30%, var(--muted));
   --skeleton-radius: var(--radius-md);
   --skeleton-animation: var(--animate-pulse);
 }
@@ -427,6 +412,14 @@
 }
 /* GENERATED THEME TOKENS — END */
 
+/* Geometry and lift are authored, not generated colors. Override the legacy
+ * generated radius fallback in every appearance without editing its block. */
+:root,
+:root.dark,
+:root.light {
+  --radius: 0.5rem;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -496,20 +489,64 @@
   --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);
   --font-sans: "Mona Sans Variable", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-  /* Radius ladder (docs/DESIGN.md). Three rungs and one relation:
-   * a CONTROL is 12, a CONTAINER is 20, and anything that acts is a pill.
-   * `--radius-row` is not a fourth rung — it is the container seen from
-   * inside: a row sitting in a surface's own 4px inset takes 20 − 4 so the
-   * two corners stay concentric. Change the inset and this moves with it.
-   * The derived sm/md/lg/xl rungs below ride `--radius` (12px, = control) and
-   * exist for the surfaces that predate the ladder. */
-  --radius-control: 12px;
-  --radius-container: 20px;
-  --radius-row: 16px;
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /* Calm rounded rectangles: 6px controls, 10px containers. Dense menus
+   * step down to 8px frames / 4px highlights at their shared 4px inset. */
+  --radius-control: calc(var(--radius) - 2px);
+  --radius-container: calc(var(--radius-control) + 4px);
+  --radius-row: calc(var(--radius-container) - 4px);
+  --radius-menu: calc(var(--radius-control) + 2px);
+  --radius-menu-item: calc(var(--radius-menu) - 4px);
+  --radius-keycap: calc(var(--radius-menu-item) - 2px);
+  --radius-sm: var(--radius-menu-item);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius-control);
+  --radius-xl: var(--radius-container);
+  /* Quiet lift resolves against each control's scoped semantic inks. */
+  --control-light: color-mix(
+    in oklab,
+    var(--background) var(--control-light-surface),
+    var(--foreground)
+  );
+  /* Shade/drop use generated canvas shadow ink, never neutral black. */
+  --control-shade: color-mix(in oklab, var(--scrim) var(--control-shade-strength), transparent);
+  --shadow-control-drop:
+    var(--control-drop-x) var(--control-drop-y) var(--control-drop-blur) var(--control-drop-spread)
+      color-mix(in oklab, var(--scrim) var(--control-drop-strength), transparent),
+    var(--control-tail-x) var(--control-tail-y) var(--control-tail-blur) var(--control-tail-spread)
+      color-mix(in oklab, var(--scrim) var(--control-tail-strength), transparent);
+  --shadow-control:
+    inset var(--control-edge-x) var(--control-edge-y) var(--control-edge-blur)
+      color-mix(in oklab, var(--control-light) var(--control-highlight), transparent),
+    inset calc(-1 * var(--control-edge-x)) calc(-1 * var(--control-edge-y)) var(--control-edge-blur)
+      var(--control-shade),
+    var(--shadow-control-drop);
+  --shadow-control-hover:
+    inset var(--control-edge-x) var(--control-edge-y) var(--control-edge-blur)
+      color-mix(in oklab, var(--control-light) var(--control-highlight-hover), transparent),
+    inset calc(-1 * var(--control-edge-x)) calc(-1 * var(--control-edge-y)) var(--control-edge-blur)
+      var(--control-shade),
+    var(--shadow-control-drop);
+  --shadow-control-pressed:
+    inset calc(var(--control-edge-x) * var(--control-pressed-depth))
+      calc(var(--control-edge-y) * var(--control-pressed-depth)) var(--control-pressed-blur)
+      color-mix(in oklab, var(--scrim) var(--control-pressed-shade), transparent),
+    inset calc(-1 * var(--control-edge-x)) calc(-1 * var(--control-edge-y)) var(--control-edge-blur)
+      color-mix(in oklab, var(--control-light) var(--control-pressed-highlight), transparent);
+  --color-control-secondary: var(--control-secondary);
+  /* Destructive reading ink is pale on dark paper. A filled action remains
+   * deep red in either appearance; retain the generated hue/chroma, cap its
+   * lightness, and pair it with bright ink. No generated colour is changed. */
+  --color-control-destructive: oklch(from var(--destructive) min(l, 0.5) c h);
+  --color-control-destructive-foreground: oklch(from var(--destructive-foreground) 0.98 0 h);
+  /* One height/inset scale, including attached fields and select triggers. */
+  --spacing-control-xs: 22px;
+  --spacing-control-sm: 24px;
+  --spacing-control-default: 28px;
+  --spacing-control-lg: 32px;
+  --spacing-control-pad-xs: 8px;
+  --spacing-control-pad-sm: 8px;
+  --spacing-control-pad-default: 10px;
+  --spacing-control-pad-lg: 12px;
   /* Layout language (docs/DESIGN.md): the canonical reading measure (Tier A
    * surfaces center on it via <ContentColumn>) and the unified page gutter
    * every surface aligns its edges to. */
@@ -521,6 +558,176 @@
    * answers to, and the eye loses the pairing the row exists to draw. */
   --container-workbench: 80rem;
   --spacing-gutter: 1.5rem;
+}
+
+/* Glass, tuned: one top catch and a small drop in both appearances.
+ * Knobs remain scoped so the catalog can compare other treatments. */
+:root,
+.dark,
+.light {
+  --control-light-surface: 100%;
+  --control-edge-x: 0px;
+  --control-edge-y: 1px;
+  --control-edge-blur: 0px;
+  --control-highlight: 25%;
+  --control-highlight-hover: 36%;
+  --control-shade-strength: 0%;
+  --control-drop-x: 0px;
+  --control-drop-y: 1px;
+  --control-drop-blur: 2px;
+  --control-drop-spread: 0px;
+  --control-drop-strength: 15%;
+  --control-tail-x: 0px;
+  --control-tail-y: 0px;
+  --control-tail-blur: 0px;
+  --control-tail-spread: 0px;
+  --control-tail-strength: 0%;
+  --control-pressed-depth: 1;
+  --control-pressed-blur: 2px;
+  --control-pressed-shade: 22%;
+  --control-pressed-highlight: 0%;
+  --control-fill-lift: 0%;
+  --control-sheen: 0%;
+  --control-sheen-angle: 135deg;
+  --control-sheen-stop: 60%;
+}
+
+/* One face recipe. Style queries read inherited knobs from the containing
+ * scope. At zero there is NO fill override: existing caller washes and native
+ * sRGB edge rasterization stay pixel-identical, not just visually close. */
+@utility control-material {
+  @container not style(--control-fill-lift: 0%) {
+    /* Checked/hover background variants have two selectors. The face must
+     * still lift those fills; their state-specific --control-fill supplies ink. */
+    &.control-material.control-material {
+      background-color: color-mix(
+        in oklab,
+        var(--control-fill, var(--card)) calc(100% - var(--control-fill-lift)),
+        var(--foreground)
+      );
+    }
+  }
+}
+
+/* Quiet highlights use light paper in either appearance. */
+:root,
+.dark {
+  --control-light-paper: var(--foreground);
+  --control-light-ink: var(--background);
+  /* Dark paper needs real lift for a secondary face to read as a control. */
+  --control-secondary: color-mix(in oklab, var(--muted) 70%, var(--foreground));
+}
+:root.light,
+.light {
+  --control-light-paper: var(--background);
+  --control-light-ink: var(--foreground);
+  /* Light paper only needs a hint of ink: more turns the face a muddy
+   * mid-tone under dark text on tinted canvases. The top catch carries the lift. */
+  --control-secondary: color-mix(in oklab, var(--muted) 92%, var(--foreground));
+}
+
+/* Resolve derived values ON the control, not once at html: a stage/scope may
+ * override either knobs or theme tokens. Ghost/link keep their flat face. */
+.control-material,
+.control-lighting,
+.control-group {
+  --control-light: color-mix(
+    in oklab,
+    var(--control-light-paper) var(--control-light-surface),
+    var(--control-light-ink)
+  );
+  --control-shade: color-mix(in oklab, var(--scrim) var(--control-shade-strength), transparent);
+  --shadow-control-drop:
+    var(--control-drop-x) var(--control-drop-y) var(--control-drop-blur) var(--control-drop-spread)
+      color-mix(in oklab, var(--scrim) var(--control-drop-strength), transparent),
+    var(--control-tail-x) var(--control-tail-y) var(--control-tail-blur) var(--control-tail-spread)
+      color-mix(in oklab, var(--scrim) var(--control-tail-strength), transparent);
+}
+
+/* Joined actions share ONE drop and perimeter. Children retain their semantic
+ * fills and press feedback, but never put another bezel beside the seam.
+ * Plain ghost toolbars and nested groups keep their existing flat drawing. */
+.control-group:not(:has(> [data-slot="button-group"])):has(
+    > [data-control="button"].control-material,
+    > * > [data-control="button"].control-material
+  ) {
+  box-shadow: var(--shadow-control-drop);
+  border-radius: var(--radius-control);
+
+  & > [data-control="button"],
+  & > :not([data-slot="button-group"]) > [data-control="button"],
+  & > [data-slot="button-group-text"] {
+    box-shadow:
+      inset 0 var(--control-edge-y) var(--control-edge-blur)
+        color-mix(in oklab, var(--control-light) var(--control-highlight), transparent),
+      inset 0 calc(-1 * var(--control-edge-y)) var(--control-edge-blur) var(--control-shade);
+    border-color: var(--border-strong);
+  }
+
+  /* A neighbour without an explicit separator earns a single hairline. */
+  & > [data-control="button"]:not(:first-child):not([data-slot="button-group-separator"] + *),
+  &
+    > [data-slot="button-group-text"]:not(:first-child):not(
+      [data-slot="button-group-separator"] + *
+    ),
+  &
+    > :not(:first-child):not([data-slot="button-group-separator"] + *):not(
+      [data-slot="button-group"]
+    )
+    > [data-control="button"] {
+    border-inline-start: 1px solid var(--border-strong);
+  }
+  &[data-orientation="vertical"] {
+    & > [data-control="button"]:not(:first-child):not([data-slot="button-group-separator"] + *),
+    &
+      > [data-slot="button-group-text"]:not(:first-child):not(
+        [data-slot="button-group-separator"] + *
+      ),
+    &
+      > :not(:first-child):not([data-slot="button-group-separator"] + *):not(
+        [data-slot="button-group"]
+      )
+      > [data-control="button"] {
+      border-inline-start: 0;
+      border-block-start: 1px solid var(--border-strong);
+    }
+  }
+  & > [data-control="button"]:active,
+  & > :not([data-slot="button-group"]) > [data-control="button"]:active {
+    box-shadow: var(--shadow-control-pressed);
+  }
+}
+
+/* Attached fields are content inside one lifted group, never a second face. */
+.control-flat {
+  background-color: transparent;
+  background-image: none;
+}
+
+@layer components {
+  .control-material {
+    --control-fill: var(--card);
+  }
+  @container not style(--control-sheen: 0%) {
+    .control-material {
+      background-image: linear-gradient(
+        var(--control-sheen-angle),
+        color-mix(in oklab, var(--foreground) var(--control-sheen), transparent),
+        transparent var(--control-sheen-stop)
+      );
+    }
+  }
+}
+
+/* Composer settings and command search use the same quiet control lift. */
+.prompt-config,
+[data-slot="command-input-wrapper"],
+[cmdk-dialog] [cmdk-root] > div:has(> [cmdk-input]) {
+  border-color: var(--border);
+  background-image: none;
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 25%, transparent),
+    0 1px 2px color-mix(in oklab, var(--scrim) 15%, transparent);
 }
 
 /*
@@ -588,7 +795,9 @@
     background: var(--canvas);
   }
   body {
-    @apply text-foreground font-sans;
+    /* Unsized UI and body portals share the UI rung, never browser-default 16px.
+     * Reading surfaces and headings declare their larger semantic rung. */
+    @apply text-foreground font-sans text-ui;
     background: transparent;
     font-synthesis: none;
   }
@@ -1370,51 +1579,214 @@
   }
 }
 
-/* ELEVATION — the lift overlays and the shadow set.
- *
- * Two tiers, applied outward from the gradient: tier 1 is the chrome band and
- * the project rail, tier 2 the inner sidebar. The lift is signed, so the SAME
- * rules serve both appearances — light walks its tiers toward paper and dark
- * away from it, and both arrive at a sidebar sitting just above its canvas.
- *
- * WHICH tiers move is the share table's call in `@volli/shared`, not this
- * file's — both rules stay unconditional and a tier meant to stay on the canvas
- * is given a share of zero, which reaches here as `transparent`. That is the
- * settled arrangement's own answer for tier 1: the frame reads as a frame only
- * if it is uniform, so the chrome band and rail ARE the gradient and the rule
- * below paints nothing. If the chrome does not respond, that table is why.
- *
- * Painted as a `background-image` rather than a `background-color` on purpose:
- * an image composites on top of a fill, so anything the element declares for
- * itself survives underneath and a share of zero keeps meaning "unchanged". */
-.app-region-drag {
-  background-image: linear-gradient(var(--lift-1), var(--lift-1));
+/* Glass, tuned material ladder. Static surfaces reuse --canvas verbatim:
+ * grain, authored stops, positions and layer sizes stay in the production
+ * canvas pipeline. Fixed attachment aligns them with html's viewport paint.
+ * No permanent backdrop filter over a terminal, transcript or native webview.
+ * Local tint variables resolve on each surface, never on the root. */
+:root,
+.dark,
+.light {
+  --material-foreground: var(--foreground);
+  --material-muted-foreground: var(--muted-foreground);
 }
-/* The primary sidebar, by its own name rather than by a utility class it
- * happens to wear (app-shell.tsx) — the one thing that distinguishes it from
- * the two other `data-slot="sidebar"` roots in the same tree (the collapsible
- * wrapper and the project rail). */
-[data-volli-sidebar] {
-  background-image: linear-gradient(var(--lift-2), var(--lift-2));
-  /* …and no veil under it, in BOTH modes, so lift owns the tier relationship
-   * outright.
-   *
-   * The two worked against each other. `--sidebar-veil` reproduces the ladder's
-   * sidebar rung over whatever is beneath it, and in light that rung sits BELOW
-   * the rail — so the veil pulled the sidebar 0.015 of lightness DOWN at the
-   * same moment lift pushed it up. Dark is the same collision, not its absence:
-   * the dark ladder's `--sidebar` is L 0.199 while a dark canvas measures 0.276,
-   * so the veil reproduces a rung DARKER than the gradient under it, which is
-   * exactly what a positive lift does — at a fixed amount with no dial on it.
-   * Two mechanisms pushing the same way is not separation, it is a dial whose
-   * zero is somewhere other than zero.
-   *
-   * What it costs is the veil's own step at lift 0. That is the point rather
-   * than the price: lift 0 now means the same sentence in both modes (every
-   * on-canvas tier IS the canvas). The veil TOKENS stay — `ui/sidebar.tsx` uses
-   * `--sidebar-accent-veil` and `--sidebar-border-veil` for hover fills and
-   * hairlines, which do still need to composite over a gradient. */
-  background-color: transparent;
+.material-clear,
+.app-region-drag,
+[data-slot="tab-strip"] {
+  --material-opacity: 50%;
+  --material-solid-fill: var(--popover);
+}
+.material-regular,
+.prompt-surface,
+article.bg-card,
+section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
+  --material-opacity: 76%;
+  --material-solid-fill: var(--card);
+}
+.material-thick,
+[data-volli-surface],
+[role="log"].bg-background,
+[data-diff-fit],
+.prompt-surface textarea,
+[data-terminal-renderer],
+[data-monaco-status],
+[data-monaco-fallback],
+[data-testid="markdown-preview"],
+table {
+  --material-opacity: 94%;
+  --material-solid-fill: var(--background);
+}
+.material-solid {
+  --material-opacity: 100%;
+  --material-solid-fill: var(--background);
+}
+:where(
+  .material-clear,
+  .material-regular,
+  .material-thick,
+  .material-solid,
+  .app-region-drag,
+  [data-slot="tab-strip"],
+  .prompt-surface,
+  article.bg-card,
+  section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
+  [data-volli-surface],
+  [role="log"].bg-background,
+  [data-diff-fit],
+  .prompt-surface textarea,
+  [data-terminal-renderer],
+  [data-monaco-status],
+  [data-monaco-fallback],
+  [data-testid="markdown-preview"],
+  table
+) {
+  --material-tint: color-mix(
+    in oklab,
+    var(--material-solid-fill) var(--material-opacity),
+    transparent
+  );
+  background: linear-gradient(var(--material-tint), var(--material-tint)), var(--canvas);
+  background-attachment: fixed;
+}
+.material-solid {
+  background: var(--material-solid-fill);
+  background-attachment: scroll;
+}
+.prompt-surface,
+[data-volli-sidebar].material-regular {
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
+    var(--shadow-card);
+}
+article.bg-card {
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
+    var(--shadow-raised);
+}
+section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent);
+}
+/* Contain panels, not chrome: chrome must let focus rings and tab ghosts out. */
+.material-regular,
+.material-thick,
+.prompt-surface,
+article.bg-card {
+  contain: paint;
+}
+/* The sidebar is tinted paper now; its own foreground must not inherit the
+ * on-canvas ink intended for the clear rail/title bar. The canvas solve stays
+ * on chrome; semantic inks stay on regular/thick reading surfaces. */
+[data-volli-sidebar].material-regular {
+  --foreground: var(--material-foreground);
+  --muted-foreground: var(--material-muted-foreground);
+  --sidebar-foreground: var(--material-foreground);
+  --material-solid-fill: var(--sidebar);
+}
+[data-volli-sidebar].material-regular :is([data-slot="sidebar-group-label"], .uppercase) {
+  color: var(--foreground);
+}
+[data-volli-sidebar].material-regular .session-row-dim.text-ui {
+  --sidebar-foreground: var(--material-foreground);
+  --muted-foreground: var(--material-foreground);
+}
+/* Only transient floats sample arbitrary content. Command embedded in a
+ * popover/dialog shares its parent's material instead of adding another pass.
+ * Floats sit over arbitrary, often high-contrast content (a dialog footer's
+ * primary button under a popover), so their tint is 90%, not the static
+ * ladder's 76%: wherever the blur pass is not composited, what shows through
+ * stays a faint ghost rather than legible text. */
+.material-floating,
+[cmdk-dialog],
+.toaster [data-sonner-toast].material-floating {
+  --material-solid-fill: var(--popover);
+  background: color-mix(in oklab, var(--material-solid-fill) 90%, transparent);
+  border-color: var(--border-strong);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
+    var(--shadow-overlay);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  contain: paint;
+}
+/* A submenu is portaled out of its parent (contain:paint would clip it), but it
+ * still opens over that parent: it keeps the nested float's solid fill. */
+.material-floating .material-floating,
+[data-slot$="menu-sub-content"].material-floating,
+[cmdk-dialog] .material-floating,
+.material-floating [cmdk-dialog] {
+  background: var(--material-solid-fill);
+  /* A hard rendering budget, including Sonner's higher-specificity skin. */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.material-floating [data-slot="command"],
+[cmdk-dialog] [cmdk-root] {
+  background: transparent;
+}
+/* cmdk owns a separate scrim. Blur belongs on its surface, never the scrim. */
+[cmdk-overlay] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* Tooltip arrows extend beyond the label; contain:paint would clip them. */
+[data-slot="tooltip-content"].material-floating {
+  contain: none;
+}
+@supports not (backdrop-filter: blur(1px)) {
+  :is(
+    .material-clear,
+    .material-regular,
+    .material-thick,
+    .material-solid,
+    .material-floating,
+    [cmdk-dialog],
+    .toaster [data-sonner-toast].material-floating,
+    .app-region-drag,
+    [data-slot="tab-strip"],
+    .prompt-surface,
+    article.bg-card,
+    section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
+    [data-volli-surface],
+    [role="log"].bg-background,
+    [data-diff-fit],
+    .prompt-surface textarea,
+    [data-terminal-renderer],
+    [data-monaco-status],
+    [data-monaco-fallback],
+    [data-testid="markdown-preview"],
+    table
+  ) {
+    background: var(--material-solid-fill);
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :is(
+    .material-clear,
+    .material-regular,
+    .material-thick,
+    .material-solid,
+    .material-floating,
+    [cmdk-dialog],
+    .toaster [data-sonner-toast].material-floating,
+    .app-region-drag,
+    [data-slot="tab-strip"],
+    .prompt-surface,
+    article.bg-card,
+    section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
+    [data-volli-surface],
+    [role="log"].bg-background,
+    [data-diff-fit],
+    .prompt-surface textarea,
+    [data-terminal-renderer],
+    [data-monaco-status],
+    [data-monaco-fallback],
+    [data-testid="markdown-preview"],
+    table
+  ) {
+    background: var(--material-solid-fill);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 /* SEAM GEOMETRY — how the sidebar, the canvas and the card meet.

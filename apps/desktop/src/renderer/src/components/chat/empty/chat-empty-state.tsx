@@ -33,6 +33,7 @@ import { StreakVisual } from "@renderer/components/chat/empty/streak-visual";
 import { WorkingCopyChips } from "@renderer/components/chat/empty/working-copy-chips";
 import { WorkingCopyVisual } from "@renderer/components/chat/empty/working-copy-visual";
 import { Segmented } from "@renderer/components/ui/segmented";
+import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
 import { useUiStore } from "@renderer/stores/ui";
 import {
   useWorkingCopyStore,
@@ -82,6 +83,7 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
       {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
       {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
       <WorkingCopyCaption workingCopy={workingCopy} />
+      <NextActionIllustration kind="chat" />
       {offered.length > 1 ? (
         <Segmented
           ariaLabel="Empty chat visual"

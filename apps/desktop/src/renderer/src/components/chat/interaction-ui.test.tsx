@@ -923,15 +923,15 @@ describe("the footer at a pane's narrowest", () => {
     }
   });
 
-  it("breaks between actions and never inside one", () => {
-    // Locally, not by weakening the global rule: `ui/button.tsx`'s
-    // `whitespace-nowrap` is what keeps `Send`/`Skip` whole for every unrelated
-    // screen, and this footer wraps by letting its own rows break instead.
+  it("lets long action labels wrap within their bounded target", () => {
+    // Buttons grow for long copy instead of clipping. The action cluster
+    // still wraps between controls, independently of each button's line box.
     const html = renderToStaticMarkup(
       <InteractionCard interaction={walk()} onResolve={() => undefined} />,
     );
     const previous = html.split("<button").find((fragment) => fragment.includes(">Previous"));
-    expect(previous).toContain("whitespace-nowrap");
+    expect(previous).toContain("whitespace-normal");
+    expect(previous).toContain("max-w-full");
   });
 
   it("keeps every action in the footer, in the order the keyboard walks them", () => {

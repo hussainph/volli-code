@@ -10,10 +10,44 @@ describe("control contrast recipe", () => {
     const recipe = classes("default");
     expect(recipe.has("bg-primary")).toBe(true);
     expect(recipe.has("text-primary-foreground")).toBe(true);
-    expect(recipe.has("hover:shadow-raised")).toBe(true);
+    expect(recipe.has("hover:shadow-control-hover")).toBe(true);
     expect([...recipe].some((value) => /(?:hover:)?bg-primary\//.test(value))).toBe(false);
     expect(renderToStaticMarkup(<Button>New ticket</Button>)).toContain("text-primary-foreground");
   });
+
+  it.each(["ghost", "link"] as const)("keeps %s flat at rest, hover and press", (variant) => {
+    expect([...classes(variant)].filter((value) => /^(?:[\w-]+:)*shadow-/.test(value))).toEqual([]);
+    expect(classes(variant).has("control-material")).toBe(false);
+  });
+
+  it.each(["default", "outline", "secondary", "destructive"] as const)(
+    "shares the same material and press feedback for %s",
+    (variant) => {
+      const recipe = classes(variant);
+      expect(recipe.has("control-material")).toBe(true);
+      expect(recipe.has("shadow-control")).toBe(true);
+      expect(recipe.has("hover:shadow-control-hover")).toBe(true);
+      expect(recipe.has("active:shadow-control-pressed")).toBe(true);
+    },
+  );
+
+  it("uses the deep destructive action pair, not pale destructive reading ink", () => {
+    const recipe = classes("destructive");
+    expect(recipe.has("bg-control-destructive")).toBe(true);
+    expect(recipe.has("text-control-destructive-foreground")).toBe(true);
+    expect(recipe.has("bg-destructive")).toBe(false);
+  });
+
+  it.each(["xs", "sm", "default", "lg"] as const)(
+    "lets %s labels wrap and grow within their available measure",
+    (size) => {
+      const recipe = new Set(buttonVariants({ size }).split(/\s+/));
+      expect(recipe.has("whitespace-normal")).toBe(true);
+      expect(recipe.has("max-w-full")).toBe(true);
+      expect(recipe.has("h-auto")).toBe(true);
+      expect(recipe.has(`min-h-control-${size}`)).toBe(true);
+    },
+  );
 
   it.each(["default", "destructive", "outline", "secondary", "ghost", "link"] as const)(
     "uses an opaque separated focus indicator for %s",

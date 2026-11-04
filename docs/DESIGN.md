@@ -60,7 +60,7 @@ do not re-collapse them without looking at the surface:
 
 | Site | Value | Why |
 |---|---|---|
-| `ui/button.tsx` size variants | `px-2.5` · `px-3` · `px-3.5` | A control's inset is a function of its own height, and this is a four-rung height ladder (20/24/28/32) with only two rungs in range |
+| Shared control geometry | horizontal inset 8/8/10/12px | A control's inset tracks its 22/24/28/32px height; all actions and fields read the same tokens |
 | `rail-panel-parts.tsx` `RAIL_PANEL_INSET` | `px-3` at narrow | The narrow step must be *smaller* than 16 and still an inset; 8 halves the edge. Collapsed, the variant became a silent no-op |
 | `sidebar/session-band-row.tsx` | `mt-1.5` · `gap-0.5` · `gap-1.5` · `pt-0.5` | The first pair keeps the dot on the title cap height and binds the real title to its meta line. VC-383's shorter 14px/12px skeleton bars need the 2px top nudge and 6px join to occupy that measured two-line row before labels replace them |
 | `board/ticket-card.tsx` | `px-3` | A dense card trades air for content: at `px-4` real titles truncate a word earlier |
@@ -111,7 +111,7 @@ with Status, Priority and Labels below. Working-copy setup and Create more live
 in **Options**, not beside every commit. Checkout and batch-entry selections
 remain visible on the closed Options trigger.
 
-The footer has **two commit buttons and a chooser**, welded into one pill.
+The footer has **two commit buttons and a chooser**, welded into one rounded control.
 **Create** is its own press — filing a ticket without starting work is the other
 ordinary answer, not an advanced variant, and it is never hidden behind a caret.
 Beside it the **primary** starts something: Create & start by default, or
@@ -154,8 +154,8 @@ thumbnails never touch the tray they sit on.
 
 ### Prompt chrome — writing sheet and control tray (VC-335)
 
-Prompt writing is a distinct object: an opaque writing sheet, a tinted lower tray, and a fine
-accent edge that catches at opposing corners. `PROMPT_SURFACE` in `chat/composer-chrome.ts`
+Prompt writing is a distinct object: a thick writing sheet, a regular-material frame and a
+tinted lower tray. `PROMPT_SURFACE` in `chat/composer-chrome.ts`
 owns the shell; `globals.css` owns its material. Every color comes from generated theme tokens.
 There is no backdrop blur, animated glow, or focus-triggered shell change.
 
@@ -165,9 +165,9 @@ treatment.
 
 | Piece | Rung | Says |
 |---|---|---|
-| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
+| Settings (model, effort) | `sm` — 24px, edged `bg-card` controls, muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
 | Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
-| Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with a fine bevel | the primary key |
+| Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with quiet lift | the primary key |
 | Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
 | Text box at rest | `min-h-20`, `py-4`, content-grown | room for a short paragraph |
 | Footer tray | `px-2 py-2`, tinted `--muted`, hairline top edge | separates writing from configuration |
@@ -180,8 +180,8 @@ whose only control is the `+` — Automation instructions, the command-prompt bo
 full-width tint holding one 24px button reads as a container someone forgot to
 fill.
 
-The send key is a deliberate exception to the action-pill silhouette: it shares the 12px control
-radius, while settings remain pills. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
+The send key shares the 8px control
+radius; ordinary settings controls follow the same rounded-rectangle silhouette. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
 The chrome stays at one ink, so a resting composer never masquerades as disabled.
 
 **`+` is the one door.** A menu, not a paperclip: Attach files… · Commands & skills `/` ·
@@ -214,6 +214,37 @@ are frozen, so that disabled combined control leaves the narrow tray entirely; t
 action keeps its icon and accessible name but drops its printed word. Add stays outside the omitted
 group, and the context / Stop / Queue cluster never moves.
 
+## Materials: Glass, tuned
+
+Choose a material by role. Colours come from semantic tokens and `--canvas`;
+opacity never applies to text or its children. Keep the current radius tokens.
+
+| Material | Tint | Use |
+| --- | --- | --- |
+| `material-clear` | 50% | Rail, title bar and tab chrome over the static canvas |
+| `material-regular` | 76% | Sidebar, cards, composer frame and Settings groups |
+| `material-thick` | 94% | Terminal frame, diff body, transcript, editor and tables |
+| `material-solid` | 100% | Opaque fallback |
+
+Static materials paint the complete `--canvas` gradient and grain with fixed
+attachment under their tint. Reuse that variable verbatim; do not copy the stops
+or blur the canvas. Reading surfaces target 7:1 text contrast; regular surfaces
+must clear 4.5:1. Use opaque semantic ink, never a low-alpha grey on clear glass.
+
+`material-floating` gives menus, popovers, dialogs, palettes, toasts and tooltips
+a 90% popover tint, a top catch, `shadow-overlay` and one 20px backdrop blur with
+`saturate(1.5)`. Floats sit over arbitrary content, so they keep more tint than
+the static ladder: where the blur is not composited, what shows through must stay
+a ghost, never legible text. A command list inside a floating surface shares that surface.
+Never nest backdrop filters, exceed 24px blur or leave glass over live terminals
+or Browser Tab webviews. Contain panel paint; keep tooltip arrows and chrome
+focus rings unclipped, and portal submenus out of their parent float, which
+would otherwise clip them (they keep the nested solid fill). Animate only transform or opacity on blurred floats.
+
+Reduce transparency and Increase contrast replace every material with its
+opaque semantic fill. Browsers without backdrop-filter get opaque materials.
+These overrides apply to body portals too.
+
 ## Elevation — three tiers
 
 One shadow per role, generated from the canvas so the halo is tinted to the window rather than
@@ -222,7 +253,7 @@ neutral black. Stock `shadow-xs`…`shadow-2xl` are banned by
 
 | Utility | Role |
 | --- | --- |
-| `shadow-raised` | On a surface: controls, fields, chips, the active tab in a strip, a board card in its column |
+| `shadow-raised` | On a surface (base of `shadow-control`): chips, the active tab in a strip, a board card in its column |
 | `shadow-card` | A pane or a sheet of paper: the floating/inset sidebar, a tile dragged off the board |
 | `shadow-overlay` | Portals to the body and floats over the whole window: menus, select, popover, hover card, dialogs, sheet, tooltip, the ⌘K palette |
 
@@ -240,8 +271,8 @@ not a decision anyone can defend or repeat.
 | `/70` | strongly present but still transparent — secondary hovers, muted ink |
 | `/90` | the one rung above: a fill declaring itself *slightly* translucent (`hover:bg-primary/90`). Not a wash, and not on the wash ladder |
 
-Three things are deliberately not on this ladder. The focus ring is `ring-ring/45` — one recipe,
-spelled in `ui/button.tsx` and recorded in `ui/field-classes.ts`. The overlay wash is
+Three things are deliberately not on this ladder. The focus ring is opaque `ring-ring` with a 2px offset — one recipe,
+spelled in `ui/button.tsx`; text fields retain their caret-only focus contract. The overlay wash is
 **`--scrim`**, a generated token rather than a modifier: it is the shadow tiers' own ink (the
 canvas's hue at the mode's shadow lightness) at 30% in light and 50% in dark, so a dialog dims the
 window in the window's own color instead of the `bg-black/N` that turned a warm gradient to dirt.
@@ -259,22 +290,36 @@ than duplicating it under a second name:
 
 | Step | Utility | Size / leading | Tracking | Use |
 |---|---|---|---|---|
-| label | `text-label` | 11px / 16px | +0.05em | UPPERCASE section labels, badges, field labels, monogram chips |
+| label | `text-label` | 11px / 16px | +0.05em | compact metadata, badges and monogram chips; never section headers |
 | ui | `text-ui` | 13px / 20px | 0 | **the single UI size**: board cards/columns, list rows, timestamps, counts, event lines, hints, buttons, menus |
 | body | `text-sm` | 14px / 20px | 0 | prose, inputs, comments |
 | heading | `text-heading` | 18px / 26px | −0.01em | dialog titles, reading-page mastheads, section headers |
 | title | `text-title` | 24px / 30px | −0.02em | the ticket title; the largest text in the app |
+
+**The document default is `text-ui`.** Body declares the UI rung so unsized UI never
+falls back to browser-default 16px. Dialog, AlertDialog, Popover, Command and shared menu
+content also declare it at their boundary, including body portals. Reading content takes
+`text-sm` / `leading-prose`; titles and headings take their explicit rung. Caller overrides
+remain supported—do not add `text-ui` at every consumer to compensate for a missing default.
+`ui/overlay-typography.test.tsx` guards the body declaration, actual portal contracts and
+explicit reading/heading overrides. `text-ui-sm` is not a registered utility. The token gate
+rejects numeric px/rem font-size literals (relative markdown em sizing remains separately
+inventoried, not silently converted).
 
 Rules:
 - **No arbitrary sizes.** `text-[13px]`-style literals are banned; if a real need falls between
   steps, the scale changes here first.
 - **No `text-xs` and no `text-base`.** Both are stock Tailwind sizes off this scale, and both are
   banned by `apps/desktop/scripts/check-design-tokens.mjs`. 12px was a rung between `text-label`
-  and `text-ui` that carried timestamps and counts; it is folded into `text-ui`. If something must
-  read smaller than 13px, `text-label` is the only rung below — and it is a *treatment* (caps,
-  wide tracking), so a site that needs neither is a scale change argued here, not a new value.
-- `text-label` bakes in its wide tracking — don't stack `tracking-wide` on it. Uppercase is still
-  applied per-use (`uppercase`), since label-size text isn't always caps.
+  and `text-ui` that carried timestamps and counts; it is folded into `text-ui`. Compact metadata
+  may use `text-label`; section headers never do.
+- **No eyebrows.** Delete kickers that repeat what follows. Keep names for sections you navigate
+  or fold as sentence-case headings, without uppercase, extra tracking or decorative mono.
+  Page and pane titles use `text-heading`. Group headers (rail sections, menu and palette groups)
+  and compact subheads use `text-ui` semibold.
+  Field labels stay sentence case at the UI rung.
+- `text-label` has tracking built in; don't add tracking to it. It is for compact metadata,
+  not section names.
 - Markdown prose (ticket bodies, comments) is typeset by `typeset.css`, whose sizes are **derived
   from this table** rather than from `em` multiples — a rendered `<h2>` in a ticket is
   `--text-heading` exactly, because a dialog title beside it is. Same for Document Mode
@@ -285,37 +330,118 @@ Rules:
   `leading-prose` utility (on `MessageContent`), `typeset.css` reads `var(--leading-prose)`. A new
   prose surface takes this token; it does not pick its own ratio.
 
-## Controls — the pill scale
+## System rules
 
-Buttons and control chips are pills (`rounded-full`, baked into `ui/button.tsx`); the filter/metadata
-chip (`h-7` pill, `text-ui`, `border-border`) set the idiom and the button primitive follows it.
-Heights come from the primitive's size variants — don't restate them per-use:
+1. **Radius:** calm rounded rectangles, a softer shadcn-style scale. Compose
+   by role; inner corners subtract their inset from the outer radius. `--radius`
+   remains the 8px compatibility base; sm/md/lg/xl resolve to 4/6/6/10px.
 
-| Size | Height | Text | Use |
-|---|---|---|---|
-| `xs` / `icon-xs` | 20px | `text-ui` | inline row actions, hover affordances |
-| `sm` / `icon-sm` | 24px | `text-ui` | dialog/footer actions (Create, Comment), toolbar buttons |
-| `default` / `icon` | 28px | `text-ui` | standalone actions, chrome-band icons; matches the chip height |
-| `lg` / `icon-lg` | 32px | `text-sm` | rare hero actions (empty states) |
+   | Utility | Radius | Role |
+   |---|---|---|
+   | `rounded-control` | 6px | Controls, fields and tooltip labels |
+   | `rounded-container` | 10px | Cards, popovers and dialogs |
+   | `rounded-row` | 6px | Container rows at a 4px inset |
+   | `rounded-menu` | 8px | Dense menu and picker frames |
+   | `rounded-menu-item` | 4px | Menu highlights at a 4px inset |
+   | `rounded-keycap` | 2px | Keyboard hint chips, not controls |
 
-`default` is the chip height on purpose: a default Button next to a filter chip reads as one family.
-Nothing in the app should render a taller standalone control than `lg`.
+   Pills are reserved for badges, switches, status chips and avatars. Checkboxes
+   use half the control radius, so they remain boxes rather than radios.
+2. **Depth:** Glass, tuned uses quiet lift on controls: a hairline, one 1px
+   inner top highlight and a 0/1px/2px soft drop. Hover strengthens the same
+   highlight; a press uses a small inset shadow. No gradient, sheen or lower
+   bevel. `shadow-control`, `shadow-control-hover` and `shadow-control-pressed`
+   share this recipe in light and dark. Filled actions keep their solved ink
+   pairs; ghost/link actions stay flat at rest. Disabled retains its material
+   at reduced opacity. This supersedes the separate dark-bevel experiment.
+3. **Geometry:** buttons, input, select trigger, segments and input-group share
+   height and horizontal-inset tokens. Short labels fit the scale; long action
+   labels wrap inside their measure and grow the target, never clip.
+
+   | Size | Height | Horizontal inset | Text |
+   |---|---|---|---|
+   | xs / icon-xs | 22px | 8px | `text-ui` |
+   | sm / icon-sm | 24px | 8px | `text-ui` |
+   | default / icon | 28px | 10px | `text-ui` |
+   | lg / icon-lg | 32px | 12px | `text-sm` |
+
+   The xs floor includes a 20px UI line box and its two border edges;
+   no primitive silently grows the smallest outline control to a different rung.
+   Icon-only targets are square. Text fields and groups accept `controlSize`;
+   select triggers use `size`. Joined controls choose the same rung. Textareas
+   keep a 32px floor and grow with their contents.
+4. **Contrast:** keep solved primary/destructive fill–ink pairs opaque. Secondary
+   fill mixes muted with foreground (80:20), with a strong border; selected
+   segments use the primary pair, unselected segments the outline treatment.
+   Validate secondary, selected, lift and tab states in light and dark.
+5. **Weight:** regular (400) for body/value, medium (500) for control/field/menu
+   labels, semibold (600) for titles and important feedback. Retain the five
+   size rungs: label 11, ui 13, sm 14, heading 18, title 24px.
+6. **Mono:** values only (paths, branches, ids, hashes, counts), never decorative
+   variants. Badge and InlineRename have no mono axis; callers may style real
+   machine values. ValueReveal inherits its trigger's host typography; its
+   descriptor is sans, the revealed machine value mono, authored reveal copy sans.
+7. **Loading:** no ellipsis-as-loading (including “Loading…” / “Saving…”).
+   Use Spinner, replacing a leading icon where available. Dialog-opening menu
+   verbs such as “Rename…” may retain ellipses.
+8. **Overlays:** concentric corners; centered inset dividers (~80%); Command
+   search is a separate field without a divider beneath it. Popover headings
+   use SectionHeading and shared spacing. Cap scroll height, keep the scrollbar
+   at the surface edge, give tooltips an arrow, reserve space for dialog close,
+   and ensure narrow widths never clip content.
+9. **Long content:** wrap, or truncate with an accessible way to see the whole.
+   Accordion content stays inside its item; long Notice errors are expandable.
+10. **Motion:** quick height/opacity disclosure transitions with reduced-motion
+    gates; no gratuitous click animation.
+
+## Controls — one scale
+
+Ordinary controls use the rounded-rectangle ladder above, not pills. Size
+variants own geometry; do not restate it per-use. `default` matches the 28px
+metadata-chip height; `lg` is the short-label ceiling. The caret is the text
+field's focus indicator; controls without a caret retain the opaque keyboard ring.
+
 The tab strip's **Earlier/Later tabs** travel targets are the one chrome-bound
-exception: rectangular edges spanning the complete folder band, including its
-8px top inset. They close the scroller's boundary rather than float as pills;
-matching that band avoids a dead strip above the overflow arrow.
-
-**A checkbox is the one control that is not a pill, and not a rung.** `ui/checkbox.tsx` is a
-16px box whose corner is half the smallest rung (`calc(var(--radius-sm) / 2)`, 4px). Every rung
-of the radius ladder is 8px or more, and at 16px that draws a circle — a radio button, which says
-"one of these" about a control that means "any of these". The value is derived from the ladder
-rather than written beside it, and it is recorded here because the token check cannot see an
-inline style.
+exception to the standalone-control ceiling: rectangular edges spanning the
+complete folder band, including its 8px top inset. They close the scroller's
+boundary rather than float as controls; matching that band avoids a dead strip
+above the overflow arrow.
 
 **Tabs ride the same rung.** `ui/tab-strip.tsx` is the one tab, at 28px / `text-ui` in both its
 drawings — `variant="folder"` (rounded top corners, active tab bleeding `-mb-px` over the strip's
 bottom border) and `variant="pill"` (rounded rectangle in a centred band). A tab is a place, not a
 hero action; the two strips that sat at `h-8 text-sm` were reading at `lg`.
+
+## Shared UI primitives — composition registry
+
+Start here rather than copying the drawing from a neighboring page. All colors remain
+semantic generated tokens; product state and mutations belong to the consumer.
+
+| Object | Primitive / contract | When to use it |
+|---|---|---|
+| Reading/workbench page | `ContentColumn` / `WorkbenchColumn`, `PageHeader` | Choose the surface tier and one gutter/header owner; do not restate measures. |
+| Action | `Button`, size/variant axes | Every ordinary action; retain icons, accessible names and keyboard focus. |
+| Fused actions | `ButtonGroup` | Adjacent controls that form one compound action, not an arbitrary toolbar container. |
+| Closed-set value | `Segmented` | A small, visible choice set. Navigation destinations are not preference segments. |
+| Field | `Input`, `Textarea`, `InputGroup` | Writing fields and attached adornments; the shared field-state contract is authoritative. |
+| Rename-in-place | `InlineRename` | Use row/field/title variants; consumers own entry and persistence, the primitive owns one-shot commit/cancel. |
+| List entry | `ListRow`, `ListRowSkeleton` | Shared row geometry, active/inert branch, optional metadata and sibling actions. Preserve list-specific semantics. |
+| Section header | `SectionHeading` | Sentence-case section titles (`h2`), compact subheads (`h3`), or inline field labels (`span`). Legacy `as="p"` renders a heading, never an eyebrow. Cut labels that repeat the content below. |
+| Mark/count | `Badge` variants | Status/metadata chips or counts; choose the role rather than reauthoring a span's shell. |
+| Empty list/page | `EMPTY_INLINE` / `EMPTY_PAGE` | Choose whether one list or the whole surface is empty. Container geometry and page child hierarchy remain caller-owned. |
+| Feedback | `Notice` | Error/warning/neutral/success reports with optional recovery actions. Preserve trust/announcement semantics. |
+| State/loading | `StatusDot`, `Spinner`, `Skeleton`, `loading-region` | Shared material and accessible state. Placeholder geometry belongs to the content it replaces. |
+| Menu/picker | DropdownMenu / ContextMenu / Select / Command | Shared menu rows, labels, states and surface defaults via `menu-classes.ts`; retain widget-specific roles/positioning. |
+| Destination search result | `COMMAND_RESULT_ROW` in `menu-classes.ts` | ⌘K/⌘P share row mechanics and UI type with menus; consumers keep stacked/single-line density and authored glyph ink. |
+| Floating panel | `PopoverContent` | Anchored interactive panels; preserve portal, ref and wheel behavior. |
+| Dialog/confirmation | `DialogContent` / `AlertDialogContent` | Bounded interaction / explicit confirmation, not a handrolled overlay. Content defaults to UI size. |
+| Hover label/reveal | Tooltip / ValueReveal | Brief labels and clipped values, not explanatory onboarding paragraphs. |
+| Disclosure | Accordion / Collapsible | Structured sections / unstyled behavioral composition, not an extra card language. |
+| Workspace places | Tab / TabStrip, split primitives | Navigation/reorder/split behavior; never move terminal/native Browser Tab lifetime into a new wrapper. |
+| Preferences | `settings/kit` sections/rows/async/table contracts | Settings and Configure have a shared vocabulary already; do not flatten control-bearing rows into ordinary lists. |
+
+Specialized board, editor, terminal, Browser Tab, drag-target and identity drawings are
+not automatically generic primitive candidates.
 
 ## Cursors — native, and one rule
 
@@ -407,7 +533,7 @@ Subagent Session and the island lists no sibling chat; the two surfaces split on
 scope rather than overlapping on it. A block that would only be true of the front chat is a block
 in the wrong place.
 
-**Four pages in one pill, and the pill is the only navigation the rail has.** Now, Diffs, Files,
+**Four pages in one segmented control, the rail's only navigation.** Now, Diffs, Files,
 Search (`TICKET_RAIL_MODES`), in that order, because it is a keyboard order as much as a visual one
 and a page inserted in the middle moves every page after it under a reader's fingers. `Now` is the
 hub; the other three are working surfaces over the worktree. Switching page never opens, closes or
@@ -437,7 +563,7 @@ The usage and worktree facts remain pinned rather than competing in the scroller
 | # | Block | What it is | Object kind |
 |---|---|---|---|
 | 1 | Properties | status and priority as the app's own dropdowns, labels as an additive pill run | section |
-| 2 | Sessions | the working set, one row per live Session, `+ Chat ▾` in the eyebrow; the record folded under the eyebrow's own label | section (folds) |
+| 2 | Sessions | the working set, one row per live Session, `+ Chat ▾` in the heading; the record folded under the heading's own label | section (folds) |
 | 3 | Automations | what this Ticket can be made to run, height-capped | section |
 | — | Usage | what it cost, at one row | pinned footer (folds) |
 | — | Worktree | the branch and one fact about it; the repository card folded above | pinned footer (folds), **under every page** |
@@ -458,14 +584,14 @@ halves — the roster earns a filter (`SESSION_ROSTER_FILTER_THRESHOLD`), and th
 record: while there is a query, a match behind the fold is a row on the page. All three rules are
 spelled once and read by both rails, so Home's roster and the Ticket's cannot drift.
 
-**One object kind carries the page**: every block on Now is a *section* — an eyebrow row
-(`RailSectionHeadingRow`: `text-label` caps at the left, at most one control at the right) over
+**One object kind carries the page**: every block on Now is a *section* — a heading row
+(`RailSectionHeadingRow`: a sentence-case compact header, `text-ui` semibold, at the left, at most one control at the right) over
 rows at the rows' own `px-2`. Properties was a run of pills, the one block that was neither a
 section nor a card — unmarked, bordered at rest where every row is borderless until hovered, two
 facts to a line — and it is three rows now, in the roster's grammar even where the value it carries
 is a control rather than a `ListRow`. *The card* (`RAIL_CARD_FRAME`, seamed rows inside one
 `rounded-xl` frame) is the Diffs page's costume; Now draws none. The page stacks with **one
-`gap-4`**, each block sets `gap-1` under its own eyebrow, and no block pays its own top padding —
+`gap-4`**, each block sets `gap-1` under its own heading, and no block pays its own top padding —
 the pill above already pays the page's top inset. An absent block then leaves no hole, and no block
 can drift from its neighbours by carrying a different inset. **Home's rail obeys the same seam**,
 the narrow step included: both rails read `RAIL_NARROW_MAX_WIDTH` (270px) against the one
@@ -478,7 +604,7 @@ An accordion crossing the overflow threshold must not shift every row inward. Th
 the rail, not a global change to editors, the sidebar or portalled menus.
 
 **The rail has one fold, and the trigger never moves.** Three things open and close in place —
-the roster's record under the Sessions eyebrow, the worktree body under its footer row, the cost
+the roster's record under the Sessions heading, the worktree body under its footer row, the cost
 breakdown under its — and they are one object (`RailFold` / `RailFoldBody` / `RailFoldCaret`, a
 measured `height` **transition**, 200ms on the strong `--ease-out`, the caret 150ms on the same
 curve). A transition rather than the `collapsible-down/up` keyframes the accordion runs on because
@@ -486,7 +612,7 @@ a fold is pressed twice in a second: keyframes restart from their own zero, so a
 jumped back to full height, while a transition retargets from the height the body is **at**. A
 keyboard press (`detail === 0`) and `prefers-reduced-motion`, read at the moment of the press, drop
 the movement entirely — body and caret both — and a closing body is `inert` for the length of the
-close, handing focus back to the trigger if it held any. A body that opens under an eyebrow grows
+close, handing focus back to the trigger if it held any. A body that opens under a heading grows
 down into the scroller; a body that opens under a pinned row grows **up** into the room the
 scroller gives back. Either way the thing the pointer is on stays under the pointer, and a second
 press lands where the first did. Putting a footer header above its body moves the target as it unfolds, so the
@@ -495,8 +621,8 @@ how a person reads the rail. Every fold rests closed. *This is not the retired d
 bleeds past the section's inset, the closed state still shows the rows that matter, and only the
 record folds.
 
-**An eyebrow that folds keeps its label as the trigger.** `SESSIONS ›` closed, `SESSIONS ⌄` open,
-the caret following the word so the eyebrow column stays one straight line down the page, and
+**A heading that folds keeps its label as the trigger.** `Sessions ›` closed, `Sessions ⌄` open,
+the caret following the word so the heading column stays one straight line down the page, and
 `+ Chat ▾` still the row's one control at the right. The count of what is folded is in the
 trigger's accessible name and nowhere on the face — the caret alone says there is more. A roster
 with no record offers no fold; a caret opening onto nothing is a lie about the block.
@@ -524,12 +650,12 @@ is not the popover's body**: a popover had no height budget, and the full breakd
 evicted Automations from the scroller. The body keeps what the row does not say: the bar, the
 basis sentence, the cached share, the top model, the per-Session ranking.
 
-**A block says what its read is doing in its own eyebrow, and never with a row.** A blank status
+**A block says what its read is doing in its own heading, and never with a row.** A blank status
 line is a hole in the page and a spinner over last-good rows is a lie about them, so read state is
 drawn where the block is already named (`rail-read-feedback.ts`, `RailHeadingReadStatus` /
 `RailReadFaultBody`): a first read in flight holds the rows' own box as skeletons, a landed read is
 the only thing that may claim the block is empty, a refresh over rows already on screen marks the
-eyebrow and leaves the rows, and a refresh that failed says so there while keeping the last
+heading and leaves the rows, and a refresh that failed says so there while keeping the last
 reading. Only a read that has nothing to show takes the body, and it carries the one action that
 changes it — a retry scoped to that block, never to the app.
 
@@ -544,6 +670,13 @@ The Ticket adds one **paperclip menu**, not a permanent Attachments heading or p
 menu lists attached files and carries attachment/removal actions where this host may mutate them;
 a host-supplied read-only list stays read-only. It remains reachable across directory/filter
 changes and without a worktree, including attachments that have no materialized file path.
+Composer attachment thumbnails keep their 64px object geometry; file labels take `text-label`
+with opaque semantic ink, an 8px inset and two clamped filename lines. Remove takes the shared
+`Button size="icon-xs"` contract, revealed on hover or keyboard focus; read-only transcript
+copies have no removal action. The queued thumbnail row remains a glyph-sized drawing with
+`text-label` overflow, not illegible type labels squeezed into 16px. The browser-only
+`attachment-tiles` audit fixture imports these production components without upload/host writes.
+
 Attachments belong to the Ticket, not the folder. Home has no paperclip because this scope has no
 Ticket attachments. Referenced rows (`@path` from the Body, plus path-backed attachments) still
 follow the listing on a Ticket and keep their folder beside the name. Search is the same page at
@@ -568,7 +701,7 @@ project with thirty Automations therefore costs the same vertical space as one w
 roster above it never moves. The alternative — one name on a button and the rest behind a caret —
 bounds the height too, by refusing to answer the block's own question. A **first** read holds the
 list's own height as skeleton rows; a re-read (the rail re-reads on arrival and on every planning
-change) keeps the rows already on screen and puts the caveat in the eyebrow, because rows that were
+change) keeps the rows already on screen and puts the caveat in the heading, because rows that were
 true a second ago are worth more than a skeleton over them. What an unconfirmed read costs is the
 *Run*, not the reading: the block never presses what it has not confirmed at the current planning
 version.
@@ -615,7 +748,7 @@ size; the trailing word reads as a qualifier at every size, and `unverified` is 
 ## Home's rail (VC-406)
 
 Home's rail is the ticket rail one scope up, at the same width (`railWidth`) and in the same
-language: one pill, one list row, one fold, footers pinned under the pages rather than stacked
+language: one segmented control, one list row, one fold, footers pinned under the pages rather than stacked
 inside them. **Three pages** (`HOME_RAIL_MODES`): Now, Files, Search — the Ticket's four minus
 Diffs, which is a worktree's change set and Home has no worktree of its own.
 

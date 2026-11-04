@@ -313,7 +313,7 @@ function InlineTextField({
   if (editing) {
     return (
       <InlineRename
-        mono
+        className="font-mono"
         size="field"
         value={value ?? ""}
         onCommit={(next) => {

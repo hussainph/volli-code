@@ -36,6 +36,7 @@ import { Command, CommandInput, CommandItem, CommandList } from "@renderer/compo
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 // Stable fallbacks: an inline `?? []` mints a fresh array identity per render,
@@ -100,7 +101,9 @@ export function LabelPickerContent({
       <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Search labels…" />
       <CommandList className="max-h-64">
         {options.length === 0 && creatable === null ? (
-          <div className={EMPTY_INLINE}>No labels</div>
+          // The list's 4px inset plus a row's 8px: the empty line starts where
+          // a label row's text would.
+          <div className={cn(EMPTY_INLINE, "px-3")}>No labels</div>
         ) : null}
         {options.map((option) => (
           <CommandItem

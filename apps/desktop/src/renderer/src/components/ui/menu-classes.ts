@@ -1,7 +1,7 @@
 /**
  * The one place menu geometry is spelled. A menu row is a control, and this
  * app's control is 28px tall at `text-ui` — `ui/button.tsx`'s `default` size and
- * docs/DESIGN.md's pill scale both say so. The menus were the only control
+ * the shared control scale both say so. The menus were the only control
  * family that never moved onto it, because each of the four primitives carried
  * its own copy of the row string. They compose these constants now, so the
  * family cannot split again; a raw menu size written anywhere else is a bug.
@@ -13,6 +13,7 @@
  * that depends on it stay with each surface.
  */
 
+import { cn } from "@renderer/lib/utils";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SECTION_HEADING, SECTION_HEADING_CMDK } from "@renderer/components/ui/section-heading";
 
@@ -22,7 +23,7 @@ import { SECTION_HEADING, SECTION_HEADING_CMDK } from "@renderer/components/ui/s
  * the menu that opened it.
  */
 export const MENU_SURFACE =
-  "z-50 min-w-[8rem] rounded-container border bg-popover text-foreground shadow-overlay";
+  "z-50 min-w-[8rem] max-w-[calc(100vw-2rem)] rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay";
 
 /**
  * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because the
@@ -70,14 +71,13 @@ export const MENU_SURFACE_MOTION = `${MENU_SURFACE_FADE} ${MENU_SURFACE_ANCHORED
  * own `text-*` — which is also the door a selection mark uses to opt back into
  * the row's ink, see {@link MENU_INDICATOR_MARK}.
  *
- * `rounded-row` is the container rung minus {@link MENU_SURFACE_PAD} — the row
- * and the surface around it are concentric, not two independent decisions. At
- * 28px tall the browser clamps that 16 to 14 and the row renders as a stadium,
- * which is the intended reading: a menu row is a control, and this app's
- * controls are pills.
+ * `rounded-menu-item` is the menu rung minus {@link MENU_SURFACE_PAD}: a
+ * concentric highlight, never a pill at the dense 28px row height.
  */
-export const MENU_ROW =
-  "relative flex cursor-default items-center gap-2 rounded-row px-2 py-1 text-ui outline-hidden select-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground";
+const MENU_ROW_LAYOUT =
+  "relative flex cursor-default items-center gap-2 min-w-0 rounded-menu-item px-2 py-1 text-ui font-medium wrap-anywhere outline-hidden select-none [&>span:not([data-slot])]:min-w-0";
+
+export const MENU_ROW = `${MENU_ROW_LAYOUT} [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground`;
 
 /** Radix row states: `focus` is the roving highlight, `data-disabled` a bare attribute. */
 export const MENU_ROW_STATE =
@@ -86,6 +86,19 @@ export const MENU_ROW_STATE =
 /** cmdk row states: a controlled `data-selected`, and `data-disabled="true"`. */
 export const MENU_ROW_STATE_CMDK =
   "data-[selected=true]:bg-accent data-[selected=true]:text-foreground data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50";
+
+/**
+ * Destination search rows (⌘K / ⌘P) share the concentric menu highlight.
+ * Consumers own density: the palette stacks context with py-2;
+ * Quick Open keeps a single 28px line. No copied cursor/selection/type recipe.
+ */
+// Result rows own their glyphs (including nested provenance marks): inheriting
+// MENU_ROW's descendant ink rule would mute a bolt colored by its parent span.
+export const COMMAND_RESULT_ROW = cn(
+  MENU_ROW_LAYOUT,
+  MENU_ROW_STATE_CMDK,
+  "outline-none data-[selected=true]:bg-control-secondary data-[selected=true]:ring-1 data-[selected=true]:ring-border-strong data-[selected=true]:ring-inset",
+);
 
 /** A sub-menu trigger stays lit for as long as the surface it opened is up. */
 export const MENU_ROW_OPEN = "data-[state=open]:bg-accent data-[state=open]:text-foreground";
@@ -118,20 +131,19 @@ export const MENU_INDICATOR =
 export const MENU_INDICATOR_MARK = "text-current";
 
 /**
- * Section label: 11px caps at 24px, a step below the rows it introduces.
- *
- * The ink is {@link SECTION_HEADING} — a menu's group label and a rail
- * section's eyebrow are the same object seen on two surfaces, and the menus
- * were the copy that never picked up the weight. All this adds is the box the
- * rows put around it.
+ * Sentence-case group header on the section-heading rung.
+ * The shared heading recipe owns type; menus add their row inset.
  */
-export const MENU_LABEL = `px-2 py-1 ${SECTION_HEADING}`;
+export const MENU_LABEL = cn("px-2 py-1", SECTION_HEADING, "font-semibold");
 
 /**
  * {@link MENU_LABEL} again, as the variant cmdk needs — it renders the group
  * heading itself, so the classes can only reach it through a selector.
  */
-export const MENU_LABEL_CMDK = `[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 ${SECTION_HEADING_CMDK}`;
+export const MENU_LABEL_CMDK = cn(
+  SECTION_HEADING_CMDK,
+  "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-semibold",
+);
 
 /**
  * The shortcut column. No `tracking-widest` (stock shadcn's): letter spacing is
@@ -141,10 +153,19 @@ export const MENU_LABEL_CMDK = `[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-hea
  * worse with rows of different width stacked. Latin chords absorb it; the ⌥⌘
  * glyph runs this app actually ships (⌘D, ⇧⌘D, ⌘T, ⌥⌘T) do not.
  */
-export const MENU_SHORTCUT = "ml-auto text-ui text-muted-foreground";
+export const MENU_SHORTCUT =
+  "ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-keycap border border-border bg-muted/50 px-1 text-ui font-normal font-sans whitespace-nowrap text-muted-foreground";
 
-/** Hairline, bled back out through the surface's 4px padding to both walls. */
-export const MENU_SEPARATOR = "-mx-1 my-1 h-px bg-border";
+/** Shared separated search field and hint strip for cmdk and its two dialogs. */
+export const COMMAND_SEARCH_FIELD =
+  "m-2 flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-control border border-border bg-background px-2 shadow-raised";
+export const COMMAND_OVERLAY_FRAME =
+  "fixed top-[18%] left-1/2 z-50 flex max-h-[calc(82svh-2rem)] w-[min(640px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay outline-none";
+export const COMMAND_FOOTER =
+  "flex min-h-9 shrink-0 flex-wrap items-center justify-end gap-4 bg-muted/30 px-2 py-2 relative before:absolute before:top-0 before:left-1/2 before:h-px before:w-4/5 before:-translate-x-1/2 before:bg-border text-ui font-normal text-muted-foreground";
+
+/** Centered inset hairline, leaving the frame edges uninterrupted. */
+export const MENU_SEPARATOR = "mx-auto my-1 h-px w-4/5 bg-border";
 
 /**
  * No-results copy: one row's worth of air above and below, at the row's size.

@@ -238,10 +238,9 @@ function FileRow({
       primary={
         renaming ? (
           <InlineRename
-            mono
             value={filename}
             ariaLabel={`Rename ${filename}`}
-            className="min-w-0 flex-1"
+            className="min-w-0 flex-1 font-mono"
             onCommit={(next) => controls.commitRename(relPath, next)}
             onCancel={controls.cancelEdit}
           />
@@ -328,10 +327,9 @@ function DraftRow({
       leading={<Icon className="size-4 shrink-0 text-muted-foreground" />}
       primary={
         <InlineRename
-          mono
           value=""
           ariaLabel={entry === "directory" ? "New folder name" : "New file name"}
-          className="min-w-0 flex-1"
+          className="min-w-0 flex-1 font-mono"
           onCommit={controls.commitDraft}
           onCancel={controls.cancelEdit}
         />

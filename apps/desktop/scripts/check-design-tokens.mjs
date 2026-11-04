@@ -85,6 +85,21 @@ const RULES = [
     match: (base) => base === "rounded" || base === "-rounded",
   },
   {
+    id: "type-literal-size",
+    // Fixed font-size literals bypass the named scale even when they restate
+    // a rung. Relative em sizing in markdown is separately inventoried, not
+    // silently swept by this rule; arbitrary text colors are not font sizes.
+    summary: "literal font size — use a named type rung",
+    match: (base) => /^text-\[(?:\d*\.)?\d+(?:px|rem)\]$/.test(base),
+  },
+  {
+    id: "type-unknown-ui-sm",
+    // No such utility is registered: this typo silently inherits its host
+    // instead of declaring the intended rung. The actual UI rung is text-ui.
+    summary: "text-ui-sm does not exist — use text-ui",
+    match: (base) => base === "text-ui-sm",
+  },
+  {
     id: "type-text-base",
     // 16px, and the five-step scale has no such rung. It survived only behind a
     // `md:` fallback that a 940px minimum window can never reach.
@@ -414,6 +429,14 @@ function selfTest() {
     ['"rounded"', ["radius-bare"]],
     ['"hover:rounded bg-card"', ["radius-bare"]],
     ['"text-base md:text-sm"', ["type-text-base"]],
+    ['"truncate text-ui-sm text-muted-foreground"', ["type-unknown-ui-sm"]],
+    ['"hover:text-ui-sm"', ["type-unknown-ui-sm"]],
+    ['"text-[10px] font-medium"', ["type-literal-size"]],
+    ['"md:text-[13px]"', ["type-literal-size"]],
+    ['"text-[0.875rem]"', ["type-literal-size"]],
+    ['"text-[.875rem]"', ["type-literal-size"]],
+    ['"text-[#ff7b72]"', []],
+    ['"text-[0.8em]"', []],
     ['"gap-1 text-xs"', ["type-text-xs"]],
     ['"group-hover:text-xs"', ["type-text-xs"]],
     // An arbitrary value may contain an apostrophe, and one used to hide every

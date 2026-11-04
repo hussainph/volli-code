@@ -4,6 +4,7 @@ import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGl
 
 import { cn } from "@renderer/lib/utils";
 import {
+  COMMAND_SEARCH_FIELD,
   MENU_EMPTY,
   MENU_LABEL_CMDK,
   MENU_ROW,
@@ -18,7 +19,7 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
     <CommandPrimitive
       data-slot="command"
       className={cn(
-        "flex h-full w-full flex-col overflow-hidden rounded-container bg-popover text-foreground",
+        "material-regular flex h-full min-w-0 w-full flex-col overflow-hidden rounded-menu bg-popover text-ui text-foreground",
         className,
       )}
       {...props}
@@ -34,12 +35,12 @@ function CommandInput({
     // One height for the row and the field inside it. Stock shipped a 40px
     // input inside a 36px wrapper — the field was taller than the box clipping
     // it, so its own padding decided where the text sat.
-    <div data-slot="command-input-wrapper" className="flex h-8 items-center gap-2 border-b px-4">
+    <div data-slot="command-input-wrapper" className={COMMAND_SEARCH_FIELD}>
       <MagnifyingGlassIcon className="size-3.5 shrink-0 opacity-50" />
       <CommandPrimitive.Input
         data-slot="command-input"
         className={cn(
-          "flex h-8 w-full bg-transparent text-ui outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-full min-w-0 flex-1 bg-transparent text-ui outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
         {...props}
@@ -52,7 +53,10 @@ function CommandList({ className, ...props }: React.ComponentProps<typeof Comman
   return (
     <CommandPrimitive.List
       data-slot="command-list"
-      className={cn("max-h-[300px] scroll-py-1 overflow-x-hidden overflow-y-auto", className)}
+      className={cn(
+        "min-h-0 max-h-[min(300px,60svh)] scroll-py-1 overflow-x-hidden overflow-y-auto overscroll-contain",
+        className,
+      )}
       {...props}
     />
   );
@@ -106,7 +110,7 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
   return (
     <CommandPrimitive.Item
       data-slot="command-item"
-      className={cn(MENU_ROW, MENU_ROW_STATE_CMDK, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE_CMDK, "[&>span:not([data-slot])]:flex-1", className)}
       {...props}
     />
   );

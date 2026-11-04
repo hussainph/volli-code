@@ -1,3 +1,5 @@
+import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 
 import {
@@ -19,13 +21,9 @@ import { useUiStore } from "@renderer/stores/ui";
  * one button, and they were the whole of what a new board said (VC-42 audit,
  * finding F6).
  *
- * ONE LINE, AND IT NAMES THE KICKOFF. The thing a first-timer cannot discover
- * is not that a board takes tickets — it is that the second button in the
- * composer turns one into a running agent in the same gesture. So the line
- * carries that clause and nothing else; the button carries the way in, and the
- * chord it announces is the same `c` that works from anywhere in the app
- * (`hooks/use-new-ticket-shortcut.ts`). Everything past those two sentences
- * belongs in the composer, where the controls are.
+ * The heading names the state; the button owns the first move. Kickoff is a
+ * choice inside the composer, not a tutorial on the empty board. The chord
+ * is the same `c` that works from anywhere in the app.
  *
  * ── EXCEPT WHEN THE APP CANNOT KEEP THAT PROMISE (VC-54 scope 6) ──────────
  * "Create & start puts an agent on it" is a lie on a profile with no default
@@ -58,15 +56,16 @@ export function BoardEmpty({ projectId, className }: { projectId: string; classN
 
   return (
     <div className={cn(EMPTY_PAGE, "gap-4", className)}>
-      {modelReady === false ? (
+      {modelReady === null ? (
+        <LoadingLabel>Loading model access</LoadingLabel>
+      ) : modelReady === false ? (
         <ModelAccessFirstRun />
       ) : (
         <>
-          <p className="text-sm text-muted-foreground">
-            Write the first ticket — Create &amp; start puts an agent on it.
-          </p>
+          <NextActionIllustration kind="board" />
+          <h2 className="text-heading font-semibold text-foreground">No tickets yet</h2>
           <Button
-            className="gap-1 px-2 text-ui"
+            size="lg"
             {...readOnlyControl(canWrite)}
             onClick={() => useUiStore.getState().setNewTicketOpen(true)}
           >

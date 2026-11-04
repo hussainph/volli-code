@@ -57,7 +57,7 @@ export function SessionPeekDialog({
       <DialogContent
         data-session-peek-dialog=""
         aria-describedby={description === undefined ? undefined : descriptionId}
-        className="flex h-[70svh] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 transition-none"
+        className="flex h-[70svh] max-h-none w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 transition-none"
         style={{ maxWidth: "var(--container-content)", ...style }}
         // A modal's Escape must not also dismiss the peek/parent behind it.
         onEscapeKeyDown={(event) => event.stopPropagation()}

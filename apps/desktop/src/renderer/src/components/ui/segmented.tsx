@@ -23,7 +23,7 @@
  * place you go, not a value you set, and rotating this control would have made
  * it lie about what it does. `shape` was proposed for the two toggles that draw
  * rounded rectangles inside a bordered track; `docs/DESIGN.md` says a control
- * that acts is a pill and bakes that into the button primitive, so a rectangle
+ * takes the shared 8px radius and bakes that into the button primitive, so a rectangle
  * axis here would be a second control language, not a variant of this one.
  * `stopPropagation` was proposed for the composer's effort segment, which no
  * longer exists — effort is a slider in a popover now (`chat/composer-effort-ui.tsx`),
@@ -57,7 +57,7 @@ export function Segmented<Key extends string>({
    */
   options: readonly { key: Key; label: string; icon?: PhosphorIcon; disabled?: boolean }[];
   /**
-   * The pill scale's two settings rungs (`docs/DESIGN.md`): `sm` where the
+   * The control scale's two settings rungs (`docs/DESIGN.md`): `sm` where the
    * control trails a section header, `default` where it is the surface's own
    * primary choice and sits at chip height.
    */
@@ -87,16 +87,17 @@ export function Segmented<Key extends string>({
         return (
           <Button
             key={option.key}
-            size={iconOnly ? (size === "sm" ? "icon-sm" : "icon") : size}
-            variant={active ? "secondary" : "ghost"}
+            size={iconOnly ? (size === "sm" ? "icon" : "icon-lg") : size}
+            variant={active ? "default" : "outline"}
             aria-pressed={active}
+            title={iconOnly ? option.label : undefined}
             data-choice={option.key}
             disabled={disabled === true || option.disabled === true}
             onClick={() => {
               if (!active) onChange(option.key);
             }}
           >
-            {Icon ? <Icon /> : null}
+            {Icon ? <Icon weight={active ? "fill" : "regular"} /> : null}
             {iconOnly ? <span className="sr-only">{option.label}</span> : option.label}
           </Button>
         );

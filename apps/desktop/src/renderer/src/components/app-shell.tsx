@@ -316,9 +316,9 @@ function useSidebarContentMotion({
  * other three sides so its shadow still behaves. The wrapper is the whole point,
  * and two plausible ways of writing it are wrong for reasons only a browser will
  * tell you: a `clip-path` on the panel itself rides the panel's own transform
- * and clips nothing, and a `clip-path` on the wrapper forms a backdrop root that
- * silently disables the peek's glass. Both are written up on the element. The
- * panel parks just past the wall rather than past the whole window, so
+ * and clips nothing, and a tight wrapper clips the pane's shadow. The oversized
+ * overflow clip below preserves that shadow. The panel parks just past the wall
+ * rather than past the whole window, so
  * "hidden" costs its own width plus {@link SHADOW_ALLOWANCE} instead of the
  * journey back to zero. The panel now emerges FROM the rail's edge and withdraws
  * into it, in both modes and both directions, and its left edge is never a thing
@@ -735,15 +735,10 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             window's when the rail is down. The other three sides let out by
             CLIP_SPILL so every shadow behaves exactly as it did unclipped.
 
-            `overflow-hidden` on an OVERSIZED box, not `clip-path` on a tight
-            one, and the difference is not stylistic. `clip-path` on an ancestor
-            forms a backdrop root: the peek panel's `backdrop-blur-lg` stopped
-            sampling the board behind it and the glass went to plain 90% fill,
-            with the card's text legible straight through it. `overflow` clips
-            without grouping the backdrop, so the blur survives — but it clips
-            all four sides, which would eat the shadows. Hence the box is let out
-            by CLIP_SPILL on the three sides that are not the wall, putting those
-            three cuts 60px away from anything that paints.
+            The oversized overflow clip lets all three free edges cast their
+            shadows. CLIP_SPILL keeps those cuts 60px away from the pane.
+            Regular fake frost paints inside the pane without a backdrop root
+            or an extra blur pass during the reveal.
 
             One box for both arrangements: the mode difference lives entirely in
             the panel's own inset inside it. `pointer-events-none` because this
@@ -805,20 +800,10 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               // named `transform` while the property that actually moves is
               // `translate` (see below).
               !pinned &&
-                // The floating card's own surface. It lives on the WRAPPER, not
-                // on `[data-volli-sidebar]`, because that selector is
-                // unconditional in globals.css and forces `background-color:
-                // transparent` for its lift overlay — a fill declared on the
-                // pane would be overruled in every mode. The lift then
-                // composites over this glass, which is the correct order
-                // anyway: material first, tier on top.
-                //
-                // `lg` (16px), not `2xl` (40px): the compositor re-samples the
-                // backdrop across the panel's whole area every frame it
-                // translates, and cost scales with radius — 40px was double the
-                // 20px transition-time budget for a panel whose entrance IS a
-                // translate. At 90% fill the material reads the same.
-                "overflow-hidden rounded-xl border border-border bg-sidebar/90 shadow-overlay backdrop-blur-lg",
+                // The wrapper owns the floating edge and shadow. The inner
+                // Sidebar paints regular fake frost in both arrangements:
+                // no large backdrop filter follows this reveal over live work.
+                "overflow-hidden rounded-xl border border-border shadow-overlay",
               panelShown
                 ? "translate-x-0"
                 : // Reduced motion: the surface arrives where it will rest
@@ -844,17 +829,13 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               } as React.CSSProperties
             }
           >
-            {/* The lifted half of the seam, and the one on-canvas tier that
-                moves (globals.css § ELEVATION). It carries no fill of its own:
-                `--lift-2` composites over the gradient as a background IMAGE,
-                and a veil underneath would be a second mechanism pushing the
-                same way.
-
-                `data-volli-sidebar` rather than a utility class, because the
-                seam has to name this element specifically: it is one of three
-                `data-slot="sidebar"` roots in this tree, and selecting it by a
-                fill it no longer has was how the lab did it. */}
-            <Sidebar collapsible="none" data-volli-sidebar className="min-w-0 flex-1">
+            {/* One regular-material pane for pinned and floating navigation.
+                The data hook also owns the existing seam geometry. */}
+            <Sidebar
+              collapsible="none"
+              data-volli-sidebar
+              className="material-regular min-w-0 flex-1"
+            >
               {paneContent}
             </Sidebar>
             {/* The grip sets the panel's width in both modes, and one width

@@ -50,9 +50,10 @@ function DropdownMenuContent({
         sideOffset={sideOffset}
         className={cn(
           MENU_SURFACE,
+          "material-floating",
           MENU_SURFACE_PAD,
           MENU_SURFACE_MOTION,
-          "max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
+          "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
           className,
         )}
         {...props}
@@ -192,22 +193,26 @@ function DropdownMenuSubTrigger({
   );
 }
 
+/** Portaled for the reason `ContextMenuSubContent` is: a parent float clips it. */
 function DropdownMenuSubContent({
   className,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   return (
-    <DropdownMenuPrimitive.SubContent
-      data-slot="dropdown-menu-sub-content"
-      className={cn(
-        MENU_SURFACE,
-        MENU_SURFACE_PAD,
-        MENU_SURFACE_MOTION,
-        "max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
-        className,
-      )}
-      {...props}
-    />
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.SubContent
+        data-slot="dropdown-menu-sub-content"
+        className={cn(
+          MENU_SURFACE,
+          "material-floating",
+          MENU_SURFACE_PAD,
+          MENU_SURFACE_MOTION,
+          "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+          className,
+        )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
   );
 }
 
