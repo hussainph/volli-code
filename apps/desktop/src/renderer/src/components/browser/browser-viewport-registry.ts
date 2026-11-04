@@ -7,6 +7,11 @@ export interface BrowserViewport {
   anchor: HTMLElement;
   /** The current surface's close path, also used by a native page's ⌘W. */
   close(): void;
+  /**
+   * The current surface's way back to the Activity Island (VC-1118): the tab
+   * goes headless and leaves this surface's strip and group as a close would.
+   */
+  hide(): void;
 }
 
 let viewports: ReadonlyMap<string, BrowserViewport> = new Map();

@@ -21,6 +21,7 @@ import {
   PLANE_OVERLAY_RELEASE_MS,
 } from "@renderer/components/browser/browser-plane-freeze";
 import { toastError } from "@renderer/lib/toast";
+import { hidesToIsland } from "@renderer/stores/browser-tabs";
 
 /**
  * What the address bar shows for a tab's current URL.
@@ -176,6 +177,7 @@ export function BrowserPane({
   api,
   onTabState,
   onClose,
+  onHide,
   onFocusPane,
 }: {
   tab: BrowserTabState;
@@ -187,6 +189,11 @@ export function BrowserPane({
    * inside the page runs (VC-301). Absent, ⌘W in the page does nothing.
    */
   onClose?: () => void;
+  /**
+   * Sends this tab back to its Activity Island the way its surface does
+   * (VC-1118). Offered in the chrome only for a tab that can go there.
+   */
+  onHide?: () => void;
   /**
    * Makes the split-view pane drawing this tab the focused one — run before a
    * chord from inside the page is replayed, because a click into the native
@@ -396,6 +403,7 @@ export function BrowserPane({
         onToggleDevTools={() =>
           void runCommand(api.toggleDevTools({ tabId: tab.tabId }), "toggle DevTools")
         }
+        onHide={hidesToIsland(tab) ? onHide : undefined}
         // The person's hold controls (VC-239). Explicit presses, never
         // inferred from input into the page; the holding Session is told by
         // main, so nothing here has to reach it.

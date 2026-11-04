@@ -1,6 +1,6 @@
 /** Composition contract over the real scoped Session reader; runtime collaborators are mocked. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionListingProjection } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import { insertProject, insertTicket } from "@volli/host-core/db";
 import {
@@ -519,13 +519,14 @@ describe("headless runtime ownership", () => {
       }
     }
     const getSession = vi.spyOn(f.engine, "getSession");
+    const getListing = vi.spyOn(f.engine, "getSessionListing");
     const listSessions = vi.spyOn(f.engine, "listSessions");
     const listSignals = vi.spyOn(f.engine, "listLatestTicketSignals");
     await f.launch().ready();
     const { sessionListing } = seam.handlers.mock.lastCall![1] as {
       sessionListing: {
         db: unknown;
-        listSessions(query: unknown): Promise<readonly SessionProjection[]>;
+        listSessions(query: unknown): Promise<readonly SessionListingProjection[]>;
         liveAttachmentIds(): ReadonlySet<string>;
       };
     };
@@ -537,7 +538,11 @@ describe("headless runtime ownership", () => {
     ).toEqual(["s-1"]);
     // The scoped SQLite reader selects first; only local rows reach the host's fold,
     // including when a cloud birth's runner cursor is absent (for example, a restore).
-    expect(getSession).toHaveBeenCalledExactlyOnceWith({ sessionId: "s-1" });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(getListing).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "s-1",
+      persistCheckpoint: false,
+    });
     expect(listSessions).not.toHaveBeenCalled();
     expect(
       (await sessionListing.listSessions({ projectId: "p", scope: "ticket", ticketId: "t" })).map(

@@ -81,6 +81,7 @@ import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialo
 import { useProjectFileWorkspace } from "@renderer/components/files/use-project-file-workspace";
 import { HOME_BOARD_TAB_ID, browserTabId, isHomeBoardTab, parseBrowserTabId } from "./home-tabs";
 import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
+import { hideBrowserTab, leaveHomeStrip } from "@renderer/components/browser/show-browser-tab";
 import { Board } from "@renderer/components/board/board";
 import { BoardBoundary } from "@renderer/components/board/board-boundary";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
@@ -542,7 +543,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const setHomeSplitRatio = useProjectUiStore((state) => state.setHomeSplitRatio);
   const closeHomePane = useProjectUiStore((state) => state.closeHomePane);
   const removeHomeTabFromSplit = useProjectUiStore((state) => state.removeHomeTabFromSplit);
-  const closeHomeBrowserTab = useProjectUiStore((state) => state.closeHomeBrowserTab);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
 
   const handleSelect = React.useCallback(
@@ -595,7 +595,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const closeBrowser = React.useCallback(
     (tabId: string) => {
       if (selectedId === null) return;
-      const id = browserTabId(tabId);
       void browserApi
         .close({ tabId })
         .then((result) => {
@@ -604,33 +603,26 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             return;
           }
           useBrowserTabsStore.getState().remove(tabId);
-          // The split-view half of a close this store does not own — the same
-          // statement the chat and terminal branches make below. While split
-          // it lands the surface on the pane's own successor, so the MRU
-          // return inside closeHomeBrowserTab only ever runs unsplit.
-          removeHomeTabFromSplit(selectedId, id);
-          const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
-          const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
-          const projectUi = useProjectUiStore.getState().byProject[selectedId];
-          const files = projectUi?.projectFiles.tabs ?? [];
-          const browsers = stripBrowserTabs(
-            Object.values(useBrowserTabsStore.getState().byId).filter(
-              (tab) => tab.projectId === selectedId && tab.ticketId === null,
-            ),
-          );
-          closeHomeBrowserTab(selectedId, id, [
-            HOME_BOARD_TAB_ID,
-            ...sessions.map((tab) => tab.sessionId),
-            ...chats.map(chatTabId),
-            ...files.map((tab) => fileTabId(tab.relPath)),
-            ...browsers.map((tab) => browserTabId(tab.tabId)),
-          ]);
+          leaveHomeStrip(selectedId, tabId);
         })
         .catch((reason: unknown) => {
           toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
         });
     },
-    [browserApi, closeHomeBrowserTab, removeHomeTabFromSplit, selectedId],
+    [browserApi, selectedId],
+  );
+
+  /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
+  const hideBrowser = React.useCallback(
+    (tabId: string) => {
+      if (selectedId === null) return;
+      void hideBrowserTab(browserApi, tabId, () => leaveHomeStrip(selectedId, tabId)).catch(
+        (reason: unknown) => {
+          toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
+        },
+      );
+    },
+    [browserApi, selectedId],
   );
 
   const handleClose = React.useCallback(
@@ -967,6 +959,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             tabId={paneBrowserTab.tabId}
             visible={visible && !ticketTakesOver && visibleTabIds.includes(tabId)}
             onClose={() => closeBrowser(paneBrowserTab.tabId)}
+            onHide={() => hideBrowser(paneBrowserTab.tabId)}
           />
         ) : null}
         {relPath === null &&
