@@ -79,6 +79,7 @@ describe("one attachment affordance", () => {
     expect(html.match(/aria-label="Attach files"/g)).toHaveLength(1);
     expect(html.match(/type="file"/g)).toHaveLength(1);
     expect(html).toContain("multiple");
+    expect(html).toContain("shadow-raised");
     expect(html).not.toContain("Attach file reference");
     expect(html).not.toContain("Search files…");
   });
@@ -169,7 +170,7 @@ it("changes mode without submitting, then commits the selected saved automation"
   expect(document.body.textContent).toContain("Doing");
   await act(async () => radio("Implement").click());
   expect(submit).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Saved runtime");
+  expect(host.textContent).toContain("Saved model");
   expect(host.querySelector('[aria-label^="Model:"]')).toBeNull();
   await act(async () =>
     host.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')!.click(),
@@ -178,6 +179,39 @@ it("changes mode without submitting, then commits the selected saved automation"
     kind: "automation",
     projectId: "p1",
     automationId: "a2",
+  });
+});
+
+it("wraps long automation names within their column group and keeps the saved choice intact", async () => {
+  const name = "Review the implementation and report every edge case before moving the ticket";
+  const change = vi.fn();
+  await act(async () =>
+    root.render(
+      <ComposerFooter
+        {...props}
+        onLaunchChange={change}
+        automationOffer={{
+          ...props.automationOffer,
+          groups: [{ ...GROUPS[0]!, automations: [automation("long", name)] }, GROUPS[1]!],
+        }}
+      />,
+    ),
+  );
+  await openMenu();
+  const item = radio(name);
+  const label = item.querySelector(`[title="${name}"]`)!;
+  expect(label.classList.contains("whitespace-normal")).toBe(true);
+  expect(label.classList.contains("break-words")).toBe(true);
+  expect(label.classList.contains("truncate")).toBe(false);
+  expect(item.closest('[data-slot="dropdown-menu-group"]')?.textContent).toContain(
+    "Todo · this column",
+  );
+  expect(item.className).not.toMatch(/\bh-\d/);
+  await act(async () => item.click());
+  expect(change).toHaveBeenCalledExactlyOnceWith({
+    kind: "automation",
+    projectId: "p1",
+    automationId: "long",
   });
 });
 

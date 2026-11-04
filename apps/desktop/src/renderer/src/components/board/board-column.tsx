@@ -483,12 +483,16 @@ export const BoardColumn = React.memo(function BoardColumn({
               // measurement churn that took this board out once already
               // (VC-221, see the note above the scroller).
               ref={attachList}
-              className="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-2"
+              // Content must keep its intrinsic height. A flex-1/min-h-0 list
+              // shrinks to the viewport and crushes virtual spacers to zero,
+              // changing the scroll range every time the window moves.
+              className="flex min-h-full shrink-0 flex-col gap-2 px-2 pb-2"
             >
               {leadingRows > 0 ? (
                 <div
                   aria-hidden
                   data-column-spacer="leading"
+                  className="shrink-0"
                   style={{ height: spacerHeight(leadingRows) }}
                 />
               ) : null}
@@ -511,6 +515,7 @@ export const BoardColumn = React.memo(function BoardColumn({
                 <div
                   aria-hidden
                   data-column-spacer="trailing"
+                  className="shrink-0"
                   style={{ height: spacerHeight(trailingRows) }}
                 />
               ) : null}

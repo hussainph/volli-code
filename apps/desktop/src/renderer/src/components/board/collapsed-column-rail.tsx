@@ -56,11 +56,7 @@ export const CollapsedColumnRail = React.memo(function CollapsedColumnRail({
 
   return (
     <div className="flex w-44 flex-none cursor-default flex-col gap-1">
-      {/* A shade under the standard mute: this rail names a column that is not
-          there, and must never compete with the columns that are. */}
-      <SectionHeading as="span" className="text-muted-foreground/70">
-        Empty
-      </SectionHeading>
+      <SectionHeading as="span">Empty</SectionHeading>
       {statuses.map((status) => (
         <CollapsedColumnTarget
           key={status}
@@ -119,13 +115,13 @@ function CollapsedColumnTarget({
           if (!dragActive) onExpand(status);
         }}
         className={cn(
-          "flex w-full items-center justify-between rounded-md border border-border/50 px-4 py-2 text-left text-ui text-muted-foreground outline-none",
+          "flex w-full items-center justify-between rounded-md border border-border bg-card px-4 py-2 text-left text-ui text-muted-foreground shadow-raised outline-none",
           // No scale in this list, ever: the pill is a dnd-kit droppable measured
           // in synchronous layout effects, and a scale mid-flight yields a new
           // rect every commit — measureRects loops to React's max update depth
           // (the DndContext crash). Enter is an opacity fade only.
           "transition-[color,background-color,border-color,box-shadow,opacity] duration-150 ease-out",
-          "hover:border-border hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+          "hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
           animateEnter && "starting:opacity-0",
           // While any card is mid-drag every pill brightens into an affordance…
           dragActive && "border-border text-foreground/70",

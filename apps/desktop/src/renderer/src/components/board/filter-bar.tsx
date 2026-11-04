@@ -1,4 +1,6 @@
 import * as React from "react";
+import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
+import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   distinctLabels,
@@ -61,6 +63,7 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
     <div className={cn("flex min-w-0 flex-wrap items-center gap-2", className)}>
       <FilterChip
         label="Priority"
+        icon={<FlagIcon aria-hidden />}
         options={PRIORITY_OPTIONS}
         selected={filter.priorities}
         onToggle={(value) =>
@@ -70,6 +73,7 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
       {labelOptions.length > 0 ? (
         <FilterChip
           label="Label"
+          icon={<TagIcon aria-hidden />}
           options={labelOptions}
           selected={filter.labels}
           onToggle={(value) => useBoardStore.getState().toggleLabel(projectId, value)}

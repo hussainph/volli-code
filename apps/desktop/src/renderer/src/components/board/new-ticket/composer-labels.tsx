@@ -32,12 +32,16 @@ export function ComposerLabels({
 
   return (
     <LabelPickerPopover projectId={projectId} value={value} onChange={onChange}>
-      <Button variant="ghost" size="sm" className={composerChipClass()}>
+      <Button variant="outline" className={composerChipClass()}>
         <TagIcon />
         {value.length === 0 ? (
           "Labels"
         ) : (
-          <span className="flex items-center gap-1">
+          <span
+            className="flex items-center gap-1"
+            aria-label={value.join(", ")}
+            title={value.join(", ")}
+          >
             {value.slice(0, 3).map((label) => (
               <span
                 key={label}

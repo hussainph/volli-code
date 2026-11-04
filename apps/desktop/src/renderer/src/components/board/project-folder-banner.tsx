@@ -14,6 +14,7 @@
  * because it is the clue, not because it is a measurement.
  */
 import * as React from "react";
+import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { RelinkProjectDialog } from "@renderer/components/rail/relink-project-dialog";
@@ -38,22 +39,24 @@ export function ProjectFolderBanner({ projectId }: { projectId: string }) {
   if (project === undefined || state === null || state === "present") return null;
 
   return (
-    <div className="px-gutter pb-3">
+    <div className="px-gutter pb-4">
       <Notice
         tone="error"
         icon={WarningIcon}
         announce
-        title={
-          state === "missing"
-            ? "This project's folder isn't where Volli left it."
-            : "This project's path is a file, not a folder."
+        title={state === "missing" ? "Project folder not found" : "Project path isn't a folder"}
+        expandable={false}
+        copyText=""
+        detail={
+          <span className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-card px-2 py-1 text-foreground">
+            <FolderOpenIcon aria-hidden className="size-4 shrink-0" />
+            <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{project.path}</span>
+          </span>
         }
-        detail={project.path}
-        truncate
-        hoverTitle={project.path}
         actions={
           <Button size="sm" variant="outline" onClick={() => setRelinkOpen(true)}>
-            Relink…
+            <FolderOpenIcon />
+            Relink folder
           </Button>
         }
       />

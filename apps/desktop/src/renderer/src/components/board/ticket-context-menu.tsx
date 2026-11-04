@@ -262,7 +262,7 @@ export function TicketContextMenu({
             an open Ticket cannot disagree about what this column offers. */}
         <ContextMenuSub>
           <ContextMenuSubTrigger icon={LightningIcon}>Automations</ContextMenuSubTrigger>
-          <ContextMenuSubContent className="w-56">
+          <ContextMenuSubContent className="w-72">
             <TicketAutomationMenuItems ticket={ticket} projectId={projectId} />
           </ContextMenuSubContent>
         </ContextMenuSub>

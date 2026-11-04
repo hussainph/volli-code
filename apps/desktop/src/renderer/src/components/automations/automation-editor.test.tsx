@@ -644,14 +644,13 @@ describe("automation editor drafts (VC-329)", () => {
     expect(header!.contains(buttonContaining("Discard draft"))).toBe(true);
     expect(header!.contains(buttonContaining("Create automation"))).toBe(true);
 
-    // The scrolling form holds only the form: nothing above Instructions moves
-    // when the draft state comes and goes. Asserted by KIND rather than by
-    // walking firstElementChild twice — the walk passed on any first node whose
-    // subtree mentioned Instructions, and broke on any wrapper added above it.
+    // Draft state stays above the scrolling form. The instructions field keeps
+    // its accessible name without a redundant heading above it.
     const form = document.querySelector("main");
     expect(form).not.toBeNull();
     expect(form!.querySelector('[data-slot^="draft-"]')).toBeNull();
-    expect(form!.querySelector("h2")?.textContent).toBe("Instructions");
+    expect(form!.querySelector("h2")).toBeNull();
+    expect(form!.querySelector('[aria-label="Instructions"]')).not.toBeNull();
   });
 
   // VC-405's actual complaint is the JUMP, not the placement. The title row is

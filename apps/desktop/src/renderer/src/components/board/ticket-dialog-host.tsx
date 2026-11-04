@@ -138,7 +138,7 @@ function TicketDialogs({
           cancel();
         }}
         title="Archive ticket?"
-        confirmLabel="Archive Anyway"
+        confirmLabel="Archive anyway"
         verb="Archiving"
       />
       {removeWorktree === null ? null : (

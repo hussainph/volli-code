@@ -75,6 +75,7 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 import {
@@ -177,14 +178,14 @@ function TimeField({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto p-2">
         <div className="flex items-end gap-2">
-          <label className="flex flex-col gap-1 text-label text-muted-foreground uppercase">
+          <label className="flex flex-col gap-1 text-ui font-medium text-muted-foreground">
             Hour
             <ScheduleNumberInput value={hour} max={23} ariaLabel="Hour" onChange={onHourChange} />
           </label>
           <span aria-hidden className="h-6 text-ui leading-6 text-muted-foreground">
             :
           </span>
-          <label className="flex flex-col gap-1 text-label text-muted-foreground uppercase">
+          <label className="flex flex-col gap-1 text-ui font-medium text-muted-foreground">
             Minute
             <ScheduleNumberInput
               value={minute}
@@ -232,7 +233,7 @@ function NextScheduledRun({
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-label text-muted-foreground uppercase">{children}</h2>;
+  return <SectionHeading>{children}</SectionHeading>;
 }
 
 function TriggerChoice({
@@ -796,8 +797,7 @@ export function AutomationEditorPanel({
         <main className="min-h-0 overflow-y-auto p-6">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
             <section className="flex min-h-0 flex-col gap-2">
-              <div className="flex items-center justify-between gap-2">
-                <SectionLabel>Instructions</SectionLabel>
+              <div className="flex items-center justify-end gap-2">
                 <AutomationAuthoringButton
                   projectId={projectId}
                   context={{

@@ -576,8 +576,8 @@ function AutomationRail({
         .filter((group) => !automationSourceIsCloud() || group.label !== "All projects")
         .map((group) => (
           <section key={group.label} className="flex flex-col gap-1 pb-4">
-            <div className="flex h-6 items-center px-2">
-              <h2 className="text-label text-muted-foreground uppercase">{group.label}</h2>
+            <div className="flex min-h-7 items-center px-2">
+              <SectionHeading>{group.label}</SectionHeading>
               <button
                 type="button"
                 aria-label={`New automation in ${group.label}`}
