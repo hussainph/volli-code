@@ -85,17 +85,13 @@ export function OverviewPane({ project }: { project: Project }) {
     );
   };
   return (
-    <PrefSection
-      title="Global overrides"
-      icon={GearSixIcon}
-      hint="Settings not listed here use global defaults."
-    >
+    <PrefSection title="Global overrides" icon={GearSixIcon}>
       <DataTable
         label="Project overrides"
         items={projectOverrides(project)}
         keyOf={(row) => row.key}
         rows={5}
-        empty="This project uses global defaults."
+        empty="No project overrides"
         columns={[
           {
             key: "setting",

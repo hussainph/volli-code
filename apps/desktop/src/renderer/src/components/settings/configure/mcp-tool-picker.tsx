@@ -34,7 +34,7 @@ import type { McpCatalogTool } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 import { Checkbox } from "@renderer/components/ui/checkbox";
 import { Segmented } from "@renderer/components/ui/segmented";
-import { InfoHint, TableSearch } from "@renderer/components/settings/kit";
+import { TableSearch } from "@renderer/components/settings/kit";
 import { cn } from "@renderer/lib/utils";
 
 import {
@@ -333,9 +333,9 @@ function ToolGroup({
           {group.key === "read-only" ? (
             // The one trust line this list carries: the grouping is the
             // server's claim, and a person deciding on it should know whose.
-            <InfoHint label="read-only tools" className="w-full">
+            <span className="block w-full text-ui text-muted-foreground">
               Read-only is the server’s claim, not a Volli guarantee.
-            </InfoHint>
+            </span>
           ) : null}
         </div>
       )}

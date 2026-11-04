@@ -11,7 +11,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogTrigger,
   DialogFooter,
 } from "@renderer/components/ui/dialog";
@@ -72,12 +71,9 @@ export function MarkdownCommandDialog({
           Write a markdown file
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>Write a command</DialogTitle>
-          <DialogDescription>
-            Create a project command file and write its prompt in the editor.
-          </DialogDescription>
         </DialogHeader>
         <label htmlFor="markdown-command-name" className="text-ui font-medium">
           Command name

@@ -127,15 +127,13 @@ function PreviewContent({ body }: { body: PreviewState }) {
     );
   }
   if (body.data.text.trim() === "") {
-    return <p className="text-ui text-muted-foreground">This file is empty.</p>;
+    return <p className="text-ui text-muted-foreground">Empty file</p>;
   }
   return (
     <>
       <Markdown source={body.data.text} />
       {body.data.truncated ? (
-        <p className="mt-4 text-ui text-muted-foreground">
-          Showing the first 1 MiB. Reveal the file to read the rest.
-        </p>
+        <p className="mt-4 text-ui text-muted-foreground">First 1 MiB</p>
       ) : null}
     </>
   );
