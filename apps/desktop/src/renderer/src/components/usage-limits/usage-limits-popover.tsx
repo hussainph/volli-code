@@ -265,10 +265,10 @@ function ReadingView({
     );
   }
   if (reading.kind === "failed") {
-    return <p className={EMPTY_INLINE}>Usage limits couldn&apos;t be read.</p>;
+    return <p className={EMPTY_INLINE}>Couldn&apos;t read usage limits</p>;
   }
   if (reading.accounts.length === 0) {
-    return <p className={EMPTY_INLINE}>No subscriptions with usage limits.</p>;
+    return <p className={EMPTY_INLINE}>No subscriptions with usage limits</p>;
   }
   return (
     <Accordion

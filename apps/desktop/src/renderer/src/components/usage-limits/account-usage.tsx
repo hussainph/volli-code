@@ -38,8 +38,8 @@ export function AccountUsage({
     return (
       <p data-testid={testId} className="mb-4 text-ui text-muted-foreground last:mb-0">
         {limits.unavailable.reason === "unsupported"
-          ? "No subscription usage windows on this account."
-          : "Usage limits couldn't be read. Refresh to try again."}
+          ? "No usage windows"
+          : "Couldn't read usage limits"}
       </p>
     );
   }

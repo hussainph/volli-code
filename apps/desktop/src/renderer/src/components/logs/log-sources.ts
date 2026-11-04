@@ -191,8 +191,7 @@ const POLLS_PER_FOLLOW_RETRY = 10;
 const RETRY_MS = 5_000;
 
 /** What the dot says while a source reads by polling: live, with why it is not streaming. */
-export const LOG_SOURCE_POLLING =
-  "Live updates are paused while this host’s links are full; reading its newest lines every few seconds.";
+export const LOG_SOURCE_POLLING = "Polling: live updates paused";
 
 /** The reason a host error names, from a relayed or a link's own error. */
 function reasonOf(error: unknown): string | undefined {

@@ -619,7 +619,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
           labels={labels}
           showSource
           onFilter={(field, value) => set(field, value)}
-          empty={lines.length === 0 ? "No lines yet." : "No lines match."}
+          empty={lines.length === 0 ? "No lines" : "No lines match"}
         />
       )}
     </div>
@@ -661,7 +661,7 @@ export function LogStream({
         labels={labels}
         showSource={sources.length > 1}
         onFilter={() => undefined}
-        empty="Nothing logged yet."
+        empty="Nothing logged yet"
       />
     </div>
   );

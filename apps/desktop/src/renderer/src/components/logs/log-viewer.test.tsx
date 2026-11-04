@@ -173,7 +173,7 @@ describe("the dev log viewer", () => {
   it("pauses the view while lines keep arriving, and says a source failed", () => {
     const mac = fakeSource("this-mac", "This Mac");
     act(() => root.render(<LogViewer local={mac.source} />));
-    expect(container.textContent).toContain("No lines yet.");
+    expect(container.textContent).toContain("No lines");
     act(() => button("Pause").click());
     mac.push([entry(1, "2026-10-07T00:00:01.000Z")]);
     settle();
@@ -195,7 +195,7 @@ describe("the dev log viewer", () => {
         ) as HTMLElement
       ).click(),
     );
-    expect(container.textContent).toContain("No lines match.");
+    expect(container.textContent).toContain("No lines match");
   });
 
   it("shows only the fault when no logs landed, and retries only the failed source", () => {
@@ -207,7 +207,7 @@ describe("the dev log viewer", () => {
     act(() => root.render(<LogViewer local={mac.source} />));
     mac.fail("bridge gone");
     expect(container.textContent).toContain("Couldn't read This Mac logs");
-    expect(container.textContent).not.toContain("No lines yet.");
+    expect(container.textContent).not.toContain("No lines");
     act(() => button("Retry").click());
     expect(localStart).toHaveBeenCalledTimes(2);
     expect(remoteStart).toHaveBeenCalledTimes(1);
