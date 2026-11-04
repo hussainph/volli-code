@@ -2,6 +2,8 @@
 export const SETTINGS_ROWS: Readonly<Record<string, readonly string[]>> = {
   "app:general": ["Zoom", "Diff layout", "Show cost and token usage"],
   "app:appearance": [
+    "Style",
+    "Motion",
     "Mode",
     "Colour placement",
     "Vibrancy",
@@ -170,6 +172,7 @@ export const SETTINGS_ROWS: Readonly<Record<string, readonly string[]>> = {
   "project:mcp": ["MCP Servers", "Add server", "Edit server", "Tools", "Status"],
   "project:secrets": ["Secrets", "Scope", "Last used", "Replace", "Revoke"],
   "project:appearance": [
+    "Style",
     "Mode",
     "App theme",
     "Colour placement",
