@@ -58,10 +58,11 @@ describe("control contrast recipe", () => {
     expect(recipe.has("active:bg-glass-3")).toBe(true);
   });
 
-  it("draws the selected segment as the solid thumb, answering no press", () => {
+  it("draws the selected segment as a primary-tinted tile, answering no press", () => {
     const recipe = classes("selected");
-    expect(recipe.has("bg-primary")).toBe(true);
-    expect(recipe.has("text-primary-foreground")).toBe(true);
+    expect(recipe.has("bg-primary/70")).toBe(true);
+    expect(recipe.has("bg-primary")).toBe(false);
+    expect(recipe.has("text-foreground")).toBe(true);
     expect([...recipe].some((value) => value.startsWith("border"))).toBe(false);
     expect([...recipe].some((value) => /^(?:hover|active):/.test(value))).toBe(false);
   });

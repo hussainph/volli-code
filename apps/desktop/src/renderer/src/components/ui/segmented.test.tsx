@@ -12,7 +12,7 @@ const options = [
 ] as const;
 
 describe("Segmented", () => {
-  it("draws a solid thumb and bare siblings on one track, without rewriting on reselect", () => {
+  it("draws every option as a filled tile on one capsule track, without rewriting on reselect", () => {
     const writes: string[] = [];
     const tree = Segmented({
       ariaLabel: "View",
@@ -24,11 +24,16 @@ describe("Segmented", () => {
       React.ComponentProps<typeof Button>
     >[];
     expect(buttons.map((button) => button.props.variant)).toEqual(["selected", "ghost"]);
-    // The track is a borderless capsule; every member is a capsule thumb.
+    // The track is a borderless capsule; every member is its own tile.
     expect(tree.props.className).toContain("rounded-segmented");
     expect(tree.props.className).toContain("bg-glass-1");
     expect(tree.props.className).not.toMatch(/\bborder\b/);
-    expect(buttons.every((button) => button.props.className === "rounded-segmented")).toBe(true);
+    expect(
+      buttons.every((button) => button.props.className?.includes("rounded-segmented-item")),
+    ).toBe(true);
+    // The unchosen tiles carry a glass fill at rest, not a bare ghost.
+    expect(buttons[1].props.className).toContain("bg-glass-2");
+    expect(buttons[0].props.className).not.toContain("bg-glass-2");
     expect(buttons.map((button) => button.props["aria-pressed"])).toEqual([true, false]);
     expect(buttons[1].props.disabled).toBe(true);
     buttons[0].props.onClick?.({} as React.MouseEvent<HTMLButtonElement>);

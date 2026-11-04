@@ -91,7 +91,7 @@ describe("foundation control contracts", () => {
     expect(input).not.toContain("border");
   });
 
-  it("draws the selected segment as the solid thumb and the rest bare on the track", () => {
+  it("draws the selected segment as the tinted tile and the rest as glass tiles", () => {
     const html = renderToStaticMarkup(
       <Segmented
         ariaLabel="View"

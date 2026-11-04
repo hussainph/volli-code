@@ -35,11 +35,14 @@ const buttonVariants = cva(
         secondary:
           "border border-glass-edge bg-glass-2 text-foreground hover:bg-glass-3 active:bg-glass-4",
         ghost: "hover:bg-glass-2 hover:text-foreground active:bg-glass-3",
-        // The chosen member of a closed set (`ui/segmented.tsx`): the solid
-        // thumb on the segmented track, beside bare ghost siblings. Not an
-        // action — re-pressing it is a no-op by contract — so it neither
-        // hovers nor answers a press.
-        selected: "bg-primary text-primary-foreground",
+        // The chosen member of a closed set (`ui/segmented.tsx`): a
+        // PRIMARY-TINTED tile beside its glass siblings — the accent at the
+        // alpha ladder's /70 over the track, so it is softened toward the
+        // paper in either appearance (terracotta on light, deep rust on dark)
+        // rather than a flat bright primary, and it carries the foreground ink,
+        // which clears AA on that mix in both. Not an action — re-pressing it
+        // is a no-op by contract — so it neither hovers nor answers a press.
+        selected: "bg-primary/70 text-foreground",
         // --primary-text, not --primary: a link variant is read, not clicked
         // as a colored area, so it takes the accent's body-copy lightness.
         link: "text-primary-text underline-offset-4 hover:underline",

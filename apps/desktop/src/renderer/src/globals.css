@@ -485,7 +485,7 @@
    * is a change to one line here and nothing else.
    *
    * The values are the owner's: controls at 10px and never pills; capsules only
-   * for compact chrome (segmented tracks and thumbs, chips, the send key, the
+   * for compact chrome (segmented tracks, chips, the send key, the
    * Activity Island pill); floating cards TIGHTER than the work under them; and
    * the flow — the panel unit, sidebar rows, board columns and ticket cards —
    * on the values v0.3.0-canary.5 rendered, which the owner calls good.
@@ -507,6 +507,8 @@
   --radius-pill: 9999px;
   --radius-chip: var(--radius-pill);
   --radius-segmented: var(--radius-pill);
+  /* A segmented control's options are tiles inside its capsule track. */
+  --radius-segmented-item: var(--radius-control);
   --radius-send: var(--radius-pill);
   /* Floats: tighter than the work they hover over. */
   --radius-menu: 10px;

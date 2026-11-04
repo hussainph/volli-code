@@ -60,6 +60,7 @@ const twMerge = extendTailwindMerge({
         "rounded-pill",
         "rounded-chip",
         "rounded-segmented",
+        "rounded-segmented-item",
         "rounded-send",
         "rounded-button",
         "rounded-button-xs",

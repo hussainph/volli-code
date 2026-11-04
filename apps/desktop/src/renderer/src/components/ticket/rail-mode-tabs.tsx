@@ -178,7 +178,8 @@ export function RailModeTabs<K extends string>({
         // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
         // height (40px), so the track can never disagree with what it holds.
         // The segmented drawing (`ui/segmented.tsx`): a borderless capsule
-        // track and a solid thumb, no lift (docs/DESIGN.md, "Surfaces").
+        // track of filled tiles, the chosen one primary-tinted, no lift
+        // (docs/DESIGN.md, "Surfaces").
         className="mx-auto flex w-max max-w-full items-center gap-1 rounded-segmented bg-glass-1 p-1"
       >
         {modes.map((mode, index) => {
@@ -206,13 +207,13 @@ export function RailModeTabs<K extends string>({
               }}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={cn(
-                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-segmented text-ui outline-none",
+                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-segmented-item text-ui outline-none",
                 selected ? "w-[84px]" : "w-8",
                 "focus-visible:ring-2 focus-visible:ring-ring",
                 !reducedMotion && "transition-[color,background-color] duration-150 ease-out",
                 selected
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-glass-2 hover:text-foreground",
+                  ? "bg-primary/70 text-foreground"
+                  : "bg-glass-2 text-muted-foreground hover:bg-glass-3 hover:text-foreground",
               )}
             >
               {/* The glyph travels with the label that grows beside it — under

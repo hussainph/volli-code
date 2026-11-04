@@ -67,7 +67,7 @@ do not re-collapse them without looking at the surface:
 | `browser/session-cursor.css` | chip `gap: 5px` · `padding: 0 7px` · `height: 20px` · action `height: 15px` | The Session cursor's label is a drawing at pointer scale, measured against a 16px arrow, not a control on the layout grid: at the ladder's next step the chip reads as a button beside the arrow rather than a name riding it. Its type and corners still take the `--text-label` and `--radius-sm` rungs |
 | `globals.css` Monaco loading skeleton | `height: 14px` · `top: 12px` · `top: 36px` | The pseudo-elements meet Monaco's 12px source inset and its measured two-line placeholder drawing; 8/16/24px rungs move a bar before the host is replaced |
 | `ui/list-row.tsx` `density="two-line"` | `py-1.5` | Two `text-ui` line boxes + 12 keeps the measured 52px two-line row; `py-2` grows every row of a dense list to 56 and orphans the `min-h-13` floor. Recorded against the Diffs page until the row became a primitive — it was a fact about the object, and the Files page's 56 was the drift |
-| `ui/segmented.tsx` track, `theme/canvas-editor.tsx` `PadChip` | `p-0.5` · `gap-0.5` | A segmented track is its rung's height around thumbs one rung down: a 24px thumb in a 28px track, a 28px one in 32. Only a 2px pad holds both on the control scale; `p-1` makes every segmented control 4px taller than the controls beside it |
+| `ui/segmented.tsx` track, `theme/canvas-editor.tsx` `PadChip` | `p-0.5` · `gap-0.5` | A segmented track is its rung's height around tiles one rung down: a 24px tile in a 28px track, a 28px one in 32. Only a 2px pad holds both on the control scale; `p-1` makes every segmented control 4px taller than the controls beside it |
 | `ui/list-row.tsx` `ListRowSkeleton` | `gap-1.5` | Its 16px/14px bars need the 6px join to preserve the measured two-line placeholder footprint; `gap-2` changes that first paint before the labels replace it |
 | `chat/transcript-skeleton.tsx` | `gap-1.5` | Its 14px assistant bars sit on a 20px top-to-top placeholder rhythm (14 + 6); `gap-2` makes the transcript's loading drawing taller before prose replaces it |
 | `session-peek/session-peek-card.tsx` card grid | `p-3` · `px-3` · `py-3` · `gap-3` | The peek's 12px inset is `RAIL_PANEL_INSET`'s narrow rung measured onto a popover, and for the same reason that one is recorded: 8 halves the edge of a floating card, and 16 inside a 360px card costs a line of the five-line summary fold. The block rhythm is that one measure turned vertical — inset and rhythm are the same number, which is what makes the two peek cards read as one surface |
@@ -250,7 +250,8 @@ so retuning how round a role reads is a change to its one line:
 | --- | --- | --- |
 | `--radius-button-xs` · `-sm` · `--radius-button` · `-lg` | 10px (`--radius-control`) | buttons at every size; never pills; they size to their words, or to a form width in a form column, never stretched full-row |
 | `--radius-input` | 10px | inputs, selects, textareas, the ⌘K search field |
-| `--radius-chip` · `--radius-segmented` · `--radius-send` | capsule (`--radius-pill`) | compact chrome only: chips, segmented tracks and thumbs, the circular send key (and the Activity Island pill) |
+| `--radius-chip` · `--radius-segmented` · `--radius-send` | capsule (`--radius-pill`) | compact chrome only: chips, segmented tracks, the circular send key (and the Activity Island pill) |
+| `--radius-segmented-item` | 10px | the option tiles inside a segmented track |
 | `--radius-menu` | 10px | menus, selects, the ⌥ column picker |
 | `--radius-menu-item` | 6px (menu − 4) | menu rows at the menu's 4px pad |
 | `--radius-popover` | 12px | popovers and floating cards: Usage limits, the Island's card, peeks, toasts, run windows |
@@ -385,14 +386,15 @@ Rules:
    `rounded-xl` (16px) is no role's radius and is banned by `check-design-tokens.mjs`.
 
    Pills are reserved for badges, switches, status chips, avatars and the
-   capsule roles (chips, segmented tracks and thumbs, the send key). Checkboxes
+   capsule roles (chips, segmented tracks, the send key). Checkboxes
    use half the control radius (5px), so they remain boxes rather than radios.
 2. **Depth: flat glass, no bevels.** No control draws an inset highlight, a
    drop shadow or a press shadow, in either appearance. There are two faces:
-   - **Solid** — `default` (primary), `destructive`, the composer's send
-     key and the selected segment's thumb: an opaque solved fill. Hover darkens it 0.03 OKLab L and a press
+   - **Solid** — `default` (primary), `destructive` and the composer's send
+     key: an opaque solved fill. Hover darkens it 0.03 OKLab L and a press
      0.06, which only ever adds contrast to the white label.
-   - **Glass** — `outline`, `secondary`, `ghost`, the segmented track, chips,
+   - **Glass** — `outline`, `secondary`, `ghost`, the segmented track and its
+     tiles, chips,
      inputs, textareas, select triggers, the checkbox and the switch track: a
      translucent tint of the foreground over whatever surface is beneath, so
      the canvas and its material show through, edged by one `glass-edge`
@@ -421,9 +423,10 @@ Rules:
    keep a 32px floor and grow with their contents.
 4. **Contrast:** keep solved primary/destructive fill–ink pairs opaque. Glass
    controls carry foreground ink on their tint. A segmented control is a
-   borderless `glass-1` capsule track with the chosen member as a solid primary
-   thumb (`selected`) and the rest bare (`ghost`) — never a row of separately
-   bordered buttons. Validate
+   borderless `glass-1` capsule track holding every option as its own filled
+   tile (`--radius-segmented-item`, `glass-2`), the chosen one primary-tinted
+   (`selected`: `bg-primary/70` with the foreground ink, softened toward the
+   paper in either appearance) — never a row of separately bordered buttons. Validate
    secondary, selected and tab states in light and dark.
 5. **Weight:** regular (400) for body/value, medium (500) for control/field/menu
    labels, semibold (600) for titles and important feedback. Retain the five
