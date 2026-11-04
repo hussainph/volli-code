@@ -31,8 +31,8 @@ describe("control token overrides", () => {
     expect(cn("size-control-sm", "size-4")).toBe("size-4");
   });
 
-  it("drops the compound field's inner control shadow", () => {
-    expect(cn("shadow-control", "shadow-none")).toBe("shadow-none");
-    expect(cn("shadow-control-pressed", "shadow-raised")).toBe("shadow-raised");
+  it("lets a caller's reset replace an elevation tier", () => {
+    expect(cn("shadow-raised", "shadow-none")).toBe("shadow-none");
+    expect(cn("shadow-card", "shadow-raised")).toBe("shadow-raised");
   });
 });

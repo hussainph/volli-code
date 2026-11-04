@@ -23,7 +23,7 @@ describe("Segmented", () => {
     const buttons = React.Children.toArray(tree.props.children) as React.ReactElement<
       React.ComponentProps<typeof Button>
     >[];
-    expect(buttons.map((button) => button.props.variant)).toEqual(["default", "outline"]);
+    expect(buttons.map((button) => button.props.variant)).toEqual(["selected", "outline"]);
     expect(buttons.map((button) => button.props["aria-pressed"])).toEqual([true, false]);
     expect(buttons[1].props.disabled).toBe(true);
     buttons[0].props.onClick?.({} as React.MouseEvent<HTMLButtonElement>);

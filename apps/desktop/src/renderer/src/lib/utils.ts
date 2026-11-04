@@ -17,11 +17,10 @@ import { extendTailwindMerge } from "tailwind-merge";
 // The three elevation tiers repeat the FIRST failure, in the shadow namespace.
 // tailwind-merge reads an unregistered `shadow-*` as a shadow COLOR, so
 // `cn("shadow-raised", "shadow-none")` kept both and the reset stopped
-// resetting. That pair is not hypothetical: `Input`, `Textarea` and `Button`
-// carry `shadow-raised` now, and every wrapper that flattens one of them
+// resetting. That pair is not hypothetical: callers raise cards, tabs and rail
+// controls with `shadow-raised`, and wrappers flatten them with `shadow-none`
 // (`ui/input-group.tsx`, `ui/sidebar.tsx`, `chat/interaction-ui.tsx`,
-// `ai-elements/*`) does it with `shadow-none`. Registered, the reset wins the
-// way its caller meant.
+// `ai-elements/*`). Registered, the reset wins the way its caller meant.
 const twMerge = extendTailwindMerge({
   extend: {
     // Control geometry must merge with caller resets (h-auto, px-0), just as
@@ -41,14 +40,7 @@ const twMerge = extendTailwindMerge({
     classGroups: {
       "font-size": ["text-label", "text-ui", "text-heading", "text-title"],
       rounded: ["rounded-control", "rounded-container", "rounded-row"],
-      shadow: [
-        "shadow-raised",
-        "shadow-card",
-        "shadow-overlay",
-        "shadow-control",
-        "shadow-control-hover",
-        "shadow-control-pressed",
-      ],
+      shadow: ["shadow-raised", "shadow-card", "shadow-overlay"],
     },
   },
 });

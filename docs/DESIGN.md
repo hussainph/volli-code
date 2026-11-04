@@ -165,9 +165,9 @@ treatment.
 
 | Piece | Rung | Says |
 |---|---|---|
-| Settings (model, effort) | `sm` — 24px, edged `bg-card` controls, muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
+| Settings (model, effort) | `sm` — 24px, glass chips (`glass-1` fill, `glass-edge` hairline), muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
 | Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
-| Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with quiet lift | the primary key |
+| Send / Queue | `icon-lg` — 32px, `rounded-control`, a flat primary fill | the primary key |
 | Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
 | Text box at rest | `min-h-20`, `py-4`, content-grown | room for a short paragraph |
 | Footer tray | `px-2 py-2`, tinted `--muted`, hairline top edge | separates writing from configuration |
@@ -180,7 +180,7 @@ whose only control is the `+` — Automation instructions, the command-prompt bo
 full-width tint holding one 24px button reads as a container someone forgot to
 fill.
 
-The send key shares the 8px control
+The send key shares the 10px control
 radius; ordinary settings controls follow the same rounded-rectangle silhouette. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
 The chrome stays at one ink, so a resting composer never masquerades as disabled.
 
@@ -253,7 +253,7 @@ neutral black. Stock `shadow-xs`…`shadow-2xl` are banned by
 
 | Utility | Role |
 | --- | --- |
-| `shadow-raised` | On a surface (base of `shadow-control`): chips, the active tab in a strip, a board card in its column |
+| `shadow-raised` | On a surface: the active tab in a strip, a board card in its column. Never a control: controls are flat |
 | `shadow-card` | A pane or a sheet of paper: the floating/inset sidebar, a tile dragged off the board |
 | `shadow-overlay` | Portals to the body and floats over the whole window: menus, select, popover, hover card, dialogs, sheet, tooltip, the ⌘K palette |
 
@@ -332,28 +332,40 @@ Rules:
 
 ## System rules
 
-1. **Radius:** calm rounded rectangles, a softer shadcn-style scale. Compose
-   by role; inner corners subtract their inset from the outer radius. `--radius`
-   remains the 8px compatibility base; sm/md/lg/xl resolve to 4/6/6/10px.
+1. **Radius:** calm rounded rectangles on shadcn's "more rounded" scale.
+   `--radius` is 12px (0.75rem), authored once in `globals.css`, and sm/md/lg/xl
+   are shadcn's own formulas (r−4, r−2, r, r+4 = 8/10/12/16px), so a vendored
+   primitive's `rounded-md` lands on the same 10px as ours. Compose by role;
+   inner corners subtract their inset from the outer radius.
 
    | Utility | Radius | Role |
    |---|---|---|
-   | `rounded-control` | 6px | Controls, fields and tooltip labels |
-   | `rounded-container` | 10px | Cards, popovers and dialogs |
-   | `rounded-row` | 6px | Container rows at a 4px inset |
-   | `rounded-menu` | 8px | Dense menu and picker frames |
-   | `rounded-menu-item` | 4px | Menu highlights at a 4px inset |
-   | `rounded-keycap` | 2px | Keyboard hint chips, not controls |
+   | `rounded-control` (= `rounded-md`) | 10px | Controls, fields and tooltip labels |
+   | `rounded-container` | 14px | Cards, popovers and dialogs |
+   | `rounded-row` | 10px | Container rows at a 4px inset |
+   | `rounded-menu` (= `rounded-lg`) | 12px | Dense menu and picker frames |
+   | `rounded-menu-item` (= `rounded-sm`) | 8px | Menu highlights at a 4px inset |
+   | `rounded-keycap` | 6px | Keyboard hint chips, not controls |
+   | `rounded-xl` | 16px | The floating content card and other large frames |
 
    Pills are reserved for badges, switches, status chips and avatars. Checkboxes
-   use half the control radius, so they remain boxes rather than radios.
-2. **Depth:** Glass, tuned uses quiet lift on controls: a hairline, one 1px
-   inner top highlight and a 0/1px/2px soft drop. Hover strengthens the same
-   highlight; a press uses a small inset shadow. No gradient, sheen or lower
-   bevel. `shadow-control`, `shadow-control-hover` and `shadow-control-pressed`
-   share this recipe in light and dark. Filled actions keep their solved ink
-   pairs; ghost/link actions stay flat at rest. Disabled retains its material
-   at reduced opacity. This supersedes the separate dark-bevel experiment.
+   use half the control radius (5px), so they remain boxes rather than radios.
+2. **Depth: flat glass, no bevels.** No control draws an inset highlight, a
+   drop shadow or a press shadow, in either appearance. There are two faces:
+   - **Solid** — `default` (primary), `destructive` and the composer's send
+     key: an opaque solved fill. Hover darkens it 0.03 OKLab L and a press
+     0.06, which only ever adds contrast to the white label.
+   - **Glass** — `outline`, `secondary`, `ghost`, the selected segment, chips,
+     inputs, textareas, select triggers, the checkbox and the switch track: a
+     translucent tint of the foreground over whatever surface is beneath, so
+     the canvas and its material show through, edged by one `glass-edge`
+     hairline. The ladder is `glass-1` rest / well, `glass-2` hover,
+     `glass-3` press, `glass-4` selected; secondary sits one step above
+     outline, ghost is bare until hovered, and fields are `glass-1` wells.
+   The ladder is solved per appearance (`globals.css`, "THE GLASS LADDER"):
+   the edge to one contrast, the fills by eye so a light and a dark chip read
+   at the same weight. Focus keeps the opaque ring. Disabled keeps its face at
+   reduced opacity.
 3. **Geometry:** buttons, input, select trigger, segments and input-group share
    height and horizontal-inset tokens. Short labels fit the scale; long action
    labels wrap inside their measure and grow the target, never clip.
@@ -370,10 +382,10 @@ Rules:
    Icon-only targets are square. Text fields and groups accept `controlSize`;
    select triggers use `size`. Joined controls choose the same rung. Textareas
    keep a 32px floor and grow with their contents.
-4. **Contrast:** keep solved primary/destructive fill–ink pairs opaque. Secondary
-   fill mixes muted with foreground (80:20), with a strong border; selected
-   segments use the primary pair, unselected segments the outline treatment.
-   Validate secondary, selected, lift and tab states in light and dark.
+4. **Contrast:** keep solved primary/destructive fill–ink pairs opaque. Glass
+   controls carry foreground ink on their tint; the selected segment takes the
+   strongest glass step, unselected segments the outline treatment. Validate
+   secondary, selected and tab states in light and dark.
 5. **Weight:** regular (400) for body/value, medium (500) for control/field/menu
    labels, semibold (600) for titles and important feedback. Retain the five
    size rungs: label 11, ui 13, sm 14, heading 18, title 24px.
@@ -714,8 +726,8 @@ the qualifier is what they check. The right edge says only the column or `Armed`
 unarmed. Put the full state in the row's title and accessible name. Keep a
 `min-w-24` floor for the name: a qualifier must not outlive the thing it qualifies.
 
-**Every act wears one costume, and a row is not an act.** `RAIL_CONTROL` (`outline`, the sidebar's
-border, a `/30` wash, `shadow-raised`) is the recipe for every button a rail page presses — the
+**Every act wears one costume, and a row is not an act.** `RAIL_CONTROL` (`outline`'s own flat
+glass at the rail's type step) is the recipe for every button a rail page presses — the
 worktree footer's publish split, its `⋯`, its PR link. A control is sized to its label and parked
 at the left, never stretched across the column. Everything else that is pressable is a `ListRow`,
 and a row **opens the thing it names — it does not spend anything**. An Automation row

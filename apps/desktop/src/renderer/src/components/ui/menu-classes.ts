@@ -158,7 +158,7 @@ export const MENU_SHORTCUT =
 
 /** Shared separated search field and hint strip for cmdk and its two dialogs. */
 export const COMMAND_SEARCH_FIELD =
-  "m-2 flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-control border border-border bg-background px-2 shadow-raised";
+  "m-2 flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-control border border-glass-edge bg-glass-1 px-2";
 export const COMMAND_OVERLAY_FRAME =
   "fixed top-[18%] left-1/2 z-50 flex max-h-[calc(82svh-2rem)] w-[min(640px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay outline-none";
 export const COMMAND_FOOTER =

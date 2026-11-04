@@ -96,7 +96,7 @@ export function ComposerAddMenu({
             // `rotate-45` to the standalone property, the same trap
             // `ui/button.tsx` records for its press scale.
             className={cn(
-              "prompt-add text-muted-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground",
+              "prompt-add text-muted-foreground data-[state=open]:bg-glass-3 data-[state=open]:text-foreground",
               "[&>svg]:transition-[rotate] [&>svg]:duration-150 [&>svg]:ease-out data-[state=open]:[&>svg]:rotate-45 motion-reduce:[&>svg]:transition-none",
               className,
             )}

@@ -56,7 +56,7 @@ const buttonGroupVariants = cva(
   // `[&>*]:focus-visible` cannot lift one that a span is standing in front of.
   // Any depth, no nested-group guard: a focused button belongs above its
   // neighbours in every group it is in.
-  "control-group flex w-fit items-stretch has-[>[data-slot=button-group]]:gap-2 [&>*]:focus-visible:relative [&>*]:focus-visible:z-10 [&_[data-control=button]]:focus-visible:relative [&_[data-control=button]]:focus-visible:z-10 has-[select[aria-hidden=true]:last-child]:[&>[data-slot=select-trigger]:last-of-type]:rounded-r-control [&>[data-slot=select-trigger]:not([class*='w-'])]:w-fit [&>input]:flex-1",
+  "flex w-fit items-stretch has-[>[data-slot=button-group]]:gap-2 [&>*]:focus-visible:relative [&>*]:focus-visible:z-10 [&_[data-control=button]]:focus-visible:relative [&_[data-control=button]]:focus-visible:z-10 has-[select[aria-hidden=true]:last-child]:[&>[data-slot=select-trigger]:last-of-type]:rounded-r-control [&>[data-slot=select-trigger]:not([class*='w-'])]:w-fit [&>input]:flex-1",
   {
     variants: {
       orientation: {
@@ -99,7 +99,7 @@ function ButtonGroupText({
     <Comp
       data-slot="button-group-text"
       className={cn(
-        "flex items-center gap-2 rounded-control border border-border-strong control-material [--control-fill:var(--color-control-secondary)] bg-control-secondary px-control-pad-default text-ui font-medium shadow-control [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
+        "flex items-center gap-2 rounded-control border border-glass-edge bg-glass-2 px-control-pad-default text-ui font-medium [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}

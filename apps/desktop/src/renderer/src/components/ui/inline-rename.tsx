@@ -49,14 +49,14 @@ export type InlineRenameSize = "row" | "field" | "title";
  * `row` and `title` are their own drawings, not text fields: one is a 22px chip
  * that replaces a label in place, the other is a seamless `h1` whose only cue
  * is the caret. `field` IS the app's text field, so it renders {@link Input}
- * rather than restating its border, radius, inset and lift — the one variant
+ * rather than restating its border, radius and inset — the one variant
  * that could drift from the primitive is the one that cannot, because it is it.
  */
 const SIZE_CLASS: Record<Exclude<InlineRenameSize, "field">, string> = {
   // Height and type step belong to the primitive: the two strips that rename
   // had drifted to `h-5 w-40 text-ui` against `h-5 w-32 text-sm` before the
   // field was shared, and only the width was ever a decision.
-  row: "h-control-xs rounded-control border border-border-strong control-material [--control-fill:var(--background)] bg-background px-2 text-ui shadow-control",
+  row: "h-control-xs rounded-control border border-glass-edge bg-glass-1 px-2 text-ui",
   // No border, no fill, no ring — the input carries the heading's exact
   // typography so nothing shifts when you click into it.
   title: "w-full bg-transparent text-title font-semibold",

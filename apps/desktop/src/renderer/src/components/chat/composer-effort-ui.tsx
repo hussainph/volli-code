@@ -128,7 +128,7 @@ export function EffortPill({
           className={cn(
             COMPOSER_CONFIG_CHIP,
             "min-w-0 text-muted-foreground",
-            open && "bg-accent text-foreground",
+            open && "bg-glass-3 text-foreground",
             className,
           )}
         >
