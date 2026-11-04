@@ -139,7 +139,7 @@ export function ComposerFooter({
           disabled={disabled}
           aria-label="Create ticket"
           aria-keyshortcuts="Meta+Enter Control+Enter"
-          title="Create the ticket without starting any work (⌘↵)"
+          title="Create ticket (⌘↵)"
           className="shrink-0 rounded-r-none"
         >
           {/* No glyph. A `+` here would be the SECOND plus in the row — the Add
@@ -167,7 +167,7 @@ export function ComposerFooter({
             <Button
               size="icon"
               aria-label="Choose what starts"
-              title="Start chat, or run an Automation"
+              title="Choose what starts"
               data-testid="composer-launch-picker"
               className="shrink-0 rounded-l-none border-l border-primary-foreground/30"
             >
@@ -221,11 +221,7 @@ export function CreateRunAutomationItems({
   if (!ready || groups.length === 0) {
     return (
       <div className="px-2 py-1 text-ui text-muted-foreground">
-        {ready ? (
-          "No ticket automations in this project."
-        ) : (
-          <LoadingLabel>Reading automations</LoadingLabel>
-        )}
+        {ready ? "No ticket automations" : <LoadingLabel>Reading automations</LoadingLabel>}
       </div>
     );
   }
