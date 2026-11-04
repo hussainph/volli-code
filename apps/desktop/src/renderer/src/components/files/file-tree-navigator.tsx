@@ -263,7 +263,7 @@ function NavigatorScope({
       )}
       {truncated && (
         <p role="status" className="shrink-0 px-4 py-2 text-ui text-muted-foreground">
-          File limit reached. Use Open file to find more.
+          File limit reached
         </p>
       )}
       {available &&

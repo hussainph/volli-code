@@ -228,8 +228,9 @@ describe("HomeRail", () => {
     // same word the Files page uses for the same checkout.
     expect(markup).toContain("Volli Code");
     // Idle until something is typed: an empty Search page is a resting state,
-    // not a list of the whole checkout.
-    expect(markup).toContain('data-testid="file-search-idle"');
+    // not a list of the whole checkout, and not a prompt either.
+    expect(markup).not.toContain('data-testid="file-search-results"');
+    expect(markup).not.toContain("Type to find text");
   });
 
   it("draws ONE block on Now — the roster — and no Session-identity card", () => {

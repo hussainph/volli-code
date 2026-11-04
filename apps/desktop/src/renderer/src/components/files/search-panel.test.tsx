@@ -97,6 +97,18 @@ function rows(selector: string): Element[] {
   return [...document.querySelectorAll(selector)];
 }
 
+/** Idle is the field alone: no results, no empty claim, no wait, no prompt. */
+function expectIdle(): void {
+  const panel = document.querySelector('[data-testid="file-search-panel"]');
+  expect(panel).not.toBeNull();
+  expect(
+    rows(
+      '[data-testid="file-search-results"], [data-testid="file-search-empty"], [data-testid="file-search-pending"]',
+    ),
+  ).toHaveLength(0);
+  expect(panel?.textContent).not.toContain("Type to find text");
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   onOpenMatch.mockReset();
@@ -128,7 +140,7 @@ describe("what the page sends", () => {
     const { search } = await mount({ kind: "home", projectId: "p1" });
 
     expect(search).not.toHaveBeenCalled();
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
   });
 
   it("searches Main from Home", async () => {
@@ -246,7 +258,7 @@ describe("what the page draws", () => {
     }
   });
 
-  it("says out loud that a capped search is not the whole answer", async () => {
+  it("says a capped search is capped in its count, with no note under the results", async () => {
     await mount({ kind: "home", projectId: "p1" }, { ...oneMatch, matches: 500, limit: "matches" });
 
     await type("needle");
@@ -254,7 +266,7 @@ describe("what the page draws", () => {
     expect(document.querySelector('[data-testid="file-search-summary"]')?.textContent).toBe(
       "First 500 matches in 1 file",
     );
-    expect(rows('[data-testid="file-search-truncated"]')).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("There may be more");
   });
 
   it("keeps zero results distinct from a truncated result", async () => {
@@ -264,7 +276,6 @@ describe("what the page draws", () => {
     );
     await type("absent");
     expect(rows('[data-testid="file-search-empty"]')[0]?.textContent).toBe("No matches");
-    expect(rows('[data-testid="file-search-truncated"]')).toHaveLength(0);
   });
 
   it("reports a failed search rather than drawing it as no matches", async () => {
@@ -282,7 +293,7 @@ describe("what the page draws", () => {
 
     await type("");
 
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
   });
 });
@@ -567,7 +578,7 @@ describe("a scope swapped under the page", () => {
     expect(before?.isConnected).toBe(false);
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
     expect(summaryText()).toBeNull();
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
   });
 
   it("lets a search the old scope left in flight write nothing here", async () => {
@@ -581,7 +592,7 @@ describe("a scope swapped under the page", () => {
 
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
     expect(rows('[data-testid="file-search-error"]')).toHaveLength(0);
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
   });
 });
 
