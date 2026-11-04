@@ -1,3 +1,8 @@
+import * as React from "react";
+import { ChatsIcon as Chats } from "@phosphor-icons/react/dist/csr/Chats";
+import { TreeStructureIcon as TreeStructure } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import { Segmented } from "@renderer/components/ui/segmented";
+import { SidebarFiles } from "./sidebar-files";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
@@ -45,14 +50,20 @@ import { useUiStore } from "@renderer/stores/ui";
  * to come out of the calc or the pane is wider than the box clipping it and the
  * overhang is shaved off the right.
  */
+// Plain per-window memory: no durable preference or renderer storage. The
+// choice survives sidebar remounts without changing any workspace's lifetime.
+let rememberedContent: "sessions" | "files" = "sessions";
+
 export function PrimarySidebar() {
   const selected = useSelectedProject();
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
+  const [content, setContent] = React.useState(() => rememberedContent);
+  const filesVisible = content === "files";
   // The Session bands ride with Home, which is the one page their rows navigate
   // into — both a Ticket view and a Board Session are reached from there.
-  const sessionsVisible = !settingsOpen && activeNav === "home";
+  const sessionsVisible = !settingsOpen && activeNav === "home" && content === "sessions";
 
   return (
     <div className="relative h-full w-full overflow-hidden">
@@ -76,15 +87,32 @@ export function PrimarySidebar() {
         {selected ? (
           <>
             <NavList />
-            <SidebarScrollArea>
-              <div className={cn(!sessionsVisible && "hidden")}>
-                {/* Render-hidden, not unmounted — so the section cannot tell it
+            <div className="shrink-0 px-4 py-2">
+              <Segmented
+                ariaLabel="Sidebar content"
+                value={content}
+                options={[
+                  { key: "sessions", label: "Sessions", icon: Chats },
+                  { key: "files", label: "Files", icon: TreeStructure },
+                ]}
+                onChange={(next) => {
+                  rememberedContent = next;
+                  setContent(next);
+                }}
+              />
+            </div>
+            {filesVisible && <SidebarFiles project={selected} />}
+            <div className={cn("flex min-h-0 flex-1 flex-col", content === "files" && "hidden")}>
+              <SidebarScrollArea>
+                <div className={cn(!sessionsVisible && "hidden")}>
+                  {/* Render-hidden, not unmounted — so the section cannot tell it
                     is off screen, and the coarse chat-activity poll it runs
                     would keep firing behind Configure or Settings. `visible`
                     is that fact, handed down from the one place that has it. */}
-                <ActiveSessions project={selected} visible={sessionsVisible} />
-              </div>
-            </SidebarScrollArea>
+                  <ActiveSessions project={selected} visible={sessionsVisible} />
+                </div>
+              </SidebarScrollArea>
+            </div>
           </>
         ) : (
           <SidebarContent />

@@ -66,7 +66,7 @@ const OTHER_PROJECT: Project = {
 function listings() {
   const queue: ((result: ListDirectoryResult) => void)[] = [];
   const listDirectory = vi.fn(
-    async (): Promise<ListDirectoryResult> =>
+    async (_scope: { projectId: string }): Promise<ListDirectoryResult> =>
       await new Promise<ListDirectoryResult>((resolve) => queue.push(resolve)),
   );
   return {
@@ -100,8 +100,19 @@ function api(listDirectory: ReturnType<typeof listings>["listDirectory"]) {
     configurable: true,
     value: {
       projects: { syncRoots: async () => ({ ok: true }) },
-      fs: { listDirectory },
       files: {
+        index: async (scope: { projectId: string }) => {
+          const result = await listDirectory(scope);
+          return result.ok
+            ? {
+                ok: true,
+                files: result.entries
+                  .filter((entry) => entry.kind === "file")
+                  .map((entry) => ({ relPath: entry.name, kind: "other", artifact: false })),
+                truncated: false,
+              }
+            : result;
+        },
         watchDir: async () => ({ ok: true }),
         unwatchDir: async () => ({ ok: true }),
         onDirChanged: () => () => {},
@@ -127,6 +138,13 @@ describe("HomeFilesPanel across a project switch", () => {
 
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -169,7 +187,7 @@ describe("HomeFilesPanel across a project switch", () => {
     expect(after?.textContent).toContain("Other Repo");
     expect(after?.textContent).not.toContain("Volli Code");
     expect(rows()).toHaveLength(0);
-    expect([...document.querySelectorAll('[data-testid="home-files-loading"]')]).toHaveLength(1);
+    expect([...document.querySelectorAll('[data-testid="file-tree-loading"]')]).toHaveLength(1);
   });
 
   it("lets no late listing from the old project land on the new one", async () => {
@@ -184,10 +202,10 @@ describe("HomeFilesPanel across a project switch", () => {
     expect(document.body.textContent).not.toContain("stale.md");
     expect(rows()).toHaveLength(0);
     // Still the new project's own first read, not a landed one.
-    expect([...document.querySelectorAll('[data-testid="home-files-loading"]')]).toHaveLength(1);
+    expect([...document.querySelectorAll('[data-testid="file-tree-loading"]')]).toHaveLength(1);
   });
 
-  it("keeps each project's remembered folder, and asks for that folder", async () => {
+  it("keeps each project's selected folder and filter while indexing the whole checkout", async () => {
     writeNavigatorView(navigatorScopeKey("files", { projectId: OTHER_PROJECT.id }), {
       cwd: "src",
       filtering: true,
@@ -200,7 +218,10 @@ describe("HomeFilesPanel across a project switch", () => {
 
     await show(OTHER_PROJECT);
 
-    expect(reads.listDirectory).toHaveBeenLastCalledWith("/code/other/src");
+    expect(reads.listDirectory).toHaveBeenLastCalledWith({
+      projectId: OTHER_PROJECT.id,
+      ticketId: undefined,
+    });
     expect(document.querySelector("input")?.value).toBe("rail");
   });
 });

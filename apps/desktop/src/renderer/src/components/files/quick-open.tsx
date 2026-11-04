@@ -35,7 +35,14 @@ import {
   quickOpenSurfaceFiles,
 } from "@renderer/components/files/quick-open-model";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
+import {
+  COMMAND_FOOTER,
+  COMMAND_OVERLAY_FRAME,
+  COMMAND_SEARCH_FIELD,
+  MENU_SHORTCUT,
+  COMMAND_RESULT_ROW,
+} from "@renderer/components/ui/menu-classes";
+import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -47,7 +54,7 @@ import { remoteHostNow } from "@renderer/stores/remote-project";
  * file's name and its folder are one fact read left to right, and the list is
  * long enough that 52px rows would show half as many of them.
  */
-const QUICK_OPEN_ROW = `flex h-7 cursor-default items-center gap-2 rounded-lg px-2 outline-none ${MENU_ROW_STATE_CMDK}`;
+const QUICK_OPEN_ROW = cn(COMMAND_RESULT_ROW, "h-7");
 
 /** The row's leading glyph: bare and muted, exactly the palette's. */
 const QUICK_OPEN_ROW_ICON = "size-4 shrink-0 text-muted-foreground";
@@ -182,9 +189,9 @@ export function QuickOpen({
       // chords onto the same spot are one drawing, not two that resemble
       // each other.
       overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
-      contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-foreground shadow-overlay outline-none"
+      contentClassName={COMMAND_OVERLAY_FRAME}
     >
-      <div className="flex h-9 items-center gap-2 border-b border-border px-4">
+      <div className={COMMAND_SEARCH_FIELD}>
         <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <Command.Input
           autoFocus
@@ -202,13 +209,11 @@ export function QuickOpen({
           disabled={scope === null}
           className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <kbd className="rounded-md border border-border bg-muted px-1 py-1 text-label text-muted-foreground">
-          esc
-        </kbd>
+        <kbd className={MENU_SHORTCUT}>Esc</kbd>
       </div>
       <Command.List
         data-testid="quick-open-list"
-        className="max-h-[min(460px,60vh)] overflow-y-auto p-2 [scrollbar-gutter:stable]"
+        className="min-h-0 max-h-[min(460px,60svh)] overflow-x-hidden overflow-y-auto overscroll-contain p-1"
       >
         <Command.Empty className={EMPTY_INLINE}>
           {/* Three different nothings, said apart. "No matching files" over a
@@ -226,6 +231,7 @@ export function QuickOpen({
           <Command.Item
             key={row.relPath}
             value={row.relPath}
+            title={row.relPath}
             onPointerDown={(event) => {
               pinIntent.current = event.metaKey;
             }}
@@ -233,17 +239,25 @@ export function QuickOpen({
             className={QUICK_OPEN_ROW}
           >
             <FileIcon aria-hidden className={QUICK_OPEN_ROW_ICON} />
-            <span className="truncate text-ui">{row.label}</span>
-            <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">
+            <span className="min-w-0 max-w-[60%] truncate text-ui font-medium" title={row.relPath}>
+              {row.label}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-label font-normal text-muted-foreground">
               {row.detail}
             </span>
           </Command.Item>
         ))}
       </Command.List>
-      <div className="flex h-9 items-center justify-end gap-4 border-t border-border px-4 text-label text-muted-foreground">
-        <span>↑↓ navigate</span>
-        <span>↵ preview</span>
-        <span>⌘↵ pin</span>
+      <div className={COMMAND_FOOTER}>
+        <span className="inline-flex items-center gap-1">
+          <kbd className={cn(MENU_SHORTCUT, "ml-0")}>↑↓</kbd>Navigate
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className={cn(MENU_SHORTCUT, "ml-0")}>↵</kbd>Preview
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className={cn(MENU_SHORTCUT, "ml-0")}>⌘↵</kbd>Pin
+        </span>
       </div>
     </Command.Dialog>
   );

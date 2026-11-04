@@ -133,8 +133,8 @@ function homeFilesPanel(page) {
   return page.getByTestId("home-files-panel");
 }
 
-/** One row in the Home Files navigator's CURRENT folder — `relPath` is always
- * the full project-relative path (`ticket-files-panel.tsx`'s `FileRow`). */
+/** One row in the Home Files tree — `relPath` is always the full
+ * project-relative path (`files/file-tree.tsx`). */
 function fileRow(page, relPath) {
   return homeFilesPanel(page).locator(`[data-testid="ticket-files-row"][data-path="${relPath}"]`);
 }
@@ -172,14 +172,17 @@ async function openHomeFilesRail(page) {
   await waitUntil("Home Files panel", async () => (await homeFilesPanel(page).count()) === 1);
 }
 
-/** Walk the navigator into root-level directory `dirRelPath` and wait for
- * `expectChild`'s row (a full relPath) to appear inside it. */
+/** Open root-level directory `dirRelPath` in the navigator's tree and wait for
+ * `expectChild`'s row (a full relPath) to appear inside it. A click on an open
+ * folder folds it, so an already-open folder is left as it is. */
 async function navigateIntoDir(page, dirRelPath, expectChild) {
   await waitUntil(
     `${dirRelPath}/ row`,
     async () => (await fileRow(page, dirRelPath).count()) === 1,
   );
-  await fileRow(page, dirRelPath).click();
+  if ((await fileRow(page, dirRelPath).getAttribute("aria-expanded")) !== "true") {
+    await fileRow(page, dirRelPath).click();
+  }
   await waitUntil(
     `navigator inside ${dirRelPath}/`,
     async () => (await fileRow(page, expectChild).count()) === 1,
@@ -188,7 +191,7 @@ async function navigateIntoDir(page, dirRelPath, expectChild) {
 
 /** Walk the navigator back out to the project root. */
 async function navigateToRoot(page) {
-  const up = homeFilesPanel(page).getByTestId("home-files-up");
+  const up = homeFilesPanel(page).getByTestId("file-tree-up");
   for (let guard = 0; guard < 10 && (await up.count()) === 1; guard += 1) {
     await up.click();
     await sleep(50);

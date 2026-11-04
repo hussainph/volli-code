@@ -377,11 +377,14 @@ async function findInDiff(page, text) {
 async function openFileFromRail(aside, path = TARGET, { pin = false } = {}) {
   await aside.getByTestId("ticket-rail-tab-files").click();
   await waitUntil(
-    "Files list",
-    async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
+    "Files tree",
+    async () => (await aside.getByRole("tree", { name: "Files" }).count()) === 1,
   );
+  // Expand src/ only while it is folded: a click on an open folder folds it.
   const src = aside.locator('[data-testid="ticket-files-row"][data-path="src"]');
-  if ((await src.count()) === 1) await src.click();
+  if ((await src.count()) === 1 && (await src.getAttribute("aria-expanded")) !== "true") {
+    await src.click();
+  }
   const row = aside.locator(`[data-testid="ticket-files-row"][data-path="${path}"]`);
   await waitUntil(`${path} Files row`, async () => (await row.count()) === 1);
   if (pin) await row.dblclick();

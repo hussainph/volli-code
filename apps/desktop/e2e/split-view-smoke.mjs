@@ -89,8 +89,8 @@ const DRAGGED_FILE = "README.md";
 const FILE_ROW = `[data-testid="ticket-files-row"][data-path="${DRAGGED_FILE}"]`;
 /**
  * A second committed file, for the reorder check's second movable tab. At the
- * repository ROOT on purpose: the navigator lists one folder at a time, so a
- * file under `docs/` is not a row until somebody opens `docs/`.
+ * repository ROOT on purpose: the navigator's folders start folded, so a file
+ * under `docs/` is not a row until somebody opens `docs/`.
  */
 const SECOND_FILE = "second.md";
 const SECOND_ROW = `[data-testid="ticket-files-row"][data-path="${SECOND_FILE}"]`;
@@ -819,8 +819,8 @@ async function main() {
         const aside = page.locator("aside");
         await aside.getByTestId("ticket-rail-tab-files").click();
         await waitUntil(
-          "the files list",
-          async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
+          "the files tree",
+          async () => (await aside.getByRole("tree", { name: "Files" }).count()) === 1,
           { timeout: 10_000 },
         );
         await waitUntil("the file row", async () => (await aside.locator(FILE_ROW).count()) === 1, {
