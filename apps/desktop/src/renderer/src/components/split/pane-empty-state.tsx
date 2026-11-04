@@ -6,7 +6,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type { Icon } from "@phosphor-icons/react";
 
 import { MENU_SHORTCUT } from "@renderer/components/ui/menu-classes";
-import { cn } from "@renderer/lib/utils";
+import { Button } from "@renderer/components/ui/button";
 
 /**
  * WHAT AN EMPTY PANE OFFERS (VC-202 §3).
@@ -26,7 +26,7 @@ import { cn } from "@renderer/lib/utils";
  * shown joins the focused pane (`split-view.ts`'s `openTab`). Close pane is the
  * one row that is about the pane itself.
  *
- * 32px rows: `docs/DESIGN.md`'s `lg` rung, the one it reserves for "rare hero
+ * Large shared push buttons: `docs/DESIGN.md`'s `lg` rung, the one it reserves for "rare hero
  * actions (empty states)", which is exactly what these are. The shortcut hint
  * is the menus' own (`MENU_SHORTCUT`) so a chord reads the same here as in the
  * menu that also offers it.
@@ -97,8 +97,10 @@ function PaneEmptyRow({
   onSelect(): void;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="lg"
       // The row a `⌘\` pane hands keyboard focus to — see
       // `hooks/use-split-shortcuts.ts` for why a keyboard split moves focus
       // when a pointer one deliberately does not.
@@ -107,22 +109,13 @@ function PaneEmptyRow({
       aria-label={label}
       {...(keyshortcuts === undefined ? {} : { "aria-keyshortcuts": keyshortcuts })}
       onClick={onSelect}
-      className={cn(
-        "flex h-8 w-full items-center gap-2 rounded-md px-2 text-ui text-foreground outline-none",
-        // Colour on hover, and the house press feedback: a row that does not
-        // move under the finger reads as a label rather than a control
-        // (`ui/button.tsx` documents the scale and its reduced-motion cancel).
-        "transition-[color,background-color,scale] duration-150 ease-out",
-        "hover:bg-accent/50 active:scale-[0.97] active:bg-accent/70",
-        "motion-reduce:transition-[color,background-color] motion-reduce:scale-100!",
-        "focus-visible:ring-2 focus-visible:ring-ring",
-      )}
+      className="w-full justify-start rounded-row px-2 text-ui hover:bg-(--accent-tint)"
     >
       {/* Outline at 14px: these are five peers, and none of them is the
           exception the fill weight marks (CLAUDE.md). */}
       <Glyph aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
       {shortcut === undefined ? null : <span className={MENU_SHORTCUT}>{shortcut}</span>}
-    </button>
+    </Button>
   );
 }
