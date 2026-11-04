@@ -46,7 +46,7 @@ describe("a compaction that happened", () => {
   it("says what happened, why, and what the reader is now looking at", () => {
     expect(html).toContain("Context compacted");
     expect(html).toContain("the window filled");
-    expect(html).toContain("Older messages above are no longer sent to the model");
+    expect(html).not.toContain('<p class="text-ui text-muted-foreground">');
   });
 
   it("carries the measured count and no estimate of what replaced it", () => {
@@ -64,8 +64,8 @@ describe("a compaction in progress", () => {
     );
 
     expect(html).toContain('role="status"');
-    expect(html).toContain("Compacting context…");
-    expect(html).toContain("Preparing a shorter working context");
+    expect(html).toContain("Compacting context");
+    expect(html).not.toContain("Preparing a shorter working context");
     expect(html).not.toContain('data-slot="separator"');
   });
 
@@ -76,7 +76,8 @@ describe("a compaction in progress", () => {
       <CompactionProgress compaction={{ throughSequence: 12, reason }} />,
     );
 
-    expect(html).toContain("Compacting context on its own…");
+    expect(html).toContain("Compacting context");
+    expect(html).toContain('title="Automatic compaction"');
   });
 });
 
@@ -90,7 +91,7 @@ describe("a compaction that failed", () => {
   it("says that the context is exactly as it was, in the executor's own words", () => {
     expect(html).toContain("Compaction failed");
     expect(html).toContain("the provider refused this turn");
-    expect(html).toContain("The context was left as it was.");
+    expect(html).not.toContain('<p class="text-ui text-muted-foreground">');
     expect(html).toContain("The summarizer refused the request.");
   });
 

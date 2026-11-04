@@ -126,6 +126,50 @@ describe("collapsed live bundles", () => {
     expect(html.match(/animate-spin/g)).toHaveLength(1);
     expect(html).toContain("Reading");
   });
+
+  it("draws every progress mark as the shared Spinner in a fixed slot, stilled for reduced motion", () => {
+    const runningTool: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "read",
+      toolCallId: "read-live",
+      toolMetadata: row.toolMetadata,
+      state: "input-available",
+      input: { path: "src/session.ts" },
+    };
+    const thought = {
+      kind: "reasoning" as const,
+      key: "thought",
+      streaming: true,
+      part: { type: "reasoning" as const, text: "**Checking**", state: "streaming" as const },
+    };
+    const markup = [
+      // Collapsed header mark (untracked), then the two row marks (tracked).
+      renderToStaticMarkup(
+        <ActivityBundle rows={[{ kind: "tool", key: "t", part: runningTool }]} />,
+      ),
+      renderToStaticMarkup(<ToolRow part={runningTool} />),
+      renderToStaticMarkup(<ActivityBundle rows={[thought]} />),
+    ];
+    const slots = markup.map((html) => {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const spinners = doc.querySelectorAll("svg.animate-spin");
+      expect(spinners).toHaveLength(1);
+      const spinner = spinners[0]!;
+      // Decorative: the verb already says it, and no second status region appears.
+      expect(spinner.getAttribute("role")).toBe("presentation");
+      expect(spinner.getAttribute("aria-hidden")).toBe("true");
+      expect(doc.querySelector('[role="status"]')).toBeNull();
+      expect([...spinner.classList]).toEqual(
+        expect.arrayContaining(["size-full", "text-primary", "motion-reduce:animate-none"]),
+      );
+      const slot = spinner.parentElement!;
+      expect(slot.tagName).toBe("SPAN");
+      expect(slot.getAttribute("aria-hidden")).toBe("true");
+      expect(slot.className).toBe("flex size-3.5 shrink-0");
+      return slot.hasAttribute("data-activity-progress");
+    });
+    expect(slots).toEqual([false, true, true]);
+  });
 });
 
 describe("legacy approval rows", () => {

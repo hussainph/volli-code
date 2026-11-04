@@ -13,12 +13,19 @@
 import * as React from "react";
 import { useStore } from "zustand";
 import { agentStateWord, type IslandAgent } from "@volli/session-presentation";
+import {
+  CheckCircleIcon,
+  HandIcon,
+  PauseCircleIcon,
+  WarningCircleIcon,
+} from "@phosphor-icons/react";
 
 import type { ChatSessionsStore } from "@renderer/chat/use-session-controller";
 import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { SessionPeekDialog } from "@renderer/components/chat/session-peek-dialog";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { Spinner } from "@renderer/components/ui/spinner";
 
 export interface SubagentPeekDialogProps {
   agent: IslandAgent | null;
@@ -46,7 +53,7 @@ export function SubagentPeekDialog({
     <SessionPeekDialog
       open={agent !== null}
       title={agent?.label ?? "Conversation"}
-      state={agent === null ? undefined : agentStateWord(agent)}
+      state={agent === null ? undefined : <SubagentState agent={agent} />}
       metadata={
         agent === null ? undefined : <AgentModelLine agent={agent} className="max-w-full text-ui" />
       }
@@ -76,6 +83,29 @@ export function SubagentPeekDialog({
         )
       }
     </SessionPeekDialog>
+  );
+}
+
+function SubagentState({ agent }: { agent: IslandAgent }) {
+  // Promotion is already named by the header action; the state reports activity only.
+  const word = agentStateWord({ ...agent, promoted: false });
+  const Icon = {
+    working: Spinner,
+    done: CheckCircleIcon,
+    failed: WarningCircleIcon,
+    stopped: PauseCircleIcon,
+    waiting: HandIcon,
+  }[agent.state];
+  return (
+    <>
+      <Icon
+        aria-hidden
+        className={
+          agent.state === "failed" ? "size-4 text-destructive" : "size-4 motion-reduce:animate-none"
+        }
+      />
+      {word.charAt(0).toUpperCase() + word.slice(1)}
+    </>
   );
 }
 

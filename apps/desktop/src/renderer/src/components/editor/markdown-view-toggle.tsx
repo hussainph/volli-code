@@ -2,11 +2,9 @@
  * The markdown file tab's view control (plan §4.6, VC-192; the Preview slot,
  * VC-307).
  *
- * Icons in the segmented control's own pressed/unpressed language, in the same
- * slim band idiom the diff pane's controls live in — `Code` for the file's own
- * bytes, `Article` for the rendered document, `Eye` for the read-only preview.
- * `iconOnly` keeps each word as the accessible name, which is what makes the
- * switch cost one control's width instead of a strip of prose.
+ * Labeled buttons share one group in the file's control band: Source for the
+ * file's bytes, Document for the rendered editor, and Preview for the read-only
+ * fallback. Each button exposes its pressed state and keeps its word visible.
  *
  * The band draws ONLY on markdown file tabs (`offersMarkdownViewToggle`), which
  * is the whole reason it is allowed to exist at all: the house rule from VC-187
@@ -73,7 +71,6 @@ export function MarkdownViewToggle({
         testId="file-markdown-view"
         value={view}
         options={refusal === null ? EDITABLE_VIEWS : REFUSED_VIEWS}
-        iconOnly
         className="shrink-0"
         onChange={onChange}
       />

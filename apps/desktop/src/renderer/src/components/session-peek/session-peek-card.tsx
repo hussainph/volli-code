@@ -14,7 +14,7 @@
  *     questions, redirection, refusal and the submission latch that makes
  *     "exactly one of them happens" true (plan §1.3, §0.6).
  *   • NO UNDO, in any form (plan §3.2, amendment A4). Send is the composer's
- *     Send: one press, `Sending…`, then `Sent` for ~2s and the card closes; a
+ *     Send: one press, `Sending` with a spinner, then `Sent` for ~2s and the card closes; a
  *     failure keeps the words with a `Try again`.
  *   • A PEEK NEVER READS (D6). There is no read side effect anywhere in this
  *     file: it says `Unread` and leaves the dot alone. Only opening, replying,
@@ -52,6 +52,7 @@ import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Skeleton } from "@renderer/components/ui/skeleton";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
@@ -81,7 +82,8 @@ export const PEEK_FRAME =
  * rung on a popover, off the spacing ladder by measurement and recorded in
  * `docs/DESIGN.md`: 8 halves the edge, 16 costs a line of the summary fold.
  */
-export const CARD_HEADER = "flex shrink-0 items-start gap-2 border-b border-border p-3";
+export const CARD_HEADER =
+  "flex shrink-0 items-start gap-2 p-3 relative after:absolute after:bottom-0 after:left-[10%] after:w-4/5 after:border-b after:border-border";
 /**
  * The header's text column: 2px down, so a 20px first line centres on the 24px
  * mark, and a 2px join that binds the title to its own meta line. Both measured
@@ -131,7 +133,7 @@ export function FolderStrip({ ticketLabel, onBack }: { ticketLabel: string; onBa
   return (
     <div
       data-peek-strip=""
-      className="flex shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-3 py-1 text-muted-foreground"
+      className="flex shrink-0 items-center gap-1 relative after:absolute after:bottom-0 after:left-[10%] after:w-4/5 after:border-b after:border-border bg-muted/30 px-3 py-1 text-muted-foreground"
     >
       {onBack === undefined ? (
         <span className={cn("inline-flex h-5 items-center", crumb)}>
@@ -287,6 +289,8 @@ function Summary({
         ) : state === "unavailable" ? (
           <p>Summary unavailable</p>
         ) : (
+          // VC-473: the whole summary, unclamped; the card's body scroller is
+          // what bounds it, so its end stays reachable without a click.
           <p data-peek-summary="" className="whitespace-pre-wrap [overflow-wrap:anywhere]">
             {summary}
           </p>
@@ -525,7 +529,7 @@ export function SessionPeekCard({
         </CardBlock>
       ) : null}
       {transcript || canReply ? (
-        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-3 py-2">
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 relative before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border bg-muted/30 px-3 py-2">
           {transcript ? (
             <Button
               data-view-conversation=""
@@ -551,9 +555,13 @@ export function SessionPeekCard({
                 size="sm"
                 disabled={message.trim() === "" || send.kind === "sending" || send.kind === "sent"}
               >
-                <PaperPlaneTiltIcon />
+                {send.kind === "sending" ? (
+                  <Spinner aria-label="Sending" />
+                ) : (
+                  <PaperPlaneTiltIcon />
+                )}
                 {send.kind === "sending"
-                  ? "Sending…"
+                  ? "Sending"
                   : send.kind === "failed"
                     ? "Try again"
                     : "Send"}

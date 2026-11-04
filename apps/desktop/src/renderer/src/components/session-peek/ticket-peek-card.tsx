@@ -21,7 +21,6 @@
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { displayTicketId, TICKET_STATUS_LABELS, type Ticket } from "@volli/shared";
 
@@ -157,11 +156,6 @@ export function TicketPeekCard({
                     {session.summary ?? "No summary yet"}
                   </span>
                 </span>
-                <CaretRightIcon
-                  aria-hidden
-                  weight="bold"
-                  className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/drill:opacity-100 group-focus-visible/drill:opacity-100 motion-reduce:transition-none"
-                />
               </button>
             </li>
           ))}

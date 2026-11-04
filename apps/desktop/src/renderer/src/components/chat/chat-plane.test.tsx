@@ -53,9 +53,12 @@ describe("the desktop transcript-row mapping", () => {
       <ChatTranscriptRow row={row} context={context} live={false} />,
     );
     expect(html).toContain("Tools updated: 1 added");
-    expect(html).toContain("Cold turn");
-    expect(html).toContain("codemode (updated)");
-    expect(html).toContain("<details");
+    // The shared Collapsible, closed at rest: the trigger says what changed;
+    // the trigger and names wait behind it (tool-refresh-notice-ui.tsx).
+    expect(html).toContain('data-slot="collapsible"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("Cold turn");
+    expect(html).not.toContain("<details");
     expect(html).not.toContain("is-user");
     expect(html).not.toContain('role="alert"');
   });
@@ -145,6 +148,10 @@ describe("ChatTurn copy control", () => {
     });
 
     expect(html).toContain('aria-label="Copy"');
+    expect(html).toContain('data-size="icon"');
+    expect(html).toContain('title="Copy"');
+    expect(html).not.toContain("left-[calc(100%");
+    expect(html).not.toContain("pointer-events-none absolute top-0");
   });
 });
 
@@ -173,10 +180,14 @@ describe("SessionBlocker hit testing", () => {
     // rather than a behaviour. Keeps main's `data-slot` requirement, since the
     // slot is how this element is addressed, without re-pinning the position
     // of the next attribute somebody adds.
-    expect(html).toMatch(
-      /^<div class="pointer-events-none"><div\b[^>]*\bdata-slot="session-blocker"[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
-    );
-    expect(html).toContain('aria-label="Dismiss"');
+    const blocker = /^<div class="pointer-events-none">(<div\b[^>]*>)/.exec(html)?.[1] ?? "";
+    expect(blocker).toContain('data-slot="session-blocker"');
+    expect(blocker).toMatch(/\bclass="[^"]*\bpointer-events-auto\b/);
+    // Drawn by the shared Notice: its dismissal, its copy and its recovery.
+    expect(html).toContain('aria-label="Dismiss notice"');
+    expect(html).toContain(">Retry</button>");
+    expect(html).toContain("Copy error");
+    expect(html).toContain("Stream ended without finish_reason");
   });
 
   // VC-584: the failed environment setup's row, the one with a third act.

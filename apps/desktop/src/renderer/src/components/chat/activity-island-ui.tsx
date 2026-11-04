@@ -639,9 +639,7 @@ function Card({
     <div className="flex cursor-default flex-col select-none">
       <div className="flex h-6 items-center gap-1.5 px-2">
         <Glyph className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-label font-medium text-muted-foreground uppercase">
-          {heading}
-        </span>
+        <h3 className="min-w-0 flex-1 truncate text-ui font-semibold text-foreground">{heading}</h3>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

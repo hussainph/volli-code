@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * A background shell's tail, read-only (VC-270): what `openShell` opens.
  *
@@ -92,7 +93,13 @@ export function ShellOutputView({ shellId, api, className }: ShellOutputViewProp
           {shell === null ? shellId : (shell.title ?? shellCommandLine(shell.command))}
         </span>
         <span className="shrink-0 text-muted-foreground" data-shell-standing>
-          {gone ? "gone" : shell === null ? "…" : shellStanding(shell)}
+          {gone ? (
+            "gone"
+          ) : shell === null ? (
+            <Spinner aria-label="Reading shell" />
+          ) : (
+            shellStanding(shell)
+          )}
         </span>
       </div>
       <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
