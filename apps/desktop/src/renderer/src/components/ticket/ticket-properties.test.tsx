@@ -74,14 +74,6 @@ function query<T extends Element>(selector: string): T {
   return found;
 }
 
-/** A row's leading glyph wrapper: the decorative mark at the left of the line. */
-function glyph(field: string): HTMLElement {
-  const row = query<HTMLElement>(`[data-testid="ticket-rail-property-row-${field}"]`);
-  const first = row.firstElementChild;
-  if (!(first instanceof HTMLElement)) throw new Error(`no glyph on the ${field} row`);
-  return first;
-}
-
 function pills(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>('[data-testid="ticket-rail-label-pill"]')];
 }
@@ -177,46 +169,34 @@ afterEach(async () => {
 });
 
 describe("the property rows", () => {
-  it("draws the value as a 28px dropdown trigger, and no field caption beside it", async () => {
+  it("aligns named properties with borderless 24px pop-ups and wrapping chips", async () => {
     await render();
-
-    const status = query<HTMLButtonElement>('[data-testid="ticket-rail-property-status"]');
-    const priority = query<HTMLButtonElement>('[data-testid="ticket-rail-property-priority"]');
-    // The app's own compact trigger: 28px tall, sized to its label.
-    expect(status.className).toContain("min-h-control-default");
-    expect(priority.className).toContain("min-h-control-default");
-    // The value is the only thing the row spends ink on.
-    expect(status.textContent).toContain("Todo");
-    expect(priority.textContent).toContain("Medium");
-    // The caption that used to trail each row is gone from all three — the
-    // glyph at the left already says which field the line is.
-    for (const [field, word] of [
-      ["status", "Status"],
-      ["priority", "Priority"],
-      ["labels", "Labels"],
-    ] as const) {
-      expect(query(`[data-testid="ticket-rail-property-row-${field}"]`).textContent).not.toContain(
-        word,
-      );
+    for (const [field, label, value] of [
+      ["status", "Status", "Todo"],
+      ["priority", "Priority", "Medium"],
+    ]) {
+      const trigger = query<HTMLButtonElement>(`[data-testid="ticket-rail-property-${field}"]`);
+      const row = query(`[data-testid="ticket-rail-property-row-${field}"]`);
+      expect(row.firstElementChild?.textContent).toBe(label);
+      expect(row.className).toContain("grid-cols-[4rem_minmax(0,1fr)]");
+      expect(trigger.dataset.variant).toBe("inspector");
+      expect(trigger.dataset.size).toBe("sm");
+      expect(trigger.textContent).toContain(value);
+      expect(trigger.getAttribute("aria-label")).toBe(`${label}: ${value}`);
+      expect(trigger.querySelectorAll("svg")).toHaveLength(2);
+      expect(trigger.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     }
-    // Nothing beside the control names the field, so the control still does:
-    // "Todo" alone names no field.
-    expect(status.getAttribute("aria-label")).toBe("Status: Todo");
-    expect(priority.getAttribute("aria-label")).toBe("Priority: Medium");
+    const labels = query('[data-testid="ticket-rail-property-row-labels"]');
+    expect(labels.firstElementChild?.textContent).toBe("Labels");
+    expect(labels.className).toContain("grid-cols-[4rem_minmax(0,1fr)]");
   });
 
-  it("keeps the leading glyph, decorative beside the control that names the field", async () => {
+  it("keeps the radio check as the only mark in plain choice menus", async () => {
     await render();
-
-    for (const field of ["status", "priority", "labels"]) {
-      const mark = glyph(field);
-      expect(mark.querySelector('svg, [role="img"]')).not.toBeNull();
-      expect(mark.getAttribute("aria-hidden")).toBe("true");
-    }
-    // `PriorityIndicator` is a labelled `img`: hidden, it cannot say
-    // "Priority: Medium" a second time beside the trigger that says it.
-    const indicator = query('[role="img"][aria-label="Priority: Medium"]');
-    expect(indicator.closest("[aria-hidden]")).toBe(glyph("priority"));
+    await press(query('[data-testid="ticket-rail-property-status"]'));
+    expect(optionRow("Todo").getAttribute("aria-checked")).toBe("true");
+    expect(optionRow("Doing").getAttribute("aria-checked")).toBe("false");
+    expect(optionRow("Doing").querySelectorAll("svg")).toHaveLength(0);
   });
 
   it("is not itself a target: the row holds one control and answers no press", async () => {

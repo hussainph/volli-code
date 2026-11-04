@@ -358,12 +358,12 @@ export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
+          variant="inspector"
           size="sm"
           data-testid="ticket-worktree-destination"
           disabled={!canWrite}
           aria-label={`Working destination: ${label}`}
-          className="w-fit gap-1 border border-border px-2 text-ui text-foreground"
+          className="w-fit gap-1 px-2 text-ui text-foreground"
         >
           {ticket.usesWorktree ? <GitBranchIcon /> : <FolderOpenIcon />}
           {label}
@@ -429,12 +429,12 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
     <DropdownMenu onOpenChange={(open) => open && void loadBranches()}>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
+          variant="inspector"
           size="sm"
           disabled={!canWrite}
-          className="w-fit gap-1 border border-border px-2 text-ui text-muted-foreground"
+          className="w-fit gap-1 px-2 text-ui text-muted-foreground"
         >
-          Select branch…
+          Select branch
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
@@ -626,28 +626,16 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
   );
 }
 
-/**
- * The Phosphor icon for a primary action, mirroring the verb's menu icon.
- * `filled` renders the fill weight for the chevron-menu treatment (the demoted
- * done-flow primary when Archive & clean takes over the button).
- */
-function PrimaryActionIcon({
-  kind,
-  filled = false,
-}: {
-  kind: PrimaryActionKind;
-  filled?: boolean;
-}) {
-  const weight = filled ? "fill" : undefined;
-  if (kind === "commit-pr" || kind === "commit-push-updates")
-    return <GitCommitIcon weight={weight} />;
-  if (kind === "view-pr") return <ArrowSquareOutIcon weight={weight} />;
-  return <GitPullRequestIcon weight={weight} />;
+/** The action keeps the same outline mark on the button and in its menu. */
+function PrimaryActionIcon({ kind }: { kind: PrimaryActionKind }) {
+  if (kind === "commit-pr" || kind === "commit-push-updates") return <GitCommitIcon />;
+  if (kind === "view-pr") return <ArrowSquareOutIcon />;
+  return <GitPullRequestIcon />;
 }
 
 /**
- * One chevron-menu row: the verb's icon (filled, per the project's menu-icon
- * convention) + label, with the disabled reason shown as trailing muted text
+ * One action-menu row: the verb's outline icon and label, with the disabled
+ * reason shown as trailing muted text
  * (disabled items can't emit hover, so a tooltip wouldn't fire — T3's inline
  * reason instead).
  */
@@ -1130,11 +1118,10 @@ export function TicketRepositorySummary({
   // button that refuses to shrink pushes its own chevron off the card's clipped
   // edge. It truncates and keeps its full label in `title` instead — a control
   // you can read to the end elsewhere beats one you cannot reach.
-  const primaryClassName = cn(RAIL_CONTROL, "min-w-0 shrink px-2 [&>span]:truncate");
+  const primaryClassName = "min-w-0 shrink px-2 text-ui [&>span]:truncate";
 
   const doneFlowPrimaryButton = (
     <Button
-      variant="outline"
       size="sm"
       className={primaryClassName}
       title={view.primary.label}
@@ -1152,7 +1139,6 @@ export function TicketRepositorySummary({
 
   const archivePrimaryButton = (
     <Button
-      variant="outline"
       size="sm"
       className={primaryClassName}
       title={ARCHIVE_CLEAN_LABEL}
@@ -1308,12 +1294,7 @@ export function TicketRepositorySummary({
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="outline"
-                                    size="icon-sm"
-                                    aria-label="More repository actions"
-                                    className={RAIL_CONTROL}
-                                  >
+                                  <Button size="icon-sm" aria-label="More repository actions">
                                     <DotsThreeIcon weight="bold" />
                                   </Button>
                                 </DropdownMenuTrigger>
@@ -1334,7 +1315,7 @@ export function TicketRepositorySummary({
                                       {stage !== "idle" ? (
                                         <Spinner aria-hidden role="presentation" />
                                       ) : (
-                                        <PrimaryActionIcon kind={view.primary.kind} filled />
+                                        <PrimaryActionIcon kind={view.primary.kind} />
                                       )}
                                       {view.primary.label}
                                     </span>

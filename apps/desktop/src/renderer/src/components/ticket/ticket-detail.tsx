@@ -1522,6 +1522,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
       >
         {tab.kind === "body" && (
           <ContentColumn>
+            <div className="mb-2 font-mono text-label text-primary-text">{displayId}</div>
             <TicketTitle ticket={ticket} />
             {/* "Running on hetzner-1" (VC-576): only for a host other than
                 This Mac, and only with the `cloud` flag on. */}
@@ -1729,7 +1730,8 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
             // app-wide via the ui store. The rail draws its own header and pages
             // (TicketRail) — this only sizes and frames the column.
             <aside
-              className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
+              className="glass relative flex shrink-0 flex-col border-l border-sidebar-border"
+              data-tint="true"
               style={{ width: railWidth }}
             >
               <RailResizeHandle />
