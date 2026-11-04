@@ -44,7 +44,7 @@ export function LocalProjectsFoot() {
           <button
             type="button"
             aria-label={line}
-            className="app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-control bg-muted"
+            className="workspace-tile app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-(--radius-card)"
           >
             <LaptopIcon className="size-[15px] text-muted-foreground" />
             <span
@@ -100,7 +100,7 @@ export function NewCloudProjectTile() {
             type="button"
             aria-label="New project"
             onClick={() => setOpen(true)}
-            className="app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-control bg-muted"
+            className="workspace-tile app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-(--radius-card)"
           >
             <PlusIcon weight="bold" className="size-[15px] text-muted-foreground" />
             <span

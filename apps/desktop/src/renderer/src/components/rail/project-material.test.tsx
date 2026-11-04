@@ -40,19 +40,17 @@ function renderToMarkup(node: ReactNode): string {
 }
 
 describe("shell control material", () => {
-  it("gives Add project a resting hairline and quiet hover/press lift", () => {
+  it("gives Add project the same quiet glass tile as its neighbours", () => {
     const html = renderToMarkup(
       <TooltipProvider>
         <AddProjectTile />
       </TooltipProvider>,
     );
-    expect(html).toContain("border-border-strong");
-    expect(html).toContain("control-material");
-    expect(html).toContain("shadow-control hover:shadow-control-hover");
-    expect(html).toContain("active:shadow-control-pressed");
+    expect(html).toContain("workspace-tile");
+    expect(html).toContain("focus-visible:ring-ring");
   });
   it.each([false, true])(
-    "lifts project tiles and keeps selection to one hairline: %s",
+    "tints project tiles and places selection at the left edge: %s",
     (selected) => {
       useProjectsStore.setState({ selectedProjectId: selected ? project.id : null });
       const html = renderToMarkup(
@@ -64,8 +62,9 @@ describe("shell control material", () => {
           </DndContext>
         </TooltipProvider>,
       );
-      expect(html).toContain("control-lighting shadow-control hover:shadow-control-hover");
-      expect(html.includes("ring-1 ring-foreground/70 ring-offset-2")).toBe(selected);
+      expect(html).toContain("workspace-tile");
+      expect(html).toContain("--tile-color:");
+      expect(html.includes("workspace-tile-selected")).toBe(selected);
       expect(html).not.toContain("ring-foreground/90");
       expect(html).not.toContain("ring-offset-[3px]");
     },

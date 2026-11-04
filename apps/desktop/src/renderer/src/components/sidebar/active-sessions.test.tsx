@@ -322,9 +322,9 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(loading().length).toBe(0);
     expect(bandText("active")).toContain("No active sessions");
     expect(bandText("previous")).toContain("Nothing yet");
-    expect(container?.querySelector('[data-next-action="active"]')).not.toBeNull();
-    expect(container?.querySelector('[data-next-action="previous"]')).not.toBeNull();
-    // A mark and a noun: no explainer under the empty state, and no zero
+    expect(container?.querySelector('[data-next-action="active"]')).toBeNull();
+    expect(container?.querySelector('[data-next-action="previous"]')).toBeNull();
+    // A quiet noun, not dashed placeholder rows or an explainer; no zero
     // beside a band header that the empty state already answers.
     expect(bandText("active")).not.toContain("Start a chat");
     expect(bandText("previous")).not.toContain("Return to earlier sessions");

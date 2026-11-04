@@ -27,7 +27,7 @@ export function AddProjectTile() {
           onClick={() => void addProject()}
           aria-disabled={busy}
           aria-label={busy ? "Adding project" : "Add project"}
-          className="app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-control control-material border border-border-strong bg-card shadow-control hover:shadow-control-hover outline-none transition-[box-shadow] duration-100 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none active:shadow-control-pressed"
+          className="workspace-tile app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-(--radius-card) outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           {busy ? <Spinner /> : <PlusIcon weight="bold" className="size-4 text-muted-foreground" />}
           <span

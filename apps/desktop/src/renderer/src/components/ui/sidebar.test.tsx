@@ -13,7 +13,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { SidebarProvider } from "./sidebar";
+import { SidebarProvider, SidebarTrigger } from "./sidebar";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -38,6 +38,7 @@ function renderProvider(field?: "textarea" | "input") {
   act(() => {
     root?.render(
       <SidebarProvider open onOpenChange={onOpenChange}>
+        <SidebarTrigger />
         {field === "textarea" ? <textarea data-testid="field" /> : null}
         {field === "input" ? <input data-testid="field" /> : null}
       </SidebarProvider>,
@@ -63,6 +64,15 @@ function pressB(target: EventTarget, modifiers: KeyboardEventInit): KeyboardEven
 }
 
 describe("SidebarProvider ⌘B listener", () => {
+  it.each([0, 1])("carries trigger modality to its one motion owner: click detail %s", (detail) => {
+    const { onOpenChange } = renderProvider();
+    act(() =>
+      container
+        ?.querySelector("button")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail })),
+    );
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false, { instant: detail === 0 });
+  });
   it("leaves ⌃B in a focused textarea alone: no toggle, caret move not cancelled", () => {
     const { onOpenChange, target } = renderProvider("textarea");
     expect(document.activeElement).toBe(target);
@@ -87,7 +97,7 @@ describe("SidebarProvider ⌘B listener", () => {
 
     const event = pressB(window, { metaKey: true });
 
-    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false, { instant: true });
     expect(event.defaultPrevented).toBe(true);
   });
 
@@ -96,7 +106,7 @@ describe("SidebarProvider ⌘B listener", () => {
 
     pressB(target!, { metaKey: true });
 
-    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false, { instant: true });
   });
 
   it("does not take ⌃⌘B or ⌥⌘B", () => {

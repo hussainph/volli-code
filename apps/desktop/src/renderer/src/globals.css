@@ -301,14 +301,16 @@
   --canvas:
     url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22140%22%3E%3Cfilter%20id%3D%22n%22%20x%3D%220%22%20y%3D%220%22%20width%3D%22100%25%22%20height%3D%22100%25%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.9%22%20numOctaves%3D%222%22%20seed%3D%227%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22luminanceToAlpha%22%2F%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type%3D%22linear%22%20slope%3D%220.083%22%2F%3E%3C%2FfeComponentTransfer%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url(%23n)%22%2F%3E%3C%2Fsvg%3E")
       0 0 / 140px 140px repeat,
-    radial-gradient(ellipse 130% 110% at 68% 30%, #55220b, transparent 75.6%), #481600;
+    radial-gradient(ellipse 85% 70% at 88% 38%, #4b1025, transparent 67.6%),
+    radial-gradient(ellipse 85% 70% at 30% 100%, #6b4a24, transparent 67.6%),
+    radial-gradient(ellipse 130% 110% at 12% 8%, #55220b, transparent 75.6%), #481600;
   /* The on-canvas copy ladder, head first — solved against the gradient and
    the lifted tiers on it, NOT against the card. `--foreground` and
    `--muted-foreground` answer the same question for the other side of the
    card's edge; neither set can serve both surfaces. */
   --canvas-ink: #fbf1ed;
-  --canvas-ink-label: #d2c8c5;
-  --canvas-ink-muted: #b6aca9;
+  --canvas-ink-label: #d9d0cc;
+  --canvas-ink-muted: #c2b9b5;
   /* Cumulative lift per on-canvas tier. Tier 1 (chrome band, project rail)
    takes a share of zero — the frame reads as a frame only if it is
    uniform — so it is `transparent` by design, not by omission. */
@@ -325,7 +327,7 @@
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(2 0 0 / 0.5);
   --canvas-accent: #e8652a;
-  --flow: linear-gradient(120deg, #e8652a, #e8652a);
+  --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
   --accent-tint: color-mix(in srgb, #e8652a 10%, #1e1e1e);
   --accent-selected: color-mix(in srgb, #e8652a 18%, #1e1e1e);
   --tertiary-foreground: #aaaaaa;
@@ -393,7 +395,9 @@
   --canvas:
     url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22140%22%3E%3Cfilter%20id%3D%22n%22%20x%3D%220%22%20y%3D%220%22%20width%3D%22100%25%22%20height%3D%22100%25%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.9%22%20numOctaves%3D%222%22%20seed%3D%227%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22luminanceToAlpha%22%2F%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type%3D%22linear%22%20slope%3D%220.083%22%2F%3E%3C%2FfeComponentTransfer%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url(%23n)%22%2F%3E%3C%2Fsvg%3E")
       0 0 / 140px 140px repeat,
-    radial-gradient(ellipse 130% 110% at 68% 30%, #ffb294, transparent 75.6%), #ff9970;
+    radial-gradient(ellipse 85% 70% at 88% 38%, #ffacc0, transparent 67.6%),
+    radial-gradient(ellipse 85% 70% at 30% 100%, #f7ba74, transparent 67.6%),
+    radial-gradient(ellipse 130% 110% at 12% 8%, #ffb294, transparent 75.6%), #ff9970;
   /* The on-canvas copy ladder, head first — solved against the gradient and
    the lifted tiers on it, NOT against the card. `--foreground` and
    `--muted-foreground` answer the same question for the other side of the
@@ -417,7 +421,7 @@
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(72 42 30 / 0.3);
   --canvas-accent: #e8652a;
-  --flow: linear-gradient(120deg, #e8652a, #e8652a);
+  --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
   --accent-tint: color-mix(in srgb, #e8652a 10%, #ffffff);
   --accent-selected: color-mix(in srgb, #e8652a 18%, #ffffff);
   --tertiary-foreground: #666666;
@@ -2733,4 +2737,62 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
     --duration-press: 0ms;
     --press-scale: 1;
   }
+}
+
+/* Navigation glass uses the semantic ink pair, not the bare canvas solve. */
+[data-volli-sidebar].glass,
+[data-volli-rail].glass {
+  --foreground: var(--material-foreground);
+  --muted-foreground: var(--material-muted-foreground);
+  --sidebar-foreground: var(--material-foreground);
+}
+[data-volli-sidebar].glass .session-row-dim.text-ui {
+  --sidebar-foreground: var(--material-foreground);
+  --muted-foreground: var(--material-foreground);
+}
+[data-volli-sidebar].glass [data-slot="sidebar-group-label"] {
+  color: var(--foreground);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"] {
+  border-radius: 8px;
+}
+.session-envelope {
+  background: color-mix(in srgb, var(--canvas-accent) 3.5%, transparent);
+}
+/* The inspector is a glass sibling of paper, never another paper column. */
+aside:has(> [data-volli-rail]) {
+  background: transparent;
+  border-left: 0;
+  padding: var(--shell-inset);
+}
+[data-volli-rail].glass {
+  border: var(--shell-edge) solid var(--glass-edge);
+  border-radius: var(--radius-floating);
+  overflow: hidden;
+}
+.workspace-tile {
+  background: color-mix(in srgb, var(--tile-color, var(--canvas-accent)) 10%, var(--glass-fill));
+  color: var(--material-foreground);
+  border: 1px solid
+    color-mix(in srgb, var(--tile-color, var(--canvas-accent)) 20%, var(--glass-edge));
+  box-shadow: var(--shadow-glass-small);
+}
+.workspace-tile-selected::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 99px;
+  background: var(--canvas-ink);
+}
+/* Pouring glass has no live hit targets or backdrop pass. The trigger's hover
+ * latch is released only after a fresh pointer departure, not by animation end. */
+[data-pane-pouring="true"][data-slot="sidebar"],
+[data-pane-pouring="true"] [data-slot="sidebar-trigger"] {
+  pointer-events: none;
+}
+[data-pane-pouring="true"][data-slot="sidebar"] .glass {
+  backdrop-filter: none !important;
 }

@@ -30,7 +30,7 @@ describe("railTabMotion", () => {
     const plan = railTabMotion({ animateSelection: true, reducedMotion: false });
 
     expect(plan.animated).toBe(true);
-    expect(plan.transition).toEqual({ type: "spring", duration: 0.32, bounce: 0.1 });
+    expect(plan.transition).toEqual({ type: "spring", duration: 0.24, bounce: 0.1 });
     expect(plan.labelDuration).toBeGreaterThan(0);
   });
 
@@ -132,6 +132,11 @@ async function walk(target: Element, name: string): Promise<void> {
 
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
   MotionGlobalConfig.skipAnimations = true;
   selected.mockReset();
   container = document.createElement("div");
@@ -150,10 +155,19 @@ afterEach(async () => {
   container?.remove();
   container = null;
   MotionGlobalConfig.skipAnimations = false;
+  delete document.documentElement.dataset.motion;
   vi.unstubAllGlobals();
 });
 
 describe("what sets the pill's gate", () => {
+  it("honours the app Motion setting as well as the system preference", async () => {
+    await act(async () => {
+      document.documentElement.dataset.motion = "off";
+      window.dispatchEvent(new Event("volli-motion-change"));
+    });
+    await activate(tab("files"), 1);
+    expect(animated()).toBe("false");
+  });
   it("springs for a real press, including one that lands on the glyph inside", async () => {
     // The shipping pointer feel, and the reason the gate is read on the BUTTON:
     // the press a person makes usually lands on the icon, and the click that

@@ -3,6 +3,7 @@ import { ChatsIcon as Chats } from "@phosphor-icons/react/dist/csr/Chats";
 import { TreeStructureIcon as TreeStructure } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { SidebarFiles } from "./sidebar-files";
+import { SessionBandHeader } from "./session-band-header";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
@@ -87,19 +88,22 @@ export function PrimarySidebar() {
         {selected ? (
           <>
             <NavList />
-            <div className="shrink-0 px-4 py-2">
-              <Segmented
-                ariaLabel="Sidebar content"
-                value={content}
-                options={[
-                  { key: "sessions", label: "Sessions", icon: Chats },
-                  { key: "files", label: "Files", icon: TreeStructure },
-                ]}
-                onChange={(next) => {
-                  rememberedContent = next;
-                  setContent(next);
-                }}
-              />
+            <div className="shrink-0 px-2 py-2">
+              <SessionBandHeader label="Active">
+                <Segmented
+                  ariaLabel="Sidebar content"
+                  iconOnly
+                  value={content}
+                  options={[
+                    { key: "sessions", label: "Sessions", icon: Chats },
+                    { key: "files", label: "Files", icon: TreeStructure },
+                  ]}
+                  onChange={(next) => {
+                    rememberedContent = next;
+                    setContent(next);
+                  }}
+                />
+              </SessionBandHeader>
             </div>
             {filesVisible && <SidebarFiles project={selected} />}
             <div className={cn("flex min-h-0 flex-1 flex-col", content === "files" && "hidden")}>
@@ -109,7 +113,11 @@ export function PrimarySidebar() {
                     is off screen, and the coarse chat-activity poll it runs
                     would keep firing behind Configure or Settings. `visible`
                     is that fact, handed down from the one place that has it. */}
-                  <ActiveSessions project={selected} visible={sessionsVisible} />
+                  <ActiveSessions
+                    project={selected}
+                    visible={sessionsVisible}
+                    activeHeader={false}
+                  />
                 </div>
               </SidebarScrollArea>
             </div>

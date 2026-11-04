@@ -20,29 +20,13 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
 
-/*
- * There WAS a keyboard-instant mode here: ⌘B passed `{ instant: true }`, which
- * flipped a local `motionMode` onto the wrapper's `data-motion` for two frames
- * so the collapse snapped instead of animating. It is gone, because it never
- * ran. `AppShell` also writes `data-motion` on this same element, and it spreads
- * its props AFTER this component's own attributes — so its `undefined` cleared
- * the flag on every render this primitive tried to set it. The escape hatch was
- * dead in the shipped app from the day the shell claimed the attribute, and ⌘B
- * has always animated exactly like the chrome-band trigger.
- *
- * Removed rather than repaired, and that is the decision, not an accident of
- * deleting the easier half: ⌘B and the trigger agreeing is the behaviour the app
- * has, the one the hover-sidebar scratch settled, and the one the shell's own
- * `data-motion` (terminal focus, rail geometry) is built to interrupt. A second
- * writer for the same attribute, whose whole contract is "the other writer must
- * not be saying anything right now", is a race waiting for a reason to happen.
- * The shell is the single writer.
- */
+/** Input modality is carried to the shell; keyboard toggles never animate. */
+type SidebarToggleOptions = { instant?: boolean };
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
   open: boolean;
   setOpen: (open: boolean) => void;
-  toggleSidebar: () => void;
+  toggleSidebar: (options?: SidebarToggleOptions) => void;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -67,17 +51,17 @@ function SidebarProvider({
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
   open?: boolean;
-  onOpenChange?: (open: boolean) => void;
+  onOpenChange?: (open: boolean, options?: SidebarToggleOptions) => void;
 }) {
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(defaultOpen);
   const open = openProp ?? _open;
   const setOpen = React.useCallback(
-    (value: boolean | ((value: boolean) => boolean)) => {
+    (value: boolean | ((value: boolean) => boolean), options?: SidebarToggleOptions) => {
       const openState = typeof value === "function" ? value(open) : value;
       if (setOpenProp) {
-        setOpenProp(openState);
+        setOpenProp(openState, options);
       } else {
         _setOpen(openState);
       }
@@ -88,9 +72,12 @@ function SidebarProvider({
     [setOpenProp, open],
   );
 
-  const toggleSidebar = React.useCallback(() => {
-    setOpen((previous) => !previous);
-  }, [setOpen]);
+  const toggleSidebar = React.useCallback(
+    (options?: SidebarToggleOptions) => {
+      setOpen((previous) => !previous, options);
+    },
+    [setOpen],
+  );
 
   // Adds a keyboard shortcut to toggle the sidebar. `event.repeat` is still
   // excluded: a held ⌘B should toggle once, not strobe the shell. ⌘ only, like
@@ -105,7 +92,7 @@ function SidebarProvider({
         !event.altKey
       ) {
         event.preventDefault();
-        if (!event.repeat) toggleSidebar();
+        if (!event.repeat) toggleSidebar({ instant: true });
       }
     };
 
@@ -259,7 +246,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       className={className}
       onClick={(event) => {
         onClick?.(event);
-        toggleSidebar();
+        toggleSidebar({ instant: event.detail === 0 });
       }}
       {...props}
     >

@@ -114,7 +114,10 @@ const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
  * `text-label` (16) plus 16 is 52. Nothing here pins it, and every value is a
  * ladder rung (docs/DESIGN.md's five steps — no half-steps here).
  */
-const PALETTE_ROW = cn(COMMAND_RESULT_ROW, "py-2");
+const PALETTE_ROW = cn(
+  COMMAND_RESULT_ROW,
+  "py-2 data-[selected=true]:bg-(--accent-selected) data-[selected=true]:text-primary-text",
+);
 
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";
@@ -465,13 +468,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       label="Search tickets, sessions, and commands"
       filter={commandPaletteFilter}
       loop
-      // The app's one `--scrim`, plus a blur no other overlay takes. This used
-      // to be a notch heavier than the dialog's — 35/55 against 30/50, a
-      // difference nobody could name behind a backdrop it also blurs, and the
-      // third and fourth spellings of one wash. The blur is what makes this
-      // overlay the exception; the wash is not.
-      overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
-      contentClassName={COMMAND_OVERLAY_FRAME}
+      // Search is a high-frequency keyboard surface: no scrim blur or motion.
+      overlayClassName="fixed inset-0 z-50 bg-scrim"
+      contentClassName={cn(COMMAND_OVERLAY_FRAME, "material-floating")}
     >
       {/* Same separated search field and keycap treatment as Quick Open. */}
       <div className={COMMAND_SEARCH_FIELD}>

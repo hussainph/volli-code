@@ -26,7 +26,11 @@ describe("chrome band copy", () => {
       /aria-label="(?:Hide project switcher|Toggle navigation sidebar)"/.test(button),
     );
     expect(toggles).toHaveLength(2);
-    for (const toggle of toggles) expect(toggle).toContain('data-size="icon-sm"');
+    for (const toggle of toggles) {
+      expect(toggle).toContain('data-size="icon-sm"');
+      expect(toggle).toContain('data-variant="toolbar"');
+    }
+    expect(html).toContain("search-capsule");
     expect(html).toContain("[&amp;_svg:not([class*=&#x27;size-&#x27;])]:size-4");
   });
   it("keeps the two toggles immediately beside search in the centered cluster", () => {
