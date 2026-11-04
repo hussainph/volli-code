@@ -1,0 +1,611 @@
+{
+  "note": "Migration debt only: one entry per file + rule. Ceilings cannot grow; lower counts and removed violations require shrinking/removing the entry. No automatic baseline-update command. Coordinator must review any new exception.",
+  "entries": [
+    {
+      "path": "apps/desktop/src/renderer/src/components/app-shell.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/armed-run-window.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/automation-lanes.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/cloud-pending-runs.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 1,
+      "reason": "Migration debt: retain the loading state with Spinner/LoadingLabel and a stable name, without progress ellipses."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/cloud-run-history.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 1,
+      "reason": "Migration debt: retain the loading state with Spinner/LoadingLabel and a stable name, without progress ellipses."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/board-column.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/board-list-view.tsx",
+      "rule": "material-hand-rolled-blur",
+      "maxCount": 1,
+      "reason": "Migration debt: use the shared material on the owning surface and remove nested/local backdrop filtering."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/board-list-view.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/board.tsx",
+      "rule": "motion-literal",
+      "maxCount": 5,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/collapsed-column-rail.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/column-offered-panel.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/composer-breadcrumb.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/project-monogram.tsx",
+      "rule": "colour-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/ticket-card.tsx",
+      "rule": "motion-literal",
+      "maxCount": 3,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/browser/browser-trace-dialog.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/browser/browser-trace-dialog.tsx",
+      "rule": "radius-off-scale",
+      "maxCount": 1,
+      "reason": "Migration debt: use a named radius rung; move genuinely measured glyph geometry into its primitive rather than inventing a component radius."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/browser/session-cursor.css",
+      "rule": "colour-literal",
+      "maxCount": 4,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/browser/session-cursor.css",
+      "rule": "motion-literal",
+      "maxCount": 12,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/activity-island-ui.tsx",
+      "rule": "colour-literal",
+      "maxCount": 8,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/activity-island-ui.tsx",
+      "rule": "motion-literal",
+      "maxCount": 14,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/activity-ui.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/chat-plane.tsx",
+      "rule": "material-hand-rolled-blur",
+      "maxCount": 1,
+      "reason": "Migration debt: use the shared material on the owning surface and remove nested/local backdrop filtering."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/composer-add-menu.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/composer-effort-ui.tsx",
+      "rule": "motion-literal",
+      "maxCount": 9,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/composer-picker-ui.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/composer-picker-ui.tsx",
+      "rule": "motion-reduced-hook",
+      "maxCount": 1,
+      "reason": "Migration debt: adopt hooks/use-reduced-motion so the app Motion preference is honoured alongside the system setting."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/context-usage-ui.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/context-usage-ui.tsx",
+      "rule": "radius-off-scale",
+      "maxCount": 2,
+      "reason": "Migration debt: use a named radius rung; move genuinely measured glyph geometry into its primitive rather than inventing a component radius."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx",
+      "rule": "motion-literal",
+      "maxCount": 4,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx",
+      "rule": "motion-reduced-hook",
+      "maxCount": 1,
+      "reason": "Migration debt: adopt hooks/use-reduced-motion so the app Motion preference is honoured alongside the system setting."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/runner-picker-start-status.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 2,
+      "reason": "Migration debt: retain the loading state with Spinner/LoadingLabel and a stable name, without progress ellipses."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/runner-picker.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 1,
+      "reason": "Migration debt: retain the loading state with Spinner/LoadingLabel and a stable name, without progress ellipses."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/secret-card.tsx",
+      "rule": "markup-native-select",
+      "maxCount": 1,
+      "reason": "Migration debt: compose the shared Select while preserving values, disabled states, accessible name and focus."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/tool-refresh-notice-ui.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chrome-bar.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/preflight.tsx",
+      "rule": "markup-native-select",
+      "maxCount": 1,
+      "reason": "Migration debt: compose the shared Select while preserving values, disabled states, accessible name and focus."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/progress.tsx",
+      "rule": "copy-banned-word",
+      "maxCount": 1,
+      "reason": "Migration debt: replace marketing phrasing with the concrete operation; review literal lock/unlock semantics before changing copy."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/cloud-moves/progress.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 2,
+      "reason": "Migration debt: retain the loading state with Spinner/LoadingLabel and a stable name, without progress ellipses."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/command-palette.tsx",
+      "rule": "material-hand-rolled-blur",
+      "maxCount": 1,
+      "reason": "Migration debt: use the shared material on the owning surface and remove nested/local backdrop filtering."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/files/quick-open.tsx",
+      "rule": "material-hand-rolled-blur",
+      "maxCount": 1,
+      "reason": "Migration debt: use the shared material on the owning surface and remove nested/local backdrop filtering."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/home/home-rail.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/add-host-sheet.tsx",
+      "rule": "motion-literal",
+      "maxCount": 12,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/host-chip.tsx",
+      "rule": "motion-literal",
+      "maxCount": 3,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/host-island.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/host-parts.tsx",
+      "rule": "colour-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/host-parts.tsx",
+      "rule": "motion-literal",
+      "maxCount": 11,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/host-parts.tsx",
+      "rule": "motion-reduced-hook",
+      "maxCount": 1,
+      "reason": "Migration debt: adopt hooks/use-reduced-motion so the app Motion preference is honoured alongside the system setting."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/open-project-sheet.tsx",
+      "rule": "motion-literal",
+      "maxCount": 5,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/sign-ins/host-sign-in-rows.tsx",
+      "rule": "colour-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/hosts/sign-ins/host-sign-in-rows.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/decision-model-settings.tsx",
+      "rule": "markup-settings-description",
+      "maxCount": 1,
+      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/add-project-tile.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/project-tile.tsx",
+      "rule": "colour-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/project-tile.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/workspace-switcher.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 1,
+      "reason": "Migration debt: retain the loading state with Spinner/LoadingLabel and a stable name, without progress ellipses."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sessions/new-session-control.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sessions/session-split-layout.tsx",
+      "rule": "material-hand-rolled-blur",
+      "maxCount": 1,
+      "reason": "Migration debt: use the shared material on the owning surface and remove nested/local backdrop filtering."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sessions/session-split-layout.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/secrets-pane.tsx",
+      "rule": "copy-banned-word",
+      "maxCount": 1,
+      "reason": "Migration debt: replace marketing phrasing with the concrete operation; review literal lock/unlock semantics before changing copy."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/configure/sessions-pane.tsx",
+      "rule": "markup-settings-description",
+      "maxCount": 1,
+      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/kit/canvas-instrument.tsx",
+      "rule": "colour-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/kit/canvas-instrument.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/appearance-pane.tsx",
+      "rule": "markup-settings-description",
+      "maxCount": 3,
+      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/decision-model-pane.tsx",
+      "rule": "markup-settings-description",
+      "maxCount": 1,
+      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/hosts-pane.tsx",
+      "rule": "markup-settings-description",
+      "maxCount": 2,
+      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/hosts-pane.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/project-appearance-pane.tsx",
+      "rule": "markup-settings-description",
+      "maxCount": 2,
+      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
+      "rule": "markup-settings-description",
+      "maxCount": 1,
+      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/settings/settings-scope.tsx",
+      "rule": "colour-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sidebar/session-band-row.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sidebar/sidebar-scroll.tsx",
+      "rule": "colour-literal",
+      "maxCount": 4,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sidebar/sidebar-scroll.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/split/pane-empty-state.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/split/split-dnd.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/split/split-drop-zones.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/split/split-view-divider.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor-model.ts",
+      "rule": "colour-literal",
+      "maxCount": 18,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor.tsx",
+      "rule": "colour-literal",
+      "maxCount": 3,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor.tsx",
+      "rule": "material-hand-rolled-blur",
+      "maxCount": 1,
+      "reason": "Migration debt: use the shared material on the owning surface and remove nested/local backdrop filtering."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor.tsx",
+      "rule": "motion-literal",
+      "maxCount": 4,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/label-editor-core.tsx",
+      "rule": "colour-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/label-editor-core.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/rail-mode-tabs.tsx",
+      "rule": "material-hand-rolled-blur",
+      "maxCount": 1,
+      "reason": "Migration debt: use the shared material on the owning surface and remove nested/local backdrop filtering."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/rail-mode-tabs.tsx",
+      "rule": "motion-literal",
+      "maxCount": 3,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/rail-mode-tabs.tsx",
+      "rule": "motion-reduced-hook",
+      "maxCount": 1,
+      "reason": "Migration debt: adopt hooks/use-reduced-motion so the app Motion preference is honoured alongside the system setting."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/rail-panel-parts.tsx",
+      "rule": "motion-literal",
+      "maxCount": 3,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/ai-elements/reasoning.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/alert-dialog.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/button.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/checkbox.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/dialog.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/disclosure.css",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/sidebar.tsx",
+      "rule": "motion-literal",
+      "maxCount": 4,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/switch.tsx",
+      "rule": "motion-literal",
+      "maxCount": 2,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/tab-strip.tsx",
+      "rule": "motion-literal",
+      "maxCount": 3,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/usage-limits/usage-limits-icon.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/usage-limits/usage-limits-popover.tsx",
+      "rule": "motion-literal",
+      "maxCount": 1,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/globals.css",
+      "rule": "colour-literal",
+      "maxCount": 7,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/globals.css",
+      "rule": "motion-literal",
+      "maxCount": 12,
+      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/globals.css",
+      "rule": "radius-off-scale",
+      "maxCount": 1,
+      "reason": "Migration debt: use a named radius rung; move genuinely measured glyph geometry into its primitive rather than inventing a component radius."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/hooks/use-chart-palette.ts",
+      "rule": "colour-literal",
+      "maxCount": 3,
+      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+    }
+  ]
+}
