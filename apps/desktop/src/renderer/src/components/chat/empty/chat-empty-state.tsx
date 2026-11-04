@@ -1,5 +1,6 @@
-/** Empty chat context, with alternate readings one disclosure away. */
+/** A quiet entry to writing; scope stays visible and charts live one click deeper. */
 import * as React from "react";
+import { ChatCircleDotsIcon, ChartBarIcon } from "@phosphor-icons/react";
 
 import {
   EMPTY_VISUAL_LABELS,
@@ -11,15 +12,15 @@ import { BoardVisual } from "@renderer/components/chat/empty/board-visual";
 import { StreakVisual } from "@renderer/components/chat/empty/streak-visual";
 import { WorkingCopyChips } from "@renderer/components/chat/empty/working-copy-chips";
 import { WorkingCopyVisual } from "@renderer/components/chat/empty/working-copy-visual";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { Button } from "@renderer/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { useUiStore } from "@renderer/stores/ui";
 import {
   useWorkingCopyStore,
@@ -64,42 +65,50 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
   }, [projectId, ticketId, refreshWorkingCopy]);
 
   return (
-    <div className="flex flex-col items-center gap-6">
-      {visual === "streak" ? <StreakVisual /> : null}
-      {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
-      {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
+    <div data-slot="chat-empty-state" className="flex max-w-full flex-col items-center gap-4">
+      <ChatCircleDotsIcon aria-hidden className="size-8 text-primary-text" />
       <WorkingCopyCaption workingCopy={workingCopy} />
-      {offered.length > 1 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label="Empty chat visual"
-              data-testid="empty-visual-picker"
-              className="text-muted-foreground"
-            >
-              {EMPTY_VISUAL_LABELS[visual]}
-              <CaretDownIcon />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="center">
-            <DropdownMenuRadioGroup
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="sm" className="text-muted-foreground">
+            <ChartBarIcon />
+            Session overview
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          className="flex w-auto max-w-[calc(100vw-2rem)] flex-col items-center gap-4 p-4"
+          side="top"
+        >
+          {offered.length > 1 ? (
+            <Select
               value={visual}
-              onValueChange={(value) => {
-                const next = offered.find((key) => key === value);
+              onValueChange={(key) => {
+                const next = offered.find((candidate) => candidate === key);
                 if (next) setVisual(next);
               }}
             >
-              {offered.map((key) => (
-                <DropdownMenuRadioItem key={key} value={key}>
-                  {EMPTY_VISUAL_LABELS[key]}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
+              <SelectTrigger
+                variant="inspector"
+                aria-label="Empty chat visual"
+                data-testid="empty-visual-picker"
+                className="w-auto self-end"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {offered.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {EMPTY_VISUAL_LABELS[key]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          {visual === "streak" ? <StreakVisual /> : null}
+          {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
+          {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 });

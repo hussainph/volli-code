@@ -30,7 +30,7 @@ function getSnapshot(): boolean {
 
 /** Live system + app Motion preference; drives JS-side animation opt-outs. */
 export function useReducedMotion(): boolean {
-  return React.useSyncExternalStore(subscribe, getSnapshot, () => false);
+  return React.useSyncExternalStore(subscribe, getSnapshot, () => true);
 }
 
 /**

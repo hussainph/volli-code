@@ -502,7 +502,7 @@ export const SessionComposer = React.memo(function SessionComposer({
           // pane is 265px and a split can be narrower, and a control that
           // drops a word must drop it for the BOX's width, not the window's —
           // the tab strip's own rule.
-          "group/composer @container/composer pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
+          "session-prompt group/composer @container/composer pointer-events-auto overflow-hidden",
           PROMPT_SURFACE,
           className,
         )}
@@ -537,12 +537,17 @@ export const SessionComposer = React.memo(function SessionComposer({
           // a Radix tooltip, and the composer can render without the app
           // shell's provider.
           <TooltipProvider>
-            <PromptInputHeader className="flex-col flex-nowrap items-stretch gap-1 border-b border-border/70 px-2">
+            <PromptInputHeader className="flex-col flex-nowrap items-stretch gap-1 border-b border-border px-2 py-2">
               {queued.map((entry) => (
                 // The group names the row for assistive tech and holds BOTH the
                 // row's text and its actions; ListRow keeps the actions a
                 // sibling of its (inert) content, so the label lives out here.
-                <div key={entry.id} role="group" aria-label={`Queued message: ${entry.text}`}>
+                <div
+                  key={entry.id}
+                  role="group"
+                  aria-label={`Queued message: ${entry.text}`}
+                  className="rounded-(--radius-card) bg-muted"
+                >
                   <ListRow
                     onActivate={null}
                     density="two-line"
@@ -776,6 +781,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                   variant="outline"
                   size={COMPOSER_PRIMARY_SIZE}
                   aria-label="Stop turn"
+                  className="rounded-full"
                   onClick={onStop}
                 >
                   {/* One of the few glyphs that keeps its fill: a stop square
@@ -802,7 +808,7 @@ export const SessionComposer = React.memo(function SessionComposer({
             <ComposerHint label={working ? "Queue ⏎ · Steer ⌘⏎" : "Send ⏎ · New line ⇧⏎"}>
               <PromptInputSubmit
                 status="ready"
-                className="prompt-primary rounded-control"
+                className="prompt-primary rounded-full"
                 size={COMPOSER_PRIMARY_SIZE}
                 disabled={!canSubmit}
                 {...readOnlyMark(!hostReadOnly)}
@@ -1983,7 +1989,7 @@ export function ModelPill({
           // `py-1` — the ladder's 4px rung. `py-1.5` was 6px from nowhere on
           // `docs/DESIGN.md`'s five steps, bought nothing this line needed, and
           // is exactly the kind of value the collapse exists to keep out.
-          className="flex items-start gap-2 border-b px-2 py-1 text-ui text-muted-foreground"
+          className="flex items-center gap-2 border-b px-3 py-2 text-ui text-muted-foreground"
         >
           <ModelMark
             model={

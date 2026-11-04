@@ -7,6 +7,7 @@ import { followCloudSession } from "@renderer/lib/cloud-client";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { appStateStorage, type SyncStateStorage } from "@renderer/lib/app-state-storage";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -157,7 +158,7 @@ export function RunnerPicker({
   const label =
     state.selected === null
       ? state.loading
-        ? "Loading runners…"
+        ? "Loading runners"
         : "Choose runner"
       : state.selected.status === "online"
         ? state.selected.name
@@ -175,7 +176,9 @@ export function RunnerPicker({
           title={state.error ?? (state.selected ? composerRunnerStatus(state.selected) : label)}
         >
           <DesktopIcon />
-          <span className="max-w-32 truncate">{label}</span>
+          <span className="max-w-32 truncate">
+            {state.loading ? <LoadingLabel>{label}</LoadingLabel> : label}
+          </span>
           <CaretUpDownIcon className="size-3" weight="bold" />
         </Button>
       </DropdownMenuTrigger>

@@ -435,7 +435,8 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
           onChange={(event) => setQuery(event.target.value)}
           aria-label="Find a session"
           placeholder="Find a session…"
-          className="h-8 text-ui md:text-ui"
+          variant="search"
+          className="text-ui md:text-ui"
         />
       ) : null}
       {!hasData && feedback?.kind === "reading" ? (
@@ -550,7 +551,6 @@ function BoardSessionRow({
       data-testid="home-session-row"
       leading={
         <Glyph
-          weight="bold"
           aria-label={row.kind === "chat" ? "Chat" : "Terminal"}
           className="size-4 shrink-0 text-muted-foreground"
         />

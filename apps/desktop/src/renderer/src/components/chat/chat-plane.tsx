@@ -2487,9 +2487,7 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
   const signIn = blocker.signInMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="xs" variant="secondary">
-          {blocker.signInMenu.label}
-        </Button>
+        <Button size="sm">{blocker.signInMenu.label}</Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
         {blocker.signInMenu.options.map((option) => (
@@ -2505,7 +2503,11 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
       <>
         {signIn}
         {blocker.action ? (
-          <Button size="xs" variant="ghost" onClick={blocker.action.act}>
+          <Button
+            size="sm"
+            variant={signIn === null ? "default" : "ghost"}
+            onClick={blocker.action.act}
+          >
             {blocker.action.label}
           </Button>
         ) : null}
@@ -3219,7 +3221,7 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   return (
     <Message from={role} className="max-w-full">
-      <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
+      <MessageContent className="gap-0">
         {/* Thumbs above the words, matching the composer the message left from. */}
         {attachedFiles.length > 0 ? (
           <AttachmentStrip

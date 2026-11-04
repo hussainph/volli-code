@@ -74,7 +74,8 @@ import {
   type SessionInteractionOption,
   type SessionInteractionResolution,
 } from "@volli/shared";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 
 import {
   askFieldOpen,
@@ -379,7 +380,6 @@ function DecisionCard({
   );
   const [step, setStep] = React.useState(0);
   const { failed, send, commit } = useDelivery(interaction.id, onResolve);
-  const reducedMotion = useReducedMotion() ?? false;
   const questions = interactionQuestions(interaction);
   const carousel = interactionCarousel(interaction, draft, step);
   // Through the same latch the verdict takes, so a withdrawal and a decision
@@ -446,9 +446,7 @@ function DecisionCard({
         ) : null}
       </div>
 
-      {/* The same cross-fade the ask-user card steps with. A permission that
-          asked one thing never sees it; one that asked several is walked
-          through the same way, by the carousel it already had. */}
+      {/* Page navigation is immediate, including the keyboard carousel. */}
       <div className="px-4 pt-2">
         <AnimatePresence initial={false} mode="popLayout">
           {asked ? (
@@ -457,7 +455,7 @@ function DecisionCard({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: reducedMotion ? 0.1 : 0.18, ease: [0.32, 0.72, 0, 1] }}
+              transition={{ duration: 0 }}
             >
               <InteractionQuestionFields
                 interaction={interaction}
@@ -640,7 +638,6 @@ function QuestionCard({
   const [collapsed, setCollapsed] = React.useState(false);
   const stageId = React.useId();
   const { failed, sent, commit, send } = useDelivery(interaction.id, onResolve);
-  const reducedMotion = useReducedMotion() ?? false;
   const stageRef = React.useRef<HTMLDivElement>(null);
   // Set by the reader's own navigation, so an arriving step takes focus and a
   // mounting card never does.
@@ -761,11 +758,9 @@ function QuestionCard({
     setBlocked(null);
   };
 
-  const transition = {
-    duration: reducedMotion ? 0.12 : 0.22,
-    ease: [0.32, 0.72, 0, 1] as const,
-  } as const;
-  const offset = reducedMotion ? 0 : 10;
+  // Question navigation and minimisation are immediate, including keyboard use.
+  const transition = { duration: 0 } as const;
+  const offset = 0;
 
   // The card, once it has done something. It keeps the shell and the question's
   // own sentence and drops every control, because there is nothing left to
@@ -808,19 +803,7 @@ function QuestionCard({
       )}
     >
       {step ? (
-        // `layout` on the frame and `popLayout` inside it: the leaving step is
-        // taken out of flow the moment it starts, so the arriving one alone sets
-        // the height and the frame tweens to it instead of the card jumping a
-        // question's worth of rows.
-        //
-        // Minimising is that same swap at the card's own scale — the strip is
-        // simply what arrives — so it needs no second frame, no height to
-        // measure and no motion contract of its own. It is also the one place
-        // that frame earns its keep twice over: the height it tweens here is
-        // the transcript's clearance (`--composer-height`), so the feed the
-        // reader minimised the card to read opens at the speed the card closes
-        // rather than appearing under a jump cut.
-        <motion.div ref={stageRef} id={stageId} layout={!reducedMotion} transition={transition}>
+        <motion.div ref={stageRef} id={stageId}>
           <AnimatePresence initial={false} mode="popLayout">
             {collapsed ? (
               // No `translateX`: the horizontal slide is what a walk between two
@@ -1350,7 +1333,7 @@ function OptionChip({
       className={cn(
         OPTION_MARK,
         outlined && !checked && "border border-muted-foreground/30",
-        checked ? "bg-primary font-medium text-primary-foreground" : "text-muted-foreground",
+        checked ? "bg-(--accent-selected) font-medium text-primary-text" : "text-muted-foreground",
         className,
       )}
     >
@@ -1408,8 +1391,8 @@ export function ComposerInteractionStack({
   const originRef = React.useRef<HTMLDivElement>(null);
   const restoreComposerFocus = React.useRef(false);
   const transition = {
-    duration: reducedMotion ? 0.125 : 0.25,
-    ease: [0.32, 0.72, 0, 1] as const,
+    duration: reducedMotion ? 0 : 0.16,
+    ease: [0.23, 1, 0.32, 1] as const,
   };
   const hidden = {
     opacity: 0,
@@ -1450,7 +1433,7 @@ export function ComposerInteractionStack({
             data-slot="composer-interaction-drawer"
             initial={hidden}
             animate={{ opacity: 1, transform: "translateY(0)" }}
-            exit={hidden}
+            exit={{ ...hidden, transition: { ...transition, duration: reducedMotion ? 0 : 0.11 } }}
             transition={transition}
           >
             <InteractionCard
@@ -1539,8 +1522,8 @@ function InteractionQuestionFields({
               key={option.id}
               className={cn(
                 OPTION_ROW,
-                "hover:bg-muted/30 has-[:focus-visible]:bg-muted/30 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
-                checked && "bg-muted/70",
+                "hover:bg-(--accent-tint) has-[:focus-visible]:bg-(--accent-tint) has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+                checked && "bg-(--accent-selected)",
                 superseded && "cursor-default opacity-50",
               )}
             >
@@ -1569,7 +1552,7 @@ function InteractionQuestionFields({
                 className={cn(
                   OPTION_MARK,
                   checked
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-(--accent-selected) text-primary-text"
                     : "border border-muted-foreground/30",
                   // The same 70% the native input wore, on the mark that
                   // replaced it: ink, and only ink.

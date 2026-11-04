@@ -14,6 +14,10 @@ afterEach(() => {
   delete document.documentElement.dataset.motion;
 });
 
+it("renders static content without requiring a window subscription", () => {
+  expect(renderToStaticMarkup(<Probe />)).toContain("true");
+});
+
 it("observes both the system and the app preference, and detaches both listeners", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const query = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
@@ -42,5 +46,5 @@ it("observes both the system and the app preference, and detaches both listeners
 });
 
 it("has a stable motion-free server snapshot for static shells", () => {
-  expect(renderToStaticMarkup(<Probe />)).toBe("<span>false</span>");
+  expect(renderToStaticMarkup(<Probe />)).toBe("<span>true</span>");
 });

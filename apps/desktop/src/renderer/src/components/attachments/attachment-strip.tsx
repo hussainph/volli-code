@@ -117,7 +117,7 @@ export function AttachmentThumb({
   return (
     <div
       className={cn(
-        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-md border border-border bg-card p-2",
+        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-(--radius-card) border border-border bg-card p-2",
         className,
       )}
       title={`${attachment.originalName} · ${metadata}${attachment.state ? ` · ${stateLabels[attachment.state]}` : ""}`}
@@ -132,7 +132,7 @@ export function AttachmentThumb({
           draggable={false}
         />
       ) : (
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-control bg-muted text-primary">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-control bg-(--accent-tint) text-primary-text">
           <AttachmentGlyph attachment={attachment} className="size-4" />
         </span>
       )}
@@ -150,7 +150,7 @@ export function AttachmentThumb({
           variant="ghost"
           aria-label={`Remove ${attachment.label}`}
           onClick={() => onRemove(attachment)}
-          className="absolute -right-1 -top-1 border border-border bg-background opacity-0 shadow-raised focus-visible:opacity-100 group-hover:opacity-100"
+          className="absolute right-1 top-1 rounded-full border border-border bg-background opacity-0 shadow-(--shadow-glass-small) focus-visible:opacity-100 group-hover:opacity-100"
         >
           <XIcon aria-hidden="true" weight="bold" className="size-3" />
         </Button>

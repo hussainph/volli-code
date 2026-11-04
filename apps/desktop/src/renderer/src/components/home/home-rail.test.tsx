@@ -169,16 +169,16 @@ describe("HomeRail", () => {
   // strings: an inactive page drops its WORD (that is what lets the pill fit at
   // the 240px floor) but must keep its NAME, or the icon that replaces the word
   // is unreadable to a screen reader and unnameable to a query.
-  it("names every page even where only the selected one wears its label", () => {
+  it("names every icon page without expanding the selected segment", () => {
     const markup = draw("chat:s1");
 
     expect(markup).toContain('aria-label="Now"');
     expect(markup).toContain('aria-label="Files"');
     expect(markup).toContain('aria-label="Search"');
-    // Resting page selected; the other two are icons, so their word is absent.
+    // All three pages are icons, with labels retained for assistive technology.
     expect(markup).toContain(">Now<");
-    expect(markup).not.toContain(">Files<");
-    expect(markup).not.toContain(">Search<");
+    expect(markup).toContain('class="sr-only">Files');
+    expect(markup).toContain('class="sr-only">Search');
   });
 
   // VC-406. Home hardcoded `data-narrow="false"` while the Ticket rail computed

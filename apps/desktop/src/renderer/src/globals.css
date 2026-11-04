@@ -2878,3 +2878,49 @@ aside:has(> [data-volli-rail]) {
 .toaster [data-sonner-toast][data-removed="true"] {
   transition-duration: var(--duration-menu-out);
 }
+
+/* Session writing dock: a single neutral focus surface, without nested glass. */
+.session-prompt {
+  border-radius: var(--radius-floating);
+  background: var(--background);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-glass);
+}
+.session-prompt:has(textarea:focus-visible) {
+  border-color: var(--ring);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.session-prompt > [data-slot="input-group"] {
+  border-radius: inherit;
+  box-shadow: none;
+  outline: none;
+}
+.session-prompt .prompt-toolbar {
+  border-top: 0;
+  background: transparent;
+}
+.session-prompt .prompt-config {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.session-prompt .prompt-config:hover,
+.session-prompt .prompt-config[data-state="open"] {
+  background: var(--accent-tint);
+}
+.session-prompt .prompt-add {
+  border-color: transparent;
+  background: transparent;
+  border-radius: 999px;
+}
+.session-prompt .prompt-add:hover {
+  background: var(--accent-tint);
+}
+.session-prompt .prompt-primary {
+  border-radius: 999px;
+  box-shadow: none;
+}
+.segmented > [aria-selected="true"] {
+  color: var(--primary-text);
+}
