@@ -127,11 +127,9 @@ describe("the model tiers in the remote-host Model Access sheet", () => {
     for (const tier of ["global", "ticket", "utility"]) {
       expect(nested?.querySelector(`[data-testid="default-model-${tier}"]`)).toBeNull();
     }
-    // Precedence is visible below the section title, without an info button.
+    // No caption under the section title, and no info button either.
     const section = document.querySelector('[data-slot="pref-section-title"]')!.closest("section")!;
-    expect(section.children[1]?.textContent).toBe(
-      "A project with a pinned model uses that model instead.",
-    );
+    expect(section.textContent).not.toContain("A project with a pinned model");
     expect(section.querySelector('[aria-label^="About"]')).toBeNull();
   });
 
@@ -155,23 +153,13 @@ describe("the model tiers in the remote-host Model Access sheet", () => {
     ).toBeNull();
   });
 
-  it("shows one purpose line below tiers whose labels do not name their job", async () => {
+  it("draws every tier as its label and control, with no purpose line under it", async () => {
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
 
-    const purposes = {
-      fast: "Quick, low-cost tasks.",
-      deep: "Complex reasoning, planning, and review.",
-      visual: "Images, screenshots, and pages.",
-      utility: "Chat names and summaries.",
-    };
-    for (const [tier, purpose] of Object.entries(purposes)) {
+    for (const tier of ["global", "ticket", "utility", "fast", "deep", "visual"]) {
       const row = document.querySelector(`[data-testid="default-model-${tier}"]`)!;
-      expect(row.querySelectorAll("p")).toHaveLength(1);
-      expect(row.querySelector("p")?.textContent).toBe(purpose);
+      expect(row.querySelector("p")).toBeNull();
       expect(row.querySelector('[aria-label^="About"]')).toBeNull();
-    }
-    for (const tier of ["global", "ticket"]) {
-      expect(document.querySelector(`[data-testid="default-model-${tier}"] p`)).toBeNull();
     }
     expect(rowText("global")).toBe("Board chatsChoose a model");
     expect(rowText("ticket")).toBe("Ticket SessionsSame as Board chats");
@@ -186,7 +174,7 @@ describe("the model tiers in the remote-host Model Access sheet", () => {
 
     expect(
       document.querySelector('[data-testid="default-model-visual-blocked"]')?.textContent,
-    ).toBe("The Ticket model can’t read images — choose one here.");
+    ).toBe("Ticket model can’t read images");
     expect(document.querySelector('[data-testid="default-model-deep-blocked"]')).toBeNull();
   });
 });

@@ -3,7 +3,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  CODE_MODE_MODEL_DEFAULTS,
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
@@ -12,7 +11,6 @@ import {
 } from "@volli/shared";
 import { toast } from "sonner";
 
-import { builtInDefaultsSentence } from "./code-mode-settings";
 import { ModelAccessSettings } from "./model-access-settings";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
@@ -348,15 +346,5 @@ describe("Code Mode in the Models pane", () => {
     await click(the('[aria-label="Unpin GPT-5.5"]'));
 
     expect(pinMode("openai-codex/gpt-5.5").textContent).toBe("Both");
-  });
-});
-
-describe("the built-in defaults hint", () => {
-  it("names every family the shared table gives a mode, and the rest as Off", () => {
-    const sentence = builtInDefaultsSentence();
-    for (const row of CODE_MODE_MODEL_DEFAULTS.filter((candidate) => candidate.mode !== "off")) {
-      expect(sentence).toContain(row.family);
-    }
-    expect(sentence).toMatch(/Off for every other model\.$/u);
   });
 });
