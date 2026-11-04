@@ -511,6 +511,11 @@
   --radius-row: 8px;
   --radius-menu: 12px;
   --radius-menu-item: 5px;
+  /* Volli Glass containers: in @theme so `rounded-card` etc. generate utilities. */
+  --radius-card: 10px;
+  --radius-sheet: 14px;
+  --radius-column: 16px;
+  --radius-floating: 20px;
   --radius-keycap: calc(var(--radius-menu-item) - 2px);
   --radius-sm: var(--radius-menu-item);
   --radius-md: var(--radius-control);
@@ -2409,10 +2414,6 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 
 /* Volli Glass geometry and motion are shared, not canvas-authored. */
 :root {
-  --radius-sheet: 14px;
-  --radius-floating: 20px;
-  --radius-card: 10px;
-  --radius-column: 16px;
   --glass-gap: 6px;
   --duration-menu-in: 160ms;
   --duration-menu-out: 110ms;
