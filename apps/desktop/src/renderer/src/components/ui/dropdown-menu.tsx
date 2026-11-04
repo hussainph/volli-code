@@ -50,7 +50,6 @@ function DropdownMenuContent({
         sideOffset={sideOffset}
         className={cn(
           MENU_SURFACE,
-          "material-floating",
           MENU_SURFACE_PAD,
           MENU_SURFACE_MOTION,
           "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
@@ -204,7 +203,6 @@ function DropdownMenuSubContent({
         data-slot="dropdown-menu-sub-content"
         className={cn(
           MENU_SURFACE,
-          "material-floating",
           MENU_SURFACE_PAD,
           MENU_SURFACE_MOTION,
           "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",

@@ -10,7 +10,7 @@ function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
       className={cn(
         // A floor, not a height: `field-sizing-content` grows the box with what
         // is typed, and the floor is one control tall plus its own padding.
-        "flex field-sizing-content min-h-control-lg w-full rounded-control px-control-pad-default py-1 text-ui transition-[color,border-color,box-shadow] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed",
+        "flex field-sizing-content min-h-control-lg w-full rounded-input px-control-pad-default py-1 text-ui transition-[color,border-color,box-shadow] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed",
         FIELD_SURFACE,
         FIELD_INVALID,
         className,

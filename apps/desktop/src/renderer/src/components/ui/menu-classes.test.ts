@@ -31,7 +31,9 @@ describe("destination-result row composition", () => {
     const tokens = cn(COMMAND_RESULT_ROW, "py-2").split(" ");
     expect(tokens).toContain("py-2");
     expect(tokens).not.toContain("py-1");
-    expect(tokens).toContain("rounded-menu-item");
+    // The palette is a modal with a 4px list pad: rows take its `-item` radius.
+    expect(tokens).toContain("rounded-dialog-item");
+    expect(tokens).not.toContain("rounded-menu-item");
     expect(tokens).not.toContain("rounded-lg");
     expect(tokens).toContain("outline-none");
     expect(tokens).not.toContain("outline-hidden");
@@ -75,7 +77,10 @@ describe("overlay hierarchy", () => {
     expect(MENU_ROW).toContain("font-medium");
   });
   it("separates the search field without a bottom divider", () => {
-    expect(COMMAND_SEARCH_FIELD).toContain("rounded-control");
+    // A control on the control radius, at the 4px inset that makes it
+    // concentric with the 14px modal (14 − 4 = 10).
+    expect(COMMAND_SEARCH_FIELD).toContain("rounded-input");
+    expect(COMMAND_SEARCH_FIELD).toContain("m-1");
     expect(COMMAND_SEARCH_FIELD).toContain("min-w-0");
     expect(COMMAND_SEARCH_FIELD).not.toContain("border-b ");
   });

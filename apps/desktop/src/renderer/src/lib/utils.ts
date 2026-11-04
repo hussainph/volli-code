@@ -39,8 +39,35 @@ const twMerge = extendTailwindMerge({
     },
     classGroups: {
       "font-size": ["text-label", "text-ui", "text-heading", "text-title"],
-      rounded: ["rounded-control", "rounded-container", "rounded-row"],
-      shadow: ["shadow-raised", "shadow-card", "shadow-overlay"],
+      // The ladder's rungs and every role radius (globals.css `@theme`), so a
+      // caller's `rounded-*` replaces a primitive's instead of racing it.
+      rounded: [
+        "rounded-control",
+        "rounded-container",
+        "rounded-row",
+        "rounded-menu",
+        "rounded-menu-item",
+        "rounded-keycap",
+        "rounded-panel",
+        "rounded-card",
+        "rounded-well",
+        "rounded-popover",
+        "rounded-popover-item",
+        "rounded-tooltip",
+        "rounded-dialog",
+        "rounded-dialog-item",
+        "rounded-input",
+        "rounded-pill",
+        "rounded-chip",
+        "rounded-segmented",
+        "rounded-send",
+        "rounded-button",
+        "rounded-button-xs",
+        "rounded-button-sm",
+        "rounded-button-lg",
+      ],
+      // The one registered shadow: the float shadow (docs/DESIGN.md, "Surfaces").
+      shadow: ["shadow-overlay"],
     },
   },
 });

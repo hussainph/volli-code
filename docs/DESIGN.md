@@ -54,7 +54,7 @@ plane, ticket detail), `pt-8` (32px) on roomy reading surfaces, `pb-16` (64px) �
 the half-steps (`0.5` `1.5` `2.5` `3.5`) and the orphans (`3` `7` `10`)
 are gone, and a new one is a change argued here rather than a value picked in a component.
 
-**Thirteen recorded exceptions**, each because the ladder's fixed rungs cannot express a
+**Fourteen recorded exceptions**, each because the ladder's fixed rungs cannot express a
 measured piece of geometry rather than a value chosen locally. They are commented at their site;
 do not re-collapse them without looking at the surface:
 
@@ -67,6 +67,7 @@ do not re-collapse them without looking at the surface:
 | `browser/session-cursor.css` | chip `gap: 5px` · `padding: 0 7px` · `height: 20px` · action `height: 15px` | The Session cursor's label is a drawing at pointer scale, measured against a 16px arrow, not a control on the layout grid: at the ladder's next step the chip reads as a button beside the arrow rather than a name riding it. Its type and corners still take the `--text-label` and `--radius-sm` rungs |
 | `globals.css` Monaco loading skeleton | `height: 14px` · `top: 12px` · `top: 36px` | The pseudo-elements meet Monaco's 12px source inset and its measured two-line placeholder drawing; 8/16/24px rungs move a bar before the host is replaced |
 | `ui/list-row.tsx` `density="two-line"` | `py-1.5` | Two `text-ui` line boxes + 12 keeps the measured 52px two-line row; `py-2` grows every row of a dense list to 56 and orphans the `min-h-13` floor. Recorded against the Diffs page until the row became a primitive — it was a fact about the object, and the Files page's 56 was the drift |
+| `ui/segmented.tsx` track, `theme/canvas-editor.tsx` `PadChip` | `p-0.5` · `gap-0.5` | A segmented track is its rung's height around thumbs one rung down: a 24px thumb in a 28px track, a 28px one in 32. Only a 2px pad holds both on the control scale; `p-1` makes every segmented control 4px taller than the controls beside it |
 | `ui/list-row.tsx` `ListRowSkeleton` | `gap-1.5` | Its 16px/14px bars need the 6px join to preserve the measured two-line placeholder footprint; `gap-2` changes that first paint before the labels replace it |
 | `chat/transcript-skeleton.tsx` | `gap-1.5` | Its 14px assistant bars sit on a 20px top-to-top placeholder rhythm (14 + 6); `gap-2` makes the transcript's loading drawing taller before prose replaces it |
 | `session-peek/session-peek-card.tsx` card grid | `p-3` · `px-3` · `py-3` · `gap-3` | The peek's 12px inset is `RAIL_PANEL_INSET`'s narrow rung measured onto a popover, and for the same reason that one is recorded: 8 halves the edge of a floating card, and 16 inside a 360px card costs a line of the five-line summary fold. The block rhythm is that one measure turned vertical — inset and rhythm are the same number, which is what makes the two peek cards read as one surface |
@@ -93,9 +94,9 @@ narrows they compress to the 24px gutter floor before text ever reflows.
 
 ## The framed content surface
 
-The main content area is a **floating card**: `rounded-xl`, hairline `border-border`, `m-2`
-(8px) on the theme-derived rail backdrop (`--rail`), applied once on `SidebarInset` in
-`app-shell.tsx`. Every page — the always-mounted sessions layer included — renders inside it, so
+The main content area is a **floating card**, the panel role (see Surfaces): `--radius-panel`,
+hairline `border-border`, no shadow, `m-2` (8px) on the canvas, applied once on `SidebarInset` in
+`app-shell.tsx`; docked, it meets the sidebar at one hairline seam (`globals.css`, SEAM GEOMETRY). Every page — the always-mounted sessions layer included — renders inside it, so
 the workspace reads as an object with edges instead of an edge-to-edge slab. The chrome bar
 and project rail form the surrounding "L", whose color and contrast come from the active theme.
 
@@ -165,9 +166,9 @@ treatment.
 
 | Piece | Rung | Says |
 |---|---|---|
-| Settings (model, effort) | `sm` — 24px, glass chips (`glass-1` fill, `glass-edge` hairline), muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
+| Settings (model, effort) | `sm` — 24px, capsule glass chips (`glass-1` fill, `glass-edge` hairline, `--radius-chip`), muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
 | Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
-| Send / Queue | `icon-lg` — 32px, `rounded-control`, a flat primary fill | the primary key |
+| Send / Queue | `icon-lg` — 32px, a circle (`--radius-send`), a flat primary fill | the primary key |
 | Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
 | Text box at rest | `min-h-20`, `py-4`, content-grown | room for a short paragraph |
 | Footer tray | `px-2 py-2`, tinted `--muted`, hairline top edge | separates writing from configuration |
@@ -180,8 +181,9 @@ whose only control is the `+` — Automation instructions, the command-prompt bo
 full-width tint holding one 24px button reads as a container someone forgot to
 fill.
 
-The send key shares the 10px control
-radius; ordinary settings controls follow the same rounded-rectangle silhouette. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
+The send key is the composer's one capsule, a circle; the settings beside it are capsule chips, and
+ordinary settings controls elsewhere keep the 10px rounded rectangle. The shell is a flat card; only
+dialogs wear `shadow-overlay`.
 The chrome stays at one ink, so a resting composer never masquerades as disabled.
 
 **`+` is the one door.** A menu, not a paperclip: Attach files… · Commands & skills `/` ·
@@ -214,49 +216,81 @@ are frozen, so that disabled combined control leaves the narrow tray entirely; t
 action keeps its icon and accessible name but drops its printed word. Add stays outside the omitted
 group, and the context / Stop / Queue cluster never moves.
 
-## Materials: Glass, tuned
+## Surfaces — one treatment per role
 
-Choose a material by role. Colours come from semantic tokens and `--canvas`;
-opacity never applies to text or its children. Keep the current radius tokens.
+Every surface is one of six roles, and each role has one fill, one edge, one shadow rule and one
+radius. A component names its role (`ui/surface-classes.ts`, the `surface-*` classes and the
+`--radius-*` role variables in `globals.css`); it never re-derives a look from its neighbours. A
+surface that needs a different look is a different role, argued here first. Colours come from
+semantic tokens and `--canvas`; opacity never applies to text or its children.
 
-| Material | Tint | Use |
+| Role | Members | Fill | Edge | Shadow | Radius |
+| --- | --- | --- | --- | --- | --- |
+| Canvas | the window, chrome bar, project rail, tab strip | `--canvas`; chrome is `material-clear` (50%) | none | none | — |
+| Panel | the content card; its side panes: sidebar, ticket and Home rails, Settings nav (`PANE_SURFACE`) | content card `material-thick` (94%); side panes `surface-pane` (76% on `--sidebar`) | `border` hairline on the outer edge; panes divide with one `border` hairline, the sidebar seam included | none | `--radius-panel`; rows `--radius-row` |
+| Card | ticket card, settings section, composer, notice, comment, log list (`CARD_SURFACE`) | `surface-card` (76% on `--card`); a state (error, aimed, hover) may paint over it | `border` | none | `--radius-card` |
+| Inset / well | code block, markdown table, tool output, log box (`WELL_SURFACE`); fields are wells too, on the control radius | `glass-1` | `glass-edge` | none | `--radius-well` |
+| Float | menu, select, popover, peek, Island card, toast, run windows (`FLOAT_SURFACE`, `MENU_SURFACE`) | `material-floating` | `border-strong` | `shadow-overlay` | `--radius-popover`; menus `--radius-menu`; tooltips `--radius-tooltip` |
+| Modal | dialog, alert, sheet, ⌘K, ⌘P (`MODAL_SURFACE`) | `material-floating` | `border-strong` | `shadow-overlay` | `--radius-dialog` |
+
+A lane that holds cards (a board column, an Automations lane) is a tint rather than a card, and
+takes `--radius-card` so it is never rounded tighter than what it holds.
+
+**Flat means flat.** Nothing in the flow casts a shadow, draws an inset rim, a gradient catch or a
+press scale — in either appearance. `shadow-overlay` is the one shadow and only floats and modals
+wear it (a drag ghost under the pointer is a float). `scripts/check-design-tokens.mjs` bans
+`shadow-raised`, `shadow-card`, the stock shadow rungs and `backdrop-blur-*` in app source.
+`shadow-raised` is still registered for one reader, `COMPOSER_STACK_SHELL`, which the chat
+activity-row work owns; it retires when that work adopts the card role.
+
+**Radii are role variables** (`globals.css @theme`). Components name a role and never a number,
+so retuning how round a role reads is a change to its one line:
+
+| Variable | Value | Role |
 | --- | --- | --- |
-| `material-clear` | 50% | Rail, title bar and tab chrome over the static canvas |
-| `material-regular` | 76% | Sidebar, cards, composer frame and Settings groups |
-| `material-thick` | 94% | Terminal frame, diff body, transcript, editor and tables |
-| `material-solid` | 100% | Opaque fallback |
+| `--radius-button-xs` · `-sm` · `--radius-button` · `-lg` | 10px (`--radius-control`) | buttons at every size; never pills; they size to their words, or to a form width in a form column, never stretched full-row |
+| `--radius-input` | 10px | inputs, selects, textareas, the ⌘K search field |
+| `--radius-chip` · `--radius-segmented` · `--radius-send` | capsule (`--radius-pill`) | compact chrome only: chips, segmented tracks and thumbs, the circular send key (and the Activity Island pill) |
+| `--radius-menu` | 10px | menus, selects, the ⌥ column picker |
+| `--radius-menu-item` | 6px (menu − 4) | menu rows at the menu's 4px pad |
+| `--radius-popover` | 12px | popovers and floating cards: Usage limits, the Island's card, peeks, toasts, run windows |
+| `--radius-popover-item` | 8px (popover − 4) | rows inside a float |
+| `--radius-tooltip` | 6px | tooltip labels |
+| `--radius-dialog` | 14px | dialogs, alerts, sheets, ⌘K, ⌘P |
+| `--radius-dialog-item` | 10px (dialog − 4) | palette rows |
+| `--radius-panel` | 20px | the sidebar + content card unit, docked or floating |
+| `--radius-row` | 10px, or its float's `-item` | sidebar rows, list rows, rail rows |
+| `--radius-card` | 12px | ticket cards, board columns, settings sections, notices, comments, the composer |
+| `--radius-well` | 10px standalone, or its float's `-item` | code blocks, markdown tables, tool output, log boxes |
 
-Static materials paint the complete `--canvas` gradient and grain with fixed
-attachment under their tint. Reuse that variable verbatim; do not copy the stops
-or blur the canvas. Reading surfaces target 7:1 text contrast; regular surfaces
-must clear 4.5:1. Use opaque semantic ink, never a low-alpha grey on clear glass.
+Controls, floats and modals carry the owner's values. The flow — the panel unit, its rows, board
+columns and ticket cards — keeps the values v0.3.0-canary.5 rendered, which the owner calls good;
+the other cards join the ticket card's 12px.
 
-`material-floating` gives menus, submenus, popovers, dialogs, palettes, toasts and tooltips
-a 90% popover tint, a top catch, `shadow-overlay` and one 20px backdrop blur with
-`saturate(1.5)`. Floats sit over arbitrary content, so they keep more tint than
-the static ladder: where the blur is not composited, what shows through must stay
-a ghost, never legible text. A command list inside a floating surface shares that surface.
-Never nest backdrop filters, exceed 24px blur or leave glass over live terminals
-or Browser Tab webviews. Contain panel paint; keep tooltip arrows and chrome
-focus rings unclipped, and portal submenus out of their parent float, which
-would otherwise clip them. Portaled submenus use the same floating tint and blur.
-Animate only transform or opacity on blurred floats.
+**Concentric nesting.** A surface nested in another at an inset `p` takes the outer radius minus
+`p`, and is never rounder than its parent. The derivations are variables too, so they follow a
+retune: a container's `-item` radius is its own minus its 4px pad. Rows and wells go one step
+further and read the radius their container publishes: the float, menu and modal roles each
+set `--nested-radius` (`globals.css`), and `rounded-row` / `rounded-well` take it, so the Island's
+rows sit at 8px inside its 12px card and a sheet's rows at 10px inside its 14px dialog without a
+call site knowing where it is. In the flow, where insets are 8px and more, a row takes 10px and a
+well the control's 10px, both under the card's 12. Where the inset is at least the outer radius (a dialog's 16px padding, a page
+gutter) the corners no longer interact and the inner surface keeps its own role radius, never
+rounder than its parent.
 
-Reduce transparency and Increase contrast replace every material with its
-opaque semantic fill. Browsers without backdrop-filter get opaque materials.
-These overrides apply to body portals too.
+**The float material** is one pair of variables, `--float-tint` and `--float-backdrop`, read by
+every float and modal and by nothing else. Whether floats end opaque or frosted is open, so that
+decision is those two lines. Never spend a backdrop blur outside them: a sticky strip takes its
+pane's own fixed-attachment fill instead, which hides what scrolls beneath it for free. Never nest
+backdrop filters, and never leave glass over live terminals or Browser Tab webviews. Contain panel
+and float paint; keep tooltip arrows and chrome focus rings unclipped, and portal submenus out of
+their parent float. Animate only transform or opacity on floats.
 
-## Elevation — three tiers
-
-One shadow per role, generated from the canvas so the halo is tinted to the window rather than
-neutral black. Stock `shadow-xs`…`shadow-2xl` are banned by
-`apps/desktop/scripts/check-design-tokens.mjs`; `shadow-none` stays legal as a reset.
-
-| Utility | Role |
-| --- | --- |
-| `shadow-raised` | On a surface: the active tab in a strip, a board card in its column. Never a control: controls are flat |
-| `shadow-card` | A pane or a sheet of paper: the floating/inset sidebar, a tile dragged off the board |
-| `shadow-overlay` | Portals to the body and floats over the whole window: menus, select, popover, hover card, dialogs, sheet, tooltip, the ⌘K palette |
+Static materials paint the complete `--canvas` gradient and grain with fixed attachment under
+their tint; reuse that variable verbatim. Reading surfaces target 7:1 text contrast; side panes and
+cards must clear 4.5:1. Reduce transparency and Increase contrast replace every material with its
+opaque semantic fill; browsers without backdrop-filter get opaque materials. These overrides apply
+to body portals too.
 
 ## Alpha — four steps, and a token for the scrim
 
@@ -334,34 +368,36 @@ Rules:
 ## System rules
 
 1. **Radius:** calm rounded rectangles on shadcn's "more rounded" scale.
-   `--radius` is 12px (0.75rem), authored once in `globals.css`, and sm/md/lg/xl
-   are shadcn's own formulas (r−4, r−2, r, r+4 = 8/10/12/16px), so a vendored
-   primitive's `rounded-md` lands on the same 10px as ours. Compose by role;
-   inner corners subtract their inset from the outer radius.
+   `--radius` is 12px (0.75rem), authored once in `globals.css`, and sm/md/lg
+   are shadcn's own formulas (r−4, r−2, r = 8/10/12px), so a vendored
+   primitive's `rounded-md` lands on the same 10px as ours. Components name a
+   role variable (Surfaces, above), never a number. Inner corners subtract their
+   inset from the outer radius.
 
-   | Utility | Radius | Role |
+   | Rung | Radius | Use |
    |---|---|---|
-   | `rounded-control` (= `rounded-md`) | 10px | Controls, fields and tooltip labels |
-   | `rounded-container` | 14px | Cards, popovers and dialogs |
-   | `rounded-row` | 10px | Container rows at a 4px inset |
-   | `rounded-menu` (= `rounded-lg`) | 12px | Dense menu and picker frames |
-   | `rounded-menu-item` (= `rounded-sm`) | 8px | Menu highlights at a 4px inset |
+   | `rounded-control` (= `rounded-md`) | 10px | the rung the control roles point at |
+   | `rounded-container` | 10px (= `--radius-panel`) | legacy name; the composer stack shell still reads it |
    | `rounded-keycap` | 6px | Keyboard hint chips, not controls |
-   | `rounded-xl` | 16px | The floating content card and other large frames |
 
-   Pills are reserved for badges, switches, status chips and avatars. Checkboxes
+   Everything else is a role variable (Surfaces, above).
+
+   `rounded-xl` (16px) is no role's radius and is banned by `check-design-tokens.mjs`.
+
+   Pills are reserved for badges, switches, status chips, avatars and the
+   capsule roles (chips, segmented tracks and thumbs, the send key). Checkboxes
    use half the control radius (5px), so they remain boxes rather than radios.
 2. **Depth: flat glass, no bevels.** No control draws an inset highlight, a
    drop shadow or a press shadow, in either appearance. There are two faces:
-   - **Solid** — `default` (primary), `destructive` and the composer's send
-     key: an opaque solved fill. Hover darkens it 0.03 OKLab L and a press
+   - **Solid** — `default` (primary), `destructive`, the composer's send
+     key and the selected segment's thumb: an opaque solved fill. Hover darkens it 0.03 OKLab L and a press
      0.06, which only ever adds contrast to the white label.
-   - **Glass** — `outline`, `secondary`, `ghost`, the selected segment, chips,
+   - **Glass** — `outline`, `secondary`, `ghost`, the segmented track, chips,
      inputs, textareas, select triggers, the checkbox and the switch track: a
      translucent tint of the foreground over whatever surface is beneath, so
      the canvas and its material show through, edged by one `glass-edge`
      hairline. The ladder is `glass-1` rest / well, `glass-2` hover,
-     `glass-3` press, `glass-4` selected; secondary sits one step above
+     `glass-3` press, `glass-4` the strongest step; secondary sits one step above
      outline, ghost is bare until hovered, and fields are `glass-1` wells.
    The ladder is solved per appearance (`globals.css`, "THE GLASS LADDER"):
    the edge to one contrast, the fills by eye so a light and a dark chip read
@@ -384,8 +420,10 @@ Rules:
    select triggers use `size`. Joined controls choose the same rung. Textareas
    keep a 32px floor and grow with their contents.
 4. **Contrast:** keep solved primary/destructive fill–ink pairs opaque. Glass
-   controls carry foreground ink on their tint; the selected segment takes the
-   strongest glass step, unselected segments the outline treatment. Validate
+   controls carry foreground ink on their tint. A segmented control is a
+   borderless `glass-1` capsule track with the chosen member as a solid primary
+   thumb (`selected`) and the rest bare (`ghost`) — never a row of separately
+   bordered buttons. Validate
    secondary, selected and tab states in light and dark.
 5. **Weight:** regular (400) for body/value, medium (500) for control/field/menu
    labels, semibold (600) for titles and important feedback. Retain the five
@@ -433,6 +471,7 @@ semantic generated tokens; product state and mutations belong to the consumer.
 | Object | Primitive / contract | When to use it |
 |---|---|---|
 | Reading/workbench page | `ContentColumn` / `WorkbenchColumn`, `PageHeader` | Choose the surface tier and one gutter/header owner; do not restate measures. |
+| Surface | `PANE_SURFACE`, `CARD_SURFACE`, `WELL_SURFACE`, `FLOAT_SURFACE`, `MODAL_SURFACE` (`ui/surface-classes.ts`) | Every box: name its role (Surfaces, above) rather than composing a fill, edge, shadow and radius by hand. |
 | Action | `Button`, size/variant axes | Every ordinary action; retain icons, accessible names and keyboard focus. |
 | Fused actions | `ButtonGroup` | Adjacent controls that form one compound action, not an arbitrary toolbar container. |
 | Closed-set value | `Segmented` | A small, visible choice set. Navigation destinations are not preference segments. |
@@ -605,7 +644,7 @@ rows at the rows' own `px-2`. Properties was a run of pills, the one block that 
 section nor a card — unmarked, bordered at rest where every row is borderless until hovered, two
 facts to a line — and it is three rows now, in the roster's grammar even where the value it carries
 is a control rather than a `ListRow`. *The card* (`RAIL_CARD_FRAME`, seamed rows inside one
-`rounded-xl` frame) is the Diffs page's costume; Now draws none. The page stacks with **one
+card frame) is the Diffs page's costume; Now draws none. The page stacks with **one
 `gap-4`**, each block sets `gap-1` under its own heading, and no block pays its own top padding —
 the pill above already pays the page's top inset. An absent block then leaves no hole, and no block
 can drift from its neighbours by carrying a different inset. **Home's rail obeys the same seam**,

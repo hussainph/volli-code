@@ -217,7 +217,7 @@ describe("TabStrip arrangement", () => {
     );
     const tab = tabsInStrip()[0]!;
     expect(tab.className).not.toContain("active:scale");
-    expect(tab.className).not.toContain("shadow-raised");
+    expect(tab.className).not.toMatch(/\bshadow-/);
     expect(tab.className).toContain("workspace-folder-tab");
     expect(tab.querySelector('[data-slot="tab-kind-state"] [data-kind="chat"]')).not.toBeNull();
     expect(

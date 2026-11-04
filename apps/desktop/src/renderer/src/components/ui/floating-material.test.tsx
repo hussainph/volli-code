@@ -65,10 +65,19 @@ function tailwindOptimize(): (
 }
 
 const BLUR = "blur(20px) saturate(1.5)";
-const backdrop = (el: Element) =>
-  getComputedStyle(el)
-    .getPropertyValue("backdrop-filter")
-    .replace(/\)(?=\S)/g, ") ");
+/**
+ * The computed backdrop, with the float variable resolved. Every float reads
+ * `var(--float-backdrop)` (one line in globals.css decides opaque or frosted),
+ * and jsdom computes the reference rather than substituting it — so the one
+ * level of indirection is resolved here, from the same computed style.
+ */
+const backdrop = (el: Element) => {
+  const style = getComputedStyle(el);
+  let value = style.getPropertyValue("backdrop-filter").trim();
+  const reference = /^var\((--[\w-]+)\)$/.exec(value);
+  if (reference) value = style.getPropertyValue(reference[1]!).trim();
+  return value.replace(/\)(?=\S)/g, ") ");
+};
 
 let shipped = "";
 let root: Root;
@@ -112,10 +121,13 @@ afterEach(async () => {
 
 describe("floating material as shipped", () => {
   it("keeps the standard backdrop-filter spelling through the build's optimizer", () => {
-    expect(shipped).toMatch(/[;{]backdrop-filter:\s*blur\(20px\)\s*saturate\(1\.5\)/);
-    // The tint stays 90%: jsdom cannot resolve `color-mix` over a variable, so
-    // the shipped rule is read as text.
-    expect(shipped).toContain("var(--material-solid-fill) 90%, transparent)");
+    expect(shipped).toMatch(/[;{]backdrop-filter:\s*var\(--float-backdrop\)/);
+    // The float pair is the whole opaque-or-frosted decision, and it ships at
+    // today's values: a 90% tint under one 20px blur. jsdom cannot resolve
+    // `color-mix` over a variable, so the shipped rules are read as text.
+    expect(shipped).toMatch(/--float-backdrop:\s*blur\(20px\)\s*saturate\(1\.5\)/);
+    expect(shipped).toMatch(/--float-tint:\s*90%/);
+    expect(shipped).toContain("var(--material-solid-fill) var(--float-tint), transparent)");
     // Hand-written prefixes are what the optimizer folded away; it adds the
     // prefix itself for any target that needs one.
     const declarations = source.replace(/\/\*[\s\S]*?\*\//g, "");

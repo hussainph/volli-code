@@ -162,7 +162,7 @@ export function ListRow({
   return (
     <div
       className={cn(
-        "group relative flex w-full items-center gap-2 rounded-lg border border-transparent px-2",
+        "group relative flex w-full items-center gap-2 rounded-row border border-transparent px-2",
         DENSITY[density],
         selected
           ? "border-sidebar-border bg-accent/70"
@@ -234,7 +234,7 @@ export function ListRowSkeleton({
     <div
       aria-hidden
       className={cn(
-        "flex w-full items-center gap-2 rounded-lg border border-transparent px-2",
+        "flex w-full items-center gap-2 rounded-row border border-transparent px-2",
         DENSITY[density],
         className,
       )}

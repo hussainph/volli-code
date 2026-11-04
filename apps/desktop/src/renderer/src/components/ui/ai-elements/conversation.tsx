@@ -263,8 +263,11 @@ export const ConversationScrollButton = ({
       <Button
         // Icon-only, so it needs a name of its own — there is no text to borrow.
         aria-label="Scroll to latest"
+        // A control hovering over the moving transcript is a float (docs/
+        // DESIGN.md, "Surfaces"): the float material, its edge and the one
+        // shadow, round because it is a single glyph.
         className={cn(
-          "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted",
+          "material-floating absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full shadow-overlay",
           className,
         )}
         onClick={handleScrollToBottom}

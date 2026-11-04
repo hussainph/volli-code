@@ -24,12 +24,9 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Prompt writing uses a thick sheet inside the regular material frame. */
+/* Prompt writing uses a thick sheet inside a card (`surface-card`): the frame
+ * is the card role's own fill, hairline and radius (docs/DESIGN.md, "Surfaces"). */
 @layer components {
-  .prompt-surface {
-    border-color: var(--border-strong);
-  }
-
   .prompt-toolbar {
     border-top: 1px solid color-mix(in oklab, var(--primary) 10%, var(--border));
     background: linear-gradient(
@@ -439,28 +436,31 @@
   --color-sidebar-veil: var(--sidebar-veil);
   --color-sidebar-accent-veil: var(--sidebar-accent-veil);
   --color-sidebar-border-veil: var(--sidebar-border-veil);
-  /* The three elevation tiers, as `shadow-raised` / `shadow-card` /
-   * `shadow-overlay`. Every surface that lifts takes one of them by ROLE — a
-   * control or an active tab is raised, a card or a panel is a card, anything
-   * that portals to the body and floats over the whole window is an overlay —
-   * and the stock `shadow-xs…2xl` rungs are banned by
-   * `scripts/check-design-tokens.mjs`, because they are untinted black
-   * (`rgb(0 0 0 / …)`) on a canvas whose own shadows are warm.
+  /* THE ONE SHADOW, as `shadow-overlay` — the float shadow, worn by floats and
+   * modals and nothing else (docs/DESIGN.md, "Surfaces": flat means flat).
+   * The generator still solves `--shadow-raised` and `--shadow-card` beside it
+   * (the canvas pipeline is not this file's to change). `shadow-card` is no
+   * longer registered, so nothing can reach for it. `shadow-raised` is HELD,
+   * not endorsed: its one remaining reader is `COMPOSER_STACK_SHELL`
+   * (`@volli/session-presentation`), the chrome the chat questions share with
+   * the activity island, which belongs to the activity-row work in flight;
+   * it retires when that work adopts the card role. In this app's own source
+   * `scripts/check-design-tokens.mjs` bans both names, and the stock
+   * `shadow-xs…2xl` rungs: untinted black on a canvas whose shadow is warm.
    *
    * THE SELF-REFERENCE IS DELIBERATE AND SAFE, and it is worth stating because
    * it looks like a cycle. Tailwind's box-shadow namespace IS `--shadow-*`, so
-   * a utility named `shadow-raised` can only come from a theme key spelled
-   * `--shadow-raised` — the same name the generated block above declares. The
+   * a utility named `shadow-overlay` can only come from a theme key spelled
+   * `--shadow-overlay` — the same name the generated block above declares. The
    * theme's copy lands inside `@layer theme`; the generated block is unlayered,
    * and unlayered declarations beat every layer regardless of source order. So
    * the generated value always wins the cascade and nothing ever evaluates
-   * `var(--shadow-raised)` against itself. What `inline` buys is that the
-   * UTILITY reads `var(--shadow-raised)` directly rather than through a second
+   * `var(--shadow-overlay)` against itself. What `inline` buys is that the
+   * UTILITY reads `var(--shadow-overlay)` directly rather than through a second
    * theme variable, which is what lets one class follow the live canvas as it
    * repaints. */
-  --shadow-raised: var(--shadow-raised);
-  --shadow-card: var(--shadow-card);
   --shadow-overlay: var(--shadow-overlay);
+  --shadow-raised: var(--shadow-raised);
   /* The overlay wash, as `bg-scrim`. Solved beside the tiers above and for the
    * same reason: a scrim is the window's shadow spread over everything, so it
    * follows the canvas instead of being a neutral `bg-black/N` that a warm
@@ -479,17 +479,59 @@
   --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);
   --font-sans: "Mona Sans Variable", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-  /* Calm rounded rectangles: 10px controls, 14px containers. Dense menus
-   * step down to 12px frames / 8px highlights at their shared 4px inset.
-   * sm/md/lg/xl are shadcn's own formulas (r-4, r-2, r, r+4), so stock and
-   * vendored primitives sit on this ladder: md IS the control rung, sm the
-   * menu highlight, lg the menu frame. */
+  /* THE RADIUS OF EACH ROLE (docs/DESIGN.md, "Surfaces", the radius table).
+   * Components name a role — `rounded-card`, `rounded-button-sm`,
+   * `rounded-popover` — and never a number, so retuning how round a role reads
+   * is a change to one line here and nothing else.
+   *
+   * The values are the owner's: controls at 10px and never pills; capsules only
+   * for compact chrome (segmented tracks and thumbs, chips, the send key, the
+   * Activity Island pill); floating cards TIGHTER than the work under them; and
+   * the flow — the panel unit, sidebar rows, board columns and ticket cards —
+   * on the values v0.3.0-canary.5 rendered, which the owner calls good.
+   *
+   * Concentric nesting is derived here, never written at a call site. A
+   * container's `-item` radius is its own minus the 4px pad (`p-1`) its rows
+   * sit at, and the containers PUBLISH the radius their rows and wells take as
+   * `--nested-radius` (the surface roles in the material section below), so a
+   * `rounded-row` or `rounded-well` is concentric with whatever holds it, and a
+   * retuned container carries its insides with it. */
+  /* Controls: buttons at every size, inputs, selects, the command search. */
   --radius-control: calc(var(--radius) - 2px);
-  --radius-container: calc(var(--radius-control) + 4px);
-  --radius-row: calc(var(--radius-container) - 4px);
-  --radius-menu: calc(var(--radius-control) + 2px);
+  --radius-button-xs: var(--radius-control);
+  --radius-button-sm: var(--radius-control);
+  --radius-button: var(--radius-control);
+  --radius-button-lg: var(--radius-control);
+  --radius-input: var(--radius-control);
+  /* Capsules: compact chrome only, never a full-width input or button. */
+  --radius-pill: 9999px;
+  --radius-chip: var(--radius-pill);
+  --radius-segmented: var(--radius-pill);
+  --radius-send: var(--radius-pill);
+  /* Floats: tighter than the work they hover over. */
+  --radius-menu: 10px;
   --radius-menu-item: calc(var(--radius-menu) - 4px);
-  --radius-keycap: calc(var(--radius-menu-item) - 2px);
+  --radius-popover: 12px;
+  --radius-popover-item: calc(var(--radius-popover) - 4px);
+  --radius-tooltip: 6px;
+  --radius-dialog: 14px;
+  --radius-dialog-item: calc(var(--radius-dialog) - 4px);
+  /* The flow, on canary.5's values: the panel unit (sidebar + content card) at
+   * 20px, sidebar and list rows at 10px, and every card — ticket cards, board
+   * columns, settings sections, notices, the composer — at 12px. */
+  --radius-panel: 20px;
+  --radius-row: var(--nested-radius, 10px);
+  --radius-card: 12px;
+  /* The legacy rung name, read only by the chat composer stack's shell
+   * (`COMPOSER_STACK_SHELL`): it is a card, so it follows the card. */
+  --radius-container: var(--radius-card);
+  /* Wells (a code block, tool output, a log box): concentric with whatever
+   * holds them; standalone, the control radius. */
+  --radius-well: var(--nested-radius, var(--radius-control));
+  --radius-keycap: calc(var(--radius-control) - 4px);
+  /* shadcn's own formulas (r−4, r−2, r, r+4), so a vendored primitive's
+   * `rounded-md` lands on the control radius. App code names a role instead;
+   * `rounded-xl` is banned outright (`scripts/check-design-tokens.mjs`). */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -540,8 +582,7 @@
   --spacing-gutter: 1.5rem;
 }
 
-/* Light paper in either appearance: the materials' top catch and the switch
- * thumb draw with it. */
+/* Light paper in either appearance: the switch thumb draws with it. */
 :root,
 .dark {
   --control-light-paper: var(--foreground);
@@ -1432,13 +1473,39 @@
  * grain, authored stops, positions and layer sizes stay in the production
  * canvas pipeline. Fixed attachment aligns them with html's viewport paint.
  * No permanent backdrop filter over a terminal, transcript or native webview.
- * Local tint variables resolve on each surface, never on the root. */
+ * Local tint variables resolve on each surface, never on the root.
+ *
+ * THE SURFACE LADDER (docs/DESIGN.md, "Surfaces"). Every surface is one of six
+ * roles, and the role — never a selector guessing at markup — picks its fill:
+ *   canvas  `html`, and the chrome standing on it      `material-clear` (50%)
+ *   panel   the content card                          `material-thick` (94%)
+ *           its side panes: sidebar, rails, Settings nav  `surface-pane` (76%)
+ *   card    ticket card, section, composer, notice    `surface-card` (76%)
+ *   well    fields, code, tool output                 `glass-1` (ui/surface-classes.ts)
+ *   float, modal                                      `material-floating`
+ * Flat means flat: nothing in the flow draws a shadow, an inset rim or a
+ * gradient catch. `shadow-overlay` is the one shadow, and only floats and
+ * modals wear it. */
 :root,
 .dark,
 .light {
   --material-foreground: var(--foreground);
   --material-muted-foreground: var(--muted-foreground);
 }
+
+/* THE FLOAT MATERIAL. Every menu, select, popover, tooltip, toast, peek,
+ * dialog, sheet and palette reads these two, and nothing else reads them.
+ * Whether floats end opaque or frosted is still an open decision, so the
+ * decision is these two lines and nothing more:
+ *   opaque   --float-tint: 100%;  --float-backdrop: none;
+ *   frosted  --float-tint: 80%;   --float-backdrop: blur(40px) saturate(1.8);
+ * Blur costs GPU on every frame content moves under it, and over the paper
+ * panels it barely shows: never spend it on a surface outside this set. */
+:root {
+  --float-tint: 90%;
+  --float-backdrop: blur(20px) saturate(1.5);
+}
+
 .material-clear,
 .app-region-drag,
 [data-slot="tab-strip"] {
@@ -1446,11 +1513,17 @@
   --material-solid-fill: var(--popover);
 }
 .material-regular,
-.prompt-surface,
-article.bg-card,
-section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
+.surface-pane,
+.surface-card {
   --material-opacity: 76%;
   --material-solid-fill: var(--card);
+}
+/* The side panes are the generator's sidebar tier — the rung between the
+ * rail and the content — so the left sidebar and the rails inside the card
+ * paint one fill, and with fixed attachment a sticky strip of it (the rail
+ * mode tabs) is indistinguishable from the pane under it. */
+.surface-pane {
+  --material-solid-fill: var(--sidebar);
 }
 .material-thick,
 [data-volli-surface],
@@ -1460,25 +1533,16 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
 [data-terminal-renderer],
 [data-monaco-status],
 [data-monaco-fallback],
-[data-testid="markdown-preview"],
-table {
+[data-testid="markdown-preview"] {
   --material-opacity: 94%;
-  --material-solid-fill: var(--background);
-}
-.material-solid {
-  --material-opacity: 100%;
   --material-solid-fill: var(--background);
 }
 :where(
   .material-clear,
   .material-regular,
   .material-thick,
-  .material-solid,
   .app-region-drag,
   [data-slot="tab-strip"],
-  .prompt-surface,
-  article.bg-card,
-  section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
   [data-volli-surface],
   [role="log"].bg-background,
   [data-diff-fit],
@@ -1486,8 +1550,7 @@ table {
   [data-terminal-renderer],
   [data-monaco-status],
   [data-monaco-fallback],
-  [data-testid="markdown-preview"],
-  table
+  [data-testid="markdown-preview"]
 ) {
   --material-tint: color-mix(
     in oklab,
@@ -1497,51 +1560,78 @@ table {
   background: linear-gradient(var(--material-tint), var(--material-tint)), var(--canvas);
   background-attachment: fixed;
 }
-.material-solid {
-  background: var(--material-solid-fill);
-  background-attachment: scroll;
+/* The two ROLE classes paint in the components layer, not unlayered like the
+ * recipes above: a pane or a card is also a thing a state paints over (a
+ * hovered collapsed column, an aimed drop target), and an unlayered fill would
+ * beat every `hover:`/`data-*:` utility that tries. Their reduced-transparency
+ * and no-backdrop fallbacks ride in the same layer for the same reason. */
+@layer components {
+  .surface-pane,
+  .surface-card {
+    --material-tint: color-mix(
+      in oklab,
+      var(--material-solid-fill) var(--material-opacity),
+      transparent
+    );
+    background: linear-gradient(var(--material-tint), var(--material-tint)), var(--canvas);
+    background-attachment: fixed;
+  }
+  @supports not (backdrop-filter: blur(1px)) {
+    .surface-pane,
+    .surface-card {
+      background: var(--material-solid-fill);
+    }
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .surface-pane,
+    .surface-card {
+      background: var(--material-solid-fill);
+    }
+  }
 }
-.prompt-surface,
-[data-volli-sidebar].material-regular {
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
-    var(--shadow-card);
+/* WHAT EACH CONTAINER HANDS ITS ROWS AND WELLS. A `rounded-row` or a
+ * `rounded-well` reads the nearest `--nested-radius`, so it is concentric with
+ * the float or modal that holds it at the 4px pad — the Island's rows inside
+ * its popover card, a sheet's rows inside its dialog — without a call site
+ * knowing where it is. Elsewhere (the flow, where insets are 8px and more) a
+ * row takes the row radius and a well the control radius: the fallbacks in
+ * `@theme`, both under the card's. A menu is a float with tighter rows, so its
+ * rule comes after the float's. */
+.surface-float {
+  --nested-radius: var(--radius-popover-item);
 }
-article.bg-card {
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
-    var(--shadow-raised);
+.surface-menu {
+  --nested-radius: var(--radius-menu-item);
 }
-section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
-  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent);
+.surface-modal {
+  --nested-radius: var(--radius-dialog-item);
 }
-/* Contain panels, not chrome: chrome must let focus rings and tab ghosts out. */
+/* Contain panels, not chrome or cards: chrome must let focus rings and tab
+ * ghosts out, and a card's session ring sits ON its border line. */
 .material-regular,
 .material-thick,
-.prompt-surface,
-article.bg-card {
+.surface-pane {
   contain: paint;
 }
 /* The sidebar is tinted paper now; its own foreground must not inherit the
  * on-canvas ink intended for the clear rail/title bar. The canvas solve stays
  * on chrome; semantic inks stay on regular/thick reading surfaces. */
-[data-volli-sidebar].material-regular {
+[data-volli-sidebar].surface-pane {
   --foreground: var(--material-foreground);
   --muted-foreground: var(--material-muted-foreground);
   --sidebar-foreground: var(--material-foreground);
-  --material-solid-fill: var(--sidebar);
 }
-[data-volli-sidebar].material-regular [data-slot="sidebar-group-label"] {
+[data-volli-sidebar].surface-pane [data-slot="sidebar-group-label"] {
   color: var(--foreground);
 }
-[data-volli-sidebar].material-regular .session-row-dim.text-ui {
+[data-volli-sidebar].surface-pane .session-row-dim.text-ui {
   --sidebar-foreground: var(--material-foreground);
   --muted-foreground: var(--material-foreground);
 }
 /* Only transient floats sample arbitrary content. Command embedded in a
  * popover/dialog shares its parent's material instead of adding another pass.
  * Floats sit over arbitrary, often high-contrast content (a dialog footer's
- * primary button under a popover), so their tint is 90%, not the static
+ * primary button under a popover), so their tint stays above the static
  * ladder's 76%: wherever the blur pass is not composited, what shows through
  * stays a faint ghost rather than legible text.
  *
@@ -1556,12 +1646,10 @@ article.bg-card {
 [cmdk-dialog],
 .toaster [data-sonner-toast].material-floating {
   --material-solid-fill: var(--popover);
-  background: color-mix(in oklab, var(--material-solid-fill) 90%, transparent);
+  background: color-mix(in oklab, var(--material-solid-fill) var(--float-tint), transparent);
   border-color: var(--border-strong);
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
-    var(--shadow-overlay);
-  backdrop-filter: blur(20px) saturate(1.5);
+  box-shadow: var(--shadow-overlay);
+  backdrop-filter: var(--float-backdrop);
   contain: paint;
 }
 /* Only DOM-nested floats share their parent's material. Portaled submenus
@@ -1590,15 +1678,11 @@ article.bg-card {
     .material-clear,
     .material-regular,
     .material-thick,
-    .material-solid,
     .material-floating,
     [cmdk-dialog],
     .toaster [data-sonner-toast].material-floating,
     .app-region-drag,
     [data-slot="tab-strip"],
-    .prompt-surface,
-    article.bg-card,
-    section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
     [data-volli-surface],
     [role="log"].bg-background,
     [data-diff-fit],
@@ -1606,8 +1690,7 @@ article.bg-card {
     [data-terminal-renderer],
     [data-monaco-status],
     [data-monaco-fallback],
-    [data-testid="markdown-preview"],
-    table
+    [data-testid="markdown-preview"]
   ) {
     background: var(--material-solid-fill);
   }
@@ -1617,15 +1700,11 @@ article.bg-card {
     .material-clear,
     .material-regular,
     .material-thick,
-    .material-solid,
     .material-floating,
     [cmdk-dialog],
     .toaster [data-sonner-toast].material-floating,
     .app-region-drag,
     [data-slot="tab-strip"],
-    .prompt-surface,
-    article.bg-card,
-    section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
     [data-volli-surface],
     [role="log"].bg-background,
     [data-diff-fit],
@@ -1633,8 +1712,7 @@ article.bg-card {
     [data-terminal-renderer],
     [data-monaco-status],
     [data-monaco-fallback],
-    [data-testid="markdown-preview"],
-    table
+    [data-testid="markdown-preview"]
   ) {
     background: var(--material-solid-fill);
     backdrop-filter: none;
@@ -1650,9 +1728,10 @@ article.bg-card {
  *
  * What ships is Slack's arrangement, and the only one of the four tried that
  * stops treating the sidebar and the card as two objects. They become ONE inset
- * unit with a colour change down the middle: a single rounded outline around the
- * pair, no gutter between them, and the canvas running all the way around the
- * outside as a frame rather than the reverse-L the alternatives left.
+ * unit with a pane divider down the middle: a single rounded outline around the
+ * pair, one hairline between them and no gutter, and the canvas running all
+ * the way around the outside as a frame rather than the reverse-L the
+ * alternatives left.
  *
  * Built as two half-boxes because the DOM has no element that wraps exactly
  * these two: the sidebar lives inside the collapsible `Sidebar` (with the
@@ -1661,15 +1740,9 @@ article.bg-card {
  * sibling. So each half draws its own outer corners and border and drops the
  * ones that face the seam; abutted, they read as one outline.
  *
- * `clip-path` is what makes that survive the shadow. Both halves cast the same
- * card shadow, and a shadow paints OUTSIDE its border box — so without a clip
- * the card's would fall across the sidebar's right edge and the sidebar's across
- * the card, drawing a dark bar down the middle of a unit whose whole claim is
- * that it has no middle. Each inset() clips flush at the seam side (0) and lets
- * the shadow run 60px past the other three, comfortably more than the widest
- * layer reaches. Nothing else is lost to it: the card already clips its content
- * with `overflow-hidden`, popovers portal to the body, and the seam edge is
- * square anyway.
+ * The unit is flat: it casts no shadow, so nothing can fall across the seam
+ * and the halves need no clip to stay one object. The hairline is the whole
+ * edge (docs/DESIGN.md, "Surfaces": nothing in the flow lifts).
  *
  * THE TWO HALVES ARE KEYED SEPARATELY, and for the length of a pin they are
  * allowed to disagree. The sidebar half answers to the SHELL
@@ -1706,12 +1779,10 @@ article.bg-card {
   margin: var(--shell-inset) 0 var(--shell-inset) var(--shell-inset);
   border: var(--shell-edge) solid var(--border);
   border-right-width: 0;
-  /* The container rung, raw rather than through a utility — this is the
+  /* The panel role, raw rather than through a utility — this is the
    * outermost container on screen, and a shell rounded tighter than the
    * dialogs and menus that open over it reads as the wrong way round. */
-  border-radius: var(--radius-container) 0 0 var(--radius-container);
-  box-shadow: var(--shadow-card);
-  clip-path: inset(-60px 0 -60px -60px);
+  border-radius: var(--radius-panel) 0 0 var(--radius-panel);
   overflow: hidden;
   /* `h-full` is `height: 100%`, which measures the row and ignores the margins
    * — so the unit would hang 16px past the bottom of the window with its lower
@@ -1745,10 +1816,13 @@ article.bg-card {
    * scaled, which is the artifact rather than the fix. Verified by measurement
    * at every zoom rung — see the note on this change. */
   margin: var(--shell-inset) var(--shell-inset) var(--shell-inset) 0;
-  border-left-width: 0;
-  border-radius: 0 var(--radius-container) var(--radius-container) 0;
-  clip-path: inset(-60px -60px -60px 0);
-  box-shadow: var(--shadow-card);
+  /* The card keeps its left hairline: the seam is where two panes of the one
+   * panel meet, and panes divide with one `border` hairline like the rails and
+   * the Settings nav inside the card do (docs/DESIGN.md, "Surfaces"). Without
+   * it the seam is only a change of fill, which disappears wherever the card's
+   * first pane wears the side-pane fill too (Settings). The sidebar half still
+   * drops its right edge, so the line is drawn once. */
+  border-radius: 0 var(--radius-panel) var(--radius-panel) 0;
 }
 
 /* Written for the collapsible wrapper that used to sit around both panes: it
@@ -1867,6 +1941,35 @@ article.bg-card {
 }
 
 /* ─── end of the seam ─────────────────────────────────────────────────────── */
+
+/* STREAMDOWN ON THE LADDER. Streamdown draws its own code blocks and tables,
+ * each as a padded frame around a second bordered box: 16px outside, 10px
+ * inside at an 8px inset, two fills and two hairlines for one object. A code
+ * block or a table is a WELL (docs/DESIGN.md, "Surfaces"), so the frame takes
+ * the well's radius, edge and fill and the inner box gives up its own: one
+ * box, one edge. Unlayered on purpose, so it outranks the package's own
+ * utilities without reaching into its markup. Its floating action strip drops
+ * the backdrop blur it shipped with — blur is the float material's alone. */
+[data-streamdown="code-block"],
+[data-streamdown="table-wrapper"] {
+  border-radius: var(--radius-well);
+  border-color: var(--glass-edge);
+  background: var(--glass-1);
+}
+[data-streamdown="code-block-body"],
+[data-streamdown="table-wrapper"] [data-streamdown="table"] {
+  border-width: 0;
+  border-radius: 0;
+  background: transparent;
+}
+[data-streamdown="code-block-body"] {
+  padding: 0;
+}
+[data-streamdown="code-block-actions"] {
+  border-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+}
 
 /* The expanded sidebar is a fixed-width presentation layer. Neutralize the
  * stock icon-collapse rules inside it so its contents never reflow while the
@@ -2000,7 +2103,6 @@ input[type="range"]::-webkit-slider-thumb {
   margin-top: -5px;
   border-radius: 9999px;
   background: var(--primary);
-  box-shadow: var(--shadow-raised);
 }
 input[type="range"]:focus-visible {
   outline: 2px solid var(--ring);

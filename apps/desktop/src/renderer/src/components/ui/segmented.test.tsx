@@ -12,7 +12,7 @@ const options = [
 ] as const;
 
 describe("Segmented", () => {
-  it("uses filled selected and outline unselected controls, without rewriting on reselect", () => {
+  it("draws a solid thumb and bare siblings on one track, without rewriting on reselect", () => {
     const writes: string[] = [];
     const tree = Segmented({
       ariaLabel: "View",
@@ -23,7 +23,12 @@ describe("Segmented", () => {
     const buttons = React.Children.toArray(tree.props.children) as React.ReactElement<
       React.ComponentProps<typeof Button>
     >[];
-    expect(buttons.map((button) => button.props.variant)).toEqual(["selected", "outline"]);
+    expect(buttons.map((button) => button.props.variant)).toEqual(["selected", "ghost"]);
+    // The track is a borderless capsule; every member is a capsule thumb.
+    expect(tree.props.className).toContain("rounded-segmented");
+    expect(tree.props.className).toContain("bg-glass-1");
+    expect(tree.props.className).not.toMatch(/\bborder\b/);
+    expect(buttons.every((button) => button.props.className === "rounded-segmented")).toBe(true);
     expect(buttons.map((button) => button.props["aria-pressed"])).toEqual([true, false]);
     expect(buttons[1].props.disabled).toBe(true);
     buttons[0].props.onClick?.({} as React.MouseEvent<HTMLButtonElement>);
@@ -31,7 +36,7 @@ describe("Segmented", () => {
   });
 
   it.each(["sm", "default"] as const)(
-    "gives %s icon-only choices larger targets and names",
+    "gives %s icon-only choices thumbs one rung under the track, and names",
     (size) => {
       const html = renderToStaticMarkup(
         <Segmented
@@ -43,7 +48,7 @@ describe("Segmented", () => {
           onChange={() => {}}
         />,
       );
-      expect(html).toContain(`data-size="${size === "sm" ? "icon" : "icon-lg"}"`);
+      expect(html).toContain(`data-size="${size === "sm" ? "icon-sm" : "icon"}"`);
       expect(html).toContain('title="Board"');
       expect(html).toContain('class="sr-only">Board');
       expect(html).toContain('title="List"');

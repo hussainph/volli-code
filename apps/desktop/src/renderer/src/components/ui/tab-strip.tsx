@@ -1002,7 +1002,7 @@ function TabShell({
                   // corners in tab-strip.css complete the joined silhouette;
                   // no lower shadow redraws the seam it is meant to cover.
                   "-mb-px bg-background text-foreground"
-                : "bg-accent text-foreground shadow-raised"
+                : "bg-accent text-foreground"
               : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
             className,
           )}
@@ -1117,9 +1117,10 @@ function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?:
  * The tab's own drawing, so nothing about the object changes on the way: same
  * shell, same folder silhouette, drawn ACTIVE because the tab in your hand is
  * by definition the one you are looking at. Two things are added and they are
- * the whole treatment — `scale-[1.02]`, just enough to say "picked up" without
- * the ghost measuring differently from the slot it will land in, and
- * `shadow-overlay`, the token every lifted surface in this app takes.
+ * the whole treatment — `shadow-overlay`, the float shadow every surface that
+ * hovers over the work takes, and the grabbing cursor. No scale: a lift that
+ * grows the tab is the press feedback the flat system retired, and the ghost
+ * must measure exactly like the slot it will land in.
  *
  * No transition on either: the ghost is created at its final size, and
  * animating a thing whose whole job is to follow the pointer would put it
@@ -1145,7 +1146,7 @@ export function TabDragGhost({ label }: { label: string }) {
           active
           tabStop={false}
           closable={false}
-          className="scale-[1.02] cursor-grabbing shadow-overlay"
+          className="cursor-grabbing shadow-overlay"
           onActivate={noop}
         />
       </TooltipProvider>

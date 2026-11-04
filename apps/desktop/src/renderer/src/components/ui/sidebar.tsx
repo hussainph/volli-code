@@ -238,7 +238,7 @@ function Sidebar({
           data-slot="sidebar-inner"
           // Transparent for the same reason as the pane above: an opaque fill
           // here would cover the canvas under the whole two-tier column.
-          className="flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-card"
+          className="flex h-full w-full flex-col group-data-[variant=floating]:rounded-panel group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border"
         >
           {children}
         </div>
@@ -284,7 +284,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
         // content (e.g. the board canvas) would stretch the window instead
         // of engaging its own overflow-x scroller.
         "relative flex w-full min-w-0 flex-1 flex-col bg-background",
-        "md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-card md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
+        "md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-panel md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className,
       )}
       {...props}
@@ -367,7 +367,7 @@ function SidebarGroupLabel({
       data-slot="sidebar-group-label"
       data-sidebar="group-label"
       className={cn(
-        "flex h-8 shrink-0 items-center rounded-md px-2 text-ui font-medium text-sidebar-foreground/70 ring-ring outline-hidden transition-[margin,opacity] duration-300 ease-swift focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
+        "flex h-8 shrink-0 items-center rounded-row px-2 text-ui font-medium text-sidebar-foreground/70 ring-ring outline-hidden transition-[margin,opacity] duration-300 ease-swift focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         "group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0",
         className,
       )}
@@ -419,13 +419,12 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
  * of the drag. That is a layout animation per row per sample, on the one
  * interaction that already had a main thread to spare.
  *
- * What is left is what actually changes: the fill and ink on hover/active, and
- * the `active:scale-[0.97]` press — which needs `scale` named in the list, not
- * `transform`, and cancels under reduced motion with `scale-100!`. See the
- * press note in `ui/button.tsx` for why those are two different properties.
+ * What is left is what actually changes: the fill and ink on hover/active.
+ * There is no press scale: controls are flat glass (docs/DESIGN.md), and a
+ * row that shrinks under the pointer is the lift this app retired.
  */
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-ring outline-hidden transition-[transform,scale,background-color,color] duration-100 ease-out group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent-veil active:text-foreground motion-reduce:scale-100! disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-row p-2 text-left text-sm ring-ring outline-hidden transition-[background-color,color] duration-100 ease-out group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2 active:bg-sidebar-accent-veil active:text-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -505,7 +504,7 @@ function SidebarMenuSkeleton({
     <div
       data-slot="sidebar-menu-skeleton"
       data-sidebar="menu-skeleton"
-      className={cn("flex h-8 items-center gap-2 rounded-md px-2", className)}
+      className={cn("flex h-8 items-center gap-2 rounded-row px-2", className)}
       {...props}
     >
       {showIcon && <Skeleton className="size-4 rounded-md" data-sidebar="menu-skeleton-icon" />}

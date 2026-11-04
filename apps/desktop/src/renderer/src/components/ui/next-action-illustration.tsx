@@ -146,7 +146,7 @@ export function NextActionIllustration({
   );
 }
 
-const frame = "rounded-control border border-border bg-card shadow-raised";
+const frame = "rounded-control border border-border bg-card";
 function BoardDrawing() {
   return (
     <div className="w-64 max-w-full">

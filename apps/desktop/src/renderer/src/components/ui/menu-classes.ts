@@ -16,14 +16,17 @@
 import { cn } from "@renderer/lib/utils";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SECTION_HEADING, SECTION_HEADING_CMDK } from "@renderer/components/ui/section-heading";
+import { FLOAT_SURFACE, MODAL_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /**
  * The popover box, shared by root menus, sub-menus and the select surface —
- * one elevation for all three, so a sub-menu does not read as floating above
- * the menu that opened it.
+ * the float role (`ui/surface-classes.ts`), one elevation for all three, so a
+ * sub-menu does not read as floating above the menu that opened it.
  */
-export const MENU_SURFACE =
-  "z-50 min-w-[8rem] max-w-[calc(100vw-2rem)] rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay";
+export const MENU_SURFACE = cn(
+  FLOAT_SURFACE,
+  "surface-menu z-50 min-w-[8rem] max-w-[calc(100vw-2rem)] rounded-menu bg-popover text-ui text-foreground",
+);
 
 /**
  * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because the
@@ -88,7 +91,9 @@ export const MENU_ROW_STATE_CMDK =
   "data-[selected=true]:bg-accent data-[selected=true]:text-foreground data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50";
 
 /**
- * Destination search rows (⌘K / ⌘P) share the concentric menu highlight.
+ * Destination search rows (⌘K / ⌘P) share the menu row's mechanics on the
+ * modal's concentric rung: the palette is a 14px modal and its list pads 4px,
+ * so a row's highlight is `rounded-row` (14 − 4 = 10), not the menu's 8.
  * Consumers own density: the palette stacks context with py-2;
  * Quick Open keeps a single 28px line. No copied cursor/selection/type recipe.
  */
@@ -97,7 +102,7 @@ export const MENU_ROW_STATE_CMDK =
 export const COMMAND_RESULT_ROW = cn(
   MENU_ROW_LAYOUT,
   MENU_ROW_STATE_CMDK,
-  "outline-none data-[selected=true]:bg-control-secondary data-[selected=true]:ring-1 data-[selected=true]:ring-border-strong data-[selected=true]:ring-inset",
+  "rounded-dialog-item outline-none data-[selected=true]:bg-control-secondary data-[selected=true]:ring-1 data-[selected=true]:ring-border-strong data-[selected=true]:ring-inset",
 );
 
 /** A sub-menu trigger stays lit for as long as the surface it opened is up. */
@@ -156,11 +161,18 @@ export const MENU_LABEL_CMDK = cn(
 export const MENU_SHORTCUT =
   "ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-keycap border border-border bg-muted/50 px-1 text-ui font-normal font-sans whitespace-nowrap text-muted-foreground";
 
-/** Shared separated search field and hint strip for cmdk and its two dialogs. */
+/**
+ * Shared separated search field and hint strip for cmdk and its two dialogs.
+ * The field is a well at the modal's concentric inset: 14 − 4 = the 10px
+ * control rung, so its corners run parallel to the frame's.
+ */
 export const COMMAND_SEARCH_FIELD =
-  "m-2 flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-control border border-glass-edge bg-glass-1 px-2";
-export const COMMAND_OVERLAY_FRAME =
-  "fixed top-[18%] left-1/2 z-50 flex max-h-[calc(82svh-2rem)] w-[min(640px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay outline-none";
+  "m-1 flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-input border border-glass-edge bg-glass-1 px-2";
+/** The ⌘K / ⌘P frame: a modal (`ui/surface-classes.ts`), centred high. */
+export const COMMAND_OVERLAY_FRAME = cn(
+  MODAL_SURFACE,
+  "fixed top-[18%] left-1/2 z-50 flex max-h-[calc(82svh-2rem)] w-[min(640px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden bg-popover text-ui text-foreground outline-none",
+);
 export const COMMAND_FOOTER =
   "flex min-h-9 shrink-0 flex-wrap items-center justify-end gap-4 bg-muted/30 px-2 py-2 relative before:absolute before:top-0 before:left-1/2 before:h-px before:w-4/5 before:-translate-x-1/2 before:bg-border text-ui font-normal text-muted-foreground";
 

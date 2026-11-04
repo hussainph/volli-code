@@ -96,7 +96,7 @@ function TooltipContent({
           // under it, and it can be selected as if it were prose. This one is
           // transparent to the pointer the way a `<label>` painted over a
           // control would be expected to be.
-          "material-floating pointer-events-none z-50 w-fit max-w-[calc(100vw-2rem)] break-words origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control border border-border bg-popover px-2 py-1 text-ui text-balance text-foreground shadow-overlay ease-out select-none fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=instant-open]:animate-none",
+          "material-floating pointer-events-none z-50 w-fit max-w-[calc(100vw-2rem)] break-words origin-(--radix-tooltip-content-transform-origin) animate-in rounded-tooltip border border-border bg-popover px-2 py-1 text-ui text-balance text-foreground shadow-overlay ease-out select-none fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=instant-open]:animate-none",
           className,
         )}
         {...props}

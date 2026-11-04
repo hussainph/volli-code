@@ -25,7 +25,7 @@ function InputGroup({
       data-size={controlSize}
       role="group"
       className={cn(
-        "group/input-group relative flex w-full items-center rounded-control transition-[color,border-color,box-shadow] outline-none",
+        "group/input-group relative flex w-full items-center rounded-input transition-[color,border-color,box-shadow] outline-none",
         CONTROL_SIZE[controlSize],
         "[--control-inset:var(--spacing-control-pad-default)] data-[size=xs]:[--control-inset:var(--spacing-control-pad-xs)] data-[size=sm]:[--control-inset:var(--spacing-control-pad-sm)] data-[size=lg]:[--control-inset:var(--spacing-control-pad-lg)] [&>input]:px-(--control-inset)",
         FIELD_SURFACE,

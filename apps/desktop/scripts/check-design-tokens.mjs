@@ -64,10 +64,21 @@ const RULES = [
     id: "radius-stock-2xl",
     // 16px, and stock: `@theme inline` overrides sm/md/lg/xl only, so this one
     // reads Tailwind's unauthored 1rem and a change to the ladder cannot move
-    // it. The container rung (`rounded-container`, 14px) or the ladder's own
-    // `rounded-xl` (16px) is the answer.
+    // it. The container rung (`rounded-container`, 14px) is the answer.
     summary: "rounded-2xl is stock Tailwind (16px) and does not ride the radius ladder",
     match: (base) => /^-?rounded(-(?:t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?-2xl$/.test(base),
+  },
+  {
+    id: "radius-xl",
+    // 16px, a rung no surface role uses (docs/DESIGN.md, "Surfaces"): panels,
+    // cards and modals are the 14px container, floats 12, wells 10. Every
+    // `rounded-xl` in the app was one of those drifting a step rounder — the
+    // floating content card, the peek, the code block, a user bubble in one
+    // renderer but not the other. The theme key stays so the stock 0.75rem
+    // can never answer the name silently; the ban keeps it unused.
+    summary:
+      "rounded-xl (16px) is no surface's radius — rounded-container (14) / rounded-menu (12)",
+    match: (base) => /^-?rounded(-(?:t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?-xl$/.test(base),
   },
   {
     id: "radius-arbitrary",
@@ -133,15 +144,39 @@ const RULES = [
     // on a canvas whose own three tiers are tinted to it (`rgb(2 0 0)` in dark,
     // `rgb(72 42 30)` in light). The tiers are registered utilities now, so the
     // fix is always a rename by ROLE: a control, field or active tab is
-    // `shadow-raised`, a panel or a dragged tile is `shadow-card`, and anything
-    // that portals to the body is `shadow-overlay`.
+    // the surface ladder: flat in the flow, `shadow-overlay` on a float or a
+    // modal (`ui/surface-classes.ts`).
     //
     // `shadow-none` and the arbitrary form are both untouched. The first is a
     // reset and resets nothing else spells; the second is currently three
     // zero-blur `shadow-[0_0_0_Npx_…]` rings, which are the focus idiom in
     // disguise and belong to the focus pass, not to a rung this ladder answers.
-    summary: "stock shadow tier — use shadow-raised / shadow-card / shadow-overlay",
+    summary: "stock shadow tier — floats and modals take shadow-overlay; the flow takes none",
     match: (base) => /^-?shadow-(2xs|xs|sm|md|lg|xl|2xl)$/.test(base),
+  },
+  {
+    id: "shadow-flow",
+    // Flat means flat (docs/DESIGN.md, "Surfaces"): nothing in the flow casts
+    // a shadow. `shadow-raised` and `shadow-card` were the two flow tiers; the
+    // generator still solves their values, but they are no longer registered
+    // utilities, so a use compiles to nothing — and a class that silently does
+    // nothing is the dead `shadow-control` this rule exists to stop recurring.
+    // `shadow-overlay` is the one shadow, and FLOAT_SURFACE / MODAL_SURFACE
+    // carry it.
+    summary: "flow shadow — the flow is flat; floats and modals take shadow-overlay",
+    match: (base) => /^-?shadow-(raised|card|control(-[a-z]+)?)$/.test(base),
+  },
+  {
+    id: "blur-flow",
+    // A backdrop blur costs GPU on every frame content moves beneath it, and
+    // the float material is the one surface that pays it — through the
+    // `--float-backdrop` variable, so the opaque-or-frosted decision stays one
+    // line in `globals.css`. A `backdrop-blur-*` utility is a second, private
+    // blur that decision cannot reach. Sticky strips take their pane's own
+    // fixed-attachment material instead, which hides what scrolls under them
+    // for free.
+    summary: "backdrop blur outside the float material — use material-floating or a pane fill",
+    match: (base) => /^-?backdrop-blur(-.+)?$/.test(base),
   },
   {
     id: "focus-ring-loud",
@@ -454,13 +489,34 @@ function selfTest() {
     ['"group-data-[variant=floating]:shadow-sm"', ["shadow-stock-tier"]],
     ['"shadow-xs shadow-2xs"', ["shadow-stock-tier", "shadow-stock-tier"]],
     // The ladder itself is never a violation.
-    ['"rounded-full rounded-none rounded-sm rounded-md rounded-lg rounded-xl"', []],
-    ['"rounded-control rounded-container rounded-row"', []],
+    ['"rounded-full rounded-none rounded-sm rounded-md rounded-lg"', []],
+    ['"rounded-xl border"', ["radius-xl"]],
+    ['"group-[.is-user]:rounded-xl"', ["radius-xl"]],
+    ['"rounded-t-xl"', ["radius-xl"]],
+    ['"rounded-xlarge"', []],
+    ['"rounded-control rounded-container rounded-row rounded-menu rounded-menu-item"', []],
+    // The role radii are the ladder too.
+    ['"rounded-panel rounded-card rounded-row rounded-well"', []],
+    [
+      '"rounded-popover rounded-popover-item rounded-tooltip rounded-dialog rounded-dialog-item"',
+      [],
+    ],
+    ['"rounded-input rounded-pill rounded-chip rounded-segmented rounded-send"', []],
+    ['"rounded-button rounded-button-xs rounded-button-sm rounded-button-lg"', []],
     ['"rounded-t-lg rounded-r-none"', []],
     ['"text-label text-ui text-sm text-heading text-title"', []],
     ['"ring-2 ring-1 ring-ring/45"', []],
     ['"bg-positive text-attention-foreground border-info"', []],
-    ['"shadow-raised shadow-card shadow-overlay shadow-none"', []],
+    ['"shadow-overlay shadow-none"', []],
+    ['"bg-card shadow-raised"', ["shadow-flow"]],
+    ['"md:shadow-card"', ["shadow-flow"]],
+    [
+      '"shadow-control hover:shadow-control-hover active:shadow-control-pressed"',
+      ["shadow-flow", "shadow-flow", "shadow-flow"],
+    ],
+    ['"bg-background/70 backdrop-blur-md"', ["blur-flow"]],
+    ['"supports-[backdrop-filter]:backdrop-blur"', ["blur-flow"]],
+    ['"backdrop-blur-[2px] bg-scrim"', ["blur-flow"]],
     // Neighbouring namespaces this ladder has no rung for, and one zero-blur
     // box-shadow that is a focus ring wearing a shadow's name.
     ['"text-shadow-md drop-shadow-lg inset-shadow-sm"', []],

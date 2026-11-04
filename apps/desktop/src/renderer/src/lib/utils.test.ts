@@ -31,8 +31,17 @@ describe("control token overrides", () => {
     expect(cn("size-control-sm", "size-4")).toBe("size-4");
   });
 
-  it("lets a caller's reset replace an elevation tier", () => {
-    expect(cn("shadow-raised", "shadow-none")).toBe("shadow-none");
-    expect(cn("shadow-card", "shadow-raised")).toBe("shadow-raised");
+  it("lets a caller's reset replace the float shadow", () => {
+    expect(cn("shadow-overlay", "shadow-none")).toBe("shadow-none");
+  });
+
+  it("merges the surface ladder's radius rungs as one group", () => {
+    expect(cn("rounded-menu", "rounded-container")).toBe("rounded-container");
+    expect(cn("rounded-menu-item", "rounded-row")).toBe("rounded-row");
+    expect(cn("rounded-container", "rounded-keycap")).toBe("rounded-keycap");
+    // A role class replaces a primitive's size radius rather than racing it.
+    expect(cn("rounded-button-sm", "rounded-segmented")).toBe("rounded-segmented");
+    expect(cn("rounded-button-lg", "rounded-send")).toBe("rounded-send");
+    expect(cn("rounded-card", "rounded-popover")).toBe("rounded-popover");
   });
 });

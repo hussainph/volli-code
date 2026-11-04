@@ -54,7 +54,8 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--foreground)",
           "--normal-border": "var(--border)",
-          "--border-radius": "var(--radius)",
+          // The float rung (docs/DESIGN.md, "Surfaces"): a toast is a float.
+          "--border-radius": "var(--radius-popover)",
         } as React.CSSProperties
       }
       {...props}

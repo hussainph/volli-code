@@ -28,14 +28,27 @@ function markupClass(element: React.ReactElement): string {
 
 describe("foundation control contracts", () => {
   it.each(["default", "destructive", "outline", "secondary", "ghost", "selected"] as const)(
-    "%s stays flat on the control rung, without a click-scale animation",
+    "%s stays flat on its size's role radius, without a click-scale animation",
     (variant) => {
       const classes = buttonVariants({ variant });
       expect(classes).not.toMatch(/(^|\s|:)shadow-/);
       expect(classes).not.toContain("scale-");
-      expect(classes).toContain("rounded-control");
+      expect(classes.split(" ")).toContain("rounded-button");
     },
   );
+
+  it.each([
+    ["xs", "rounded-button-xs"],
+    ["icon-xs", "rounded-button-xs"],
+    ["sm", "rounded-button-sm"],
+    ["icon-sm", "rounded-button-sm"],
+    ["default", "rounded-button"],
+    ["icon", "rounded-button"],
+    ["lg", "rounded-button-lg"],
+    ["icon-lg", "rounded-button-lg"],
+  ] as const)("gives a %s button its size's radius variable", (size, radius) => {
+    expect(buttonVariants({ size }).split(" ")).toContain(radius);
+  });
 
   it("keeps ghost actions flat even on hover, and bounds long labels", () => {
     const classes = markupClass(<Button variant="ghost">A very long action label</Button>);
@@ -69,6 +82,7 @@ describe("foundation control contracts", () => {
       expect(classes).not.toContain("hover:");
       expect(classes).toContain("border-glass-edge");
       expect(classes).toContain("bg-glass-1");
+      expect(classes.split(" ")).toContain("rounded-input");
     }
     const input = markupClass(<InputGroupInput />).split(" ");
     expect(input).toContain("shadow-none");
@@ -77,7 +91,7 @@ describe("foundation control contracts", () => {
     expect(input).not.toContain("border");
   });
 
-  it("draws the selected segment as strong glass and the rest outlined", () => {
+  it("draws the selected segment as the solid thumb and the rest bare on the track", () => {
     const html = renderToStaticMarkup(
       <Segmented
         ariaLabel="View"
@@ -90,7 +104,7 @@ describe("foundation control contracts", () => {
       />,
     );
     expect(html).toMatch(/data-variant="selected"[^>]*aria-pressed="true"/);
-    expect(html).toMatch(/data-variant="outline"[^>]*aria-pressed="false"/);
+    expect(html).toMatch(/data-variant="ghost"[^>]*aria-pressed="false"/);
   });
 
   it("keeps switch and checkbox flat glass in both states", () => {

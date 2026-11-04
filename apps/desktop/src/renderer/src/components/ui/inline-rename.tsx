@@ -56,7 +56,7 @@ const SIZE_CLASS: Record<Exclude<InlineRenameSize, "field">, string> = {
   // Height and type step belong to the primitive: the two strips that rename
   // had drifted to `h-5 w-40 text-ui` against `h-5 w-32 text-sm` before the
   // field was shared, and only the width was ever a decision.
-  row: "h-control-xs rounded-control border border-glass-edge bg-glass-1 px-2 text-ui",
+  row: "h-control-xs rounded-input border border-glass-edge bg-glass-1 px-2 text-ui",
   // No border, no fill, no ring — the input carries the heading's exact
   // typography so nothing shifts when you click into it.
   title: "w-full bg-transparent text-title font-semibold",

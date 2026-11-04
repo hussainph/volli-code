@@ -10,14 +10,20 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 export type NoticeTone = "neutral" | "error" | "positive" | "warning";
 
+/**
+ * A notice is a card (docs/DESIGN.md, "Surfaces"): the card's fill, hairline
+ * and radius. Only a fault tints it — the destructive wash and edge paint over
+ * the card fill, the way a state paints over any surface.
+ */
 const NOTICE_TONE: Record<NoticeTone, string> = {
-  neutral: "border-border bg-muted/30 text-muted-foreground",
+  neutral: "text-muted-foreground",
   error: "border-destructive/30 bg-destructive/10 text-destructive",
-  positive: "border-border bg-muted/30 text-muted-foreground",
-  warning: "border-border bg-muted/30 text-muted-foreground",
+  positive: "text-muted-foreground",
+  warning: "text-muted-foreground",
 };
 const NOTICE_ICON = {
   neutral: InfoIcon,
@@ -118,7 +124,8 @@ export function Notice({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-wrap gap-2 rounded-container border",
+        CARD_SURFACE,
+        "flex min-w-0 flex-wrap gap-2",
         stacked ? "items-start p-4" : "items-start px-4 py-2",
         NOTICE_TONE[tone],
         className,

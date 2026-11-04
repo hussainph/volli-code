@@ -230,9 +230,12 @@ describe("overlay layout contracts", () => {
     expect(styles).toMatch(/\.material-floating,[^{]*\{[^}]*contain:\s*paint/);
     expect(parent.contains(sub)).toBe(false);
     expect(sub.classList.contains("material-floating")).toBe(true);
+    // Every float reads the one backdrop variable, so a portaled submenu
+    // gets the same glass as its parent from the same line of globals.css.
     expect(styles).toMatch(
-      /\.material-floating,[^{]*\{[^}]*backdrop-filter:\s*blur\(20px\)\s+saturate\(1\.5\)/,
+      /\.material-floating,[^{]*\{[^}]*backdrop-filter:\s*var\(--float-backdrop\)/,
     );
+    expect(styles).toMatch(/--float-backdrop:\s*blur\(20px\)\s+saturate\(1\.5\)/);
     const nested = styles.match(/([^{}]*)\{[^}]*backdrop-filter:\s*none !important/)?.[1] ?? "";
     expect(nested).not.toContain('[data-slot$="menu-sub-content"].material-floating');
     expect(sub.getAttribute("data-slot")?.endsWith("menu-sub-content")).toBe(true);

@@ -67,7 +67,7 @@ describe("Notice", () => {
 
     expect(error).toContain("bg-destructive/10");
     expect(error).toContain("text-destructive");
-    expect(positive).toContain("bg-muted/30");
+    expect(positive).toContain("surface-card");
     expect(positive).not.toContain("bg-destructive/10");
   });
 

@@ -17,14 +17,19 @@
  * "Custom" re-entered while already Custom would re-run the entry write and
  * could silently replace what the user had chosen.
  *
+ * THE DRAWING IS A TRACK AND A THUMB (docs/DESIGN.md, "Surfaces"): a
+ * borderless capsule track with the chosen member as a solid capsule — or a
+ * circle, icon-only — inside it, and the rest bare until hovered. It is one of
+ * the few capsules in the app (`--radius-segmented`), because it is compact
+ * chrome rather than a control standing on its own. A row of separately
+ * bordered buttons read as a toolbar of actions, which this is not.
+ *
  * WHAT IT IS NOT. `orientation` and `shape` are deliberately absent. The audit
  * named a vertical rotation in `pages/settings-shell.tsx`; that is a `<nav>` of
  * `aria-current="page"` category rows with icons and full-width targets — a
  * place you go, not a value you set, and rotating this control would have made
- * it lie about what it does. `shape` was proposed for the two toggles that draw
- * rounded rectangles inside a bordered track; `docs/DESIGN.md` says a control
- * takes the shared 10px radius and bakes that into the button primitive, so a rectangle
- * axis here would be a second control language, not a variant of this one.
+ * it lie about what it does. A `shape` axis would be a second control
+ * language, not a variant of this one.
  * `stopPropagation` was proposed for the composer's effort segment, which no
  * longer exists — effort is a slider in a popover now (`chat/composer-effort-ui.tsx`),
  * and nothing else in the app puts a segmented control inside a menu item.
@@ -79,7 +84,13 @@ export function Segmented<Key extends string>({
       role="group"
       aria-label={ariaLabel}
       data-testid={testId}
-      className={cn("flex items-center gap-1", className)}
+      // `p-0.5`: the track is its rung's height (28px for `sm`, 32 for
+      // `default`) around thumbs one rung down — a recorded spacing exception
+      // (docs/DESIGN.md).
+      className={cn(
+        "inline-flex w-fit items-center gap-0.5 rounded-segmented bg-glass-1 p-0.5",
+        className,
+      )}
     >
       {options.map((option) => {
         const Icon = option.icon;
@@ -87,8 +98,12 @@ export function Segmented<Key extends string>({
         return (
           <Button
             key={option.key}
-            size={iconOnly ? (size === "sm" ? "icon" : "icon-lg") : size}
-            variant={active ? "selected" : "outline"}
+            size={
+              iconOnly ? (size === "sm" ? "icon-sm" : "icon") : size === "sm" ? "sm" : "default"
+            }
+            // The thumb is the solid primary; the rest sit bare on the track.
+            variant={active ? "selected" : "ghost"}
+            className="rounded-segmented"
             aria-pressed={active}
             title={iconOnly ? option.label : undefined}
             data-choice={option.key}
