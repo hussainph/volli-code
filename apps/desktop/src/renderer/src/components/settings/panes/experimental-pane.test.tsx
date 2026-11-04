@@ -129,9 +129,11 @@ describe("Settings → Experimental", () => {
     expect(rpc.query).toHaveBeenCalledTimes(1);
     expect(experimentSwitch().getAttribute("aria-checked")).toBe("false");
     expect(experimentSwitch().disabled).toBe(false);
-    expect(document.body.textContent).toContain(
-      "Cloud features are experimental. Read the security notes before enabling them.",
+    const notes = [...document.querySelectorAll("a")].find(
+      (node) => node.textContent === "Security notes",
     );
+    expect(notes?.getAttribute("href")).toContain("SECURITY.md#cloud-threat-model");
+    expect(document.body.textContent).not.toContain("Cloud features are experimental");
   });
 
   it("writes through the semantic API and adopts its returned snapshot", async () => {

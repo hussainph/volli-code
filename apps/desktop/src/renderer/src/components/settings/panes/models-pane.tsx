@@ -55,16 +55,17 @@ import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Notice } from "@renderer/components/ui/notice";
 import { useUiStore } from "@renderer/stores/ui";
 
-export const PURPOSE_ROWS: readonly {
+const PURPOSE_ROWS: readonly {
   purpose: ModelPurpose;
   label: string;
-  hint?: string;
   depth: 0 | 1;
 }[] = (["global", "utility", "ticket", "fast", "deep", "visual"] as const).map((purpose) => {
   const row = MODEL_TIER_ROWS.find((candidate) => candidate.tier === purpose)!;
-  return purpose === "global" || purpose === "ticket"
-    ? { purpose, label: row.label, depth: 0 }
-    : { purpose, label: row.label, hint: row.hint, depth: row.advanced ? 1 : 0 };
+  return {
+    purpose,
+    label: row.label,
+    depth: purpose === "global" || purpose === "ticket" || !row.advanced ? 0 : 1,
+  };
 });
 
 function inheritLabel(purpose: ModelPurpose): string | null {
@@ -237,12 +238,11 @@ export function ModelAccessSettings({
   const offerable = offerableModels(models);
   const sees = acceptsImageInputIn(models);
 
-  const renderDefaultRow = ({ purpose, label, hint }: (typeof PURPOSE_ROWS)[number]) => (
+  const renderDefaultRow = ({ purpose, label }: (typeof PURPOSE_ROWS)[number]) => (
     <DefaultModelRow
       key={purpose}
       purpose={purpose}
       label={label}
-      {...(hint === undefined ? {} : { hint })}
       selection={defaults[purpose]}
       // Only Visual can inherit a rung and still be refused — a Ticket model
       // that cannot read images — and only that is said. An empty ladder is
@@ -291,28 +291,28 @@ export function ModelAccessSettings({
         <PrefSection
           title="Default models"
           icon={CpuIcon}
-          hint={
-            hostName === undefined ? (
-              <OverrideLinks
-                projects={projects.filter((p) => p.sessionModel != null)}
-                page="sessions"
-              />
-            ) : undefined
-          }
           action={
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Refresh models"
-              disabled={loading}
-              onClick={() => void load(true)}
-            >
-              {loading ? (
-                <Spinner className="size-3.5" />
-              ) : (
-                <ArrowClockwiseIcon className="size-3.5" />
-              )}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {hostName === undefined ? (
+                <OverrideLinks
+                  projects={projects.filter((p) => p.sessionModel != null)}
+                  page="sessions"
+                />
+              ) : null}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Refresh models"
+                disabled={loading}
+                onClick={() => void load(true)}
+              >
+                {loading ? (
+                  <Spinner className="size-3.5" />
+                ) : (
+                  <ArrowClockwiseIcon className="size-3.5" />
+                )}
+              </Button>
+            </div>
           }
         >
           {loading ? (
@@ -364,13 +364,9 @@ export function ModelAccessSettings({
             </div>
           ) : (
             loadError === null && (
-              <PrefRow
-                label="Automatic compaction"
-                description="Summarize earlier messages when a chat runs out of room."
-                testId="auto-compaction"
-              >
+              <PrefRow label="Automatic compaction" testId="auto-compaction">
                 <Switch
-                  aria-label="Compact a Session automatically before it fills its context window"
+                  aria-label="Automatic compaction"
                   checked={compaction.autoCompaction}
                   disabled={loading}
                   onCheckedChange={(autoCompaction) =>
@@ -433,7 +429,7 @@ function CatalogSection({
         search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
         query={query}
         placeholder="Search models"
-        empty="No models. Connect a provider above."
+        empty="No models"
         noResults="No models match."
         columns={[
           {
@@ -478,7 +474,6 @@ function CatalogSection({
 function DefaultModelRow({
   purpose,
   label,
-  hint,
   selection,
   blocked,
   models: _models,
@@ -489,7 +484,6 @@ function DefaultModelRow({
 }: {
   purpose: ModelPurpose;
   label: string;
-  hint?: string;
   selection: ModelSelection | null;
   blocked: boolean;
   models: readonly ModelAccessModel[];
@@ -500,14 +494,7 @@ function DefaultModelRow({
 }) {
   const inherit = inheritLabel(purpose);
   return (
-    <PrefRow
-      label={label}
-      description={
-        hint ??
-        (purpose === "global" ? "Applies to new board chats." : "Applies to new ticket chats.")
-      }
-      testId={`default-model-${purpose}`}
-    >
+    <PrefRow label={label} testId={`default-model-${purpose}`}>
       <div className="flex max-w-full flex-col items-end gap-2">
         <ModelControl
           models={offerable}

@@ -145,7 +145,7 @@ export function CloudOptInDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Send decisions to {label}?</AlertDialogTitle>
           <AlertDialogDescription>
-            {shown === null ? "" : decisionCloudDisclosure(label)} Choose None at any time to stop.
+            {shown === null ? "" : decisionCloudDisclosure(label)}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -178,13 +178,9 @@ function AutoPickRow({
   const [asking, setAsking] = React.useState(false);
   const label = settingLabel(setting, catalog);
   return (
-    <PrefRow
-      label="Pick models automatically"
-      description="Choose a model and effort for each new session."
-      testId={testId}
-    >
+    <PrefRow label="Pick models automatically" testId={testId}>
       <Switch
-        aria-label="Let the decision model choose a model and reasoning level for each new Session"
+        aria-label="Pick models automatically"
         checked={autoPickOn(setting)}
         disabled={busy}
         onCheckedChange={(enabled) => {
@@ -201,8 +197,7 @@ function AutoPickRow({
           <AlertDialogHeader>
             <AlertDialogTitle>Let {label} choose models?</AlertDialogTitle>
             <AlertDialogDescription>
-              {decisionCloudDisclosure(label, ["model.select"])} Switch it off at any time to stop;
-              a Session that is already running never changes model.
+              {decisionCloudDisclosure(label, ["model.select"])}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -299,11 +294,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
 
   if (state.status === "loading") {
     return (
-      <PrefSection
-        title="Decision model"
-        icon={SignpostIcon}
-        hint="Classify requests and choose models for new sessions."
-      >
+      <PrefSection title="Decision model" icon={SignpostIcon}>
         <div className="space-y-4 p-4" aria-label="Loading decision model">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
@@ -313,11 +304,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   }
   if (state.status === "error") {
     return (
-      <PrefSection
-        title="Decision model"
-        icon={SignpostIcon}
-        hint="Classify requests and choose models for new sessions."
-      >
+      <PrefSection title="Decision model" icon={SignpostIcon}>
         <Notice
           announce
           tone="error"
@@ -341,11 +328,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   const cloud = global.kind === "cloud" ? cloudStatus(global, view.catalog) : null;
 
   return (
-    <PrefSection
-      title="Decision model"
-      icon={SignpostIcon}
-      hint="Classify requests and choose models for new sessions."
-    >
+    <PrefSection title="Decision model" icon={SignpostIcon}>
       <PrefRow label="Model" testId="decision-model-mode">
         <Segmented
           ariaLabel="Decision model"
