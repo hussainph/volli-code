@@ -113,7 +113,10 @@ const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
  * `text-label` (16) plus 16 is 52. Nothing here pins it, and every value is a
  * ladder rung (docs/DESIGN.md's five steps — no half-steps here).
  */
-const PALETTE_ROW = cn(COMMAND_RESULT_ROW, "py-2");
+const PALETTE_ROW = cn(
+  COMMAND_RESULT_ROW,
+  "py-2 data-[selected=true]:bg-(--accent-selected) data-[selected=true]:text-primary-text",
+);
 
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";
