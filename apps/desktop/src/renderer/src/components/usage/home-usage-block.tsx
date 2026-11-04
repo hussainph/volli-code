@@ -1,38 +1,6 @@
-/**
- * The Home rail's usage card — what this project has cost, where it went, and
- * what the Session in front is contributing to it.
- *
- * ONE CARD, TWO SCOPES, and that is the change VC-203 made. The Session's own
- * cost used to be three key/value rows (Cost / Tokens / Cached input) mounted
- * inside the Session block's `<dl>`, a whole section above the Project card that
- * reported the same kind of number in a completely different drawing. The
- * argument for that placement was real — cost is a property of the Session, not
- * a subject of its own — but the result was two usage readouts on one page that
- * shared no shape, no container and no notation, with the smaller one sitting
- * above the larger. Whatever it was in principle, on screen it read as a stray
- * fragment.
- *
- * So the Session is a ROW of this card now. The principle survives intact: the
- * row is a fact about the Session, not a section headed with its name, and it
- * still renders nothing at all for a Session that has metered nothing (a
- * terminal companion, a chat before its first reply — see the notes on absence
- * in `usage/usage-format.ts`). What changes is that both scopes are drawn by one
- * component in one frame, so the page has a single answer to "what is this
- * costing" with the narrower scope nested inside the broader one.
- *
- * WHY THE PROJECT IS THE HERO AND THE SESSION IS THE ROW. The card sits in the
- * Now page's Project slot, so the project is its subject; and the structure has
- * to hold still. A card whose hero swapped scopes as Sessions came and went
- * would restructure itself under the reader several times an hour. The Session
- * arriving and leaving as one row is a change the eye can follow.
- *
- * THE WINDOW CONTROL STAYS ON THE HEADING, not in the card. That is the
- * placement `ui/segmented.tsx` names for its `sm` rung, and a control inside the
- * card would compete with the hero figure for the first line — the exact
- * crowding this redesign exists to undo. It also has to stay visible: the window
- * is what the figure MEANS, and a total whose period is one popover away is a
- * number a reader can misread without noticing.
- */
+/** Home usage: a token-led Instrument footer pinned beneath Now. The coloured
+ * bar stays visible; the bounded RailFold keeps attribution above the trigger.
+ * Store reads and the fold preference live in usage-rail.tsx. */
 import { ChartDonutIcon } from "@phosphor-icons/react/dist/csr/ChartDonut";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { ReceiptIcon } from "@phosphor-icons/react/dist/csr/Receipt";
@@ -50,6 +18,14 @@ import {
 } from "@renderer/components/ticket/rail-panel-parts";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
+import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { UsageBar } from "@renderer/components/usage/usage-bar";
 import {
   UsageBreakdown,
@@ -59,15 +35,15 @@ import {
   UsageCardHero,
   UsageCardRow,
   UsageCostFigure,
+  UsageSummaryFigure,
   UsageRankList,
 } from "@renderer/components/usage/usage-card";
 import { cn } from "@renderer/lib/utils";
-import { formatTokens } from "@volli/session-presentation";
+import { tokenCountLabel } from "./usage-token-count";
 import {
   formatCachedShare,
   formatUsageCost,
   totalUsageTokens,
-  usageBasisLine,
   USAGE_WINDOWS,
   type UsageGroupRow,
   type UsageWindow,
@@ -129,7 +105,6 @@ export function HomeUsageFooter({
 }) {
   const cost = formatUsageCost(summary);
   const tokens = totalUsageTokens(summary);
-  const basis = usageBasisLine(summary);
   const cached = formatCachedShare(summary);
   // The Session's own figure, resolved HERE rather than left to the row below:
   // `UsageCostFigure` draws nothing for a Session that metered nothing, so a
@@ -141,7 +116,10 @@ export function HomeUsageFooter({
 
   return (
     <RailFold asChild open={open} onOpenChange={onOpenChange}>
-      <footer data-testid="home-usage-footer" className={cn(RAIL_FOOTER, className)}>
+      <footer
+        data-testid="home-usage-footer"
+        className={cn(RAIL_FOOTER, "usage-instrument", className)}
+      >
         {/* The body comes BEFORE the row in the DOM: it opens upward. */}
         <RailFoldBody>
           <div
@@ -154,17 +132,23 @@ export function HomeUsageFooter({
             )}
           >
             <div className="flex items-center justify-between gap-2">
-              <SectionHeading as="p">Project usage</SectionHeading>
-              <Segmented
-                ariaLabel="Usage window"
+              <Select
                 value={usageWindow}
-                options={USAGE_WINDOWS}
-                size="sm"
-                onChange={onWindowChange}
-              />
+                onValueChange={(value) => onWindowChange(value as UsageWindow)}
+              >
+                <SelectTrigger size="sm" aria-label="Usage window" className="w-auto gap-2">
+                  <FunnelIcon weight="bold" className="size-3" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {USAGE_WINDOWS.map((entry) => (
+                    <SelectItem key={entry.key} value={entry.key}>
+                      {entry.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            {tokens > 0 ? <UsageBar summary={summary} /> : null}
-            {basis === null ? null : <p className="text-ui text-muted-foreground">{basis}</p>}
             <div className="flex flex-col gap-2">
               {cached === null ? null : (
                 <UsageBreakdownFact label="Cached input share" value={cached} />
@@ -196,10 +180,10 @@ export function HomeUsageFooter({
           <button
             type="button"
             data-testid="home-usage"
-            aria-label={`Project usage ${cost ?? "unmetered"} over ${windowLabel} — ${
+            aria-label={`Project usage ${tokenCountLabel(tokens)}, ${cost ?? "unmetered"} over ${windowLabel} — ${
               open ? "hide" : "show"
             } breakdown`}
-            className={RAIL_FOOTER_ROW}
+            className={cn(RAIL_FOOTER_ROW, "py-2")}
           >
             <ReceiptIcon className="size-4 shrink-0 text-muted-foreground" />
             {cost === null ? (
@@ -211,19 +195,18 @@ export function HomeUsageFooter({
               </span>
             ) : (
               <>
-                <UsageCostFigure
-                  summary={summary}
-                  className="shrink-0 text-ui font-medium text-foreground"
-                />
-                <span className="min-w-0 flex-1 truncate text-right text-ui text-muted-foreground tabular-nums">
-                  {tokens > 0 ? `${formatTokens(tokens)} tokens` : ""}
-                </span>
+                <UsageSummaryFigure summary={summary} />
               </>
             )}
-            <span className="shrink-0 text-label text-muted-foreground">{windowLabel}</span>
+            <span className="shrink-0 text-ui text-muted-foreground">{windowLabel}</span>
             <RailFoldCaret open={open} placement="footer" />
           </button>
         </RailFoldTrigger>
+        {tokens > 0 ? (
+          <div className={cn(RAIL_PANEL_INSET, "pb-4")}>
+            <UsageBar summary={summary} />
+          </div>
+        ) : null}
       </footer>
     </RailFold>
   );
