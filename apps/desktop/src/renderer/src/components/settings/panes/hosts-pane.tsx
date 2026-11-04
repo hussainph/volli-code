@@ -250,7 +250,7 @@ function HostList({
     >
       {readOnly === null ? null : (
         <p role="status" className="text-ui text-muted-foreground">
-          {readOnly} Its hosts can’t be added or changed here.
+          {readOnly}
         </p>
       )}
       <div className="flex flex-col">
@@ -445,7 +445,7 @@ function HostPage({
       <PrefSection title="Host" icon={HardDrivesIcon}>
         <NameRow host={remote} startEditing={startRename} readOnly={readOnly !== null} />
         {hostFacts(remote).map((fact) => (
-          <PrefRow key={fact.label} label={fact.label} hint={fact.hint}>
+          <PrefRow key={fact.label} label={fact.label} description={fact.hint}>
             {fact.full === undefined ? (
               <span className="max-w-40 wrap-anywhere text-right text-ui text-muted-foreground">
                 {fact.value}
@@ -458,10 +458,7 @@ function HostPage({
       </PrefSection>
 
       <PrefSection title="Sign-ins" icon={KeyIcon}>
-        <PrefRow
-          label="Models and git"
-          hint={`What agents on ${remote.name} sign in with: provider keys, subscriptions and push tokens.`}
-        >
+        <PrefRow label="Models and git">
           <Button
             size="sm"
             variant="outline"
@@ -490,10 +487,7 @@ function HostPage({
       <DevicesSection host={remote} />
 
       <div className="rounded-lg bg-card px-4 py-4">
-        <PrefRow
-          label="Forget host"
-          hint={readOnly ?? "Removes this Mac’s pairing and its key. Nothing on the host changes."}
-        >
+        <PrefRow label="Forget host" description={readOnly ?? undefined}>
           <Button
             size="sm"
             variant="outline"
@@ -525,7 +519,7 @@ function NameRow({
 }) {
   const [editing, setEditing] = React.useState(startEditing && !readOnly);
   return (
-    <PrefRow label="Name" hint="What this Mac calls it. The host’s own name doesn’t change.">
+    <PrefRow label="Name">
       {readOnly ? (
         <span className="max-w-40 wrap-anywhere text-right text-ui text-muted-foreground">
           {host.name}
@@ -634,7 +628,7 @@ function ProjectsSection({ hostId }: { hostId: string }) {
 function openHere(claims: Readonly<Record<string, { readonly hostId: string }>>, hostId: string) {
   const count = Object.values(claims).filter((claim) => claim.hostId === hostId).length;
   return count === 0
-    ? "No projects open on this Mac yet"
+    ? "No projects open on this Mac"
     : `${count} ${count === 1 ? "project" : "projects"} open on this Mac`;
 }
 

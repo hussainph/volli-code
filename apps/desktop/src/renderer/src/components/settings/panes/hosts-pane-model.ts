@@ -49,7 +49,7 @@ export function hostRowMeta(host: RemoteHost, projects: number): string {
 export interface HostFact {
   readonly label: string;
   readonly value: string;
-  /** The row's `(i)`. */
+  /** The row's one-line trust boundary, where its value alone hides one. */
   readonly hint?: string;
   /** The whole value, to copy, when `value` shows a short form of it (a host key). */
   readonly full?: string;
@@ -76,25 +76,16 @@ export function hostFacts(host: RemoteHost): HostFact[] {
     {
       label: "Connection",
       value: `SSH · ${host.target}`,
-      hint: "An SSH tunnel through this Mac’s own ssh: your keys, agent and ~/.ssh/config.",
     },
     host.agentsShareAccount
       ? {
           label: "Runs as",
           value: "Your account",
-          hint: `${agentsShareAccountLine(host.name)}: they can do whatever you can there. Installing with sudo gives them an account of their own.`,
+          hint: `${agentsShareAccountLine(host.name)}: they can do whatever you can there.`,
         }
-      : {
-          label: "Runs as",
-          value: "Its own account",
-          hint: "Volli host and its agents run as the volli account, apart from yours.",
-        },
+      : { label: "Runs as", value: "Its own account" },
     host.os === "macos"
-      ? {
-          label: "Starts",
-          value: `When you log in to ${host.name}`,
-          hint: "A Mac’s host is your login’s agent: after a restart it waits for you to log in.",
-        }
+      ? { label: "Starts", value: `When you log in to ${host.name}` }
       : { label: "Starts", value: "When it boots" },
   ];
   const [key] = host.hostKeys;
@@ -103,7 +94,6 @@ export function hostFacts(host: RemoteHost): HostFact[] {
     facts.push({
       label: "Host key",
       value: shortFingerprint(key),
-      hint: "The key you compared and trusted when you added it.",
       full: host.hostKeys.join("\n"),
     });
   }

@@ -107,7 +107,7 @@ export function listNotice(state: ProjectListState, hostName: string): ProjectNo
       return projects.length > 0
         ? null
         : {
-            line: `No projects on ${hostName} yet.`,
+            line: `No projects on ${hostName}`,
             recovery: { kind: "new", label: "New project…" },
           };
   }
@@ -163,15 +163,6 @@ export function sourceProblem(
     return `A folder on ${hostName} is a full path, like /srv/volli/app.`;
   }
   return null;
-}
-
-/** The field's hint: where a clone goes, which a folder is not. */
-export function sourceHint(source: ProjectSource | null, modern = false): string {
-  return source?.kind === "git"
-    ? modern
-      ? "Cloned on the host, then added."
-      : "Cloned into /srv/volli on the host, then added."
-    : "A git URL, or a folder already on the host.";
 }
 
 /** The busy line while a create runs. */

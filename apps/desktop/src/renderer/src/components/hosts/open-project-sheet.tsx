@@ -58,7 +58,6 @@ import {
   listNotice,
   projectRows,
   projectSource,
-  sourceHint,
   sourceProblem,
   type ProjectListState,
   type ProjectFailure,
@@ -550,14 +549,7 @@ function NewProjectScreen({
             setText(event.target.value);
           }}
         />
-        <p
-          className={cn(
-            "px-1 text-ui",
-            problem === null ? "text-muted-foreground" : "text-destructive",
-          )}
-        >
-          {problem ?? sourceHint(source, modern)}
-        </p>
+        {problem === null ? null : <p className="px-1 text-ui text-destructive">{problem}</p>}
         <Input
           aria-label="Name (optional)"
           value={name}
