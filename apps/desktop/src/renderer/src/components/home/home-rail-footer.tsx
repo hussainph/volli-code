@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Home's checkout footer — the Main checkout, pinned under EVERY Home page
  * (VC-406).
@@ -41,6 +42,11 @@
  */
 import * as React from "react";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
+import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { HardDriveIcon } from "@phosphor-icons/react/dist/csr/HardDrive";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
+import { Spinner } from "@renderer/components/ui/spinner";
 
 import { workingCopyLooseCount } from "@volli/shared";
 
@@ -51,6 +57,7 @@ import {
   RAIL_CHECKOUT_IDENTITY,
   RAIL_CHECKOUT_ROW,
   RAIL_FOOTER,
+  RAIL_CONTROL,
   RAIL_PANEL_INSET,
   RailFold,
   RailFoldBody,
@@ -88,6 +95,10 @@ export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
 
   const snapshot = workingCopy?.status === "ready" ? workingCopy.workingCopy : null;
   const failed = workingCopy?.status === "error";
+  const loading =
+    workingCopy === undefined ||
+    workingCopy.status === "loading" ||
+    workingCopy.status === "resolving";
   const glance = homeCheckoutGlance({ workingCopy: snapshot, failed });
   // The branch is the identity, and a detached HEAD has none — the word is the
   // whole value then, exactly as the card said it.
@@ -121,20 +132,31 @@ export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
                 className={RAIL_CHECKOUT_IDENTITY}
               >
                 <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate font-mono text-ui text-sidebar-foreground">
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
+                    branch !== null && "font-mono",
+                  )}
+                >
                   {branch ?? "Main checkout"}
                 </span>
               </button>
             </PopoverTrigger>
             <PopoverContent align="start" side="top" className="flex w-72 flex-col gap-4 p-4">
               <div className="flex flex-col gap-1">
-                <SectionHeading as="p">Checkout</SectionHeading>
+                <SectionHeading as="span">Checkout</SectionHeading>
                 <span className="px-2 text-ui text-foreground">
-                  {snapshot === null ? "Reading…" : workingCopyKindLabel(snapshot)}
+                  {failed ? (
+                    "Unavailable"
+                  ) : snapshot === null ? (
+                    <LoadingLabel>Reading</LoadingLabel>
+                  ) : (
+                    workingCopyKindLabel(snapshot)
+                  )}
                 </span>
               </div>
               <div className="flex flex-col gap-1">
-                <SectionHeading as="p">Path</SectionHeading>
+                <SectionHeading as="span">Path</SectionHeading>
                 <span
                   title={snapshot?.path}
                   className="block truncate px-2 font-mono text-ui text-foreground"
@@ -159,10 +181,14 @@ export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
                   className="flex shrink-0 items-center gap-1 text-label text-muted-foreground"
                 >
                   <StatusDot state={glance.tone} />
-                  {glance.phrase}
+                  <span className="group-data-[narrow=true]/rail:hidden">{glance.phrase}</span>
                 </span>
               )}
-              <RailFoldCaret open={open} placement="footer" />
+              {loading ? (
+                <Spinner className="size-4 shrink-0" />
+              ) : (
+                <RailFoldCaret open={open} placement="footer" />
+              )}
             </button>
           </RailFoldTrigger>
         </div>
@@ -194,9 +220,14 @@ function CheckoutBody({
     workingCopy.status === "resolving"
   ) {
     return (
-      <div aria-hidden data-testid="home-checkout-loading" className="flex flex-col gap-2">
+      <div
+        role="status"
+        aria-label="Reading checkout"
+        data-testid="home-checkout-loading"
+        className="flex flex-col gap-2"
+      >
         {["w-3/5", "w-2/5"].map((width) => (
-          <Skeleton key={width} className={cn("h-3", width)} />
+          <Skeleton aria-hidden key={width} className={cn("h-4", width)} />
         ))}
       </div>
     );
@@ -224,20 +255,51 @@ function CheckoutBody({
   const loose = workingCopyLooseCount(workingCopy.workingCopy.files);
   return (
     <>
-      <ValueReveal
-        term={workingCopyKindLabel(workingCopy.workingCopy)}
-        full={workingCopy.workingCopy.path}
-        side="top"
-        className="min-w-0 truncate rounded-sm text-left font-mono text-ui text-muted-foreground"
-      >
-        {workingCopyPathTail(workingCopy.workingCopy.path)}
-      </ValueReveal>
+      <header className="flex items-center gap-2 pb-2">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-control border border-border bg-card shadow-raised">
+          <HardDriveIcon className="size-4 text-primary-text" />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-ui font-semibold">Main checkout</h3>
+          {workingCopyKindLabel(workingCopy.workingCopy) !== "Main checkout" && (
+            <span className="text-label text-muted-foreground">
+              {workingCopyKindLabel(workingCopy.workingCopy)}
+            </span>
+          )}
+        </div>
+      </header>
+      <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-card p-2">
+        <FolderOpenIcon className="size-4 shrink-0 text-muted-foreground" />
+        <ValueReveal
+          term={workingCopyKindLabel(workingCopy.workingCopy)}
+          full={workingCopy.workingCopy.path}
+          side="top"
+          className="min-w-0 truncate rounded-sm text-left font-mono text-ui text-muted-foreground"
+        >
+          {workingCopyPathTail(workingCopy.workingCopy.path)}
+        </ValueReveal>
+      </div>
       <div className="flex items-center justify-between gap-2 text-ui text-muted-foreground">
-        <span>Working tree</span>
-        <span className="tabular-nums">
-          {loose === 0 ? "Clean" : `${loose} uncommitted ${loose === 1 ? "file" : "files"}`}
+        {loose === 0 ? (
+          <CheckCircleIcon className="size-4 shrink-0 text-positive" />
+        ) : (
+          <FileCodeIcon className="size-4 shrink-0" />
+        )}
+        <span className="flex-1 font-medium text-foreground tabular-nums">
+          {loose === 0
+            ? "Working tree clean"
+            : `${loose} uncommitted ${loose === 1 ? "file" : "files"}`}
         </span>
       </div>
+      <Button
+        variant="outline"
+        size="sm"
+        className={cn(RAIL_CONTROL, "w-fit")}
+        onClick={() => useUiStore.getState().setHomeRailMode("files")}
+      >
+        <FolderOpenIcon />
+        Browse files
+      </Button>
     </>
   );
 }

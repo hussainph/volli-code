@@ -45,6 +45,7 @@
  * nothing anyway.
  */
 import * as React from "react";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
@@ -163,7 +164,7 @@ const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: PhosphorIcon; ink: stri
 function ChangesTitle({ count }: { count: number }) {
   return (
     <>
-      <p className="text-ui font-medium">Diffs</p>
+      <SectionHeading>Diffs</SectionHeading>
       <Badge variant="count-pill">{count}</Badge>
     </>
   );
@@ -327,9 +328,11 @@ function ChangeRow({
                 <span
                   data-testid="ticket-changes-updated"
                   aria-label={row.updatedDescription}
-                  className="shrink-0 text-label font-medium text-primary-text"
+                  title={row.updatedDescription}
+                  className="shrink-0 text-primary-text"
                 >
-                  {row.updatedLabel}
+                  <ArrowClockwiseIcon aria-hidden weight="bold" className="size-3.5" />
+                  <span className="sr-only">{row.updatedLabel}</span>
                 </span>
               ) : undefined
             }
@@ -344,13 +347,13 @@ function ChangeRow({
             // A fixed column, so the numbers line up down the list and the
             // filename's truncation point never moves with them.
             trailing={
-              <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-ui tabular-nums">
+              <span className="flex w-[72px] shrink-0 justify-end gap-1 text-ui tabular-nums">
                 {row.binary ? (
                   <span className="text-muted-foreground">Binary</span>
                 ) : row.insertions === null || row.deletions === null ? null : (
                   <>
-                    <span className="font-medium text-positive">+{row.insertions}</span>
-                    <span className="font-medium text-destructive">−{row.deletions}</span>
+                    <span className="font-mono font-medium text-positive">+{row.insertions}</span>
+                    <span className="font-mono font-medium text-destructive">−{row.deletions}</span>
                   </>
                 )}
               </span>

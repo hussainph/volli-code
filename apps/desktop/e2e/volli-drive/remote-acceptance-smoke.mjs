@@ -422,13 +422,13 @@ async function journey() {
       await click("button", "Logs", { contains: true, first: true });
       await wait("Sources");
       await click("button", REMOTE_HOST);
-      await type("Search", "serving");
+      await type("Search logs", "serving");
       const current = await wait('button "serving');
       assert.ok(controls(current.text, "button", "This Mac").length === 1);
       assert.ok(controls(current.text, "button", REMOTE_HOST)[0]?.includes("[pressed]"));
       assert.ok(
         visibleServingRow(current.text, REMOTE_HOST),
-        "Real serving row must name hostd and the remote machine, not just the Search input",
+        "Real serving row must name hostd and the remote machine, not just the Search logs input",
       );
     },
   );

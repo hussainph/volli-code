@@ -69,7 +69,11 @@
  */
 import * as React from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
+import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
+import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
+import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
+import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
@@ -117,6 +121,14 @@ import { useBoardStore } from "@renderer/stores/board";
  * keeps every row's text on one left edge), without the hover fill that would
  * promise a press the row does not answer.
  */
+const STATUS_ICON = {
+  backlog: TrayIcon,
+  todo: ListChecksIcon,
+  doing: PlayCircleIcon,
+  needs_review: EyeIcon,
+  done: CheckCircleIcon,
+} as const;
+
 function PropertyRow({
   glyph,
   control,
@@ -457,6 +469,7 @@ function LabelRun({
 
 export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
   const statusLabel = TICKET_STATUS_LABELS[ticket.status];
+  const StatusIcon = STATUS_ICON[ticket.status];
   const priorityLabel = TICKET_PRIORITY_LABELS[ticket.priority];
   const canWrite = useCanWrite(projectId);
   return (
@@ -469,7 +482,7 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
       <ul className="flex flex-col">
         <PropertyRow
           data-testid="ticket-rail-property-row-status"
-          glyph={<CircleIcon className="size-4" />}
+          glyph={<StatusIcon className="size-4" />}
           control={
             <DropdownMenu>
               <ValueTrigger
@@ -496,11 +509,15 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
                       );
                   }}
                 >
-                  {TICKET_STATUSES.map((status) => (
-                    <DropdownMenuRadioItem key={status} value={status}>
-                      {TICKET_STATUS_LABELS[status]}
-                    </DropdownMenuRadioItem>
-                  ))}
+                  {TICKET_STATUSES.map((status) => {
+                    const Icon = STATUS_ICON[status];
+                    return (
+                      <DropdownMenuRadioItem key={status} value={status}>
+                        <Icon aria-hidden className="size-4 shrink-0" />
+                        {TICKET_STATUS_LABELS[status]}
+                      </DropdownMenuRadioItem>
+                    );
+                  })}
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>

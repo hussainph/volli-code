@@ -38,6 +38,7 @@ import {
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { resolveLabelColor } from "@renderer/lib/labels";
@@ -249,14 +250,15 @@ function ArchiveInspect({
             </span>
           ) : null}
           {prUrl !== null ? (
-            <button
-              type="button"
+            <Button
+              variant="link"
+              size="xs"
+              className="shrink-0"
               onClick={() => openExternalUrl(prUrl)}
-              className="inline-flex shrink-0 items-center gap-1 text-primary-text hover:underline"
             >
-              <GitPullRequestIcon className="size-3" />
+              <GitPullRequestIcon />
               PR
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -372,7 +374,6 @@ function ArchiveList({
           onChange={(event) => setQuery(event.target.value)}
           aria-label="Find an archived ticket"
           placeholder="Find an archived ticket…"
-          className="h-8 text-ui md:text-ui"
         />
       ) : null}
       {/* `undefined` = not loaded yet (a fetch is in flight); `[]` = loaded,
@@ -389,7 +390,9 @@ function ArchiveList({
         </div>
       ) : archived === undefined ? (
         <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
-          <p className="text-sm">Loading…</p>
+          <p className="text-sm">
+            <LoadingLabel>Loading</LoadingLabel>
+          </p>
         </div>
       ) : archived.length === 0 ? (
         <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
