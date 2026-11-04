@@ -808,9 +808,7 @@ function LocalFileView({
         )}
         <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
           {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
-          {state.truncated && (
-            <Notice title="Showing the first 1 MiB. Open in… for the whole file." />
-          )}
+          {state.truncated && <Notice title="First 1 MiB shown" />}
           <div
             className={cn(
               "min-h-0 flex-1 overflow-hidden",
@@ -890,7 +888,7 @@ function LocalFileView({
   return (
     <div className={cn("flex-1", EMPTY_PAGE, "gap-4")}>
       <FileIcon className="size-6 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
+      <p className="text-sm text-muted-foreground">No preview</p>
     </div>
   );
 }
