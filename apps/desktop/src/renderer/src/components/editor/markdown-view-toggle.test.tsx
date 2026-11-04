@@ -72,8 +72,8 @@ describe("MarkdownViewToggle", () => {
 
     const previewing = draw("preview", RAW_HTML);
     expect(previewing).toMatch(/aria-pressed="true"[^>]*data-choice="preview"/);
-    expect(previewing).toContain("Read-only preview");
-    expect(previewing.toLowerCase()).toContain("unsupported html");
+    expect(previewing).toContain(">Read-only</p>");
+    expect(previewing.toLowerCase()).not.toContain("unsupported html");
     // The refusal it stopped repeating is still one hover away.
     expect(previewing).toContain('title="Document view can');
   });
@@ -82,9 +82,9 @@ describe("MarkdownViewToggle", () => {
     // Preview draws the file as last read or saved. With unsaved edits open in
     // Source that is a different string, and saying nothing would read as work
     // lost rather than work not previewed.
-    expect(draw("preview", RAW_HTML, { dirty: true })).toContain("Unsaved");
-    expect(draw("preview", RAW_HTML, { dirty: false })).not.toContain("Unsaved");
-    // Source is where the draft is, so it needs no such sentence.
-    expect(draw("source", RAW_HTML, { dirty: true })).not.toContain("Unsaved");
+    expect(draw("preview", RAW_HTML, { dirty: true })).toContain("unsaved edits not shown");
+    expect(draw("preview", RAW_HTML, { dirty: false })).not.toContain("unsaved");
+    // Source is where the draft is, so it needs no such status.
+    expect(draw("source", RAW_HTML, { dirty: true })).not.toContain("unsaved");
   });
 });

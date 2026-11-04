@@ -93,20 +93,18 @@ export function RelinkProjectDialog({
 
   const notices = aftermath === null ? [] : projectRelinkNotices(aftermath);
 
+  // A state, not a reassurance: the folder button is the explanation.
+  const description =
+    aftermath !== null ? "These items need attention:" : folderMissing ? "Folder not found" : null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent {...(description === null ? { "aria-describedby": undefined } : {})}>
         <DialogHeader>
           <DialogTitle>
             {aftermath === null ? `Relink ${project.name}` : `${project.name} is relinked`}
           </DialogTitle>
-          <DialogDescription>
-            {aftermath === null
-              ? folderMissing
-                ? "Folder not found. Choose its new location to keep your tickets and history."
-                : "Choose a new location. Your tickets and history stay with this project."
-              : "Folder updated. These items need attention:"}
-          </DialogDescription>
+          {description === null ? null : <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
 
         {aftermath === null ? (
