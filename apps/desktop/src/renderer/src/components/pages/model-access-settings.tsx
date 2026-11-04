@@ -467,7 +467,7 @@ function CatalogSection({
         search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
         query={query}
         placeholder="Search models"
-        empty="No models. Sign in to a provider below."
+        empty="No models"
         noResults="No models match."
         columns={[
           {

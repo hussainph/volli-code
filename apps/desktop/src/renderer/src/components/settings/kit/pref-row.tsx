@@ -18,7 +18,6 @@ export function PrefRow({
   label,
   icon: Icon,
   htmlFor,
-  hint,
   description,
   testId,
   children,
@@ -26,11 +25,6 @@ export function PrefRow({
   label: string;
   icon?: Icon;
   htmlFor?: string;
-  /**
-   * @deprecated Its last caller is `pages/code-mode-settings.tsx`; remove the
-   * prop with it. A row carries no edge-case prose.
-   */
-  hint?: React.ReactNode;
   /**
    * The row's status or provenance ("Project override", "Inherited from
    * Ghostty"), its blocked reason, or its one-line trust boundary — never an
@@ -59,8 +53,8 @@ export function PrefRow({
             {label}
           </label>
         </div>
-        {description || hint ? (
-          <p className="mt-1 text-ui leading-5 text-muted-foreground">{description ?? hint}</p>
+        {description ? (
+          <p className="mt-1 text-ui leading-5 text-muted-foreground">{description}</p>
         ) : null}
       </div>
       <div className="flex max-w-full flex-wrap items-center gap-2">{children}</div>
