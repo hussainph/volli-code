@@ -98,19 +98,20 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                       }),
                     );
                   }}
+                  aria-label={project.name}
+                  aria-current={isSelected ? "true" : undefined}
                   style={{ backgroundColor: projectColor(project.colorIndex) }}
                   className={cn(
                     // `text-white` is ink on the PROJECT's own color, not on
                     // the page — `PROJECT_COLORS` is identity, not theme, so it
                     // holds still across a mode flip and so does the ink on it.
-                    "group/tile relative flex size-9 items-center justify-center rounded-control text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96] motion-reduce:scale-100!",
+                    "group/tile relative flex size-9 items-center justify-center rounded-control border border-border/50 control-lighting shadow-control hover:shadow-control-hover text-sm font-semibold text-white outline-none transition-[box-shadow] duration-100 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none active:shadow-control-pressed",
                     // `ring-offset-transparent`, NOT `ring-offset-rail` (#74):
                     // the rail gave up its fill to sit on the canvas, so an
                     // offset painted in `--rail` would punch an opaque dark
                     // halo through the gradient around every selected tile.
                     // The offset is a GAP, and a gap has to show what is behind.
-                    isSelected &&
-                      "ring-2 ring-foreground/90 ring-offset-[3px] ring-offset-transparent",
+                    isSelected && "ring-1 ring-foreground/70 ring-offset-2 ring-offset-transparent",
                   )}
                 >
                   {monogram(project.name)}
@@ -132,7 +133,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
             </ContextMenuTrigger>
             <TooltipContent side="right" className="max-w-80">
               <div className="flex items-center gap-1">
-                <span className="font-bold">{project.name}</span>
+                <span className="font-semibold">{project.name}</span>
                 {index < 9 && (
                   <kbd className="rounded-sm bg-background/30 px-1 py-px font-sans text-label font-bold">
                     ⌘{index + 1}
@@ -142,7 +143,10 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
               {remoteHost === null ? null : (
                 <div className="text-background/70">On {remoteHost.name}</div>
               )}
-              <div className="text-background/70">{project.path}</div>
+              <div className="mt-2 flex items-start gap-2 rounded-control border border-background/30 px-2 py-1">
+                <FolderOpenIcon aria-hidden className="mt-1 size-4 shrink-0" />
+                <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{project.path}</span>
+              </div>
             </TooltipContent>
           </Tooltip>
           <ContextMenuContent>
@@ -198,7 +202,7 @@ function LocalProjectActions({
         Reveal in Finder
       </ContextMenuItem>
       <ContextMenuItem icon={ArrowsLeftRightIcon} onSelect={onRelink}>
-        Relink folder…
+        Relink folder
       </ContextMenuItem>
       {onMove === undefined ? null : (
         <ContextMenuItem icon={CloudArrowUpIcon} onSelect={onMove}>
@@ -206,7 +210,7 @@ function LocalProjectActions({
         </ContextMenuItem>
       )}
       <ContextMenuItem icon={MinusCircleIcon} variant="destructive" onSelect={onRemove}>
-        Remove from Volli…
+        Remove from Volli
       </ContextMenuItem>
     </>
   );

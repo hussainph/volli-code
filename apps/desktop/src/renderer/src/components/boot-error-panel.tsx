@@ -1,3 +1,5 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { useEffect, useRef, useState } from "react";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import type {
@@ -44,12 +46,11 @@ const recoveryGateway: RecoveryGateway = {
 
 /** Where a person gets a build the updater cannot offer (a dev run, or another channel). */
 export const DOWNLOAD_URL = "https://volli.app/download/";
-export const NEWER_VERSION_TITLE = "This database was created by a newer version of Volli";
-const NEWER_VERSION_DETAIL =
-  "This version can't open it, so nothing was changed. Update Volli, or restore an older backup.";
+export const NEWER_VERSION_TITLE = "Update Volli to open this database";
+const NEWER_VERSION_DETAIL = "Nothing changed. Update Volli or restore an older backup.";
 
-const RESTORE_LABEL = "Restore from the last backup that checks clean";
-const MANUAL_RECOVERY = "Your database and safety copies are preserved for manual recovery.";
+const RESTORE_LABEL = "Restore latest clean backup";
+const MANUAL_RECOVERY = "Your database and backups are preserved for manual recovery.";
 const containsDiagnosticPath = (message: string) =>
   /(?:^|\s|["'(])(?:\/[\w.~]|[A-Za-z]:\\)/.test(message);
 
@@ -154,7 +155,7 @@ export function BootErrorPanel({
   return (
     <div className="flex min-h-svh w-full items-center bg-background py-8">
       <ContentColumn className="flex flex-col gap-4">
-        <div className="flex flex-col items-center gap-2 text-center">
+        <div className="flex flex-col items-start gap-2 text-left">
           <WarningCircleIcon aria-hidden className="size-8 text-muted-foreground" />
           {fault === null ? null : fault === "newer-version" ? (
             <>
@@ -176,17 +177,17 @@ export function BootErrorPanel({
         {fault === "newer-version" ? <NewerVersionActions gateway={gateway} /> : null}
 
         {recovery.kind === "checking" ? (
-          <Notice title="Checking whether backup recovery is available…" announce />
+          <Notice icon={Spinner} title="Checking backups" announce />
         ) : recovery.kind === "unavailable" ? (
           <Notice title="Backup recovery is unavailable. No files were changed." announce />
         ) : (
           <section aria-labelledby="safety-copies-title" className="flex flex-col gap-4">
             <h2 id="safety-copies-title" className="text-sm font-medium text-foreground">
-              Local safety copies
+              Local backups
             </h2>
             {recovery.backups.length > 0 ? (
               <ul
-                aria-label="Local safety copies"
+                aria-label="Local backups"
                 className="divide-y divide-border rounded-lg border border-border"
               >
                 {recovery.backups.map((backup) => (
@@ -208,7 +209,9 @@ export function BootErrorPanel({
                         backup.integrity === "clean" ? "text-positive" : "text-muted-foreground"
                       }
                     >
-                      {backup.integrity === "newer" ? "newer version" : backup.integrity}
+                      {backup.integrity === "newer"
+                        ? "Newer version"
+                        : backup.integrity.charAt(0).toUpperCase() + backup.integrity.slice(1)}
                     </span>
                   </li>
                 ))}
@@ -217,8 +220,8 @@ export function BootErrorPanel({
             <Notice
               title={
                 hasCleanBackup
-                  ? "Restoring a backup restarts Volli. Changes since that backup won't be included."
-                  : "No local backup checks clean. Nothing was restored."
+                  ? "Volli will restart. Changes since that backup won't be included."
+                  : "No clean backup available. Nothing restored."
               }
               detail={MANUAL_RECOVERY}
               announce
@@ -235,13 +238,18 @@ export function BootErrorPanel({
               </Button>
             </div>
             {restoreState === "pending" ? (
-              <Notice title="Restoring the last backup that checks clean…" announce />
+              <Notice icon={Spinner} title="Restoring backup" announce />
             ) : restoreState === "restarting" ? (
-              <Notice tone="positive" title="Backup restored. Volli is restarting…" announce />
+              <Notice
+                tone="positive"
+                icon={Spinner}
+                title="Backup restored. Volli is restarting"
+                announce
+              />
             ) : restoreState === "failed" ? (
               <Notice
                 tone="error"
-                title="Couldn't restore a clean backup. Volli has not restarted."
+                title="Couldn't restore the backup. Volli hasn't restarted."
                 detail={restoreError ?? MANUAL_RECOVERY}
                 announce
               />
@@ -316,14 +324,14 @@ function NewerVersionActions({ gateway }: { gateway: RecoveryGateway }) {
   const downloadLink = (
     <Button asChild variant={supported ? "outline" : "default"}>
       <a href={DOWNLOAD_URL} target="_blank" rel="noreferrer">
-        Open the download page
+        Download Volli
       </a>
     </Button>
   );
 
   return (
     <section aria-label="Update Volli" className="flex flex-col gap-4">
-      <div className="flex flex-wrap justify-center gap-2">
+      <div className="flex flex-wrap justify-start gap-2">
         {ready ? (
           <Button
             onClick={() =>
@@ -340,7 +348,7 @@ function NewerVersionActions({ gateway }: { gateway: RecoveryGateway }) {
               void gateway.updates.check();
             }}
           >
-            {phase === "checking" ? "Checking…" : "Check for updates"}
+            {phase === "checking" ? <LoadingLabel>Checking</LoadingLabel> : "Check for updates"}
           </Button>
         ) : null}
         {supported ? null : downloadLink}
@@ -352,7 +360,7 @@ function NewerVersionActions({ gateway }: { gateway: RecoveryGateway }) {
         </Button>
       </div>
       {!supported ? null : phase === "downloading" ? (
-        <Notice title={`Downloading ${target ?? "the update"}…`} announce />
+        <Notice icon={Spinner} title={`Downloading ${target ?? "the update"}`} announce />
       ) : ready ? (
         <Notice tone="positive" title={`${target ?? "The update"} is ready.`} announce />
       ) : phase === "error" ? (
@@ -360,7 +368,7 @@ function NewerVersionActions({ gateway }: { gateway: RecoveryGateway }) {
       ) : check === "done" && phase === "idle" ? (
         <Notice
           title="No newer version on this update channel."
-          detail="This database needs a newer Volli. If you switched from Canary, reinstall Canary from the download page, or wait for a newer release here."
+          detail="Download a newer build. If you used Canary, reinstall Canary."
           actions={downloadLink}
           announce
         />

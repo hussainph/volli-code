@@ -197,6 +197,14 @@ async function waitForFileMatching(path, pattern, timeoutMs = 8000) {
 /** `stty size` output: "<rows> <cols>". */
 const GRID_SHAPE = /^\d+\s+\d+$/;
 
+/**
+ * A project's rail tile. Its accessible name is the project's name (the
+ * monogram is only painted text); `.and(a real <button>)` because dnd-kit's
+ * sortable wrapper also carries role="button" and inherits that name.
+ */
+const railTile = (page, name) =>
+  page.getByRole("button", { name, exact: true }).and(page.locator("button"));
+
 /** Number of session tabs the selected workspace shows (close buttons ≙ tabs). */
 async function tabCount(page) {
   return page.locator('[aria-label^="Close Terminal"]').count();
@@ -297,9 +305,7 @@ async function main() {
     await fs.rm(p, { force: true });
   }
 
-  // Distinct two-word names → distinct monograms "AR" / "BC" (rail tiles carry
-  // a duplicate accessible name from the dnd-kit wrapper, so we click the
-  // monogram TEXT exactly).
+  // Distinct names → distinct rail tiles (see `railTile`).
   const projects = [
     {
       id: "ws-alpha",
@@ -376,7 +382,7 @@ async function main() {
     // Nav and the active Home tab are both remembered per-project and both
     // default to Home's Board tab, so a fresh workspace opens on the board —
     // click Home to be sure of the page, then mint its own terminal.
-    await page.getByText("BC", { exact: true }).click(); // Beta Cove monogram
+    await railTile(page, projects[1].name).click(); // Beta Cove
     await page.getByText("Home", { exact: true }).click();
     await startTerminalTab(page, 1); // beta's first terminal, explicitly
     const bTabs = await tabCount(page);
@@ -394,7 +400,7 @@ async function main() {
 
     // === 3. Isolation/concurrency: back in A, SAME session, no dup tab ======
     // Alpha remembers it was on Sessions, but re-assert to be robust.
-    await page.getByText("AR", { exact: true }).click(); // Alpha Ridge monogram
+    await railTile(page, projects[0].name).click(); // Alpha Ridge
     await page.getByText("Home", { exact: true }).click();
     await waitForLiveTerminal(page);
     const aTabs2 = await tabCount(page);

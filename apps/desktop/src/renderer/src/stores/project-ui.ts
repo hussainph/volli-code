@@ -344,6 +344,8 @@ export interface ProjectUiState {
    * lives here rather than in a map of its own.
    */
   dependencyOfferDismissed: boolean;
+  /** Measured readiness identities put away by this project's reader. Persisted. */
+  dismissedReadinessNotices: readonly string[];
   /**
    * Home's tab groups (`split-view.ts`): split trees of tab stacks, any
    * number of them beside the ordinary strip. Selecting an ordinary tab leaves
@@ -371,6 +373,7 @@ export const DEFAULT_PROJECT_UI: ProjectUiState = {
   markdownDocumentFiles: [],
   markdownPreviewFiles: [],
   dependencyOfferDismissed: false,
+  dismissedReadinessNotices: [],
 };
 
 /**
@@ -722,6 +725,7 @@ interface ProjectUiStoreState {
   setBoardView(projectId: string, view: BoardView): void;
   /** Wave off this project's uninstalled-dependencies offer for good (VC-156). */
   dismissDependencyOffer(projectId: string): void;
+  dismissReadinessNotice(projectId: string, key: string): void;
   setBoardSort(projectId: string, sort: TicketSort): void;
   /**
    * Records which tab is in front on Home. A plain record and nothing else —
@@ -1136,6 +1140,7 @@ type PersistedProjectUi = Pick<
   | "markdownDocumentFiles"
   | "markdownPreviewFiles"
   | "dependencyOfferDismissed"
+  | "dismissedReadinessNotices"
 >;
 
 interface PersistedProjectUiState {
@@ -1377,6 +1382,9 @@ function sanitizePersistedUi(persisted: Partial<PersistedProjectUi>): PersistedP
     // key from a build before this existed, a corrupt value — means the offer
     // stands, which is the recoverable side of the mistake.
     dependencyOfferDismissed: persisted.dependencyOfferDismissed === true,
+    dismissedReadinessNotices: Array.isArray(persisted.dismissedReadinessNotices)
+      ? persisted.dismissedReadinessNotices.filter((key): key is string => typeof key === "string")
+      : [],
   };
 }
 
@@ -1396,7 +1404,8 @@ function isDefaultPersistedUi(ui: ProjectUiState): boolean {
     (ui.homeSplitView ?? null) === null &&
     ui.markdownDocumentFiles.length === 0 &&
     ui.markdownPreviewFiles.length === 0 &&
-    ui.dependencyOfferDismissed === DEFAULT_PROJECT_UI.dependencyOfferDismissed
+    ui.dependencyOfferDismissed === DEFAULT_PROJECT_UI.dependencyOfferDismissed &&
+    ui.dismissedReadinessNotices.length === 0
   );
 }
 
@@ -1665,6 +1674,16 @@ export function createProjectUiStore(
 
         setBoardView(projectId, view) {
           set((state) => patchProjectUi(state, projectId, { boardView: view }));
+        },
+
+        dismissReadinessNotice(projectId, key) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            if (current.dismissedReadinessNotices.includes(key)) return state;
+            return patchProjectUi(state, projectId, {
+              dismissedReadinessNotices: [...current.dismissedReadinessNotices, key],
+            });
+          });
         },
 
         dismissDependencyOffer(projectId) {
@@ -2756,6 +2775,7 @@ export function createProjectUiStore(
                   // A standing answer, not a sitting's state: the offer this
                   // dismisses would otherwise return on every relaunch.
                   dependencyOfferDismissed: ui.dependencyOfferDismissed,
+                  dismissedReadinessNotices: ui.dismissedReadinessNotices,
                 },
               ]),
           ),

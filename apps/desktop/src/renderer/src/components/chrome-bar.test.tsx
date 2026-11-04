@@ -15,6 +15,34 @@ import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { ChromeBar } from "./chrome-bar";
 
 describe("chrome band copy", () => {
+  it("gives both sidebar toggles the same icon box", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <ChromeBar />
+      </SidebarProvider>,
+    );
+    const buttons = html.match(/<button[^>]+>/g) ?? [];
+    const toggles = buttons.filter((button) =>
+      /aria-label="(?:Hide project switcher|Toggle navigation sidebar)"/.test(button),
+    );
+    expect(toggles).toHaveLength(2);
+    for (const toggle of toggles) expect(toggle).toContain('data-size="icon-sm"');
+    expect(html).toContain("[&amp;_svg:not([class*=&#x27;size-&#x27;])]:size-4");
+  });
+  it("keeps the two toggles immediately beside search in the centered cluster", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <ChromeBar />
+      </SidebarProvider>,
+    );
+    const cluster = html.slice(html.indexOf("absolute left-1/2 top-[19px]"));
+    expect(cluster.indexOf('aria-label="Hide project switcher"')).toBeLessThan(
+      cluster.indexOf('aria-label="Toggle navigation sidebar"'),
+    );
+    expect(cluster.indexOf('aria-label="Toggle navigation sidebar"')).toBeLessThan(
+      cluster.indexOf('aria-label="Search tickets, sessions, and commands"'),
+    );
+  });
   it("labels the rail toggle with the ruled word — project switcher, never workspace", () => {
     const html = renderToStaticMarkup(
       <SidebarProvider>

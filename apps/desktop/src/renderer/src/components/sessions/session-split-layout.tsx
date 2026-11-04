@@ -299,7 +299,7 @@ function SplitNode(props: SplitNodeProps) {
             variant="destructive"
             onSelect={() => props.onClose(layout.sessionId)}
           >
-            Close Pane
+            Close pane
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

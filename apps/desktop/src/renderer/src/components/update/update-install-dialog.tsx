@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * The explicit install prompt (VC-59) — the ONE dialog on the update path.
  *
@@ -102,11 +103,13 @@ export function UpdateInstallDialog() {
           </AlertDialogTitle>
           <AlertDialogDescription>
             The update has been downloaded. Installing restarts the app now
-            {lines === null
-              ? " — checking what's running…"
-              : lines.length === 0
-                ? ". Nothing is running that a restart would interrupt."
-                : ", and that stops live work:"}
+            {lines === null ? (
+              <LoadingLabel> — checking what's running</LoadingLabel>
+            ) : lines.length === 0 ? (
+              ". Nothing is running that a restart would interrupt."
+            ) : (
+              ", and that stops live work:"
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {lines !== null && lines.length > 0 && (
@@ -128,7 +131,7 @@ export function UpdateInstallDialog() {
               confirmInstall();
             }}
           >
-            {installing ? "Restarting…" : "Restart & Install"}
+            {installing ? <LoadingLabel>Restarting</LoadingLabel> : "Restart & Install"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

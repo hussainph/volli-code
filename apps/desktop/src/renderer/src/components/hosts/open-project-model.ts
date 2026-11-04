@@ -176,7 +176,7 @@ export function sourceHint(source: ProjectSource | null, modern = false): string
 
 /** The busy line while a create runs. */
 export function creatingLine(source: ProjectSource, hostName: string): string {
-  return source.kind === "git" ? `Cloning on ${hostName}…` : `Adding it on ${hostName}…`;
+  return source.kind === "git" ? `Cloning on ${hostName}` : `Adding on ${hostName}`;
 }
 
 const messageOf = (error: unknown): string =>

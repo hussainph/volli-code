@@ -559,6 +559,15 @@ describe("a companion's mark", () => {
  * The ticket entry the Previous band collapses onto, and the one thing a child
  * row gives up to sit under it (VC-69).
  */
+describe("Previous row geometry", () => {
+  it("gives the text and Session glyph room instead of clipping to 24px", () => {
+    const html = renderPrevious();
+    expect(html).toContain("min-h-8");
+    expect(html).toContain("h-auto");
+    expect(html).not.toContain(" h-6 ");
+  });
+});
+
 describe("TicketGroupRow", () => {
   const HOUR_AGO = 60_000 * 60;
   const NOW = HOUR_AGO * 2;
@@ -610,6 +619,8 @@ describe("TicketGroupRow", () => {
   it("takes the active treatment when the session in front of you is one of its own", () => {
     expect(renderGroup(4, false, { selected: true })).toContain('data-active="true"');
     expect(renderGroup(4, false)).toContain('data-active="false"');
+    // The selected child owns the highlight once its group is expanded.
+    expect(renderGroup(4, true, { selected: true })).toContain('data-active="false"');
   });
 
   it("carries no status dot in either state — attention never reaches this band", () => {

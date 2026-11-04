@@ -14,7 +14,7 @@ export interface SessionEnvironmentAlertState {
   /**
    * The app fault this notice reports, or `null` for the project-readiness
    * notice — a project's own onboarding shortfall, not a fault of the app, and
-   * dismissed for the view rather than durably.
+   * dismissed by measured identity durably in the project workspace.
    */
   fault: SessionEnvironmentFaultKind | null;
   /**
@@ -56,6 +56,7 @@ type SessionEnvironmentFaultNotice = SessionEnvironmentAlertState & {
 /** The one project fact the shared alert needs; Configure owns future repair UI. */
 export interface ProjectEnvironmentScope {
   name: string;
+  id?: string;
 }
 
 /**
@@ -153,7 +154,7 @@ export function projectEnvironmentReadiness(
   return {
     fault: null,
     // The measured facts, not the sentence built from them.
-    key: `readiness:${project.name}:${missingSessionTools(status).join(",")}`,
+    key: `readiness:${project.id ?? project.name}:${missingSessionTools(status).join(",")}`,
     title: `Sessions aren't ready for ${project.name}`,
     detail,
   };

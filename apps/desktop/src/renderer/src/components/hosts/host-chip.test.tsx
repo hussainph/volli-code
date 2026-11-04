@@ -226,12 +226,12 @@ describe("host chip", () => {
     useHostConnectionStore.getState().setEntryPoints({ addHost, manageHosts: () => {} });
     useRemoteHostsStore.setState({ addHostActivity: { name: "box", status: "running" } });
     await world.render(<HostChip />);
-    await click(await openSwitcher(), "Adding box…");
+    await click(await openSwitcher(), "Adding box");
     expect(addHost).toHaveBeenCalledOnce();
     await act(async () =>
       useRemoteHostsStore.setState({ addHostActivity: { name: "box", status: "question" } }),
     );
-    expect((await openSwitcher()).textContent).toContain("Adding box — needs attention…");
+    expect((await openSwitcher()).textContent).toContain("Adding box — needs attention");
     await act(async () =>
       useRemoteHostsStore.setState({ addHostActivity: { name: "box", status: "done" } }),
     );

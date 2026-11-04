@@ -26,11 +26,20 @@ describe("SessionEnvironmentNotice", () => {
     expect(html).toContain("Volli couldn&#x27;t read your terminal&#x27;s PATH");
     expect(html).toContain("Sessions can&#x27;t find gh and node");
     expect(html).toContain("Fix now");
+    const actions = (html.match(/<button[^>]+>/g) ?? []).filter((button) =>
+      button.includes('data-variant="outline"'),
+    );
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      expect(action).toContain("control-material");
+      expect(action).toContain("shadow-control");
+      expect(action).toContain("hover:shadow-control-hover");
+    }
     expect(html).toContain("Review details");
     expect(html).not.toContain("volli doctor");
     // The escape hatch: a fault the user has read can be put away, so the
     // persistent notice never becomes a permanent one.
-    expect(html).toContain("Dismiss");
+    expect(html).toContain('aria-label="Dismiss notice"');
     expect(html).toContain("bg-destructive/10");
     expect(html).toContain('role="status"');
   });
@@ -46,7 +55,7 @@ describe("SessionEnvironmentNotice", () => {
       />,
     );
 
-    expect(html).toContain("Fixing…");
+    expect(html).toContain("Fixing");
     expect(html).toContain("disabled");
   });
 
@@ -68,6 +77,6 @@ describe("SessionEnvironmentNotice", () => {
 
     expect(html).not.toContain("Fix now");
     expect(html).toContain("Review details");
-    expect(html).toContain("Dismiss");
+    expect(html).toContain('aria-label="Dismiss notice"');
   });
 });
