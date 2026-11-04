@@ -261,7 +261,7 @@ function provisionalChatDraftSelector(
  * session is bracketed by the mark that tree taught this sidebar to mean
  * "inside".
  */
-const SESSION_GROUP_NEST = "mx-0 mt-1 ml-2 gap-1 py-1 pr-0 pl-2";
+const SESSION_GROUP_NEST = "mx-0 mt-0 gap-1 border-0 px-1 pb-1";
 
 /**
  * One object per distinct row vendor (VC-1078). `ActiveBandRow` and
@@ -315,10 +315,13 @@ function indexSignalsByTicket(
 export function ActiveSessions({
   project,
   visible,
+  activeHeader = true,
   onProfile,
 }: {
   project: Project;
   visible: boolean;
+  /** The primary sidebar shares this header with its content switcher. */
+  activeHeader?: boolean;
   /**
    * Optional benchmark instrumentation. Production callers leave this absent,
    * so the Profiler boundaries add no work to the shipped sidebar; the lab's
@@ -1358,7 +1361,7 @@ export function ActiveSessions({
 
   const activeBand = (
     <SidebarGroup data-session-band="active" className="gap-1">
-      <SessionBandHeader label="Active" />
+      {activeHeader ? <SessionBandHeader label="Active" /> : null}
       {activeRows.length === 0 && listingPending ? (
         // The rows' box, held while the listing is read. Live tabs this window
         // already holds are rows regardless (they come from the sessions store,
@@ -1446,7 +1449,7 @@ export function ActiveSessions({
                 onToggleRead={entry.row.kind === "chat" ? toggleRead : null}
               />
             ) : (
-              <SidebarMenuItem key={entry.id}>
+              <SidebarMenuItem key={entry.id} className="session-envelope rounded-card">
                 <TicketGroupRow
                   ticket={entry.ticket}
                   ticketPrefix={project.ticketPrefix}

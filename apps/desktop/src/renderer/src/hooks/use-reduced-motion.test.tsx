@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { prefersReducedMotion, useReducedMotion } from "./use-reduced-motion";
@@ -38,4 +39,8 @@ it("observes both the system and the app preference, and detaches both listeners
   expect(host.textContent).toBe("true");
   await act(async () => root.unmount());
   expect(query.removeEventListener).toHaveBeenCalledWith("change", expect.any(Function));
+});
+
+it("has a stable motion-free server snapshot for static shells", () => {
+  expect(renderToStaticMarkup(<Probe />)).toBe("<span>false</span>");
 });

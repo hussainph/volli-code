@@ -25,6 +25,7 @@ import {
   isContentMoving,
   planContentMotion,
 } from "@renderer/components/sidebar/content-motion";
+import { useSidebarPour } from "@renderer/components/sidebar/sidebar-pour";
 import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import {
   LIVE_WIDTH_PROPERTY,
@@ -363,6 +364,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   const fullScreen = useFullScreen();
   const [resizing, setResizing] = React.useState(false);
   const [geometryInstant, setGeometryInstant] = React.useState(false);
+  const [keyboardInstant, setKeyboardInstant] = React.useState(false);
   const [nativePlaneInstant, setNativePlaneInstant] = React.useState(false);
   const [pinSuspended, setPinSuspended] = React.useState(false);
   const terminalFocused = terminalFocusTarget !== null;
@@ -474,6 +476,17 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   }, [nativePlaneInstant]);
 
   const reducedMotion = useReducedMotion();
+  const pouring = useSidebarPour({
+    shown: panelShown,
+    instant: keyboardInstant || reducedMotion || terminalFocused || nativePlaneInstant,
+    panelRef,
+    bandRef,
+  });
+  React.useLayoutEffect(() => {
+    if (!keyboardInstant) return;
+    const frame = window.requestAnimationFrame(() => setKeyboardInstant(false));
+    return () => window.cancelAnimationFrame(frame);
+  }, [keyboardInstant]);
   const contentMotion = useSidebarContentMotion({
     pinned: docked,
     // A resize drag needs exact pointer tracking, and terminal/rail geometry has
@@ -485,6 +498,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       geometryInstant ||
       geometryChanged ||
       nativePlaneInstant ||
+      keyboardInstant ||
       reducedMotion,
     panelRef,
   });
@@ -524,7 +538,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   }, [fullScreen]);
 
   const setPinned = React.useCallback(
-    (next: boolean) => {
+    (next: boolean, options?: { instant?: boolean }) => {
+      setKeyboardInstant(options?.instant === true);
       setPinSuspended(false);
       // A deliberate pin toggle uses the full base clock. CSS retargets the
       // panel from its live value if the direction changes; the content hook
@@ -582,7 +597,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       // own endpoint marker during pin motion; every other seam rule reads this
       // shell attribute.
       data-volli-shell={terminalFocused ? "focused" : pinned ? "framed" : "ephemeral"}
-      data-motion={terminalFocused || geometryInstant ? "instant" : undefined}
+      data-motion={terminalFocused || geometryInstant || keyboardInstant ? "instant" : undefined}
+      data-pane-pouring={pouring || undefined}
       // The pin journey's own hatch, separate from `data-motion` above and read
       // only by the panel's reveal. See the native-plane exception.
       data-pin-motion={nativePlaneInstant ? "instant" : undefined}
@@ -774,7 +790,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             data-slot="sidebar"
             data-native-plane-overlay={nativePlaneOverlay ? "" : undefined}
             aria-hidden={!panelShown || undefined}
-            inert={!panelShown}
+            inert={!panelShown || pouring}
+            data-glass-blur={pouring || contentMotion.moving ? "off" : undefined}
             onTransitionEnd={(event) => {
               if (event.target === event.currentTarget && !panelShown) {
                 setFloatingOverlayExiting(false);
@@ -792,7 +809,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               // changing, and the panel teleports at full opacity instead of
               // sliding. `transform` stays because `transform-gpu` writes it,
               // and neither costs anything.
-              "transition-[translate,transform,opacity] ease-swift [transition-duration:var(--reveal-duration,200ms)] group-data-[pin-motion=instant]/sidebar-wrapper:transition-none",
+              "transition-[translate,transform,opacity] ease-swift [transition-duration:var(--reveal-duration,200ms)] group-data-[pin-motion=instant]/sidebar-wrapper:transition-none group-data-[motion=instant]/sidebar-wrapper:transition-none",
               // No `will-change` here, and that is not an omission.
               // `transform-gpu` above writes `transform: translateZ(0)`, which
               // already gives this element its own compositor layer for as long
@@ -834,7 +851,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             <Sidebar
               collapsible="none"
               data-volli-sidebar
-              className="material-regular min-w-0 flex-1"
+              data-tint="true"
+              className="glass min-w-0 flex-1"
             >
               {paneContent}
             </Sidebar>

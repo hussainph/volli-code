@@ -100,18 +100,12 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                   }}
                   aria-label={project.name}
                   aria-current={isSelected ? "true" : undefined}
-                  style={{ backgroundColor: projectColor(project.colorIndex) }}
+                  style={
+                    { "--tile-color": projectColor(project.colorIndex) } as React.CSSProperties
+                  }
                   className={cn(
-                    // `text-white` is ink on the PROJECT's own color, not on
-                    // the page — `PROJECT_COLORS` is identity, not theme, so it
-                    // holds still across a mode flip and so does the ink on it.
-                    "group/tile relative flex size-9 items-center justify-center rounded-control border border-border/50 control-lighting shadow-control hover:shadow-control-hover text-sm font-semibold text-white outline-none transition-[box-shadow] duration-100 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none active:shadow-control-pressed",
-                    // `ring-offset-transparent`, NOT `ring-offset-rail` (#74):
-                    // the rail gave up its fill to sit on the canvas, so an
-                    // offset painted in `--rail` would punch an opaque dark
-                    // halo through the gradient around every selected tile.
-                    // The offset is a GAP, and a gap has to show what is behind.
-                    isSelected && "ring-1 ring-foreground/70 ring-offset-2 ring-offset-transparent",
+                    "workspace-tile group/tile relative flex size-9 items-center justify-center rounded-card text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                    isSelected && "workspace-tile-selected",
                   )}
                 >
                   {monogram(project.name)}

@@ -31,7 +31,10 @@ const EXTREMES = ["#000000", "#ffffff", "#ff0000", "#00ff00", "#0000ff"];
 
 /** A one-stop canvas on `hex`, with everything else at the defaults. */
 function canvasOf(hex: string, patch: Partial<Canvas> = {}): Canvas {
-  return { ...withPrimaryHex(DEFAULT_CANVAS, hex), ...patch };
+  return {
+    ...withPrimaryHex({ ...DEFAULT_CANVAS, stops: [DEFAULT_CANVAS.stops[0]] }, hex),
+    ...patch,
+  };
 }
 
 function effectiveOf(canvas: Canvas, resolved: ResolvedAppearance) {
@@ -159,7 +162,7 @@ describe("the base fill", () => {
 
 describe("the background value", () => {
   it("stacks grain, the other pools, the primary's pool, then the base fill", () => {
-    const three = addStop(addStop(DEFAULT_CANVAS));
+    const three = addStop(addStop({ ...DEFAULT_CANVAS, stops: [DEFAULT_CANVAS.stops[0]] }));
     const painted = canvasBackground(three, "dark");
     expect(painted.startsWith('url("data:image/svg+xml,')).toBe(true);
     expect(painted.match(/radial-gradient/g)).toHaveLength(three.stops.length);

@@ -180,7 +180,8 @@ export function TicketRail({
     // hides scrollbars in — which is why it sits on this root rather than on
     // each scroller: the page that overflows is not always one this file owns.
     <div
-      className="group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      className="glass group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      data-tint="true"
       data-narrow={narrow ? "true" : "false"}
       data-volli-rail="ticket"
       data-testid="ticket-rail"

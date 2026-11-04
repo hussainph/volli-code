@@ -5,6 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
 import { newId } from "@volli/shared/cloud";
+import { monogram } from "@volli/shared";
 
 import { Empty } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
@@ -77,13 +78,9 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
           <button
             type="button"
             aria-label={workspace?.name ?? "Workspaces"}
-            className="app-region-no-drag flex size-9 shrink-0 items-center justify-center rounded-control border border-border text-ui font-medium text-muted-foreground hover:bg-muted"
+            className="workspace-tile app-region-no-drag flex size-9 shrink-0 items-center justify-center rounded-card text-ui font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {workspace === null ? (
-              <BuildingsIcon className="size-4" />
-            ) : (
-              workspace.name.slice(0, 1).toUpperCase()
-            )}
+            {workspace === null ? <BuildingsIcon className="size-4" /> : monogram(workspace.name)}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="right" align="start" className="w-64">
@@ -109,7 +106,7 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
                 ? state.workspaces.message
                 : state.readOnly
                   ? "Volli Cloud is offline."
-                  : "Loading Workspaces…"}
+                  : "Loading Workspaces"}
             </Empty>
           )}
           {state.mine.kind === "failed" && <Empty>{state.mine.message}</Empty>}

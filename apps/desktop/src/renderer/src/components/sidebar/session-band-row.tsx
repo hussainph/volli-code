@@ -656,7 +656,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
           // native tooltip would open on top of that card.
           className={cn(
             "h-auto min-h-8 gap-1.5 py-1 text-ui text-muted-foreground",
-            row.cleaned && "opacity-80",
+            row.cleaned && "text-tertiary-foreground",
           )}
         >
           {/* No `session-row-dim` here: this band is uniformly muted, with no
@@ -792,8 +792,10 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
       onClick={() => onToggle(ticket.id)}
       // No `title`, for the reason the rows above dropped theirs (D1): this row
       // peeks its TICKET, and the card says the id and the title in full.
-      className="h-auto min-h-8 gap-1.5 py-1 text-ui active:scale-100 transition-colors"
+      className="h-auto min-h-8 gap-1.5 rounded-lg py-1 text-ui active:scale-100"
     >
+      <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">{ticket.title}</span>
       {/* `bold` for the same reason every other glyph in this band takes it:
           at 12px regular draws lighter than the label beside it. */}
       <CaretRightIcon
@@ -804,9 +806,7 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
           open && "rotate-90",
         )}
       />
-      <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground">{ticket.title}</span>
-      <span className="shrink-0 text-label tabular-nums text-muted-foreground/70">
+      <span className="shrink-0 text-label tabular-nums text-muted-foreground">
         {count}
         {/* The count and the age are two unlabelled numbers standing next to
             each other, which a screen reader runs into one token — 3 sessions

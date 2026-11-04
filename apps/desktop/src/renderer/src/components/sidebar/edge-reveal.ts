@@ -20,7 +20,7 @@
  *     chrome-band SidebarTrigger is the one patch of band where a resting
  *     pointer can only mean the sidebar, so dwelling on it summons the panel
  *     the same way the strip does (VC-57's recoverability rule: an unpinned
- *     sidebar is never a dead end). Its dwell is longer —
+ *     sidebar is never a dead end). Its dwell is the same —
  *     {@link TRIGGER_ENTER_DELAY_MS} — because the travel it has to reject is
  *     different: a pointer crossing the band toward the traffic lights clears
  *     the ≈28px button in well under 100ms, where the strip's travel problem
@@ -64,13 +64,15 @@
  */
 import * as React from "react";
 
+import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
+
 import { edgeRegion, type Point } from "./edge-region";
 
 /** Continuous residence in the strip before the panel is summoned. */
-export const ENTER_DELAY_MS = 20;
+export const ENTER_DELAY_MS = 140;
 /** Continuous residence on the chrome-band trigger before the panel is
  * summoned — see the header. */
-export const TRIGGER_ENTER_DELAY_MS = 250;
+export const TRIGGER_ENTER_DELAY_MS = 140;
 /** How long an exited pointer has to come back before the panel withdraws. */
 export const EXIT_GRACE_MS = 375;
 /** Dead time after the pointer leaves the chrome band — see the header. */
@@ -84,8 +86,8 @@ export const OPEN_MS = 200;
 export const CLOSE_MS = 160;
 /** Below this a scaled-down reversal stops reading as motion and starts reading as a glitch. */
 const MIN_REVEAL_MS = 90;
-/** Reduced motion keeps a cross-fade, and keeps it short. */
-const REDUCED_REVEAL_MS = 120;
+/** Motion-off takes the endpoint; neither a travel nor a cross-fade. */
+const REDUCED_REVEAL_MS = 0;
 
 /** The arming strip, on the canvas gutter the framed card already leaves bare.
  * The shell widens it by one shell inset when the project rail is down
@@ -177,7 +179,7 @@ export function armRevealClock(
   fullJourney = false,
 ): void {
   if (panel === null) return;
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  if (prefersReducedMotion()) {
     panel.style.setProperty("--reveal-duration", `${REDUCED_REVEAL_MS}ms`);
     return;
   }
@@ -248,7 +250,12 @@ export function useEdgeReveal({
       // Only a change in VISIBILITY moves the panel. `open → closing` starts a
       // timer and nothing else, so re-arming the clock there would overwrite a
       // live journey's duration with a measurement of a journey that is over.
-      if (wasVisible !== willBeVisible) armRevealClock(panelRef.current, willBeVisible);
+      if (wasVisible !== willBeVisible) {
+        armRevealClock(panelRef.current, willBeVisible);
+        // A dismissal must not answer the pointer still on the button with
+        // another peek, including after a pour finishes under that pointer.
+        if (!willBeVisible) triggerHoldRef.current = true;
+      }
       phaseRef.current = next;
       setPhase(next);
     },
@@ -262,8 +269,9 @@ export function useEdgeReveal({
 
   const openNow = React.useCallback(() => {
     clearTimer();
+    panelRef.current?.removeAttribute("data-keyboard-dismiss");
     enter("open");
-  }, [clearTimer, enter]);
+  }, [clearTimer, enter, panelRef]);
 
   React.useEffect(() => {
     if (enabled) return;
@@ -296,6 +304,10 @@ export function useEdgeReveal({
       // pulling — including this sidebar's own, whose pointer travels far
       // outside the safe corridor while captured.
       if (pointerDownRef.current) return;
+      if (panelRef.current?.dataset.panePouring === "true") {
+        triggerHoldRef.current = true;
+        return;
+      }
 
       const visible = phaseRef.current === "open" || phaseRef.current === "closing";
       const region = edgeRegion(point, {
@@ -390,7 +402,7 @@ export function useEdgeReveal({
      *
      * Coalescing costs nothing that mattered: the pointer cannot be in two
      * places within one frame, so only the last sample of a frame could ever
-     * have decided anything, and the arming rule is a 20ms dwell that a
+     * have decided anything, and the arming rule is a 140ms dwell that a
      * one-frame delay in its first sample cannot change.
      */
     let pendingPoint: Point | null = null;
@@ -484,7 +496,11 @@ export function useEdgeReveal({
       // No preventDefault: Escape belongs to whatever else is listening (an
       // active session's interrupt, a dialog). Dismissing the overlay is
       // additive to that, never instead of it.
-      if (phaseRef.current !== "closed") closeNow();
+      if (phaseRef.current !== "closed") {
+        closeNow();
+        panelRef.current?.style.setProperty("--reveal-duration", "0ms");
+        panelRef.current?.setAttribute("data-keyboard-dismiss", "true");
+      }
     }
 
     window.addEventListener("pointermove", handleMove, { passive: true });

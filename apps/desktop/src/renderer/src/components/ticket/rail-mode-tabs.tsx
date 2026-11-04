@@ -60,7 +60,8 @@
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -96,7 +97,7 @@ export function railTabMotion(input: {
   const animated = input.animateSelection && !input.reducedMotion;
   return {
     animated,
-    transition: animated ? { type: "spring", duration: 0.32, bounce: 0.1 } : { duration: 0 },
+    transition: animated ? { type: "spring", duration: 0.24, bounce: 0.1 } : { duration: 0 },
     labelDuration: animated ? 0.14 : 0,
   };
 }
@@ -157,12 +158,7 @@ export function RailModeTabs<K extends string>({
   }
 
   return (
-    <div
-      className={cn(
-        "sticky top-0 z-20 shrink-0 bg-sidebar/70 pt-4 pb-4 backdrop-blur-xl",
-        RAIL_PANEL_INSET,
-      )}
-    >
+    <div className={cn("sticky top-0 z-20 shrink-0 pt-4 pb-4", RAIL_PANEL_INSET)}>
       <div
         role="tablist"
         aria-label={label}
@@ -172,7 +168,7 @@ export function RailModeTabs<K extends string>({
         data-animated={animated}
         // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
         // height (40px), so the track can never disagree with what it holds.
-        className="mx-auto flex w-max max-w-full items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
+        className="mx-auto flex w-max max-w-full items-center gap-1 glass-control rounded-full p-1"
       >
         {modes.map((mode, index) => {
           const Icon = mode.icon;
@@ -209,7 +205,7 @@ export function RailModeTabs<K extends string>({
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
                 selected
-                  ? "bg-accent text-foreground shadow-raised"
+                  ? "bg-(--accent-selected) text-primary-text"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
@@ -241,15 +237,16 @@ export function RailModeTabs<K extends string>({
               </AnimatePresence>
             </motion.button>
           );
-          // The selected tab already wears its name, so its tooltip would only
-          // repeat it — `open={false}` keeps the trigger's accessibility wiring
-          // without ever showing the bubble.
+          // The selected tab wears its name. Keep one uncontrolled tooltip
+          // root and omit its redundant bubble instead of changing control mode.
           return (
-            <Tooltip key={mode.key} open={selected ? false : undefined}>
+            <Tooltip key={mode.key}>
               <TooltipTrigger asChild>{tab}</TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                {mode.label}
-              </TooltipContent>
+              {selected ? null : (
+                <TooltipContent side="bottom" sideOffset={6}>
+                  {mode.label}
+                </TooltipContent>
+              )}
             </Tooltip>
           );
         })}

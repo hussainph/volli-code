@@ -76,7 +76,7 @@ export function peekFrameStyle(position: PeekPosition, width: number): React.CSS
 }
 
 export const PEEK_FRAME =
-  "flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-ui shadow-overlay outline-none";
+  "material-floating flex flex-col overflow-hidden rounded-floating border border-border text-ui outline-none";
 /**
  * Every strip's inset is the card's measured 12px — `RAIL_PANEL_INSET`'s narrow
  * rung on a popover, off the spacing ladder by measurement and recorded in

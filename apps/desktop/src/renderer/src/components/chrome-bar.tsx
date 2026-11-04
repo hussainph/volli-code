@@ -66,12 +66,7 @@ export function ChromeBar() {
           ending ≈70px) plus breathing room so the trigger doesn't crowd them.
           Fullscreen hides the lights, so the spacer collapses and the trigger
           slides to the left edge — same animation the old rail-top-strip used. */}
-        <div
-          className={cn(
-            "shrink-0 transition-[width] duration-300 ease-swift",
-            fullScreen ? "w-2" : "w-[78px]",
-          )}
-        />
+        <div className={cn("shrink-0", fullScreen ? "w-2" : "w-[78px]")} />
         {terminalFocusTarget !== null ? (
           <TerminalFocusBreadcrumb />
         ) : (
@@ -178,7 +173,7 @@ function ProjectRailToggle() {
 
   return (
     <Button
-      variant="ghost"
+      variant="toolbar"
       size="icon-sm"
       // No `aria-pressed`: the label below already carries the state, and the
       // button has no pressed appearance for it to describe. Both together
@@ -205,9 +200,9 @@ function NavHistoryButtons() {
   const forwardEnabled = useProjectUiStore((state) => canGoForward(state.navHistory));
 
   return (
-    <div className="app-region-no-drag flex translate-y-px items-center">
+    <div className="glass-control app-region-no-drag flex translate-y-px items-center rounded-full [&_button]:border-0 [&_button]:bg-transparent [&_button]:shadow-none">
       <Button
-        variant="ghost"
+        variant="toolbar"
         size="icon-sm"
         disabled={!backEnabled}
         onClick={() => navBack()}
@@ -218,7 +213,7 @@ function NavHistoryButtons() {
         <span className="sr-only">Back</span>
       </Button>
       <Button
-        variant="ghost"
+        variant="toolbar"
         size="icon-sm"
         disabled={!forwardEnabled}
         onClick={() => navForward()}
@@ -261,7 +256,7 @@ function TerminalFocusExit() {
 
   return (
     <Button
-      variant="ghost"
+      variant="toolbar"
       size="icon-sm"
       // mr-1 keeps it off the window's right edge; translate-y-px meets the
       // traffic lights, like every other icon button on this band.
@@ -306,6 +301,7 @@ function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
       <div className="app-region-no-drag flex items-center">
         <ProjectRailToggle />
         <SidebarTrigger
+          variant="toolbar"
           size="icon-sm"
           className="[&_svg:not([class*='size-'])]:size-4"
           aria-label="Toggle navigation sidebar"
@@ -331,19 +327,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       aria-haspopup="dialog"
       aria-label="Search tickets, sessions, and commands"
       title="Search tickets, sessions, and commands (⌘K)"
-      //
-      // The fill is a MATERIAL over the canvas rather than a rung of the ladder,
-      // so it is a wash of the ink: `--foreground` runs toward white in dark and
-      // toward black in light, which is the direction a material has to move in
-      // each mode. A literal white lightens a light canvas and disappears.
-      //
-      // THE HOVER IS THE EDGE, not the fill. The wash used to step 6% → 8% on
-      // hover, two rungs of a twenty-step alpha ladder that has since collapsed
-      // to four — and on this ladder the next rung up from the wash (30%) is a
-      // grey patch on the band, not a hover. The border was already doing the
-      // work (`border-border/50` → `border-border`); the fill now holds still at
-      // the one wash rung and lets it.
-      className="app-region-no-drag flex h-[22px] w-[380px] max-w-[40vw] items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="search-capsule app-region-no-drag flex h-control-sm w-[380px] max-w-[40vw] items-center gap-1 px-2 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>

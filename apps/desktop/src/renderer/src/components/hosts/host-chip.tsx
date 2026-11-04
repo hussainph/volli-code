@@ -99,7 +99,7 @@ function EnabledHostChip() {
             type="button"
             aria-label={`Host: ${host.name}${BADGE_WORDS[hostBadge(host) ?? "none"]}`}
             data-slot="host-chip"
-            className="app-region-no-drag ml-1 flex h-7 translate-y-px items-center gap-2 rounded-full pr-2 pl-0.5 text-ui text-foreground transition-colors hover:bg-accent/60 data-[state=open]:bg-accent"
+            className="glass-control app-region-no-drag ml-1 flex h-7 translate-y-px items-center gap-2 rounded-full pr-2 pl-0.5 text-ui text-foreground transition-colors hover:bg-accent/60 data-[state=open]:bg-accent"
           >
             <motion.span
               animate={pulsing ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}

@@ -25,7 +25,10 @@ function at(range: { min: number; max: number }, t: number): number {
 }
 
 function canvasOf(hex: string, patch: Partial<Canvas> = {}): Canvas {
-  return { ...withPrimaryHex(DEFAULT_CANVAS, hex), ...patch };
+  return {
+    ...withPrimaryHex({ ...DEFAULT_CANVAS, stops: [DEFAULT_CANVAS.stops[0]] }, hex),
+    ...patch,
+  };
 }
 
 describe("the foreground flip", () => {

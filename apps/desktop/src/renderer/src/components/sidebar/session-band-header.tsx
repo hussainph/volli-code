@@ -75,10 +75,12 @@ export function SessionBandHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-6 items-center gap-2 px-2">
-      <SectionHeading as="span">{label}</SectionHeading>
+    <div className="flex min-h-control-default items-center gap-2 px-2">
+      <SectionHeading as="span" className="text-sm font-semibold text-foreground">
+        {label}
+      </SectionHeading>
       {count === undefined || count === 0 ? null : (
-        <span data-band-count="" className="text-label tabular-nums text-muted-foreground/70">
+        <span data-band-count="" className="text-label tabular-nums text-muted-foreground">
           {count}
         </span>
       )}
@@ -126,7 +128,7 @@ export function SessionBandFilterMenu({
           style={{ marginRight: -FILTER_GLYPH_NUDGE }}
           className={cn(
             "flex size-5 items-center justify-center rounded-sm ring-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2",
-            narrowed ? "text-foreground" : "text-muted-foreground",
+            narrowed ? "bg-(--accent-selected) text-primary-text" : "text-muted-foreground",
           )}
         >
           {/* `bold` OVERRIDES the audit, which records `regular` for this site

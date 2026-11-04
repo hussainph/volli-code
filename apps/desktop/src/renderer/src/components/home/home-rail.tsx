@@ -173,7 +173,8 @@ export function HomeRail({
     // load-bearing at runtime, and the group class is a utility the compiler
     // owns.
     <div
-      className="group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      className="glass group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      data-tint="true"
       data-testid="home-rail"
       data-volli-rail="home"
       data-narrow={narrow ? "true" : "false"}
