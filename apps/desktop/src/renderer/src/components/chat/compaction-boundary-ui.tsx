@@ -67,8 +67,7 @@ export const CompactionBoundary = React.memo(function CompactionBoundary({
   const copy = compactionBoundaryCopy(compaction);
   const compacted = compaction.outcome === "compacted";
   return (
-    // The whole row hovers to its full sentence: both the reason and the note
-    // clip on a narrow window, and this is the only way back to the rest of one.
+    // The row hovers to its reason, and a failure's clipped detail in full.
     <div className="not-prose flex min-w-0 flex-col gap-1" title={copy.description}>
       <div className="flex min-w-0 items-center gap-2 text-ui">
         {compacted ? (
