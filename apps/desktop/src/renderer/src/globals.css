@@ -1583,7 +1583,15 @@
  * grain, authored stops, positions and layer sizes stay in the production
  * canvas pipeline. Fixed attachment aligns them with html's viewport paint.
  * No permanent backdrop filter over a terminal, transcript or native webview.
- * Local tint variables resolve on each surface, never on the root. */
+ * Local tint variables resolve on each surface, never on the root.
+ *
+ * The window chrome takes no material. The title bar, the project rail and the
+ * gutters around the sidebar and the content card are one surface, the canvas
+ * on `html`, exactly as the elevation tiers already say (`--lift-1` is
+ * `transparent`). A tint on `.app-region-drag` covers only the two boxes that
+ * wear it, the title bar and the rail's column, so the rail's inset, the gap
+ * beside the sidebar and the bottom margin stay raw canvas between two tinted
+ * bands. The on-canvas inks are also scored against the canvas, not a tint. */
 :root,
 .dark,
 .light {
@@ -1591,7 +1599,6 @@
   --material-muted-foreground: var(--muted-foreground);
 }
 .material-clear,
-.app-region-drag,
 [data-slot="tab-strip"] {
   --material-opacity: 50%;
   --material-solid-fill: var(--popover);
@@ -1625,7 +1632,6 @@ table {
   .material-regular,
   .material-thick,
   .material-solid,
-  .app-region-drag,
   [data-slot="tab-strip"],
   .prompt-surface,
   article.bg-card,
@@ -1674,7 +1680,7 @@ article.bg-card {
   contain: paint;
 }
 /* The sidebar is tinted paper now; its own foreground must not inherit the
- * on-canvas ink intended for the clear rail/title bar. The canvas solve stays
+ * on-canvas ink intended for the rail and title bar. The canvas solve stays
  * on chrome; semantic inks stay on regular/thick reading surfaces. */
 [data-volli-sidebar].material-regular {
   --foreground: var(--material-foreground);
@@ -1741,7 +1747,6 @@ article.bg-card {
     .material-floating,
     [cmdk-dialog],
     .toaster [data-sonner-toast].material-floating,
-    .app-region-drag,
     [data-slot="tab-strip"],
     .prompt-surface,
     article.bg-card,
@@ -1768,7 +1773,6 @@ article.bg-card {
     .material-floating,
     [cmdk-dialog],
     .toaster [data-sonner-toast].material-floating,
-    .app-region-drag,
     [data-slot="tab-strip"],
     .prompt-surface,
     article.bg-card,

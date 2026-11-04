@@ -221,10 +221,14 @@ opacity never applies to text or its children. Keep the current radius tokens.
 
 | Material | Tint | Use |
 | --- | --- | --- |
-| `material-clear` | 50% | Rail, title bar and tab chrome over the static canvas |
+| `material-clear` | 50% | Tab chrome over the static canvas |
 | `material-regular` | 76% | Sidebar, cards, composer frame and Settings groups |
 | `material-thick` | 94% | Terminal frame, diff body, transcript, editor and tables |
 | `material-solid` | 100% | Opaque fallback |
+
+The window chrome takes no material: the title bar, the project rail and the
+gutters around the sidebar and the content card are the canvas itself, one
+surface with nothing painted on any part of it.
 
 Static materials paint the complete `--canvas` gradient and grain with fixed
 attachment under their tint. Reuse that variable verbatim; do not copy the stops
