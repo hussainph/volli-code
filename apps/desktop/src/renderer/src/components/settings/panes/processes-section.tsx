@@ -136,12 +136,6 @@ export function RunningProcessesSection() {
     <AsyncSection
       title="Running processes"
       icon={CpuIcon}
-      hint={
-        <>
-          Processes still running under a ticket&rsquo;s worktree with no live Session. Scanning
-          only looks.
-        </>
-      }
       action={
         <SectionIconAction
           label="Look for processes no Session owns"
