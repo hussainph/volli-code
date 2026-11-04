@@ -21,15 +21,13 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
     <Sonner
       theme={appearance}
       className="toaster group"
-      // The one surface in the app where the glyph is MEANT to out-weigh its
-      // sentence: a toast is read as a colour first and a string second, and it
-      // is gone before a second read. Everywhere else outline is the baseline.
-      // The spinner is the exception to the exception — a filled spinner-gap is
-      // a disc with no gap to rotate — so it takes the weight step instead.
+      position="bottom-right"
+      gap={6}
+      // The error is the exception; routine confirmations keep outline glyphs.
       icons={{
-        success: <CheckCircleIcon weight="fill" className="size-4" />,
-        info: <InfoIcon weight="fill" className="size-4" />,
-        warning: <WarningCircleIcon weight="fill" className="size-4" />,
+        success: <CheckCircleIcon className="size-4" />,
+        info: <InfoIcon className="size-4" />,
+        warning: <WarningCircleIcon className="size-4" />,
         error: <XCircleIcon weight="fill" className="size-4" />,
         loading: (
           <SpinnerGapIcon
@@ -44,8 +42,14 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
           ...toastOptions?.classNames,
           toast: cn("material-floating", toastOptions?.classNames?.toast),
           description: cn("!text-muted-foreground", toastOptions?.classNames?.description),
-          actionButton: cn("!cursor-default", toastOptions?.classNames?.actionButton),
-          cancelButton: cn("!cursor-default", toastOptions?.classNames?.cancelButton),
+          actionButton: cn(
+            "!cursor-default !bg-(--accent-selected) !text-primary-text",
+            toastOptions?.classNames?.actionButton,
+          ),
+          cancelButton: cn(
+            "!cursor-default !bg-(--accent-tint) !text-foreground",
+            toastOptions?.classNames?.cancelButton,
+          ),
           closeButton: cn("!cursor-default", toastOptions?.classNames?.closeButton),
         },
       }}
@@ -54,7 +58,7 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--foreground)",
           "--normal-border": "var(--border)",
-          "--border-radius": "var(--radius)",
+          "--border-radius": "var(--radius-menu)",
         } as React.CSSProperties
       }
       {...props}

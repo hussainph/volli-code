@@ -21,6 +21,9 @@ describe("Toaster", () => {
       />,
     );
     expect(captured.props?.theme).toBe("dark");
+    expect(captured.props?.position).toBe("bottom-right");
+    expect(captured.props?.gap).toBe(6);
+    expect(captured.props?.style).toMatchObject({ "--border-radius": "var(--radius-menu)" });
     expect(captured.props?.toastOptions?.classNames?.toast).toBe("material-floating");
     expect(captured.props?.toastOptions?.duration).toBe(6000);
     expect(captured.props?.toastOptions?.classNames?.description).toBe(

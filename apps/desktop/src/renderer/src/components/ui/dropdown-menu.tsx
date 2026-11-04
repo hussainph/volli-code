@@ -77,7 +77,7 @@ function DropdownMenuItem({
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
       data-variant={variant}
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, "plain-menu-row", className)}
       {...props}
     />
   );
@@ -85,8 +85,8 @@ function DropdownMenuItem({
 
 // Checkbox/radio items put the selection indicator TRAILING (right edge)
 // rather than stock shadcn's leading pl-8 gutter: these menus
-// carry their own leading icons (priority bars, tag dots), and an empty
-// check column in front of them read as dead space.
+// reserve the leading axis for labels; an empty check column would add
+// dead space to every unselected item.
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -96,7 +96,7 @@ function DropdownMenuCheckboxItem({
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, "plain-menu-row", className)}
       checked={checked}
       {...props}
     >
@@ -127,7 +127,7 @@ function DropdownMenuRadioItem({
   return (
     <DropdownMenuPrimitive.RadioItem
       data-slot="dropdown-menu-radio-item"
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, "plain-menu-row", className)}
       {...props}
     >
       {children}
@@ -184,11 +184,11 @@ function DropdownMenuSubTrigger({
   return (
     <DropdownMenuPrimitive.SubTrigger
       data-slot="dropdown-menu-sub-trigger"
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, "plain-menu-row", className)}
       {...props}
     >
       {children}
-      <CaretRightIcon weight="bold" className="ml-auto" />
+      <CaretRightIcon data-slot="menu-submenu-caret" weight="bold" className="ml-auto" />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }

@@ -2733,3 +2733,45 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
     --press-scale: 1;
   }
 }
+
+/* Transient controls share flat glass; context menus retain their action glyphs.
+ * Plain command menus show labels and selection marks, not decorative icons.
+ * Nested identity/status content is not a plain command glyph. */
+.plain-menu-row > svg:not([data-slot="menu-submenu-caret"]) {
+  display: none;
+}
+.material-floating,
+[cmdk-dialog],
+.toaster [data-sonner-toast].material-floating {
+  box-shadow: var(--shadow-glass);
+}
+[data-slot="tooltip-content"].material-floating {
+  box-shadow: var(--shadow-glass-small);
+}
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="dialog-overlay"],
+  [data-slot="alert-dialog-overlay"]
+) {
+  animation-timing-function: var(--ease-out);
+}
+[data-slot="alert-dialog-overlay"] {
+  animation-duration: var(--duration-sheet);
+}
+[data-slot="alert-dialog-overlay"][data-state="closed"] {
+  animation-duration: var(--duration-menu-out);
+}
+[data-slot="tooltip-content"][data-state="instant-open"] {
+  animation: none;
+}
+
+/* Sonner retargets its stack with transitions. Do not animate layout height. */
+.toaster [data-sonner-toast] {
+  transition-property: transform, opacity, box-shadow;
+  transition-duration: var(--duration-menu-in);
+  transition-timing-function: var(--ease-out);
+}
+.toaster [data-sonner-toast][data-removed="true"] {
+  transition-duration: var(--duration-menu-out);
+}

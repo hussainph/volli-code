@@ -22,9 +22,9 @@ describe("destination-result row composition", () => {
       (stateClass) => !stateClass.includes(":bg-"),
     ))
       expect(tokens).toContain(token);
-    expect(tokens).toContain("data-[selected=true]:bg-control-secondary");
-    expect(tokens).toContain("data-[selected=true]:ring-border-strong");
-    expect(tokens).toContain("data-[selected=true]:ring-inset");
+    expect(tokens).toContain("data-[selected=true]:bg-(--accent-selected)");
+    expect(tokens).toContain("data-[selected=true]:text-primary-text");
+    expect(tokens).not.toContain("data-[selected=true]:bg-control-secondary");
   });
 
   it("lets the palette take a stacked density without two conflicting insets", () => {

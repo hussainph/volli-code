@@ -71,8 +71,8 @@ export const MENU_SURFACE_MOTION = `${MENU_SURFACE_FADE} ${MENU_SURFACE_ANCHORED
  * own `text-*` — which is also the door a selection mark uses to opt back into
  * the row's ink, see {@link MENU_INDICATOR_MARK}.
  *
- * `rounded-menu-item` is the menu rung minus {@link MENU_SURFACE_PAD}: a
- * concentric highlight, never a pill at the dense 28px row height.
+ * `rounded-menu-item` is the native 5px highlight, never a pill at the
+ * dense 28px row height.
  */
 const MENU_ROW_LAYOUT =
   "relative flex cursor-default items-center gap-2 min-w-0 rounded-menu-item px-2 py-1 text-ui font-medium wrap-anywhere outline-hidden select-none [&>span:not([data-slot])]:min-w-0";
@@ -81,11 +81,11 @@ export const MENU_ROW = `${MENU_ROW_LAYOUT} [&_svg]:pointer-events-none [&_svg]:
 
 /** Radix row states: `focus` is the roving highlight, `data-disabled` a bare attribute. */
 export const MENU_ROW_STATE =
-  "focus:bg-accent focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+  "focus:bg-(--accent-selected) focus:text-primary-text data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 
 /** cmdk row states: a controlled `data-selected`, and `data-disabled="true"`. */
 export const MENU_ROW_STATE_CMDK =
-  "data-[selected=true]:bg-accent data-[selected=true]:text-foreground data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50";
+  "data-[selected=true]:bg-(--accent-selected) data-[selected=true]:text-primary-text data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50";
 
 /**
  * Destination search rows (⌘K / ⌘P) share the concentric menu highlight.
@@ -94,14 +94,11 @@ export const MENU_ROW_STATE_CMDK =
  */
 // Result rows own their glyphs (including nested provenance marks): inheriting
 // MENU_ROW's descendant ink rule would mute a bolt colored by its parent span.
-export const COMMAND_RESULT_ROW = cn(
-  MENU_ROW_LAYOUT,
-  MENU_ROW_STATE_CMDK,
-  "outline-none data-[selected=true]:bg-control-secondary data-[selected=true]:ring-1 data-[selected=true]:ring-border-strong data-[selected=true]:ring-inset",
-);
+export const COMMAND_RESULT_ROW = cn(MENU_ROW_LAYOUT, MENU_ROW_STATE_CMDK, "outline-none");
 
 /** A sub-menu trigger stays lit for as long as the surface it opened is up. */
-export const MENU_ROW_OPEN = "data-[state=open]:bg-accent data-[state=open]:text-foreground";
+export const MENU_ROW_OPEN =
+  "data-[state=open]:bg-(--accent-selected) data-[state=open]:text-primary-text";
 
 /** The destructive row, and its glyph, which the muted-icon rule must not claim. */
 export const MENU_ROW_DESTRUCTIVE =
