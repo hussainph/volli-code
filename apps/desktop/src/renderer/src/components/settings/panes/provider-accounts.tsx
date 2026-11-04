@@ -34,6 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Input } from "@renderer/components/ui/input";
+import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
@@ -113,7 +114,7 @@ function FilteredAccounts({
       title="Available to connect"
       icon={PlugsIcon}
       action={
-        <InputGroup className="w-56">
+        <InputGroup className="search-capsule w-56">
           <InputGroupAddon>
             <MagnifyingGlassIcon />
           </InputGroupAddon>
@@ -247,12 +248,14 @@ function ProviderAccount({
       <ItemRow
         name={provider.label}
         leading={
-          <ModelMark
-            model={{ providerId: provider.id, modelId: "", label: provider.label }}
-            providerLabel={provider.label}
-            by="provider"
-            className="size-4"
-          />
+          <IdentityTile>
+            <ModelMark
+              model={{ providerId: provider.id, modelId: "", label: provider.label }}
+              providerLabel={provider.label}
+              by="provider"
+              className="size-4"
+            />
+          </IdentityTile>
         }
         testId={`account-${provider.id}`}
       >

@@ -2,6 +2,7 @@
 export const SETTINGS_ROWS: Readonly<Record<string, readonly string[]>> = {
   "app:general": ["Zoom", "Diff layout", "Show cost and token usage"],
   "app:appearance": [
+    "Appearance",
     "Style",
     "Motion",
     "Mode",

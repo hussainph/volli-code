@@ -10,6 +10,7 @@ import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-depen
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 import { Button } from "@renderer/components/ui/button";
+import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
@@ -103,12 +104,10 @@ function EmptyProjectsState() {
       data-empty-projects-state
       className={cn("empty-projects-canvas relative flex-1 overflow-hidden", EMPTY_PAGE)}
     >
-      <div className="relative z-10 flex max-w-sm flex-col items-center">
-        {/* The frame is the glyph plus its inset — 20 + 8 + 8 — so a bigger
-            or smaller icon moves the box instead of overflowing a fixed one. */}
-        <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2 shadow-raised">
-          <FolderPlusIcon className="size-5 text-muted-foreground" />
-        </div>
+      <div className="material-thick relative z-10 flex max-w-sm flex-col items-center rounded-sheet border border-border p-6 shadow-glass">
+        <IdentityTile aria-hidden className="mb-4">
+          <FolderPlusIcon className="size-5" />
+        </IdentityTile>
         <h1 className="text-title font-semibold">Add your first project</h1>
         <Button className="mt-6 app-region-no-drag" onClick={() => void pickAndAdd()}>
           Add Project…

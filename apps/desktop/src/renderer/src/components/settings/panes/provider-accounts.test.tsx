@@ -90,6 +90,7 @@ it("shows account marks, compact rows and all providers on request", async () =>
   expect(
     accounts.querySelector('[data-testid="account-azure-openai-responses"] svg path'),
   ).not.toBeNull();
+  expect(accounts.querySelector('[data-slot="identity-tile"] svg')).not.toBeNull();
   expect(available.querySelectorAll('[data-testid^="account-"]')).toHaveLength(5);
   expect(available.querySelectorAll("svg path").length).toBeGreaterThanOrEqual(5);
   expect(host.textContent).not.toContain("Unknown");

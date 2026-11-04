@@ -259,7 +259,7 @@ function HostList({
           density="two-line"
           leading={<HostGlyph os="macos" local />}
           primary="This Mac"
-          secondary={<span className="block truncate text-ui text-muted-foreground/70">Local</span>}
+          secondary={<span className="block truncate text-ui text-muted-foreground">Local</span>}
           onActivate={null}
         />
         <AnimatePresence initial={false}>
@@ -381,7 +381,7 @@ function HostRow({
           <CaretRightIcon
             aria-hidden
             onClick={onOpen}
-            className="size-3.5 shrink-0 text-muted-foreground/70"
+            className="size-3.5 shrink-0 text-muted-foreground"
           />
         </>
       }
