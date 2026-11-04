@@ -203,10 +203,10 @@ describe("Move progress and outcomes", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
   it.each(["backup", "export"] as const)(
-    "explains the uninterruptible snapshot during %s",
+    "carries no explanation of the snapshot during %s",
     async (step) => {
       await mount({ state: "moving", step });
-      expect(container.textContent).toContain("snapshot cannot stop immediately");
+      expect(container.textContent).not.toContain("snapshot cannot stop immediately");
     },
   );
   it("opens the cancel confirmation from the paused banner without mutating first", async () => {

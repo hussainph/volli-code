@@ -354,13 +354,13 @@ try {
       deadline,
     );
     await closeSheet("Close");
-    await wait("Move Project is read-only while it moves to Volli Cloud.");
+    await wait("Moving Move Project to Volli Cloud · Read-only");
     await click("button", "Home", { first: true });
     const navigation = await drive("snapshot");
     assert.ok(
       visibleControls(navigation.text, "button", "Move to Volli Cloud progress").length === 1,
     );
-    assert.ok(navigation.text.includes("Move Project is read-only while it moves to Volli Cloud."));
+    assert.ok(navigation.text.includes("Moving Move Project to Volli Cloud · Read-only"));
     await drive("screenshot", { name: "read-only-banner-and-durable-row" });
     await click("button", "Move to Volli Cloud progress");
     await wait("Moves to Volli Cloud");

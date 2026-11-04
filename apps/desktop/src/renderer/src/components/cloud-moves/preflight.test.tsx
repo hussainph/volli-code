@@ -187,9 +187,9 @@ describe("Move pre-flight", () => {
     ])
       await mount(blip);
     expect(api.preflight).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("Checking projects…");
+    expect(container.textContent).toContain("Checking projects");
     await act(async () => answer.resolve(preflight));
-    expect(container.textContent).not.toContain("Checking projects…");
+    expect(container.textContent).not.toContain("Checking projects");
     expect(button("Move").disabled).toBe(false);
   });
   it("shows the running dry run's project, phase and counts", async () => {
