@@ -32,14 +32,14 @@ describe("DataTable", () => {
           },
         ]}
         filter={activeSourceFilter}
-        empty="No commands yet."
-        noResults="No commands match."
+        empty="No commands"
+        noResults="No commands match"
       />,
     );
 
     expect(html).toContain('aria-label="Filter by source"');
-    expect(html).toContain("No commands match.");
-    expect(html).not.toContain("No commands yet.");
+    expect(html).toContain("No commands match");
+    expect(html).not.toContain("No commands<");
   });
 });
 

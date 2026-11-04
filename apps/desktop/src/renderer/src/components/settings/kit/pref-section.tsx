@@ -17,7 +17,12 @@ export function PrefSection({
 }: {
   title: string;
   icon?: PhosphorIcon;
-  /** Visible section context. A node so it can carry a link. */
+  /**
+   * The one-line trust boundary AGENTS.md allows ("Volli writes an overlay
+   * file and never edits your Ghostty config"): what Volli will and will not
+   * touch, which no control can show. Never explanation, never a tour of the
+   * section — the controls are the explanation.
+   */
   hint?: React.ReactNode;
   action?: React.ReactNode;
   /**

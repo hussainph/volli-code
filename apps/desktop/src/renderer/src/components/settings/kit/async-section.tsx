@@ -75,7 +75,6 @@ export function Empty({ children }: { children: React.ReactNode }) {
 export function AsyncSection<T>({
   title,
   icon,
-  hint,
   action,
   before,
   fill,
@@ -86,7 +85,6 @@ export function AsyncSection<T>({
 }: {
   title: string;
   icon?: PhosphorIcon;
-  hint?: React.ReactNode;
   action?: React.ReactNode;
   /** Content that stays useful while this fetched collection changes state. */
   before?: React.ReactNode;
@@ -105,7 +103,6 @@ export function AsyncSection<T>({
     <PrefSection
       title={title}
       icon={icon}
-      hint={hint}
       action={action}
       fill={fill && state.status === "ready" && !isEmpty?.(state.data)}
     >
@@ -116,7 +113,7 @@ export function AsyncSection<T>({
       ) : null}
       {state.status === "ready" ? (
         isEmpty?.(state.data) ? (
-          <Empty>{empty ?? "Nothing here yet."}</Empty>
+          <Empty>{empty ?? "Nothing yet"}</Empty>
         ) : (
           children(state.data)
         )
