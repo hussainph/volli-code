@@ -495,6 +495,7 @@ export function ComposerForm({
             }
           }}
           placeholder="Ticket title"
+          aria-label="Ticket title"
           className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
         />
         <MonacoDocumentEditor
@@ -556,7 +557,7 @@ export function ComposerForm({
         className="border-t border-border px-6 py-2"
       />
 
-      <ReadOnlyNote projectId={target.id} className="px-6 pt-3" />
+      <ReadOnlyNote projectId={target.id} className="px-6 pt-4" />
       <div className="prompt-toolbar px-6 py-4">
         <ComposerFooter
           projectId={target.id}

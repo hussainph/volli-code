@@ -360,13 +360,24 @@ try {
     const submenu = page.getByRole("menu").nth(1);
     await submenu.waitFor({ timeout: 10000 });
     const items = await submenu.innerText();
+    // Group labels read as their parts — the column, then the mark naming this
+    // Ticket's own — case-folded: how the label lays out and cases those parts
+    // is presentation, while the order is the claim.
+    const headings = await submenu
+      .locator('[data-slot="context-menu-label"]')
+      .evaluateAll((labels) =>
+        labels.map((label) =>
+          [...label.childNodes]
+            .map((part) => part.textContent?.trim() ?? "")
+            .filter(Boolean)
+            .join(" · ")
+            .toLowerCase(),
+        ),
+      );
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
-    // Group labels by line, case-folded: `innerText` follows the label's
-    // text-transform, which is presentation, while the order is the claim.
-    const lines = items.split("\n").map((line) => line.trim().toLowerCase());
-    const ownColumn = lines.indexOf("doing · this ticket");
-    const doneColumn = lines.indexOf("done");
+    const ownColumn = headings.indexOf("doing · this ticket");
+    const doneColumn = headings.indexOf("done");
     return {
       ok:
         items.includes("Review sweep") &&
@@ -376,7 +387,7 @@ try {
         ownColumn < doneColumn &&
         // A card has nowhere to type an Unbound Run, so it offers none.
         !items.includes("Run once"),
-      detail: items.replaceAll("\n", " | ").slice(0, 240),
+      detail: `headings=${JSON.stringify(headings)} ${items.replaceAll("\n", " | ").slice(0, 200)}`,
     };
   });
 

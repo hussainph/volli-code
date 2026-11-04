@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * The ticket rail's Automations block (VC-129): what this Ticket can be made
  * to run, and one press to run it, without leaving the current tab. VC-234
@@ -542,13 +543,17 @@ function AutomationOfferRow({
               setOpen(true);
             }}
             leading={
-              <Bolt
-                weight={row.armed ? "fill" : undefined}
-                className={cn(
-                  "size-4 shrink-0",
-                  row.armed ? "text-primary" : "text-muted-foreground",
-                )}
-              />
+              launch === "pending" ? (
+                <Spinner aria-label="Starting" />
+              ) : (
+                <Bolt
+                  weight={row.armed ? "fill" : undefined}
+                  className={cn(
+                    "size-4 shrink-0",
+                    row.armed ? "text-primary" : "text-muted-foreground",
+                  )}
+                />
+              )
             }
             primary={
               <span className="min-w-24 flex-1 truncate text-ui">{row.automation.name}</span>
@@ -735,7 +740,11 @@ function AutomationInspectContent({
           data-testid="ticket-rail-automation-run"
           onClick={() => onRun(chosen?.selection ?? null)}
         >
-          <PlayIcon weight="fill" className="size-3" />
+          {launch === "pending" ? (
+            <Spinner aria-label="Starting" />
+          ) : (
+            <PlayIcon weight="fill" className="size-3" />
+          )}
           {runLaunchLabel(launch)}
         </Button>
       </div>

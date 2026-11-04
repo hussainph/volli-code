@@ -1,3 +1,4 @@
+import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 
 import { Button } from "@renderer/components/ui/button";
@@ -18,13 +19,14 @@ interface FilterChipOption {
 
 interface FilterChipProps {
   label: string;
+  icon?: React.ReactNode;
   options: readonly FilterChipOption[];
   selected: readonly string[];
   onToggle(value: string): void;
 }
 
 /** Generic multi-select facet chip: a dropdown of checkbox options that stays open per-toggle. */
-export function FilterChip({ label, options, selected, onToggle }: FilterChipProps) {
+export function FilterChip({ label, icon, options, selected, onToggle }: FilterChipProps) {
   const active = selected.length > 0;
   // Reserve the icon slot for every option once any option in this menu has
   // one, so labels stay left-aligned across icon and non-icon rows.
@@ -40,6 +42,7 @@ export function FilterChip({ label, options, selected, onToggle }: FilterChipPro
             active && "border-border-strong text-foreground",
           )}
         >
+          {icon ?? <FunnelIcon aria-hidden />}
           {active ? `${label} · ${selected.length}` : label}
           <CaretDownIcon className="size-3" />
         </Button>

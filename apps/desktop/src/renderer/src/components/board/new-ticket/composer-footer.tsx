@@ -1,3 +1,5 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { OffNote } from "@renderer/components/automations/automation-run-menu";
 import type { AutomationGroup } from "@renderer/components/automations/ticket-rail-automations-model";
@@ -8,6 +10,7 @@ import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -87,7 +90,10 @@ export function ComposerFooter({
           commits did not take. */}
       <div className="flex min-w-0 grow basis-38 flex-wrap items-center gap-1">
         {onAttachFiles === undefined ? null : (
-          <ComposerAttachButton className="prompt-add" onFiles={onAttachFiles} />
+          <ComposerAttachButton
+            className="prompt-add bg-card shadow-raised"
+            onFiles={onAttachFiles}
+          />
         )}
         {launch.kind === "kickoff" ? (
           <>
@@ -100,12 +106,16 @@ export function ComposerFooter({
             role="status"
             className="flex items-center gap-1 px-2 text-ui text-muted-foreground"
           >
-            <LightningIcon className="size-3.5 shrink-0" />
+            {!action.available && !automationOffer.ready ? (
+              <Spinner />
+            ) : (
+              <LightningIcon className="size-3.5 shrink-0" />
+            )}
             {action.available
-              ? "Saved runtime"
+              ? "Saved model"
               : automationOffer.ready
                 ? "Choose an available automation"
-                : "Reading automations…"}
+                : "Reading automations"}
           </span>
         ) : null}
       </div>
@@ -211,25 +221,29 @@ export function CreateRunAutomationItems({
   if (!ready || groups.length === 0) {
     return (
       <div className="px-2 py-1 text-ui text-muted-foreground">
-        {ready ? "No ticket automations in this project." : "Reading automations…"}
+        {ready ? (
+          "No ticket automations in this project."
+        ) : (
+          <LoadingLabel>Reading automations</LoadingLabel>
+        )}
       </div>
     );
   }
   return groups.map((group) => (
-    <div key={group.status}>
-      <DropdownMenuLabel className="text-label text-muted-foreground">
+    <DropdownMenuGroup key={group.status}>
+      <DropdownMenuLabel>
         {group.label}
         {group.current ? " · this column" : ""}
       </DropdownMenuLabel>
       {group.automations.map((automation) => (
         <DropdownMenuRadioItem key={automation.id} value={`automation:${automation.id}`}>
           <LightningIcon />
-          <span className="min-w-0 flex-1 truncate" title={automation.name}>
+          <span className="min-w-0 flex-1 whitespace-normal break-words" title={automation.name}>
             {automation.name}
           </span>
           <OffNote automation={automation} enabledIds={enabledIds} />
         </DropdownMenuRadioItem>
       ))}
-    </div>
+    </DropdownMenuGroup>
   ));
 }

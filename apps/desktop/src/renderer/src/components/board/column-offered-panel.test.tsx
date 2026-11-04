@@ -54,15 +54,13 @@ async function mount(props: Partial<ColumnOfferedPanelProps>): Promise<HTMLEleme
 
 /** Every drawn row, Move only last, as `[name, lit, inert, pointer target]`. */
 function rows(panel: HTMLElement): [string, boolean, boolean, string | null][] {
-  // The panel's own children, less the footer line under them.
-  return [...panel.children]
-    .slice(0, -1)
-    .map((row) => [
-      row.querySelector("span")?.textContent ?? "",
-      row.getAttribute("aria-current") === "true",
-      row.getAttribute("data-offered-row-inert") === "true",
-      row.getAttribute(OFFERED_ROW_ATTRIBUTE),
-    ]);
+  // The panel's own rows (each titled with its label), not the separator or footer.
+  return [...panel.querySelectorAll(":scope > [title]")].map((row) => [
+    row.querySelector("span")?.textContent ?? "",
+    row.getAttribute("aria-current") === "true",
+    row.getAttribute("data-offered-row-inert") === "true",
+    row.getAttribute(OFFERED_ROW_ATTRIBUTE),
+  ]);
 }
 
 beforeEach(() => {
@@ -88,7 +86,7 @@ describe("the Offered panel over the card's own column", () => {
       ["Two-opinion review", false, false, "1"],
       ["Move only", false, false, MOVE_ONLY_ROW],
     ]);
-    expect(panel.textContent).toContain("default");
+    expect(panel.textContent).toContain("Default");
   });
 
   it("dims the origin column's rows, takes them off the pointer, and lights Move only", async () => {
@@ -106,7 +104,7 @@ describe("the Offered panel over the card's own column", () => {
     }
     expect(panel.querySelectorAll('[aria-disabled="true"]')).toHaveLength(ROWS.length);
     // The armed row is no default here: a plain release starts nothing either.
-    expect(panel.textContent).not.toContain("default");
+    expect(panel.textContent).not.toContain("Default");
   });
 
   it("says the same at the compact size, before ⌥ grows it", async () => {

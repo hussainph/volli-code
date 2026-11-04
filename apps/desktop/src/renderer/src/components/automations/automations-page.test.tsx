@@ -10,6 +10,8 @@
  * clicks. A static render would prove the markup and none of the promises.
  */
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
+import { LightningSlashIcon } from "@phosphor-icons/react/dist/csr/LightningSlash";
 import { act, type ComponentProps } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -1127,7 +1129,7 @@ describe("the lane view", () => {
     expect(document.querySelector('[data-lane-row="none:automation-1"]')).not.toBeNull();
   });
 
-  it("calls the disarmed choice No Automation", async () => {
+  it("names the disarmed menu choice No automation", async () => {
     await mount({ automations: [doingOnly] });
     await openLanes();
 
@@ -1137,7 +1139,10 @@ describe("the lane view", () => {
       );
     });
 
-    expect(document.body.textContent).toContain("No Automation");
+    const disarmed = document.querySelector('[data-slot="dropdown-menu-radio-item"]');
+    expect(disarmed?.textContent).toBe("No automation");
+    expect(disarmed?.querySelector("svg")).not.toBeNull();
+    expect(disarmed?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("puts a SCHEDULE record in that lane too, rather than claiming every automation has a column", async () => {
@@ -1283,6 +1288,17 @@ describe("the lane view", () => {
       expect(row.getAttribute("aria-roledescription")).toBe("sortable");
       expect(row.textContent).not.toMatch(/\d/);
     }
+    // Every row's key cap is the keycap rung, digit or not; past the ninth it
+    // keeps its width but not its ink, so the names stay in one column.
+    for (const [index, row] of rows.entries()) {
+      const cap = row.querySelector("kbd");
+      const classes = cap?.className.split(/\s+/) ?? [];
+      expect(classes).toContain("rounded-keycap");
+      expect(classes).not.toContain("rounded-sm");
+      const placeholder = index >= MAX_OFFERED_DIGITS;
+      expect(classes.includes("invisible")).toBe(placeholder);
+      expect(cap?.getAttribute("aria-hidden")).toBe(placeholder ? "true" : null);
+    }
   });
 
   it("stores the rank a drop of a row ranked past the ninth asks for", async () => {
@@ -1352,7 +1368,14 @@ describe("the lane view", () => {
     const menuRow = [...document.querySelectorAll('[data-slot="dropdown-menu-radio-item"]')].find(
       (candidate) => candidate.textContent?.includes("Standards sweep"),
     );
-    expect(menuRow?.textContent).toContain("Manual only");
+    expect(menuRow?.textContent).toBe("Standards sweep");
+    expect(menuRow?.getAttribute("aria-label")).toBe("Standards sweep · Manual only");
+    expect(menuRow?.getAttribute("title")).toBe("Standards sweep · Manual only");
+    const expectedIcon = document.createElement("div");
+    expectedIcon.innerHTML = renderToStaticMarkup(<LightningSlashIcon />);
+    expect(menuRow?.querySelector("svg")?.innerHTML).toBe(
+      expectedIcon.querySelector("svg")!.innerHTML,
+    );
   });
 });
 

@@ -530,7 +530,7 @@ describe("the offer list", () => {
     // The wait is drawn as rows, not as a sentence (VC-406): two skeleton rows
     // before anything has been read, so the first read moves as little as it
     // can and a re-read moves nothing.
-    expect(text()).not.toContain("Reading automations…");
+    expect(text()).not.toContain("Reading automations");
     const unread = document.querySelector('[data-testid="ticket-rail-automations-unread"]');
     expect(unread).not.toBeNull();
     expect(unread?.getAttribute("aria-busy")).toBe("true");
@@ -891,11 +891,11 @@ describe("the pending gate and the failure that earns a retry", () => {
     // pressable and minting a second Session.
     expect(runAutomationOnTicket).toHaveBeenCalledTimes(1);
     expect(runButton().disabled).toBe(true);
-    expect(runButton().textContent).toContain("Starting…");
+    expect(runButton().textContent).toContain("Starting");
     // The row carries the same acknowledgment, so the popover need not stay
     // open to prove the press was heard.
     expect(row("Review sweep").dataset.launch).toBe("pending");
-    expect(row("Review sweep").textContent).toContain("Starting…");
+    expect(row("Review sweep").textContent).toContain("Starting");
 
     await press(runButton());
     expect(runAutomationOnTicket).toHaveBeenCalledTimes(1);
@@ -946,7 +946,7 @@ describe("the pending gate and the failure that earns a retry", () => {
     await press(runButton());
     // The alert belonged to the attempt that produced it.
     expect(document.querySelector('[role="alert"]')).toBeNull();
-    expect(runButton().textContent).toContain("Starting…");
+    expect(runButton().textContent).toContain("Starting");
     await launch.resolve("started");
   });
 

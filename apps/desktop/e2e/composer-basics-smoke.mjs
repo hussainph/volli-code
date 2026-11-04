@@ -10,11 +10,12 @@
  *   • a title input (placeholder "Ticket title") + a Monaco Document Mode
  *     markdown description editor (placeholder "Add description…");
  *   • a metadata chip row, on ONE line: Status ("Backlog"), Priority
- *     ("Medium"), Labels ("Labels"), and the branch relationship — a "Base
- *     branch" chip and a "Working destination" chip (defaulting to a new
- *     worktree, which is what the footer's old Worktree switch bound; the
- *     destination chip is that same `usesWorktree` field named by what it
- *     produces). There is NO terminal-harness picker: it left with the terminal
+ *     ("Medium"), Labels ("Labels"), and the Options popover holding the
+ *     branch relationship — a "Working copy" choice of "New worktree" (the
+ *     default, which is what the footer's old Worktree switch bound; the
+ *     choice is that same `usesWorktree` field named by what it produces) or
+ *     "Project checkout", and a "Base branch" chip shown while it is a
+ *     worktree. There is NO terminal-harness picker: it left with the terminal
  *     kickoff it described (VC-15/VC-56);
  *   • a footer whose left rail carries the model a Create & start will run on.
  *     A fresh profile has no default configured, so the pill reads "Model" and
@@ -95,6 +96,17 @@ async function openComposerViaHeader(page) {
     );
   }
   return opened;
+}
+
+/**
+ * In-page: whether a control (or the option row a radio sits in) ends at least
+ * `inset` px inside the Options popover's right edge, rather than spilling out.
+ */
+function insideOptions(element, inset) {
+  const options = element.closest('[data-slot="popover-content"]');
+  const bounds = options?.getBoundingClientRect();
+  const box = (element.closest("label") ?? element).getBoundingClientRect();
+  return Boolean(bounds && box.right <= bounds.right - inset);
 }
 
 /** Observe the product's reset + focus handoff; never focus the title for it. */
@@ -213,25 +225,30 @@ async function main() {
           .getByRole("button", { name: /^Reasoning effort:/ })
           .count();
         // The branch relationship replaced the footer's Worktree switch: the
-        // destination chip binds the same `usesWorktree` field, and the base
-        // chip is shown only while that destination is a worktree.
+        // Working copy choice binds the same `usesWorktree` field, defaults to a
+        // new worktree, and the base chip is shown only while it is a worktree.
         await composer(page).getByRole("button", { name: "Ticket options" }).click();
-        await page
-          .getByRole("button", { name: "Base branch: fix/worktree-identity-drift" })
-          .waitFor();
+        const baseBranch = page.getByRole("button", {
+          name: "Base branch: fix/worktree-identity-drift",
+        });
+        await baseBranch.waitFor();
         const baseChip = await page.getByRole("button", { name: "Base branch" }).count();
-        const destinationChip = await page
-          .getByRole("button", { name: "Working destination" })
-          .count();
+        const workingCopy = page.getByRole("group", { name: "Working copy", exact: true });
+        const newWorktree = workingCopy.getByRole("radio", { name: "New worktree", exact: true });
+        const projectCheckout = workingCopy.getByRole("radio", {
+          name: "Project checkout",
+          exact: true,
+        });
+        const destinationChoices = (await newWorktree.count()) + (await projectCheckout.count());
+        const defaultsToWorktree =
+          (await newWorktree.isChecked()) && !(await projectCheckout.isChecked());
         const createMore = await page.getByRole("switch", { name: "Create more" }).count();
-        const branchFits = await page
-          .getByRole("button", { name: "Working destination: new worktree" })
-          .evaluate((button) => {
-            const options = button.closest('[data-slot="popover-content"]');
-            const bounds = options?.getBoundingClientRect();
-            const destination = button.getBoundingClientRect();
-            return Boolean(bounds && destination.right <= bounds.right - 8);
-          });
+        // A real branch name wider than the Options row must give up its own
+        // width: neither the base chip nor the chosen destination may spill
+        // past the panel's inner edge.
+        const branchFits =
+          (await baseBranch.evaluate(insideOptions, 8)) &&
+          (await newWorktree.evaluate(insideOptions, 4));
         await page.keyboard.press("Escape");
         const actionPicker = await composer(page)
           .getByRole("button", { name: "Choose what starts" })
@@ -257,7 +274,8 @@ async function main() {
           modelPill === 1 &&
           effortChip === 0 &&
           baseChip === 1 &&
-          destinationChip === 1 &&
+          destinationChoices === 2 &&
+          defaultsToWorktree &&
           branchFits &&
           createMore === 1 &&
           // Plain Create is a visible peer of the primary again, not a menu row.
@@ -266,7 +284,7 @@ async function main() {
           kickoff === 1;
         return {
           ok,
-          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} modelPill=${modelPill} effortChip=${effortChip} base=${baseChip} destination=${destinationChip} branchFits=${branchFits} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
+          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} modelPill=${modelPill} effortChip=${effortChip} base=${baseChip} destinationChoices=${destinationChoices} defaultsToWorktree=${defaultsToWorktree} branchFits=${branchFits} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
         };
       },
     );
