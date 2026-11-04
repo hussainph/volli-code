@@ -32,6 +32,15 @@ import {
   DropdownMenuTrigger,
 } from "./dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "./context-menu";
+import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 
 const source = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
 
@@ -168,7 +177,7 @@ describe("floating material as shipped", () => {
     expect(backdrop(surface)).toBe(BLUR);
   });
 
-  it("gives a submenu over its parent float the solid fill and no second blur", async () => {
+  it("gives a dropdown submenu the same floating blur as its parent", async () => {
     await act(async () =>
       root.render(
         <DropdownMenu open modal={false}>
@@ -185,6 +194,34 @@ describe("floating material as shipped", () => {
     const parent = document.querySelector('[data-slot="dropdown-menu-content"]')!;
     const sub = document.querySelector('[data-slot="dropdown-menu-sub-content"]')!;
     expect(backdrop(parent)).toBe(BLUR);
-    expect(backdrop(sub)).toBe("none");
+    expect(backdrop(sub)).toBe(BLUR);
+  });
+
+  it("gives a context submenu the same floating blur as its parent", async () => {
+    await act(async () =>
+      root.render(
+        <ContextMenu modal={false}>
+          <ContextMenuTrigger>Open</ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuSub open>
+              <ContextMenuSubTrigger icon={ArrowRightIcon}>Move to</ContextMenuSubTrigger>
+              <ContextMenuSubContent>Doing</ContextMenuSubContent>
+            </ContextMenuSub>
+          </ContextMenuContent>
+        </ContextMenu>,
+      ),
+    );
+    await act(async () =>
+      host
+        .querySelector('[data-slot="context-menu-trigger"]')!
+        .dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 10, clientY: 10 }),
+        ),
+    );
+    const parent = document.querySelector('[data-slot="context-menu-content"]')!;
+    const sub = document.querySelector('[data-slot="context-menu-sub-content"]')!;
+    expect(parent.contains(sub)).toBe(false);
+    expect(backdrop(parent)).toBe(BLUR);
+    expect(backdrop(sub)).toBe(BLUR);
   });
 });
