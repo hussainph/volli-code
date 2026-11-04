@@ -57,6 +57,11 @@ describe("Glass primitives", () => {
       'data-size="sm"',
     );
     expect(css).toContain('.identity-tile[data-size="sm"]');
+    // Root material values also need utility registrations for sheet callers.
+    const themeUtilities = css.slice(css.indexOf("@theme inline {"), css.indexOf("@theme {"));
+    expect(themeUtilities).toContain("--radius-sheet: var(--radius-sheet)");
+    expect(themeUtilities).toContain("--shadow-glass: var(--shadow-glass)");
+    expect(themeUtilities).toContain("--shadow-glass-small: var(--shadow-glass-small)");
     for (const [value, expected] of [
       [-1, 0],
       [50, 50],

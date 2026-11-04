@@ -485,6 +485,9 @@
   --shadow-raised: var(--shadow-raised);
   --shadow-card: var(--shadow-card);
   --shadow-overlay: var(--shadow-overlay);
+  --shadow-glass: var(--shadow-glass);
+  --shadow-glass-small: var(--shadow-glass-small);
+  --radius-sheet: var(--radius-sheet);
   /* The overlay wash, as `bg-scrim`. Solved beside the tiers above and for the
    * same reason: a scrim is the window's shadow spread over everything, so it
    * follows the canvas instead of being a neutral `bg-black/N` that a warm
