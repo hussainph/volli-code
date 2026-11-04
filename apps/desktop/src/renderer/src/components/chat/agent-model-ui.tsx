@@ -52,20 +52,21 @@ export function AgentModelLine({
   className?: string;
 }): React.ReactElement | null {
   const facts = agentModelFacts(agent);
-  if (facts === null) return null;
+  if (facts === null || agent.model === null) return null;
   return (
     <span
       data-agent-model=""
       className={cn(
-        "flex min-w-0 items-center gap-1 text-label text-muted-foreground/70",
+        "flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-ui text-muted-foreground",
         className,
       )}
     >
       {/* Catalogue names and marks match the parent composer. The name may
           wrap; the effort remains a distinct setting beside its gauge. */}
-      {agent.model === null ? null : <ResolvedModelName selection={agent.model} />}
-      <GaugeIcon aria-hidden weight="bold" className="size-3 shrink-0" />
-      {/* WHAT THE GAUGE SAYS, SAID. The glyph is what stops `High` reading as
+      <ResolvedModelName selection={agent.model} className="max-w-full" />
+      <span className="inline-flex shrink-0 items-center gap-1">
+        <GaugeIcon aria-hidden weight="bold" className="size-3 shrink-0" />
+        {/* WHAT THE GAUGE SAYS, SAID. The glyph is what stops `High` reading as
           an adjective on the model beside it, and a glyph says nothing to a
           screen reader — read aloud, the line would be "sonnet-4.5 High", the
           exact ambiguity the drawing spent a glyph to remove. So the noun is
@@ -73,8 +74,9 @@ export function AgentModelLine({
           `aria-label` on this span would have been the shorter spelling and the
           wrong one: it is not interactive and carries no role, which is the
           case where a label is free to be ignored. */}
-      <span className="sr-only">Reasoning effort:</span>
-      <span className="shrink-0">{facts.effort}</span>
+        <span className="sr-only">Reasoning effort:</span>
+        <span>{facts.effort}</span>
+      </span>
     </span>
   );
 }

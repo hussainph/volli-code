@@ -50,17 +50,11 @@ export const CompactionProgress = React.memo(function CompactionProgress({
   return (
     <div
       role="status"
+      title={compaction.reason === "manual" ? "Manual compaction" : "Automatic compaction"}
       className="not-prose flex min-w-0 items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-ui"
     >
       <Spinner aria-hidden role="presentation" className="size-4 shrink-0 text-primary" />
-      <div className="min-w-0">
-        <p className="font-medium text-foreground">
-          {compaction.reason === "manual"
-            ? "Compacting context…"
-            : "Compacting context on its own…"}
-        </p>
-        <p className="text-muted-foreground">Preparing a shorter working context</p>
-      </div>
+      <span className="font-medium text-foreground">Compacting context</span>
     </div>
   );
 });
@@ -86,7 +80,6 @@ export const CompactionBoundary = React.memo(function CompactionBoundary({
           <WarningIcon aria-hidden className="size-3.5 shrink-0 text-attention" weight="fill" />
         )}
         <span className="shrink-0 font-medium">{copy.headline}</span>
-        <span className="min-w-0 truncate text-muted-foreground">{copy.reason}</span>
         {/* The rule runs from the label to the count, so the two ends of the
             row are the two things a glance wants and the line is what joins
             them. Only the compacted arm draws one; see the module note. */}
@@ -95,12 +88,8 @@ export const CompactionBoundary = React.memo(function CompactionBoundary({
           <span className="shrink-0 tabular-nums text-muted-foreground">{copy.before}</span>
         )}
       </div>
-      {/* The row's actual job, said once: what a reader scrolling up is looking
-          at. Everything above this line is still here and still true; it is
-          simply not what the model is reading any more. */}
-      <p className="text-ui text-muted-foreground/70">{copy.note}</p>
       {copy.detail === null ? null : (
-        <p className="truncate text-ui text-muted-foreground/70">{copy.detail}</p>
+        <p className="truncate text-ui text-muted-foreground">{copy.detail}</p>
       )}
     </div>
   );

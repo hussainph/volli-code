@@ -337,6 +337,9 @@ describe("the ask-user card", () => {
     const html = drawn(ask([askPrompt({ options: [], custom: true })]));
     expect(html).toContain("<textarea");
     expect(html).not.toContain('role="radio"');
+    // Alone, the box is an answer, not an alternative to rows that are not there.
+    expect(html).toContain('placeholder="Your answer"');
+    expect(html).not.toContain("another answer");
     // No numeral either: a lone box is not one row of a list.
     expect(html).not.toContain(">1</span>");
   });
@@ -498,6 +501,18 @@ function boxes(html: string): string[] {
   return [...html.matchAll(/<textarea[^>]*class="([^"]*)"/g)].map(([, classes]) => classes ?? "");
 }
 
+/**
+ * The markup of one question row — the shared `ListRow` shell, from its opening
+ * tag through its target — carrying this label.
+ */
+function answerRow(html: string, label: string): string {
+  const row = html
+    .split('<div class="group relative')
+    .find((fragment) => fragment.includes(`>${label}</span>`));
+  if (row === undefined) throw new Error(`no answer row labelled ${label}`);
+  return `<div class="group relative${row}`;
+}
+
 /** The markup of the one row carrying this label, out of the list it sits in. */
 function optionRow(html: string, label: string): string {
   const row = html.split("<label").find((fragment) => fragment.includes(`>${label}</span>`));
@@ -573,23 +588,66 @@ describe("the question that stands out of the transcript's way", () => {
 });
 
 describe("the two cards as one family", () => {
-  it("shares row rhythm while framing only the questionnaire choices", () => {
-    // The guarantee this test exists for: the shared row is a string in one
-    // place, and the two cards are different elements around it. Nothing stops
-    // a class being added to one of them and not the other except this.
+  it("composes question choices from the shared list row, unframed", () => {
+    // A question's choices were bespoke framed tiles (rounded-xl, an input
+    // border, an input wash). They are the shared row now: its shell, its
+    // radius, its transparent rest border and its selected fill.
+    const html = drawn(ask([askPrompt()]));
+    const answer = answerRow(html, "release");
+    expect(answer).toContain("rounded-lg border border-transparent px-2");
+    for (const bespoke of ["rounded-xl", "border-input", "bg-input/20", "bg-primary/10"])
+      expect([bespoke, html.includes(bespoke)]).toEqual([bespoke, false]);
+    // Content-height rows: they wrap, so no two-line floor centres a short
+    // option away from the numeral on its first line.
+    for (const label of ["main", "release"]) {
+      expect([label, answerRow(html, label).includes("py-2")]).toEqual([label, true]);
+      expect([label, answerRow(html, label).includes("min-h-13")]).toEqual([label, false]);
+    }
+    // The verdict card keeps its own row over native inputs.
     const verdict = optionRow(
       renderToStaticMarkup(
         <InteractionCard interaction={permission()} onResolve={() => undefined} />,
       ),
       "Allow once",
     );
-    const answer = optionRow(drawn(ask([askPrompt()])), "main");
-    for (const shared of ["gap-2", "py-2", "transition-colors"])
-      expect([shared, verdict.includes(shared), answer.includes(shared)]).toEqual([
-        shared,
-        true,
-        true,
-      ]);
+    expect(verdict).toContain('type="radio"');
+    expect(verdict).not.toContain("group relative");
+  });
+
+  it("keeps a question row's group semantics, roving stop and trailing numeral", () => {
+    const radios = drawn(ask([askPrompt()]));
+    const first = answerRow(radios, "main");
+    const second = answerRow(radios, "release");
+    // The target is a real button carrying the radio role; the shell is not.
+    expect(first).toMatch(/<button type="button"[^>]*role="radio"[^>]*aria-checked="false"/);
+    // Roving: nothing chosen yet, so the first row is the one tab stop.
+    expect(first).toContain('tabindex="0"');
+    expect(second).toContain('tabindex="-1"');
+    expect(first).toContain('data-step-entry="prompt:0"');
+    expect(second).not.toContain("data-step-entry");
+    // The numeral trails the words, top-aligned to the first line.
+    expect(first.indexOf("main</span>")).toBeLessThan(first.indexOf(">1</span>"));
+    expect(first).toMatch(/class="[^"]*self-start[^"]*">1<\/span>/);
+    // A multi-select is a group of checkboxes, each its own stop.
+    const checks = drawn(ask([askPrompt({ multiple: true })]));
+    expect(checks).toContain('role="group"');
+    expect(answerRow(checks, "main")).toMatch(/role="checkbox"[^>]*tabindex="0"/);
+    expect(answerRow(checks, "release")).toMatch(/role="checkbox"[^>]*tabindex="0"/);
+  });
+
+  it("wraps a long option whole rather than truncating it", () => {
+    const long = "Rebase every open branch onto the release tag and rerun the full suite";
+    const html = drawn(
+      ask([
+        askPrompt({
+          options: [{ id: "question:0:bG9uZw", label: long, description: long }],
+        }),
+      ]),
+    );
+    const row = answerRow(html, long);
+    expect(row).toContain(`break-words text-ui font-medium text-foreground">${long}</span>`);
+    expect(row).toContain(`break-words text-ui text-muted-foreground">${long}</span>`);
+    expect(row).not.toContain(`truncate text-ui font-medium">${long}`);
   });
 
   it("keeps the standing grant's down-weighting ink rather than size", () => {
@@ -610,7 +668,7 @@ describe("the two cards as one family", () => {
     expect(once.includes("text-ui font-medium")).toBe(always.includes("text-ui font-medium"));
   });
 
-  it("frames the questionnaire field while leaving the permission field unchanged", () => {
+  it("lets the questionnaire field own its geometry, leaving the permission field unchanged", () => {
     const cases: readonly (readonly [string, string])[] = [
       ["the lone answer", drawn(ask([askPrompt({ options: [], custom: true })]))],
       ["the box beside the options", drawn(ask([askPrompt({ custom: true })]))],
@@ -623,7 +681,23 @@ describe("the two cards as one family", () => {
         what,
         what === "the verdict card's words",
       ]);
-      expect([what, drawnBoxes[0]?.includes("shadow-raised")]).toEqual([what, false]);
+      // The shared field's own lift on a question's box; the verdict card's
+      // borderless words stay flat inside the card's single border.
+      expect([what, drawnBoxes[0]?.includes("shadow-raised")]).toEqual([
+        what,
+        what !== "the verdict card's words",
+      ]);
+    }
+    // The question's box is the shared Textarea as drawn: its corners, its
+    // floor and its inset, with no local rounding, height or wash over them.
+    for (const box of [
+      boxes(drawn(ask([askPrompt({ options: [], custom: true })])))[0] ?? "",
+      boxes(drawn(ask([askPrompt({ custom: true })])))[0] ?? "",
+    ]) {
+      for (const owned of ["rounded-control", "min-h-control-lg", "px-control-pad-default"])
+        expect([owned, box.includes(owned)]).toEqual([owned, true]);
+      for (const override of ["rounded-xl", "min-h-9", "px-4", "bg-input/20", "shadow-none"])
+        expect([override, box.includes(override)]).toEqual([override, false]);
     }
   });
 
@@ -768,6 +842,10 @@ describe("the receipt the card itself shows once a response is sent", () => {
     );
     expect(html).toContain("How much detail do you want?");
     expect(html).toContain("Sent: Detailed");
+    // The clipped heading is revealed by the shared control, not a bare title.
+    expect(html).toContain('data-slot="value-reveal"');
+    expect(html).toContain('aria-label="Question · How much detail do you want?"');
+    expect(html).not.toContain('title="How much detail do you want?"');
     // Announced, because the control that was pressed is gone with the form it
     // stood in and focus has nowhere to hear this from.
     expect(html).toContain('role="status"');

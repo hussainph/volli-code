@@ -28,7 +28,7 @@ export function SessionPeekDialog({
   children?: React.ReactNode | ((closeForNavigation: () => void) => React.ReactNode);
   open: boolean;
   title: string;
-  state?: string;
+  state?: React.ReactNode;
   metadata?: React.ReactNode;
   description?: React.ReactNode;
   openLabel?: string;
@@ -74,17 +74,11 @@ export function SessionPeekDialog({
           target.focus();
         }}
       >
-        <div className="flex shrink-0 flex-col gap-1 border-b border-border py-4 pr-12 pl-4">
+        <div className="relative flex shrink-0 flex-col gap-2 py-4 pr-12 pl-4 after:absolute after:inset-x-[10%] after:bottom-0 after:border-b after:border-border">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <DialogTitle className="min-w-0 flex-1 truncate text-ui font-semibold" title={title}>
+            <DialogTitle className="min-w-0 flex-1 break-words text-heading font-semibold">
               {title}
             </DialogTitle>
-            {state === undefined ? null : (
-              <span data-session-peek-state="" className="text-ui text-muted-foreground">
-                {state}
-              </span>
-            )}
-            {metadata}
             {onOpen === undefined ? null : (
               <Button
                 type="button"
@@ -100,6 +94,19 @@ export function SessionPeekDialog({
               </Button>
             )}
           </div>
+          {state === undefined && metadata === undefined ? null : (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+              {state === undefined ? null : (
+                <span
+                  data-session-peek-state=""
+                  className="inline-flex shrink-0 items-center gap-1 text-ui text-muted-foreground"
+                >
+                  {state}
+                </span>
+              )}
+              {metadata}
+            </div>
+          )}
           {description === undefined ? null : (
             <DialogDescription id={descriptionId} className="text-ui">
               {description}

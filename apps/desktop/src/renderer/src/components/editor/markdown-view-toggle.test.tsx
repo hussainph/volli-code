@@ -31,11 +31,12 @@ describe("MarkdownViewToggle", () => {
     expect(html).toContain('data-testid="file-view-control-band"');
   });
 
-  it("keeps each view's word as its accessible name once it is an icon", () => {
+  it("keeps each view's word visible in the shared segmented control", () => {
     const html = draw("source", PLAIN);
     expect(html).toContain('aria-label="Markdown view"');
     expect(html).toContain("Source");
     expect(html).toContain("Document");
+    expect(html).not.toContain('class="sr-only"');
     expect(html).toContain("<svg");
   });
 

@@ -409,7 +409,7 @@ describe("bundleSummary", () => {
     );
     // Settled kinds stay in the past; only the kind still working moves. This
     // line is the whole report while a turn streams, so it has to say which.
-    expect(summaryText(rows)).toEqual(["Read 2 files, running 1 command…"]);
+    expect(summaryText(rows)).toEqual(["Read 2 files, running 1 command"]);
   });
 
   it("says nothing for a bundle that only thought", () => {
@@ -1603,6 +1603,23 @@ describe("isAwaitingFirstOutput", () => {
 });
 
 describe("reasoningStatus", () => {
+  it("advances to the latest complete OpenAI summary title in the joined channel", () => {
+    const first = "**Checking the reducer**\n\nInspecting the updates.";
+    expect(reasoningStatus(first, { streaming: true }).verb).toBe("Checking the reducer");
+    const next = `${first}\n\n**Testing the scroll range**`;
+    expect(reasoningStatus(next, { streaming: true }).verb).toBe("Testing the scroll range");
+    expect(
+      reasoningStatus(`${next}\n\nLooking at **inline emphasis**.`, { streaming: true }).verb,
+    ).toBe("Testing the scroll range");
+    expect(reasoningStatus(`${next}\n\n**Unfinished`, { streaming: true }).verb).toBe(
+      "Testing the scroll range",
+    );
+    expect(reasoningStatus(next, { streaming: false }).verb).toBe("Testing the scroll range");
+    expect(reasoningStatus(`${next}\n\n**  **\n\nMore context.`, { streaming: true }).verb).toBe(
+      "Testing the scroll range",
+    );
+  });
+
   it("promotes the first bold line to the status verb", () => {
     expect(
       reasoningStatus("**Checking the reducer**\n\nmore text", {
@@ -1620,7 +1637,7 @@ describe("reasoningStatus", () => {
     // verb that is still being written is the layout fight every reference app
     // documents avoiding.
     expect(reasoningStatus("thinking out loud", { streaming: true, durationMs: 9000 })).toEqual({
-      verb: "Thinking…",
+      verb: "Thinking",
       meta: null,
     });
   });
@@ -1649,7 +1666,7 @@ describe("reasoningStatus", () => {
     // `**  **` trims to "", which `??` would keep — rendering a status line
     // carrying a duration and no words.
     expect(reasoningStatus("**  **\nrest", { streaming: true, durationMs: 4000 })).toEqual({
-      verb: "Thinking…",
+      verb: "Thinking",
       meta: null,
     });
     expect(reasoningStatus("**  **\nrest", { streaming: false, durationMs: 23000 })).toEqual({
@@ -1668,7 +1685,7 @@ describe("reasoningStatus", () => {
       meta: null,
     });
     expect(reasoningStatus("plain", { streaming: true })).toEqual({
-      verb: "Thinking…",
+      verb: "Thinking",
       meta: null,
     });
   });

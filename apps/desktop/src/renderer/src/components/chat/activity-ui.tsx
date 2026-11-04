@@ -29,7 +29,6 @@ import {
   MagnifyingGlassIcon,
   PencilSimpleIcon,
   ProhibitIcon,
-  SpinnerGapIcon,
   TerminalWindowIcon,
   UsersThreeIcon,
   WrenchIcon,
@@ -69,6 +68,7 @@ import {
   useBrowserPicture,
 } from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
@@ -335,6 +335,32 @@ function BundleGlyph() {
 const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
 
 /**
+ * The one progress mark in the glyph column, shared by the bundle header, a
+ * running tool row and a live thought. The fixed 14px slot is what layout and
+ * the bundle's visibility arbitration see — never the rotating bounds — and
+ * reduced motion stills the ring in that same slot rather than swapping it, so
+ * the column never shifts. Decorative: the verb beside it already says the work
+ * is in progress, and a second `status` region would repeat it to readers.
+ * `tracked` marks a row's mark for `useVisibleBundleProgress`; the header's own
+ * mark stays untracked.
+ */
+function ProgressGlyph({ tracked = false }: { tracked?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      data-activity-progress={tracked ? "" : undefined}
+      className="flex size-3.5 shrink-0"
+    >
+      <Spinner
+        aria-hidden
+        role="presentation"
+        className="size-full text-primary motion-reduce:animate-none"
+      />
+    </span>
+  );
+}
+
+/**
  * The one glyph a tool row gets.
  *
  * At rest it is the kind icon, which is there to be scanned rather than read —
@@ -371,11 +397,7 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
     case "not-run":
       return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
-      return (
-        <span aria-hidden data-activity-progress className={cn("flex", className)}>
-          <SpinnerGapIcon className="size-full animate-spin text-primary" />
-        </span>
-      );
+      return <ProgressGlyph tracked />;
     case "failed":
       return (
         <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
@@ -1171,14 +1193,7 @@ export const ActivityBundle = React.memo(
           data-slot="activity-bundle-header"
           className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
         >
-          {streaming && (!open || !rowProgressVisible) ? (
-            <SpinnerGapIcon
-              aria-hidden
-              className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
-            />
-          ) : (
-            <BundleGlyph />
-          )}
+          {streaming && (!open || !rowProgressVisible) ? <ProgressGlyph /> : <BundleGlyph />}
           {/* A closed bundle must not hide its live thought behind a finished
               tool summary. Open, the thought already has its own visible row. */}
           {!open && liveThought?.kind === "reasoning" ? (
@@ -1319,9 +1334,7 @@ const ReasoningRow = React.memo(function ReasoningRow({
     <div className="group/row not-prose">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         {progressing ? (
-          <span aria-hidden data-activity-progress className="flex size-3.5 shrink-0">
-            <SpinnerGapIcon className="size-full animate-spin text-primary" />
-          </span>
+          <ProgressGlyph tracked />
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}

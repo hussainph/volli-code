@@ -200,6 +200,17 @@ describe("a chat with no messages on screen", () => {
   it("stands the skeleton down when the read failed, so the failure is what shows", async () => {
     await mountPlane(chatStore({ projection: null, sessionError: "Lost the Session stream" }));
     expect(loading()).toBeNull();
+    expect(emptyState()).toBeNull();
+    const blockers = container?.querySelectorAll('[data-slot="session-blocker"]');
+    expect(blockers).toHaveLength(1);
+    expect(blockers?.[0]?.closest('[role="log"]')).not.toBeNull();
+    expect(blockers?.[0]?.textContent).toContain("Lost the Session stream");
+    // The shared Notice: the message wraps anywhere and long reports clamp
+    // behind Show more rather than truncating.
+    const message = blockers?.[0]?.querySelector("p")?.parentElement;
+    expect(message?.className).toContain("[overflow-wrap:anywhere]");
+    expect(message?.className).toContain("line-clamp-2");
+    expect(message?.className).not.toContain("truncate");
   });
 
   it("gives way to the transcript the moment messages arrive", async () => {
