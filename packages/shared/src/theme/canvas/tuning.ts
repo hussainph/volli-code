@@ -202,7 +202,7 @@ export const ARC_TUNING = {
    * under whichever one wins.
    *
    * Three tiers rather than two, mirroring what the card already has
-   * (`LIGHT_FLOORS` in `floors.ts`): a head, a section/label tier, and a mute.
+   * in `derive.ts`: a head, a section/label tier, and a mute.
    * The canvas needs its own copy because the card's is solved against `--card`
    * and this text does not sit on `--card` — but it needs the same SHAPE, or the
    * sidebar and the paper beside it would rank their copy differently and the

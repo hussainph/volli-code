@@ -1,3 +1,4 @@
+import { Progress } from "@renderer/components/ui/progress";
 import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * The drawings the host surfaces share, ported from the VC-615 lab kit
@@ -202,21 +203,14 @@ export function AutoHeight({ children }: { children: React.ReactNode }) {
 export function ProgressLine({ value, label }: { value: number; label: string }) {
   const timed = useMotionTiming();
   return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(Math.max(0, Math.min(1, value)) * 100)}
-      className="h-1 overflow-hidden rounded-full bg-muted"
-    >
+    <Progress value={Math.round(Math.max(0, Math.min(1, value)) * 100)} aria-label={label}>
       <motion.div
-        className="h-full origin-left rounded-full bg-foreground/80"
+        className="h-full origin-left rounded-full bg-(image:--flow)"
         initial={false}
         animate={{ scaleX: Math.max(0.02, Math.min(1, value)) }}
         transition={timed({ duration: 0.2, ease: "linear" })}
       />
-    </div>
+    </Progress>
   );
 }
 

@@ -12,7 +12,7 @@ const options = [
 ] as const;
 
 describe("Segmented", () => {
-  it("uses filled selected and outline unselected controls, without rewriting on reselect", () => {
+  it("uses a shared thumb and preserves selected and disabled controls, without rewriting on reselect", () => {
     const writes: string[] = [];
     const tree = Segmented({
       ariaLabel: "View",
@@ -23,7 +23,7 @@ describe("Segmented", () => {
     const buttons = React.Children.toArray(tree.props.children) as React.ReactElement<
       React.ComponentProps<typeof Button>
     >[];
-    expect(buttons.map((button) => button.props.variant)).toEqual(["default", "outline"]);
+    expect(buttons.map((button) => button.props.variant)).toEqual(["ghost", "ghost"]);
     expect(buttons.map((button) => button.props["aria-pressed"])).toEqual([true, false]);
     expect(buttons[1].props.disabled).toBe(true);
     buttons[0].props.onClick?.({} as React.MouseEvent<HTMLButtonElement>);

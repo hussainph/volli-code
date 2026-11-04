@@ -144,7 +144,7 @@ export function ListRow({
           {primaryTrailing}
         </span>
         {secondary === undefined ? null : typeof secondary === "string" ? (
-          <span className="block truncate text-ui text-muted-foreground/70">{secondary}</span>
+          <span className="block truncate text-ui text-muted-foreground">{secondary}</span>
         ) : (
           secondary
         )}

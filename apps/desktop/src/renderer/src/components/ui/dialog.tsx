@@ -74,7 +74,7 @@ function DialogContent({
         className={cn(
           // A modal is not anchored to a trigger, so it keeps the centered
           // origin and only the duration/curve are shared with the scrim.
-          "material-floating fixed top-1/2 left-1/2 z-50 flex max-h-[min(80svh,40rem)] w-full flex-col overflow-y-auto overscroll-contain max-w-[calc(100%-2rem)] -translate-1/2 gap-4 rounded-container border border-border bg-background p-4 text-ui [&_label]:font-medium [&_div:has(>[data-slot=input])>span]:font-medium shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "material-floating fixed top-1/2 left-1/2 z-50 flex max-h-[min(80svh,40rem)] w-full flex-col overflow-y-auto overscroll-contain max-w-[calc(100%-2rem)] -translate-1/2 gap-4 rounded-container border border-border bg-background p-4 text-ui [&_label]:font-medium [&_div:has(>[data-slot=input])>span]:font-medium shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className,
         )}
         {...props}

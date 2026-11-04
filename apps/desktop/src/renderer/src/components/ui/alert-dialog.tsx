@@ -52,7 +52,7 @@ function AlertDialogContent({
         data-slot="alert-dialog-content"
         data-size={size}
         className={cn(
-          "material-floating group/alert-dialog-content fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100svh-2rem)] w-full overflow-y-auto overscroll-contain max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-container border bg-background p-4 text-ui shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[size=sm]:max-w-[min(20rem,calc(100vw-2rem))] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[size=default]:sm:max-w-lg",
+          "material-floating group/alert-dialog-content fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100svh-2rem)] w-full overflow-y-auto overscroll-contain max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-container border bg-background p-4 text-ui shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[size=sm]:max-w-[min(20rem,calc(100vw-2rem))] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[size=default]:sm:max-w-lg",
           className,
         )}
         {...props}

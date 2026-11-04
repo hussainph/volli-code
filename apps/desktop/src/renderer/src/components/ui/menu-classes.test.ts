@@ -75,7 +75,7 @@ describe("overlay hierarchy", () => {
     expect(MENU_ROW).toContain("font-medium");
   });
   it("separates the search field without a bottom divider", () => {
-    expect(COMMAND_SEARCH_FIELD).toContain("rounded-control");
+    expect(COMMAND_SEARCH_FIELD).toContain("rounded-full");
     expect(COMMAND_SEARCH_FIELD).toContain("min-w-0");
     expect(COMMAND_SEARCH_FIELD).not.toContain("border-b ");
   });

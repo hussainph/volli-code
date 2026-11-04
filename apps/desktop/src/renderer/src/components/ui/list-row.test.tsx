@@ -45,7 +45,7 @@ describe("ListRow", () => {
 
     expect(twoLine).toContain("font-medium");
     expect(twoLine).toContain("min-h-13");
-    expect(twoLine).toContain("text-muted-foreground/70");
+    expect(twoLine).toContain("text-muted-foreground");
     expect(oneLine).not.toContain("font-medium");
   });
 

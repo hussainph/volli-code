@@ -10,6 +10,7 @@
 import type * as React from "react";
 import type { Icon } from "@phosphor-icons/react";
 
+import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { cn } from "@renderer/lib/utils";
 import { AppGlyph, isAppName } from "./app-glyph";
@@ -90,7 +91,14 @@ export function ItemRow({
   return (
     <ListRow
       density={meta ? "two-line" : "row"}
-      leading={leading ?? (isAppName(name) ? <AppGlyph name={name} /> : undefined)}
+      leading={
+        leading ??
+        (isAppName(name) ? (
+          <IdentityTile>
+            <AppGlyph name={name} />
+          </IdentityTile>
+        ) : undefined)
+      }
       primary={name}
       primaryTrailing={badges}
       secondary={meta}

@@ -206,7 +206,7 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
     <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
         <Button
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           className="app-region-no-drag shrink-0"
           // Sized from the glyph rather than beside it: `icon-sm`'s own
@@ -226,11 +226,11 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
           <UsageLimitsIcon reading={glyph} />
         </Button>
       </PopoverTrigger>
-      <PopoverContent aria-label="Usage limits" align="center" className="w-80 p-0">
+      <PopoverContent tint aria-label="Usage limits" align="center" className="w-80 p-0">
         <div className="usage-instrument flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2">
           <span className="text-ui font-medium">Usage limits</span>
           <Button
-            variant="ghost"
+            variant="toolbar"
             size="icon-sm"
             aria-label="Refresh usage limits"
             title="Refresh"

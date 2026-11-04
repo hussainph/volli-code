@@ -60,7 +60,7 @@ export const MENU_SURFACE_FADE =
  * composes the two halves itself instead of taking {@link MENU_SURFACE_MOTION}.
  */
 export const MENU_SURFACE_ANCHORED =
-  "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95";
+  "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=open]:zoom-in-95";
 
 /** Open and close, shared by every trigger-anchored menu surface. */
 export const MENU_SURFACE_MOTION = `${MENU_SURFACE_FADE} ${MENU_SURFACE_ANCHORED}`;
@@ -158,7 +158,7 @@ export const MENU_SHORTCUT =
 
 /** Shared separated search field and hint strip for cmdk and its two dialogs. */
 export const COMMAND_SEARCH_FIELD =
-  "m-2 flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-control border border-border bg-background px-2 shadow-raised";
+  "search-capsule m-2 flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-full border border-border-strong bg-transparent px-3";
 export const COMMAND_OVERLAY_FRAME =
   "fixed top-[18%] left-1/2 z-50 flex max-h-[calc(82svh-2rem)] w-[min(640px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay outline-none";
 export const COMMAND_FOOTER =

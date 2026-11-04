@@ -190,7 +190,7 @@ function ValueTrigger({
   return (
     <DropdownMenuTrigger asChild>
       <Button
-        variant="outline"
+        variant="inspector"
         disabled={!canWrite}
         className={cn(RAIL_CONTROL, "max-w-full justify-start gap-1.5 pr-2 pl-2.5 font-normal")}
         // The field is in the accessible name because nothing beside the

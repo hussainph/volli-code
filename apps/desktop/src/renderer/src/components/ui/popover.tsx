@@ -97,13 +97,17 @@ function PopoverContent({
   className,
   align = "start",
   sideOffset = 6,
+  tint = false,
+  blur = true,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+}: React.ComponentProps<typeof PopoverPrimitive.Content> & { tint?: boolean; blur?: boolean }) {
   const claimWheel = usePopoverWheelClaim();
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
         data-slot="popover-content"
+        data-tint={tint}
+        data-glass-blur={blur ? undefined : "off"}
         align={align}
         sideOffset={sideOffset}
         className={cn(
@@ -111,7 +115,7 @@ function PopoverContent({
           // loses the specificity fight with `data-[state=open]:animate-in`
           // without it. The full argument is on MENU_SURFACE_FADE in
           // `ui/menu-classes.ts`, which every overlay in this folder follows.
-          "material-floating z-50 max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-4 text-ui text-foreground shadow-overlay ease-out outline-hidden [&>div:has(>[data-slot=popover-header])]:gap-2 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          "material-floating z-50 max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-4 text-ui text-foreground shadow-overlay ease-out outline-hidden [&>div:has(>[data-slot=popover-header])]:gap-2 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           className,
         )}
         {...props}

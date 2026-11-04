@@ -6,13 +6,13 @@ const classes = (variant: "default" | "destructive" | "outline" | "secondary" | 
   new Set(buttonVariants({ variant }).split(/\s+/));
 
 describe("control contrast recipe", () => {
-  it("keeps the solved primary pair opaque at rest and hover", () => {
+  it("uses tonal accent ink and tint at rest and hover", () => {
     const recipe = classes("default");
-    expect(recipe.has("bg-primary")).toBe(true);
-    expect(recipe.has("text-primary-foreground")).toBe(true);
-    expect(recipe.has("hover:shadow-control-hover")).toBe(true);
+    expect(recipe.has("bg-accent")).toBe(true);
+    expect(recipe.has("text-primary-text")).toBe(true);
+    expect(recipe.has("button-tonal")).toBe(true);
     expect([...recipe].some((value) => /(?:hover:)?bg-primary\//.test(value))).toBe(false);
-    expect(renderToStaticMarkup(<Button>New ticket</Button>)).toContain("text-primary-foreground");
+    expect(renderToStaticMarkup(<Button>New ticket</Button>)).toContain("text-primary-text");
   });
 
   it.each(["ghost", "link"] as const)("keeps %s flat at rest, hover and press", (variant) => {
@@ -20,7 +20,7 @@ describe("control contrast recipe", () => {
     expect(classes(variant).has("control-material")).toBe(false);
   });
 
-  it.each(["default", "outline", "secondary", "destructive"] as const)(
+  it.each(["outline", "secondary", "destructive"] as const)(
     "shares the same material and press feedback for %s",
     (variant) => {
       const recipe = classes(variant);

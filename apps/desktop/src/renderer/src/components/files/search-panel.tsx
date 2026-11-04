@@ -303,6 +303,7 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
           <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         </div>
         <Input
+          variant="search"
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
           aria-label="Search files"

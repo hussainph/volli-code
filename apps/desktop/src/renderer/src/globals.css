@@ -247,29 +247,29 @@
 :root.dark {
   color-scheme: dark;
   /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
-  --rail: #170f0b;
-  --background: #1c1310;
-  --card: #211815;
-  --popover: #251b18;
-  --muted: #271d1a;
-  --accent: #2d2220;
-  --sidebar: #211815;
-  --foreground: #e8e4e2;
-  --muted-foreground: #bdbab8;
-  --sidebar-foreground: #d0cdcb;
-  --border: #312623;
-  --border-strong: #423632;
-  --sidebar-border: #2d241f;
+  --rail: #282828;
+  --background: #1e1e1e;
+  --card: #1e1e1e;
+  --popover: #282828;
+  --muted: #282828;
+  --accent: #3e2920;
+  --sidebar: #282828;
+  --foreground: #ededed;
+  --muted-foreground: #bdbdbd;
+  --sidebar-foreground: #ededed;
+  --border: #424242;
+  --border-strong: #5c5c5c;
+  --sidebar-border: #424242;
   /* The canvas accent fill and label solved together for APCA Lc 60 AND
    WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
    to legibility. The pair is shared by both appearances. */
-  --primary: #b85d38;
+  --primary: #cd4d00;
   --primary-foreground: #ffffff;
   /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
-  --primary-text: #fc9a74;
+  --primary-text: #ffc8b2;
   /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
    dilute focus indicators: the shipped control surfaces require 3:1. */
-  --ring: #fc9a74;
+  --ring: #ffc8b2;
   /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.
@@ -277,13 +277,13 @@
    all four read at one weight in either appearance, and each label is
    whichever of white or a near-black tint of its own hue wins on the fill
    — which is why they flip polarity between the two blocks. */
-  --destructive: #ffa49f;
+  --destructive: #ffa5a0;
   --destructive-foreground: #290b0b;
-  --positive: #27d496;
+  --positive: #29d597;
   --positive-foreground: #001c10;
-  --attention: #ffaa2f;
+  --attention: #ffab33;
   --attention-foreground: #221200;
-  --info: #65c6ff;
+  --info: #68c7ff;
   --info-foreground: #001827;
   --radius: 0.75rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
@@ -291,9 +291,9 @@
    rail, so plain transparency would darken it. Each veil is the color that,
    at 10% over the surface named beside it, composites to the opaque token
    above byte-exactly. */
-  --sidebar-veil: rgb(123 105 111 / 0.1);
-  --sidebar-accent-veil: rgb(153 124 131 / 0.1);
-  --sidebar-border-veil: rgb(153 144 121 / 0.1);
+  --sidebar-veil: rgb(40 40 40 / 0.1);
+  --sidebar-accent-veil: rgb(255 50 0 / 0.1);
+  --sidebar-border-veil: rgb(255 255 255 / 0.1);
   /* THE CANVAS ITSELF, and the ten values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
@@ -315,7 +315,7 @@
   --lift-1: transparent;
   --lift-2: rgb(251 241 237 / 0.03);
   /* The card's micro-label tier, between body and secondary. */
-  --label-ink: #d5d1cf;
+  --label-ink: #cecece;
   /* The three shadow tiers: raised on a surface, the card, and overlays. */
   --shadow-raised: 0 1px 2px 0px rgb(2 0 0 / 0.09), 0 2px 7px -1px rgb(2 0 0 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(2 0 0 / 0.075), 0 10px 30px -6px rgb(2 0 0 / 0.18);
@@ -324,6 +324,13 @@
    spread over the whole window instead of pooled under one edge, so it
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(2 0 0 / 0.5);
+  --canvas-accent: #e8652a;
+  --flow: linear-gradient(120deg, #e8652a, #e8652a);
+  --accent-tint: color-mix(in srgb, #e8652a 10%, #1e1e1e);
+  --accent-selected: color-mix(in srgb, #e8652a 18%, #1e1e1e);
+  --tertiary-foreground: #aaaaaa;
+  --glass-fill: #282828;
+  --glass-edge: rgb(0 0 0 / 0.6);
 }
 
 /* Later in the file at equal specificity (0,2,0) to `:root.dark` and higher
@@ -332,29 +339,29 @@
 :root.light {
   color-scheme: light;
   /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
-  --rail: #edd1c6;
-  --background: #fdded2;
-  --card: #f4d4c8;
-  --popover: #f7d8cc;
-  --muted: #eacabd;
-  --accent: #dab9ad;
-  --sidebar: #e2c3b7;
-  --foreground: #120906;
-  --muted-foreground: #514541;
-  --sidebar-foreground: #080302;
-  --border: #d8b6a9;
-  --border-strong: #d5b2a5;
-  --sidebar-border: #ddbbad;
+  --rail: #f6f6f6;
+  --background: #ffffff;
+  --card: #ffffff;
+  --popover: #fafafa;
+  --muted: #f6f6f6;
+  --accent: #fdf1ec;
+  --sidebar: #f6f6f6;
+  --foreground: #272727;
+  --muted-foreground: #555555;
+  --sidebar-foreground: #272727;
+  --border: #dfdfdf;
+  --border-strong: #bcbcbc;
+  --sidebar-border: #dfdfdf;
   /* The canvas accent fill and label solved together for APCA Lc 60 AND
    WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
    to legibility. The pair is shared by both appearances. */
-  --primary: #b85d38;
+  --primary: #cd4d00;
   --primary-foreground: #ffffff;
   /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
-  --primary-text: #9c441e;
+  --primary-text: #862f00;
   /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
    dilute focus indicators: the shipped control surfaces require 3:1. */
-  --ring: #9c441e;
+  --ring: #862f00;
   /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.
@@ -362,13 +369,13 @@
    all four read at one weight in either appearance, and each label is
    whichever of white or a near-black tint of its own hue wins on the fill
    — which is why they flip polarity between the two blocks. */
-  --destructive: #9b1e28;
+  --destructive: #d85959;
   --destructive-foreground: #ffffff;
-  --positive: #005f40;
+  --positive: #009567;
   --positive-foreground: #ffffff;
-  --attention: #764900;
+  --attention: #b77400;
   --attention-foreground: #ffffff;
-  --info: #005880;
+  --info: #008bc5;
   --info-foreground: #ffffff;
   --radius: 0.75rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
@@ -376,9 +383,9 @@
    rail, so plain transparency would darken it. Each veil is the color that,
    at 10% over the surface named beside it, composites to the opaque token
    above byte-exactly. */
-  --sidebar-veil: rgb(127 69 48 / 0.1);
-  --sidebar-accent-veil: rgb(146 95 83 / 0.1);
-  --sidebar-border-veil: rgb(176 115 83 / 0.1);
+  --sidebar-veil: rgb(246 246 246 / 0.1);
+  --sidebar-accent-veil: rgb(255 196 146 / 0.1);
+  --sidebar-border-veil: rgb(16 16 16 / 0.1);
   /* THE CANVAS ITSELF, and the ten values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
@@ -398,9 +405,9 @@
    takes a share of zero — the frame reads as a frame only if it is
    uniform — so it is `transparent` by design, not by omission. */
   --lift-1: transparent;
-  --lift-2: rgb(253 222 210 / 0.175);
+  --lift-2: rgb(255 255 255 / 0.175);
   /* The card's micro-label tier, between body and secondary. */
-  --label-ink: #2f2521;
+  --label-ink: #444444;
   /* The three shadow tiers: raised on a surface, the card, and overlays. */
   --shadow-raised: 0 1px 2px 0px rgb(72 42 30 / 0.09), 0 2px 7px -1px rgb(72 42 30 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(72 42 30 / 0.075), 0 10px 30px -6px rgb(72 42 30 / 0.18);
@@ -409,6 +416,13 @@
    spread over the whole window instead of pooled under one edge, so it
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(72 42 30 / 0.3);
+  --canvas-accent: #e8652a;
+  --flow: linear-gradient(120deg, #e8652a, #e8652a);
+  --accent-tint: color-mix(in srgb, #e8652a 10%, #ffffff);
+  --accent-selected: color-mix(in srgb, #e8652a 18%, #ffffff);
+  --tertiary-foreground: #666666;
+  --glass-fill: #fafafa;
+  --glass-edge: rgb(0 0 0 / 0.11);
 }
 /* GENERATED THEME TOKENS — END */
 
@@ -487,15 +501,14 @@
   /* macOS-feel motion: fast start, long gentle settle (the iOS sheet curve).
    * Used for structural transitions like the sidebar collapse. */
   --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);
-  --font-sans: "Mona Sans Variable", system-ui, -apple-system, sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-  /* Calm rounded rectangles: 6px controls, 10px containers. Dense menus
-   * step down to 8px frames / 4px highlights at their shared 4px inset. */
-  --radius-control: calc(var(--radius) - 2px);
-  --radius-container: calc(var(--radius-control) + 4px);
-  --radius-row: calc(var(--radius-container) - 4px);
-  --radius-menu: calc(var(--radius-control) + 2px);
-  --radius-menu-item: calc(var(--radius-menu) - 4px);
+  --font-sans: var(--ui-font, system-ui, -apple-system, sans-serif);
+  --font-mono: "Space Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  /* Native geometry: 6px controls, 12px containers and menus, 5px menu items. */
+  --radius-control: 6px;
+  --radius-container: 12px;
+  --radius-row: 8px;
+  --radius-menu: 12px;
+  --radius-menu-item: 5px;
   --radius-keycap: calc(var(--radius-menu-item) - 2px);
   --radius-sm: var(--radius-menu-item);
   --radius-md: var(--radius-control);
@@ -539,10 +552,11 @@
   --color-control-destructive: oklch(from var(--destructive) min(l, 0.5) c h);
   --color-control-destructive-foreground: oklch(from var(--destructive-foreground) 0.98 0 h);
   /* One height/inset scale, including attached fields and select triggers. */
-  --spacing-control-xs: 22px;
+  --spacing-control-mini: 16px;
+  --spacing-control-xs: 20px;
   --spacing-control-sm: 24px;
   --spacing-control-default: 28px;
-  --spacing-control-lg: 32px;
+  --spacing-control-lg: 36px;
   --spacing-control-pad-xs: 8px;
   --spacing-control-pad-sm: 8px;
   --spacing-control-pad-default: 10px;
@@ -1594,7 +1608,7 @@
 .prompt-surface,
 article.bg-card,
 section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
-  --material-opacity: 76%;
+  --material-opacity: 100%;
   --material-solid-fill: var(--card);
 }
 .material-thick,
@@ -1607,7 +1621,7 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
 [data-monaco-fallback],
 [data-testid="markdown-preview"],
 table {
-  --material-opacity: 94%;
+  --material-opacity: 100%;
   --material-solid-fill: var(--background);
 }
 .material-solid {
@@ -1729,8 +1743,54 @@ article.bg-card {
 [data-slot="tooltip-content"].material-floating {
   contain: none;
 }
+/* Glass surfaces share viewport coordinates without measuring on every scroll.
+ * --bx/--by can be supplied by a morph host using its captured window offset.
+ * Permanent paper never blurs. Small controls borrow the material without a pass. */
+.glass,
+.material-floating {
+  background: color-mix(in srgb, var(--glass-fill) 90%, transparent);
+  border-color: var(--glass-edge);
+  box-shadow: var(--shadow-glass);
+  color: var(--foreground);
+  backdrop-filter: blur(20px) saturate(1.5);
+}
+.glass[data-tint="true"],
+.material-floating[data-tint="true"],
+.material-regular,
+.glass-tinted {
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--glass-fill) 90%, transparent),
+      color-mix(in srgb, var(--glass-fill) 90%, transparent)
+    ),
+    var(--canvas);
+  background-size: 100vw 100vh;
+  background-position: var(--bx, 0px) var(--by, 0px);
+  background-attachment: fixed;
+}
+/* Hard blur budget: no nested passes, and no pass during a pour/morph. */
+:is(.glass, .material-floating) :is(.glass, .material-floating),
+[data-glass-blur="off"],
+[data-glass-blur="off"] :is(.glass, .material-floating) {
+  backdrop-filter: none !important;
+}
+/* Opaque neutral content: never sample the mesh through reading surfaces. */
+.material-thick,
+.material-solid,
+[data-volli-surface],
+[role="log"].bg-background,
+[data-diff-fit],
+.prompt-surface,
+article.bg-card,
+section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
+  background: var(--material-solid-fill, var(--card));
+  background-attachment: scroll;
+  box-shadow: none;
+}
+
 @supports not (backdrop-filter: blur(1px)) {
   :is(
+    .glass,
     .material-clear,
     .material-regular,
     .material-thick,
@@ -1752,11 +1812,12 @@ article.bg-card {
     [data-testid="markdown-preview"],
     table
   ) {
-    background: var(--material-solid-fill);
+    background: var(--material-solid-fill, var(--glass-fill)) !important;
   }
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   :is(
+    .glass,
     .material-clear,
     .material-regular,
     .material-thick,
@@ -1778,8 +1839,8 @@ article.bg-card {
     [data-testid="markdown-preview"],
     table
   ) {
-    background: var(--material-solid-fill);
-    backdrop-filter: none;
+    background: var(--material-solid-fill, var(--glass-fill)) !important;
+    backdrop-filter: none !important;
   }
 }
 
@@ -2342,4 +2403,331 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   transition:
     opacity 200ms var(--ease-out),
     filter 200ms var(--ease-out);
+}
+
+/* Volli Glass geometry and motion are shared, not canvas-authored. */
+:root {
+  --radius-sheet: 14px;
+  --radius-floating: 20px;
+  --radius-card: 10px;
+  --radius-column: 16px;
+  --glass-gap: 6px;
+  --duration-menu-in: 160ms;
+  --duration-menu-out: 110ms;
+  --duration-sheet: 220ms;
+  --duration-press: 120ms;
+  --press-scale: 0.97;
+  --shadow-glass: 0 4px 16px rgb(0 0 0 / 0.055), 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-glass-small: 0 1px 3px rgb(0 0 0 / 0.06);
+  --spring-smooth: linear(
+    0,
+    0.0139,
+    0.0495,
+    0.0995,
+    0.1582,
+    0.2215,
+    0.2864,
+    0.3507,
+    0.4129,
+    0.472,
+    0.5273,
+    0.5786,
+    0.6256,
+    0.6685,
+    0.7073,
+    0.7423,
+    0.7736,
+    0.8015,
+    0.8263,
+    0.8483,
+    0.8677,
+    0.8848,
+    0.8998,
+    0.913,
+    0.9246,
+    0.9347,
+    0.9435,
+    0.9511,
+    0.9578,
+    0.9636,
+    0.9686,
+    0.9729,
+    0.9767,
+    0.98,
+    0.9828,
+    0.9852,
+    0.9873,
+    0.9891,
+    0.9906,
+    0.992,
+    0.9931,
+    0.9941,
+    0.995,
+    0.9957,
+    0.9963,
+    0.9968,
+    0.9973,
+    0.9977,
+    0.998
+  );
+  --duration-smooth: 270ms;
+  --spring-snappy: linear(
+    0,
+    0.007,
+    0.026,
+    0.0544,
+    0.0899,
+    0.1307,
+    0.1751,
+    0.2218,
+    0.2698,
+    0.3182,
+    0.3661,
+    0.4131,
+    0.4587,
+    0.5026,
+    0.5445,
+    0.5842,
+    0.6217,
+    0.6568,
+    0.6896,
+    0.7201,
+    0.7484,
+    0.7744,
+    0.7983,
+    0.8202,
+    0.8402,
+    0.8584,
+    0.8749,
+    0.8898,
+    0.9032,
+    0.9153,
+    0.9261,
+    0.9358,
+    0.9444,
+    0.9521,
+    0.9589,
+    0.9649,
+    0.9702,
+    0.9748,
+    0.9789,
+    0.9824,
+    0.9855,
+    0.9882,
+    0.9905,
+    0.9924,
+    0.9941,
+    0.9955,
+    0.9967,
+    0.9978,
+    0.9986
+  );
+  --duration-snappy: 225ms;
+  --spring-bouncy: linear(
+    0,
+    0.0126,
+    0.0462,
+    0.0952,
+    0.1549,
+    0.2214,
+    0.2916,
+    0.3629,
+    0.4333,
+    0.5014,
+    0.566,
+    0.6264,
+    0.6821,
+    0.7327,
+    0.7783,
+    0.8188,
+    0.8545,
+    0.8856,
+    0.9123,
+    0.9351,
+    0.9542,
+    0.9701,
+    0.9831,
+    0.9936,
+    1.0018,
+    1.0081,
+    1.0127,
+    1.016,
+    1.0182,
+    1.0194,
+    1.0199,
+    1.0198,
+    1.0192,
+    1.0183,
+    1.0172,
+    1.0159,
+    1.0145,
+    1.0131,
+    1.0117,
+    1.0103,
+    1.009,
+    1.0078,
+    1.0066,
+    1.0056,
+    1.0047,
+    1.0038,
+    1.0031,
+    1.0024,
+    1.0019
+  );
+  --duration-bouncy: 380ms;
+}
+:root.dark {
+  --shadow-glass: 0 6px 20px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.22);
+  --shadow-glass-small: 0 1px 3px rgb(0 0 0 / 0.25);
+}
+/* Flat faces. Tonal primary has a same-hue sheen, never a grey bevel. */
+[data-control="button"].control-material {
+  box-shadow: var(--shadow-glass-small);
+  background-image: none;
+}
+.button-tonal {
+  background-image: linear-gradient(
+    150deg,
+    color-mix(in srgb, var(--canvas-accent) 8%, transparent),
+    transparent 65%
+  );
+}
+[data-control="button"]:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(var(--press-scale));
+}
+/* Keyboard-triggered activation and navigation are immediate. */
+[data-control="button"]:focus-visible:active {
+  transform: none;
+}
+.glass-control {
+  background: color-mix(in srgb, var(--glass-fill) 90%, transparent);
+  border: 0.5px solid var(--glass-edge);
+  border-radius: 999px;
+  box-shadow: var(--shadow-glass-small);
+}
+.inspector-popup {
+  height: var(--spacing-control-default);
+  min-height: var(--spacing-control-default);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding-inline: 0;
+  justify-content: flex-start;
+}
+.search-capsule {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+.segmented {
+  border-radius: 999px;
+  background: var(--accent-tint);
+}
+.segmented::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: calc((100% - 4px) / var(--segment-count));
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--shadow-glass-small);
+  transform: translateX(calc(var(--segment-index) * 100%));
+}
+.segmented[data-pointer-motion="true"]::before {
+  transition: transform var(--duration-snappy) var(--spring-snappy);
+}
+.segmented > [data-control="button"] {
+  position: relative;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+.segmented > [aria-pressed="true"] {
+  color: var(--primary-text);
+}
+.identity-tile {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  align-self: center;
+  border-radius: 9px;
+  corner-shape: squircle;
+  background: var(--accent-tint);
+  color: var(--primary-text);
+}
+:is(
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="popover-content"]
+) {
+  border-radius: var(--radius-menu);
+  animation-duration: var(--duration-menu-in);
+  animation-timing-function: var(--ease-out);
+}
+:is(
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="popover-content"]
+)[data-state="closed"] {
+  animation-duration: var(--duration-menu-out);
+}
+:is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  border-radius: var(--radius-sheet);
+  animation-duration: var(--duration-sheet);
+}
+[data-slot="dialog-overlay"] {
+  animation-duration: var(--duration-sheet);
+}
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="dialog-overlay"],
+  [data-slot="alert-dialog-overlay"]
+)[data-state="closed"] {
+  animation-duration: var(--duration-menu-out);
+}
+[data-control="button"] {
+  transition-duration: var(--duration-press);
+}
+:root[data-motion="off"] {
+  --duration-snappy: 0ms;
+  --duration-smooth: 0ms;
+  --duration-bouncy: 0ms;
+  --duration-menu-in: 0ms;
+  --duration-menu-out: 0ms;
+  --duration-sheet: 0ms;
+  --duration-press: 0ms;
+  --press-scale: 1;
+}
+:root[data-motion="off"] *,
+:root[data-motion="off"] *::before,
+:root[data-motion="off"] *::after {
+  animation-duration: 0ms !important;
+  transition-duration: 0ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-snappy: 0ms;
+    --duration-smooth: 0ms;
+    --duration-bouncy: 0ms;
+    --duration-menu-in: 0ms;
+    --duration-menu-out: 0ms;
+    --duration-sheet: 0ms;
+    --duration-press: 0ms;
+    --press-scale: 1;
+  }
 }

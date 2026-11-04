@@ -1,34 +1,5 @@
-/**
- * The segmented control: a small closed set, all of it on screen, one member
- * selected.
- *
- * Promoted out of `theme/segmented-choice.tsx`, whose own header called the
- * board's view toggle and the diff presentation toggle "the same shape", warned
- * that "three copies of it would be three places for the pressed-state contract
- * to drift", and then extracted only its own two. There were four by the time
- * this file was written, and a fifth in the harness picker that had drifted far
- * enough to be unrecognisable as the same object — raw `<button>`s with
- * `aria-current`, no press, and **no focus ring at all**. That is the tell: a
- * segmented control is a row of buttons, and every hand-rolled row of buttons
- * re-implements the parts of `ui/button.tsx` its author remembered.
- *
- * Re-selecting the active segment is a NO-OP, and that is a contract rather
- * than an optimisation. Each surface's segments mean a different stored write —
- * "Custom" re-entered while already Custom would re-run the entry write and
- * could silently replace what the user had chosen.
- *
- * WHAT IT IS NOT. `orientation` and `shape` are deliberately absent. The audit
- * named a vertical rotation in `pages/settings-shell.tsx`; that is a `<nav>` of
- * `aria-current="page"` category rows with icons and full-width targets — a
- * place you go, not a value you set, and rotating this control would have made
- * it lie about what it does. `shape` was proposed for the two toggles that draw
- * rounded rectangles inside a bordered track; `docs/DESIGN.md` says a control
- * takes the shared 8px radius and bakes that into the button primitive, so a rectangle
- * axis here would be a second control language, not a variant of this one.
- * `stopPropagation` was proposed for the composer's effort segment, which no
- * longer exists — effort is a slider in a popover now (`chat/composer-effort-ui.tsx`),
- * and nothing else in the app puts a segmented control inside a menu item.
- */
+/** A closed choice with one shared sliding thumb; keyboard changes are instant. */
+import type { CSSProperties } from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 
 import { Button } from "@renderer/components/ui/button";
@@ -79,7 +50,26 @@ export function Segmented<Key extends string>({
       role="group"
       aria-label={ariaLabel}
       data-testid={testId}
-      className={cn("flex items-center gap-1", className)}
+      data-slot="segmented"
+      onPointerDown={(event) => {
+        event.currentTarget.dataset.pointerMotion = "true";
+      }}
+      onKeyDown={(event) => {
+        event.currentTarget.dataset.pointerMotion = "false";
+      }}
+      style={
+        {
+          "--segment-count": options.length,
+          "--segment-index": Math.max(
+            0,
+            options.findIndex((option) => option.key === value),
+          ),
+        } as CSSProperties
+      }
+      className={cn(
+        "segmented relative isolate inline-grid grid-flow-col auto-cols-fr items-center p-0.5",
+        className,
+      )}
     >
       {options.map((option) => {
         const Icon = option.icon;
@@ -88,7 +78,7 @@ export function Segmented<Key extends string>({
           <Button
             key={option.key}
             size={iconOnly ? (size === "sm" ? "icon" : "icon-lg") : size}
-            variant={active ? "default" : "outline"}
+            variant="ghost"
             aria-pressed={active}
             title={iconOnly ? option.label : undefined}
             data-choice={option.key}
@@ -97,7 +87,7 @@ export function Segmented<Key extends string>({
               if (!active) onChange(option.key);
             }}
           >
-            {Icon ? <Icon weight={active ? "fill" : "regular"} /> : null}
+            {Icon ? <Icon /> : null}
             {iconOnly ? <span className="sr-only">{option.label}</span> : option.label}
           </Button>
         );

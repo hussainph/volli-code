@@ -107,6 +107,13 @@ export const CANVAS_TOKEN_NAMES = [
   LABEL_VARIABLE,
   ...Object.values(SHADOW_VARIABLES),
   SCRIM_VARIABLE,
+  "--canvas-accent",
+  "--flow",
+  "--accent-tint",
+  "--accent-selected",
+  "--tertiary-foreground",
+  "--glass-fill",
+  "--glass-edge",
 ] as const;
 
 export type CanvasTokenName = (typeof CANVAS_TOKEN_NAMES)[number];
@@ -180,6 +187,13 @@ export function deriveCanvasPaint(
       "--shadow-card": elevation.shadows.card,
       "--shadow-overlay": elevation.shadows.overlay,
       [SCRIM_VARIABLE]: elevation.scrim,
+      "--canvas-accent": canvas.stops[0].hex,
+      "--flow": `linear-gradient(120deg, ${canvas.stops.map((stop) => stop.hex).join(", ")}${canvas.stops.length === 1 ? `, ${canvas.stops[0].hex}` : ""})`,
+      "--accent-tint": `color-mix(in srgb, ${canvas.stops[0].hex} 10%, ${tokens["--card"]})`,
+      "--accent-selected": `color-mix(in srgb, ${canvas.stops[0].hex} 18%, ${tokens["--card"]})`,
+      "--tertiary-foreground": resolved === "light" ? "#666666" : "#aaaaaa",
+      "--glass-fill": resolved === "light" ? "#fafafa" : "#282828",
+      "--glass-edge": resolved === "light" ? "rgb(0 0 0 / .11)" : "rgb(0 0 0 / .6)",
     },
   };
 }

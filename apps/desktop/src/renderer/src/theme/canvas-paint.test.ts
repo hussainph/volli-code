@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_CANVAS,
+  wcagContrast,
   THEME_TOKEN_NAMES,
   canvasBackground,
   deriveCanvasTokens,
@@ -76,6 +77,30 @@ describe("deriveCanvasPaint", () => {
     for (const name of CANVAS_TOKEN_NAMES) expect(canvasTokens[name].length).toBeGreaterThan(0);
     expect(canvasTokens["--lift-1"]).toBe("transparent");
   });
+
+  it.each(["light", "dark"] as const)(
+    "%s exposes accent, flow and legible glass tokens",
+    (mode) => {
+      for (const canvas of [
+        DEFAULT_CANVAS,
+        TEAL,
+        { ...TEAL, stops: [...TEAL.stops, { hex: "#e0457b", x: 0.8, y: 0.2 }] },
+      ]) {
+        const { canvasTokens } = deriveCanvasPaint(canvas, mode);
+        expect(canvasTokens["--canvas-accent"]).toBe(canvas.stops[0].hex);
+        expect(canvasTokens["--flow"]).toContain(canvas.stops[0].hex);
+        expect(canvasTokens["--flow"]).toContain("linear-gradient");
+        expect(canvasTokens["--glass-fill"]).toBe(mode === "light" ? "#fafafa" : "#282828");
+        for (const surface of mode === "light"
+          ? ["#ffffff", "#f6f6f6", "#e1e1e1"]
+          : ["#1e1e1e", "#282828", "#3e3e3e"]) {
+          expect(
+            wcagContrast(canvasTokens["--tertiary-foreground"], surface),
+          ).toBeGreaterThanOrEqual(3);
+        }
+      }
+    },
+  );
 
   it("carries the gradient the shared pipeline paints, verbatim", () => {
     const { canvasTokens } = deriveCanvasPaint(TEAL, "light");

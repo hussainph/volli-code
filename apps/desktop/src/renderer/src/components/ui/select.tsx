@@ -36,10 +36,12 @@ function SelectValue({ ...props }: React.ComponentProps<typeof SelectPrimitive.V
 function SelectTrigger({
   className,
   size = "default",
+  variant = "regular",
   children,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Trigger> & {
   size?: "sm" | "default";
+  variant?: "regular" | "inspector";
 }) {
   return (
     <SelectPrimitive.Trigger
@@ -51,6 +53,7 @@ function SelectTrigger({
         // keeps the keyboard ring — button.tsx's quiet recipe, not a field one.
         "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring",
         FIELD_INVALID,
+        variant === "inspector" && "inspector-popup",
         className,
       )}
       {...props}
