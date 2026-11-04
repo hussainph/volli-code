@@ -39,9 +39,9 @@ const buttonVariants = cva(
       // a bordered button outgrows the icon button fused beside it.
       size: {
         default: `${CONTROL_SIZE.default} h-auto min-h-control-default py-0.5 text-ui`,
-        xs: `${CONTROL_SIZE.xs} h-auto min-h-control-xs px-control-pad-default py-0 gap-1 text-ui [&_svg:not([class*='size-'])]:size-3`,
-        sm: `${CONTROL_SIZE.sm} h-auto min-h-control-sm py-px gap-1 text-ui [&_svg:not([class*='size-'])]:size-3.5`,
-        lg: `${CONTROL_SIZE.lg} h-auto min-h-control-lg py-1`,
+        xs: `${CONTROL_SIZE.xs} h-auto min-h-control-xs rounded-control-mini px-control-pad-default py-0 gap-1 text-ui leading-4 [&_svg:not([class*='size-'])]:size-3`,
+        sm: `${CONTROL_SIZE.sm} h-auto min-h-control-sm rounded-control-small py-px gap-1 text-ui [&_svg:not([class*='size-'])]:size-3.5`,
+        lg: `${CONTROL_SIZE.lg} h-auto min-h-control-lg rounded-full py-1`,
         icon: "size-control-default",
         "icon-xs": "size-control-xs [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-control-sm [&_svg:not([class*='size-'])]:size-3.5",

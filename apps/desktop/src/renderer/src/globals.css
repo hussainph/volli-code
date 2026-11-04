@@ -504,6 +504,8 @@
   --font-sans: var(--ui-font, system-ui, -apple-system, sans-serif);
   --font-mono: "Space Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   /* Native geometry: 6px controls, 12px containers and menus, 5px menu items. */
+  --radius-control-mini: 4px;
+  --radius-control-small: 5px;
   --radius-control: 6px;
   --radius-container: 12px;
   --radius-row: 8px;
