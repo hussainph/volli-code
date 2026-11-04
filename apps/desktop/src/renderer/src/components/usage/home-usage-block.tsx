@@ -1,6 +1,5 @@
-/** Home usage: a token-led Instrument footer pinned beneath Now. The coloured
- * bar stays visible; the bounded RailFold keeps attribution above the trigger.
- * Store reads and the fold preference live in usage-rail.tsx. */
+/** One pinned spend reading for the project/session inspector. Accounting and
+ * the time-window control unfold into a bounded scroller, never a dashboard. */
 import { ChartDonutIcon } from "@phosphor-icons/react/dist/csr/ChartDonut";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { ReceiptIcon } from "@phosphor-icons/react/dist/csr/Receipt";
@@ -26,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
-import { UsageBar } from "@renderer/components/usage/usage-bar";
+import { UsageClassRows } from "@renderer/components/usage/usage-bar";
 import {
   UsageBreakdown,
   UsageBreakdownFact,
@@ -116,10 +115,7 @@ export function HomeUsageFooter({
 
   return (
     <RailFold asChild open={open} onOpenChange={onOpenChange}>
-      <footer
-        data-testid="home-usage-footer"
-        className={cn(RAIL_FOOTER, "usage-instrument", className)}
-      >
+      <footer data-testid="home-usage-footer" className={cn(RAIL_FOOTER, className)}>
         {/* The body comes BEFORE the row in the DOM: it opens upward. */}
         <RailFoldBody>
           <div
@@ -136,7 +132,12 @@ export function HomeUsageFooter({
                 value={usageWindow}
                 onValueChange={(value) => onWindowChange(value as UsageWindow)}
               >
-                <SelectTrigger size="sm" aria-label="Usage window" className="w-auto gap-2">
+                <SelectTrigger
+                  variant="inspector"
+                  size="sm"
+                  aria-label="Usage window"
+                  className="w-auto gap-2"
+                >
                   <FunnelIcon weight="bold" className="size-3" />
                   <SelectValue />
                 </SelectTrigger>
@@ -149,6 +150,7 @@ export function HomeUsageFooter({
                 </SelectContent>
               </Select>
             </div>
+            <UsageClassRows summary={summary} />
             <div className="flex flex-col gap-2">
               {cached === null ? null : (
                 <UsageBreakdownFact label="Cached input share" value={cached} />
@@ -202,11 +204,6 @@ export function HomeUsageFooter({
             <RailFoldCaret open={open} placement="footer" />
           </button>
         </RailFoldTrigger>
-        {tokens > 0 ? (
-          <div className={cn(RAIL_PANEL_INSET, "pb-4")}>
-            <UsageBar summary={summary} />
-          </div>
-        ) : null}
       </footer>
     </RailFold>
   );

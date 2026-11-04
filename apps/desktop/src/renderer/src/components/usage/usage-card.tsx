@@ -1,5 +1,4 @@
-/** Props-in usage cards and breakdowns. Tokens lead the Instrument face; costs keep
- * their coverage qualifier. The colour bar opens class details independently. */
+/** Cost leads the glance; exact tokens and attribution stay available on demand. */
 import type * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -34,7 +33,7 @@ import {
  * than a row, so it cannot take that constant and takes this half of it.
  */
 const USAGE_CARD_PRESSABLE =
-  "outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
+  "outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
 
 /** The width every one of the card's popovers opens at, matching the rail's others. */
 const USAGE_POPOVER = "w-72 p-4";
@@ -49,10 +48,7 @@ export function UsageCard({
   className?: string;
 }) {
   return (
-    <section
-      data-testid={testId}
-      className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN, "usage-instrument", className)}
-    >
+    <section data-testid={testId} className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN, className)}>
       {children}
     </section>
   );
@@ -93,21 +89,21 @@ export function UsageCostFigure({
   );
 }
 
-/** Tokens lead; money gives way to a second line before either value clips. */
+/** Spend answers the decision; tokens are the quiet measure of workload. */
 export function UsageSummaryFigure({ summary }: { summary: SessionUsageSummary }) {
   return (
-    <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+    <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+      <UsageCostFigure summary={summary} className="text-ui font-semibold text-foreground" />
       <UsageTokenCount
         tokens={totalUsageTokens(summary)}
         unit
-        className="whitespace-nowrap text-ui font-semibold text-foreground"
+        className="whitespace-nowrap text-label text-muted-foreground"
       />
-      <UsageCostFigure summary={summary} className="text-ui text-muted-foreground" />
     </span>
   );
 }
 
-/** One token-led header and a noninteractive bar inside its inspection trigger. */
+/** One cost-led inspection target, without a meter that implies an allowance. */
 export function UsageCardHero({
   name,
   cost,
@@ -138,17 +134,28 @@ export function UsageCardHero({
           )}
         >
           <span className="flex w-full flex-wrap items-baseline gap-2">
-            <UsageTokenCount tokens={tokens} unit className="flex-1 text-heading font-semibold" />
-            <UsageCostFigure summary={summary} className="text-ui text-muted-foreground" />
+            <UsageCostFigure
+              summary={summary}
+              className="text-heading font-semibold text-foreground"
+            />
+            <UsageTokenCount
+              tokens={tokens}
+              unit
+              className="flex-1 text-label text-muted-foreground"
+            />
             <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
           </span>
-          {tokens > 0 ? <UsageBar summary={summary} interactive={false} /> : null}
         </button>
       </PopoverTrigger>
       {/* Radix gives its content `role="dialog"`, and a dialog with no
           accessible name is announced as an unnamed one — the heading inside is
           not associated with it. The trigger's own subject names it. */}
-      <PopoverContent aria-label={name} align="start" side="left" className={USAGE_POPOVER}>
+      <PopoverContent
+        aria-label={name}
+        align="start"
+        side="left"
+        className={cn(USAGE_POPOVER, "max-h-96 overflow-y-auto overscroll-contain")}
+      >
         {children}
       </PopoverContent>
     </Popover>
@@ -186,7 +193,7 @@ export function UsageCardRow({
           type="button"
           data-testid={testId}
           aria-label={ariaLabel}
-          className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent/50")}
+          className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent")}
         >
           <Icon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{label}</span>
@@ -196,7 +203,12 @@ export function UsageCardRow({
           <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent aria-label={label} align="start" side="left" className={USAGE_POPOVER}>
+      <PopoverContent
+        aria-label={label}
+        align="start"
+        side="left"
+        className={cn(USAGE_POPOVER, "max-h-96 overflow-y-auto overscroll-contain")}
+      >
         {children}
       </PopoverContent>
     </Popover>
@@ -313,7 +325,12 @@ export function UsageRankRow({ row }: { row: UsageGroupRow }) {
  */
 export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
   const model = row.model ?? null;
-  if (model === null) return <span className="min-w-0 truncate">{row.label}</span>;
+  if (model === null)
+    return (
+      <span className="min-w-0 truncate" title={row.label}>
+        {row.label}
+      </span>
+    );
   return (
     <>
       <ModelMark model={model.model} providerLabel={model.providerLabel} />
