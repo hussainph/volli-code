@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { WorkingCopyReading, WorkingCopyMeasurement } from "@volli/shared";
 
 import { ChatEmptyState } from "./chat-empty-state";
@@ -36,17 +36,19 @@ function draw(node: React.ReactElement): string {
  * inherit) and lands on the state the test drew.
  */
 let mounted: { root: Root; host: HTMLElement } | null = null;
-function mount(node: React.ReactElement, reading: WorkingCopyReading): string {
+async function mount(node: React.ReactElement, reading: WorkingCopyReading): Promise<string> {
   Object.assign(window, {
     api: { workingCopy: { snapshot: vi.fn().mockResolvedValue({ ok: true, reading }) } },
   });
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  act(() => root.render(<TooltipProvider>{node}</TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider>{node}</TooltipProvider>));
   mounted = { root, host };
   return host.innerHTML;
 }
+
+beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
 
 afterEach(async () => {
   if (mounted !== null) {
@@ -62,6 +64,7 @@ afterEach(async () => {
   Reflect.deleteProperty(window, "api");
   useWorkingCopyStore.setState({ byScope: {} });
   useUiStore.setState({ homeEmptyVisual: "streak" });
+  vi.unstubAllGlobals();
 });
 
 describe("WorkingCopyVisual", () => {
@@ -157,8 +160,25 @@ describe("ChatEmptyState", () => {
     expect(markup).toContain('data-empty-visual="streak"');
     expect(markup).toContain("empty-visual-picker");
     expect(markup).toContain("Streak");
-    expect(markup).toContain("Board");
-    expect(markup).toContain("Venue");
+    expect(markup).toContain('aria-haspopup="menu"');
+    expect(markup).not.toContain('role="group"');
+    expect(markup).not.toContain("data-next-action");
+  });
+
+  it("keeps every alternate reading reachable through the visual menu", async () => {
+    await mount(<ChatEmptyState projectId="p1" ticketId={null} />, { state: "pending" });
+    const trigger = mounted?.host.querySelector<HTMLElement>('[data-testid="empty-visual-picker"]');
+    await act(async () => {
+      trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+    expect(items.map((item) => item.textContent)).toEqual(["Streak", "Board", "Venue"]);
+    expect(items[0]?.getAttribute("aria-checked")).toBe("true");
+    await act(async () => {
+      items[1]?.click();
+    });
+    expect(useUiStore.getState().homeEmptyVisual).toBe("board");
+    expect(mounted?.host.querySelector('[data-empty-visual="board"]')).not.toBeNull();
   });
 
   it("offers a Ticket Session no menu at all, and none of Home's fields", () => {
@@ -178,7 +198,7 @@ describe("ChatEmptyState", () => {
     expect(markup).not.toContain('data-empty-visual="venue"');
   });
 
-  it("draws the waiting shape, not the main checkout, for a ticket still resolving its worktree (VC-286)", () => {
+  it("draws the waiting shape, not the main checkout, for a ticket still resolving its worktree (VC-286)", async () => {
     useWorkingCopyStore.setState({
       byScope: {
         // The project's own reading exists and is the main checkout — the
@@ -191,7 +211,9 @@ describe("ChatEmptyState", () => {
       },
     });
 
-    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, { state: "pending" });
+    const markup = await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+      state: "pending",
+    });
 
     expect(markup).toContain('data-working-copy-state="resolving"');
     expect(markup).not.toContain("Main checkout");
@@ -199,12 +221,12 @@ describe("ChatEmptyState", () => {
     expect(markup).not.toContain('data-empty-visual="venue"');
   });
 
-  it("draws the working copy once the ticket's checkout is measured", () => {
+  it("draws the working copy once the ticket's checkout is measured", async () => {
     useWorkingCopyStore.setState({
       byScope: { [workingCopyKey("p1", "t1")]: { status: "ready", workingCopy: workingCopy() } },
     });
 
-    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+    const markup = await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
       state: "measured",
       workingCopy: workingCopy(),
     });

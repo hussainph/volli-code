@@ -54,6 +54,11 @@ describe("PaneEmptyState", () => {
   it("offers the five verbs, in the order the surface answers them", () => {
     render();
 
+    for (const row of rows()) {
+      expect(row.dataset.control).toBe("button");
+      expect(row.dataset.variant).toBe("ghost");
+      expect(row.className).toContain("focus-visible:ring-ring");
+    }
     expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual([
       "New chat",
       "New terminal",
