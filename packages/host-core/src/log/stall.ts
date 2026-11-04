@@ -38,7 +38,8 @@
  * - **Many short spans, summed.** Lag no single span explains, but which
  *   short spans since the previous tick account for at least half of, is
  *   logged as `attribution: "aggregate"` naming the operation that ran
- *   longest (`spanMs`, `spanCount`, and `coveredMs` for every span).
+ *   longest (`spanMs`, `spanCount`, and `coveredMs` for every span). Tallies
+ *   keep callers separate and name the parent span or requesting async door.
  *
  * Every tick's lag also goes into a histogram, and once an hour (and once
  * more when the monitor stops) a `main stall load` line rolls the window up: stall count, loop-delay p95
@@ -56,6 +57,7 @@ import {
 } from "node:perf_hooks";
 
 import {
+  logContext,
   observeMainSpans,
   withRootLogContext,
   type MainSpan,
@@ -151,6 +153,8 @@ interface DoorLoad {
 interface TickLoad {
   readonly door: string;
   readonly operation: string;
+  readonly parentDoor?: string;
+  readonly parentOperation?: string;
   count: number;
   ms: number;
 }
@@ -184,9 +188,18 @@ function share(part: number, whole: number): number {
 
 /** The parent hint: the span this one ran inside, when there is one. */
 function parentHint(span: MainSpan): { parentDoor?: string; parentOperation?: string } {
-  return span.parent === null
-    ? {}
-    : { parentDoor: span.parent.door, parentOperation: span.parent.operation };
+  if (span.parent !== null) {
+    return { parentDoor: span.parent.door, parentOperation: span.parent.operation };
+  }
+  // Synchronous frames end at the first await, but the door's context follows
+  // its continuations. A roster read must still name the operation that asked
+  // for it after yielding, rather than losing its caller at every chunk.
+  const context = logContext();
+  return span.kind !== "door" &&
+    typeof context.door === "string" &&
+    typeof context.operation === "string"
+    ? { parentDoor: context.door, parentOperation: context.operation }
+    : {};
 }
 
 /**
@@ -247,10 +260,24 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
     lastSpan = span;
     lastSpanAt = now();
     tickCoveredMs += selfMs;
-    const key = `${span.door}\u0000${span.operation}`;
+    const parent = parentHint(span);
+    // Separate callers of the same inner operation: otherwise an aggregate
+    // could blame one door for work another door did in the same tick.
+    const key = JSON.stringify([
+      span.door,
+      span.operation,
+      parent.parentDoor,
+      parent.parentOperation,
+    ]);
     const tally = tickLoads.get(key);
     if (tally === undefined) {
-      tickLoads.set(key, { door: span.door, operation: span.operation, count: 1, ms: selfMs });
+      tickLoads.set(key, {
+        door: span.door,
+        operation: span.operation,
+        ...parent,
+        count: 1,
+        ms: selfMs,
+      });
     } else {
       tally.count += 1;
       tally.ms += selfMs;
@@ -260,7 +287,7 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
     const durationMs = Math.round(syncMs);
     if (span.kind === "door") {
       // Inside the call's own context: the line carries its trace, door and operation.
-      log.warn("main stall", { durationMs, attribution: "door", thresholdMs, ...parentHint(span) });
+      log.warn("main stall", { durationMs, attribution: "door", thresholdMs, ...parent });
     } else {
       log.warn("main stall", {
         durationMs,
@@ -269,7 +296,7 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
         door: span.door,
         operation: span.operation,
         ...(span.sessionId === undefined ? {} : { sessionId: span.sessionId }),
-        ...parentHint(span),
+        ...parent,
       });
     }
     count(span.door, span.operation, durationMs);
@@ -339,6 +366,9 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
         operation: top.operation,
         spanMs: Math.round(top.ms),
         spanCount: top.count,
+        ...(top.parentDoor === undefined
+          ? {}
+          : { parentDoor: top.parentDoor, parentOperation: top.parentOperation }),
         coveredMs: Math.round(tickCoveredMs),
       });
       count(top.door, top.operation, durationMs);

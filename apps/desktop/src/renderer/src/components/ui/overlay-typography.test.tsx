@@ -26,7 +26,14 @@ import {
   PopoverScrollBody,
   PopoverTrigger,
 } from "./popover";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "./dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "./dropdown-menu";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./context-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { Command } from "./command";
@@ -201,6 +208,32 @@ describe("UI typography defaults", () => {
 });
 
 describe("overlay layout contracts", () => {
+  it("portals a submenu out of the parent float that would clip it, keeping the nested fill", async () => {
+    await act(async () =>
+      root.render(
+        <DropdownMenu open modal={false}>
+          <DropdownMenuTrigger>Open menu</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuSub open>
+              <DropdownMenuSubTrigger>Move to</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>Doing</DropdownMenuSubContent>
+            </DropdownMenuSub>
+          </DropdownMenuContent>
+        </DropdownMenu>,
+      ),
+    );
+    const parent = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    const sub = document.querySelector('[data-slot="dropdown-menu-sub-content"]')!;
+    expect(sub).not.toBeNull();
+    // `material-floating` contains paint: a descendant submenu is drawn clipped
+    // to the parent's box, so it must not be one.
+    expect(styles).toMatch(/\.material-floating,[^{]*\{[^}]*contain:\s*paint/);
+    expect(parent.contains(sub)).toBe(false);
+    expect(sub.classList.contains("material-floating")).toBe(true);
+    const nested = styles.match(/([^{}]*)\{[^}]*backdrop-filter:\s*none !important/)?.[1] ?? "";
+    expect(nested).toContain('[data-slot$="menu-sub-content"].material-floating');
+    expect(sub.getAttribute("data-slot")?.endsWith("menu-sub-content")).toBe(true);
+  });
   it("bounds dialog content and reserves title room for its close action", async () => {
     await act(async () =>
       root.render(

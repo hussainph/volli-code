@@ -116,13 +116,19 @@ function renderAnchor(
   visible = true,
   paneId = "pane-a",
   onClose = vi.fn(),
+  onHide = vi.fn(),
 ): void {
   act(() => {
     root.render(
       <>
         {key !== null && (
           <div key={key} data-pane-id={paneId}>
-            <BrowserPaneAnchor tabId="opaque-tab-a" visible={visible} onClose={onClose} />
+            <BrowserPaneAnchor
+              tabId="opaque-tab-a"
+              visible={visible}
+              onClose={onClose}
+              onHide={onHide}
+            />
           </div>
         )}
         <ResidentBrowserPanes api={api} />
@@ -237,8 +243,13 @@ it("shows both pair members and hides only the anchor whose surface becomes inac
     act(() =>
       root.render(
         <>
-          <BrowserPaneAnchor tabId="opaque-tab-a" visible={firstVisible} onClose={() => {}} />
-          <BrowserPaneAnchor tabId="opaque-tab-b" visible onClose={() => {}} />
+          <BrowserPaneAnchor
+            tabId="opaque-tab-a"
+            visible={firstVisible}
+            onClose={() => {}}
+            onHide={() => {}}
+          />
+          <BrowserPaneAnchor tabId="opaque-tab-b" visible onClose={() => {}} onHide={() => {}} />
           <ResidentBrowserPanes api={api} />
         </>,
       ),
@@ -283,8 +294,8 @@ it("unmounts only on removal or leaving strip presentation, not unrelated store 
 
 describe("browser viewport registry", () => {
   it("keeps snapshots stable and old cleanup cannot clear a replacement anchor", () => {
-    const first = { anchor: document.createElement("div"), close: vi.fn() };
-    const second = { anchor: document.createElement("div"), close: vi.fn() };
+    const first = { anchor: document.createElement("div"), close: vi.fn(), hide: vi.fn() };
+    const second = { anchor: document.createElement("div"), close: vi.fn(), hide: vi.fn() };
     const changed = vi.fn();
     const unsubscribe = subscribeBrowserViewports(changed);
     const empty = browserViewportSnapshot();
@@ -343,4 +354,35 @@ it("routes native-page chords through the current surface without remounting the
   );
   expect(latestClose).toHaveBeenCalledTimes(1);
   expect(mounted).toHaveBeenCalledTimes(1);
+});
+
+describe("Hide to Island (VC-1118)", () => {
+  const hideButton = () =>
+    host.querySelector<HTMLButtonElement>('button[aria-label="Hide to Island"]');
+
+  it("routes a Session tab's chrome control through the surface lending it bounds", () => {
+    receive(tab({ createdBy: "session", ownerSessionId: "ses-a" }));
+    const staleHide = vi.fn();
+    const latestHide = vi.fn();
+    renderAnchor("home", true, "home-pane", vi.fn(), staleHide);
+    renderAnchor("ticket", true, "ticket-pane", vi.fn(), latestHide);
+
+    act(() => hideButton()!.click());
+
+    expect(latestHide).toHaveBeenCalledOnce();
+    expect(staleHide).not.toHaveBeenCalled();
+    expect(mounted).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers nothing on a person's tab, and nothing once no surface draws the tab", () => {
+    receive(tab());
+    renderAnchor("home");
+    expect(address()).not.toBeNull();
+    expect(hideButton()).toBeNull();
+
+    receive(tab({ createdBy: "session", ownerSessionId: "ses-a" }));
+    expect(hideButton()).not.toBeNull();
+    renderAnchor(null);
+    expect(hideButton()).toBeNull();
+  });
 });

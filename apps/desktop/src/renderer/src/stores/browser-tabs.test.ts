@@ -6,6 +6,7 @@ import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import {
   browserTabDisplayTitle,
   browserTabOwnerLabel,
+  hidesToIsland,
   sessionBrowserTabs,
   stripBrowserTabs,
   hydrateBrowserTabs,
@@ -152,6 +153,14 @@ describe("strip and inventory selection (VC-238)", () => {
     ];
 
     expect(stripBrowserTabs(tabs).map((one) => one.tabId)).toEqual(["person", "promoted"]);
+  });
+
+  it("sends only a Session's own tab back to the Island, never a person's (VC-1118)", () => {
+    expect(hidesToIsland(agent("promoted", "s1", "tab"))).toBe(true);
+    expect(hidesToIsland(tab({ tabId: "person" }))).toBe(false);
+    // The host stamps an owner on every Session tab; one without is no
+    // Island's to list, so it is not offered either.
+    expect(hidesToIsland(tab({ createdBy: "session", ownerSessionId: null }))).toBe(false);
   });
 
   it("lists a Session's own tabs and its children's, in every presentation, and nobody else's", () => {
