@@ -392,9 +392,9 @@ interface UiState {
    */
   settingsSignInProviderId: string | null;
   /**
-   * A Configure pane someone asked for by name, or null (VC-303).
+   * A legacy project-settings pane someone asked for by name, or null (VC-303).
    *
-   * Configure owns its own selected pane, so this is a REQUEST rather than a
+   * Settings owns its own selected pane, so this is a REQUEST rather than a
    * mirror of it: ⌘K sets it, the page takes it — on mount, or while already
    * on screen — and spends it ({@link UiState.consumeConfigureCategory}), so
    * a later visit opens wherever the page itself would. Session-only.
@@ -487,9 +487,9 @@ interface UiState {
    * anyway — not an auth flow.
    */
   consumeSettingsSignIn(): void;
-  /** Ask Configure to show one pane; the page spends it on arrival. */
+  /** Open Settings on a named agent or project pane; the page spends it on arrival. */
   requestConfigureCategory(key: string): void;
-  /** Spend {@link UiState.configureCategory} — the Configure page took it. */
+  /** Spend {@link UiState.configureCategory} — Settings took it. */
   consumeConfigureCategory(): void;
   setNewTicketOpen(open: boolean): void;
   /** Show one closed Session's saved record. Replaces whichever was open. */
@@ -623,7 +623,13 @@ export function createUiStore(storage?: StateStorage) {
             settingsSignInProviderId: signInProviderId ?? null,
           }),
         consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
-        requestConfigureCategory: (key) => set({ configureCategory: key }),
+        requestConfigureCategory: (key) =>
+          set({
+            configureCategory: key,
+            settingsOpen: true,
+            settingsCategory: null,
+            settingsSignInProviderId: null,
+          }),
         consumeConfigureCategory: () => set({ configureCategory: null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         openSessionDetail: (projectId, sessionId) =>

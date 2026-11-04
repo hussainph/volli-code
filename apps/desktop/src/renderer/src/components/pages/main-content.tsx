@@ -1,10 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
 import { CloudMoveReadOnlyBanner } from "@renderer/components/cloud-moves/cloud-moves";
-import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
 import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
@@ -24,7 +23,13 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   const selected = useSelectedProject();
   const pending = useProjectsStore((state) => state.pendingRemoteSelection);
   const projectCount = useProjectsStore((state) => state.projects.length);
-  const [activeNav] = useActiveNav();
+  const [activeNav, setActiveNav] = useActiveNav();
+  // Old navigation-history entries redirect; Configure is no longer a page.
+  useEffect(() => {
+    if (activeNav !== "configure") return;
+    useUiStore.getState().requestConfigureCategory("overview");
+    setActiveNav("home");
+  }, [activeNav, setActiveNav]);
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const settingsCategory = useUiStore((state) => state.settingsCategory);
   const settingsSignInProviderId = useUiStore((state) => state.settingsSignInProviderId);
@@ -32,8 +37,8 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
   // Home hosts the layer that owns every live PTY terminal in the app, so it is
   // ALWAYS mounted and merely hidden via CSS — switching nav, switching
-  // projects, or opening Settings must not tear its terminals down. Configure
-  // and Settings are stateless, so they keep plain conditional rendering.
+  // projects, or opening Settings must not tear its terminals down. Settings
+  // has no process lifetime, so it keeps plain conditional rendering.
   const homeVisible = !settingsOpen && selected !== null && activeNav === "home";
 
   if (override !== undefined) {
@@ -73,10 +78,8 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           <div className={cn("flex-1", EMPTY_PAGE)}>
             <p className="text-sm text-muted-foreground">Select a project</p>
           </div>
-        ) : activeNav === "configure" ? (
-          <ConfigurePage />
         ) : activeNav === "automations" ? (
-          // Stateless like Configure, so plain conditional rendering: nothing
+          // Plain conditional rendering: nothing
           // on this page owns a live PTY, and it re-reads its record on mount.
           <AutomationsOnly projectId={selected.id}>
             <AutomationsPage />

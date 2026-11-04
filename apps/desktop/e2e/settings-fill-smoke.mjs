@@ -55,15 +55,14 @@ async function measure(page) {
   });
 }
 
-// Configure and Settings share one shell and one rail, named "Settings
-// categories"; the scope switch at the top of the rail says which half is
-// showing. Project scope is the one where "All projects" is not pressed.
+// One Settings rail; Skills is a shared inventory in the app scope.
 const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
 
-const openConfigure = async (page, category) => {
-  await page.getByRole("button", { name: "Configure", exact: true }).first().click();
+const openAgentSettings = async (page, category) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   const nav = settingsRail(page);
-  await nav.getByRole("button", { name: "All projects", pressed: false }).waitFor();
+  await nav.getByRole("button", { name: "All projects", exact: true }).click();
+  await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
   await nav.getByRole("button", { name: category, exact: true }).click();
   await page.locator("table").first().waitFor();
 };
@@ -90,8 +89,8 @@ try {
   }
   await seedProjects(page, [{ id: "fill-p1", name: "Fill Fixture", path: repo, prefix: "FF" }]);
 
-  await must(1, "Configure → Skills: the table fills more than the old 8-row cap", async () => {
-    await openConfigure(page, "Skills");
+  await must(1, "Settings → Skills: the table fills more than the old 8-row cap", async () => {
+    await openAgentSettings(page, "Skills");
     const m = await measure(page);
     if (!m) return { ok: false, detail: "no table found" };
     // The old cap was 8 rows * 36px + 32px header = 320px.

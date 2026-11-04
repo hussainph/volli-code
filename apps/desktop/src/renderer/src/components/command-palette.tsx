@@ -48,6 +48,7 @@ import {
   type PaletteScopeId,
   type PaletteSectionId,
 } from "@renderer/components/command-palette-search";
+import { activatePaletteNavigation } from "@renderer/components/command-palette-navigation";
 import { configureGroups } from "@renderer/components/settings/configure-groups";
 import { canGoToLine, runGoToLine } from "@renderer/editor/go-to-line";
 import { openAddHostSheet, openHostsSettings } from "@renderer/components/hosts/host-entry";
@@ -129,27 +130,6 @@ const NAVIGATION_ICONS: Record<
   configure: SlidersHorizontalIcon,
   settings: GearSixIcon,
 };
-
-/**
- * One Go to row's page of `projectId`: Home, the Board tab in a view, or
- * Configure (on a named pane). Settings is app-wide and opened by the row
- * itself; with no project selected the model offers no other row.
- */
-function goToProjectPage(item: CommandPaletteNavigationItem, projectId: string | null): void {
-  if (projectId === null) return;
-  const projectUi = useProjectUiStore.getState();
-  if (item.id === "home") {
-    projectUi.openHome(projectId);
-  } else if (item.id === "board" || item.id === "list") {
-    // The Board tab's own act, then the view: what the header's segmented
-    // toggle would leave on screen.
-    projectUi.openHomeBoard(projectId);
-    projectUi.setBoardView(projectId, item.id);
-  } else if (item.id === "configure" || item.id === "configure-pane") {
-    if (item.id === "configure-pane") useUiStore.getState().requestConfigureCategory(item.paneKey);
-    projectUi.setNav(projectId, "configure");
-  }
-}
 
 interface ShowAllRowProps {
   sectionId: PaletteSectionId;
@@ -299,7 +279,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     remoteHostList,
   );
 
-  // The page rows (VC-303). Configure's panes come off the rail's own
+  // The page rows (VC-303). Settings' project panes come off the rail's own
   // definition, so a pane added there is reachable here with no second list;
   // their icons ride along by key.
   const configureCategories = React.useMemo(
@@ -435,7 +415,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     scope === null && navigationSlice.visible.length > 0 ? (
       <Command.Group heading="Go to" className={MENU_LABEL_CMDK}>
         {navigationSlice.visible.map(({ row: item, match }) => {
-          // A Configure pane is keyed by, and wears the rail icon of, its pane.
+          // A named Settings pane wears its own rail icon.
           const { key, RowIcon } =
             item.id === "configure-pane"
               ? {
@@ -451,14 +431,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               value={match.value}
               keywords={match.keywords}
               onSelect={() => {
-                if (item.id === "settings") {
-                  // Not `finishNavigation`, which closes Settings.
-                  useUiStore.getState().setSettingsOpen(true);
-                  onOpenChange(false);
-                  return;
-                }
-                goToProjectPage(item, selectedProjectId);
-                finishNavigation();
+                activatePaletteNavigation(item, selectedProjectId);
+                onOpenChange(false);
               }}
               className={PALETTE_ROW}
             >

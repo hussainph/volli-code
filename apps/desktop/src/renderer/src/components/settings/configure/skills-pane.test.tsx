@@ -159,7 +159,7 @@ describe("Configure → Skills", () => {
       const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
       expect(dialog?.querySelector("h2")?.textContent).toBe(long.name);
       expect(dialog?.textContent).toContain(long.description);
-      expect(dialog?.textContent).toContain(`Personal · ${long.root}`);
+      expect(dialog?.textContent).toContain(`Global · ${long.root}`);
       expect(dialog?.querySelector(".typeset h2")?.textContent).toBe("Steps");
       expect(dialog?.textContent).toContain("Read every line of this before acting.");
       expect(setSkillModes).not.toHaveBeenCalled();
@@ -172,6 +172,43 @@ describe("Configure → Skills", () => {
     // row) and then the dialog's rendered markdown: no loop, but more than the
     // default 5s budget on a machine shared with other test runs.
   }, 20_000);
+
+  it("filters global and workspace skills in one pane without changing their rules", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <SkillsPane project={project} />
+          </TooltipProvider>,
+        ),
+      );
+      const scope = host.querySelector('[aria-label="Skill scope"]')!;
+      const pick = (name: string) =>
+        Array.from(scope.querySelectorAll("button")).find((button) => button.textContent === name)!;
+      await act(async () => pick("Global").click());
+      expect(pick("Global").getAttribute("aria-pressed")).toBe("true");
+      expect(host.querySelector("tbody")?.textContent).toContain(skills[3]!.name);
+      expect(host.querySelector("tbody")?.textContent).not.toContain(skills[0]!.name);
+      await act(async () => pick("This workspace").click());
+      expect(host.querySelector("tbody")?.textContent).toContain(skills[0]!.name);
+      expect(host.querySelector("tbody")?.textContent).not.toContain(skills[3]!.name);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
 
   describe("ruled", () => {
     const tdd = skills[0]!;

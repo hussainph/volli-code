@@ -350,8 +350,8 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
 /* ------------------------------------------------------------ navigation */
 
 /**
- * The palette's page rows (VC-303): Home, its Board and List views, Configure
- * and each of its panes, and Settings — each reachable by typing its name.
+ * The palette's page rows (VC-303): Home, its Board and List views, project
+ * overrides, and named Settings panes — each reachable by typing its name.
  */
 export type CommandPaletteNavigationItem =
   | {
@@ -364,14 +364,14 @@ export type CommandPaletteNavigationItem =
   | {
       kind: "navigation";
       id: "configure-pane";
-      /** The Configure category key the row opens. */
+      /** The legacy category key, resolved to its Settings scope on arrival. */
       paneKey: string;
       title: string;
       hint: string;
       keywords: string[];
     };
 
-/** A Configure pane as the palette names it — the rail's own key, label and search terms. */
+/** A Settings pane as the palette names it — the rail's own key, label and search terms. */
 interface PaletteConfigurePane {
   readonly key: string;
   readonly label: string;
@@ -409,7 +409,7 @@ export function buildNavigationCommandItems(
     {
       kind: "navigation",
       id: "configure",
-      title: "Configure",
+      title: "Project settings",
       hint,
       keywords: ["configure", "project settings"],
     },
@@ -417,9 +417,9 @@ export function buildNavigationCommandItems(
       kind: "navigation",
       id: "configure-pane",
       paneKey: pane.key,
-      title: `Configure → ${pane.label}`,
+      title: `Settings → ${pane.label}`,
       hint,
-      keywords: [pane.label, ...(pane.keywords ?? [])],
+      keywords: ["configure", `Configure → ${pane.label}`, pane.label, ...(pane.keywords ?? [])],
     })),
     settings,
   ];

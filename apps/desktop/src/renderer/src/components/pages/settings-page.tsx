@@ -1,4 +1,4 @@
-/** One Settings surface. Legacy Configure entry points deep-link into project scope. */
+/** One Settings surface for machine configuration and project overrides. */
 import { SettingsNavigation } from "@renderer/components/settings/settings-navigation";
 import * as React from "react";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
@@ -7,7 +7,7 @@ import { launchStore } from "@renderer/stores/launch";
 import { useUiStore } from "@renderer/stores/ui";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
 import { useLogViewerEnabled } from "@renderer/components/logs/log-viewer";
-import { configureGroups } from "@renderer/components/settings/configure-groups";
+import { configureGroups, globalAgentGroups } from "@renderer/components/settings/configure-groups";
 import { PrefShell, type PrefGroup } from "@renderer/components/settings/kit";
 import {
   SettingsScope,
@@ -22,6 +22,16 @@ import { useAddProject } from "@renderer/hooks/use-add-project";
 
 let lastPage = "general";
 const PROJECT_PREFIX = "project:";
+/** Legacy pane requests keep their spelling; machine inventories have one destination. */
+function settingsPaneKey(key: string, cloud: boolean): string {
+  const pane = key.replace(/^project:/, "");
+  if (!cloud && (pane === "mcp" || pane === "skills")) return pane;
+  if (key.startsWith(PROJECT_PREFIX)) return key;
+  return ["overview", "sessions", "worktrees", "commands", "secrets"].includes(key) ||
+    (cloud && (pane === "mcp" || pane === "skills"))
+    ? `${PROJECT_PREFIX}${key}`
+    : key;
+}
 export function SettingsPage({
   initialCategoryKey,
   initialSignInProviderId,
@@ -48,38 +58,55 @@ export function SettingsPage({
   const selectedId = useProjectsStore((s) => s.selectedProjectId);
   const addProject = useAddProject();
   const [projectId, setProjectId] = React.useState(selectedId);
+  const [previousSelection, setPreviousSelection] = React.useState(selectedId);
+  // A scope choice is local to Settings; an explicit workspace switch still
+  // follows that workspace, without painting the previous project's controls.
+  if (previousSelection !== selectedId) {
+    setPreviousSelection(selectedId);
+    setProjectId(selectedId);
+  }
   const project = projects.find((p) => p.id === projectId) ?? null;
   const [activeKey, setActiveKey] = React.useState(
     () =>
-      resolveSettingsCategory(initialCategoryKey) ??
+      resolveSettingsCategory(
+        initialCategoryKey === undefined ? undefined : settingsPaneKey(initialCategoryKey, runners),
+      ) ??
       (requestedPane !== null
-        ? `${PROJECT_PREFIX}${requestedPane}`
+        ? settingsPaneKey(requestedPane, runners)
         : initialScope === "project"
           ? "project:overview"
-          : lastPage),
+          : settingsPaneKey(lastPage, runners)),
   );
   const scope = activeKey.startsWith(PROJECT_PREFIX) ? "project" : "app";
-  const appGroups = React.useMemo(
-    () =>
-      settingsGroups(initialSignInProviderId, {
-        logs,
-        hosts,
-        moves: hosts,
-        account,
-        runners,
-        experiments,
-      }),
-    [initialSignInProviderId, logs, hosts, account, runners, experiments],
-  );
+  const appGroups = React.useMemo(() => {
+    const groups = settingsGroups(initialSignInProviderId, {
+      logs,
+      hosts,
+      moves: hosts,
+      account,
+      runners,
+      experiments,
+    });
+    return [
+      ...groups.slice(0, 1),
+      ...(!runners ? globalAgentGroups(project) : []),
+      ...groups.slice(1),
+    ];
+  }, [initialSignInProviderId, logs, hosts, account, runners, experiments, project]);
   const projectGroups = React.useMemo<readonly PrefGroup[]>(
     () =>
       project
         ? configureGroups(project).map((group) =>
             Object.assign({}, group, {
-              categories: group.categories.map((category) => ({
-                ...category,
-                key: `${PROJECT_PREFIX}${category.key}`,
-              })),
+              categories: group.categories
+                .filter(
+                  (category) => runners || (category.key !== "mcp" && category.key !== "skills"),
+                )
+                .map((category) =>
+                  Object.assign({}, category, {
+                    key: `${PROJECT_PREFIX}${category.key}`,
+                  }),
+                ),
             }),
           )
         : [
@@ -101,24 +128,24 @@ export function SettingsPage({
               ],
             },
           ],
-    [project, projects.length, addProject],
+    [project, projects.length, addProject, runners],
   );
   React.useEffect(() => {
     if (initialCategoryKey !== undefined)
-      setActiveKey(resolveSettingsCategory(initialCategoryKey) ?? "general");
-  }, [initialCategoryKey]);
-  React.useEffect(() => {
-    if (projectId === null && selectedId !== null) setProjectId(selectedId);
-  }, [projectId, selectedId]);
+      setActiveKey(
+        resolveSettingsCategory(settingsPaneKey(initialCategoryKey, runners)) ?? "general",
+      );
+  }, [initialCategoryKey, runners]);
   const select = React.useCallback((key: string) => {
     setActiveKey(key);
     lastPage = key;
   }, []);
   React.useEffect(() => {
     if (requestedPane === null) return;
-    select(`${PROJECT_PREFIX}${requestedPane}`);
+    setProjectId(selectedId);
+    select(settingsPaneKey(requestedPane, runners));
     useUiStore.getState().consumeConfigureCategory();
-  }, [requestedPane, select]);
+  }, [requestedPane, select, runners, selectedId]);
   const navigation = React.useMemo(
     () => ({
       openProject: (id: string, page: string) => {
@@ -144,7 +171,7 @@ export function SettingsPage({
             onScope={(next) => select(next === "app" ? "general" : "project:overview")}
             onProject={(id) => {
               setProjectId(id);
-              select("project:overview");
+              if (activeKey !== "skills" && activeKey !== "mcp") select("project:overview");
             }}
             onAdd={() => void addProject()}
           />

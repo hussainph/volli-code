@@ -1,5 +1,5 @@
 /**
- * Configure → Skills: what this project's agents can reach, and what they are
+ * Settings → Skills: what this project's agents can reach, and what they are
  * told about unprompted.
  *
  * THE MODE COLUMN IS THE POINT OF THIS PANE. A fresh Session's Volli-composed
@@ -77,6 +77,7 @@ import {
 } from "@renderer/components/ui/select";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { boardApi } from "@renderer/lib/board-api";
 
 /** What each mode is called, and the one line explaining what it costs. */
@@ -134,6 +135,16 @@ export function SkillsPane({ project }: { project: Project }) {
         icon={BookOpenIcon}
         action={
           <div className="flex items-center gap-2">
+            <Segmented
+              ariaLabel="Skill scope"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { key: "all", label: "All" },
+                { key: "personal", label: "Global" },
+                { key: "project", label: "This workspace" },
+              ]}
+            />
             {/* What Auto costs every turn: the one number the mode column hides. */}
             {indexTokens === null ? null : (
               <span className="text-ui text-muted-foreground tabular-nums">
@@ -153,7 +164,6 @@ export function SkillsPane({ project }: { project: Project }) {
             project={project}
             skills={data.skills}
             filter={filter}
-            onFilter={setFilter}
             onPreview={setPreviewing}
           />
         )}
@@ -172,7 +182,7 @@ export function SkillsPane({ project }: { project: Project }) {
 
 /** Where a skill lives, as its preview's origin line: its tier, then its root. */
 function skillOrigin(skill: SkillReference): string {
-  return `${skillScope(skill) === "project" ? "This project" : "Personal"} · ${skill.root}`;
+  return `${skillScope(skill) === "project" ? "This workspace" : "Global"} · ${skill.root}`;
 }
 
 /**
@@ -210,13 +220,11 @@ function SkillsTable({
   project,
   skills,
   filter,
-  onFilter,
   onPreview,
 }: {
   project: Project;
   skills: readonly SkillReference[];
   filter: string;
-  onFilter: (next: string) => void;
   onPreview: (skill: SkillReference) => void;
 }) {
   const adoptProject = useProjectsStore((store) => store.adoptProject);
@@ -253,7 +261,7 @@ function SkillsTable({
 
   return (
     <DataTable
-      label="Skills available to this project"
+      label="Skills available to this workspace"
       items={shown}
       keyOf={(skill) => `${skillScope(skill)}/${skill.name}`}
       rows="fill"
@@ -262,17 +270,6 @@ function SkillsTable({
       search={(skill) => `${skill.name} ${skill.description}`}
       placeholder="Search skills"
       bulk={(matched) => <BulkMode skills={matched} onApply={setAllModes} />}
-      filter={{
-        label: "Filter by source",
-        value: filter,
-        isFiltering: filter !== "all",
-        onChange: onFilter,
-        options: [
-          { value: "all", label: "All sources" },
-          { value: "project", label: "This project" },
-          { value: "personal", label: "Personal" },
-        ],
-      }}
       empty="No skills in .agents/skills"
       noResults="No skills match"
       columns={[
@@ -317,7 +314,7 @@ function SkillsTable({
           header: "Source",
           width: "7rem",
           cell: (skill) => (
-            <Cell muted>{skillScope(skill) === "project" ? "This project" : "Personal"}</Cell>
+            <Cell muted>{skillScope(skill) === "project" ? "This workspace" : "Global"}</Cell>
           ),
         },
         {

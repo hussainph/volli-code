@@ -31,7 +31,7 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
  * Three ways out, and no fourth. RUN types the workspace's own lockfile-derived
  * command into a real Session terminal, where its output is visible and
  * interruptible, and waits for the sentinel so the offer can withdraw itself
- * the moment the install lands. SET A SETUP COMMAND goes to Configure, where a
+ * the moment the install lands. SET A SETUP COMMAND goes to Settings → Worktrees, where a
  * project's setup command already exists and will run this automatically for
  * every future worktree. IGNORE is a persisted per-project answer — unlike the
  * banner's string-keyed component state, which came back on every relaunch and
@@ -59,7 +59,7 @@ export function WorkspaceDependenciesOffer() {
   );
   const terminalFocused = useUiStore((state) => state.terminalFocusTarget !== null);
   const dismiss = useProjectUiStore((state) => state.dismissDependencyOffer);
-  const setNav = useProjectUiStore((state) => state.setNav);
+  const configure = useUiStore((state) => state.requestConfigureCategory);
   // The answer that lands is the one asked for last, whether the ask came from
   // selection, from refocus, or from an install this surface itself ran.
   const fetchToken = useRef(0);
@@ -128,7 +128,7 @@ export function WorkspaceDependenciesOffer() {
         installCommand={installCommand}
         running={running}
         onRun={() => void runInstall()}
-        onConfigureSetup={() => setNav(projectId, "configure")}
+        onConfigureSetup={() => configure("worktrees")}
         onIgnore={() => dismiss(projectId)}
       />
     </div>

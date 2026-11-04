@@ -89,7 +89,7 @@ use `rounded-full`; zero-radius seams are legitimate resets.
 - **Tier A, reading:** Ticket body, prose and reading empty states use `<ContentColumn>`:
   `mx-auto w-full max-w-content px-gutter`, a 45rem / 720px measure.
 - **Tier B, workbench:** Board, terminals, editors and diffs earn width; align workbench
-  edges to the `gutter` token (24px). Settings and Configure use `<WorkbenchColumn>`, capped
+  edges to the `gutter` token (24px). Settings uses `<WorkbenchColumn>`, capped
   at 80rem / 1280px. Do not put workbenches inside the reading measure.
 - `<PageHeader>` owns the single page `h1`, optional actions and wrap-friendly title row.
   Its `reading` variant sits inside the reading column; `workbench` owns its gutter.

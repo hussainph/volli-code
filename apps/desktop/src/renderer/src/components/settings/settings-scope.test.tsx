@@ -4,10 +4,9 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { resolveExperiments, type Project } from "@volli/shared";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
-import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { settingsGroups } from "./settings-groups";
-import { configureGroups } from "./configure-groups";
+import { configureGroups, globalAgentGroups } from "./configure-groups";
 import { settingsSearch } from "./kit/pref-shell";
 import { SETTINGS_ROWS } from "./settings-inventory";
 const project: Project = {
@@ -64,7 +63,7 @@ it("switches App and project scopes and picks a project without retargeting the 
     host.remove();
   }
 });
-it("follows the sidebar's selected project in the Configure compatibility route", () => {
+it("follows an explicit workspace switch without retargeting it when choosing a Settings scope", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Element.prototype.scrollTo = vi.fn();
   useProjectsStore.setState({
@@ -74,15 +73,16 @@ it("follows the sidebar's selected project in the Configure compatibility route"
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
   try {
-    act(() => root.render(<ConfigurePage />));
-    expect(
-      host.querySelector('[aria-label="Settings scope"] button[aria-pressed="true"]')?.textContent,
-    ).toContain("First project");
+    act(() => root.render(<SettingsPage initialScope="project" />));
     act(() => useProjectsStore.setState({ selectedProjectId: "p2" }));
     expect(
       host.querySelector('[aria-label="Settings scope"] button[aria-pressed="true"]')?.textContent,
     ).toContain("Second project");
-    expect(host.querySelector('[aria-current="page"]')?.textContent).toBe("Overview");
+    const nav = host.querySelector('nav[aria-label="Settings categories"]');
+    expect(nav?.textContent).toContain("Commands");
+    expect(nav?.textContent).toContain("Secrets");
+    expect(nav?.textContent).not.toContain("MCP Servers");
+    expect(nav?.textContent).not.toContain("Skills");
   } finally {
     act(() => root.unmount());
     host.remove();
@@ -98,6 +98,7 @@ it("reaches every inventoried row through search, across both scopes", () => {
       moves: true,
       experiments: resolveExperiments({ cloud: true }, [], "dev"),
     }),
+    ...globalAgentGroups(project),
     ...configureGroups(project).map((g) =>
       Object.assign({}, g, {
         categories: g.categories.map((c) => Object.assign({}, c, { key: `project:${c.key}` })),

@@ -720,7 +720,7 @@ export function registerDataIpcHandlers(
     "volli:mcp-list": (input: McpProjectInput) => ({
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
-      operations: listMcpOperations(db, input.projectId),
+      operations: listMcpOperations(db, mcpSettings.global ? null : input.projectId),
       access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),

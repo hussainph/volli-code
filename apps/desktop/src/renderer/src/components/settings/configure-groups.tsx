@@ -1,16 +1,6 @@
 import { OverviewPane } from "./configure/overview-pane";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-/**
- * The Configure rail: two groups, eight categories, this project always.
- *
- * AGENT CONFIG LANDS HERE because agent config *is* project-scoped — which
- * skills a repo's agents can reach and which commands it defines. Putting it
- * in Settings was the original surface's central confusion: the same words
- * appeared on both pages with no way to tell which one won.
- *
- * Project is the rest: how this repo's sessions, theming and worktrees behave.
- *
- */
+/** Project-specific settings and the shared agent pane definitions. */
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
@@ -31,9 +21,57 @@ import { SessionsPane } from "./configure/sessions-pane";
 import { SecretsPane } from "./configure/secrets-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
+import { useAddProject } from "@renderer/hooks/use-add-project";
+import { SettingsProjectWelcome } from "./settings-scope";
+
+function ChooseProject() {
+  const addProject = useAddProject();
+  return <SettingsProjectWelcome hasProjects={false} onOpen={() => void addProject()} />;
+}
+
+/** The one shared Skills/MCP inventory, outside project override navigation. */
+export function globalAgentGroups(project: Project | null): readonly PrefGroup[] {
+  if (project)
+    return [
+      {
+        key: "agent",
+        label: "Agent",
+        categories: configureGroups(project)
+          .flatMap((group) => group.categories)
+          .filter((category) => category.key === "skills" || category.key === "mcp")
+          .map((category) =>
+            category.key === "mcp"
+              ? Object.assign({}, category, { content: <McpPane project={{ id: "" }} /> })
+              : category,
+          ),
+      },
+    ];
+  return [
+    {
+      key: "agent",
+      label: "Agent",
+      categories: [
+        {
+          key: "skills",
+          label: "Skills",
+          icon: BookOpenIcon,
+          keywords: ["global", "workspace", "mode", "source"],
+          content: <ChooseProject />,
+        },
+        {
+          key: "mcp",
+          label: "MCP Servers",
+          icon: PlugsConnectedIcon,
+          keywords: ["server", "tools", "global"],
+          content: <McpPane project={{ id: "" }} />,
+        },
+      ],
+    },
+  ];
+}
 
 /**
- * Every Configure pane reads or writes this Mac's own config for the project
+ * Project override panes read or write this Mac's own config for the project
  * (its files, MCP servers, secrets, worktrees): for a remote project's, each
  * says "Not available on <host> yet" until its host serves them (VC-711).
  */

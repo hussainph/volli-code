@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { configureGroups } from "@renderer/components/settings/configure-groups";
 import { PrefShell, type PrefCategory } from "@renderer/components/settings/kit";
-import { ConfigurePage } from "./configure-page";
+import { SettingsPage } from "./settings-page";
 
 const project: Project = {
   id: "p1",
@@ -23,7 +23,7 @@ const project: Project = {
 function renderConfigure(activeKey: string): string {
   return renderToStaticMarkup(
     <PrefShell
-      surfaceLabel="Configure"
+      surfaceLabel="Settings"
       groups={configureGroups(project)}
       activeKey={activeKey}
       onSelect={() => {}}
@@ -240,11 +240,11 @@ describe("Configure → MCP", () => {
   });
 });
 
-describe("ConfigurePage", () => {
+describe("Settings project scope", () => {
   it("renders a graceful empty state when no project is selected", () => {
     // The projects-store singleton starts with no selection, so the page
     // resolves to null and shows the empty state instead of the shell.
-    const html = renderToStaticMarkup(<ConfigurePage />);
+    const html = renderToStaticMarkup(<SettingsPage initialScope="project" />);
 
     expect(html).toContain("Open a project");
     expect(html).not.toContain("Branch from");

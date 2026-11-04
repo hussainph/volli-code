@@ -7,11 +7,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { ConfigurePage } from "./configure-page";
+import { SettingsPage } from "./settings-page";
 
 // The real panes read the host on mount; which pane is in FRONT is the page's
 // own decision, so two inert categories are all this needs.
 vi.mock("@renderer/components/settings/configure-groups", () => ({
+  globalAgentGroups: () => [
+    {
+      key: "agent",
+      label: "Agent",
+      categories: [
+        { key: "skills", label: "Skills", icon: BookOpenIcon, content: <p>skills pane</p> },
+      ],
+    },
+  ],
   configureGroups: () => [
     {
       key: "agent",
@@ -66,28 +75,30 @@ function current(): string | undefined {
   return host.querySelector('[aria-current="page"]')?.textContent?.trim();
 }
 
-describe("ConfigurePage pane requests (VC-303)", () => {
+describe("Settings pane requests (VC-303)", () => {
   it("opens on Skills when nobody asked for a pane", async () => {
-    await act(async () => root.render(<ConfigurePage />));
+    await act(async () => root.render(<SettingsPage initialCategoryKey="skills" />));
     expect(current()).toBe("Skills");
   });
 
   it("opens on the pane ⌘K asked for, and spends the request", async () => {
     useUiStore.getState().requestConfigureCategory("secrets");
-    await act(async () => root.render(<ConfigurePage />));
+    await act(async () => root.render(<SettingsPage initialCategoryKey="skills" />));
 
     expect(current()).toBe("Secrets");
     expect(host.textContent).toContain("secrets pane");
     expect(useUiStore.getState().configureCategory).toBeNull();
+    expect(useUiStore.getState().settingsOpen).toBe(true);
   });
 
   it("switches panes when asked while already on screen", async () => {
-    await act(async () => root.render(<ConfigurePage />));
+    await act(async () => root.render(<SettingsPage initialCategoryKey="skills" />));
     expect(current()).toBe("Skills");
 
     await act(async () => useUiStore.getState().requestConfigureCategory("secrets"));
 
     expect(current()).toBe("Secrets");
     expect(useUiStore.getState().configureCategory).toBeNull();
+    expect(useUiStore.getState().settingsOpen).toBe(true);
   });
 });

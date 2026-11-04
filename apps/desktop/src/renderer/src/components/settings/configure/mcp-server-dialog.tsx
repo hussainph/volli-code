@@ -206,7 +206,7 @@ export function McpServerDialog({
   onSignOut,
   onAccessChanged,
 }: {
-  project: Project;
+  project: Pick<Project, "id">;
   target: McpServerDialogTarget;
   /** The saved server's sign-in state and missing secrets, when it is a saved one. */
   access: McpServerAccess | undefined;
