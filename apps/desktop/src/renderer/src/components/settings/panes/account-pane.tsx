@@ -138,8 +138,13 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
         ) : undefined
       }
     >
-      <div className="flex flex-col gap-2 p-4" data-testid="account-sign-in">
+      {/* A form column, not a stretched row: the field takes a form width and
+          the two sign-in buttons size to their words, side by side, on the
+          control radius like every other action (docs/DESIGN.md, "Surfaces").
+          `items-start` is what stops the column stretching them full-row. */}
+      <div className="flex flex-col items-start gap-2 p-4" data-testid="account-sign-in">
         <Input
+          className="max-w-sm"
           aria-label="Preview invite code"
           placeholder="Invite code (optional)"
           value={inviteCode}
@@ -166,27 +171,29 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
             .
           </span>
         </label>
-        {BUTTONS.map(({ connection, label, icon: Icon }) => (
-          <Button
-            key={connection}
-            variant="outline"
-            disabled={waiting || snapshot.state === "restoring" || !agreementAccepted}
-            onClick={() => {
-              const code = inviteCode.trim();
-              if (code !== "" && code.length < 16) {
-                toastError("Invite codes are at least 16 characters.");
-                return;
-              }
-              act(
-                () => commands.signIn(connection, code || undefined, PREVIEW_AGREEMENT_VERSION),
-                "Sign-in",
-              );
-            }}
-          >
-            <Icon />
-            {waiting && snapshot.signingInWith === connection ? WAITING_FOR_BROWSER : label}
-          </Button>
-        ))}
+        <div className="flex flex-wrap gap-2">
+          {BUTTONS.map(({ connection, label, icon: Icon }) => (
+            <Button
+              key={connection}
+              variant="outline"
+              disabled={waiting || snapshot.state === "restoring" || !agreementAccepted}
+              onClick={() => {
+                const code = inviteCode.trim();
+                if (code !== "" && code.length < 16) {
+                  toastError("Invite codes are at least 16 characters.");
+                  return;
+                }
+                act(
+                  () => commands.signIn(connection, code || undefined, PREVIEW_AGREEMENT_VERSION),
+                  "Sign-in",
+                );
+              }}
+            >
+              <Icon />
+              {waiting && snapshot.signingInWith === connection ? WAITING_FOR_BROWSER : label}
+            </Button>
+          ))}
+        </div>
         <Failure text={snapshot.failure} />
       </div>
     </PrefSection>
