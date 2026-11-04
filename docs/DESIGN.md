@@ -226,7 +226,7 @@ semantic tokens and `--canvas`; opacity never applies to text or its children.
 
 | Role | Members | Fill | Edge | Shadow | Radius |
 | --- | --- | --- | --- | --- | --- |
-| Canvas | the window, chrome bar, project rail, tab strip | `--canvas`; chrome is `material-clear` (50%) | none | none | — |
+| Canvas | the window, chrome bar, project rail and the gutters around the panels; the tab strip | `--canvas`, with no material on the chrome: title bar, rail and gutters are one surface; the tab strip is `material-clear` (50%) | none | none | — |
 | Panel | the content card; its side panes: sidebar, ticket and Home rails, Settings nav (`PANE_SURFACE`) | content card `material-thick` (94%); side panes `surface-pane` (76% on `--sidebar`) | `border` hairline on the outer edge; panes divide with one `border` hairline, the sidebar seam included | none | `--radius-panel`; rows `--radius-row` |
 | Card | ticket card, settings section, composer, notice, comment, log list (`CARD_SURFACE`) | `surface-card` (76% on `--card`); a state (error, aimed, hover) may paint over it | `border` | none | `--radius-card` |
 | Inset / well | code block, markdown table, tool output, log box (`WELL_SURFACE`); fields are wells too, on the control radius | `glass-1` | `glass-edge` | none | `--radius-well` |
