@@ -42,7 +42,7 @@ function requestCheck(): void {
 
 function failureLabel(error: string | null): string {
   const summary = summarizeUpdateFailure(error ?? UPDATE_FAILURE_FALLBACK).replace(/\.$/u, "");
-  return `Update check failed: ${summary}${summary.endsWith("…") ? "" : "."} Select for details.`;
+  return `Update check failed: ${summary}`;
 }
 
 export function UpdateButton() {
@@ -60,8 +60,8 @@ export function UpdateButton() {
         ? `Downloading ${state.targetVersion ?? "update"} (${Math.round(state.percent ?? 0)}%)`
         : state.phase === "downloaded"
           ? state.targetVersion === null
-            ? "Update ready. Select to install."
-            : `Volli Code ${state.targetVersion} is ready. Select to install.`
+            ? "Install update"
+            : `Install Volli Code ${state.targetVersion}`
           : state.phase === "error"
             ? failureLabel(state.error)
             : "Check for updates";

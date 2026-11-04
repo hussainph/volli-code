@@ -8,9 +8,6 @@ export function SessionListEmpty({ band }: { band: "active" | "previous" }) {
     <div className={cn(EMPTY_INLINE, "flex flex-col gap-2")}>
       <NextActionIllustration kind={band} className="w-full" />
       <p>{band === "active" ? "No active sessions" : "Nothing yet"}</p>
-      <p>
-        {band === "active" ? "Start a chat to see it here." : "Return to earlier sessions here."}
-      </p>
     </div>
   );
 }

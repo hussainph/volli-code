@@ -338,9 +338,8 @@ async function columnCardIds(page, label) {
  * The ticket ids listed in one of the sidebar's session bands, in DOM order.
  * `null` when that band is not on screen at all.
  *
- * Anchored on `data-session-band` rather than on heading text. The bands' own
- * labels are uppercased by CSS from sentence-case strings, so matching them
- * would be matching a typographic treatment; and a ticketless row prints a
+ * Anchored on `data-session-band` rather than on heading text, because a
+ * label is copy and the attribute is the seam; and a ticketless row prints a
  * globe instead of an id, so a row is not guaranteed to contribute an entry
  * here at all — which is exactly why the attribute exists.
  *
@@ -362,7 +361,9 @@ async function sidebarSessionIds(page, band = "active") {
 
 /**
  * The count a session band's header prints — the built listing's own row count,
- * read back off the rendered heading. `null` when that band is not on screen.
+ * read back off the rendered heading. `0` when the header draws no count (Active
+ * never does, and Previous drops a zero), `null` when that band is not on
+ * screen.
  *
  * Worth asserting separately from the ids above because the two come from
  * different halves of the seam: the count is `listing.<band>.length` straight
@@ -371,9 +372,10 @@ async function sidebarSessionIds(page, band = "active") {
  */
 async function sidebarBandCount(page, band) {
   return page.evaluate((name) => {
-    const header = document.querySelector(`[data-session-band="${name}"]`)?.firstElementChild;
-    const raw = header?.children[1]?.textContent?.trim();
-    return raw === undefined ? null : Number(raw);
+    const group = document.querySelector(`[data-session-band="${name}"]`);
+    if (!group) return null;
+    const raw = group.querySelector("[data-band-count]")?.textContent?.trim();
+    return raw === undefined ? 0 : Number(raw);
   }, band);
 }
 
