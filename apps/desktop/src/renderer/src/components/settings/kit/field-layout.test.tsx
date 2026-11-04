@@ -16,7 +16,7 @@ describe("Settings field hierarchy and alignment", () => {
   it("centres every control on its full label block with symmetric row padding", () => {
     const doc = documentFor(
       renderToStaticMarkup(
-        <PrefRow label="Notifications" description="Know when a session needs you." align="start">
+        <PrefRow label="Theme" description="Inherited from Ghostty" align="start">
           <input type="checkbox" />
         </PrefRow>,
       ),

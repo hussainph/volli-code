@@ -8,6 +8,7 @@ import type {
   CloudMoveExclusion,
 } from "@volli/shared";
 import { AccountPane } from "@renderer/components/settings/panes/account-pane";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
 import { Checkbox } from "@renderer/components/ui/checkbox";
 import { DialogFooter } from "@renderer/components/ui/dialog";
@@ -156,7 +157,9 @@ export function MovePreflight({
         ) : null}
         {reading ? (
           <div role="status" className="flex flex-col gap-1">
-            <p>Checking projects… The dry run finishes even if you close this sheet.</p>
+            <p>
+              <LoadingLabel>Checking projects</LoadingLabel>
+            </p>
             {snapshot.preflight !== null ? (
               <p className="text-muted-foreground">{preflightProgressLabel(snapshot.preflight)}</p>
             ) : null}
@@ -166,7 +169,7 @@ export function MovePreflight({
         {preflight !== null && !reading ? (
           <>
             {preflight.projects.length === 0 ? (
-              <p>No local projects to move.</p>
+              <p>No local projects</p>
             ) : (
               <div className="flex flex-col gap-4">
                 {preflight.projects.map((project) => (
@@ -236,7 +239,7 @@ export function MovePreflight({
           Run a dry run only
         </Button>
         <Button disabled={!canStart} onClick={() => void start()}>
-          {starting ? "Starting…" : "Move"}
+          {starting ? <LoadingLabel>Starting</LoadingLabel> : "Move"}
         </Button>
       </DialogFooter>
     </>

@@ -21,7 +21,7 @@ export function DisplaySection() {
   const index = UI_SCALE_STEPS.findIndex((step) => step === uiScale);
   return (
     <PrefSection title="Display" icon={MonitorIcon}>
-      <PrefRow label="Zoom" icon={MonitorIcon} description="Scale the app's text and controls.">
+      <PrefRow label="Zoom" icon={MonitorIcon}>
         <ButtonGroup aria-label="Zoom">
           <Button
             size="icon-sm"
@@ -46,11 +46,7 @@ export function DisplaySection() {
           </Button>
         </ButtonGroup>
       </PrefRow>
-      <PrefRow
-        label="Diff layout"
-        icon={ColumnsIcon}
-        description="Read changes inline or in two columns."
-      >
+      <PrefRow label="Diff layout" icon={ColumnsIcon}>
         <ButtonGroup aria-label="Diff layout">
           {(
             [
@@ -75,12 +71,7 @@ export function DisplaySection() {
           ))}
         </ButtonGroup>
       </PrefRow>
-      <PrefRow
-        label="Show cost and token usage"
-        icon={CurrencyDollarIcon}
-        htmlFor="cost-visible"
-        description="Show usage in the rails; recording continues when hidden."
-      >
+      <PrefRow label="Show cost and token usage" icon={CurrencyDollarIcon} htmlFor="cost-visible">
         <Switch id="cost-visible" checked={costVisible} onCheckedChange={setCostVisible} />
       </PrefRow>
     </PrefSection>

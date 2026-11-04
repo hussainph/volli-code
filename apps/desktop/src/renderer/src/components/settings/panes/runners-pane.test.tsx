@@ -323,7 +323,7 @@ describe("Settings → Runners", () => {
     const tier = standIn();
     act(() => root.render(<RunnersPane {...tier.props} />));
     tier.list([]);
-    expect(container.textContent).toContain("No runners yet.");
+    expect(container.textContent).toContain("No runners");
     tier.push({ ...THIS_MAC_RUNNER_OFF, state: "registering" });
     const pending = container.querySelector('[data-testid="runner-this-mac-pending"]')!;
     expect(pending.textContent).toContain("This Mac");

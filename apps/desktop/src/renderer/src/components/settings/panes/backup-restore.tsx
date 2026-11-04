@@ -172,9 +172,7 @@ export function BackupRestore() {
           <DialogHeader>
             <DialogTitle>Restore backup</DialogTitle>
             <DialogDescription>
-              Restarting replaces local history with this backup, including changes you make while
-              the restore is being prepared. Volli keeps the previous profile and leaves project
-              files unchanged.
+              Restarting replaces local history with this backup. Project files stay.
             </DialogDescription>
           </DialogHeader>
           {status?.selectedFile ? <p className="text-ui break-all">{status.selectedFile}</p> : null}
@@ -188,7 +186,7 @@ export function BackupRestore() {
               <progress aria-label="Restore progress" />
               <p className="text-ui">
                 {status?.paused
-                  ? "Restore paused while memory is under pressure."
+                  ? "Paused: low memory"
                   : phase === "checking"
                     ? "Checking backup"
                     : "Preparing restore"}
@@ -202,7 +200,7 @@ export function BackupRestore() {
                 <ItemRow
                   key={project.id}
                   name={project.name}
-                  meta={paths[project.id] || "Choose a local directory"}
+                  meta={paths[project.id] || "No directory"}
                 >
                   <Button
                     size="xs"
@@ -245,14 +243,13 @@ export function BackupRestore() {
           ) : null}
           {phase === "cancelled" ? (
             <p role="status" className="text-ui">
-              Restore cancelled. The current profile is unchanged.
+              Restore cancelled
             </p>
           ) : null}
           {phase === "ready" ? (
             <div role="status" className="space-y-2 text-ui">
-              <p>Ready to restore on restart.</p>
-              <p>{status?.credentialsMessage}</p>
-              <p>Previous profile backup will be kept.</p>
+              <p>Ready to restore on restart</p>
+              {status?.credentialsMessage ? <p>{status.credentialsMessage}</p> : null}
             </div>
           ) : null}
           <DialogFooter>

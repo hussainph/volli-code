@@ -357,7 +357,7 @@ export function DataTable<T>({
       </div>
       {withheld > 0 ? (
         <p className="text-ui text-muted-foreground">
-          Showing {shown.length} of {matched.length}. Search to narrow.
+          {shown.length} of {matched.length} shown
         </p>
       ) : null}
       <p aria-live="polite" className="sr-only">

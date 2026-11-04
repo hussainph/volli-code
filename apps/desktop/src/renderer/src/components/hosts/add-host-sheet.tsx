@@ -201,14 +201,7 @@ function EntryScreen({
             onChange={(event) => flow.setTarget(event.target.value)}
           />
         </div>
-        <p
-          className={cn(
-            "px-1 text-ui",
-            error === null ? "text-muted-foreground" : "text-destructive",
-          )}
-        >
-          {error ?? "Uses this Mac’s ssh: your keys, agent and ~/.ssh/config."}
-        </p>
+        {error === null ? null : <p className="px-1 text-ui text-destructive">{error}</p>}
       </div>
       <div className="flex items-center justify-end relative px-4 py-4 before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border/60">
         <Button type="submit" disabled={!valid || starting}>

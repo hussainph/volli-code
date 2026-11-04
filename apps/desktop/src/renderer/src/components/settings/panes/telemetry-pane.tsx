@@ -133,10 +133,7 @@ export function AgentObservabilitySettings() {
   const panel = agentObservabilityPanel(state.view);
   return (
     <PrefSection title="Agent telemetry" icon={ChartLineIcon}>
-      <PrefRow
-        label="Export agent telemetry"
-        description="Send agent traces and metrics to your collector."
-      >
+      <PrefRow label="Export agent telemetry">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 text-ui text-muted-foreground">
             <StatusDot state={panel.dotState} />
@@ -152,11 +149,7 @@ export function AgentObservabilitySettings() {
         </div>
       </PrefRow>
 
-      <PrefRow
-        label="Collector"
-        description="The destination for exported telemetry."
-        htmlFor="agent-observability-endpoint"
-      >
+      <PrefRow label="Collector" htmlFor="agent-observability-endpoint">
         <div className="flex w-64 max-w-full flex-col items-end gap-2">
           <Input
             id="agent-observability-endpoint"

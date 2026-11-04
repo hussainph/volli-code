@@ -232,7 +232,7 @@ describe("UsageLimitsPopover", () => {
       settleFirst?.({ observedAt: NOW, models: [], providers: [] });
       await first;
     });
-    expect(document.body.textContent).not.toContain("No subscriptions with usage limits.");
+    expect(document.body.textContent).not.toContain("No subscriptions with usage limits");
 
     await act(async () => {
       settleSecond?.(SNAPSHOT);

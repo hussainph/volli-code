@@ -3,14 +3,9 @@ import { errorMessage } from "@volli/shared";
 import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
 import { desktopCloudMovesApi, type CloudMovesClient } from "@renderer/lib/cloud-moves";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@renderer/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { SidebarMenu, SidebarMenuItem, SidebarMenuButton } from "@renderer/components/ui/sidebar";
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import {
@@ -51,16 +46,11 @@ function CloudMoveSheet() {
         if (!open) closeCloudMoves();
       }}
     >
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>
             {sheet?.kind === "prepare" ? "Move to Volli Cloud" : "Moves to Volli Cloud"}
           </DialogTitle>
-          <DialogDescription className={sheet?.kind === "prepare" ? undefined : "sr-only"}>
-            {sheet?.kind === "prepare"
-              ? "Your local projects stay on this Mac."
-              : "Project move progress"}
-          </DialogDescription>
         </DialogHeader>
         {error !== null ? (
           <div className="flex items-center justify-between gap-2 text-ui">
@@ -72,7 +62,7 @@ function CloudMoveSheet() {
         ) : null}
         {api === null || snapshot === null ? (
           <p role="status" className="text-ui">
-            Reading moves…
+            <LoadingLabel>Reading moves</LoadingLabel>
           </p>
         ) : sheet?.kind === "prepare" ? (
           <MovePreflight
@@ -175,11 +165,11 @@ export function CloudMoveReadOnlyBanner() {
       <span>
         {move.confirmedAt === null
           ? move.completedSteps.includes("verify")
-            ? "In Volli Cloud. This local copy is read-only until you finish the move or go back to local."
+            ? "In Volli Cloud · Read-only here"
             : move.state === "waiting"
-              ? `${move.message} The local copy is read-only.`
-              : `${move.projectName} is read-only while it moves to Volli Cloud.`
-          : `Moved to Volli Cloud (${move.workspaceName}) on ${new Date(move.confirmedAt).toLocaleDateString()}. This local copy is read-only.`}
+              ? `${move.message} · Read-only`
+              : `Moving ${move.projectName} to Volli Cloud · Read-only`
+          : `Moved to Volli Cloud (${move.workspaceName}) on ${new Date(move.confirmedAt).toLocaleDateString()} · Read-only`}
       </span>
       <div className="flex items-center gap-2">
         {move.actions.includes("resume") ? (

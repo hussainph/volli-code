@@ -112,7 +112,7 @@ export function MoveProgress({
   return (
     <>
       <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto text-ui">
-        {moves.length === 0 ? <p>No moves yet.</p> : null}
+        {moves.length === 0 ? <p>No moves</p> : null}
         {moves.map((move) => (
           <section
             key={move.moveId}
@@ -150,9 +150,6 @@ export function MoveProgress({
                   </>
                 ) : null}
                 <p className="text-muted-foreground">{moveTime(move.estimateSeconds)}</p>
-                {move.step === "backup" || move.step === "export" ? (
-                  <p className="text-muted-foreground">The snapshot cannot stop immediately.</p>
-                ) : null}
               </>
             ) : null}
             {move.counts !== null && (move.state === "check" || move.state === "finished") ? (
@@ -184,7 +181,7 @@ export function MoveProgress({
             {move.state === "check" &&
             move.checks.length > 0 &&
             move.checks.every((check) => check.passed) ? (
-              <p>All checks passed. Open the project in Volli Cloud, then finish the move.</p>
+              <p>All checks passed</p>
             ) : null}
             {move.state === "check" || move.state === "finished" ? (
               <p className="text-muted-foreground">

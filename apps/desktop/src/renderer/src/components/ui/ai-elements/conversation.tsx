@@ -13,8 +13,9 @@
  * `ConversationScrollButton`, `ConversationEmptyState`, their
  * `use-stick-to-bottom` wiring and their literal class strings — is copied
  * expression, which is why the notice is here. Changed: Phosphor icons,
- * `@renderer/*` imports, the scroll-chaining bridge below, and both
- * `StickToBottom` props forced to `instant` where upstream animates.
+ * `@renderer/*` imports, the scroll-chaining bridge below, both
+ * `StickToBottom` props forced to `instant` where upstream animates, and
+ * `ConversationEmptyState` reduced to its shell (no default title or copy).
  *
  * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
  */
@@ -226,17 +227,11 @@ export const ConversationContent = ({ className, ...props }: ConversationContent
   <StickToBottom.Content className={cn("flex flex-col gap-8 p-4", className)} {...props} />
 );
 
-export type ConversationEmptyStateProps = ComponentProps<"div"> & {
-  title?: string;
-  description?: string;
-  icon?: React.ReactNode;
-};
+export type ConversationEmptyStateProps = ComponentProps<"div">;
 
+/** A caller-drawn empty state in upstream's centring shell; it carries no copy of its own. */
 export const ConversationEmptyState = ({
   className,
-  title = "No messages yet",
-  description = "Start a conversation to see messages here",
-  icon,
   children,
   ...props
 }: ConversationEmptyStateProps) => (
@@ -247,15 +242,7 @@ export const ConversationEmptyState = ({
     )}
     {...props}
   >
-    {children ?? (
-      <>
-        {icon && <div className="text-muted-foreground">{icon}</div>}
-        <div className="space-y-1">
-          <h3 className="font-medium text-sm">{title}</h3>
-          {description && <p className="text-muted-foreground text-sm">{description}</p>}
-        </div>
-      </>
-    )}
+    {children}
   </div>
 );
 

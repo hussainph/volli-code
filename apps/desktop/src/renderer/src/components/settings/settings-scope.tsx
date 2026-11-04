@@ -122,14 +122,9 @@ export function SettingsProjectWelcome({
   return (
     <div className="flex min-h-80 flex-col justify-center gap-6 py-8">
       <NextActionIllustration kind={hasProjects ? "selection" : "project"} />
-      <div>
-        <h2 className="text-title font-semibold">Open a project</h2>
-        <p className="mt-2 max-w-sm text-ui text-muted-foreground">
-          {hasProjects
-            ? "Choose a project to manage its settings."
-            : "Choose a repository to set up instructions and tools."}
-        </p>
-      </div>
+      <h2 className="text-title font-semibold">
+        {hasProjects ? "No project selected" : "No projects"}
+      </h2>
       <Button variant="outline" className="w-fit" onClick={onOpen}>
         <FolderOpenIcon />
         Open a project

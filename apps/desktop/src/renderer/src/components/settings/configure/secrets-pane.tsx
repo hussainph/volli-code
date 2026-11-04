@@ -21,13 +21,7 @@ import { Input } from "@renderer/components/ui/input";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@renderer/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -192,12 +186,9 @@ export function SecretsPane({ project }: { project: Project }) {
           if (!open) setEditing(null);
         }}
       >
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Replace {editing?.name}</DialogTitle>
-            <DialogDescription>
-              Only the new value is sent. Saved values are never revealed.
-            </DialogDescription>
           </DialogHeader>
           {editing && (
             <SecretEditor

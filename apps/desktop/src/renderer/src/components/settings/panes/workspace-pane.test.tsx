@@ -180,12 +180,13 @@ describe("Workspace sections", () => {
     expect(text()).not.toContain("Invites");
     expect(text()).not.toContain("Invitations to you");
     expect(button("Leave…").disabled).toBe(true);
-    expect(text()).toContain("Make someone else an owner");
+    expect(text()).toContain("Sole owner");
   });
   it("shows just you and Invite, and no suspend UI", () => {
     const h = mount();
     h.ready("owner", [owner]);
-    expect(text()).toContain("Just you so far.");
+    expect(text()).toContain("Dana");
+    expect(text()).not.toContain("Just you so far");
     expect(button("Invite").disabled).toBe(false);
     expect(text()).not.toContain("Suspend");
   });
@@ -293,14 +294,14 @@ describe("Invitations", () => {
     const h = mount();
     h.ready();
     h.answer("invites:list", [invite]);
-    expect(text()).not.toContain("They need preview access");
+    expect(text()).not.toContain("Needs preview access");
     h.answer("invites:list", [{ ...invite, preview: "needs_access" }]);
-    expect(text()).toContain("They need preview access from Volli first");
+    expect(text()).toContain("Needs preview access");
     h.answer("invites:list", [{ ...invite, preview: "future_verdict" }]);
-    expect(text()).not.toContain("They need preview access");
-    expect(text()).not.toContain("They can join now");
+    expect(text()).not.toContain("Needs preview access");
+    expect(text()).not.toContain("Can join");
     h.answer("invites:list", [{ ...invite, preview: "sponsored" }]);
-    expect(text()).toContain("They can join now");
+    expect(text()).toContain("Can join");
   });
   it("distinguishes a completed Join from a failed Workspace navigation", async () => {
     const h = mount();
@@ -321,7 +322,7 @@ describe("Invitations", () => {
     const writeText = vi.fn(async (_value: string) => {});
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     await click("Invite");
-    expect(text()).toContain("People you invite see every project here");
+    expect(text()).toContain("Invitees see every project");
     await type("invite-email", "new@example.com");
     await click("Admin", document.querySelector('[aria-label="Invite role"]')!);
     await click("Create invite");
@@ -330,7 +331,7 @@ describe("Invitations", () => {
       args: { ...args, email: "new@example.com", role: "admin" },
     });
     await resolve(h, { inviteId: "i1", token: "once-only-secret", preview: "already_granted" });
-    expect(text()).toContain("They can join now");
+    expect(text()).toContain("Can join");
     expect(text()).not.toContain("once-only-secret");
     expect(writeText).not.toHaveBeenCalled();
     await click("Copy invite");
@@ -355,8 +356,8 @@ describe("Invitations", () => {
     await click("Create invite");
     expect(h.cloud.mutations[0]).toMatchObject({ args: { ...args, email: null, role: "member" } });
     await resolve(h, { inviteId: "i1", token: "code-only-once" });
-    expect(text()).not.toContain("They need preview access from Volli first");
-    expect(text()).not.toContain("They can join now");
+    expect(text()).not.toContain("Needs preview access");
+    expect(text()).not.toContain("Can join");
     expect(text()).toContain("Workspace menu → Join a workspace…");
     // New people redeem it by pasting it into the sign-in pane's Invite code field.
     expect(text()).toContain("paste this code into Invite code, and sign in");
@@ -405,7 +406,7 @@ describe("Invitations", () => {
       args: { ...args, email: null, role: "member" },
     });
     await resolve(h, { token: "new-token", preview: "sponsored" });
-    expect(text()).toContain("They can join now");
+    expect(text()).toContain("Can join");
   });
   it("does not create a replacement when revocation fails; Revoke errors are also surfaced", async () => {
     const h = mount();
@@ -465,7 +466,8 @@ describe("Read failures, offline and scope changes", () => {
     await click("Try again");
     expect(h.cloud.watchers("members:list", args)).toBe(1);
     h.answer("members:list", [owner]);
-    expect(text()).toContain("Just you so far.");
+    expect(text()).toContain("Dana");
+    expect(text()).not.toContain("Access changed");
   });
   it("retains live answers read-only offline; a cold offline pane shows an Empty", () => {
     const h = mount();
@@ -502,7 +504,7 @@ describe("Read failures, offline and scope changes", () => {
     h.answer("invites:listMine", [
       { inviteId: "mine", workspaceName: "Team", invitedByName: "Robin", role: "member" },
     ]);
-    expect(text()).toContain("No Workspace selected.");
+    expect(text()).toContain("No Workspace selected");
     expect(button("Join")).toBeDefined();
     expect(text()).not.toContain("Who can invite");
   });

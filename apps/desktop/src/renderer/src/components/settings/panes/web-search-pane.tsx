@@ -16,7 +16,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
 } from "@renderer/components/ui/dialog";
 import { toastError } from "@renderer/lib/toast";
@@ -179,11 +178,11 @@ export function WebSearchPane() {
               ]}
             />
             <div className="flex flex-wrap items-center justify-between gap-4 p-4">
-              <span className="text-ui text-muted-foreground">
+              <Health state={saved.provider === "off" ? "idle" : "ready"}>
                 {saved.provider === "off"
-                  ? "Web search is off."
-                  : `New sessions use ${PROVIDERS.find((p) => p.id === saved.provider)?.name}.`}
-              </span>
+                  ? "Web search off"
+                  : `Web search: ${PROVIDERS.find((p) => p.id === saved.provider)?.name}`}
+              </Health>
               <Button
                 variant="ghost"
                 size="sm"
@@ -219,16 +218,11 @@ export function WebSearchPane() {
           }
         }}
       >
-        <DialogContent showCloseButton={!busy}>
+        <DialogContent showCloseButton={!busy} aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>
               {editing?.name} {editing?.id === "searxng" ? "instance" : "API key"}
             </DialogTitle>
-            <DialogDescription>
-              {editing?.id === "searxng"
-                ? "Agents send searches to this instance."
-                : "Saved keys are never shown here."}
-            </DialogDescription>
           </DialogHeader>
           <Input
             autoFocus

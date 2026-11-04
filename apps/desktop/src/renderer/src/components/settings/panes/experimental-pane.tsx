@@ -1,4 +1,5 @@
 import { Skeleton } from "@renderer/components/ui/skeleton";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import * as React from "react";
@@ -17,6 +18,9 @@ import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 import { hasVisibleExperiments, useExperimentsStore } from "@renderer/stores/experiments";
+
+const CLOUD_THREAT_MODEL_URL =
+  "https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model";
 
 type LoadState =
   | { status: "loading" }
@@ -118,26 +122,18 @@ export function ExperimentalSettings() {
           <PrefRow
             key={experiment.id}
             label={experiment.label}
-            description={
-              experiment.id === "cloud" ? (
-                <>
-                  Cloud features are experimental. Read the{" "}
-                  <a
-                    className="underline underline-offset-2"
-                    href="https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    security notes
-                  </a>{" "}
-                  before enabling them.
-                </>
-              ) : (
-                experiment.description
-              )
-            }
             testId={`experiment-${experiment.id}`}
           >
+            {experiment.id === "cloud" ? (
+              // The threat model a person should read before turning it on, as
+              // a control beside the switch rather than a sentence under it.
+              <Button size="sm" variant="link" asChild>
+                <a href={CLOUD_THREAT_MODEL_URL} target="_blank" rel="noreferrer">
+                  Security notes
+                  <ArrowSquareOutIcon />
+                </a>
+              </Button>
+            ) : null}
             {environmentLocked ? (
               <span className="text-ui text-muted-foreground" data-testid="experiment-source">
                 Set by environment

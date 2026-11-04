@@ -26,14 +26,16 @@ export function PrefRow({
   label: string;
   icon?: Icon;
   htmlFor?: string;
-  /** Optional edge-case detail. Essential meaning belongs in `description`. */
+  /**
+   * @deprecated Its last caller is `pages/code-mode-settings.tsx`; remove the
+   * prop with it. A row carries no edge-case prose.
+   */
   hint?: React.ReactNode;
   /**
-   * One concise line explaining the setting's outcome, visible without opening a hint.
-   *
-   * A node rather than a string, so a row can emphasize the sentence that
-   * carries the consequence and keep the qualification quiet beside it. Nothing
-   * here may be a block element: it renders inside a `<p>`.
+   * The row's status or provenance ("Project override", "Inherited from
+   * Ghostty"), its blocked reason, or its one-line trust boundary — never an
+   * explanation of what the setting does; the label and control say that.
+   * Nothing here may be a block element: it renders inside a `<p>`.
    */
   description?: React.ReactNode;
   /** @deprecated Controls are always centred on the complete label block. */

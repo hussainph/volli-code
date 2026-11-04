@@ -355,9 +355,9 @@ describe("Storage → Orphaned worktrees", () => {
     expect(
       findByText("Scan again", unreadable.closest("[class*='rounded-container']")!),
     ).toBeTruthy();
-    // The retention window and the archive policy are both stated.
-    expect(text).toContain("Unused folders become eligible after 14 day(s)");
-    expect(text).toContain("An orphan has no ticket to archive");
+    // The retention window every date was measured against is stated.
+    expect(text).toContain("Eligible after 14 day(s)");
+    expect(text).not.toContain("An orphan has no ticket to archive");
     // Nothing has happened, so nothing may read as having happened.
     expect(text).not.toContain("Removed");
   });
@@ -480,9 +480,7 @@ describe("Storage → Orphaned worktrees", () => {
     expect(text).toContain("Cleanup finished with problems");
     expect(text).toContain("git refused: worktree is locked");
     expect(findByText("Scan again")).toBeTruthy();
-    expect(announcedNotice("Cleanup finished with problems").textContent).toContain(
-      "Each one is listed below with its reason.",
-    );
+    expect(announcedNotice("Cleanup finished with problems").textContent).toContain("1 failed");
   });
 
   // The recovery acceptance, on the surface a person actually looks at: a run

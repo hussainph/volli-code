@@ -11,7 +11,6 @@ import {
   listNotice,
   projectRows,
   projectSource,
-  sourceHint,
   sourceProblem,
   type ProjectListState,
 } from "./open-project-model";
@@ -45,7 +44,7 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
       recovery: { kind: "retry", label: "Try again" },
     });
     expect(listNotice(ready({ projects: [] }), "box")).toEqual({
-      line: "No projects on box yet.",
+      line: "No projects on box",
       recovery: { kind: "new", label: "New project…" },
     });
     expect(listNotice(ready(), "box")).toBeNull();
@@ -121,15 +120,7 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
     }
   });
 
-  it("hints where a clone goes, and says what runs while it does", () => {
-    expect(sourceHint(null)).toBe("A git URL, or a folder already on the host.");
-    expect(sourceHint({ kind: "path", path: "/a" })).toBe(
-      "A git URL, or a folder already on the host.",
-    );
-    expect(sourceHint({ kind: "git", gitUrl: "u" })).toBe(
-      "Cloned into /srv/volli on the host, then added.",
-    );
-    expect(sourceHint({ kind: "git", gitUrl: "u" }, true)).toBe("Cloned on the host, then added.");
+  it("says what runs while a create does", () => {
     expect(creatingLine({ kind: "git", gitUrl: "u" }, "box")).toBe("Cloning on box");
     expect(creatingLine({ kind: "path", path: "/a" }, "box")).toBe("Adding on box");
   });

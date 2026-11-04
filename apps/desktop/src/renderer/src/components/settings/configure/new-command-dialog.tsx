@@ -24,7 +24,6 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -113,12 +112,9 @@ export function NewCommandDialog({
           New command
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>New command</DialogTitle>
-          <DialogDescription>
-            Commands are markdown files. Typing the name in a composer runs the prompt below.
-          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
@@ -143,7 +139,7 @@ export function NewCommandDialog({
             </div>
             {malformed ? (
               <p id="cmd-name-error" role="alert" className="text-ui text-destructive">
-                Letters, numbers, dashes and underscores only — it becomes the filename.
+                Letters, numbers, dashes and underscores only
               </p>
             ) : null}
           </div>

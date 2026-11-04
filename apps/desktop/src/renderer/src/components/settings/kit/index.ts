@@ -11,7 +11,6 @@ export {
   type TableFilter,
 } from "./data-table";
 export { DetailLine, HealthPanel, type Fault, type HealthPanelState } from "./health-panel";
-export { InfoHint } from "./info-hint";
 export { OverrideControl } from "./override";
 export { ItemRow, PrefRow } from "./pref-row";
 export { RowAction } from "./row-action";

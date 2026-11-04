@@ -7,7 +7,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogTrigger,
 } from "@renderer/components/ui/dialog";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
@@ -44,14 +43,9 @@ export function LegalDialog({ kind }: { kind: "licence" | "acknowledgements" }) 
           {title}
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {kind === "licence"
-              ? "Volli is licensed under Apache 2.0."
-              : "The open-source work included with this build."}
-          </DialogDescription>
         </DialogHeader>
         {failed ? (
           <Notice tone="error" title="Couldn't read the notice. Close and reopen to try again." />

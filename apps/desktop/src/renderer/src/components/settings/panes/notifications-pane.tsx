@@ -24,9 +24,9 @@
  * of the OS authorization state, so nothing here says "Allowed" or "Denied" —
  * a denied notification's `show()` succeeds in silence, and a page that
  * inferred permission from it would be confidently wrong in exactly the case
- * somebody came here to diagnose. So: the switches are Volli's answer, the
- * hint says the system owns the rest, and a reported failure is shown as the
- * fault it is with the one route that fixes it.
+ * somebody came here to diagnose. So: the switches are Volli's answer, and a
+ * reported failure is shown as the fault it is with the one route that fixes
+ * it.
  *
  * The view is only ever set from what main READ BACK — the answer to a write,
  * or a push after the view moved — so a switch on this page cannot show a
@@ -51,24 +51,13 @@ import { toastError } from "@renderer/lib/toast";
  * How each category reads in a row. A total `Record`, so an event added to
  * {@link NOTIFICATION_EVENTS} fails to compile here until it has been given
  * words — the same mechanism that kept the preview honest, now guarding a page
- * whose switches do something.
- *
- * The hints name the PRODUCERS, because that is the only way a person can tell
- * what a category will cost them. They are the one exception CLAUDE.md's
- * "let controls talk" rule leaves room for: a mute switch's blast radius is not
- * visible in its label, and getting it wrong is silence.
+ * whose switches do something. The label is the whole row: it names the event.
  */
-const EVENT_ROWS: Record<NotificationEvent, { label: string; hint: string }> = {
-  "needs-you": {
-    label: "An agent needs my input",
-    hint: "An unattended Automation needs input, a terminal is waiting, or a session stalls.",
-  },
-  finished: { label: "A pull request merges", hint: "A ticket’s pull request has merged." },
-  swept: {
-    label: "Volli reclaims a worktree",
-    hint: "The folder is removed after Done; the branch is kept.",
-  },
-  update: { label: "An update is ready", hint: "A downloaded update is ready to install." },
+const EVENT_LABELS: Record<NotificationEvent, string> = {
+  "needs-you": "An agent needs my input",
+  finished: "A pull request merges",
+  swept: "Volli reclaims a worktree",
+  update: "An update is ready",
 };
 
 const SYSTEM_SETTINGS_ROUTE = "System Settings → Notifications → Volli Code";
@@ -130,7 +119,6 @@ export function NotificationsPane() {
           tone="error"
           icon={WarningCircleIcon}
           title="This system can't show notifications"
-          detail="Volli has nowhere to post these, so the switches below have no effect here."
         />
       ) : null}
       {failure !== null ? (
@@ -143,11 +131,7 @@ export function NotificationsPane() {
       ) : null}
 
       <PrefSection title="Notifications" icon={BellIcon}>
-        <PrefRow
-          label="Notify me"
-          htmlFor="notify-me"
-          description={`Allow Volli Code in ${SYSTEM_SETTINGS_ROUTE}. Alerts for the item in front of you are silenced.`}
-        >
+        <PrefRow label="Notify me" htmlFor="notify-me">
           <Switch
             id="notify-me"
             checked={preferences?.enabled ?? false}
@@ -156,12 +140,7 @@ export function NotificationsPane() {
           />
         </PrefRow>
         {NOTIFICATION_EVENTS.map((event) => (
-          <PrefRow
-            key={event}
-            label={EVENT_ROWS[event].label}
-            htmlFor={`notify-${event}`}
-            description={EVENT_ROWS[event].hint}
-          >
+          <PrefRow key={event} label={EVENT_LABELS[event]} htmlFor={`notify-${event}`}>
             <Switch
               id={`notify-${event}`}
               checked={preferences?.events[event] ?? false}

@@ -109,8 +109,8 @@ async function pickChannel(text: string): Promise<void> {
 }
 
 describe("UpdatesPane", () => {
-  // VC-851: leaving canary is honoured at the next launch, and the installed
-  // canary build stays — the row must say both rather than imply "now".
+  // VC-851: leaving canary is honoured at the next launch — the notice says
+  // when rather than imply "now".
   it("says when Stable takes effect after leaving Canary", async () => {
     await render();
     expect(container.textContent).not.toContain("Stable takes effect");
@@ -119,9 +119,7 @@ describe("UpdatesPane", () => {
 
     expect(container.querySelector("#update-channel")?.textContent).toContain("Stable");
     expect(container.textContent).toContain("Stable takes effect the next time Volli opens");
-    expect(container.textContent).toContain(
-      "An installed canary build stays until a newer stable release is out.",
-    );
+    expect(container.textContent).not.toContain("An installed canary build stays");
   });
 
   it("shows the channel it read", async () => {

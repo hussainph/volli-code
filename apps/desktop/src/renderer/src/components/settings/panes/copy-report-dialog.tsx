@@ -205,9 +205,7 @@ export function CopyReportDialog({
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Copy report</DialogTitle>
-          <DialogDescription>
-            This is everything that goes on your clipboard. It includes your home folder path.
-          </DialogDescription>
+          <DialogDescription>Includes your home folder path.</DialogDescription>
         </DialogHeader>
 
         <CopyReportPreview report={report} copyState={copyState} availability={availability} />
