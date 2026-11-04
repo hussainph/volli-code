@@ -1,17 +1,8 @@
 /**
- * Files navigator — the Calm Stack's files page
- * (the retired ticket-right-sidebar lab scratch's `FilesPanel`).
- *
- * A titled header over ONE flat list (decision #46, #53/#54 — never a deep
- * tree). The scratch retires the two uppercase section captions the icon-mode
- * rail used: a row's leading glyph already says whether it is a folder, a file
- * in the worktree, or a path the Ticket Body points at, and the referenced rows
- * repeat that in their sub-line. Worktree entries lead, referenced context
- * follows, because the worktree is what the current directory is about.
- *
- * Selecting a file opens/focuses a ticket file tab via preview/pin (decision
- * #56) — never from an fs event. A folder navigates in place; the header's
- * mono line is the way back out.
+ * Ticket Files mounts the shared virtual tree over its scoped host index.
+ * Body references join that hierarchy; attachments remain in the paperclip.
+ * Only a user gesture opens a preview/pinned tab, never a filesystem event.
+ * TicketFilesList remains a compatibility drawing for existing list consumers.
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
@@ -24,44 +15,27 @@ import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
+import type { Ticket, NamedBlobLink } from "@volli/shared";
 import { AttachmentMenu } from "@renderer/components/files/attachment-menu";
-import { FilesNavigatorHeader } from "@renderer/components/files/navigator-header";
+import { FileTreeNavigator } from "@renderer/components/files/file-tree-navigator";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { useFileNavigatorMutations } from "@renderer/components/files/use-navigator-mutations";
 import type { FileNavigatorControls } from "@renderer/components/files/use-navigator-mutations";
 import type { NavigatorEntryKind } from "@renderer/components/files/navigator-mutations";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { type AttachmentsHandle, useAttachments } from "@renderer/hooks/use-attachments";
 
-import {
-  NewFileRailAction,
-  RAIL_PANEL_MARGIN,
-  RailHeadingReadStatus,
-  RailPanelSkeleton,
-  RailReadFaultBody,
-  RailRowActions,
-  railNavigatorMatch,
-} from "@renderer/components/ticket/rail-panel-parts";
-import {
-  railReadCanClaimEmpty,
-  railReadFeedback,
-  type RailReadState,
-} from "@renderer/components/ticket/rail-read-feedback";
-import {
-  navigatorScopeKey,
-  useRememberedNavigatorView,
-} from "@renderer/components/files/navigator-scope-state";
+import { RailRowActions } from "@renderer/components/ticket/rail-panel-parts";
+import { navigatorScopeKey } from "@renderer/components/files/navigator-scope-state";
 import {
   buildTicketFilesNavigator,
   splitFilesPath,
   type TicketFileRefRow,
   type TicketWorktreeEntry,
 } from "@renderer/components/ticket/ticket-files-model";
-import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -71,19 +45,7 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
-
-function joinRel(parent: string, name: string): string {
-  return parent === "" ? name : `${parent}/${name}`;
-}
-
-function toWorktreeEntries(cwd: string, entries: readonly DirEntry[]): TicketWorktreeEntry[] {
-  return entries.map((entry) => ({
-    relPath: joinRel(cwd, entry.name),
-    kind: entry.kind === "dir" ? "directory" : "file",
-  }));
-}
 
 /**
  * The three kinds a row can be, and the glyph each wears — outline, the
@@ -125,14 +87,14 @@ function FileMutationMenuItems({
         disabled={!controls.canWrite}
         onSelect={() => controls.startDraft("file")}
       >
-        New File…
+        New file…
       </ContextMenuItem>
       <ContextMenuItem
         icon={FolderPlusIcon}
         disabled={!controls.canWrite}
         onSelect={() => controls.startDraft("directory")}
       >
-        New Folder…
+        New folder…
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem
@@ -199,7 +161,7 @@ function FileRow({
   relPath: string;
   label: string;
   kind: "file" | "directory" | "reference";
-  /** Absent where the surface has no write authority (fixtures, the lab). */
+  /** Absent where the surface has no write authority. */
   controls?: FileNavigatorControls;
   onActivate(): void;
   /** Double-click pin — omitted for directories (they only navigate). */
@@ -364,9 +326,8 @@ export function TicketFilesList({
   /** What an empty-but-read listing says — a filter that matched nothing differs. */
   emptyLabel?: string;
   /**
-   * The create/rename/duplicate/delete controller (VC-191). Optional: the
-   * fixture gallery and the unit tests mount this list without an IPC bridge,
-   * and a navigator with no controller is simply a read-only one.
+   * The create/rename/duplicate/delete controller (VC-191). A navigator
+   * without a controller is read-only.
    */
   controls?: FileNavigatorControls;
   /** Single-click: open in the replaceable File preview slot (decision #56). */
@@ -534,109 +495,6 @@ function TicketFilesScope({
       label: entry.label,
       originalName: entry.originalName,
     }));
-  // Where this ticket's navigator was left, which survived the tab switch that
-  // unmounted the page (`files/navigator-scope-state.ts`). Plain data: nothing
-  // about the memory keeps a read or a watch alive behind an unmounted panel.
-  const scopeKey = navigatorScopeKey("files", {
-    projectId: ticket.projectId,
-    ticketId: ticket.id,
-  });
-  const [view, setView] = useRememberedNavigatorView(scopeKey);
-  const { cwd, filtering, query } = view;
-  // The listing callbacks read the view through a ref rather than closing over
-  // it: a keystroke in the filter must not rebuild `loadDir` and re-list the
-  // directory.
-  const viewRef = React.useRef(view);
-  viewRef.current = view;
-  const rememberCwd = React.useCallback(
-    (next: string) => setView({ ...viewRef.current, cwd: next }),
-    [setView],
-  );
-
-  const [entries, setEntries] = React.useState<TicketWorktreeEntry[]>([]);
-  const [detail, setDetail] = React.useState<string | null>(null);
-  const worktreePath = ticket.worktreePath;
-  // The three bits `rail-read-feedback.ts` decides from. `hasData` is "a read
-  // has LANDED", never "the array is non-empty": a refused first read and an
-  // empty folder must not draw the same.
-  const [read, setRead] = React.useState<RailReadState>({
-    hasData: worktreePath === null,
-    pending: worktreePath !== null,
-    failed: false,
-  });
-  // Only the newest read may name the current folder or replace its rows. The
-  // unmount cleanup bumps it too, so a late answer cannot land on a gone panel.
-  const requestId = React.useRef(0);
-
-  const loadDir = React.useCallback(
-    async (nextCwd: string) => {
-      if (worktreePath === null) {
-        setEntries([]);
-        setDetail(null);
-        setRead({ hasData: true, pending: false, failed: false });
-        return;
-      }
-      const request = ++requestId.current;
-      setRead((prev) => ({ ...prev, pending: true }));
-      const abs = nextCwd === "" ? worktreePath : `${worktreePath}/${nextCwd}`;
-      try {
-        const result = await window.api.fs.listDirectory(abs);
-        if (request !== requestId.current) return;
-        if (!result.ok) {
-          setDetail(result.error);
-          // The rows on screen were true as of the last read and stay drawn;
-          // the heading is where the caveat goes.
-          setRead((prev) => ({ hasData: prev.hasData, pending: false, failed: true }));
-          return;
-        }
-        setDetail(null);
-        setEntries(toWorktreeEntries(nextCwd, result.entries));
-        setRead({ hasData: true, pending: false, failed: false });
-        rememberCwd(nextCwd);
-      } catch (err) {
-        if (request !== requestId.current) return;
-        setDetail(errorMessage(err));
-        setRead((prev) => ({ hasData: prev.hasData, pending: false, failed: true }));
-      }
-    },
-    [worktreePath, rememberCwd],
-  );
-
-  React.useEffect(() => {
-    void loadDir(viewRef.current.cwd);
-    return () => {
-      requestId.current += 1;
-    };
-  }, [loadDir]);
-
-  // The creation track, scoped to THIS ticket (VC-191) — so every verb resolves
-  // into its worktree through the same seam a read does. Offered only while the
-  // worktree exists: without one this navigator lists nothing but Ticket Body
-  // references, and a New File here would silently land in the main checkout.
-  const mutations = useFileNavigatorMutations({
-    scope: { projectId: ticket.projectId, ticketId: ticket.id },
-    cwd,
-    host: {
-      refresh: () => void loadDir(cwd),
-      openCreated: onOpenCreatedFile,
-      renameTab: onRenameFile,
-    },
-  });
-  const controls = ticket.worktreePath === null ? undefined : mutations;
-
-  const nav = buildTicketFilesNavigator({
-    body: ticket.body,
-    attachments,
-    worktreeEntries: entries,
-  });
-  const feedback = railReadFeedback(read, "Files");
-  // Nothing to LIST, which is a fact about the checkout and not about the
-  // Ticket. Attachments hang off the Ticket, so the page around this keeps its
-  // paperclip menu, its Attach control and its drop target: a PDF attached
-  // before a worktree exists used to have no surface here at all, because this
-  // was an early return over the whole panel.
-  const listEmptyWithoutWorktree = worktreePath === null && nav.referenced.length === 0;
-
   // The paperclip, and what it may do. A host that SUPPLIED the list owns it:
   // this panel is then a view of someone else's attachments and may neither add
   // to them nor remove from them — and with nothing supplied there is no menu
@@ -654,106 +512,27 @@ function TicketFilesScope({
       <AttachmentMenu attachments={providedAttachments} />
     );
 
-  const worktree = nav.worktree.filter((entry) => railNavigatorMatch(query, entry.relPath));
-  const referenced = nav.referenced.filter((row) => railNavigatorMatch(query, row.relPath));
-
-  function navigateUp() {
-    const slash = cwd.lastIndexOf("/");
-    void loadDir(slash === -1 ? "" : cwd.slice(0, slash));
-  }
-
+  const nav = buildTicketFilesNavigator({ body: ticket.body, attachments, worktreeEntries: [] });
   return (
     <div
       data-testid="ticket-files-panel"
-      // The rail is a drop target in its own right: this is the Ticket's file
-      // surface, so a file dragged onto the list attaches rather than bouncing —
-      // unless the host SUPPLIED the list, which makes this panel a read-only
-      // view of someone else's attachments. `undefined` returns handlers that
-      // decline every drop and paste, so the read-only menu and the surface
-      // under it refuse the same gestures.
+      className="flex min-h-0 flex-1 flex-col"
       {...fileAttachHandlers(
         providedAttachments === undefined ? (picked) => void attachFiles(picked) : undefined,
       )}
-      className="flex min-h-0 flex-1 flex-col"
     >
-      {/* One line: where the listing is, then everything that acts on it —
-          New File on the folder, the Ticket's paperclip, the filter. The
-          paperclip is in the header rather than in the list so that walking
-          into a folder or opening the filter cannot take it away: attachments
-          belong to the Ticket, not to the directory on screen. */}
-      <FilesNavigatorHeader
-        status={
-          <RailHeadingReadStatus
-            word
-            feedback={feedback}
-            onRetry={() => void loadDir(cwd)}
-            testId="ticket-files-read-status"
-          />
-        }
-        // New File acts on the FOLDER, which is what makes it a page action.
-        // Absent without a worktree, where a create would land in the main
-        // checkout instead.
-        actions={
-          controls === undefined ? undefined : (
-            <NewFileRailAction
-              disabled={!controls.canWrite}
-              onNewFile={() => controls.startDraft("file")}
-            />
-          )
-        }
-        attachmentMenu={attachmentMenu}
+      <FileTreeNavigator
+        projectId={ticket.projectId}
+        ticketId={ticket.id}
         root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
-        cwd={cwd}
-        upTestId="ticket-files-up"
-        filtering={filtering}
-        query={query}
-        onToggleFilter={() =>
-          setView({ ...view, filtering: !filtering, query: filtering ? "" : query })
-        }
-        onQueryChange={(next) => setView({ ...view, query: next })}
-        onNavigateUp={navigateUp}
+        available={ticket.worktreePath !== null}
+        attachmentMenu={attachmentMenu}
+        referenced={nav.referenced.map((row) => ({ path: row.relPath, referenced: true }))}
+        onOpen={onPreviewFile}
+        onPin={onPinFile}
+        onRename={onRenameFile}
+        onCreated={onOpenCreatedFile}
       />
-      {/* A first read that never landed IS the body; a refresh that failed is a
-          caveat in the heading above, over the rows it could not replace. */}
-      {feedback?.place === "body" && feedback.kind === "reading" ? (
-        <RailPanelSkeleton label="files" testId="ticket-files-loading" />
-      ) : (
-        <>
-          <RailReadFaultBody
-            feedback={feedback}
-            detail={detail}
-            onRetry={() => void loadDir(cwd)}
-            testId="ticket-files-error"
-            className={cn("mb-2 shrink-0", RAIL_PANEL_MARGIN)}
-          />
-          {/* The LIST's own empty state, under the header rather than instead
-              of it: where files would come from once there is a checkout. */}
-          {listEmptyWithoutWorktree ? (
-            <div
-              data-testid="ticket-files-no-worktree"
-              className={cn("min-h-0 flex-1", EMPTY_PAGE)}
-            >
-              <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-              <p className="text-ui text-muted-foreground/70">
-                Reference files in the Ticket Body with @path
-              </p>
-            </div>
-          ) : (
-            <TicketFilesList
-              projectId={ticket.projectId}
-              ticketId={ticket.id}
-              referenced={referenced}
-              worktree={worktree}
-              controls={controls}
-              canClaimEmpty={railReadCanClaimEmpty(read)}
-              emptyLabel={query.trim() === "" ? "Nothing here yet" : "No matches"}
-              onPreviewFile={onPreviewFile}
-              onPinFile={onPinFile}
-              onOpenDirectory={(relPath) => void loadDir(relPath)}
-            />
-          )}
-        </>
-      )}
     </div>
   );
 }
