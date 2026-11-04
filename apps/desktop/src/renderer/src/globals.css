@@ -1700,7 +1700,15 @@ article.bg-card {
  * Floats sit over arbitrary, often high-contrast content (a dialog footer's
  * primary button under a popover), so their tint is 90%, not the static
  * ladder's 76%: wherever the blur pass is not composited, what shows through
- * stays a faint ghost rather than legible text. */
+ * stays a faint ghost rather than legible text.
+ *
+ * `backdrop-filter` is written UNPREFIXED ONLY, in every rule of this file.
+ * Lightning CSS (Tailwind's optimizer and the build's minifier) folds a
+ * `-webkit-backdrop-filter` written after the standard property into one
+ * declaration and keeps only the prefixed spelling. Chromium does not parse
+ * that spelling, so every float would compute `backdrop-filter: none` and show
+ * crisp text through its tint. The build adds the prefix itself for any target
+ * that needs it (`floating-material.test.tsx`). */
 .material-floating,
 [cmdk-dialog],
 .toaster [data-sonner-toast].material-floating {
@@ -1711,19 +1719,16 @@ article.bg-card {
     inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
     var(--shadow-overlay);
   backdrop-filter: blur(20px) saturate(1.5);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
   contain: paint;
 }
-/* A submenu is portaled out of its parent (contain:paint would clip it), but it
- * still opens over that parent: it keeps the nested float's solid fill. */
+/* Only DOM-nested floats share their parent's material. Portaled submenus
+ * sample the page independently and keep the same glass as every other float. */
 .material-floating .material-floating,
-[data-slot$="menu-sub-content"].material-floating,
 [cmdk-dialog] .material-floating,
 .material-floating [cmdk-dialog] {
   background: var(--material-solid-fill);
   /* A hard rendering budget, including Sonner's higher-specificity skin. */
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
 }
 .material-floating [data-slot="command"],
 [cmdk-dialog] [cmdk-root] {
@@ -1732,7 +1737,6 @@ article.bg-card {
 /* cmdk owns a separate scrim. Blur belongs on its surface, never the scrim. */
 [cmdk-overlay] {
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 /* Tooltip arrows extend beyond the label; contain:paint would clip them. */
 [data-slot="tooltip-content"].material-floating {
@@ -1789,7 +1793,6 @@ article.bg-card {
   ) {
     background: var(--material-solid-fill);
     backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 }
 
