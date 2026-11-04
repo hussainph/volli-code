@@ -30,6 +30,7 @@ import {
   ContextMenuSeparator,
 } from "@renderer/components/ui/context-menu";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
+import { SOURCE_LIST_ROW } from "@renderer/components/ui/list-row";
 import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import { cn } from "@renderer/lib/utils";
@@ -46,7 +47,7 @@ function PathLabel({ label, query }: { label: string; query: string }) {
         hits.has(index) ? (
           <mark
             key={label.slice(0, index + 1)}
-            className="rounded-keycap bg-primary/10 text-primary-text"
+            className="rounded-keycap bg-(--accent-selected) text-primary-text"
           >
             {letter}
           </mark>
@@ -285,12 +286,13 @@ export function FileTree({
                         : "ticket-files-row"
                     }
                     data-line={row.match?.line}
+                    data-selected={selected === path || undefined}
                     data-path={path}
                     data-kind={row.match ? "match" : file ? "file" : "directory"}
                     title={row.match ? row.match.text : referenced ? `Referenced · ${path}` : path}
                     className={cn(
-                      "absolute inset-x-0 flex cursor-default select-none items-center gap-2 rounded-row px-2 text-ui hover:bg-accent/50",
-                      selected === path && "bg-primary/10",
+                      "absolute inset-x-0 flex cursor-default select-none items-center gap-1.5 px-2 text-ui",
+                      SOURCE_LIST_ROW,
                       focused === key &&
                         "group-focus-visible/tree:inset-ring-1 group-focus-visible/tree:inset-ring-ring",
                     )}

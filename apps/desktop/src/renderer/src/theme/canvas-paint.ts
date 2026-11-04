@@ -29,6 +29,9 @@ import {
   canvasInk,
   deriveCanvasTokens,
   deriveLabelInk,
+  hexToOklch,
+  oklchToHex,
+  solveLightnessOrCeiling,
   type Canvas,
   type ResolvedAppearance,
 } from "@volli/shared";
@@ -114,6 +117,8 @@ export const CANVAS_TOKEN_NAMES = [
   "--tertiary-foreground",
   "--glass-fill",
   "--glass-edge",
+  "--diff-added",
+  "--diff-removed",
 ] as const;
 
 export type CanvasTokenName = (typeof CANVAS_TOKEN_NAMES)[number];
@@ -170,6 +175,14 @@ export function deriveCanvasPaint(
   const tokens = deriveCanvasTokens(canvas, resolved);
   const elevation = canvasElevation(canvas, resolved, tokens);
   const { ink, inkLabel, inkMuted } = canvasInk(canvas, resolved, elevation.surfaces);
+  // Diff counts and gutter marks are reading ink, not status fills. Solve
+  // against the worst 18%-selected paper pool (black / white canvas stops),
+  // which also bounds neutral glass, rather than diluting the status colour.
+  const diffSurface = resolved === "light" ? "#d1d1d1" : "#474747";
+  const diffInk = (status: string): string => {
+    const { C, h } = hexToOklch(status);
+    return oklchToHex(solveLightnessOrCeiling(75, C, h, diffSurface), C, h);
+  };
   return {
     tokens,
     canvasTokens: {
@@ -194,6 +207,8 @@ export function deriveCanvasPaint(
       "--tertiary-foreground": resolved === "light" ? "#666666" : "#aaaaaa",
       "--glass-fill": resolved === "light" ? "#fafafa" : "#282828",
       "--glass-edge": resolved === "light" ? "rgb(0 0 0 / .11)" : "rgb(0 0 0 / .6)",
+      "--diff-added": diffInk(tokens["--positive"]),
+      "--diff-removed": diffInk(tokens["--destructive"]),
     },
   };
 }

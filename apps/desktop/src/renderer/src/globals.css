@@ -331,6 +331,8 @@
   --tertiary-foreground: #aaaaaa;
   --glass-fill: #282828;
   --glass-edge: rgb(0 0 0 / 0.6);
+  --diff-added: #5cf9b8;
+  --diff-removed: #ffd6d2;
 }
 
 /* Later in the file at equal specificity (0,2,0) to `:root.dark` and higher
@@ -423,6 +425,8 @@
   --tertiary-foreground: #666666;
   --glass-fill: #fafafa;
   --glass-edge: rgb(0 0 0 / 0.11);
+  --diff-added: #002c1c;
+  --diff-removed: #4a0009;
 }
 /* GENERATED THEME TOKENS — END */
 
@@ -449,6 +453,8 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-positive: var(--positive);
   --color-positive-foreground: var(--positive-foreground);
+  --color-diff-added: var(--diff-added);
+  --color-diff-removed: var(--diff-removed);
   --color-attention: var(--attention);
   --color-attention-foreground: var(--attention-foreground);
   --color-info: var(--info);

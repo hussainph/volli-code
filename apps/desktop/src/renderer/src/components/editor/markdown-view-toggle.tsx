@@ -64,7 +64,7 @@ export function MarkdownViewToggle({
   return (
     <div
       data-testid="file-view-control-band"
-      className="flex shrink-0 items-center gap-2 border-b border-border px-gutter py-1"
+      className="flex min-h-control-default shrink-0 items-center gap-2 border-b border-border bg-background px-1 py-0.5"
     >
       <Segmented
         ariaLabel="Markdown view"

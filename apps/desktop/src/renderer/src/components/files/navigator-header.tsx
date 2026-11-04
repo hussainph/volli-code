@@ -112,7 +112,7 @@ export function FilesNavigatorHeader({
           <TooltipTrigger asChild>
             <Button
               size="icon-sm"
-              variant="ghost"
+              variant="toolbar"
               aria-label="Filter files"
               aria-pressed={filtering}
               onClick={onToggleFilter}
@@ -134,6 +134,7 @@ export function FilesNavigatorHeader({
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           aria-label="Filter files"
+          variant="search"
           placeholder="Filter files…"
           className="h-7 text-ui"
         />

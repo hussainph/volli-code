@@ -141,3 +141,47 @@
   border-color: var(--foreground);
   color: var(--background);
 }
+
+/* Workbench reading surfaces use accent selection, with semantic diff ink.
+   These aliases leave the person's chosen syntax theme and terminal alone. */
+.volli-source-mode .monaco-editor,
+.volli-source-mode .monaco-diff-editor {
+  --vscode-editor-selectionBackground: var(--accent-selected);
+  --vscode-editor-inactiveSelectionBackground: var(--accent-tint);
+  --vscode-editor-selectionHighlightBackground: var(--accent-tint);
+  --vscode-editor-lineHighlightBackground: var(--accent-tint);
+  --vscode-diffEditor-insertedLineBackground: color-mix(in srgb, var(--diff-added) 9%, transparent);
+  --vscode-diffEditor-removedLineBackground: color-mix(
+    in srgb,
+    var(--diff-removed) 9%,
+    transparent
+  );
+  --vscode-diffEditor-insertedTextBackground: color-mix(
+    in srgb,
+    var(--diff-added) 15%,
+    transparent
+  );
+  --vscode-diffEditor-removedTextBackground: color-mix(
+    in srgb,
+    var(--diff-removed) 15%,
+    transparent
+  );
+  --vscode-diffEditorGutter-insertedLineBackground: color-mix(
+    in srgb,
+    var(--diff-added) 9%,
+    transparent
+  );
+  --vscode-diffEditorGutter-removedLineBackground: color-mix(
+    in srgb,
+    var(--diff-removed) 9%,
+    transparent
+  );
+}
+
+.volli-source-mode .monaco-editor .insert-sign {
+  color: var(--diff-added);
+}
+
+.volli-source-mode .monaco-editor .delete-sign {
+  color: var(--diff-removed);
+}

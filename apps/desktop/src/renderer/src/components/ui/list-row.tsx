@@ -47,6 +47,10 @@ import { cn } from "@renderer/lib/utils";
 
 export type ListRowDensity = "row" | "two-line";
 
+/** Dense source navigation uses the same accent washes as the sidebar. */
+export const SOURCE_LIST_ROW =
+  "rounded-row hover:bg-(--accent-tint) data-[selected=true]:bg-(--accent-selected)";
+
 /**
  * The fixed Tailwind widths every VC-383 loading row deliberately draws.
  *
@@ -71,6 +75,7 @@ export function ListRow({
   onActivate,
   selected = false,
   density = "row",
+  variant = "list",
   className,
   ...rest
 }: React.HTMLAttributes<HTMLElement> & {
@@ -103,6 +108,7 @@ export function ListRow({
   onActivate: (() => void) | null;
   selected?: boolean;
   density?: ListRowDensity;
+  variant?: "list" | "source";
 }) {
   const activatable = onActivate !== null;
 
@@ -161,12 +167,15 @@ export function ListRow({
 
   return (
     <div
+      data-selected={selected || undefined}
       className={cn(
         "group relative flex w-full items-center gap-2 rounded-lg border border-transparent px-2",
         DENSITY[density],
-        selected
-          ? "border-sidebar-border bg-accent/70"
-          : activatable && "hover:border-sidebar-border hover:bg-accent/50",
+        variant === "source"
+          ? activatable && SOURCE_LIST_ROW
+          : selected
+            ? "border-sidebar-border bg-accent/70"
+            : activatable && "hover:border-sidebar-border hover:bg-accent/50",
         className,
       )}
     >

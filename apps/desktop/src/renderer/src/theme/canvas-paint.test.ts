@@ -102,6 +102,26 @@ describe("deriveCanvasPaint", () => {
     },
   );
 
+  it.each(["light", "dark"] as const)(
+    "%s diff ink clears AA on paper, glass and any accent selection",
+    (mode) => {
+      for (const hex of ["#e8652a", "#4653a2", "#18b6a4", "#f2d060", "#000000", "#ffffff"]) {
+        const { canvasTokens } = deriveCanvasPaint(
+          { ...TEAL, stops: [{ hex, x: 0.5, y: 0.5 }] },
+          mode,
+        );
+        const surfaces =
+          mode === "light"
+            ? ["#ffffff", "#f6f6f6", "#e1e1e1", "#d1d1d1"]
+            : ["#1e1e1e", "#282828", "#3e3e3e", "#474747"];
+        for (const name of ["--diff-added", "--diff-removed"] as const) {
+          for (const surface of surfaces)
+            expect(wcagContrast(canvasTokens[name], surface)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    },
+  );
+
   it("carries the gradient the shared pipeline paints, verbatim", () => {
     const { canvasTokens } = deriveCanvasPaint(TEAL, "light");
 

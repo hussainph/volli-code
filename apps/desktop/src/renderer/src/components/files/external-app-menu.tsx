@@ -55,11 +55,6 @@ export function preferredExternalApp(
   return apps.find((app) => app.id === defaultExternalAppId) ?? null;
 }
 
-function AppGlyph({ app }: { app: ExternalApp }) {
-  const Icon = app.kind === "editor" ? CodeIcon : TerminalWindowIcon;
-  return <Icon aria-hidden weight="fill" />;
-}
-
 function useExternalAppActions(target: ExternalAppTarget) {
   const open = React.useCallback(
     async (app: ExternalApp) => {
@@ -129,18 +124,14 @@ export function ExternalAppContextMenu({
     <>
       {defaultApp !== null ? (
         <>
-          <ContextMenuItem
-            icon={ArrowSquareOutIcon}
-            iconWeight="fill"
-            onSelect={() => void open(defaultApp)}
-          >
+          <ContextMenuItem icon={ArrowSquareOutIcon} onSelect={() => void open(defaultApp)}>
             Open in {defaultApp.label}
           </ContextMenuItem>
           <ContextMenuSeparator />
         </>
       ) : null}
       <ContextMenuSub>
-        <ContextMenuSubTrigger icon={ArrowSquareOutIcon} iconWeight="fill">
+        <ContextMenuSubTrigger icon={ArrowSquareOutIcon}>
           {defaultApp === null ? label : "Open in another app…"}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
@@ -149,11 +140,7 @@ export function ExternalAppContextMenu({
               return (
                 <React.Fragment key="finder">
                   {selectableApps.length > 0 ? <ContextMenuSeparator /> : null}
-                  <ContextMenuItem
-                    icon={FolderOpenIcon}
-                    iconWeight="fill"
-                    onSelect={() => void reveal()}
-                  >
+                  <ContextMenuItem icon={FolderOpenIcon} onSelect={() => void reveal()}>
                     Reveal in Finder
                   </ContextMenuItem>
                 </React.Fragment>
@@ -161,12 +148,7 @@ export function ExternalAppContextMenu({
             }
             const Icon = entry.app.kind === "editor" ? CodeIcon : TerminalWindowIcon;
             return (
-              <ContextMenuItem
-                key={entry.app.id}
-                icon={Icon}
-                iconWeight="fill"
-                onSelect={() => void open(entry.app)}
-              >
+              <ContextMenuItem key={entry.app.id} icon={Icon} onSelect={() => void open(entry.app)}>
                 {entry.app.label}
               </ContextMenuItem>
             );
@@ -199,16 +181,12 @@ export function ExternalAppDropdownMenu({
           return (
             <React.Fragment key="finder">
               {selectableApps.length > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuItem onSelect={() => void reveal()}>
-                <FolderOpenIcon aria-hidden weight="fill" />
-                Reveal in Finder
-              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void reveal()}>Reveal in Finder</DropdownMenuItem>
             </React.Fragment>
           );
         }
         return (
           <DropdownMenuItem key={entry.app.id} onSelect={() => void open(entry.app)}>
-            <AppGlyph app={entry.app} />
             {entry.app.label}
           </DropdownMenuItem>
         );
@@ -222,19 +200,19 @@ export function ExternalAppDropdownMenu({
       <ButtonGroup aria-label={defaultLabel}>
         <Button
           size="xs"
-          variant="outline"
+          variant="toolbar"
           aria-label={defaultLabel}
           onClick={() => void open(defaultApp)}
           title={defaultLabel}
         >
-          <ArrowSquareOutIcon weight="fill" />
+          <ArrowSquareOutIcon />
           Open
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               size="icon-xs"
-              variant="outline"
+              variant="toolbar"
               aria-label="Choose another app"
               title="Choose another app"
             >
@@ -250,8 +228,8 @@ export function ExternalAppDropdownMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="xs" variant="ghost" className="shrink-0" aria-label={label} title={label}>
-          <ArrowSquareOutIcon weight="fill" />
+        <Button size="xs" variant="toolbar" className="shrink-0" aria-label={label} title={label}>
+          <ArrowSquareOutIcon />
           Open
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>
