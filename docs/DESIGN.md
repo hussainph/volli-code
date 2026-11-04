@@ -19,11 +19,11 @@ Every surface declares which tier it is; the tiers may not be mixed ad hoc.
   (title, description, activity, composer), empty states. These center on
   the canonical measure via `<ContentColumn>`; surrounding whitespace is the point.
 - **Tier B — workbench surfaces.** Content that genuinely earns width: the kanban board, list
-  view, artifacts viewer, terminals, and the Settings and Configure panes. These stay fluid edge-to-edge but align their horizontal edges
+  view, artifacts viewer, terminals, and the Settings panes. These stay fluid edge-to-edge but align their horizontal edges
   to the page gutter so all surfaces share the same left/right rhythm.
 
-  Settings and Configure are Tier B via `<WorkbenchColumn>` — still a centered column, but capped
-  at `--container-workbench` rather than the reading measure. They read like preference forms, yet
+  Settings is Tier B via `<WorkbenchColumn>` — still a centered column, but capped
+  at `--container-workbench` rather than the reading measure. Its panes read like preference forms, yet
   their tables carry a name AND a description AND provenance, and at 45rem the description
   truncated to a few words — the one column that tells two skills apart. Capped rather than fully
   fluid because an unbounded row parks a switch a foot from the label it answers to.
@@ -33,7 +33,7 @@ Every surface declares which tier it is; the tiers may not be mixed ad hoc.
 | Token | Value | Utility | Meaning |
 |---|---|---|---|
 | `--container-content` | `45rem` (720px) | `max-w-content` | The canonical reading measure for code-heavy ticket markdown. |
-| `--container-workbench` | `80rem` (1280px) | `max-w-workbench` | The Tier B ceiling, for surfaces that are columns but carry tables (Settings, Configure). |
+| `--container-workbench` | `80rem` (1280px) | `max-w-workbench` | The Tier B ceiling, for surfaces that are columns but carry tables (Settings). |
 | `--spacing-gutter` | `1.5rem` (24px) | `px-gutter` etc. | The unified page-edge padding every surface aligns to. |
 
 ## Spacing — five steps
@@ -82,7 +82,7 @@ narrows they compress to the 24px gutter floor before text ever reflows.
 
 - **`<ContentColumn>`** — the Tier A measure column. Tier B surfaces must not wrap in it.
 - **`<WorkbenchColumn>`** — the same column at the Tier B ceiling (`--container-workbench`), for a
-  surface that needs width for tables but would look adrift edge-to-edge. Settings and Configure.
+  surface that needs width for tables but would look adrift edge-to-edge. Settings.
 - **`<PageHeader>`** — the page-level header, and the only one: `title` (always the page's `h1`),
   no subtitle, optional right-parked `actions`, and `children` for controls that share the title's
   row and wrap with it. `py-4`, wrap-friendly, gaps `4`/`2`. One axis, `variant`,
@@ -443,7 +443,7 @@ semantic generated tokens; product state and mutations belong to the consumer.
 | Hover label/reveal | Tooltip / ValueReveal | Brief labels and clipped values, not explanatory onboarding paragraphs. |
 | Disclosure | Accordion / Collapsible | Structured sections / unstyled behavioral composition, not an extra card language. |
 | Workspace places | Tab / TabStrip, split primitives | Navigation/reorder/split behavior; never move terminal/native Browser Tab lifetime into a new wrapper. |
-| Preferences | `settings/kit` sections/rows/async/table contracts | Settings and Configure have a shared vocabulary already; do not flatten control-bearing rows into ordinary lists. |
+| Preferences | `settings/kit` sections/rows/async/table contracts | App and project Settings share one vocabulary; do not flatten control-bearing rows into ordinary lists. |
 
 Specialized board, editor, terminal, Browser Tab, drag-target and identity drawings are
 not automatically generic primitive candidates.
