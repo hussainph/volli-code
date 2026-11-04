@@ -1,4 +1,3 @@
-import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 
@@ -62,7 +61,6 @@ export function BoardEmpty({ projectId, className }: { projectId: string; classN
         <ModelAccessFirstRun />
       ) : (
         <>
-          <NextActionIllustration kind="board" />
           <h2 className="text-heading font-semibold text-foreground">No tickets yet</h2>
           <Button
             size="lg"
@@ -73,7 +71,7 @@ export function BoardEmpty({ projectId, className }: { projectId: string; classN
             New ticket
             {/* The shortcut-chip treatment the primary buttons already use
                 (ticket-activity-feed.tsx, project-tile.tsx). */}
-            <kbd className="rounded-sm bg-primary-foreground/10 px-1 py-px font-sans text-label font-normal text-primary-foreground/70">
+            <kbd className="rounded-sm bg-(--accent-selected) px-1 py-px font-sans text-label font-normal text-primary-text">
               C
             </kbd>
           </Button>

@@ -126,6 +126,9 @@ describe("board create controls", () => {
     const container = await world.render(<BoardEmpty projectId="remote" />);
     const control = button(container, "New ticket");
     expectUntouched(control);
+    expect(container.querySelectorAll("button")).toHaveLength(1);
+    expect(container.querySelector("[data-next-action]")).toBeNull();
+    expect(control.querySelector("kbd")?.className).toContain("text-primary-text");
     act(() => control.click());
     expect(useUiStore.getState().newTicketOpen).toBe(true);
   });
