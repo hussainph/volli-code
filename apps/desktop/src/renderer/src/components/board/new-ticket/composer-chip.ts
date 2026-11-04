@@ -8,5 +8,5 @@
  * the ticket property controls; the Button owns geometry.
  */
 export function composerChipClass(): string {
-  return "gap-1.5 px-2 font-medium text-foreground";
+  return "text-foreground";
 }
