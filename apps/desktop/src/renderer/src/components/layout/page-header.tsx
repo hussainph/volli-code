@@ -13,9 +13,11 @@ import { cn } from "@renderer/lib/utils";
  *
  * A **reading** header is Tier A: it takes its measure and its horizontal
  * inset from the `<ContentColumn>` it is mounted in and adds none of its own,
- * and its identity block takes the column's width so a description wraps on
- * the measure instead of running past it. Its title is the pane's masthead, one
- * step above the `text-sm` section titles underneath it.
+ * and its identity block takes the column's width. Its title is the pane's
+ * masthead, one step above the `text-sm` section titles underneath it.
+ *
+ * There is no subtitle slot: a page is named by its title, and a sentence
+ * under it explaining the page is the copy this app does not draw.
  */
 const TIERS = {
   workbench: { inset: "px-gutter", identity: "shrink-0", title: "text-sm" },
@@ -46,7 +48,6 @@ const TIERS = {
  */
 export function PageHeader({
   title,
-  description,
   actions,
   variant = "workbench",
   titleHidden = false,
@@ -56,8 +57,6 @@ export function PageHeader({
   title: ReactNode;
   /** Keep the title for the outline, off the screen — see the doc above. */
   titleHidden?: boolean;
-  /** One line under the title. */
-  description?: ReactNode;
   /** The right-parked cluster. */
   actions?: ReactNode;
   /** Surface controls sharing the title's row. */
@@ -77,7 +76,6 @@ export function PageHeader({
     >
       <div className={titleHidden ? "contents" : tier.identity}>
         <h1 className={titleHidden ? "sr-only" : cn(tier.title, "font-semibold")}>{title}</h1>
-        {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {children}
       {actions ? <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div> : null}

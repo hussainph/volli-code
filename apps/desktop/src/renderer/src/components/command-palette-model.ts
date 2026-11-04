@@ -328,7 +328,6 @@ export interface CommandPaletteEditorItem {
   kind: "editor-command";
   id: "go-to-line";
   title: string;
-  hint: string;
 }
 
 /**
@@ -344,7 +343,6 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
       kind: "editor-command",
       id: "go-to-line",
       title: "Go to Line…",
-      hint: "In the editor you were last in",
     },
   ];
 }
@@ -432,14 +430,15 @@ export function buildNavigationCommandItems(
 /**
  * "Add a host…" and "Manage hosts…" (VC-700): the palette's way to more
  * machines; and, per remote host (VC-710), "Open a project on <host>…" and
- * "Sign-ins on <host>…".
+ * "Sign-ins on <host>…". A `hint` is a place ("Settings → Hosts"), never a
+ * description of what the row does: the title already says that.
  */
 export type CommandPaletteHostItem =
   | {
       kind: "host-command";
       id: "add-host" | "manage-hosts";
       title: string;
-      hint: string;
+      hint?: string;
       keywords: string[];
     }
   | {
@@ -448,7 +447,6 @@ export type CommandPaletteHostItem =
       hostId: string;
       hostName: string;
       title: string;
-      hint: string;
       keywords: string[];
     };
 
@@ -476,7 +474,6 @@ export function buildHostCommandItems(
       hostId: host.id,
       hostName: host.name,
       title: `Open a project on ${host.name}…`,
-      hint: "Its projects, or a new one from a git URL or a folder",
       keywords: ["open project", "remote", "host", "new project", "clone", host.name],
     },
     {
@@ -485,7 +482,6 @@ export function buildHostCommandItems(
       hostId: host.id,
       hostName: host.name,
       title: `Sign-ins on ${host.name}…`,
-      hint: "Model providers and git push tokens on the host",
       keywords: ["sign in", "api key", "token", "git", "remote", host.name],
     },
   ]);
@@ -493,7 +489,6 @@ export function buildHostCommandItems(
     kind: "host-command",
     id: "add-host",
     title: "Add a host…",
-    hint: "Install Volli host on a machine over SSH",
     keywords: ["add host", "remote", "server", "ssh", "machine", "box"],
   };
   return [
