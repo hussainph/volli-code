@@ -36,10 +36,10 @@ export function FilterChip({ label, icon, options, selected, onToggle }: FilterC
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
+          variant="toolbar"
           className={cn(
-            "border border-border px-2 text-ui text-muted-foreground",
-            active && "border-border-strong text-foreground",
+            "px-2 text-ui text-muted-foreground",
+            active && "bg-(--accent-selected) text-primary-text",
           )}
         >
           {icon ?? <FunnelIcon aria-hidden />}

@@ -42,6 +42,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  useDndMonitor,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import {
@@ -205,7 +206,7 @@ function LaneColumn({
 }) {
   const movable = draggableRows(lane);
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-lg bg-muted/30 p-2">
+    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-(--radius-column) bg-muted p-2">
       {/* `group/column-header` is what the bolt's hover reveal reads: the same
           control as the board's, so arming a column from the page and arming it
           from the board are provably one act (and one store door). */}
@@ -258,6 +259,12 @@ function LaneRow({
   switchedOff: boolean;
   reducedMotion: boolean;
 }) {
+  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
+  useDndMonitor({
+    onDragStart: ({ activatorEvent }) => setKeyboardDrag(activatorEvent.type === "keydown"),
+    onDragEnd: () => setKeyboardDrag(false),
+    onDragCancel: () => setKeyboardDrag(false),
+  });
   // Two components would need two hook orders; one component with a disabled
   // sortable keeps dnd-kit's own opt-out where it belongs.
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -265,7 +272,7 @@ function LaneRow({
     disabled: pinned,
     // `null` is dnd-kit's own "do not animate": under reduced motion the
     // siblings jump to their new places instead of sliding.
-    transition: reducedMotion ? null : LANE_SORT_TRANSITION,
+    transition: reducedMotion || keyboardDrag ? null : LANE_SORT_TRANSITION,
   });
 
   return (
@@ -327,7 +334,7 @@ function LaneRow({
  */
 function OffBoardLane({ automations }: { automations: readonly Automation[] }) {
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-lg border border-dashed border-border p-2">
+    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-(--radius-column) border border-dashed border-border p-2">
       <div className="flex items-center gap-2 px-1">
         <span className="text-ui font-medium text-muted-foreground">No column</span>
         <span className="text-label text-muted-foreground tabular-nums">

@@ -49,6 +49,7 @@ const TIERS = {
 export function PageHeader({
   title,
   actions,
+  actionsClassName,
   variant = "workbench",
   titleHidden = false,
   className,
@@ -59,6 +60,8 @@ export function PageHeader({
   titleHidden?: boolean;
   /** The right-parked cluster. */
   actions?: ReactNode;
+  /** Optional geometry for a dense, wrapping toolbar cluster. */
+  actionsClassName?: string;
   /** Surface controls sharing the title's row. */
   children?: ReactNode;
   variant?: keyof typeof TIERS;
@@ -78,7 +81,11 @@ export function PageHeader({
         <h1 className={titleHidden ? "sr-only" : cn(tier.title, "font-semibold")}>{title}</h1>
       </div>
       {children}
-      {actions ? <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className={cn("ml-auto flex shrink-0 items-center gap-2", actionsClassName)}>
+          {actions}
+        </div>
+      ) : null}
     </header>
   );
 }

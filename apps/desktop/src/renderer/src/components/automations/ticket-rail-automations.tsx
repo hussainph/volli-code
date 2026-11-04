@@ -680,7 +680,7 @@ function AutomationInspectContent({
           push the Run out of the popover. */}
       <pre
         data-testid="ticket-rail-automation-instructions"
-        className="max-h-32 overflow-y-auto overscroll-contain rounded-row bg-muted/40 px-2 py-1.5 text-label whitespace-pre-wrap text-foreground/90"
+        className="max-h-32 overflow-y-auto overscroll-contain rounded-row bg-muted px-2 py-1.5 text-label whitespace-pre-wrap text-foreground"
       >
         {row.automation.instructions}
       </pre>
@@ -691,7 +691,7 @@ function AutomationInspectContent({
             <DropdownMenuTrigger asChild>
               <Button
                 size="sm"
-                variant="outline"
+                variant="inspector"
                 className={cn(RAIL_CONTROL, "min-w-0 gap-1.5 font-normal")}
                 aria-label="Run on model"
                 data-testid="ticket-rail-automation-model"

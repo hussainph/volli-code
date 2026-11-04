@@ -1599,6 +1599,28 @@
   }
 }
 
+/* Board live state uses the canvas accent in both states. Motion, not a
+ * second colour or badge, distinguishes working from waiting. */
+:root .session-ring.board-session-ring {
+  --session-ring-seed: var(--canvas-accent);
+  --session-ring-color: var(--primary-text);
+}
+
+/* Motion off freezes a working arc; waiting still fills the whole ring. */
+:root[data-motion="off"] .board-session-ring[data-activity="working"]::before {
+  animation: none;
+}
+:root[data-motion="off"] .board-session-ring[data-activity="waiting"]::before {
+  animation: none;
+  background: var(--session-ring-color);
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-ring.board-session-ring[data-activity="working"]::before {
+    background: conic-gradient(var(--session-ring-color) 0deg 96deg, transparent 96deg 360deg);
+    opacity: 1;
+  }
+}
+
 /* Glass, tuned material ladder. Static surfaces reuse --canvas verbatim:
  * grain, authored stops, positions and layer sizes stay in the production
  * canvas pipeline. Fixed attachment aligns them with html's viewport paint.

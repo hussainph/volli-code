@@ -110,6 +110,8 @@ import { DEFAULT_PROJECT_UI, useProjectUiStore, type BoardView } from "@renderer
  */
 interface DragState {
   activeTicket: Ticket;
+  /** Keyboard gestures change position immediately, including their landing. */
+  keyboard: boolean;
   selectedTickets: Ticket[];
   ticketIds: string[];
   preview: Ticket[];
@@ -294,7 +296,7 @@ function sameColumn(previous: readonly Ticket[], next: readonly Ticket[]): boole
  * whole subtree every time, which is the exact class of churn the provider
  * exists to stop.
  */
-const CLUSTER_SPRING = { type: "spring", duration: 0.5, bounce: 0.2 } as const;
+const CLUSTER_SPRING = { type: "spring", duration: 0.24, bounce: 0.1 } as const;
 
 function DragOverlayBody({
   activeTicket,
@@ -327,7 +329,7 @@ function DragOverlayBody({
         />
       </div>
     ) : (
-      <div className="rounded-lg shadow-card">
+      <div className="rounded-(--radius-card) shadow-card">
         <TicketCardContent
           ticket={ticket}
           ticketPrefix={ticketPrefix}
@@ -466,6 +468,15 @@ export const Board = React.memo(function Board({
   }, [selectedIds]);
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
+  // WAAPI does not resolve CSS variables in animation options. Resolve the
+  // foundation spring only when the shared Motion preference changes.
+  const dropMotion = React.useMemo(() => {
+    if (reducedMotion) return null;
+    const style = getComputedStyle(document.documentElement);
+    const easing = style.getPropertyValue("--spring-bouncy").trim();
+    const duration = Number.parseFloat(style.getPropertyValue("--duration-bouncy"));
+    return easing !== "" && duration > 0 ? { duration, easing } : null;
+  }, [reducedMotion]);
   React.useLayoutEffect(() => {
     const sourceRects = pendingSlotAnimation.current;
     if (sourceRects === null) return;
@@ -479,16 +490,18 @@ export const Board = React.memo(function Board({
       const dx = source.left - destination.left;
       const dy = source.top - destination.top;
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-      const easing = getComputedStyle(slot).getPropertyValue("--ease-swift").trim();
+      const style = getComputedStyle(slot);
+      const easing = style.getPropertyValue("--spring-bouncy").trim();
+      const duration = Number.parseFloat(style.getPropertyValue("--duration-bouncy"));
       // Web Animations does not resolve `var(...)` in its options dictionary;
       // read the canonical motion token from the element instead. If a future
       // shell omits it, skip the flourish rather than throwing during layout.
-      if (easing === "") continue;
+      if (easing === "" || !(duration > 0)) continue;
       for (const animation of slot.getAnimations()) animation.cancel();
       slot.dataset.boardSlotAnimated = "true";
       slot.animate(
         [{ transform: `translate3d(${dx}px, ${dy}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
-        { duration: 200, easing },
+        { duration, easing },
       );
     }
   }, [storeTickets, reducedMotion]);
@@ -940,6 +953,7 @@ export const Board = React.memo(function Board({
     };
     setDrag({
       activeTicket,
+      keyboard: activatorEvent.type === "keydown",
       selectedTickets,
       ticketIds,
       preview: storeTickets,
@@ -1025,7 +1039,7 @@ export const Board = React.memo(function Board({
             };
     const choice = deliberateChoice(release.status, release.choice);
     const sourceRects =
-      !reducedMotion && completed.ticketIds.length > 1
+      !reducedMotion && !completed.keyboard && completed.ticketIds.length > 1
         ? new Map(
             completed.ticketIds.flatMap((ticketId) => {
               const slot = ticketSlotElement(ticketId);
@@ -1245,13 +1259,17 @@ export const Board = React.memo(function Board({
               // cannot have: the release would run the column's default
               // instead of what the hand was pointing at.
               className="pointer-events-none"
+              transition={drag?.keyboard ? "" : undefined}
               dropAnimation={
                 // A picked release lands where the PICKER says, which is not
                 // necessarily where the card is: animating the card into the
                 // slot it was hovering would draw the wrong landing.
-                reducedMotion || isPickerOpen(picker) || (drag?.ticketIds.length ?? 0) > 1
+                reducedMotion ||
+                drag?.keyboard ||
+                isPickerOpen(picker) ||
+                (drag?.ticketIds.length ?? 0) > 1
                   ? null
-                  : { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
+                  : dropMotion
               }
             >
               {drag ? (
@@ -1265,7 +1283,7 @@ export const Board = React.memo(function Board({
                     ticketPrefix={ticketPrefix}
                     projectLabels={projectLabels}
                     listView={boardView === "list"}
-                    reducedMotion={reducedMotion}
+                    reducedMotion={reducedMotion || drag.keyboard}
                   />
                 </div>
               ) : null}

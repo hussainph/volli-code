@@ -43,6 +43,18 @@ function Preview() {
     />
   );
 }
+it("shares native inspector popup geometry for status and priority", async () => {
+  await act(async () => root.render(<Preview />));
+  for (const label of ["Status: Todo", "Priority: Medium"]) {
+    const popup = host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    expect(popup.getAttribute("data-variant")).toBe("inspector");
+    expect(popup.getAttribute("data-size")).toBe("sm");
+    // Exactly one disclosure; no nested local pop-up face.
+    expect(popup.querySelectorAll(":scope > svg.size-3")).toHaveLength(1);
+    expect(popup.className).not.toContain("shadow-raised");
+  }
+});
+
 it("offers both working copies directly, hiding the base when it has no worktree to branch", async () => {
   await act(async () => root.render(<Preview />));
   await act(async () =>

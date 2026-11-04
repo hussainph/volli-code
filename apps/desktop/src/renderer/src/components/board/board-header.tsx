@@ -58,10 +58,7 @@ function OrderingMenu({ projectId }: { projectId: string }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className="gap-1 border border-border px-2 text-ui text-muted-foreground"
-        >
+        <Button variant="toolbar" className="gap-1 px-2 text-ui text-muted-foreground">
           <ArrowsDownUpIcon className="size-3.5" />
           {TICKET_SORT_LABELS[sort.key]}
         </Button>
@@ -111,6 +108,7 @@ function ViewToggle({ projectId }: { projectId: string }) {
   return (
     <Segmented
       ariaLabel="Board layout"
+      className="h-control-default [&>[data-control=button]]:size-control-sm"
       value={view}
       size="sm"
       iconOnly
@@ -146,17 +144,19 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
       // stays in the outline and leaves the screen — the two are one object at
       // one scope, and it only has one name.
       titleHidden
+      actionsClassName="max-w-full flex-wrap"
       actions={
         <>
+          <FilterBar projectId={projectId} tickets={tickets} filter={filter} />
           <OrderingMenu projectId={projectId} />
           <ViewToggle projectId={projectId} />
           {/* The Archive is a per-project view, not a sixth column (CONCEPT #92) —
               reached from here and only here. */}
           <Button
-            variant="ghost"
+            variant="toolbar"
             size="icon"
             aria-label="Archive"
-            className="border border-border text-muted-foreground"
+            className="text-muted-foreground"
             onClick={() => setArchiveOpen(true)}
           >
             <ArchiveIcon className="size-3.5" />
@@ -181,7 +181,6 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
       }
     >
       <BoardSummary visible={ticketCount} total={tickets.length} />
-      <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
     </PageHeader>
   );
 }
@@ -206,10 +205,14 @@ function BoardSummary({ visible, total }: { visible: number; total: number }) {
 
   return (
     <span className="flex items-center gap-2">
-      {summary.count === null ? null : <Badge variant="count">{summary.count}</Badge>}
+      {summary.count === null ? null : (
+        <span className={visible === total ? "sr-only" : undefined}>
+          <Badge variant="count">{summary.count}</Badge>
+        </span>
+      )}
       {live ? (
         <span className="flex items-center gap-2 text-ui text-muted-foreground">
-          <span aria-hidden>·</span>
+          {visible !== total ? <span aria-hidden>·</span> : null}
           {/* Waiting leads working, the precedence every surface in the app
               gives it: an agent that has stopped to ask something is the one
               thing here a person can act on. */}

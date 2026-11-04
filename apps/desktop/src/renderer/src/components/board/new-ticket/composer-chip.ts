@@ -4,9 +4,9 @@
  * same object at the same weight, and adding a chip cannot quietly introduce a
  * sixth size.
  *
- * It rides the default 28px metadata rung. The raised card face is the same
- * semantic material as the runtime controls below; the Button owns geometry.
+ * It rides the default 28px metadata rung. The borderless inspector face matches
+ * the ticket property controls; the Button owns geometry.
  */
 export function composerChipClass(): string {
-  return "border border-border bg-card font-medium text-muted-foreground shadow-raised";
+  return "text-foreground";
 }

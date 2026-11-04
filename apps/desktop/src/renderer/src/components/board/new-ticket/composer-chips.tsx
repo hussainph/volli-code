@@ -29,6 +29,7 @@ import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHor
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Switch } from "@renderer/components/ui/switch";
 import { Button } from "@renderer/components/ui/button";
+import { InspectorPopup } from "@renderer/components/ui/inspector";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,14 +57,13 @@ function StatusChip({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
+        <InspectorPopup
           aria-label={`Status: ${TICKET_STATUS_LABELS[status]}`}
           className={composerChipClass()}
         >
-          <Icon aria-hidden />
+          <Icon aria-hidden className="text-primary-text" />
           {TICKET_STATUS_LABELS[status]}
-        </Button>
+        </InspectorPopup>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
@@ -95,8 +95,7 @@ function PriorityChip({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
+        <InspectorPopup
           aria-label={`Priority: ${TICKET_PRIORITY_LABELS[priority]}`}
           className={composerChipClass()}
         >
@@ -107,7 +106,7 @@ function PriorityChip({
             <PriorityIndicator priority={priority} />
           </span>
           {TICKET_PRIORITY_LABELS[priority]}
-        </Button>
+        </InspectorPopup>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
@@ -158,7 +157,7 @@ export function ComposerChips({
 }) {
   const workingCopyName = useId();
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="flex flex-wrap items-center gap-2">
       <StatusChip status={status} onChange={onStatusChange} />
       <PriorityChip priority={priority} onChange={onPriorityChange} />
       <ComposerLabels projectId={projectId} value={labels} onChange={onLabelsChange} />

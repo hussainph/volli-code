@@ -3,7 +3,7 @@ import type { Label } from "@volli/shared";
 
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { LabelPickerPopover } from "@renderer/components/ticket/label-picker";
-import { Button } from "@renderer/components/ui/button";
+import { InspectorPopup } from "@renderer/components/ui/inspector";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -32,7 +32,7 @@ export function ComposerLabels({
 
   return (
     <LabelPickerPopover projectId={projectId} value={value} onChange={onChange}>
-      <Button variant="outline" className={composerChipClass()}>
+      <InspectorPopup className={composerChipClass()}>
         <TagIcon />
         {value.length === 0 ? (
           "Labels"
@@ -53,7 +53,7 @@ export function ComposerLabels({
             {value.length} {value.length === 1 ? "label" : "labels"}
           </span>
         )}
-      </Button>
+      </InspectorPopup>
     </LabelPickerPopover>
   );
 }

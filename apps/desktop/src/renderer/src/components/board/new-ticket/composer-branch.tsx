@@ -205,8 +205,7 @@ export function BaseBranchChip({
             what it will branch from, and "unknown" is the honest answer. */}
         <Button
           aria-label={`Base branch: ${label.spoken}`}
-          variant="ghost"
-          size="sm"
+          variant="inspector"
           className={cn(composerChipClass(), "min-w-0 flex-1 justify-start")}
         >
           {state.status === "loading" && value === null ? (
