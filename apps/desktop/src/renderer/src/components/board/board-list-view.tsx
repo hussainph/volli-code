@@ -22,40 +22,10 @@ import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
-import { StatusDot } from "@renderer/components/ui/status-dot";
-import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
 import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
-
-/**
- * What a list row wears while an agent is running on its ticket (VC-100).
- *
- * The board's cards get a travelling ring; a row deliberately does not. A 36px
- * full-width strip has ~1500px of perimeter for a highlight to crawl around,
- * and a dozen of them would be a page of moving outlines — the ring works on a
- * card because a card is a small closed shape, which is exactly what a row is
- * not.
- *
- * TWO MARKS, because the two states are two different claims and each already
- * has its drawing in this app. `working` is the transcript's own running mark
- * (`ui/thinking-orbs.tsx`): three orbs on a wave, the idiom for "still going",
- * carrying no urgency for something that may be on screen for ten minutes.
- * `waiting` is the one state asking for a person, and that is `StatusDot`'s
- * amber — orbs there would say the agent is thinking when it is in fact
- * stopped, waiting on you.
- *
- * The orbs take `--positive` rather than the transcript's ember: on this
- * surface the accent already means "selected" (`bg-primary/10` on the row it
- * sits in), and the card's ring beside it reads the same green for the same
- * state. One colour for `working` across the whole board.
- */
-function RunningMark({ activity }: { activity: TicketSessionActivity | null }) {
-  if (activity === null) return null;
-  if (activity === "waiting") return <StatusDot state="waiting" />;
-  return <ThinkingOrbs className="text-positive" />;
-}
 
 /**
  * Pure presentational row — also rendered inside the drag overlay (unselected
@@ -83,17 +53,22 @@ export function TicketRowContent({
     <div
       className={cn(
         "flex h-9 cursor-default select-none items-center gap-4 border-b border-border/30 px-gutter",
-        selected ? "bg-primary/10" : "hover:bg-muted/30",
+        selected ? "bg-(--accent-selected)" : "hover:bg-(--accent-tint)",
       )}
     >
       <PriorityIndicator priority={ticket.priority} />
-      <span className="w-14 shrink-0 font-mono text-label text-muted-foreground">{displayId}</span>
-      {/* The title and its running mark travel together, inside the row's own
-          `gap-4` rather than beside it: the mark is about the ticket the title
-          names, and 16px of air would read as a third column. */}
+      {/* A compact ring around the key keeps live state in the same accent
+          grammar as cards without rastering a full-width animated row. */}
+      <span className="relative w-14 shrink-0 rounded-control-mini px-1 font-mono text-label text-muted-foreground">
+        <span
+          aria-hidden
+          className="session-ring board-session-ring"
+          data-activity={sessionActivity ?? undefined}
+        />
+        {displayId}
+      </span>
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate text-sm text-foreground">{ticket.title}</span>
-        <RunningMark activity={sessionActivity} />
       </span>
       {ticket.labels.length > 0 ? (
         <div className="ml-auto hidden shrink-0 items-center gap-1 sm:flex">
@@ -214,9 +189,9 @@ function ListSection({
       data-list-section
       data-status={status}
       data-drop-aimed={aimed || undefined}
-      className={cn(aimed && "bg-accent/30 ring-1 ring-inset ring-primary/50")}
+      className={cn(aimed && "bg-(--accent-tint) ring-1 ring-inset ring-primary-text")}
     >
-      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/30 px-gutter py-1 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted px-gutter py-1">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <Badge variant="count">{tickets.length}</Badge>
       </div>

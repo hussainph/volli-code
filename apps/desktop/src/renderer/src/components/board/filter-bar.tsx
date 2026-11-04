@@ -72,7 +72,7 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
       />
       {labelOptions.length > 0 ? (
         <FilterChip
-          label="Label"
+          label="Labels"
           icon={<TagIcon aria-hidden />}
           options={labelOptions}
           selected={filter.labels}

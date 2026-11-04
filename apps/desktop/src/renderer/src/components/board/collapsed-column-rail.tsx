@@ -115,7 +115,7 @@ function CollapsedColumnTarget({
           if (!dragActive) onExpand(status);
         }}
         className={cn(
-          "flex w-full items-center justify-between rounded-md border border-border bg-card px-4 py-2 text-left text-ui text-muted-foreground shadow-raised outline-none",
+          "flex w-full items-center justify-between rounded-(--radius-card) border border-border bg-muted px-4 py-2 text-left text-ui text-muted-foreground shadow-(--shadow-glass-small) outline-none",
           // No scale in this list, ever: the pill is a dnd-kit droppable measured
           // in synchronous layout effects, and a scale mid-flight yields a new
           // rect every commit — measureRects loops to React's max update depth
@@ -124,7 +124,7 @@ function CollapsedColumnTarget({
           "hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
           animateEnter && "starting:opacity-0",
           // While any card is mid-drag every pill brightens into an affordance…
-          dragActive && "border-border text-foreground/70",
+          dragActive && "border-border text-foreground",
           // …and the hovered one lights up as the drop target.
           (isOver || aimed) && "border-transparent bg-accent ring-1 ring-primary/50",
         )}

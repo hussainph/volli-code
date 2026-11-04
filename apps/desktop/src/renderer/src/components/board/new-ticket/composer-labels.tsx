@@ -32,7 +32,7 @@ export function ComposerLabels({
 
   return (
     <LabelPickerPopover projectId={projectId} value={value} onChange={onChange}>
-      <Button variant="outline" className={composerChipClass()}>
+      <Button variant="inspector" className={composerChipClass()}>
         <TagIcon />
         {value.length === 0 ? (
           "Labels"

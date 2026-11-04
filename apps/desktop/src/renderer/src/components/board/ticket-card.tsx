@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
+import { useDndMonitor } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cardTicketKey, type Label, type Ticket } from "@volli/shared";
@@ -75,19 +76,15 @@ export function TicketCardContent({
         // `relative` for the session ring below, which lies on the card's own
         // border line rather than outside it.
         "relative",
-        // `shadow-raised` and not `shadow-card`: the tier names an elevation,
-        // not a component noun. A board card is a tile lying ON its column, the
-        // same lift an active tab takes; `shadow-card` is the deeper halo the
-        // detached drag preview wears while the tile is off the board
-        // (`board.tsx`). This shadow used to be applied from a hand-maintained
-        // `article.bg-card` selector in globals.css, which is exactly why the
-        // three overlays that selector forgot were wearing stock black.
-        // px-3, not the ladder's 4: a dense card trades air for content, and at
-        // px-4 real titles truncate a word earlier. Recorded spacing exception.
-        "flex flex-col gap-1 rounded-lg border bg-card px-3 py-2 shadow-raised cursor-default select-none transition-[border-color] duration-150 ease-out",
+        // A quiet contact shadow lifts paper off the neutral column. The
+        // detached drag preview keeps its deeper `shadow-card` halo.
+        // px-3 preserves the dense card's title measure.
+        "flex flex-col gap-1 rounded-(--radius-card) border bg-card px-3 py-2 shadow-(--shadow-glass-small) cursor-default select-none",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
-        selected ? "border-primary/70" : "border-border hover:border-border-strong",
+        selected
+          ? "border-primary-text bg-(--accent-tint)"
+          : "border-border hover:border-border-strong",
       )}
     >
       {/* An agent is running on this ticket. Always rendered, never conditionally
@@ -96,7 +93,11 @@ export function TicketCardContent({
           well as in, which React cannot do for an unmount on its own.
           `aria-hidden` for the reason `StatusDot` gives — the card is not the
           only place this is said, and the sidebar's band says it in words. */}
-      <span aria-hidden className="session-ring" data-activity={sessionActivity ?? undefined} />
+      <span
+        aria-hidden
+        className="session-ring board-session-ring"
+        data-activity={sessionActivity ?? undefined}
+      />
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-label text-muted-foreground">{displayId}</span>
         <div className="flex items-center gap-1">
@@ -160,6 +161,12 @@ export function SortableTicketShell({
   children: React.ReactNode;
 }) {
   const reducedMotion = useReducedMotion();
+  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
+  useDndMonitor({
+    onDragStart: ({ activatorEvent }) => setKeyboardDrag(activatorEvent.type === "keydown"),
+    onDragEnd: () => setKeyboardDrag(false),
+    onDragCancel: () => setKeyboardDrag(false),
+  });
   const dragData = React.useMemo<TicketDragData>(
     () => ({ kind: "tickets", projectId, ticketIds: dragTicketIds }),
     [projectId, dragTicketIds],
@@ -167,7 +174,7 @@ export function SortableTicketShell({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
     data: dragData,
-    transition: reducedMotion ? null : SORT_TRANSITION,
+    transition: reducedMotion || keyboardDrag ? null : SORT_TRANSITION,
   });
 
   // Keyboard-open path (a11y): dnd-kit already makes the card focusable

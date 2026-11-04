@@ -396,7 +396,7 @@ export const BoardColumn = React.memo(function BoardColumn({
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
-        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/30",
+        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-(--radius-column) bg-muted",
         // Enter is an opacity fade ONLY, and so is the dim below it. This
         // column hosts droppables that dnd-kit measures in synchronous layout
         // effects; a scale mid-flight returns a different rect on every commit
@@ -412,7 +412,7 @@ export const BoardColumn = React.memo(function BoardColumn({
         // The board's card order and parentage stay frozen during the gesture
         // to keep dnd-kit measurement stable. This paint-only ring replaces the
         // old reparented-card gap as explicit cross-column landing feedback.
-        aimed && "bg-accent/50 ring-1 ring-inset ring-primary/50",
+        aimed && "bg-(--accent-tint) ring-1 ring-inset ring-primary-text",
       )}
     >
       <div className="group/column-header flex items-center gap-2 px-4 pt-2 pb-2">
@@ -524,7 +524,7 @@ export const BoardColumn = React.memo(function BoardColumn({
         </SortableContext>
       </div>
       {composer.open ? (
-        <div className="mx-2 mb-2 rounded-lg border border-border bg-card px-4 py-2">
+        <div className="mx-2 mb-2 rounded-(--radius-card) border border-border bg-card px-4 py-2">
           <input
             ref={composer.inputRef}
             autoFocus

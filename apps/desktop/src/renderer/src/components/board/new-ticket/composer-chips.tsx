@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
 import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
 import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
@@ -57,12 +58,13 @@ function StatusChip({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="outline"
+          variant="inspector"
           aria-label={`Status: ${TICKET_STATUS_LABELS[status]}`}
           className={composerChipClass()}
         >
-          <Icon aria-hidden />
+          <Icon aria-hidden className="text-primary-text" />
           {TICKET_STATUS_LABELS[status]}
+          <CaretDownIcon aria-hidden weight="bold" className="size-3 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
@@ -96,7 +98,7 @@ function PriorityChip({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="outline"
+          variant="inspector"
           aria-label={`Priority: ${TICKET_PRIORITY_LABELS[priority]}`}
           className={composerChipClass()}
         >
@@ -107,6 +109,7 @@ function PriorityChip({
             <PriorityIndicator priority={priority} />
           </span>
           {TICKET_PRIORITY_LABELS[priority]}
+          <CaretDownIcon aria-hidden weight="bold" className="size-3 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">

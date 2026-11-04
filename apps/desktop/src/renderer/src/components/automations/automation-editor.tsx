@@ -75,7 +75,7 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { PrefSection } from "@renderer/components/settings/kit/pref-section";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 import {
@@ -231,10 +231,6 @@ function NextScheduledRun({
   return <p className="text-ui text-foreground tabular-nums">{next.label}</p>;
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <SectionHeading>{children}</SectionHeading>;
-}
-
 function TriggerChoice({
   value,
   selected,
@@ -250,17 +246,15 @@ function TriggerChoice({
 }) {
   const active = value === selected;
   return (
-    <button
+    <Button
       type="button"
+      variant={active ? "default" : "ghost"}
       role="radio"
       aria-checked={active}
       onClick={() => onSelect(value)}
       className={cn(
-        "flex h-7 w-full items-center gap-2 rounded-lg border px-2 text-left text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring",
-        active
-          ? "border-ring bg-accent text-foreground"
-          : "border-border text-muted-foreground hover:text-foreground",
+        "w-full justify-start gap-2 rounded-menu-item px-2 text-left text-ui",
+        !active && "text-muted-foreground",
       )}
     >
       <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
@@ -272,7 +266,7 @@ function TriggerChoice({
           active ? "border-primary bg-primary" : "border-muted-foreground",
         )}
       />
-    </button>
+    </Button>
   );
 }
 
@@ -290,14 +284,15 @@ function ColumnPicker({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="inspector"
           aria-label="Columns"
-          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
+          className="w-full gap-2 text-ui"
         >
           <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-1">
         {TICKET_STATUSES.map((status) => {
@@ -401,7 +396,7 @@ function RuntimeFields({
           if (selection !== null) onChange(selection);
         }}
       >
-        <SelectTrigger className="w-full" aria-label="Runtime model">
+        <SelectTrigger variant="inspector" className="w-full" aria-label="Runtime model">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -444,7 +439,7 @@ function RuntimeFields({
             if (next !== null) onChange(next);
           }}
         >
-          <SelectTrigger className="w-full" aria-label="Reasoning effort">
+          <SelectTrigger variant="inspector" className="w-full" aria-label="Reasoning effort">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -831,149 +826,159 @@ export function AutomationEditorPanel({
           </div>
         </main>
 
-        <aside className="min-h-0 overflow-y-auto border-l border-border bg-rail/30">
-          <section className="flex flex-col gap-2 border-b border-border p-4">
-            <SectionLabel>Ownership</SectionLabel>
-            {automation === null ? (
-              <Select
-                value={ownershipChoice}
-                disabled={triggerChoice === "schedule"}
-                onValueChange={(value) => setOwnership(value as OwnershipChoice)}
-              >
-                <SelectTrigger className="w-full" aria-label="Ownership">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="project">
-                    <FolderOpenIcon />
-                    This project
-                  </SelectItem>
-                  {automationSourceIsCloud() ? null : (
-                    <SelectItem value="global">
-                      <GlobeIcon />
-                      All projects
-                    </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-            ) : (
-              <div className="flex h-7 items-center gap-2 text-ui text-foreground">
-                {automation.projectId === null ? <GlobeIcon /> : <FolderOpenIcon />}
-                {automation.projectId === null ? "All projects" : "This project"}
-              </div>
-            )}
-          </section>
-
-          <section className="flex flex-col gap-2 border-b border-border p-4">
-            <SectionLabel>Trigger</SectionLabel>
-            <div role="radiogroup" aria-label="Trigger" className="flex flex-col gap-1">
-              <TriggerChoice
-                value="none"
-                selected={triggerChoice}
-                icon={PlayIcon}
-                onSelect={setTriggerChoice}
-              >
-                {MANUAL_TRIGGER_LABEL}
-              </TriggerChoice>
-              <TriggerChoice
-                value="columns"
-                selected={triggerChoice}
-                icon={ArrowRightIcon}
-                onSelect={setTriggerChoice}
-              >
-                Ticket enters
-              </TriggerChoice>
-              <TriggerChoice
-                value="schedule"
-                selected={triggerChoice}
-                icon={ClockIcon}
-                onSelect={setTriggerChoice}
-              >
-                On a schedule
-              </TriggerChoice>
-            </div>
-
-            {triggerChoice === "columns" ? (
-              <ColumnPicker value={columns} onChange={setColumns} />
-            ) : null}
-
-            {triggerChoice === "schedule" ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2">
+        <aside
+          data-tint="true"
+          className="glass flex min-h-0 flex-col gap-4 overflow-y-auto border-l border-border p-4"
+        >
+          <PrefSection title="Ownership">
+            <div className="flex flex-col gap-2 p-3">
+              {automation === null ? (
                 <Select
-                  value={preset}
-                  onValueChange={(value) => setPreset(value as AutomationSchedulePreset)}
+                  value={ownershipChoice}
+                  disabled={triggerChoice === "schedule"}
+                  onValueChange={(value) => setOwnership(value as OwnershipChoice)}
                 >
-                  <SelectTrigger className="w-full" aria-label="Schedule">
+                  <SelectTrigger variant="inspector" className="w-full" aria-label="Ownership">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        <ClockIcon />
-                        {AUTOMATION_SCHEDULE_PRESET_LABELS[value]}
+                    <SelectItem value="project">
+                      <FolderOpenIcon />
+                      This project
+                    </SelectItem>
+                    {automationSourceIsCloud() ? null : (
+                      <SelectItem value="global">
+                        <GlobeIcon />
+                        All projects
                       </SelectItem>
-                    ))}
+                    )}
                   </SelectContent>
                 </Select>
-                {preset === "weekly" ? (
+              ) : (
+                <div className="flex h-7 items-center gap-2 text-ui text-foreground">
+                  {automation.projectId === null ? <GlobeIcon /> : <FolderOpenIcon />}
+                  {automation.projectId === null ? "All projects" : "This project"}
+                </div>
+              )}
+            </div>
+          </PrefSection>
+
+          <PrefSection title="Trigger">
+            <div className="flex flex-col gap-2 p-3">
+              <div role="radiogroup" aria-label="Trigger" className="flex flex-col gap-1">
+                <TriggerChoice
+                  value="none"
+                  selected={triggerChoice}
+                  icon={PlayIcon}
+                  onSelect={setTriggerChoice}
+                >
+                  {MANUAL_TRIGGER_LABEL}
+                </TriggerChoice>
+                <TriggerChoice
+                  value="columns"
+                  selected={triggerChoice}
+                  icon={ArrowRightIcon}
+                  onSelect={setTriggerChoice}
+                >
+                  Ticket enters
+                </TriggerChoice>
+                <TriggerChoice
+                  value="schedule"
+                  selected={triggerChoice}
+                  icon={ClockIcon}
+                  onSelect={setTriggerChoice}
+                >
+                  On a schedule
+                </TriggerChoice>
+              </div>
+
+              {triggerChoice === "columns" ? (
+                <ColumnPicker value={columns} onChange={setColumns} />
+              ) : null}
+
+              {triggerChoice === "schedule" ? (
+                <div className="flex flex-col gap-2 border-t border-border pt-2">
                   <Select
-                    value={weekday}
-                    onValueChange={(value) => setWeekday(value as ScheduleWeekday)}
+                    value={preset}
+                    onValueChange={(value) => setPreset(value as AutomationSchedulePreset)}
                   >
-                    <SelectTrigger className="w-full" aria-label="Day of the week">
+                    <SelectTrigger variant="inspector" className="w-full" aria-label="Schedule">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {SCHEDULE_WEEKDAYS.map((value) => (
+                      {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
                         <SelectItem key={value} value={value}>
                           <ClockIcon />
-                          {SCHEDULE_WEEKDAY_LABELS[value]}
+                          {AUTOMATION_SCHEDULE_PRESET_LABELS[value]}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                ) : null}
-                {preset === "hourly" ? (
-                  <label className="flex items-center justify-between gap-2 text-ui text-muted-foreground">
-                    Minutes past the hour
-                    <ScheduleNumberInput
-                      value={minute}
-                      max={59}
-                      ariaLabel="Minutes past the hour"
-                      onChange={setMinute}
-                    />
-                  </label>
-                ) : (
-                  <TimeField
-                    hour={hour}
-                    minute={minute}
-                    onHourChange={setHour}
-                    onMinuteChange={setMinute}
-                  />
-                )}
-                <TimeZonePicker
-                  value={timeZone}
-                  onChange={setTimeZone}
-                  className="w-full max-w-none"
-                />
-                {firesHere && automationId !== null && scheduleProblem === null ? (
-                  automationSourceIsCloud() ? (
-                    <CloudNextScheduledRun projectId={projectId} automationId={automationId} />
+                  {preset === "weekly" ? (
+                    <Select
+                      value={weekday}
+                      onValueChange={(value) => setWeekday(value as ScheduleWeekday)}
+                    >
+                      <SelectTrigger
+                        variant="inspector"
+                        className="w-full"
+                        aria-label="Day of the week"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SCHEDULE_WEEKDAYS.map((value) => (
+                          <SelectItem key={value} value={value}>
+                            <ClockIcon />
+                            {SCHEDULE_WEEKDAY_LABELS[value]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
+                  {preset === "hourly" ? (
+                    <label className="flex items-center justify-between gap-2 text-ui text-muted-foreground">
+                      Minutes past the hour
+                      <ScheduleNumberInput
+                        value={minute}
+                        max={59}
+                        ariaLabel="Minutes past the hour"
+                        onChange={setMinute}
+                      />
+                    </label>
                   ) : (
-                    <NextScheduledRun schedule={schedule} automationId={automationId} />
-                  )
-                ) : null}
-              </div>
-            ) : null}
-            {scheduleProblem === null ? null : (
-              <p className="text-label text-muted-foreground">{scheduleProblem}</p>
-            )}
-          </section>
+                    <TimeField
+                      hour={hour}
+                      minute={minute}
+                      onHourChange={setHour}
+                      onMinuteChange={setMinute}
+                    />
+                  )}
+                  <TimeZonePicker
+                    value={timeZone}
+                    onChange={setTimeZone}
+                    className="w-full max-w-none"
+                  />
+                  {firesHere && automationId !== null && scheduleProblem === null ? (
+                    automationSourceIsCloud() ? (
+                      <CloudNextScheduledRun projectId={projectId} automationId={automationId} />
+                    ) : (
+                      <NextScheduledRun schedule={schedule} automationId={automationId} />
+                    )
+                  ) : null}
+                </div>
+              ) : null}
+              {scheduleProblem === null ? null : (
+                <p className="text-label text-muted-foreground">{scheduleProblem}</p>
+              )}
+            </div>
+          </PrefSection>
 
-          <section className="flex flex-col gap-2 p-4">
-            <SectionLabel>Runtime</SectionLabel>
-            <RuntimeFields models={models} runtime={runtime} onChange={setRuntime} />
-          </section>
+          <PrefSection title="Runtime">
+            <div className="p-3">
+              <RuntimeFields models={models} runtime={runtime} onChange={setRuntime} />
+            </div>
+          </PrefSection>
         </aside>
       </div>
       {problem === null ? null : (

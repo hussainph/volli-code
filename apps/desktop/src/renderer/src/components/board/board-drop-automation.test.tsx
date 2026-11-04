@@ -34,6 +34,8 @@
  * the board's real DOM, driven by real pointer events through the real
  * `PointerSensor`. So it pins the commit chain rather than the crash.
  */
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -331,8 +333,10 @@ function installAnimations(): () => void {
   };
 }
 
-/** `--ease-swift` as `globals.css` ships it. */
-const EASE_SWIFT = "cubic-bezier(0.32, 0.72, 0, 1)";
+/** Resolve the shipped landing spring; jsdom does not load the stylesheet. */
+const STYLES = readFileSync(resolvePath(import.meta.dirname, "../../globals.css"), "utf8");
+const BOUNCY = STYLES.match(/--spring-bouncy:\s*([^;]+);/)![1]!.trim();
+const BOUNCY_DURATION = STYLES.match(/--duration-bouncy:\s*([^;]+);/)![1]!.trim();
 
 function installLayout(): () => void {
   const realRect = Element.prototype.getBoundingClientRect;
@@ -354,7 +358,11 @@ function installLayout(): () => void {
         // reads off its slot is answered here, with the shipped value.
         if (key === "getPropertyValue") {
           return (name: string) =>
-            name === "--ease-swift" ? EASE_SWIFT : target.getPropertyValue(name);
+            name === "--spring-bouncy"
+              ? BOUNCY
+              : name === "--duration-bouncy"
+                ? BOUNCY_DURATION
+                : target.getPropertyValue(name);
         }
         if (key === "overflowX") return x ? "auto" : "visible";
         if (key === "overflowY") return y ? "auto" : "visible";
@@ -904,11 +912,52 @@ function slotNamed(ticketId: string): Element {
  * The multi-drop slide (VC-665). The e2e smoke's 8.5 proves a dropped group
  * lands and its slide FINISHES, but its readiness wait is a generous bound, so
  * it would pass a slide that took 3s. This pins what the board asks the
- * browser to play: from where each slot was picked up, back to rest, in 200ms.
+ * browser to play: from where each slot was picked up, back to rest, using the
+ * shared Bouncy landing spring.
  */
 describe("a group of cards released into another column", () => {
   it(
-    "slides every landed slot home from where it was picked up, in 200ms",
+    "lands keyboard drags immediately without a spring or sortable transition",
+    async () => {
+      await mountBoard();
+      const grip = columnNamed("todo").querySelector("article")!.parentElement!;
+      grip.focus();
+      await act(async () => {
+        grip.dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }),
+        );
+      });
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      // The KeyboardSensor installs document listeners on the next task.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", code: "ArrowRight", bubbles: true }),
+        );
+      });
+      // This layout shim resolves the keyboard coordinate to the empty rail.
+      expect(overNow()).toBe("column:backlog");
+      for (const node of document.querySelectorAll<HTMLElement>("[data-board-ticket-slot] > div")) {
+        expect(node.style.transition).toBe("");
+      }
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }),
+        );
+      });
+      expect(ticketSlots("backlog")).toContain(DRAGGED);
+      expect(animateCalls).toEqual([]);
+      expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+
+  it(
+    "slides every landed slot home with the shared Bouncy drop spring",
     async () => {
       // A third Todo card keeps Todo standing once the pair leaves it, so the
       // journey is the sideways one a person sees rather than a column
@@ -950,7 +999,7 @@ describe("a group of cards released into another column", () => {
           { transform: `translate3d(${from.left - to.left}px, ${from.top - to.top}px, 0)` },
           { transform: "translate3d(0, 0, 0)" },
         ]);
-        expect(slide.options).toEqual({ duration: 200, easing: EASE_SWIFT });
+        expect(slide.options).toEqual({ duration: 380, easing: BOUNCY });
       }
       expect(loopErrors()).toEqual([]);
     },

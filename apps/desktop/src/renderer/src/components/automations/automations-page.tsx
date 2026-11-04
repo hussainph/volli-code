@@ -82,6 +82,7 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import {
   DropdownMenu,
@@ -141,39 +142,6 @@ export function AutomationsPage() {
 }
 
 type AutomationPageView = "details" | "lanes";
-
-function ViewChoice({
-  view,
-  value,
-  label,
-  icon: Icon,
-  onChange,
-}: {
-  view: AutomationPageView;
-  value: AutomationPageView;
-  label: string;
-  icon: typeof ListBulletsIcon;
-  onChange(value: AutomationPageView): void;
-}) {
-  const active = view === value;
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={() => onChange(value)}
-      className={cn(
-        "flex h-7 items-center gap-2 rounded-md px-2 text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring",
-        active
-          ? "bg-accent text-foreground shadow-raised"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <Icon aria-hidden className="size-4" />
-      {label}
-    </button>
-  );
-}
 
 function AutomationsSurface({
   projectId,
@@ -389,28 +357,21 @@ function AutomationsSurface({
     );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-4 border-b border-border px-6 py-4">
+    <div className="flex min-h-0 flex-1 flex-col bg-background">
+      <header className="flex shrink-0 flex-wrap items-center gap-4 border-b border-border px-6 py-4">
         <div className="flex items-center gap-2">
-          <LightningIcon weight="fill" className="size-4 text-muted-foreground" />
+          <LightningIcon className="size-4 text-primary-text" />
           <h1 className="text-sm font-semibold">Automations</h1>
         </div>
-        <div className="flex items-center gap-1 rounded-lg border border-border bg-rail/30 p-1">
-          <ViewChoice
-            view={view}
-            value="details"
-            label="Automations"
-            icon={ListBulletsIcon}
-            onChange={setView}
-          />
-          <ViewChoice
-            view={view}
-            value="lanes"
-            label="Lanes"
-            icon={KanbanIcon}
-            onChange={setView}
-          />
-        </div>
+        <Segmented<AutomationPageView>
+          ariaLabel="Automation layout"
+          value={view}
+          options={[
+            { key: "details", label: "Automations", icon: ListBulletsIcon },
+            { key: "lanes", label: "Lanes", icon: KanbanIcon },
+          ]}
+          onChange={setView}
+        />
         <Button size="sm" onClick={createAutomation}>
           <PlusIcon />
           {target?.automation !== null && loadEditorDraft(projectId) !== null
@@ -565,7 +526,10 @@ function AutomationRail({
     { label: "All projects", automations: global },
   ] as const;
   return (
-    <aside className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-rail/30 p-2">
+    <aside
+      data-tint="true"
+      className="glass flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border p-2"
+    >
       {creating ? (
         <div className="mb-2 rounded-lg bg-accent px-2 py-2 text-ui font-medium text-foreground">
           New Automation
