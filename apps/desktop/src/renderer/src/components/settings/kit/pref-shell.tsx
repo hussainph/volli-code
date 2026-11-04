@@ -4,6 +4,7 @@ import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { Badge } from "@renderer/components/ui/badge";
+import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
@@ -72,7 +73,7 @@ export function PrefShell({
     if (!highlight || !scroller.current) return;
     const root = scroller.current;
     let row: Element | undefined;
-    const classes = ["bg-primary/10", "ring-2", "ring-inset", "ring-primary/40"];
+    const classes = ["bg-(--accent-tint)", "ring-2", "ring-inset", "ring-primary/40"];
     const reveal = () => {
       if (row) return;
       const label = Array.from(
@@ -97,10 +98,11 @@ export function PrefShell({
       <div className="flex h-full min-h-0 w-full flex-1">
         <nav
           aria-label={`${surfaceLabel} categories`}
-          className="flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto border-r border-border bg-sidebar p-4"
+          data-tint="true"
+          className="glass flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto border-r border-border p-4"
         >
           {header}
-          <InputGroup>
+          <InputGroup className="search-capsule">
             <InputGroupAddon>
               <MagnifyingGlassIcon />
             </InputGroupAddon>
@@ -127,9 +129,11 @@ export function PrefShell({
                       setHighlight(label);
                       setQuery("");
                     }}
-                    className="flex w-full items-start gap-2 rounded-row px-2 py-2 text-left text-ui hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    className="flex w-full items-center gap-2 rounded-row px-2 py-2 text-left text-ui hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                   >
-                    <category.icon aria-hidden className="mt-1 size-4 shrink-0" />
+                    <IdentityTile size="sm" aria-hidden>
+                      <category.icon className="size-3.5" />
+                    </IdentityTile>
                     <span className="min-w-0">
                       <span className="block font-medium">{label}</span>
                       <span className="text-label text-muted-foreground">
@@ -159,13 +163,15 @@ export function PrefShell({
                         onSelect(category.key);
                       }}
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-row px-2 py-2 text-left text-ui transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                        "flex w-full items-center gap-2 rounded-row px-2 py-2 text-left text-ui text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                         category.key === current?.key
-                          ? "bg-accent text-foreground"
-                          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                          ? "bg-(--accent-selected)"
+                          : "hover:bg-accent",
                       )}
                     >
-                      <category.icon aria-hidden className="size-4 shrink-0" />
+                      <IdentityTile size="sm" aria-hidden>
+                        <category.icon className="size-3.5" />
+                      </IdentityTile>
                       <span className="min-w-0 flex-1 truncate">{category.label}</span>
                       {category.count === undefined ? null : (
                         <Badge variant="count">{category.count}</Badge>
@@ -183,7 +189,7 @@ export function PrefShell({
             )}
           </div>
         </nav>
-        <div ref={scroller} className="min-w-0 flex-1 overflow-y-auto">
+        <div ref={scroller} className="material-solid min-w-0 flex-1 overflow-y-auto">
           <div className={cn("px-12 pt-8 pb-16", current?.fill && "flex h-full flex-col")}>
             <div
               className={cn(

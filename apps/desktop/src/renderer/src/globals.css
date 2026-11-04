@@ -2665,6 +2665,12 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background: var(--accent-tint);
   color: var(--primary-text);
 }
+/* Native sidebar identity size; list identities retain the 32px default. */
+.identity-tile[data-size="sm"] {
+  width: var(--spacing-control-xs);
+  height: var(--spacing-control-xs);
+  border-radius: var(--radius-control-small);
+}
 :is(
   [data-slot="dropdown-menu-content"],
   [data-slot="dropdown-menu-sub-content"],

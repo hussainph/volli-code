@@ -70,7 +70,7 @@ describe("SettingsPage (app-wide)", () => {
     // exception to the copy rule and must not become a hint. VC-284 added the
     // pull-request link and the Keep exemption for the same reason: a policy
     // whose opt-out is invisible here reads as unconditional.
-    expect(html).toContain("keeps the branch, its commits, the pull-request link, and the ticket");
+    expect(html).toContain("keeps the branch, commits, PR link and ticket");
     expect(html).toContain("Keep on a ticket holds its folder");
   });
 
@@ -103,6 +103,29 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("Ask every time");
     expect(html).toContain('id="open-files-in"');
     expect(html).toContain("Loading");
+  });
+
+  it("orders Appearance as canvas, mode, style and motion without explaining the controls", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="appearance" />);
+    const content = html.slice(html.indexOf('data-testid="canvas-pad"'));
+    expect(content.indexOf('data-testid="appearance-mode"')).toBeGreaterThan(0);
+    expect(content.indexOf('aria-label="Style"')).toBeGreaterThan(
+      content.indexOf('data-testid="appearance-mode"'),
+    );
+    expect(content.indexOf('id="appearance-motion"')).toBeGreaterThan(
+      content.indexOf('aria-label="Style"'),
+    );
+    for (const label of [
+      "Light",
+      "Dark",
+      "Auto",
+      "macOS",
+      "Modern",
+      "Motion",
+      "Ghostty config",
+      "Volli overlay",
+    ])
+      expect(content).toContain(label);
   });
 
   it("marks the opened category in the rail", () => {

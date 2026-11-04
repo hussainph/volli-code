@@ -288,7 +288,7 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
         htmlFor="done-ttl-days"
         // The one-line trust boundary: this governs an automatic deletion, so
         // what it deletes, and what it never touches, stays on screen.
-        description="Removes the folder; keeps the branch, commits, PR link and ticket."
+        description="Removes the folder; keeps the branch, commits, PR link and ticket. Keep on a ticket holds its folder."
       >
         <CommitField
           id="done-ttl-days"

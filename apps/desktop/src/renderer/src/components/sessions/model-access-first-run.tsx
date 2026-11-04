@@ -23,6 +23,7 @@ import * as React from "react";
 import type { ModelAccessProvider } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -102,9 +103,11 @@ export function ModelAccessFirstRun() {
   );
 
   return (
-    <>
-      <CpuIcon className="size-8 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">
+    <div className="material-thick flex max-w-sm flex-col items-center gap-4 rounded-sheet border border-border p-6 shadow-glass">
+      <IdentityTile aria-hidden>
+        <CpuIcon className="size-5" />
+      </IdentityTile>
+      <p className="text-heading font-semibold">
         {signedIn ? "No default model" : "No model provider"}
       </p>
       <div className="flex items-center gap-2">
@@ -132,6 +135,6 @@ export function ModelAccessFirstRun() {
           Model Access
         </Button>
       </div>
-    </>
+    </div>
   );
 }

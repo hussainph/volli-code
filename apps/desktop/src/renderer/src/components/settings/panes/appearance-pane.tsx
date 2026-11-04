@@ -112,23 +112,18 @@ function AppThemeSection() {
         />
       }
     >
+      <CanvasInstrument scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
+      <PrefRow label="Appearance">
+        <AppearanceModeChoice
+          value={appearance}
+          testId="appearance-mode"
+          onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
+        />
+      </PrefRow>
       <StyleChoice />
       <PrefRow label="Motion" htmlFor="appearance-motion">
         <Switch id="appearance-motion" checked={motion} onCheckedChange={setMotion} />
       </PrefRow>
-      <CanvasInstrument
-        scope={GLOBAL_SCOPE}
-        canvas={canvas}
-        resolved={resolved}
-        mode={
-          <AppearanceModeChoice
-            iconOnly
-            value={appearance}
-            testId="appearance-mode"
-            onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
-          />
-        }
-      />
     </PrefSection>
   );
 }

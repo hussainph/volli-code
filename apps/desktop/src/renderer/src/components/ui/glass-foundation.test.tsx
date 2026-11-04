@@ -53,6 +53,10 @@ describe("Glass primitives", () => {
     expect(renderToStaticMarkup(<IdentityTile aria-hidden>A</IdentityTile>)).toContain(
       'data-slot="identity-tile"',
     );
+    expect(renderToStaticMarkup(<IdentityTile size="sm">A</IdentityTile>)).toContain(
+      'data-size="sm"',
+    );
+    expect(css).toContain('.identity-tile[data-size="sm"]');
     for (const [value, expected] of [
       [-1, 0],
       [50, 50],
