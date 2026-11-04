@@ -35,7 +35,7 @@ describe("resolveDoneFlow — primary action", () => {
     expect(primary.kind).toBe("create-pr");
     expect(primary.label).toBe("Create draft PR");
     expect(primary.disabled).toBe(true);
-    expect(primary.reason).toBe("Loading…");
+    expect(primary.reason).toBe("Loading");
   });
 
   it("is an enabled 'View PR' before the first fetch when a PR already exists", () => {
@@ -182,16 +182,16 @@ describe("resolveDoneFlow — unmerged-paths rule", () => {
 });
 
 describe("resolveDoneFlow — busy stage", () => {
-  it("disables the primary and shows 'Committing…' while committing", () => {
+  it("disables the primary and shows 'Committing' while committing", () => {
     const { primary } = view(status({ uncommitted: true }), null, "committing");
-    expect(primary.label).toBe("Committing…");
+    expect(primary.label).toBe("Committing");
     expect(primary.disabled).toBe(true);
     expect(primary.reason).toBeNull();
   });
 
-  it("disables the primary and shows 'Pushing…' while pushing", () => {
+  it("disables the primary and shows 'Pushing' while pushing", () => {
     const { primary } = view(status({ aheadOfBase: 3 }), null, "pushing");
-    expect(primary.label).toBe("Pushing…");
+    expect(primary.label).toBe("Pushing");
     expect(primary.disabled).toBe(true);
   });
 
@@ -214,10 +214,10 @@ describe("resolveDoneFlow — chevron menu", () => {
     expect(menu.commit.reason).toBe("Working tree clean");
   });
 
-  it("disables Commit with 'Loading…' before the first fetch", () => {
+  it("disables Commit with 'Loading' before the first fetch", () => {
     const { menu } = view(null, null);
     expect(menu.commit.disabled).toBe(true);
-    expect(menu.commit.reason).toBe("Loading…");
+    expect(menu.commit.reason).toBe("Loading");
   });
 
   it("labels Push 'Push & create draft PR' with no PR, enabled iff ahead of base", () => {

@@ -50,7 +50,7 @@ export const RAIL_PANEL_INSET = "px-4 group-data-[narrow=true]/rail:px-3";
 export const RAIL_PANEL_MARGIN = "mx-4 group-data-[narrow=true]/rail:mx-3";
 
 /**
- * A Now-page section's title line: the uppercase eyebrow at the left, whatever
+ * A Now-page section's title line: the sentence-case heading at the left, whatever
  * the block offers at the right — Sessions' `+ Chat`, History's count,
  * Automations' door to its page. Inset by the rows' own `px-2` rather than the
  * section's edge, so the label sits over its list instead of hanging left of
@@ -449,7 +449,7 @@ export function RailFoldHeadingRow({
                 type="button"
                 aria-label={triggerLabel}
                 data-testid={testId}
-                className="flex items-center gap-1 rounded-sm uppercase outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+                className="flex items-center gap-1 rounded-sm outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
               >
                 {label}
                 <RailFoldCaret open={open} placement="eyebrow" />
@@ -860,6 +860,7 @@ export function RailFaultBanner({
       tone="error"
       icon={WarningIcon}
       title={label}
+      detail={error}
       hoverTitle={error}
       data-testid={testId}
       // The rail's own narrow step over the notice's 16, for the reason

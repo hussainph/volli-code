@@ -19,13 +19,27 @@ import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimpl
 import { PauseIcon } from "@phosphor-icons/react/dist/csr/Pause";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import * as React from "react";
 import { errorMessage, LOG_LEVELS, type HostLogEntry, type LogLevel } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import { Notice } from "@renderer/components/ui/notice";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
-import { Segmented } from "@renderer/components/ui/segmented";
+import { InputGroup, InputGroupInput, InputGroupAddon } from "@renderer/components/ui/input-group";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@renderer/components/ui/select";
+import { Spinner } from "@renderer/components/ui/spinner";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
@@ -41,7 +55,6 @@ import {
   mergeLines,
   recordFields,
   ROW_ID_FIELDS,
-  rowDetail,
   toJsonl,
   traceSummary,
   VIEWER_RENDER_CAP,
@@ -107,35 +120,54 @@ function useLogLines(sources: readonly LogSource[], paused: boolean) {
     if (!paused) setLines(held.current);
   }, [paused]);
 
+  const restart = React.useRef<(id: string) => void>(() => {});
+  const retry = React.useCallback((id: string) => restart.current(id), []);
+
   React.useEffect(() => {
-    const stops = sources.map((source) =>
-      source.start({
-        onLines: (entries: readonly HostLogEntry[], gap: boolean) => {
-          held.current = mergeLines(held.current, linesOf(source.id, entries));
-          if (gap) {
+    const stops = new Map<string, () => void>();
+    const start = (source: LogSource) => {
+      setViews((all) => ({
+        ...all,
+        [source.id]: { status: "connecting", gaps: all[source.id]?.gaps ?? 0 },
+      }));
+      stops.set(
+        source.id,
+        source.start({
+          onLines: (entries: readonly HostLogEntry[], gap: boolean) => {
+            held.current = mergeLines(held.current, linesOf(source.id, entries));
+            if (gap) {
+              setViews((all) => ({
+                ...all,
+                [source.id]: {
+                  ...(all[source.id] ?? { status: "live" }),
+                  gaps: (all[source.id]?.gaps ?? 0) + 1,
+                },
+              }));
+            }
+            publish();
+          },
+          onStatus: (status, detail) =>
             setViews((all) => ({
               ...all,
               [source.id]: {
-                ...(all[source.id] ?? { status: "live" }),
-                gaps: (all[source.id]?.gaps ?? 0) + 1,
+                status,
+                ...(detail === undefined ? {} : { detail }),
+                gaps: all[source.id]?.gaps ?? 0,
               },
-            }));
-          }
-          publish();
-        },
-        onStatus: (status, detail) =>
-          setViews((all) => ({
-            ...all,
-            [source.id]: {
-              status,
-              ...(detail === undefined ? {} : { detail }),
-              gaps: all[source.id]?.gaps ?? 0,
-            },
-          })),
-      }),
-    );
+            })),
+        }),
+      );
+    };
+    for (const source of sources) start(source);
+    restart.current = (id) => {
+      const source = sources.find((candidate) => candidate.id === id);
+      if (!source) return;
+      stops.get(id)?.();
+      start(source);
+    };
     return () => {
-      for (const stop of stops) stop();
+      restart.current = () => {};
+      for (const stop of stops.values()) stop();
     };
   }, [sources, publish]);
 
@@ -150,7 +182,7 @@ function useLogLines(sources: readonly LogSource[], paused: boolean) {
     [],
   );
 
-  return { lines, views };
+  return { lines, views, retry };
 }
 
 const DOT: Record<LogSourceStatus, StatusDotState> = {
@@ -181,49 +213,80 @@ function LogRow({
   line,
   sourceLabel,
   showSource,
+  foldSource,
   onFilter,
 }: {
   line: ViewerLine;
   sourceLabel: string;
   showSource: boolean;
+  /** Name the machine under a narrow row: only when the stream holds more than one. */
+  foldSource: boolean;
   onFilter(field: "traceId" | "sessionId" | "ticketId" | "component", value: string): void;
 }) {
   const [open, setOpen] = React.useState(false);
   const { record } = line;
   const fields = recordFields(record);
-  const detail = rowDetail(record);
   return (
     <li
-      className="border-b border-border/50 font-mono text-ui"
+      className="border-b border-border/50 text-ui"
       data-testid="log-row"
       data-level={record.level}
     >
-      <div className="flex items-baseline gap-3 px-2 py-0.5 hover:bg-muted/40">
-        <span className="shrink-0 text-muted-foreground tabular-nums">{clockOf(record.ts)}</span>
-        {showSource ? (
-          <span className="w-20 shrink-0 truncate text-muted-foreground" title={sourceLabel}>
-            {sourceLabel}
-          </span>
-        ) : null}
+      <div className="grid grid-cols-2 items-baseline gap-2 px-4 py-2 hover:bg-muted/40 @sm/logs:grid-cols-[6rem_4rem_minmax(0,1fr)] @2xl/logs:grid-cols-[6rem_4rem_8rem_minmax(0,1fr)] @4xl/logs:grid-cols-[6rem_4rem_8rem_7rem_minmax(0,1fr)]">
+        <span className="font-mono text-muted-foreground tabular-nums">{clockOf(record.ts)}</span>
         <span className={cn("w-10 shrink-0", LEVEL_TONE[record.level])}>{record.level}</span>
         <button
           type="button"
-          className="w-28 shrink-0 truncate text-left text-muted-foreground hover:text-foreground"
+          className="hidden truncate text-left text-muted-foreground hover:text-foreground @2xl/logs:block"
           title={record.component}
           onClick={() => onFilter("component", record.component)}
         >
           {record.component}
         </button>
+        {showSource ? (
+          <span
+            className="hidden truncate text-muted-foreground @4xl/logs:block"
+            title={sourceLabel}
+          >
+            {sourceLabel}
+          </span>
+        ) : (
+          <span className="hidden @4xl/logs:block" />
+        )}
         <button
           type="button"
-          className="min-w-0 flex-1 truncate text-left"
+          className="col-span-2 min-w-0 text-left [overflow-wrap:anywhere] @sm/logs:col-span-1"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
           {record.msg}
-          {detail === "" ? null : <span className="ml-2 text-muted-foreground">{detail}</span>}
         </button>
-        <span className="flex shrink-0 gap-1">
+        <span className="col-span-full flex flex-wrap gap-1">
+          {/* A narrow pane folds the Component and Source columns under the
+              message instead of dropping them: in a stream that interleaves
+              several machines, a line that no longer names its machine (or
+              its component) is ambiguous. Each folded value hides at the width
+              where its own column appears, so a row says each once. */}
+          <span
+            className={cn(
+              "mr-1 flex min-w-0 items-baseline gap-2 text-label text-muted-foreground",
+              foldSource ? "@4xl/logs:hidden" : "@2xl/logs:hidden",
+            )}
+          >
+            {foldSource ? (
+              <span className="truncate" title={sourceLabel}>
+                {sourceLabel}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="truncate text-left hover:text-foreground @2xl/logs:hidden"
+              title={record.component}
+              onClick={() => onFilter("component", record.component)}
+            >
+              {record.component}
+            </button>
+          </span>
           {ROW_ID_FIELDS.map((field) => {
             const value = record[field];
             if (typeof value !== "string") return null;
@@ -234,7 +297,7 @@ function LogRow({
                 type="button"
                 disabled={!filterable}
                 title={`${field} ${value}`}
-                className="rounded-control border border-border px-1.5 text-muted-foreground enabled:hover:text-foreground"
+                className="rounded-control border border-border px-2 font-mono text-label text-muted-foreground enabled:hover:text-foreground"
                 onClick={() => {
                   if (filterable) onFilter(field, value);
                 }}
@@ -247,7 +310,17 @@ function LogRow({
       </div>
       {open ? (
         <pre className="overflow-x-auto bg-muted/30 px-2 py-1 whitespace-pre-wrap text-muted-foreground">
-          {JSON.stringify(fields, null, 2)}
+          {JSON.stringify(
+            {
+              // A column or its folded line can truncate; the disclosure keeps
+              // their full values available alongside the record's fields.
+              ...(showSource ? { source: sourceLabel } : {}),
+              component: record.component,
+              ...fields,
+            },
+            null,
+            2,
+          )}
         </pre>
       ) : null}
     </li>
@@ -271,17 +344,27 @@ function LogRows({
     lines.length > VIEWER_RENDER_CAP ? lines.slice(lines.length - VIEWER_RENDER_CAP) : lines;
   if (shown.length === 0) return <p className={EMPTY_INLINE}>{empty}</p>;
   return (
-    <ol className="min-h-0 flex-1 overflow-y-auto" data-testid="log-rows">
-      {shown.map((line) => (
-        <LogRow
-          key={line.key}
-          line={line}
-          sourceLabel={labels.get(line.source) ?? line.source}
-          showSource={showSource}
-          onFilter={onFilter}
-        />
-      ))}
-    </ol>
+    <div className="min-h-0 flex-1 overflow-y-auto rounded-container border border-border bg-card">
+      <div className="sticky top-0 grid grid-cols-2 gap-2 border-b border-border bg-card px-4 py-2 text-ui font-medium text-muted-foreground @sm/logs:grid-cols-[6rem_4rem_minmax(0,1fr)] @2xl/logs:grid-cols-[6rem_4rem_8rem_minmax(0,1fr)] @4xl/logs:grid-cols-[6rem_4rem_8rem_7rem_minmax(0,1fr)]">
+        <span>Time</span>
+        <span>Level</span>
+        <span className="hidden @2xl/logs:block">Component</span>
+        <span className="hidden @4xl/logs:block">Source</span>
+        <span className="hidden @sm/logs:block">Message</span>
+      </div>
+      <ol data-testid="log-rows">
+        {shown.map((line) => (
+          <LogRow
+            key={line.key}
+            line={line}
+            sourceLabel={labels.get(line.source) ?? line.source}
+            showSource={showSource}
+            foldSource={showSource && labels.size > 1}
+            onFilter={onFilter}
+          />
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -311,7 +394,6 @@ const FILTER_INPUTS = [
   { field: "sessionId", label: "Session" },
   { field: "ticketId", label: "Ticket" },
   { field: "component", label: "Component" },
-  { field: "text", label: "Search" },
 ] as const;
 
 /** The whole viewer: Settings → System → Logs. */
@@ -319,7 +401,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
   const sources = useLogSources(local);
   const [paused, setPaused] = React.useState(false);
   const [filter, setFilter] = React.useState<LogFilter>(EMPTY_FILTER);
-  const { lines, views } = useLogLines(sources, paused);
+  const { lines, views, retry } = useLogLines(sources, paused);
   const labels = React.useMemo(
     () => new Map(sources.map((source) => [source.id, source.label])),
     [sources],
@@ -331,15 +413,8 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
     setFilter((current) => ({ ...current, [field]: value }));
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="log-viewer">
+    <div className="@container/logs flex min-h-0 flex-1 flex-col gap-4" data-testid="log-viewer">
       <div className="flex flex-wrap items-center gap-2">
-        <Segmented
-          ariaLabel="Lowest level"
-          size="sm"
-          value={filter.minLevel}
-          options={LEVEL_OPTIONS}
-          onChange={(level) => set("minLevel", level)}
-        />
         <span className="flex items-center gap-1" role="group" aria-label="Sources">
           {sources.map((source) => {
             const view = views[source.id];
@@ -356,7 +431,11 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
                 }
                 onClick={() => set("source", active ? "" : source.id)}
               >
-                <StatusDot state={DOT[view?.status ?? "connecting"]} />
+                {view === undefined || view.status === "connecting" ? (
+                  <Spinner />
+                ) : (
+                  <StatusDot state={DOT[view.status]} />
+                )}
                 {source.label}
               </Button>
             );
@@ -382,29 +461,121 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
           </Button>
         </span>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {FILTER_INPUTS.map(({ field, label }) => (
-          <Input
-            key={field}
-            aria-label={label}
-            placeholder={label}
-            className="w-40"
-            list={field === "component" ? "log-components" : undefined}
-            value={filter[field]}
-            onChange={(event) => set(field, event.target.value.trim())}
-          />
-        ))}
-        <datalist id="log-components">
-          {components.map((component) => (
-            <option key={component} value={component} />
+      <InputGroup>
+        <InputGroupAddon>
+          <MagnifyingGlassIcon />
+        </InputGroupAddon>
+        <InputGroupInput
+          aria-label="Search logs"
+          placeholder="Search logs"
+          value={filter.text}
+          onChange={(event) => set("text", event.target.value)}
+        />
+        <InputGroupAddon align="inline-end">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button size="sm" variant="ghost" aria-label="Filter logs">
+                <FunnelIcon />
+                Filters
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-4 p-4"
+            >
+              <label className="flex flex-col gap-1 text-ui font-medium">
+                Minimum level
+                <Select
+                  value={filter.minLevel}
+                  onValueChange={(level) => set("minLevel", level as LogLevel)}
+                >
+                  <SelectTrigger aria-label="Minimum level">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LEVEL_OPTIONS.map(({ key, label }) => (
+                      <SelectItem key={key} value={key}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="flex flex-col gap-1 text-ui font-medium">
+                Source
+                <Select
+                  value={filter.source || "all"}
+                  onValueChange={(source) => set("source", source === "all" ? "" : source)}
+                >
+                  <SelectTrigger aria-label="Log source">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All sources</SelectItem>
+                    {sources.map((source) => (
+                      <SelectItem key={source.id} value={source.id}>
+                        {source.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              {FILTER_INPUTS.map(({ field, label }) => (
+                <label key={field} className="flex flex-col gap-1 text-ui font-medium">
+                  {label}
+                  <Input
+                    aria-label={label}
+                    list={field === "component" ? "log-components" : undefined}
+                    value={filter[field]}
+                    onChange={(event) => set(field, event.target.value.trim())}
+                    className={field === "component" ? "" : "font-mono"}
+                  />
+                </label>
+              ))}
+              <datalist id="log-components">
+                {components.map((component) => (
+                  <option key={component} value={component} />
+                ))}
+              </datalist>
+            </PopoverContent>
+          </Popover>
+          {Object.keys(EMPTY_FILTER).some(
+            (key) => filter[key as keyof LogFilter] !== EMPTY_FILTER[key as keyof LogFilter],
+          ) && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Clear filters"
+              onClick={() => setFilter(EMPTY_FILTER)}
+            >
+              <XIcon />
+            </Button>
+          )}
+        </InputGroupAddon>
+      </InputGroup>
+      <div className="flex flex-wrap items-center gap-2 text-label text-muted-foreground">
+        <span>
+          {shown.length} of {lines.length} lines
+        </span>
+        {Object.entries(filter)
+          .filter(([key, value]) => value !== EMPTY_FILTER[key as keyof LogFilter])
+          .map(([key, value]) => (
+            <Button
+              key={key}
+              variant="outline"
+              size="xs"
+              onClick={() =>
+                setFilter((current) => ({
+                  ...current,
+                  [key]: EMPTY_FILTER[key as keyof LogFilter],
+                }))
+              }
+            >
+              {key === "minLevel" ? "Level" : key === "text" ? "Search" : key.replace(/Id$/u, "")}:{" "}
+              {labels.get(value) ?? value}
+              <XIcon />
+            </Button>
           ))}
-        </datalist>
-        {filter !== EMPTY_FILTER ? (
-          <Button size="sm" variant="ghost" onClick={() => setFilter(EMPTY_FILTER)}>
-            <XIcon />
-            Clear
-          </Button>
-        ) : null}
       </div>
       {trace !== null ? (
         <p className="text-ui text-muted-foreground" data-testid="trace-summary">
@@ -413,13 +584,44 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
           }${trace.durationMs === null ? "" : ` · ${(trace.durationMs / 1000).toFixed(2)} s`}`}
         </p>
       ) : null}
-      <LogRows
-        lines={shown}
-        labels={labels}
-        showSource
-        onFilter={(field, value) => set(field, value)}
-        empty={lines.length === 0 ? "No lines yet." : "No lines match."}
-      />
+      {sources
+        .filter((source) => views[source.id]?.status === "failed")
+        .map((source) => (
+          <Notice
+            key={source.id}
+            tone="error"
+            announce
+            title={`Couldn't read ${source.label} logs`}
+            actions={
+              <Button size="xs" variant="outline" onClick={() => retry(source.id)}>
+                <ArrowClockwiseIcon />
+                Retry
+              </Button>
+            }
+          />
+        ))}
+      {lines.length === 0 &&
+      sources.some(
+        (source) => views[source.id] === undefined || views[source.id]?.status === "connecting",
+      ) ? (
+        <div
+          role="status"
+          aria-label="Reading logs"
+          className="flex flex-col gap-2 rounded-container border border-border bg-card p-4"
+        >
+          <Skeleton aria-hidden className="h-4 w-3/4" />
+          <Skeleton aria-hidden className="h-4 w-1/2" />
+        </div>
+      ) : lines.length === 0 &&
+        sources.some((source) => views[source.id]?.status === "failed") ? null : (
+        <LogRows
+          lines={shown}
+          labels={labels}
+          showSource
+          onFilter={(field, value) => set(field, value)}
+          empty={lines.length === 0 ? "No lines yet." : "No lines match."}
+        />
+      )}
     </div>
   );
 }
@@ -450,7 +652,10 @@ export function LogStream({
   );
   const shown = React.useMemo(() => filterLines(lines, fixed), [lines, fixed]);
   return (
-    <div className={cn("flex min-h-0 flex-col", className)} data-testid="log-stream">
+    <div
+      className={cn("@container/logs flex min-h-0 flex-col", className)}
+      data-testid="log-stream"
+    >
       <LogRows
         lines={shown}
         labels={labels}

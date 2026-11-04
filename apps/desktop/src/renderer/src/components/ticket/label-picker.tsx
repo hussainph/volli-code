@@ -66,6 +66,7 @@ function LabelDot({ color }: { color: string }) {
   return (
     <span
       aria-hidden
+      data-slot="label-mark"
       className="size-1.5 shrink-0 rounded-full"
       style={{ backgroundColor: color }}
     />
@@ -99,7 +100,7 @@ export function LabelPickerContent({
     // that reorders itself as you type is one you cannot learn.
     <Command shouldFilter={false} className="bg-transparent">
       <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Search labels…" />
-      <CommandList className="max-h-64">
+      <CommandList className="max-h-64 p-1">
         {options.length === 0 && creatable === null ? (
           // The list's 4px inset plus a row's 8px: the empty line starts where
           // a label row's text would.
@@ -114,7 +115,7 @@ export function LabelPickerContent({
             onSelect={() => onChange(withLabelToggled(value, option.name))}
           >
             <LabelDot color={resolveLabelColor(projectLabels, option.name)} />
-            <span className="truncate">{option.name}</span>
+            <span className="wrap-anywhere">{option.name}</span>
             {option.selected ? (
               <CheckIcon weight="bold" className="ml-auto size-3.5 shrink-0 text-foreground" />
             ) : null}
@@ -131,7 +132,7 @@ export function LabelPickerContent({
             }}
           >
             <PlusIcon />
-            <span className="truncate">Create “{creatable}”</span>
+            <span className="wrap-anywhere">Create “{creatable}”</span>
           </CommandItem>
         )}
       </CommandList>

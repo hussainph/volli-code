@@ -233,6 +233,10 @@ describe("TicketRail's Now page", () => {
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
     expect(page).not.toContain("Run once");
     expect([...page.matchAll(/shadow-raised/g)]).toHaveLength(2);
+    // The compact Chat split uses its controls' own lift, not a raised frame
+    // around the whole group. Rail geometry must not silently become strip-sized.
+    expect(page).toMatch(/data-size="xs"[^>]*aria-label="New chat"/);
+    expect(page).not.toContain("bg-card shadow-raised");
     for (const field of ["status", "priority"]) {
       expect(page).toContain(`data-testid="ticket-rail-property-${field}"`);
     }

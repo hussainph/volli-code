@@ -26,8 +26,8 @@ describe("railReadFeedback", () => {
     expect(railReadFeedback(state({ pending: true }), "Sessions")).toEqual({
       place: "body",
       kind: "reading",
-      face: "Reading…",
-      detail: "Reading…",
+      face: "Reading",
+      detail: "Reading",
     });
   });
 
@@ -48,7 +48,7 @@ describe("railReadFeedback", () => {
     expect(railReadFeedback(state({ hasData: true, pending: true }), "Sessions")).toEqual({
       place: "heading",
       kind: "refreshing",
-      face: "Refreshing…",
+      face: "Refreshing",
       detail: "Refreshing · last read shown",
     });
     expect(railReadFeedback(state({ hasData: true, failed: true }), "Sessions")).toEqual({

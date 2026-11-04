@@ -322,10 +322,16 @@ test("durable answer proof uses the real titled trailer and the same question's 
 });
 
 test("log proof requires a real row, not search/filter or other-host names", () => {
-  const header = `- button "volli-acceptance" [pressed]\n- textbox "Search": serving`;
+  const header = `- button "volli-acceptance" [pressed]\n- textbox "Search logs": serving`;
   const row = `- listitem:\n  - generic: volli-acceptance\n  - button "hostd" [ref=e1]\n  - 'button "serving database: /fixture/db" [ref=e2]'`;
   assert.equal(visibleServingRow(header, "volli-acceptance"), false);
   assert.equal(visibleServingRow(`${header}\n${row}`, "volli-acceptance"), true);
+  // A narrow pane: the row folds source and component under the message.
+  const folded = `- listitem:\n  - generic:\n    - generic: 22:41:58.775\n    - generic: info\n    - button "serving" [ref=e2]\n    - generic:\n      - generic:\n        - generic: volli-acceptance\n        - button "hostd" [ref=e1]`;
+  assert.equal(visibleServingRow(`${header}\n${folded}`, "volli-acceptance"), true);
+  // A row that names neither its machine nor its component proves nothing.
+  const bare = `- listitem:\n  - generic:\n    - generic: 22:41:58.775\n    - generic: info\n    - button "serving" [ref=e2]`;
+  assert.equal(visibleServingRow(`${header}\n${bare}`, "volli-acceptance"), false);
   assert.equal(
     visibleServingRow(
       `${header}\n${row.replace("volli-acceptance", "other-host")}`,
@@ -669,7 +675,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     "Signed in on",
     "Stop turn",
     "Waiting for you",
-    "Search",
+    "Search logs",
   ])
     assert.ok(smoke.includes(label), label);
   assert.doesNotMatch(smoke, /EXPECTED_PROJECT_FAILURE|XFAIL|XPASS|expectedFailure/u);

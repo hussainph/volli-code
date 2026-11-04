@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
@@ -704,7 +705,11 @@ function LocalFileView({
   }
 
   if (state.status === "loading") {
-    return <p className="px-gutter py-4 text-ui text-muted-foreground">Loading…</p>;
+    return (
+      <p className="px-gutter py-4 text-ui text-muted-foreground">
+        <LoadingLabel>Loading</LoadingLabel>
+      </p>
+    );
   }
   if (state.status === "error") {
     return <p className="px-gutter py-4 text-ui text-destructive">{state.error}</p>;
