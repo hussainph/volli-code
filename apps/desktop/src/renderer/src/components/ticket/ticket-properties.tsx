@@ -143,7 +143,7 @@ function PropertyRow({
   return (
     <li
       className={cn(
-        "flex w-full gap-2 rounded-lg border border-transparent px-2 py-1",
+        "flex w-full gap-2 rounded-row border border-transparent px-2 py-1",
         align === "center" ? "items-center" : "items-start",
       )}
       {...rest}

@@ -14,6 +14,7 @@ import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { Button } from "@renderer/components/ui/button";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /** One thing that is wrong, and — where there is one — the button that fixes it. */
 export interface Fault {
@@ -70,7 +71,7 @@ export function HealthPanel({
   return (
     <section
       hidden={state === "healthy"}
-      className="rounded-container bg-card px-4 py-4"
+      className={cn(CARD_SURFACE, "px-4 py-4")}
       data-health-state={state}
     >
       <header className="flex items-center gap-2 py-1">

@@ -87,6 +87,7 @@ import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
+import { cn } from "@renderer/lib/utils";
 
 /** 16:10 — the app's real default window (1280×800). See the module header. */
 const PAD_ASPECT = "16 / 10";
@@ -154,6 +155,9 @@ export function AppearanceModeChoice({
       value={value}
       options={APPEARANCE_OPTIONS}
       iconOnly={iconOnly}
+      // Floating on the pad, the track takes the pad's paper so it reads on
+      // any gradient; in a settings row it is the ordinary glass track.
+      className={iconOnly ? PAD_PAPER : undefined}
       onChange={onChange}
     />
   );
@@ -334,7 +338,7 @@ function PadOrb({
         marginTop: -size / 2,
         background: stop.hex,
       }}
-      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
+      className="absolute touch-none rounded-full ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
     />
   );
 }
@@ -402,22 +406,29 @@ function GradientPad({
   );
 }
 
+/** The paper the pad's own chrome stands on — see {@link PadChip}. */
+const PAD_PAPER = "bg-background/70";
+
 /**
- * A quiet translucent chip for a control FLOATING ON THE PAD.
- *
- * Only for controls without a fill of their own (the ghost −/+ pair): the
- * appearance segments are lifted buttons and float bare.
+ * A quiet translucent capsule for a control FLOATING ON THE PAD.
  *
  * The pad paints the user's own gradient, which can be any colour at all, so
  * a floating control cannot borrow the pad as its surface — white glyphs
  * vanish on a pale canvas, dark ones on a deep canvas (the orbs' two-tone
- * ring exists for the same reason). The chip brings its own token surface at
- * partial opacity, so the controls read on anything while the canvas still
- * shows through.
+ * ring exists for the same reason). The capsule brings its own paper at
+ * partial opacity, borderless and flat, the same track the appearance
+ * segments stand on ({@link AppearanceModeChoice}), so the controls read on
+ * anything while the canvas still shows through. No backdrop blur: that is
+ * the float material's alone (docs/DESIGN.md, "Surfaces").
  */
 function PadChip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="pointer-events-auto flex items-center gap-0.5 rounded-full bg-background/60 p-0.5 backdrop-blur-sm">
+    <div
+      className={cn(
+        "pointer-events-auto flex items-center gap-0.5 rounded-segmented p-0.5",
+        PAD_PAPER,
+      )}
+    >
       {children}
     </div>
   );
@@ -734,7 +745,7 @@ function WaveSlider({
           <span
             aria-hidden
             style={{ left: seam }}
-            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-150 ease-out motion-reduce:transition-none!"
+            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary transition-[left] duration-150 ease-out motion-reduce:transition-none!"
           />
           {/* Last, so it takes the pointer: the platform's own control with its
             paint suppressed, which keeps click-to-jump, the keyboard, and the

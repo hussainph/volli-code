@@ -18,6 +18,7 @@ import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
+import { WELL_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /** No router: the selected project's nav page dispatches directly to a page component. */
 export function MainContent({ override }: { override?: ReactNode } = {}) {
@@ -103,7 +104,7 @@ function EmptyProjectsState() {
       <div className="relative z-10 flex max-w-sm flex-col items-center">
         {/* The frame is the glyph plus its inset — 20 + 8 + 8 — so a bigger
             or smaller icon moves the box instead of overflowing a fixed one. */}
-        <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2 shadow-raised">
+        <div className={cn(WELL_SURFACE, "mb-4 flex items-center justify-center p-2")}>
           <FolderPlusIcon className="size-5 text-muted-foreground" />
         </div>
         <h1 className="text-title font-semibold">Add your first project</h1>

@@ -1,14 +1,20 @@
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
+import { cn } from "@renderer/lib/utils";
+
 /**
  * Shared prompt chrome (VC-335): a writing sheet over a tinted control tray.
- * The material recipes live in globals.css and derive entirely from theme
- * tokens. Prompt surfaces opt in here; stacked questions and activity retain
- * COMPOSER_STACK_SHELL so decoration never competes with their content.
+ * The frame is the card role (docs/DESIGN.md, "Surfaces") — its fill,
+ * hairline and radius, flat — and `prompt-surface` is the hook the writing
+ * sheet, the forced-colors edge and the layout probe read. Stacked questions and
+ * activity retain COMPOSER_STACK_SHELL so decoration never competes with their
+ * content.
  */
-export const PROMPT_SURFACE =
-  "prompt-surface rounded-container border border-transparent shadow-card";
+export const PROMPT_SURFACE = cn("prompt-surface", CARD_SURFACE);
 
-/** A bounded setting rather than another floating word: a glass chip. */
-export const COMPOSER_CONFIG_CHIP = "prompt-config border border-glass-edge bg-glass-1";
+/** A bounded setting rather than another floating word: a glass chip, on the
+ * chip role's radius (`--radius-chip`). */
+export const COMPOSER_CONFIG_CHIP =
+  "prompt-config rounded-chip border border-glass-edge bg-glass-1";
 
 /** The rung every secondary control in a composer's footer wears: 24px. */
 export const COMPOSER_CONTROL_SIZE = "sm" as const;

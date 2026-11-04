@@ -205,7 +205,7 @@ function LaneColumn({
 }) {
   const movable = draggableRows(lane);
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-lg bg-muted/30 p-2">
+    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-card bg-muted/30 p-2">
       {/* `group/column-header` is what the bolt's hover reveal reads: the same
           control as the board's, so arming a column from the page and arming it
           from the board are provably one act (and one store door). */}
@@ -327,7 +327,7 @@ function LaneRow({
  */
 function OffBoardLane({ automations }: { automations: readonly Automation[] }) {
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-lg border border-dashed border-border p-2">
+    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-card border border-dashed border-border p-2">
       <div className="flex items-center gap-2 px-1">
         <span className="text-ui font-medium text-muted-foreground">No column</span>
         <span className="text-label text-muted-foreground tabular-nums">

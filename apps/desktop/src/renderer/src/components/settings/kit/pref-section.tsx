@@ -6,6 +6,7 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 import { Button } from "@renderer/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 export function PrefSection({
   title,
@@ -47,14 +48,7 @@ export function PrefSection({
       </div>
       {hint ? <div className="text-ui text-muted-foreground">{hint}</div> : null}
       {/* A direct first row suppresses its top rule against the group's border. */}
-      <div
-        className={cn(
-          "rounded-container border border-border bg-card",
-          fill && "flex min-h-0 flex-1 flex-col",
-        )}
-      >
-        {children}
-      </div>
+      <div className={cn(CARD_SURFACE, fill && "flex min-h-0 flex-1 flex-col")}>{children}</div>
     </section>
   );
 }

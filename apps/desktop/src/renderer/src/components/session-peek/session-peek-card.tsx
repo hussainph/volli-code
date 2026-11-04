@@ -60,6 +60,7 @@ import { cn } from "@renderer/lib/utils";
 import { PEEK_CONFIRMATION_MS } from "./peek-machine";
 import type { PeekPosition } from "./peek-geometry";
 import type { SessionPeekRow } from "./use-session-peek";
+import { FLOAT_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /* ------------------------------------------------------------- the card grid */
 
@@ -75,8 +76,8 @@ export function peekFrameStyle(position: PeekPosition, width: number): React.CSS
   };
 }
 
-export const PEEK_FRAME =
-  "flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-ui shadow-overlay outline-none";
+/** A peek hovers over the work: the float role (`ui/surface-classes.ts`). */
+export const PEEK_FRAME = cn(FLOAT_SURFACE, "flex flex-col overflow-hidden text-ui outline-none");
 /**
  * Every strip's inset is the card's measured 12px — `RAIL_PANEL_INSET`'s narrow
  * rung on a popover, off the spacing ladder by measurement and recorded in

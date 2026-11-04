@@ -127,10 +127,7 @@ export const UsageBar = React.memo(function UsageBar({
     <span
       role={interactive ? "group" : "img"}
       aria-label={`Token classes: ${label}`}
-      className={cn(
-        "flex h-8 w-full gap-px overflow-hidden rounded-control shadow-control",
-        className,
-      )}
+      className={cn("flex h-8 w-full gap-px overflow-hidden rounded-control", className)}
     >
       {segments.map((segment) =>
         interactive ? (

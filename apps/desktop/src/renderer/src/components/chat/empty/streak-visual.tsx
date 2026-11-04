@@ -82,7 +82,9 @@ export function StreakVisual() {
         {hover === null ? null : (
           <div
             aria-hidden
-            className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-ui text-popover-foreground shadow-overlay"
+            // A tooltip label: the float material on the tooltip radius, like
+            // `ui/tooltip.tsx`.
+            className="material-floating pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-tooltip border px-2 py-1 text-ui text-foreground shadow-overlay"
             style={{ left: hover.x, top: hover.y - 6 }}
           >
             {dayLabel(hover.day)}

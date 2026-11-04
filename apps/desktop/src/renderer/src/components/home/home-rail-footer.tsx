@@ -256,7 +256,7 @@ function CheckoutBody({
   return (
     <>
       <header className="flex items-center gap-2 pb-2">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-control border border-border bg-card shadow-raised">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-control border border-border bg-card">
           <HardDriveIcon className="size-4 text-primary-text" />
         </span>
         <div className="min-w-0">

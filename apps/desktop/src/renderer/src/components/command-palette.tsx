@@ -491,12 +491,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       label="Search tickets, sessions, and commands"
       filter={commandPaletteFilter}
       loop
-      // The app's one `--scrim`, plus a blur no other overlay takes. This used
-      // to be a notch heavier than the dialog's — 35/55 against 30/50, a
-      // difference nobody could name behind a backdrop it also blurs, and the
-      // third and fourth spellings of one wash. The blur is what makes this
-      // overlay the exception; the wash is not.
-      overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
+      // The app's one `--scrim`, exactly the dialog's. This used to be a notch
+      // heavier (35/55 against 30/50) and to ask for a 2px blur — the blur was
+      // never painted (`[cmdk-overlay]` in globals.css keeps blur off every
+      // scrim), and blur belongs to the float material alone.
+      overlayClassName="fixed inset-0 z-50 bg-scrim"
       contentClassName={COMMAND_OVERLAY_FRAME}
     >
       {/* Same separated search field and keycap treatment as Quick Open. */}

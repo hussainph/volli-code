@@ -38,6 +38,7 @@ import {
   useBrowserTabsStore,
 } from "@renderer/stores/browser-tabs";
 import { cn } from "@renderer/lib/utils";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /** What a card needs from the chat around it; absent (the lab) draws facts alone. */
 export interface BrowserCardHost {
@@ -201,7 +202,7 @@ export function BrowserTabCard({
   return (
     <div
       data-browser-tab-card={facet.tabId ?? undefined}
-      className="my-1 flex flex-col gap-2 rounded-container border border-border bg-card p-2 text-ui shadow-raised"
+      className={cn(CARD_SURFACE, "my-1 flex flex-col gap-2 p-2 text-ui")}
     >
       <div className="flex min-w-0 items-center gap-2">
         <BrowserTabMark driven={driven} />

@@ -82,6 +82,7 @@ import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-a
 import { remoteHosts, useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import { deviceMeta, hostFacts, hostHealth, hostRowMeta, orderDevices } from "./hosts-pane-model";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 const messageOf = (error: unknown): string =>
   error instanceof Error && error.message !== "" ? error.message : "That didn’t work.";
@@ -409,7 +410,7 @@ function HostPage({
   const readOnly = useRemoteHostsStore((state) => state.readOnly);
   return (
     <>
-      <div className="flex items-center gap-4 rounded-lg bg-card px-4 py-4">
+      <div className={cn(CARD_SURFACE, "flex items-center gap-4 px-4 py-4")}>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button size="icon-sm" variant="ghost" aria-label="All hosts" onClick={onBack}>
@@ -486,7 +487,7 @@ function HostPage({
 
       <DevicesSection host={remote} />
 
-      <div className="rounded-lg bg-card px-4 py-4">
+      <div className={cn(CARD_SURFACE, "px-4 py-4")}>
         <PrefRow label="Forget host" description={readOnly ?? undefined}>
           <Button
             size="sm"

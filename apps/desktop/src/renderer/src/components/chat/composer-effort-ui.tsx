@@ -596,7 +596,7 @@ export function EffortSlider({
               data-slot="effort-handle"
               className={cn(
                 "absolute top-1/2 left-0 h-5 w-1 -translate-x-1/2 -translate-y-1/2",
-                "rounded-full bg-foreground shadow-raised",
+                "rounded-full bg-foreground",
                 // THE GRIP ANSWERS BEING GRIPPED, and it answers loudly: twice
                 // as wide, a sixth taller, and wearing a soft ring while the
                 // pointer is down. A 4px bar swelling to 6px was the polite

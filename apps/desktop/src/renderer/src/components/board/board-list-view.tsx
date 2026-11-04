@@ -216,7 +216,10 @@ function ListSection({
       data-drop-aimed={aimed || undefined}
       className={cn(aimed && "bg-accent/30 ring-1 ring-inset ring-primary/50")}
     >
-      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/30 px-gutter py-1 backdrop-blur-sm">
+      {/* The panel's own material, not a blur: a fixed-attachment strip of
+          the content card's fill hides the rows scrolling under it at no GPU
+          cost (docs/DESIGN.md, "Surfaces"). */}
+      <div className="material-thick sticky top-0 z-10 flex items-center gap-2 border-b border-border px-gutter py-1">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <Badge variant="count">{tickets.length}</Badge>
       </div>

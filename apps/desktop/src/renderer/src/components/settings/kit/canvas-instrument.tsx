@@ -198,7 +198,7 @@ function PadOrb({
         marginTop: -size / 2,
         background: stop.hex,
       }}
-      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
+      className="absolute touch-none rounded-full ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
     />
   );
 }
@@ -562,7 +562,7 @@ function Rotary({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(value * 100)}
-        className="grid size-20 touch-none place-items-center rounded-full border border-border-strong bg-secondary shadow-control outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="grid size-20 touch-none place-items-center rounded-full border border-border-strong bg-secondary outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onPointerDown={(e) => {
           e.currentTarget.focus();
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -607,7 +607,7 @@ function Rotary({
       >
         <span
           aria-hidden
-          className="relative block size-16 rounded-full border border-border bg-card shadow-raised"
+          className="relative block size-16 rounded-full border border-border bg-card"
           style={{ transform: `rotate(${-135 + value * 270}deg)` }}
         >
           <span className="absolute top-2 left-1/2 h-4 w-1 -translate-x-1/2 rounded-full bg-primary" />

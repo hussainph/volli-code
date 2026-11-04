@@ -4,9 +4,10 @@
  * same object at the same weight, and adding a chip cannot quietly introduce a
  * sixth size.
  *
- * It rides the default 28px metadata rung. The raised card face is the same
- * semantic material as the runtime controls below; the Button owns geometry.
+ * It rides the default 28px metadata rung, in the same flat glass as the
+ * runtime controls below. The Button owns height and inset; the corner is the
+ * chip role's (`--radius-chip`, globals.css).
  */
 export function composerChipClass(): string {
-  return "border border-border bg-card font-medium text-muted-foreground shadow-raised";
+  return "rounded-chip border border-glass-edge bg-glass-1 font-medium text-muted-foreground";
 }

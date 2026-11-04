@@ -239,7 +239,7 @@ function CommitGateDialog({
           </DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-2 rounded-lg border border-border p-4">
+          <div className="flex items-center gap-2 rounded-card border border-border p-4">
             <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-ui font-medium">{changesLabel}</span>
             {diff === null ? null : <DiffTotals diff={diff} />}

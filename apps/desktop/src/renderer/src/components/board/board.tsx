@@ -318,7 +318,7 @@ function DragOverlayBody({
 
   const content = (ticket: Ticket, active: boolean) =>
     listView ? (
-      <div className="overflow-hidden rounded-md bg-card shadow-card">
+      <div className="overflow-hidden rounded-md bg-card shadow-overlay">
         <TicketRowContent
           ticket={ticket}
           ticketPrefix={ticketPrefix}
@@ -327,7 +327,7 @@ function DragOverlayBody({
         />
       </div>
     ) : (
-      <div className="rounded-lg shadow-card">
+      <div className="rounded-card shadow-overlay">
         <TicketCardContent
           ticket={ticket}
           ticketPrefix={ticketPrefix}
@@ -371,7 +371,7 @@ function DragOverlayBody({
       <div className="relative">{content(activeTicket, true)}</div>
       {tickets.length > 1 ? (
         <motion.span
-          className="absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-primary text-ui font-medium text-primary-foreground shadow-raised"
+          className="absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-primary text-ui font-medium text-primary-foreground"
           initial={reducedMotion ? false : { opacity: 0, transform: "scale(0.95)" }}
           animate={{ opacity: 1, transform: "scale(1)" }}
           transition={CLUSTER_SPRING}
@@ -1284,7 +1284,7 @@ export const Board = React.memo(function Board({
               >
                 <p
                   className={cn(
-                    "flex items-center gap-2 rounded-full border border-border bg-popover px-2 py-1 text-ui text-muted-foreground shadow-overlay",
+                    "material-floating flex items-center gap-2 rounded-full border px-2 py-1 text-ui text-muted-foreground shadow-overlay",
                     !reducedMotion &&
                       "transition-[opacity,translate] duration-200 ease-out starting:translate-y-1 starting:opacity-0",
                   )}

@@ -32,6 +32,7 @@ import {
 } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
+import { PANE_SURFACE } from "@renderer/components/ui/surface-classes";
 import { UpdateInstallDialog } from "@renderer/components/update/update-install-dialog";
 import { useBrowserAppShortcuts } from "@renderer/hooks/use-browser-app-shortcuts";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
@@ -53,15 +54,15 @@ const SHELL_INSET = 8;
 const SLIVER_WIDTH = 6;
 /**
  * How far past the clip line the panel parks, so its shadow leaves too. The
- * widest either surface throws sideways is `--shadow-overlay`'s `44px` blur at
- * `-8px` spread — 44/2 − 8 = 14px — and `--shadow-card` reaches 9; 16 clears
- * both with a pixel to spare and nothing to gain by growing.
+ * floating panel wears the one float shadow, `--shadow-overlay`, whose `44px`
+ * blur at `-8px` spread throws 44/2 − 8 = 14px sideways; 16 clears it with a
+ * pixel to spare and nothing to gain by growing.
  */
 const SHADOW_ALLOWANCE = 16;
 /**
- * How far the panel's clip is let out on the three sides that are NOT the rail,
- * matching the number the seam's own `clip-path` uses (globals.css). Wide enough
- * that no shadow ever reaches it, so those three edges behave as if unclipped.
+ * How far the panel's clip is let out on the three sides that are NOT the rail.
+ * Wide enough that the float shadow never reaches it, so those three edges
+ * behave as if unclipped.
  */
 const CLIP_SPILL = 60;
 /**
@@ -707,8 +708,10 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
                   // draws on its own outer edges. Floating, the surface's layout
                   // marker does not match and the card becomes whole again —
                   // four corners, its own left border, standing on the canvas.
+                  // Flat on both arrangements: a panel casts no shadow, and the
+                  // floating card keeps the container rung the docked unit has.
                   "border border-border",
-                  !contentMotion.layoutPinned && "m-2 rounded-xl shadow-card",
+                  !contentMotion.layoutPinned && "m-2 rounded-panel",
                 ),
           )}
         >
@@ -800,10 +803,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               // named `transform` while the property that actually moves is
               // `translate` (see below).
               !pinned &&
-                // The wrapper owns the floating edge and shadow. The inner
-                // Sidebar paints regular fake frost in both arrangements:
-                // no large backdrop filter follows this reveal over live work.
-                "overflow-hidden rounded-xl border border-border shadow-overlay",
+                // The wrapper owns the floating edge and shadow: unpinned, the
+                // pane hovers over the work, so it wears the float shadow on
+                // the panel's container rung. The inner Sidebar paints the
+                // pane fill in both arrangements: no large backdrop filter
+                // follows this reveal over live work.
+                "overflow-hidden rounded-panel border border-border shadow-overlay",
               panelShown
                 ? "translate-x-0"
                 : // Reduced motion: the surface arrives where it will rest
@@ -829,12 +834,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               } as React.CSSProperties
             }
           >
-            {/* One regular-material pane for pinned and floating navigation.
+            {/* One side-pane surface for pinned and floating navigation.
                 The data hook also owns the existing seam geometry. */}
             <Sidebar
               collapsible="none"
               data-volli-sidebar
-              className="material-regular min-w-0 flex-1"
+              className={cn(PANE_SURFACE, "min-w-0 flex-1")}
             >
               {paneContent}
             </Sidebar>

@@ -38,6 +38,7 @@ import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 import { automationSourceIsCloud } from "@renderer/stores/automation-source";
 import { CloudPendingRuns } from "./cloud-pending-runs";
+import { FLOAT_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /**
  * A frame clock, running only while something is counting down.
@@ -104,11 +105,11 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
     <div
       data-armed-run-window={window.ticketId}
       className={cn(
-        // `shadow-overlay` and not `shadow-card`: this floats over the whole
-        // window rather than sitting on a surface (docs/DESIGN.md, Elevation),
-        // which is the same tier menus, dialogs and the palette wear.
-        "pointer-events-auto relative w-80 overflow-hidden rounded-container border border-border",
-        "bg-popover shadow-overlay",
+        // A float: it hovers over the whole window rather than sitting on a
+        // surface (docs/DESIGN.md, "Surfaces"), so it wears what menus and
+        // peeks wear — the float material, edge, shadow and radius.
+        FLOAT_SURFACE,
+        "pointer-events-auto relative w-80 overflow-hidden",
         // Entrance only — the bar below is information and never opts out.
         !reducedMotion && "transition-[opacity,translate] duration-200 ease-swift",
         !reducedMotion && "starting:translate-y-2 starting:opacity-0",

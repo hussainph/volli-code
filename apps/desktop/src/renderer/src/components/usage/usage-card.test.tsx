@@ -170,7 +170,7 @@ describe("the usage footers' faces", () => {
       }
       // A rounded frame here would read as a block that happens to be last
       // rather than as the page's floor.
-      expect(markup).not.toContain("rounded-xl");
+      expect(markup).not.toMatch(/rounded-xl/);
     }
   });
 

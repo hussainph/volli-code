@@ -27,9 +27,9 @@
  * pill exists to show. `w-max` keeps every tab at its own size and lets the
  * pill grow; `max-w-full` keeps it inside a rail dragged to its floor.
  *
- * Translucent and blurred rather than opaque: at `top-0` of a column whose
- * pages scroll beneath it, the bar is a floating material, not a strip the
- * layout gives away.
+ * The bar is the rail's own pane material, not a blur: at `top-0` of a column
+ * whose pages scroll beneath it, a fixed-attachment strip of the pane fill
+ * hides what passes under it exactly as the pane does, at no GPU cost.
  *
  * THE SELECTION IS A MOTION LAYOUT ANIMATION, not a width transition. A CSS
  * transition can grow the selected tab, but it cannot make the tabs beside it
@@ -63,6 +63,7 @@ import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import { PANE_SURFACE } from "@renderer/components/ui/surface-classes";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
@@ -159,7 +160,11 @@ export function RailModeTabs<K extends string>({
   return (
     <div
       className={cn(
-        "sticky top-0 z-20 shrink-0 bg-sidebar/70 pt-4 pb-4 backdrop-blur-xl",
+        // The pane's own fill, not a blur: with fixed attachment a sticky strip
+        // of the side-pane material is the pane under it, so rows scroll away
+        // beneath a header that never shows them through (docs/DESIGN.md).
+        PANE_SURFACE,
+        "sticky top-0 z-20 shrink-0 pt-4 pb-4",
         RAIL_PANEL_INSET,
       )}
     >
@@ -172,7 +177,9 @@ export function RailModeTabs<K extends string>({
         data-animated={animated}
         // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
         // height (40px), so the track can never disagree with what it holds.
-        className="mx-auto flex w-max max-w-full items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
+        // The segmented drawing (`ui/segmented.tsx`): a borderless capsule
+        // track and a solid thumb, no lift (docs/DESIGN.md, "Surfaces").
+        className="mx-auto flex w-max max-w-full items-center gap-1 rounded-segmented bg-glass-1 p-1"
       >
         {modes.map((mode, index) => {
           const Icon = mode.icon;
@@ -199,18 +206,13 @@ export function RailModeTabs<K extends string>({
               }}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={cn(
-                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-full text-ui outline-none",
+                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-segmented text-ui outline-none",
                 selected ? "w-[84px]" : "w-8",
-                // `scale-100!` is the press's reduced-motion cancel: dropping
-                // the transition below only made the depress instant, it never
-                // removed it, and `transform-none` could not have — see the
-                // press note in `ui/button.tsx`.
-                "focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] motion-reduce:scale-100!",
-                !reducedMotion &&
-                  "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
+                "focus-visible:ring-2 focus-visible:ring-ring",
+                !reducedMotion && "transition-[color,background-color] duration-150 ease-out",
                 selected
-                  ? "bg-accent text-foreground shadow-raised"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-glass-2 hover:text-foreground",
               )}
             >
               {/* The glyph travels with the label that grows beside it — under

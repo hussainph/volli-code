@@ -109,12 +109,10 @@ function PaneEmptyRow({
       onClick={onSelect}
       className={cn(
         "flex h-8 w-full items-center gap-2 rounded-md px-2 text-ui text-foreground outline-none",
-        // Colour on hover, and the house press feedback: a row that does not
-        // move under the finger reads as a label rather than a control
-        // (`ui/button.tsx` documents the scale and its reduced-motion cancel).
-        "transition-[color,background-color,scale] duration-150 ease-out",
-        "hover:bg-accent/50 active:scale-[0.97] active:bg-accent/70",
-        "motion-reduce:transition-[color,background-color] motion-reduce:scale-100!",
+        // Colour on hover and press, and nothing else: controls are flat
+        // glass (docs/DESIGN.md), so a row answers by fill, never by scale.
+        "transition-[color,background-color] duration-150 ease-out motion-reduce:transition-none",
+        "hover:bg-accent/50 active:bg-accent/70",
         "focus-visible:ring-2 focus-visible:ring-ring",
       )}
     >

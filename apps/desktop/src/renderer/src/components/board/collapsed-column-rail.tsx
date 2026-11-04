@@ -9,6 +9,7 @@ import {
 } from "@renderer/components/board/column-offered-panel";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /**
  * Rail of empty columns collapsed into pills at the board's right end.
@@ -115,7 +116,8 @@ function CollapsedColumnTarget({
           if (!dragActive) onExpand(status);
         }}
         className={cn(
-          "flex w-full items-center justify-between rounded-md border border-border bg-card px-4 py-2 text-left text-ui text-muted-foreground shadow-raised outline-none",
+          CARD_SURFACE,
+          "flex w-full items-center justify-between px-4 py-2 text-left text-ui text-muted-foreground outline-none",
           // No scale in this list, ever: the pill is a dnd-kit droppable measured
           // in synchronous layout effects, and a scale mid-flight yields a new
           // rect every commit — measureRects loops to React's max update depth

@@ -38,6 +38,8 @@ import {
   type MessageResponseProps,
 } from "@renderer/components/ui/ai-elements/message";
 import { splitMarkdownSource } from "@volli/session-presentation";
+import { WELL_SURFACE } from "@renderer/components/ui/surface-classes";
+import { cn } from "@renderer/lib/utils";
 
 interface BoundaryProps {
   /**
@@ -93,7 +95,7 @@ class MarkdownBoundary extends React.Component<BoundaryProps, BoundaryState> {
           segment.kind === "code" ? (
             <div
               key={segment.line}
-              className="w-full overflow-hidden rounded-xl border border-border bg-sidebar"
+              className={cn(WELL_SURFACE, "w-full overflow-hidden")}
               data-language={segment.language ?? undefined}
             >
               {segment.language ? (

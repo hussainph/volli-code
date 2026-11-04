@@ -274,7 +274,7 @@ export function DataTable<T>({
               <col key={column.key} style={{ width: column.width }} />
             ))}
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-card">
+          <thead className="surface-card sticky top-0 z-10">
             <tr>
               {tableColumns.map((column) => (
                 <th

@@ -116,6 +116,7 @@ import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { PANE_SURFACE } from "@renderer/components/ui/surface-classes";
 import { useBoardStore } from "@renderer/stores/board";
 import {
   browserTabDisplayTitle,
@@ -1729,7 +1730,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
             // app-wide via the ui store. The rail draws its own header and pages
             // (TicketRail) — this only sizes and frames the column.
             <aside
-              className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
+              className={cn(PANE_SURFACE, "relative flex shrink-0 flex-col border-l border-border")}
               style={{ width: railWidth }}
             >
               <RailResizeHandle />

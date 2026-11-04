@@ -73,6 +73,7 @@ import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
 import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { boardApi } from "@renderer/lib/board-api";
+import { CARD_SURFACE, WELL_SURFACE } from "@renderer/components/ui/surface-classes";
 
 type PhosphorIcon = typeof ChatCircleIcon;
 
@@ -278,12 +279,7 @@ function CommentBlock({
   }
 
   return (
-    <li
-      className={cn(
-        "overflow-hidden rounded-container border border-border bg-card",
-        optimistic && "opacity-60",
-      )}
-    >
+    <li className={cn(CARD_SURFACE, "overflow-hidden", optimistic && "opacity-60")}>
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-4 py-2">
         <AuthorChip actor={comment.actor} label={author} />
         <span className="text-ui font-medium text-foreground">{author}</span>
@@ -348,7 +344,10 @@ function CommentBlock({
                 setEditing(false);
               }
             }}
-            className="min-h-16 w-full resize-none rounded-md border border-border bg-transparent px-2 py-1 font-mono text-sm text-foreground outline-none [field-sizing:content] focus-visible:border-ring"
+            className={cn(
+              WELL_SURFACE,
+              "min-h-16 w-full resize-none px-2 py-1 font-mono text-sm text-foreground outline-none [field-sizing:content] focus-visible:border-ring",
+            )}
           />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>

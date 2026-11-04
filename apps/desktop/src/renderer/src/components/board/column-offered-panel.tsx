@@ -46,6 +46,7 @@ import { type Automation } from "@volli/shared";
 
 import { MENU_SEPARATOR } from "@renderer/components/ui/menu-classes";
 import { cn } from "@renderer/lib/utils";
+import { FLOAT_SURFACE } from "@renderer/components/ui/surface-classes";
 
 export interface ColumnOfferedPanelProps {
   /** This column's Offered list in digit order — armed pinned to `1`, capped at nine. */
@@ -79,7 +80,12 @@ export function ColumnOfferedPanel({
     return (
       /* Not helper text: with no rows there is nothing on screen at all, and a
          blank panel would read as a list that failed to load. */
-      <p className="rounded-lg border border-dashed border-border bg-popover px-2 py-1 text-label text-muted-foreground shadow-overlay">
+      <p
+        className={cn(
+          FLOAT_SURFACE,
+          "rounded-menu border-dashed px-2 py-1 text-label text-muted-foreground",
+        )}
+      >
         Nothing to run here
       </p>
     );
@@ -89,7 +95,9 @@ export function ColumnOfferedPanel({
       data-offered-panel={expanded ? "expanded" : "collapsed"}
       data-offered-inert={inert ? "true" : undefined}
       className={cn(
-        "flex flex-col rounded-lg border border-border bg-popover shadow-overlay",
+        // Menu-shaped — rows at its 4px pad — so the menu's radius and rows.
+        FLOAT_SURFACE,
+        "flex flex-col rounded-menu",
         "transition-[gap,padding] duration-150 ease-out motion-reduce:transition-none",
         expanded ? "gap-1 p-1" : "gap-0 p-1",
       )}
@@ -171,7 +179,8 @@ function OfferedRow({
       aria-current={chosen ? "true" : undefined}
       title={label}
       className={cn(
-        "flex items-center gap-2 rounded-md border text-left text-ui",
+        // The float's 4px pad under a 12px corner: 8px rows, as in a menu.
+        "flex items-center gap-2 rounded-menu-item border text-left text-ui",
         "transition-[background-color,border-color,color,padding] duration-150 ease-out motion-reduce:transition-none",
         expanded ? "px-2 py-2" : "px-1 py-0",
         dashed && !chosen ? "border-dashed border-border" : "border-transparent",

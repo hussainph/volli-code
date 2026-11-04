@@ -159,12 +159,10 @@ function PaneFocusControl({ sessionId }: { sessionId: string }) {
         className={cn(
           // Its own material, not a ghost: a transparent rest state over
           // arbitrary scrollback is a glyph competing with whatever character
-          // happens to be under it. The wash is of the ink (`--foreground` runs
-          // toward white in dark and black in light), so it stays a lift in both
-          // modes the way the ⌘K pill does, and the blur keeps the border legible
-          // against a moving canvas.
-          "border border-border/50 bg-background/70 text-muted-foreground shadow-raised backdrop-blur-sm",
-          "hover:bg-background hover:text-foreground",
+          // happens to be under it. Opaque popover paper, flat, and no blur —
+          // glass never sits over a live terminal (docs/DESIGN.md, Materials).
+          "border border-border bg-popover text-muted-foreground",
+          "hover:bg-accent hover:text-foreground",
           // Chrome charged to the canvas only while the pointer is on it. Opacity
           // alone, so there is nothing here for reduced motion to object to.
           "opacity-0 transition-opacity duration-150 ease-out group-hover/focus:opacity-100 focus-visible:opacity-100",
@@ -243,7 +241,7 @@ function SplitNode(props: SplitNodeProps) {
                   type="button"
                   size="sm"
                   variant="secondary"
-                  className="pointer-events-auto shadow-raised"
+                  className="pointer-events-auto"
                   onClick={(event) => {
                     event.stopPropagation();
                     props.onResume?.(layout.sessionId);

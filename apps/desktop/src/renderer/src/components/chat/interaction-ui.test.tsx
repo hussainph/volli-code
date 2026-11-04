@@ -594,8 +594,9 @@ describe("the two cards as one family", () => {
     // radius, its transparent rest border and its selected fill.
     const html = drawn(ask([askPrompt()]));
     const answer = answerRow(html, "release");
-    expect(answer).toContain("rounded-lg border border-transparent px-2");
-    for (const bespoke of ["rounded-xl", "border-input", "bg-input/20", "bg-primary/10"])
+    expect(answer).toContain("rounded-row border border-transparent px-2");
+    // (The old 16px corner is banned app-wide by `check-design-tokens.mjs`.)
+    for (const bespoke of ["border-input", "bg-input/20", "bg-primary/10"])
       expect([bespoke, html.includes(bespoke)]).toEqual([bespoke, false]);
     // Content-height rows: they wrap, so no two-line floor centres a short
     // option away from the numeral on its first line.
@@ -681,12 +682,10 @@ describe("the two cards as one family", () => {
         what,
         what === "the verdict card's words",
       ]);
-      // The shared field's own lift on a question's box; the verdict card's
-      // borderless words stay flat inside the card's single border.
-      expect([what, drawnBoxes[0]?.includes("shadow-raised")]).toEqual([
-        what,
-        what !== "the verdict card's words",
-      ]);
+      // Flat glass everywhere: neither the shared field nor the verdict
+      // card's borderless words draws a lift (docs/DESIGN.md, "Surfaces");
+      // `shadow-none` is a reset, not a lift.
+      expect([what, /(^|[\s:])shadow-(?!none)/.test(drawnBoxes[0] ?? "")]).toEqual([what, false]);
     }
     // The question's box is the shared Textarea as drawn: its corners, its
     // floor and its inset, with no local rounding, height or wash over them.
@@ -694,9 +693,9 @@ describe("the two cards as one family", () => {
       boxes(drawn(ask([askPrompt({ options: [], custom: true })])))[0] ?? "",
       boxes(drawn(ask([askPrompt({ custom: true })])))[0] ?? "",
     ]) {
-      for (const owned of ["rounded-control", "min-h-control-lg", "px-control-pad-default"])
+      for (const owned of ["rounded-input", "min-h-control-lg", "px-control-pad-default"])
         expect([owned, box.includes(owned)]).toEqual([owned, true]);
-      for (const override of ["rounded-xl", "min-h-9", "px-4", "bg-input/20", "shadow-none"])
+      for (const override of ["min-h-9", "px-4", "bg-input/20", "shadow-none"])
         expect([override, box.includes(override)]).toEqual([override, false]);
     }
   });

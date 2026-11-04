@@ -7,6 +7,7 @@ import { Badge } from "@renderer/components/ui/badge";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
+import { PANE_SURFACE } from "@renderer/components/ui/surface-classes";
 import { SETTINGS_ROWS } from "../settings-inventory";
 
 export interface PrefCategory {
@@ -97,7 +98,10 @@ export function PrefShell({
       <div className="flex h-full min-h-0 w-full flex-1">
         <nav
           aria-label={`${surfaceLabel} categories`}
-          className="flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto border-r border-border bg-sidebar p-4"
+          className={cn(
+            PANE_SURFACE,
+            "flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto border-r border-border p-4",
+          )}
         >
           {header}
           <InputGroup>

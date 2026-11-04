@@ -50,6 +50,7 @@ import {
 import { EASE_OUT, HostGlyph, StepMark, SwapText, useMotionTiming } from "./host-parts";
 import { useAddHostFlow, type AddHostFlow, type NumberedLogLine } from "./use-add-host-flow";
 import { useRestartSessionCount } from "./use-restart-session-count";
+import { WELL_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /** The sheet, open while the remote-hosts store says so. */
 export function AddHostSheet() {
@@ -839,7 +840,10 @@ function LogView({
       ref={scroller}
       role="log"
       aria-label="Details"
-      className="h-40 overflow-y-auto scroll-py-2 rounded-lg border border-border bg-muted/30 px-4 py-2 font-mono text-ui leading-5 text-foreground"
+      className={cn(
+        WELL_SURFACE,
+        "h-40 overflow-y-auto scroll-py-2 px-4 py-2 font-mono text-ui leading-5 text-foreground",
+      )}
     >
       {lines.length === 0 && detail === null ? (
         <div className="font-sans text-muted-foreground">No details yet</div>

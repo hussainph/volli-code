@@ -77,7 +77,9 @@ function EnabledHostIsland() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.98, transition: { duration: 0.16 } }}
               transition={{ duration: 0.28, ease: EASE_OUT }}
-              className="pointer-events-auto flex h-11 items-center gap-2 rounded-full border border-border bg-popover pr-1.5 pl-4 shadow-overlay"
+              // A float in a status pill's shape: the float material, edge and
+              // shadow (docs/DESIGN.md, "Surfaces").
+              className="material-floating pointer-events-auto flex h-11 items-center gap-2 rounded-full border pr-1.5 pl-4 shadow-overlay"
             >
               <SurfaceBody host={host} surface={shown} />
             </motion.div>

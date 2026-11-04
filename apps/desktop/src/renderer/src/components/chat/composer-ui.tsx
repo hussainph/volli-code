@@ -800,9 +800,11 @@ export const SessionComposer = React.memo(function SessionComposer({
                 control the chord replaces is the menus' own idiom for the same
                 fact. */}
             <ComposerHint label={working ? "Queue ⏎ · Steer ⌘⏎" : "Send ⏎ · New line ⇧⏎"}>
+              {/* The send key is the composer's one capsule: a circle
+                  (`--radius-send`), the primary key and nothing else. */}
               <PromptInputSubmit
                 status="ready"
-                className="prompt-primary rounded-control"
+                className="prompt-primary rounded-send"
                 size={COMPOSER_PRIMARY_SIZE}
                 disabled={!canSubmit}
                 {...readOnlyMark(!hostReadOnly)}

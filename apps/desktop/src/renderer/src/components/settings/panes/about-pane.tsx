@@ -327,7 +327,7 @@ export function AboutPane() {
         <LegalDialog kind="licence" />
         <LegalDialog kind="acknowledgements" />
       </section>
-      <details className="rounded-container border border-border">
+      <details className="rounded-card border border-border">
         <summary className="cursor-default px-4 py-4 text-ui font-medium">Diagnostics</summary>
         <div className="space-y-4 border-t border-border p-4">
           <CopyReportDialog report={report} availability={copyReportAvailability} />

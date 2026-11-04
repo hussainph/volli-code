@@ -188,7 +188,7 @@ export function BootErrorPanel({
             {recovery.backups.length > 0 ? (
               <ul
                 aria-label="Local backups"
-                className="divide-y divide-border rounded-lg border border-border"
+                className="divide-y divide-border rounded-card border border-border"
               >
                 {recovery.backups.map((backup) => (
                   <li

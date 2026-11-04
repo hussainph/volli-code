@@ -88,7 +88,7 @@ export function HostGlyph({
       data-slot="host-glyph"
       data-badge={badge ?? undefined}
       className={cn(
-        "relative inline-grid shrink-0 place-items-center border border-border bg-gradient-to-b from-card to-muted text-foreground shadow-raised",
+        "relative inline-grid shrink-0 place-items-center border border-border bg-card text-foreground",
         tile.box,
         tile.radius,
         className,

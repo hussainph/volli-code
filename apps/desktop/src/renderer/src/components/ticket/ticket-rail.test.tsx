@@ -230,12 +230,12 @@ describe("TicketRail's Now page", () => {
     // Properties dropdowns, which are a row's VALUE rather than something the
     // page does, and are the app's own pickers rather than a rail-local
     // control. Counted, so a third outline button cannot appear unnoticed.
-    expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
+    expect(page).not.toMatch(/rounded-xl border border-sidebar-border\/70/);
     expect(page).not.toContain("Run once");
     // Four outline buttons: the two Properties dropdowns and the compact Chat
     // split's two halves (`NewSessionControl`'s `rail` drawing).
     expect([...page.matchAll(/data-variant="outline"/g)]).toHaveLength(4);
-    expect(page).not.toContain("shadow-raised");
+    expect(page).not.toMatch(/\bshadow-/);
     // The compact Chat split uses its controls' own fill, not a frame around
     // the whole group. Rail geometry must not silently become strip-sized.
     expect(page).toMatch(/data-size="xs"[^>]*aria-label="New chat"/);
@@ -310,7 +310,7 @@ describe("the worktree footer", () => {
     // The row wears the footer's rule, not the card frame, and draws no
     // changes row of its own — the Diffs page IS the change list.
     expect(html).toContain("border-t border-sidebar-border/70");
-    expect(html).not.toContain("rounded-xl");
+    expect(html).not.toMatch(/rounded-xl/);
     expect(html).not.toContain('data-testid="ticket-repository-changes"');
     expect(html).toContain('data-testid="ticket-repository-branch"');
     expect(html).toContain('aria-label="Branch main to volli/VC-6-calm-stack"');

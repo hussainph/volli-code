@@ -229,7 +229,7 @@ function TraceReplay({
           className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center text-ui text-muted-foreground"
           data-trace-empty
         >
-          <div className="relative flex size-16 items-center justify-center rounded-container border border-border bg-card shadow-raised">
+          <div className="relative flex size-16 items-center justify-center rounded-card border border-border bg-card">
             <FilmStripIcon aria-hidden className="size-8" />
             <CursorClickIcon
               aria-hidden
@@ -352,7 +352,7 @@ function Frame({
         />
       )}
       {shown?.asOf == null || drawn === null ? null : (
-        <span className="absolute top-5 left-5 rounded-control border border-border bg-background px-2 py-1 text-ui text-muted-foreground shadow-raised">
+        <span className="absolute top-5 left-5 rounded-control border border-border bg-background px-2 py-1 text-ui text-muted-foreground">
           As of step {shown.asOf}
         </span>
       )}

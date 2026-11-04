@@ -91,6 +91,7 @@ import {
 } from "./editor-draft";
 import { TimeZonePicker } from "./time-zone-picker";
 import { AutomationAuthoringButton } from "./automation-authoring-button";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 const NO_MODELS: readonly ComposerModel[] = [];
 
@@ -293,7 +294,7 @@ function ColumnPicker({
         <button
           type="button"
           aria-label="Columns"
-          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-left">{label}</span>
@@ -898,7 +899,7 @@ export function AutomationEditorPanel({
             ) : null}
 
             {triggerChoice === "schedule" ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2">
+              <div className={cn(CARD_SURFACE, "flex flex-col gap-2 p-2")}>
                 <Select
                   value={preset}
                   onValueChange={(value) => setPreset(value as AutomationSchedulePreset)}

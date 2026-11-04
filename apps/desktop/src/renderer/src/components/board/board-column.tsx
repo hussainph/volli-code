@@ -30,6 +30,7 @@ import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 interface BoardColumnProps {
   status: TicketStatus;
@@ -396,7 +397,9 @@ export const BoardColumn = React.memo(function BoardColumn({
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
-        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/30",
+        // The container rung: a lane is never rounded tighter than the cards
+        // it holds (docs/DESIGN.md, "Surfaces").
+        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-card bg-muted/30",
         // Enter is an opacity fade ONLY, and so is the dim below it. This
         // column hosts droppables that dnd-kit measures in synchronous layout
         // effects; a scale mid-flight returns a different rect on every commit
@@ -524,7 +527,7 @@ export const BoardColumn = React.memo(function BoardColumn({
         </SortableContext>
       </div>
       {composer.open ? (
-        <div className="mx-2 mb-2 rounded-lg border border-border bg-card px-4 py-2">
+        <div className={cn(CARD_SURFACE, "mx-2 mb-2 px-4 py-2")}>
           <input
             ref={composer.inputRef}
             autoFocus

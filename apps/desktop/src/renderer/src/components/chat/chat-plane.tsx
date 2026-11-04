@@ -2112,7 +2112,7 @@ function ChatPlaneContent({
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
                   {messages.length > 0 ? (
-                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)]" />
                   ) : null}
                 </Conversation>
               </RunningBashProvider>
@@ -3219,7 +3219,7 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   return (
     <Message from={role} className="max-w-full">
-      <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
+      <MessageContent className="gap-0 group-[.is-user]:rounded-card group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
         {/* Thumbs above the words, matching the composer the message left from. */}
         {attachedFiles.length > 0 ? (
           <AttachmentStrip

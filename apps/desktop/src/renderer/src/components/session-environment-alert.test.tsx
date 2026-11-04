@@ -28,10 +28,10 @@ describe("SessionEnvironmentNotice", () => {
       button.includes('data-variant="outline"'),
     );
     expect(actions).toHaveLength(2);
+    // The shared flat-glass outline: no lift, rest or hover (docs/DESIGN.md).
     for (const action of actions) {
-      expect(action).toContain("control-material");
-      expect(action).toContain("shadow-control");
-      expect(action).toContain("hover:shadow-control-hover");
+      expect(action).toContain("bg-glass-1");
+      expect(action).not.toMatch(/\bshadow-/);
     }
     expect(html).toContain("Review details");
     expect(html).not.toContain("volli doctor");

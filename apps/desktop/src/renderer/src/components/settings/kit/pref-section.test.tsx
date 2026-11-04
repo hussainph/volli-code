@@ -18,7 +18,7 @@ describe("PrefSection", () => {
         </PrefRow>
       </PrefSection>,
     );
-    expect(html.indexOf("Terminal")).toBeLessThan(html.indexOf("rounded-container"));
+    expect(html.indexOf("Terminal")).toBeLessThan(html.indexOf("surface-card"));
     expect(html).toContain("never edits your Ghostty config");
     expect(html).not.toContain("border-b ");
     expect(html.match(/first:border-t-0/g)).toHaveLength(2);

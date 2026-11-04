@@ -792,7 +792,7 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
       onClick={() => onToggle(ticket.id)}
       // No `title`, for the reason the rows above dropped theirs (D1): this row
       // peeks its TICKET, and the card says the id and the title in full.
-      className="h-auto min-h-8 gap-1.5 py-1 text-ui active:scale-100 transition-colors"
+      className="h-auto min-h-8 gap-1.5 py-1 text-ui transition-colors"
     >
       {/* `bold` for the same reason every other glyph in this band takes it:
           at 12px regular draws lighter than the label beside it. */}
@@ -841,7 +841,7 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
 export function SessionBandRowSkeleton({ primaryWidth }: { primaryWidth: LoadingBarWidth }) {
   return (
     <SidebarMenuItem aria-hidden>
-      <div className="flex min-h-13 w-full items-center gap-2 rounded-md px-2 py-1.5">
+      <div className="flex min-h-13 w-full items-center gap-2 rounded-row px-2 py-1.5">
         <Skeleton className="size-6 shrink-0 rounded-control" />
         <span className="flex min-w-0 flex-1 flex-col gap-1.5">
           <Skeleton className={cn("h-3.5", primaryWidth)} />

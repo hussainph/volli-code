@@ -31,6 +31,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui
 import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /**
  * Every rail page insets to the column's edge, and tightens at the 240px floor.
@@ -582,7 +583,7 @@ export function RailReadFaultBody({
       data-read-status="failed"
       title={detail ?? undefined}
       className={cn(
-        "flex items-center gap-2 rounded-lg border border-dashed border-sidebar-border px-2 py-2 text-ui text-muted-foreground",
+        "flex items-center gap-2 rounded-card border border-dashed border-border px-2 py-2 text-ui text-muted-foreground",
         className,
       )}
     >
@@ -689,8 +690,7 @@ export const RAIL_CARD_ROW =
  * it bottomed out at its content height. The card refuses to shrink; overflow
  * is the column scrollbar's job.
  */
-export const RAIL_CARD_FRAME =
-  "shrink-0 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/50 dark:bg-accent/50";
+export const RAIL_CARD_FRAME = cn(CARD_SURFACE, "shrink-0 overflow-hidden");
 
 /** The seam above every card row but the first. */
 export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";

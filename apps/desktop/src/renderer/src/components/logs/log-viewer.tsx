@@ -61,6 +61,7 @@ import {
   type LogFilter,
   type ViewerLine,
 } from "./log-viewer-model";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 
 /* ---------------------------------------------------------------- gating */
 
@@ -344,8 +345,8 @@ function LogRows({
     lines.length > VIEWER_RENDER_CAP ? lines.slice(lines.length - VIEWER_RENDER_CAP) : lines;
   if (shown.length === 0) return <p className={EMPTY_INLINE}>{empty}</p>;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto rounded-container border border-border bg-card">
-      <div className="sticky top-0 grid grid-cols-2 gap-2 border-b border-border bg-card px-4 py-2 text-ui font-medium text-muted-foreground @sm/logs:grid-cols-[6rem_4rem_minmax(0,1fr)] @2xl/logs:grid-cols-[6rem_4rem_8rem_minmax(0,1fr)] @4xl/logs:grid-cols-[6rem_4rem_8rem_7rem_minmax(0,1fr)]">
+    <div className={cn(CARD_SURFACE, "min-h-0 flex-1 overflow-y-auto")}>
+      <div className="surface-card sticky top-0 grid grid-cols-2 gap-2 border-b border-border px-4 py-2 text-ui font-medium text-muted-foreground @sm/logs:grid-cols-[6rem_4rem_minmax(0,1fr)] @2xl/logs:grid-cols-[6rem_4rem_8rem_minmax(0,1fr)] @4xl/logs:grid-cols-[6rem_4rem_8rem_7rem_minmax(0,1fr)]">
         <span>Time</span>
         <span>Level</span>
         <span className="hidden @2xl/logs:block">Component</span>
@@ -607,7 +608,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
         <div
           role="status"
           aria-label="Reading logs"
-          className="flex flex-col gap-2 rounded-container border border-border bg-card p-4"
+          className={cn(CARD_SURFACE, "flex flex-col gap-2 p-4")}
         >
           <Skeleton aria-hidden className="h-4 w-3/4" />
           <Skeleton aria-hidden className="h-4 w-1/2" />

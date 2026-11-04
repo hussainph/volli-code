@@ -10,6 +10,8 @@ import {
 import { selectAutomations, useAutomationsStore } from "@renderer/stores/automations";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
+import { FLOAT_SURFACE } from "@renderer/components/ui/surface-classes";
+import { cn } from "@renderer/lib/utils";
 
 export function CloudPendingRuns() {
   const byProject = useCloudAutomationsStore((state) => state.pending);
@@ -77,7 +79,7 @@ function PendingRow({
   return (
     <div
       data-armed-run-window={row.ticketId}
-      className="pointer-events-auto flex w-96 items-center gap-2 rounded-container border border-border bg-popover px-4 py-2 shadow-overlay"
+      className={cn(FLOAT_SURFACE, "pointer-events-auto flex w-96 items-center gap-2 px-4 py-2")}
     >
       <span className="min-w-0 flex-1 text-ui">
         {name}
@@ -110,7 +112,9 @@ function FailedRow({
   const canWrite = useCanWrite(projectId);
   const [saving, setSaving] = React.useState(false);
   return (
-    <div className="pointer-events-auto flex w-96 items-center gap-2 rounded-container border border-border bg-popover px-4 py-2 shadow-overlay">
+    <div
+      className={cn(FLOAT_SURFACE, "pointer-events-auto flex w-96 items-center gap-2 px-4 py-2")}
+    >
       <span className="min-w-0 flex-1 text-ui">
         {row.automationName ?? "Automation"}
         <span className="block text-label text-muted-foreground">

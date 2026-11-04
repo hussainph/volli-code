@@ -150,7 +150,7 @@ export function AttachmentThumb({
           variant="ghost"
           aria-label={`Remove ${attachment.label}`}
           onClick={() => onRemove(attachment)}
-          className="absolute -right-1 -top-1 border border-border bg-background opacity-0 shadow-raised focus-visible:opacity-100 group-hover:opacity-100"
+          className="absolute -right-1 -top-1 border border-border bg-background opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
         >
           <XIcon aria-hidden="true" weight="bold" className="size-3" />
         </Button>

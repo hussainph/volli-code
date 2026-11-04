@@ -612,7 +612,8 @@ describe("the effort control's place in the footer", () => {
     expect(html).toContain("prompt-surface");
     expect(html).toContain("prompt-toolbar");
     expect(html).toContain("prompt-config");
-    expect(html).toContain("prompt-primary rounded-control");
+    // The send key is the composer's one capsule.
+    expect(html).toContain("prompt-primary rounded-send");
     expect(html).toContain("min-h-20");
   });
 

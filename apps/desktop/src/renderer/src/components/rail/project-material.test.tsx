@@ -39,20 +39,22 @@ function renderToMarkup(node: ReactNode): string {
   return html;
 }
 
+/** Flat means flat (docs/DESIGN.md, "Surfaces"): no shell control lifts. */
+const SHADOW = /(^|[\s:])shadow-/;
+
 describe("shell control material", () => {
-  it("gives Add project a resting hairline and quiet hover/press lift", () => {
+  it("gives Add project the flat glass face: an edge and fill steps, no lift", () => {
     const html = renderToMarkup(
       <TooltipProvider>
         <AddProjectTile />
       </TooltipProvider>,
     );
-    expect(html).toContain("border-border-strong");
-    expect(html).toContain("control-material");
-    expect(html).toContain("shadow-control hover:shadow-control-hover");
-    expect(html).toContain("active:shadow-control-pressed");
+    expect(html).toContain("border-glass-edge bg-glass-1");
+    expect(html).toContain("hover:bg-glass-2 active:bg-glass-3");
+    expect(html).not.toMatch(SHADOW);
   });
   it.each([false, true])(
-    "lifts project tiles and keeps selection to one hairline: %s",
+    "keeps project tiles flat and selection to one hairline: %s",
     (selected) => {
       useProjectsStore.setState({ selectedProjectId: selected ? project.id : null });
       const html = renderToMarkup(
@@ -64,13 +66,13 @@ describe("shell control material", () => {
           </DndContext>
         </TooltipProvider>,
       );
-      expect(html).toContain("control-lighting shadow-control hover:shadow-control-hover");
+      expect(html).not.toMatch(SHADOW);
       expect(html.includes("ring-1 ring-foreground/70 ring-offset-2")).toBe(selected);
       expect(html).not.toContain("ring-foreground/90");
       expect(html).not.toContain("ring-offset-[3px]");
     },
   );
-  it("uses the raised outline primitive for the updater", () => {
+  it("uses the flat outline primitive for the updater", () => {
     useUpdateStore.setState({
       state: {
         supported: true,
@@ -88,7 +90,7 @@ describe("shell control material", () => {
       </TooltipProvider>,
     );
     expect(html).toContain('data-variant="outline"');
-    expect(html).toContain("control-material");
-    expect(html).toContain("shadow-control hover:");
+    expect(html).toContain("border-glass-edge bg-glass-1");
+    expect(html).not.toMatch(SHADOW);
   });
 });

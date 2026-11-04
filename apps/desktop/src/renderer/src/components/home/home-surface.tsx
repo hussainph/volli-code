@@ -119,6 +119,8 @@ import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anc
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
+import { PANE_SURFACE } from "@renderer/components/ui/surface-classes";
+import { cn } from "@renderer/lib/utils";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { usePaneChatViews } from "@renderer/components/chat/kept-chat-views";
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
@@ -975,7 +977,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const rail =
     railVisible && selected !== null ? (
       <aside
-        className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
+        className={cn(PANE_SURFACE, "relative flex shrink-0 flex-col border-l border-border")}
         style={{ width: railWidth }}
       >
         <RailResizeHandle />

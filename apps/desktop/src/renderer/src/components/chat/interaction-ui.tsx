@@ -146,7 +146,7 @@ const FIELD_LABEL: Record<InteractionFieldRole, string> = {
  * `ListRow` (see {@link QuestionStep}), a target the card drives itself.
  */
 const OPTION_ROW =
-  "group flex min-w-0 cursor-default items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors outline-none";
+  "group flex min-w-0 cursor-default items-center gap-2 rounded-row px-2 py-2 text-left transition-colors outline-none";
 
 /** The disc at the head of a row: a numeral on one card, a tick on the other. */
 const OPTION_MARK =

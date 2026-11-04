@@ -365,7 +365,7 @@ function ChangeRow({
               <RailRowActions
                 path={row.path}
                 onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
+                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1"
               />
             }
           />

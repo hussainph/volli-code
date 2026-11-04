@@ -11,6 +11,7 @@ import { launchStore } from "@renderer/stores/launch";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
+import { WELL_SURFACE } from "@renderer/components/ui/surface-classes";
 
 type SecretEntry = { kind: "local" } | { kind: "unavailable"; message: string };
 
@@ -172,7 +173,10 @@ function SecretCard({
               id={scopeId}
               value={scope}
               disabled={busy}
-              className="h-7 rounded-control border border-border bg-background px-2 text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className={cn(
+                WELL_SURFACE,
+                "h-7 px-2 text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              )}
               onChange={(event) => {
                 const next = event.target.value;
                 if (next === "session" || next === "project" || next === "always") setScope(next);

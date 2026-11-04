@@ -10,6 +10,7 @@ import type { TicketSessionActivity } from "@renderer/components/board/board-ses
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TicketCardLabels } from "@renderer/components/board/ticket-card-labels";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
+import { CARD_SURFACE } from "@renderer/components/ui/surface-classes";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import {
   rememberTicketFocusOrigin,
@@ -72,22 +73,21 @@ export function TicketCardContent({
   return (
     <article
       className={cn(
+        // The card role (docs/DESIGN.md, "Surfaces"): its fill, hairline and
+        // radius, and no shadow — a tile lying on its column is flat, and only
+        // the detached drag preview (`board.tsx`) hovers. This used to be
+        // chosen by a hand-maintained `article.bg-card` selector in
+        // globals.css, which a tag change would have silently undone.
+        CARD_SURFACE,
         // `relative` for the session ring below, which lies on the card's own
         // border line rather than outside it.
         "relative",
-        // `shadow-raised` and not `shadow-card`: the tier names an elevation,
-        // not a component noun. A board card is a tile lying ON its column, the
-        // same lift an active tab takes; `shadow-card` is the deeper halo the
-        // detached drag preview wears while the tile is off the board
-        // (`board.tsx`). This shadow used to be applied from a hand-maintained
-        // `article.bg-card` selector in globals.css, which is exactly why the
-        // three overlays that selector forgot were wearing stock black.
         // px-3, not the ladder's 4: a dense card trades air for content, and at
         // px-4 real titles truncate a word earlier. Recorded spacing exception.
-        "flex flex-col gap-1 rounded-lg border bg-card px-3 py-2 shadow-raised cursor-default select-none transition-[border-color] duration-150 ease-out",
+        "flex flex-col gap-1 px-3 py-2 cursor-default select-none transition-[border-color] duration-150 ease-out",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
-        selected ? "border-primary/70" : "border-border hover:border-border-strong",
+        selected ? "border-primary/70" : "hover:border-border-strong",
       )}
     >
       {/* An agent is running on this ticket. Always rendered, never conditionally

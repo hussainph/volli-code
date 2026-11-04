@@ -79,7 +79,8 @@ describe("one attachment affordance", () => {
     expect(html.match(/aria-label="Attach files"/g)).toHaveLength(1);
     expect(html.match(/type="file"/g)).toHaveLength(1);
     expect(html).toContain("multiple");
-    expect(html).toContain("shadow-raised");
+    // Flat glass: the attach door casts no shadow (docs/DESIGN.md, "Surfaces").
+    expect(html).not.toMatch(/\bshadow-/);
     expect(html).not.toContain("Attach file reference");
     expect(html).not.toContain("Search files…");
   });

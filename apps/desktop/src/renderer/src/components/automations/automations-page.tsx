@@ -109,6 +109,7 @@ import { useBoardStore } from "@renderer/stores/board";
 import { automationSourceIsCloud } from "@renderer/stores/automation-source";
 import { CloudAutomationControls } from "./cloud-automation-controls";
 import { CloudRunHistory } from "./cloud-run-history";
+import { WELL_SURFACE } from "@renderer/components/ui/surface-classes";
 
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
@@ -122,7 +123,7 @@ export function AutomationsPage() {
     return (
       <div className={cn("flex-1", EMPTY_PAGE)}>
         <div className="flex max-w-sm flex-col items-center">
-          <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2">
+          <div className={cn(WELL_SURFACE, "mb-4 flex items-center justify-center p-2")}>
             <LightningIcon className="size-5 text-muted-foreground" />
           </div>
           <h1 className="text-heading font-semibold">No project selected</h1>
@@ -164,9 +165,7 @@ function ViewChoice({
       className={cn(
         "flex h-7 items-center gap-2 rounded-md px-2 text-ui outline-none",
         "focus-visible:ring-2 focus-visible:ring-ring",
-        active
-          ? "bg-accent text-foreground shadow-raised"
-          : "text-muted-foreground hover:text-foreground",
+        active ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >
       <Icon aria-hidden className="size-4" />
@@ -567,7 +566,7 @@ function AutomationRail({
   return (
     <aside className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-rail/30 p-2">
       {creating ? (
-        <div className="mb-2 rounded-lg bg-accent px-2 py-2 text-ui font-medium text-foreground">
+        <div className="mb-2 rounded-row bg-accent px-2 py-2 text-ui font-medium text-foreground">
           New Automation
         </div>
       ) : null}
@@ -597,7 +596,7 @@ function AutomationRail({
                   aria-current={automation.id === selectedId ? "page" : undefined}
                   onClick={() => onSelect(automation)}
                   className={cn(
-                    "flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left outline-none",
+                    "flex w-full flex-col gap-1 rounded-row px-2 py-2 text-left outline-none",
                     "focus-visible:ring-2 focus-visible:ring-ring",
                     automation.id === selectedId
                       ? "bg-accent text-foreground"
@@ -651,7 +650,7 @@ function AutomationRail({
         aria-current={activitySelected ? "page" : undefined}
         onClick={onShowActivity}
         className={cn(
-          "mt-auto flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left outline-none",
+          "mt-auto flex w-full items-center gap-2 rounded-row px-2 py-2 text-left outline-none",
           "focus-visible:ring-2 focus-visible:ring-ring",
           activitySelected
             ? "bg-accent text-foreground"

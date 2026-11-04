@@ -352,9 +352,7 @@ describe("Storage → Orphaned worktrees", () => {
     // A failure, so it is drawn as one: an announced error Notice with the
     // scan as its recovery, not an ordinary row with a clipped message.
     const unreadable = announcedNotice("worktrees couldn't be listed");
-    expect(
-      findByText("Scan again", unreadable.closest("[class*='rounded-container']")!),
-    ).toBeTruthy();
+    expect(findByText("Scan again", unreadable.closest("[class*='surface-card']")!)).toBeTruthy();
     // The retention window every date was measured against is stated.
     expect(text).toContain("Eligible after 14 day(s)");
     expect(text).not.toContain("An orphan has no ticket to archive");

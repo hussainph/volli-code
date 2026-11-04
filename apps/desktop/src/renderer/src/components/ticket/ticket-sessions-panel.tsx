@@ -211,10 +211,7 @@ const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
  * has rows on other days. Written once — the two sites that take it (no current
  * sessions, no history matches) were two copies of the same string.
  */
-const SESSION_SECTION_EMPTY = cn(
-  "rounded-lg border border-dashed border-sidebar-border",
-  EMPTY_INLINE,
-);
+const SESSION_SECTION_EMPTY = cn("rounded-card border border-dashed border-border", EMPTY_INLINE);
 
 /**
  * Every row's QUIET SECOND LINE: one tone dot, the state, and when (VC-406).

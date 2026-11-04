@@ -247,10 +247,7 @@ export function SignInRow({
   const choosable = row.kind === "provider" && row.macHasKey && row.subscription;
   return (
     <div
-      className={cn(
-        "rounded-control transition-colors duration-150",
-        open && "bg-background shadow-raised",
-      )}
+      className={cn("rounded-control transition-colors duration-150", open && "bg-background")}
       data-row={row.key}
     >
       <div className="flex items-center gap-2 px-2 py-2">
