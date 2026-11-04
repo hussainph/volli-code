@@ -23,7 +23,7 @@
  * place you go, not a value you set, and rotating this control would have made
  * it lie about what it does. `shape` was proposed for the two toggles that draw
  * rounded rectangles inside a bordered track; `docs/DESIGN.md` says a control
- * takes the shared 8px radius and bakes that into the button primitive, so a rectangle
+ * takes the shared 10px radius and bakes that into the button primitive, so a rectangle
  * axis here would be a second control language, not a variant of this one.
  * `stopPropagation` was proposed for the composer's effort segment, which no
  * longer exists — effort is a slider in a popover now (`chat/composer-effort-ui.tsx`),
@@ -88,7 +88,7 @@ export function Segmented<Key extends string>({
           <Button
             key={option.key}
             size={iconOnly ? (size === "sm" ? "icon" : "icon-lg") : size}
-            variant={active ? "default" : "outline"}
+            variant={active ? "selected" : "outline"}
             aria-pressed={active}
             title={iconOnly ? option.label : undefined}
             data-choice={option.key}

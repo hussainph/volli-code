@@ -7,8 +7,8 @@
 export const PROMPT_SURFACE =
   "prompt-surface rounded-container border border-transparent shadow-card";
 
-/** A bounded, softly raised setting rather than another floating word. */
-export const COMPOSER_CONFIG_CHIP = "prompt-config border border-border/70 bg-card shadow-raised";
+/** A bounded setting rather than another floating word: a glass chip. */
+export const COMPOSER_CONFIG_CHIP = "prompt-config border border-glass-edge bg-glass-1";
 
 /** The rung every secondary control in a composer's footer wears: 24px. */
 export const COMPOSER_CONTROL_SIZE = "sm" as const;

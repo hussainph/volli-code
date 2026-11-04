@@ -229,14 +229,16 @@ describe("TicketRail's Now page", () => {
     // `RAIL_CONTROL` recipe survives on Now in exactly one place — the two
     // Properties dropdowns, which are a row's VALUE rather than something the
     // page does, and are the app's own pickers rather than a rail-local
-    // control. Counted, so a third raised button cannot appear unnoticed.
+    // control. Counted, so a third outline button cannot appear unnoticed.
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
     expect(page).not.toContain("Run once");
-    expect([...page.matchAll(/shadow-raised/g)]).toHaveLength(2);
-    // The compact Chat split uses its controls' own lift, not a raised frame
-    // around the whole group. Rail geometry must not silently become strip-sized.
+    // Four outline buttons: the two Properties dropdowns and the compact Chat
+    // split's two halves (`NewSessionControl`'s `rail` drawing).
+    expect([...page.matchAll(/data-variant="outline"/g)]).toHaveLength(4);
+    expect(page).not.toContain("shadow-raised");
+    // The compact Chat split uses its controls' own fill, not a frame around
+    // the whole group. Rail geometry must not silently become strip-sized.
     expect(page).toMatch(/data-size="xs"[^>]*aria-label="New chat"/);
-    expect(page).not.toContain("bg-card shadow-raised");
     for (const field of ["status", "priority"]) {
       expect(page).toContain(`data-testid="ticket-rail-property-${field}"`);
     }

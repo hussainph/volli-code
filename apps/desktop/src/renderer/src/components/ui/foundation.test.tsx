@@ -27,12 +27,11 @@ function markupClass(element: React.ReactElement): string {
 }
 
 describe("foundation control contracts", () => {
-  it.each(["default", "outline", "secondary", "destructive"] as const)(
-    "%s keeps lift and sinks on press, without a click-scale animation",
+  it.each(["default", "destructive", "outline", "secondary", "ghost", "selected"] as const)(
+    "%s stays flat on the control rung, without a click-scale animation",
     (variant) => {
       const classes = buttonVariants({ variant });
-      expect(classes).toContain("shadow-control");
-      expect(classes).toContain("active:shadow-control-pressed");
+      expect(classes).not.toMatch(/(^|\s|:)shadow-/);
       expect(classes).not.toContain("scale-");
       expect(classes).toContain("rounded-control");
     },
@@ -40,9 +39,8 @@ describe("foundation control contracts", () => {
 
   it("keeps ghost actions flat even on hover, and bounds long labels", () => {
     const classes = markupClass(<Button variant="ghost">A very long action label</Button>);
-    expect(classes.split(" ")).not.toContain("shadow-control");
-    expect(classes).not.toContain("hover:shadow-control-hover");
-    expect(classes).toContain("hover:bg-accent");
+    expect(classes).not.toMatch(/(^|\s|:)shadow-/);
+    expect(classes).toContain("hover:bg-glass-2");
     expect(classes).toContain("max-w-full");
     expect(classes).toContain("whitespace-normal");
     expect(classes).toContain("h-auto");
@@ -60,25 +58,26 @@ describe("foundation control contracts", () => {
     expect(group).not.toContain(inset);
   });
 
-  it("keeps fields calm on hover and contained fields flat", () => {
+  it("keeps fields flat wells, calm on hover, and contained fields flat", () => {
     for (const field of [
       <Input key="input" />,
       <Textarea key="textarea" />,
       <InputGroup key="group" />,
     ]) {
       const classes = markupClass(field);
-      expect(classes).toContain("shadow-raised");
+      expect(classes).not.toContain("shadow-");
       expect(classes).not.toContain("hover:");
-      expect(classes).toContain("border-border-strong");
+      expect(classes).toContain("border-glass-edge");
+      expect(classes).toContain("bg-glass-1");
     }
     const input = markupClass(<InputGroupInput />).split(" ");
     expect(input).toContain("shadow-none");
-    expect(input).not.toContain("shadow-control");
+    expect(input).toContain("bg-transparent");
     expect(input).toContain("border-0");
     expect(input).not.toContain("border");
   });
 
-  it("draws selected segments filled and unselected segments outlined", () => {
+  it("draws the selected segment as strong glass and the rest outlined", () => {
     const html = renderToStaticMarkup(
       <Segmented
         ariaLabel="View"
@@ -90,19 +89,24 @@ describe("foundation control contracts", () => {
         onChange={noop}
       />,
     );
-    expect(html).toMatch(/data-variant="default"[^>]*aria-pressed="true"/);
+    expect(html).toMatch(/data-variant="selected"[^>]*aria-pressed="true"/);
     expect(html).toMatch(/data-variant="outline"[^>]*aria-pressed="false"/);
   });
 
-  it("uses the same material for switch and checkbox in both states", () => {
+  it("keeps switch and checkbox flat glass in both states", () => {
     for (const checked of [false, true]) {
-      expect(markupClass(<Switch checked={checked} />)).toContain("shadow-control");
-      expect(markupClass(<Checkbox checked={checked} />)).toContain("shadow-control");
+      for (const classes of [
+        markupClass(<Switch checked={checked} />),
+        markupClass(<Checkbox checked={checked} />),
+      ]) {
+        expect(classes).not.toContain("shadow-");
+        expect(classes).toContain("border-glass-edge");
+      }
     }
     expect(renderToStaticMarkup(<Checkbox />)).toContain("calc(var(--radius-control) / 2)");
   });
 
-  it("keeps the select trigger on the same rung and bevel as the input", () => {
+  it("keeps the select trigger on the input's rung, flat like an outline action", () => {
     const html = renderToStaticMarkup(
       <Select>
         <SelectTrigger>
@@ -113,8 +117,10 @@ describe("foundation control contracts", () => {
     expect(html).toContain("data-[size=default]:h-control-default");
     expect(html).toContain("data-[size=sm]:px-1");
     expect(html).toContain("data-[size=sm]:leading-4");
-    expect(html).toContain("shadow-control");
-    expect(html).toContain("active:shadow-control-pressed");
+    expect(html).not.toMatch(/(^|\s|:)shadow-/);
+    expect(html).toContain("border-glass-edge bg-glass-1");
+    expect(html).toContain("hover:bg-glass-2");
+    expect(html).toContain("active:bg-glass-3");
   });
 
   it("uses role contrast for secondary badges, not a decorative font variant", () => {

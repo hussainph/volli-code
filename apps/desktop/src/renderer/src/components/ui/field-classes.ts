@@ -29,6 +29,9 @@ export const CONTROL_SIZE = {
 } as const;
 export type ControlSize = keyof typeof CONTROL_SIZE;
 
-/** A text field keeps its lift even while its caret is active. */
-export const FIELD_SURFACE =
-  "border border-border-strong bg-card shadow-raised disabled:opacity-50";
+/**
+ * A text field is a flat well: the glass hairline and the rest step of the
+ * glass ladder (`globals.css`), and nothing that lifts it off the surface. A
+ * shadow under it read as a raised control in light and vanished in dark.
+ */
+export const FIELD_SURFACE = "border border-glass-edge bg-glass-1 disabled:opacity-50";

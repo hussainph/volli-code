@@ -11,24 +11,35 @@ const buttonVariants = cva(
   // its contrast floor. The offset separates the ring from a filled control.
   // Text fields carry their caret instead (`ui/field-classes.ts`).
   //
-  // A press sinks the shared bevel; it never scales or shifts the target.
+  // Flat glass: no bevel, no inset catch, no drop shadow, on any variant.
+  // Solid actions (`default`, `destructive`) are opaque fills; every other
+  // variant is a translucent glass tint with a hairline edge. Hover changes
+  // the fill and a press changes it a step more; nothing scales or shifts.
   "inline-flex min-w-0 max-w-full shrink-0 items-center justify-center gap-2 rounded-control text-sm font-medium whitespace-normal break-words transition-[color,background-color,border-color,box-shadow,opacity] duration-150 ease-out outline-none motion-reduce:transition-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         // Keep the solved fill opaque on hover: a 90% wash loses AA on light
-        // surfaces. Elevation supplies hover feedback without changing ink.
+        // surfaces. Hover and press darken it instead, which only ever adds
+        // contrast to the white label (`globals.css`, `--color-primary-*`).
         default:
-          "control-material [--control-fill:var(--primary)] bg-primary text-primary-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed",
+          "bg-primary text-primary-foreground hover:bg-primary-hover active:bg-primary-press",
         // Destructive body ink is pale in dark mode; an action instead takes
-        // the shared deep-red control pair, with the same bevel as its peers.
+        // the shared deep-red control pair, darkened the same way.
         destructive:
-          "control-material [--control-fill:var(--color-control-destructive)] bg-control-destructive text-control-destructive-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed",
+          "bg-control-destructive text-control-destructive-foreground hover:bg-control-destructive-hover active:bg-control-destructive-press",
+        // The glass ladder (`globals.css`): 1 rest, 2 hover, 3 press, 4 the
+        // selected/strongest step. Secondary sits one step above outline.
         outline:
-          "control-material border border-border-strong bg-card text-foreground shadow-control hover:bg-accent hover:[--control-fill:var(--accent)] hover:shadow-control-hover active:shadow-control-pressed",
+          "border border-glass-edge bg-glass-1 text-foreground hover:bg-glass-2 active:bg-glass-3",
         secondary:
-          "control-material [--control-fill:var(--color-control-secondary)] border border-border-strong bg-control-secondary text-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed",
-        ghost: "hover:bg-accent hover:text-foreground",
+          "border border-glass-edge bg-glass-2 text-foreground hover:bg-glass-3 active:bg-glass-4",
+        ghost: "hover:bg-glass-2 hover:text-foreground active:bg-glass-3",
+        // The chosen member of a closed set (`ui/segmented.tsx`): the
+        // strongest glass step beside its outline peers. Not an action —
+        // re-pressing it is a no-op by contract — so it neither hovers nor
+        // answers a press.
+        selected: "border border-glass-edge bg-glass-4 text-foreground",
         // --primary-text, not --primary: a link variant is read, not clicked
         // as a colored area, so it takes the accent's body-copy lightness.
         link: "text-primary-text underline-offset-4 hover:underline",

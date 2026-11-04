@@ -696,8 +696,8 @@ export const RAIL_CARD_FRAME =
 export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
 
 /**
- * The one button recipe a rail page presses: an `outline` Button on the
- * rail's own border, a resting wash, and the raised tier's lift.
+ * The one button recipe a rail page presses: an `outline` Button — the flat
+ * glass every outline control wears — at the rail's type step.
  *
  * Spelled here for the reason {@link RAIL_CARD_FRAME} is. The repository
  * card's publish row wrote it three times inline (the primary, its `⋯`, the
@@ -708,11 +708,14 @@ export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
  * composed by every act on the page, is what makes "this is a button" a
  * fact about the drawing rather than a thing to infer.
  *
- * Only the material is here. Size stays with the primitive (`sm` / `icon-sm`,
- * the toolbar rung), and width is the row's decision: the recipe must work for
- * a control that truncates its own label and for a bare icon beside it.
+ * The material is the primitive's own: a rail button used to restate it here
+ * (the sidebar's border, a `/30` wash, the raised tier), and that private copy
+ * was the one outline control in the app with a drop shadow. Size stays with
+ * the primitive too (`sm` / `icon-sm`, the toolbar rung), and width is the
+ * row's decision: the recipe must work for a control that truncates its own
+ * label and for a bare icon beside it.
  */
-export const RAIL_CONTROL = "border-sidebar-border bg-background/30 text-ui shadow-raised";
+export const RAIL_CONTROL = "text-ui";
 
 /**
  * Insertions and deletions as one pair — the repository card's changes row, the
