@@ -238,7 +238,8 @@ the static ladder: where the blur is not composited, what shows through must sta
 a ghost, never legible text. A command list inside a floating surface shares that surface.
 Never nest backdrop filters, exceed 24px blur or leave glass over live terminals
 or Browser Tab webviews. Contain panel paint; keep tooltip arrows and chrome
-focus rings unclipped. Animate only transform or opacity on blurred floats.
+focus rings unclipped, and portal submenus out of their parent float, which
+would otherwise clip them (they keep the nested solid fill). Animate only transform or opacity on blurred floats.
 
 Reduce transparency and Increase contrast replace every material with its
 opaque semantic fill. Browsers without backdrop-filter get opaque materials.
@@ -509,7 +510,9 @@ and moving re-anchor them without remounting.
 splitting the chat's pane when the chat is already grouped. The Activity Island
 lists page titles over host:port and path; it does not embed a thumbnail or a
 pinned preview, and **Show tab** only selects. A close removes the row
-immediately and offers Undo before native destruction.
+immediately and offers Undo before native destruction. **Hide to Island**
+(`ArrowSquareIn`, the Island's reveal glyph turned inward) ends a Session tab's
+address row and sends it back headless; a person's own tab never shows it.
 
 `⌘\` / `⇧⌘\` split the focused pane (a full-width tab becomes a group of two)
 and open an empty pane whose menu offers New chat, New terminal, New browser,

@@ -118,6 +118,19 @@ async function openTicket(key) {
   await click("tab", key);
 }
 const press = (role, name, key, options) => action("press", role, name, { key }, options);
+/**
+ * Close the move sheet and wait out its exit. Until the modal unmounts, its
+ * `hideOthers` leaves the app behind it in the tree without accessible names,
+ * so the next control cannot be found by name yet.
+ */
+async function closeSheet(name) {
+  await click("button", name);
+  await waitUntil(
+    `the move sheet to close after ${name}`,
+    async () => !/^\s*- '?(?:alert)?dialog\b/mu.test((await drive("snapshot")).text),
+    { timeout: 10_000, interval: 100 },
+  );
+}
 async function assertPreflightCounts() {
   let prepared;
   await waitUntil(
@@ -253,7 +266,7 @@ try {
     await click("menuitem", "Move to Volli Cloud…");
     await assertPreflightCounts();
     await drive("screenshot", { name: "project-menu-preflight" });
-    await click("button", "Cancel");
+    await closeSheet("Cancel");
     assert.deepEqual(
       await sql("SELECT move_id FROM cloud_moves"),
       [],
@@ -340,7 +353,7 @@ try {
       (row) => row.state === "history" || row.state === "checked",
       deadline,
     );
-    await click("button", "Close");
+    await closeSheet("Close");
     await wait("Move Project is read-only while it moves to Volli Cloud.");
     await click("button", "Home", { first: true });
     const navigation = await drive("snapshot");
@@ -641,7 +654,7 @@ try {
     assert.equal(result.text.match(/Move personal proof · Not armed/gu)?.length, 1);
     assert.equal(visibleControls(result.text, "button", "Re-arm", { contains: true }).length, 0);
     await drive("screenshot", { name: "explicit-rearm-result-and-inert-personal-definition" });
-    await click("button", "Close");
+    await closeSheet("Close");
     return {
       runnerId: current.runnerId,
       columns,

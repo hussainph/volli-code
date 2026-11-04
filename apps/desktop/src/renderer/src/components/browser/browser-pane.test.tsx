@@ -86,3 +86,28 @@ describe("BrowserPane holder pill (VC-239)", () => {
     expect(draw(tab({ heldBy: { kind: "person" } }))).toContain('data-holder="person"');
   });
 });
+
+describe("BrowserPane Hide to Island (VC-1118)", () => {
+  const drawWithHide = (state: BrowserTabState) =>
+    renderToStaticMarkup(
+      <BrowserPane
+        tab={state}
+        visible
+        api={api}
+        onTabState={() => undefined}
+        onHide={() => undefined}
+      />,
+    );
+
+  it("offers the way back for a Session's tab its surface can hide", () => {
+    const html = drawWithHide(tab({ createdBy: "session", ownerSessionId: "ses-a" }));
+    expect(html).toContain('aria-label="Hide to Island"');
+  });
+
+  it("never offers it for a person's tab, nor where no surface can hide", () => {
+    expect(drawWithHide(tab())).not.toContain("Hide to Island");
+    expect(draw(tab({ createdBy: "session", ownerSessionId: "ses-a" }))).not.toContain(
+      "Hide to Island",
+    );
+  });
+});
