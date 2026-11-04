@@ -14,6 +14,7 @@ export function Segmented<Key extends string>({
   iconOnly = false,
   disabled,
   className,
+  tabIdPrefix,
   onChange,
 }: {
   ariaLabel: string;
@@ -43,11 +44,13 @@ export function Segmented<Key extends string>({
   iconOnly?: boolean;
   disabled?: boolean;
   className?: string;
+  /** Page navigation retains tab/tabpanel associations and roving keyboard focus. */
+  tabIdPrefix?: string;
   onChange(key: Key): void;
 }) {
   return (
     <div
-      role="group"
+      role={tabIdPrefix === undefined ? "group" : "tablist"}
       aria-label={ariaLabel}
       data-testid={testId}
       data-slot="segmented"
@@ -56,6 +59,25 @@ export function Segmented<Key extends string>({
       }}
       onKeyDown={(event) => {
         event.currentTarget.dataset.pointerMotion = "false";
+        if (tabIdPrefix === undefined || disabled) return;
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const available = options.filter((option) => !option.disabled);
+        const current = available.findIndex((option) => option.key === value);
+        const index =
+          event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? available.length - 1
+              : (current + (event.key === "ArrowRight" ? 1 : -1) + available.length) %
+                available.length;
+        const next = available[index];
+        if (next === undefined) return;
+        onChange(next.key);
+        const target = Array.from(
+          event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+        ).find((button) => button.dataset.choice === next.key);
+        target?.focus();
       }}
       style={
         {
@@ -79,11 +101,22 @@ export function Segmented<Key extends string>({
             key={option.key}
             size={iconOnly ? (size === "sm" ? "icon" : "icon-lg") : size}
             variant="ghost"
-            aria-pressed={active}
+            role={tabIdPrefix === undefined ? undefined : "tab"}
+            id={tabIdPrefix === undefined ? undefined : `${tabIdPrefix}-tab-${option.key}`}
+            aria-controls={
+              tabIdPrefix === undefined ? undefined : `${tabIdPrefix}-page-${option.key}`
+            }
+            aria-selected={tabIdPrefix === undefined ? undefined : active}
+            aria-pressed={tabIdPrefix === undefined ? active : undefined}
+            aria-label={iconOnly ? option.label : undefined}
+            tabIndex={tabIdPrefix === undefined ? undefined : active ? 0 : -1}
+            data-testid={tabIdPrefix === undefined ? undefined : `${tabIdPrefix}-tab-${option.key}`}
             title={iconOnly ? option.label : undefined}
             data-choice={option.key}
             disabled={disabled === true || option.disabled === true}
-            onClick={() => {
+            onClick={(event) => {
+              const track = event.currentTarget.parentElement;
+              if (track) track.dataset.pointerMotion = String(event.detail !== 0);
               if (!active) onChange(option.key);
             }}
           >

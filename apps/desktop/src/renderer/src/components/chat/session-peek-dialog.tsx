@@ -66,7 +66,7 @@ export function SessionPeekDialog({
           target.focus();
         }}
       >
-        <div className="relative flex shrink-0 flex-col gap-2 py-4 pr-12 pl-4 after:absolute after:inset-x-[10%] after:bottom-0 after:border-b after:border-border">
+        <div className="relative flex shrink-0 flex-col gap-2 border-b border-border py-4 pr-12 pl-4">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <DialogTitle className="min-w-0 flex-1 break-words text-heading font-semibold">
               {title}

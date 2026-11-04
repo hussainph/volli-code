@@ -1,26 +1,6 @@
-/**
- * What an empty chat opens on (VC-55).
- *
- * IT REPLACES A BARE MARK, and that reversal is deliberate rather than drift:
- * this surface used to draw one squircle and nothing else, on the argument that
- * an empty transcript has nothing to say. It has one thing to say, and it is
- * the thing no surface in the app was saying — WHERE this Session runs. A
- * Board Session works in the user's own main checkout; a Ticket Session works
- * in a throwaway worktree. That is "safe to let it run" against "it is editing
- * my working tree".
- *
- * It is answered by drawing rather than by labelling. The visual a scope can
- * offer is legible only at that scope ({@link resolveEmptyVisual}), so the SHAPE
- * carries the identity: Home can draw a field of many, a ticket draws one
- * thing's state, and many-against-one is read before anything is read. CLAUDE.md's
- * "let controls talk" is upheld, not broken — what replaces the mark is data
- * and controls, never prose.
- *
- * THE PICKER IS PART OF THE SIGNAL. Home offers three drawings and shows the
- * choice; a ticket offers one and shows no picker at all, because a menu with a
- * single item is a statement dressed as a question. The shortness is the point.
- */
+/** A quiet entry to writing; scope stays visible and charts live one click deeper. */
 import * as React from "react";
+import { ChatCircleDotsIcon, ChartBarIcon } from "@phosphor-icons/react";
 
 import {
   EMPTY_VISUAL_LABELS,
@@ -32,8 +12,15 @@ import { BoardVisual } from "@renderer/components/chat/empty/board-visual";
 import { StreakVisual } from "@renderer/components/chat/empty/streak-visual";
 import { WorkingCopyChips } from "@renderer/components/chat/empty/working-copy-chips";
 import { WorkingCopyVisual } from "@renderer/components/chat/empty/working-copy-visual";
-import { Segmented } from "@renderer/components/ui/segmented";
-import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
+import { Button } from "@renderer/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { useUiStore } from "@renderer/stores/ui";
 import {
   useWorkingCopyStore,
@@ -78,21 +65,50 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
   }, [projectId, ticketId, refreshWorkingCopy]);
 
   return (
-    <div className="flex flex-col items-center gap-6">
-      {visual === "streak" ? <StreakVisual /> : null}
-      {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
-      {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
+    <div data-slot="chat-empty-state" className="flex max-w-full flex-col items-center gap-4">
+      <ChatCircleDotsIcon aria-hidden className="size-8 text-primary-text" />
       <WorkingCopyCaption workingCopy={workingCopy} />
-      <NextActionIllustration kind="chat" />
-      {offered.length > 1 ? (
-        <Segmented
-          ariaLabel="Empty chat visual"
-          testId="empty-visual-picker"
-          value={visual}
-          options={offered.map((key) => ({ key, label: EMPTY_VISUAL_LABELS[key] }))}
-          onChange={setVisual}
-        />
-      ) : null}
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="sm" className="text-muted-foreground">
+            <ChartBarIcon />
+            Session overview
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          className="flex w-auto max-w-[calc(100vw-2rem)] flex-col items-center gap-4 p-4"
+          side="top"
+        >
+          {offered.length > 1 ? (
+            <Select
+              value={visual}
+              onValueChange={(key) => {
+                const next = offered.find((candidate) => candidate === key);
+                if (next) setVisual(next);
+              }}
+            >
+              <SelectTrigger
+                variant="inspector"
+                aria-label="Empty chat visual"
+                data-testid="empty-visual-picker"
+                className="w-auto self-end"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {offered.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {EMPTY_VISUAL_LABELS[key]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          {visual === "streak" ? <StreakVisual /> : null}
+          {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
+          {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 });

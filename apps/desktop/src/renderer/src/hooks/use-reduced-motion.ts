@@ -8,28 +8,29 @@ const QUERY = "(prefers-reduced-motion: reduce)";
 // Lazily created so importing the module never touches `window`.
 let mediaQuery: MediaQueryList | undefined;
 
-function getMediaQuery(): MediaQueryList {
+function getMediaQuery(): MediaQueryList | undefined {
+  if (typeof window.matchMedia !== "function") return undefined;
   mediaQuery ??= window.matchMedia(QUERY);
   return mediaQuery;
 }
 
 function subscribe(onChange: () => void): () => void {
   const query = getMediaQuery();
-  query.addEventListener("change", onChange);
+  query?.addEventListener("change", onChange);
   window.addEventListener("volli-motion-change", onChange);
   return () => {
-    query.removeEventListener("change", onChange);
+    query?.removeEventListener("change", onChange);
     window.removeEventListener("volli-motion-change", onChange);
   };
 }
 
 function getSnapshot(): boolean {
-  return getMediaQuery().matches || document.documentElement.dataset.motion === "off";
+  return getMediaQuery()?.matches === true || document.documentElement.dataset.motion === "off";
 }
 
 /** Live system + app Motion preference; drives JS-side animation opt-outs. */
 export function useReducedMotion(): boolean {
-  return React.useSyncExternalStore(subscribe, getSnapshot);
+  return React.useSyncExternalStore(subscribe, getSnapshot, () => true);
 }
 
 /**

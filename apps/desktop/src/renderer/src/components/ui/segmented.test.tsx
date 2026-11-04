@@ -26,7 +26,10 @@ describe("Segmented", () => {
     expect(buttons.map((button) => button.props.variant)).toEqual(["ghost", "ghost"]);
     expect(buttons.map((button) => button.props["aria-pressed"])).toEqual([true, false]);
     expect(buttons[1].props.disabled).toBe(true);
-    buttons[0].props.onClick?.({} as React.MouseEvent<HTMLButtonElement>);
+    buttons[0].props.onClick?.({
+      currentTarget: { parentElement: null },
+      detail: 0,
+    } as React.MouseEvent<HTMLButtonElement>);
     expect(writes).toEqual([]);
   });
 

@@ -151,9 +151,8 @@ async function mountPlane(store: ReturnType<typeof chatStore>) {
 }
 
 const loading = () => container?.querySelector('[data-testid="chat-transcript-loading"]') ?? null;
-// A project-scope empty state always offers its three visuals, so the picker
-// is the one element every drawing of it carries.
-const emptyState = () => container?.querySelector('[data-testid="empty-visual-picker"]') ?? null;
+// The quiet entry is present before its optional overview is opened.
+const emptyState = () => container?.querySelector('[data-slot="chat-empty-state"]') ?? null;
 
 describe("a chat with no messages on screen", () => {
   it("shows Auto ahead of an inherited tier for an automatic pick", async () => {

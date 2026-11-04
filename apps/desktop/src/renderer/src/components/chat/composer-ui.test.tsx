@@ -607,12 +607,12 @@ describe("the effort control's place in the footer", () => {
     expect(html).not.toContain('data-size="icon-xs"');
   });
 
-  it("separates the writing sheet, settings tray, and send key (VC-335)", () => {
+  it("preserves the writing sheet and controls in one dock with a round send key", () => {
     const html = renderFooter();
     expect(html).toContain("prompt-surface");
     expect(html).toContain("prompt-toolbar");
     expect(html).toContain("prompt-config");
-    expect(html).toContain("prompt-primary rounded-control");
+    expect(html).toContain("prompt-primary rounded-full");
     expect(html).toContain("min-h-20");
   });
 
