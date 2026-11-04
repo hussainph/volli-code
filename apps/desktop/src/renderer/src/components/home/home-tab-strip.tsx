@@ -649,14 +649,9 @@ function TerminalTab({
     <Tab
       {...sharedTabProps(tab.title, shell)}
       label={tab.title}
-      // Exited tabs read as muted; a parked (and live) tab explains itself
-      // on hover.
+      // Exited tabs read as muted; a parked (and live) tab says so on hover.
       title={tabTitleWithProvenance(
-        exited
-          ? `Exited (${exitCode})`
-          : parked
-            ? "Terminal is parked to save memory. Select to wake it."
-            : tab.title,
+        exited ? `Exited (${exitCode})` : parked ? `${tab.title}\nParked` : tab.title,
         sessionProvenanceHoverLine(provenance),
       )}
       labelClassName={exited ? "line-through" : undefined}
