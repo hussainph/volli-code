@@ -787,12 +787,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 className={PALETTE_ROW}
               >
                 <ListNumbersIcon aria-hidden className={PALETTE_ROW_ICON} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ui font-medium">{item.title}</span>
-                  <span className="truncate text-label font-normal text-muted-foreground">
-                    {item.hint}
-                  </span>
-                </span>
+                <span className="min-w-0 flex-1 truncate text-ui font-medium">{item.title}</span>
                 <span className="shrink-0 text-label font-normal text-muted-foreground">⌃G</span>
               </Command.Item>
             ))}
@@ -813,7 +808,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               return (
                 <Command.Item
                   key={key}
-                  value={`${item.title} ${item.hint}`}
+                  value={"hint" in item && item.hint ? `${item.title} ${item.hint}` : item.title}
                   keywords={item.keywords}
                   onSelect={() => {
                     onOpenChange(false);
@@ -842,9 +837,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   <RowIcon aria-hidden className={PALETTE_ROW_ICON} />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-ui font-medium">{item.title}</span>
-                    <span className="truncate text-label font-normal text-muted-foreground">
-                      {item.hint}
-                    </span>
+                    {"hint" in item && item.hint ? (
+                      <span className="truncate text-label font-normal text-muted-foreground">
+                        {item.hint}
+                      </span>
+                    ) : null}
                   </span>
                 </Command.Item>
               );

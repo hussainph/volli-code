@@ -56,13 +56,14 @@ const TRIGGER_BOX_PX = 20;
 const FILTER_GLYPH_NUDGE = (TRIGGER_BOX_PX - GLYPH_PX) / 2;
 
 /**
- * The band label and its count. `label` is written in sentence case and
- * uppercased by the sidebar's heading rule in `globals.css`, which is also what
- * puts it on the heading ink tier — the caps are a typographic treatment, not
- * the string.
+ * The band label, in sentence case at the label tier, and the band's count
+ * where it says something the rows do not.
  *
- * The count rides WITH the heading rather than dropping to the mute: the two
- * bracket the row from opposite edges and read as one unit.
+ * Active draws every one of its rows, so a count there only repeats them and
+ * it passes none. Previous folds Sessions under their ticket and behind Show
+ * more, so its count is the one number on screen for how much is back there —
+ * and it is drawn only when there is something back there: a zero beside the
+ * band's own empty state says the same thing twice.
  */
 export function SessionBandHeader({
   label,
@@ -70,13 +71,17 @@ export function SessionBandHeader({
   children,
 }: {
   label: string;
-  count: number;
+  count?: number;
   children?: React.ReactNode;
 }) {
   return (
     <div className="flex h-6 items-center gap-2 px-2">
       <SectionHeading as="span">{label}</SectionHeading>
-      <span className="text-label tabular-nums text-muted-foreground/70">{count}</span>
+      {count === undefined || count === 0 ? null : (
+        <span data-band-count="" className="text-label tabular-nums text-muted-foreground/70">
+          {count}
+        </span>
+      )}
       <span className="ml-auto flex items-center">{children}</span>
     </div>
   );

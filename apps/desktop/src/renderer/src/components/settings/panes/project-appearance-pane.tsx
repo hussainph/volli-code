@@ -133,11 +133,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
       />
 
       {
-        <PrefRow
-          label="Canvas"
-          description={own === null ? "Global default" : "Project override"}
-          testId="project-appearance-canvas-row"
-        >
+        <PrefRow label="Canvas" testId="project-appearance-canvas-row">
           <OverrideControl
             label="Canvas"
             inheritedValue="the global canvas"
@@ -189,7 +185,8 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
     <PrefSection
       title="Terminal"
       icon={TerminalWindowIcon}
-      hint={<>Volli writes an overlay file. It never edits your Ghostty config.</>}
+      // The one-line trust boundary: whose file Volli writes.
+      hint={<>Volli writes an overlay file and never edits your Ghostty config.</>}
     >
       <PrefRow
         label={rows.theme.label}

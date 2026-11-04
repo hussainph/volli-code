@@ -90,12 +90,10 @@ export function MarkdownViewToggle({
 }
 
 /**
- * What Preview says about itself: that it cannot be edited, that unsupported
- * markup may be missing from it, and — only while it is true — that the draft
- * open in Source is not what is on screen.
+ * What Preview says about itself, as a status: that it cannot be edited and —
+ * only while it is true — that the draft open in Source is not what is on
+ * screen. Omitted HTML marks itself in place, so the line does not say it too.
  */
 function previewNote(sourceDirty: boolean): string {
-  return sourceDirty
-    ? "Read-only preview. Unsaved Source edits and unsupported HTML may be left out."
-    : "Read-only preview. Unsupported HTML may be left out.";
+  return sourceDirty ? "Read-only · unsaved edits not shown" : "Read-only";
 }

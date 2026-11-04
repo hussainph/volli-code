@@ -146,30 +146,31 @@ try {
     // never becomes "visible". This measures a box height, not whether the
     // table is on screen.
     //
-    // The Models catalog can also be legitimately EMPTY. DataTable renders
-    // `<Empty>` and NO `<table>` when it has no items (kit/data-table.tsx), and
-    // the catalog comes from the Pi runtime — a CI runner has none, so the pane
-    // correctly shows "No models. Sign in to a provider below." and this waited
-    // 30s for a table that was never going to exist.
+    // The Models catalog can also be legitimately EMPTY. Its models come from
+    // the Pi runtime — a CI runner has none — and with nothing to offer the
+    // pane omits its Catalog section entirely (panes/models-pane.tsx): no
+    // `<table>`, and no empty-state text to wait for either.
     //
-    // Both outcomes are asserted rather than skipped. With rows, the cap is
-    // measured as before. Without rows there is no cap to measure, so the
-    // assertion becomes the documented empty state — which still proves the
-    // pane mounted and still fails if it renders neither.
-    const modelsTable = page.locator("table").first();
-    const modelsEmpty = page.getByText("No models. Sign in to a provider below.");
+    // Both outcomes are asserted rather than skipped. The Default models rows
+    // render in the same commit as the catalog, once the pane's one read has
+    // settled without an error — so once the first row is attached, a missing
+    // catalog table is the empty catalog, not a pane still loading. With rows,
+    // the cap is measured as before. Without them there is no cap to measure,
+    // and the assertion still fails if the pane rendered neither.
+    const modelsTable = page.getByRole("table", { name: "Model catalog", exact: true });
+    const defaultsLoaded = page.getByTestId("default-model-global");
     await Promise.race([
       modelsTable.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
-      modelsEmpty.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
+      defaultsLoaded.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
     ]);
 
     if ((await modelsTable.count()) === 0) {
-      const empty = (await modelsEmpty.count()) === 1;
+      const loaded = (await defaultsLoaded.count()) === 1;
       return {
-        ok: empty,
-        detail: empty
-          ? "catalog empty (no Pi runtime) — empty state rendered; cap not measurable here"
-          : "Models pane rendered neither a table nor its empty state",
+        ok: loaded,
+        detail: loaded
+          ? "catalog empty (no Pi runtime) — pane loaded without a catalog; cap not measurable here"
+          : "Models pane rendered neither its catalog nor its default models",
       };
     }
 

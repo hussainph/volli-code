@@ -79,9 +79,7 @@ export function FolderClaimDialog() {
               <DialogTitle>Is this a project you already have?</DialogTitle>
               <DialogDescription>
                 Volli can't find the folder for the project
-                {(claim?.candidates.length ?? 0) > 1 ? "s" : ""} below. If you moved or renamed one
-                of them, relink it instead of adding a second copy — its tickets, settings and
-                history stay with it.
+                {(claim?.candidates.length ?? 0) > 1 ? "s" : ""} below.
               </DialogDescription>
             </DialogHeader>
 
@@ -132,9 +130,7 @@ export function FolderClaimDialog() {
           <>
             <DialogHeader>
               <DialogTitle>Relinked</DialogTitle>
-              <DialogDescription>
-                The move is saved. Some of it could not follow on its own:
-              </DialogDescription>
+              <DialogDescription>These items need attention:</DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-2">
               {notices.map((notice) => (

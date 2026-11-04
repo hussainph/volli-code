@@ -234,13 +234,14 @@ describe("NotificationsPane", () => {
     expect(container.textContent ?? "").toContain("can't show notifications");
   });
 
-  it("explains the OS's part and the exact-item rule without claiming a permission", async () => {
+  it("lets the switches talk, without row prose or a permission claim", async () => {
     await render();
 
     expect(container.querySelector('[aria-label="About Notify me"]')).toBeNull();
     const text = container.textContent ?? "";
-    expect(text).toContain("System Settings → Notifications → Volli Code");
-    expect(text).toContain("Alerts for the item in front of you are silenced");
+    expect(text).toContain("Notify me");
+    expect(text).not.toContain("System Settings");
+    expect(text).not.toContain("Alerts for the item in front of you are silenced");
     // Never a permission state: Electron gives the app none to report.
     expect(text).not.toMatch(/\b(Allowed|Denied)\b/);
   });

@@ -173,13 +173,9 @@ export function CodeModeSettings({
     <PrefSection title="Code Mode" icon={CodeIcon}>
       {/* The control is the explanation (AGENTS.md, "let controls talk"):
           what each mode does, which models get which, and that the switch
-          also governs large-server deferral are in Advanced's (i) and in
-          the Code Mode guide, not under the switch. */}
-      <PrefRow
-        label="Code Mode"
-        description="Let agents call MCP tools through JavaScript in new sessions."
-        testId="code-mode"
-      >
+          also governs large-server deferral are in the Code Mode guide, not
+          under the switch. */}
+      <PrefRow label="Code Mode" testId="code-mode">
         <Switch
           aria-label="Code Mode for new Sessions"
           data-testid="code-mode-switch"
@@ -213,18 +209,13 @@ export function CodeModeSettings({
               {loaded && !current.enabled ? (
                 // A blocked state with one recovery — the switch above.
                 <p className="text-ui text-muted-foreground" data-testid="code-mode-off-note">
-                  Code Mode is off, so no new Session uses these. They&rsquo;re kept for when
-                  it&rsquo;s back on.
+                  Inactive while Code Mode is off
                 </p>
               ) : null}
               {/* Its own box, so the row's `first:`/`last:` rules hold and it
                   draws no hairline against the note above it. */}
               <div>
-                <PrefRow
-                  label="Add model exception"
-                  description="Choose how this model calls MCP tools."
-                  testId="code-mode-pin"
-                >
+                <PrefRow label="Add model exception" testId="code-mode-pin">
                   <PinPicker
                     pickable={pickable}
                     providers={providers}
@@ -242,7 +233,7 @@ export function CodeModeSettings({
                   items={pins}
                   keyOf={(pin) => pin.key}
                   rows={6}
-                  empty="No model exceptions."
+                  empty="No model exceptions"
                   columns={[
                     {
                       key: "model",

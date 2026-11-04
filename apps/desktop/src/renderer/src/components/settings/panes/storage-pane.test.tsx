@@ -349,14 +349,13 @@ describe("Settings → Storage Pi session logs", () => {
     expect(document.body.textContent).toContain("session-one");
   });
 
-  it("keeps scan guidance visible without an information trigger", async () => {
+  it("labels the orphaned-log row with no guidance prose or information trigger", async () => {
     bridge();
     const sheet = await openReview();
 
-    expect(sheet.textContent).toContain(
-      "Only logs not referenced by any Volli session are candidates.",
-    );
-    expect(sheet.textContent).toContain("Scanning never deletes files.");
+    expect(sheet.textContent).toContain("Orphaned logs");
+    expect(sheet.textContent).not.toContain("Only logs not referenced");
+    expect(sheet.textContent).not.toContain("Scanning never deletes files");
     expect(sheet.querySelector('[aria-label="About Orphaned logs"]')).toBeNull();
   });
 });
@@ -375,7 +374,7 @@ describe("Settings → Storage build artifacts", () => {
 
     // Both rows are listed; the busy one says why rather than disappearing.
     expect(document.body.textContent).toContain("VC-1-alpha");
-    expect(document.body.textContent).toContain("3 ignored path(s).");
+    expect(document.body.textContent).toContain("3 ignored path(s)");
     expect(document.body.textContent).toContain("An agent is still running in this worktree");
 
     await act(async () => buttonNamed("Trim…").click());
@@ -482,6 +481,7 @@ describe("Settings → Database section", () => {
     // The old copy promised "every project, ticket, comment, session, label,
     // and setting", which is what made it read as a backup.
     expect(html).not.toContain("every project");
+    expect(html).not.toContain("readable copy");
     expect(html.toLowerCase()).not.toContain("backup");
   });
 });
@@ -514,15 +514,14 @@ describe("Storage page", () => {
     expect(worktrees?.textContent).not.toContain("Clean up…");
   });
 
-  it("says what retention takes and what it keeps, including the Keep exemption", () => {
+  it("says what retention takes and what it keeps, in one line", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <StorageOverviewPane />
       </TooltipProvider>,
     );
 
-    expect(html).toContain("keeps the branch, its commits, the pull-request link, and the ticket");
-    expect(html).toContain("Keep on a ticket holds its folder");
+    expect(html).toContain("Removes the folder; keeps the branch, commits, PR link and ticket.");
   });
 });
 
@@ -544,7 +543,7 @@ describe("Storage overview", () => {
     expect(api.trimScan).toHaveBeenCalledOnce();
     expect(api.scanOrphans).toHaveBeenCalledOnce();
     expect(container?.textContent).toContain(
-      "0 unused worktrees, 1 log file and build output in 1 checkout.",
+      "0 unused worktrees · 1 log file · build output in 1 checkout",
     );
     expect(api.trim).not.toHaveBeenCalled();
     expect(api.reclaimOrphans).not.toHaveBeenCalled();

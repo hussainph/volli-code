@@ -82,7 +82,6 @@ import {
   INSTRUCTIONS_PLACEHOLDER,
   MANUAL_TRIGGER_LABEL,
   nextScheduledRun,
-  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
 } from "./automations-page-model";
 import {
   clearEditorDraft,
@@ -964,11 +963,6 @@ export function AutomationEditorPanel({
                     <NextScheduledRun schedule={schedule} automationId={automationId} />
                   )
                 ) : null}
-                {automationSourceIsCloud() ? null : (
-                  <p className="text-ui text-muted-foreground">
-                    {SCHEDULE_SKIPPED_OCCURRENCE_POLICY}
-                  </p>
-                )}
               </div>
             ) : null}
             {scheduleProblem === null ? null : (

@@ -108,9 +108,7 @@ export function ShellOutputView({ shellId, api, className }: ShellOutputViewProp
           aria-live="off"
           aria-readonly="true"
         >
-          {gone
-            ? "This background shell is gone: its Session's attachment ended."
-            : (tail?.output ?? "")}
+          {gone ? "Shell gone · Session detached" : (tail?.output ?? "")}
         </pre>
       </div>
     </div>

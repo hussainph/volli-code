@@ -86,11 +86,7 @@ export function CloudRunHistory({
         {automationId === null ? "Project activity" : "Runs"}
       </SectionHeading>
       {loaded && rows.length === 0 ? (
-        <p className="py-2 text-ui text-muted-foreground">
-          {automationId === null
-            ? "Nothing has run in this project yet."
-            : "Nothing has run this Automation yet."}
-        </p>
+        <p className="py-2 text-ui text-muted-foreground">No runs yet</p>
       ) : null}
       {rows.map((row) => (
         <CloudRunRow key={row.id} run={row} now={now} />

@@ -208,7 +208,7 @@ describe("TicketChangesList markup", () => {
   it("renders a framed empty state when there are no changes", () => {
     const html = render([]);
     expect(html).toContain("No changes vs base");
-    expect(html).toContain("The branch is up to date.");
+    expect(html).not.toContain("The branch is up to date.");
   });
 
   it("says how many files the cap left out rather than silently dropping them", () => {

@@ -210,7 +210,6 @@ function LocalColumnArmingButton({
           </>
         )}
         <DropdownMenuSeparator />
-        <p className="px-2 py-1 text-ui text-muted-foreground">⌥-drag to choose once</p>
         {/* The link, not an editor: authoring lives on the page (VC-112), and
             what a column offers is decided by an Automation's Trigger there. */}
         <DropdownMenuItem

@@ -482,7 +482,7 @@ describe("the offer list", () => {
   it("keeps its page door in the heading row, at every state", async () => {
     await mount({});
 
-    expect(text()).toContain("No automations in this project yet.");
+    expect(text()).toContain("No automations");
 
     const panel = document.querySelector('[data-testid="ticket-rail-automations"]');
     const heading = panel?.querySelector("h2");
@@ -526,7 +526,7 @@ describe("the offer list", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    expect(text()).not.toContain("No automations in this project yet.");
+    expect(text()).not.toContain("No automations");
     // The wait is drawn as rows, not as a sentence (VC-406): two skeleton rows
     // before anything has been read, so the first read moves as little as it
     // can and a re-read moves nothing.
@@ -551,7 +551,7 @@ describe("the offer list", () => {
     expect(rows()).toHaveLength(0);
     expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
     // And no claim about the project, which it has not read.
-    expect(text()).not.toContain("No automations in this project yet.");
+    expect(text()).not.toContain("No automations");
 
     await act(async () => {
       list.resolve({ ok: true, automations: [automation()] });
@@ -652,7 +652,7 @@ describe("what it says about its own read", () => {
     // Not a skeleton waiting for a read nobody will make, and not a claim
     // about a project this block never read.
     expect(skeleton()).toBeNull();
-    expect(text()).not.toContain("No automations in this project yet.");
+    expect(text()).not.toContain("No automations");
     expect(rows()).toHaveLength(0);
 
     // The one press that changes it, local to the block: no planning change,
@@ -765,7 +765,7 @@ describe("what it says about its own read", () => {
     expect(text()).not.toContain("Review sweep");
     expect(readStatus()).toBeNull();
     expect(skeleton()).not.toBeNull();
-    expect(text()).not.toContain("No automations in this project yet.");
+    expect(text()).not.toContain("No automations");
 
     await act(async () => {
       second.resolve({ ok: true, automations: [automation({ id: "b1", name: "Deploy check" })] });

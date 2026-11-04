@@ -547,10 +547,6 @@ function WorktreeMissingNotice({
       layout="stack"
       icon={FolderOpenIcon}
       title="Worktree folder is missing"
-      // The one thing worth saying next to the button: the work is not gone.
-      // What the button then does is on the button (voice.md: no "click Save to
-      // save"), so this states the fact and stops.
-      detail="The branch and its commits are still in git."
       data-testid="ticket-repository-worktree-missing"
       className={RAIL_PANEL_INSET}
       actions={

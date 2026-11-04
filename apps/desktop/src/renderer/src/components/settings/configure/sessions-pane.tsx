@@ -133,16 +133,7 @@ export function SessionsPane({ project }: { project: Project }) {
 
   return (
     <>
-      <PrefSection
-        title="Chat"
-        icon={CpuIcon}
-        // The precedence table, as one hint rather than a paragraph under the
-        // header — available to whoever wants it, invisible to everyone else.
-        hint={
-          <>New chats use the composer&rsquo;s choice first, then this project, then Settings.</>
-        }
-        action={modelCatalogAction}
-      >
+      <PrefSection title="Chat" icon={CpuIcon} action={modelCatalogAction}>
         {/*
          * An override no longer named by the offerable catalogue is shown as
          * inherited. The reset button remains the one, honest signal that the
@@ -153,9 +144,7 @@ export function SessionsPane({ project }: { project: Project }) {
           htmlFor="project-session-model"
           align="start"
           testId="project-session-model"
-          description={
-            model === null ? "Global default for new chats." : "Project override for new chats."
-          }
+          description={model === null ? "Global default" : "Project override"}
         >
           <OverrideControl
             label="Model"
@@ -267,13 +256,6 @@ function InstructionsSection({ project }: { project: Project }) {
       <AsyncSection
         title="Instructions"
         icon={BookOpenIcon}
-        hint={
-          <>
-            Chats start with AGENTS.md in their prompt, or CLAUDE.md when the repo has no AGENTS.md,
-            as the file reads when each Chat starts. Terminal harnesses load their own: Claude Code
-            reads CLAUDE.md, Codex, Cursor and OpenCode read AGENTS.md.
-          </>
-        }
         action={
           <SectionIconAction
             label="Check the repo again"

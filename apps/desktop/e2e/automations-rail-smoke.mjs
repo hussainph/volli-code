@@ -172,7 +172,7 @@ try {
       const said = await rail().innerText();
       // VC-406 retired the rail's Run once; the block ends at its rows.
       const runOnce = await rail().locator('[data-testid="ticket-rail-run-once"]').count();
-      const emptyReport = rail().getByText("No automations in this project yet.", { exact: true });
+      const emptyReport = rail().getByText("No automations", { exact: true });
       const door = pageDoor();
       const [headingBox, doorBox] = await Promise.all([heading.boundingBox(), door.boundingBox()]);
       const reportMetrics = await emptyReport.evaluate((element) => {
@@ -199,7 +199,7 @@ try {
       await backToBoard();
       return {
         ok:
-          said.includes("No automations in this project yet.") &&
+          said.includes("No automations") &&
           runOnce === 0 &&
           strayLinks === 0 &&
           doorSharesHeadingRow &&

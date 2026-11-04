@@ -715,7 +715,6 @@ describe("buildEditorCommandItems", () => {
         kind: "editor-command",
         id: "go-to-line",
         title: "Go to Line…",
-        hint: "In the editor you were last in",
       },
     ]);
   });

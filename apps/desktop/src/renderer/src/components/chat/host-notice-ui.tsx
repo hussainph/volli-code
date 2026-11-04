@@ -69,17 +69,16 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
 }) {
   const copy = subagentNoticeCopy(notice);
   const childSessionId = notice.childSessionId;
-  const historicalNote =
-    childSessionId === null
-      ? [copy.note, `Answer: volli session answer ${notice.sessionHandle}`]
-          .filter((part) => part.length > 0)
-          .join(" ")
-      : copy.note;
+  // A historical notice has no child id to open, so its handle is the one way
+  // left to answer it — a value, not an explanation.
+  const hover = [
+    `${copy.headline} — ${copy.state}${copy.cause === null ? "" : ` · ${copy.cause}`}`,
+    childSessionId === null ? `Answer: volli session answer ${notice.sessionHandle}` : null,
+  ]
+    .filter((part) => part !== null)
+    .join("\n");
   return (
-    <div
-      className="not-prose flex min-w-0 flex-col gap-1"
-      title={`${copy.headline} — ${copy.state}${historicalNote.length > 0 ? `. ${historicalNote}` : ""}`}
-    >
+    <div className="not-prose flex min-w-0 flex-col gap-1" title={hover}>
       <div className="flex min-w-0 items-center gap-2 text-ui">
         <SubagentNoticeGlyph state={notice.state} />
         <span className="min-w-0 truncate font-medium">{copy.headline}</span>
@@ -112,12 +111,12 @@ export const BrowserHoldNoticeRow = React.memo(function BrowserHoldNoticeRow({
   return (
     <div
       className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground"
-      title={`Browser Tab ${notice.tabId} — ${copy.headline} — ${copy.note}`}
+      title={`Browser Tab ${notice.tabId} — ${copy.headline} — ${copy.state}`}
     >
       <BrowserIcon aria-hidden className={GLYPH_CLASS} />
       <span className="min-w-0 truncate font-medium text-foreground">{copy.headline}</span>
       <Separator aria-hidden className="min-w-4 flex-1" />
-      <span className="min-w-0 truncate">{copy.note}</span>
+      <span className="min-w-0 truncate">{copy.state}</span>
     </div>
   );
 });

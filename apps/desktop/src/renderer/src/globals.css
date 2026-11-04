@@ -908,21 +908,8 @@
  * contrasts and neither of them was measured. A solved tier is the fix, and the
  * `color` (rather than a token override) is what actually kills the alpha —
  * redefining `--sidebar-foreground` on the element would only change what the
- * 70% is taken OF.
- *
- * `.uppercase` catches the second heading level, the session-band headers
- * ("ACTIVE", "PREVIOUS") that are a plain div rather than a group label.
- * Counted in the running sidebar, that class matches two elements and both are
- * headings — which is why one this generic is precise here. It is also the rule
- * that should survive a third: 11px letterspaced caps in a sidebar IS a section
- * heading, whatever component drew it. (The caps come from here, so the JSX
- * writes "Active" and "Previous" — the string is sentence case, the treatment
- * is not.)
- *
- * Each heading's COUNT rides with it rather than dropping to the mute. The two
- * bracket the row from opposite edges and read as one unit. */
-[data-slot="sidebar"] [data-slot="sidebar-group-label"],
-[data-slot="sidebar"] .uppercase {
+ * 70% is taken OF. */
+[data-slot="sidebar"] [data-slot="sidebar-group-label"] {
   color: var(--canvas-ink-label);
 }
 
@@ -1688,7 +1675,7 @@ article.bg-card {
   --sidebar-foreground: var(--material-foreground);
   --material-solid-fill: var(--sidebar);
 }
-[data-volli-sidebar].material-regular :is([data-slot="sidebar-group-label"], .uppercase) {
+[data-volli-sidebar].material-regular [data-slot="sidebar-group-label"] {
   color: var(--foreground);
 }
 [data-volli-sidebar].material-regular .session-row-dim.text-ui {

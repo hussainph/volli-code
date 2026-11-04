@@ -494,7 +494,8 @@ describe("the page", () => {
 
     expect(text()).toContain("New Automation");
     expect(text()).toContain("Nothing saved yet");
-    expect(text()).toContain("Nothing has run in this project yet.");
+    expect(text()).toContain("No runs yet");
+    expect(text()).not.toContain("Save a way of starting work");
   });
 
   it("keeps both ownership groups visible in the persistent rail", async () => {
@@ -603,7 +604,7 @@ describe("running by hand", () => {
       setInputValue(find, "nothing like this");
     });
 
-    const ticketNotice = paragraph("No tickets here.");
+    const ticketNotice = paragraph("No tickets");
     expect(ticketNotice.classList.contains("text-ui")).toBe(true);
     expect(ticketNotice.classList.contains("text-sm")).toBe(false);
   });
@@ -959,7 +960,7 @@ describe("history is scoped to the selected Automation", () => {
     // Critically, not the previous record's rows either.
     expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
     expect(historyRowIds("run")).toEqual([]);
-    expect(historySection().textContent).not.toContain("Nothing has run");
+    expect(historySection().textContent).not.toContain("No runs yet");
 
     await act(async () => {
       release?.();
@@ -982,7 +983,7 @@ describe("history is scoped to the selected Automation", () => {
     });
 
     expect(historyRowIds("run")).toEqual([]);
-    expect(paragraph("Nothing has run this Automation yet.")).not.toBeNull();
+    expect(paragraph("No runs yet")).not.toBeNull();
     expect(historySection().textContent).not.toContain("Nightly sweep");
   });
 });

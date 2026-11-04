@@ -125,8 +125,7 @@ export function AutomationsPage() {
           <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2">
             <LightningIcon className="size-5 text-muted-foreground" />
           </div>
-          <h1 className="text-heading font-semibold">No automations</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">Select a project first.</p>
+          <h1 className="text-heading font-semibold">No project selected</h1>
         </div>
       </div>
     );
@@ -708,12 +707,7 @@ function EmptyAutomations({ onCreate, history }: { onCreate(): void; history?: R
       <div className="grid min-h-64 flex-1 place-items-center p-6">
         <div className="flex max-w-sm flex-col items-center gap-4 text-center">
           <LightningIcon className="size-5 text-muted-foreground" />
-          <div>
-            <h2 className="text-heading font-semibold">Nothing saved yet</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Save a way of starting work, then run it by hand or give it a Trigger.
-            </p>
-          </div>
+          <h2 className="text-heading font-semibold">Nothing saved yet</h2>
           <Button size="sm" onClick={onCreate}>
             <PlusIcon />
             New Automation
@@ -788,7 +782,7 @@ function RunOnTicketDialog({
           />
           <div className="flex max-h-80 flex-col overflow-y-auto">
             {matches.length === 0 ? (
-              <p className="py-2 text-ui text-muted-foreground">No tickets here.</p>
+              <p className="py-2 text-ui text-muted-foreground">No tickets</p>
             ) : (
               matches.map((ticket) => {
                 const ticketDisplayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
@@ -885,7 +879,7 @@ function LocalRunHistory({
   const now = useAgeNow(
     entries.map((entry) => (entry.kind === "run" ? entry.run.createdAt : entry.skip.dueAt)),
   );
-  const emptyCopy = historyEmptyCopy(automationId, loaded);
+  const emptyCopy = historyEmptyCopy(loaded);
   return (
     <section className="flex flex-col gap-1" data-run-history={automationId ?? "project"}>
       <SectionHeading className="h-6 leading-6">

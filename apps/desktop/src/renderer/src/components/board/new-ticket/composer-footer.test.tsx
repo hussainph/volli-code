@@ -105,7 +105,7 @@ it("offers creation, chat and the Automation chooser in a cloud launch", () => {
   expect(html).toContain('data-testid="composer-create"');
   expect(html).toContain('data-testid="composer-kickoff"');
   expect(html).toContain('data-testid="composer-launch-picker"');
-  expect(html).toContain("Automation");
+  expect(html).toContain('aria-label="Choose what starts"');
 });
 
 it("gives the unmodified chord to Create and the shifted one to the primary", () => {
@@ -292,7 +292,7 @@ it("keeps the launch selector available without a catalogue", async () => {
   );
   await openMenu();
   expect(radio("Start chat")).toBeDefined();
-  expect(document.body.textContent).toContain("No ticket automations in this project.");
+  expect(document.body.textContent).toContain("No ticket automations");
 });
 
 it("does not claim an empty catalogue or expose cached runs while reading", () => {

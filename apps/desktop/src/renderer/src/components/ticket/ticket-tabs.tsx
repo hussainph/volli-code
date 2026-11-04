@@ -385,7 +385,7 @@ function TicketTab({
         exited
           ? `Exited (${terminal?.exitCode ?? "?"})`
           : parked
-            ? "Terminal is parked to save memory. Select to wake it."
+            ? `${tab.label}\nParked`
             : tab.status === "waiting"
               ? `${tab.label}\nWaiting for you`
               : tab.label,

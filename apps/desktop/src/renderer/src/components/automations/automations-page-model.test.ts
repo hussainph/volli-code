@@ -10,7 +10,6 @@ import type {
 import {
   INSTRUCTIONS_PLACEHOLDER,
   MANUAL_TRIGGER_LABEL,
-  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
   automationHistory,
   duplicateName,
   groupByOwnership,
@@ -147,16 +146,14 @@ describe("a Run prints its own evidence", () => {
   });
 
   it("says nothing about an empty history until the read has landed (VC-297)", () => {
-    // "Nothing has run" is a claim about the past, and an unread cache cannot
+    // "No runs yet" is a claim about the past, and an unread cache cannot
     // make it. A cold cache is the ordinary state on every record the reader
-    // picks, so this is the difference between silence and a false sentence.
-    expect(historyEmptyCopy("automation-1", false)).toBeNull();
-    expect(historyEmptyCopy(null, false)).toBeNull();
+    // picks, so this is the difference between silence and a false label.
+    expect(historyEmptyCopy(false)).toBeNull();
   });
 
-  it("names the scope once it knows the answer is empty", () => {
-    expect(historyEmptyCopy("automation-1", true)).toBe("Nothing has run this Automation yet.");
-    expect(historyEmptyCopy(null, true)).toBe("Nothing has run in this project yet.");
+  it("says so in a short label once it knows the answer is empty", () => {
+    expect(historyEmptyCopy(true)).toBe("No runs yet");
   });
 
   it("never names a schedule for an unattended Run", () => {
@@ -489,11 +486,5 @@ describe("nextScheduledRun (VC-298)", () => {
     const at = next(schedule, Date.UTC(2026, 2, 7, 12)).at;
     expect(at).toBeGreaterThanOrEqual(Date.UTC(2026, 2, 8, 6));
     expect(at).toBeLessThan(Date.UTC(2026, 2, 8, 6, 5));
-  });
-
-  it("states the scheduler's grace and what happens outside it", () => {
-    expect(SCHEDULE_SKIPPED_OCCURRENCE_POLICY).toBe(
-      "Runs up to 2 min late; skipped if Volli is closed or the Mac is asleep",
-    );
   });
 });

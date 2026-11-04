@@ -49,7 +49,6 @@ import {
   searchQuery,
   searchRevealTarget,
   searchSummary,
-  searchTruncationNote,
   SEARCH_DEBOUNCE_MS,
   type SearchGroup,
   type SearchScope,
@@ -337,7 +336,6 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
       <SearchResults
         groups={groups}
         query={outcome?.query ?? null}
-        limit={outcome?.limit ?? "none"}
         idle={query === null}
         searching={pendingQuery !== null}
         canClaimEmpty={railReadCanClaimEmpty({
@@ -357,7 +355,6 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
 function SearchResults({
   groups,
   query,
-  limit,
   idle,
   searching,
   canClaimEmpty,
@@ -367,7 +364,6 @@ function SearchResults({
 }: {
   groups: readonly SearchGroup[];
   query: string | null;
-  limit: FileSearchLimit;
   idle: boolean;
   searching: boolean;
   /**
@@ -380,13 +376,8 @@ function SearchResults({
   ticketId: string | null;
   onOpenMatch(relPath: string, match: FileSearchMatch, query: string): void;
 }) {
-  if (idle) {
-    return (
-      <p data-testid="file-search-idle" className={EMPTY_INLINE}>
-        Type to find text in these files
-      </p>
-    );
-  }
+  // Idle is a resting state: the field above is the whole of it.
+  if (idle) return null;
   if (groups.length === 0) {
     if (searching) {
       return (
@@ -402,7 +393,6 @@ function SearchResults({
       </p>
     );
   }
-  const note = searchTruncationNote(limit);
   return (
     <div data-testid="file-search-results" className="flex min-h-0 flex-1 flex-col pb-8">
       <FileTree
@@ -435,14 +425,6 @@ function SearchResults({
           },
         }}
       />
-      {note === null ? null : (
-        <p
-          data-testid="file-search-truncated"
-          className={cn("pt-2 text-ui text-muted-foreground", RAIL_PANEL_INSET)}
-        >
-          {note}
-        </p>
-      )}
     </div>
   );
 }

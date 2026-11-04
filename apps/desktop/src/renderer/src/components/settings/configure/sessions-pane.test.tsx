@@ -280,16 +280,8 @@ describe("SessionsPane's instruction files", () => {
     await renderPane(vi.fn().mockResolvedValue(CATALOG));
 
     expect(api.fs.listDirectory).toHaveBeenCalledWith(PROJECT.path);
-    // The copy matches the runtime's prompt-file precedence.
-    expect(document.body.textContent).toContain(
-      "Chats start with AGENTS.md in their prompt, or CLAUDE.md when the repo has no AGENTS.md",
-    );
-    expect(document.body.textContent).toContain(
-      "as the file reads when each Chat starts. Terminal harnesses load their own",
-    );
-    expect(document.body.textContent).toContain(
-      "Claude Code reads CLAUDE.md, Codex, Cursor and OpenCode read AGENTS.md.",
-    );
+    // The rows name the files; no precedence paragraph sits under the header.
+    expect(document.body.textContent).not.toContain("Chats start with AGENTS.md");
     expect(row("AGENTS.md").textContent).toContain("not in this repo");
     expect(row("CLAUDE.md").textContent).toContain("not in this repo");
     expect(action("Preview AGENTS.md")).toBeNull();

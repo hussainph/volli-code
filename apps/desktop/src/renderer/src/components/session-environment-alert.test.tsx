@@ -7,9 +7,7 @@ const FAULT = {
   fault: "login-path-unreadable" as const,
   key: "login-path-unreadable",
   title: "Volli couldn't read your terminal's PATH",
-  detail:
-    "Sessions can't find gh and node, so some commands may be missing. " +
-    "Fix now asks your terminal again — Sessions you start afterwards get the result.",
+  detail: "Sessions can't find gh and node.",
 };
 
 describe("SessionEnvironmentNotice", () => {

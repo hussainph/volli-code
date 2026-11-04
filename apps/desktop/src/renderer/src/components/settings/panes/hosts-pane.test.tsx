@@ -212,7 +212,7 @@ describe("Settings → Hosts", () => {
     expect(text).toContain("macOS");
     expect(text).toContain("Your account");
     expect(text).toContain("When you log in to studio");
-    expect(text).toContain("No projects open on this Mac yet");
+    expect(text).toContain("No projects open on this Mac");
     // One row per device: this Mac first, a revoked one last.
     const devices = [...root.querySelectorAll<HTMLElement>('[data-testid^="host-device-"]')].map(
       (node) => [node.dataset["testid"], node.textContent ?? ""],
@@ -235,7 +235,7 @@ describe("Settings → Hosts", () => {
       useRemoteHostsStore.getState().setHosts([], "This Mac’s hosts file is from a newer Volli."),
     );
     expect(root.querySelector('[role="status"]')?.textContent).toBe(
-      "This Mac’s hosts file is from a newer Volli. Its hosts can’t be added or changed here.",
+      "This Mac’s hosts file is from a newer Volli.",
     );
     // The empty row closes up (its exit animation), and the section offers no action.
     await vi.waitFor(() => expect(root.textContent).not.toContain("Add a host…"));

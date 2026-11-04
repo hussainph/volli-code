@@ -314,7 +314,7 @@ function GithubAccounts({
       }
     >
       {installations === null ? null : installations.length === 0 ? (
-        <Empty>No GitHub accounts yet.</Empty>
+        <Empty>No GitHub accounts</Empty>
       ) : (
         <div data-testid="github-installations">
           {installations.map((installation) => (
@@ -341,11 +341,7 @@ function GithubAccounts({
       )}
       {snapshot.requested ? (
         // The backend cannot tell an owner's approval request from a cancel on GitHub.
-        <Notice
-          announce
-          className="m-4"
-          title="If you asked an organization owner to approve, Volli will show the account here once they do."
-        />
+        <Notice announce className="m-4" title="Owner approval may be pending" />
       ) : null}
     </PrefSection>
   );
@@ -458,9 +454,7 @@ function SignedIn({
               </PrefRow>
             ) : (
               <PrefRow label="Request">
-                <span className="text-ui">
-                  Cancellation window ended. Email privacy@volli.app for help.
-                </span>
+                <span className="text-ui">Window ended · privacy@volli.app</span>
               </PrefRow>
             )
           ) : (
@@ -482,9 +476,8 @@ function SignedIn({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete your Volli account?</AlertDialogTitle>
             <AlertDialogDescription>
-              This blocks cloud access and disconnects GitHub and cloud devices. You can cancel
-              within 30 days, then reconnect them. Automatic erasure is not available in this
-              preview; email privacy@volli.app to complete deletion.
+              Blocks cloud access and disconnects GitHub and cloud devices. Restorable for 30 days;
+              to erase your data, email privacy@volli.app.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -551,7 +544,7 @@ export function AccountPane({ rpc }: { rpc?: AccountRpc } = {}) {
   if (snapshot.state === "unconfigured") {
     return (
       <PrefSection title="Account" icon={UserCircleIcon}>
-        <Empty>This build has no Volli Cloud sign-in.</Empty>
+        <Empty>No Volli Cloud sign-in in this build</Empty>
       </PrefSection>
     );
   }

@@ -166,6 +166,9 @@ a bare "modified" tells a reader nothing.
 - **`conversation.tsx` does not animate scroll.** Both `StickToBottom` props are
   `instant` rather than upstream's smooth default, on measured evidence; the
   file's own comment carries the reasoning.
+- **`ConversationEmptyState` carries no copy.** Its default title, description
+  and icon slots were removed; the caller draws the empty state inside the
+  shell.
 
 ## License
 

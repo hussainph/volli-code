@@ -36,26 +36,26 @@ export function AutomationAuthoringButton({
     }
   }
 
+  const button = (
+    <Button
+      size="sm"
+      variant="ghost"
+      disabled={empty || starting || pending}
+      onClick={() => void start()}
+    >
+      <SparkleIcon />
+      Draft in chat
+    </Button>
+  );
+  // The label names the action; only the blocked state earns a tooltip, and it
+  // names the one thing that unblocks it.
+  if (!empty) return button;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={empty || starting || pending}
-            onClick={() => void start()}
-          >
-            <SparkleIcon />
-            Draft in chat
-          </Button>
-        </span>
+        <span>{button}</span>
       </TooltipTrigger>
-      <TooltipContent>
-        {empty
-          ? "Add an idea in Instructions first"
-          : "Opens a Board chat with this draft. Review and copy suggestions back here."}
-      </TooltipContent>
+      <TooltipContent>Add an idea in Instructions first</TooltipContent>
     </Tooltip>
   );
 }

@@ -132,24 +132,21 @@ export function SkillsPane({ project }: { project: Project }) {
       <AsyncSection
         title="Skills"
         icon={BookOpenIcon}
-        hint={
-          indexTokens === null ? (
-            <>
-              Auto is discovered by agents; Manual is available through <code>/name</code>; Off
-              hides it.
-            </>
-          ) : (
-            <>
-              Auto adds ~{formatTokens(indexTokens)} tokens per turn; Manual waits for you; Off
-              hides it.
-            </>
-          )
+        action={
+          <div className="flex items-center gap-2">
+            {/* What Auto costs every turn: the one number the mode column hides. */}
+            {indexTokens === null ? null : (
+              <span className="text-ui text-muted-foreground tabular-nums">
+                Auto · ~{formatTokens(indexTokens)} tokens per turn
+              </span>
+            )}
+            <SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />
+          </div>
         }
-        action={<SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />}
         fill
         state={state}
         isEmpty={(data) => data.skills.length === 0}
-        empty="No skills yet. Add one to .agents/skills."
+        empty="No skills in .agents/skills"
       >
         {(data) => (
           <SkillsTable
@@ -276,8 +273,8 @@ function SkillsTable({
           { value: "personal", label: "Personal" },
         ],
       }}
-      empty="No skills yet. Add one to .agents/skills."
-      noResults="No skills match."
+      empty="No skills in .agents/skills"
+      noResults="No skills match"
       columns={[
         {
           key: "name",

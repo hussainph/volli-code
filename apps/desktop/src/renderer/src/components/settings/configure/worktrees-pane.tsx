@@ -71,12 +71,7 @@ export function WorktreesPane({ project }: { project: Project }) {
           <SectionIconAction label="Refresh branches" busy={status === "loading"} onAct={reload} />
         }
       >
-        <PrefRow
-          label="Branch from"
-          icon={TreeStructureIcon}
-          htmlFor="project-base-branch"
-          description="New ticket checkouts start from this branch."
-        >
+        <PrefRow label="Branch from" icon={TreeStructureIcon} htmlFor="project-base-branch">
           <Select
             value={project.baseBranch ?? "__default"}
             disabled={status !== "ready" || saving}
@@ -127,9 +122,6 @@ export function WorktreesPane({ project }: { project: Project }) {
             <TerminalWindowIcon aria-hidden className="size-4 text-muted-foreground" />
             Setup command
           </label>
-          <p className="text-ui text-muted-foreground">
-            Runs in each new worktree before its first session.
-          </p>
           <Textarea
             id="project-setup-command"
             value={draft}
@@ -160,7 +152,6 @@ export function WorktreesPane({ project }: { project: Project }) {
       <PrefSection
         title="Copied files"
         icon={FileCodeIcon}
-        hint={<>A .worktreeinclude file replaces these defaults.</>}
         action={
           <Button
             variant="ghost"

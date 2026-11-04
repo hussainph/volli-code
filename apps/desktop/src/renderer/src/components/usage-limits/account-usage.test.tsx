@@ -149,9 +149,9 @@ describe("AccountUsage", () => {
         <AccountUsage limits={failed} now={NOW} />
       </>,
     );
-    expect(html).toContain("No subscription usage windows on this account.");
+    expect(html).toContain("No usage windows");
     // The failed line names its retry: the host's own Refresh.
-    expect(html).toContain("Usage limits couldn&#x27;t be read. Refresh to try again.");
+    expect(html).toContain("Couldn&#x27;t read usage limits");
     expect(html).not.toContain("stroke-dasharray");
     expect(html).not.toContain("% left");
   });

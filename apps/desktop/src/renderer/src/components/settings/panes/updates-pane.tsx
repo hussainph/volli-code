@@ -45,12 +45,9 @@ import { useUpdateStore } from "@renderer/stores/update";
 
 import { updateStatus } from "./updates-pane-model";
 
-/** Shown once Stable is chosen over Canary — exactly when and how it takes effect. */
-const LEAVING_CANARY_DETAIL =
-  "An installed canary build stays until a newer stable release is out.";
-
+/** The one caution at the moment of the choice; the Channel row itself carries none. */
 const ENTER_CANARY_WARNING =
-  "Canary builds ship the newest work first and break more often. You can switch back, but an installed canary won't downgrade itself. Continue?";
+  "Canary builds break more often, and an installed canary won't downgrade itself. Continue?";
 
 async function check() {
   try {
@@ -121,7 +118,6 @@ export function UpdatesPane() {
           dismissalKey={`settings:updates:ready:${state?.targetVersion}`}
           icon={DownloadSimpleIcon}
           title={`Volli ${state?.targetVersion} is ready`}
-          detail="It installs the next time you quit."
           actions={
             <Button size="xs" variant="outline" onClick={openDialog}>
               Restart now
@@ -130,23 +126,11 @@ export function UpdatesPane() {
         />
       ) : null}
       {leftCanary ? (
-        <Notice
-          icon={DownloadSimpleIcon}
-          title="Stable takes effect the next time Volli opens"
-          detail={LEAVING_CANARY_DETAIL}
-        />
+        <Notice icon={DownloadSimpleIcon} title="Stable takes effect the next time Volli opens" />
       ) : null}
 
       <PrefSection title="Updates" icon={DownloadSimpleIcon}>
-        <PrefRow
-          label="Channel"
-          htmlFor="update-channel"
-          hint={
-            <>
-              Canary builds break more often, and an installed canary won&rsquo;t downgrade itself.
-            </>
-          }
-        >
+        <PrefRow label="Channel" htmlFor="update-channel">
           {channelError ? (
             <Notice
               tone="error"

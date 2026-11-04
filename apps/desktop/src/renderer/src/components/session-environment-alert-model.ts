@@ -114,7 +114,7 @@ function loginPathFault(
     fault: "login-path-unreadable",
     key: "login-path-unreadable",
     title: "Volli couldn't read your terminal's PATH",
-    detail: `Sessions can't find ${plainList(missing)}, so some commands may be missing. Fix now asks your terminal again — Sessions you start afterwards get the result.`,
+    detail: `Sessions can't find ${plainList(missing)}.`,
   };
 }
 
@@ -132,9 +132,9 @@ function loginPathFault(
 function readinessDetail(status: Pick<CliToolStatus, "environment">): string | null {
   const missingTools = missingSessionTools(status);
   if (missingTools.length === 0) return null;
-  // No CLI incantation: a first-run reader is pointed at the door that holds
-  // the evidence and the repair button, not handed a command to type.
-  return `Missing from the Session PATH: ${missingTools.join(", ")}. If they are installed, open Settings → CLI to repair the Session PATH.`;
+  // No CLI incantation and no instructions: the notice's Review action is the
+  // door to Settings → CLI, which holds the evidence and the repair button.
+  return `Missing from the Session PATH: ${missingTools.join(", ")}`;
 }
 
 /**

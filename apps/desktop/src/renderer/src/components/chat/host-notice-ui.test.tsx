@@ -66,7 +66,7 @@ describe("a Subagent Session notice row", () => {
     expect(html).not.toContain('aria-label="Copy"');
   });
 
-  it("puts the complete title and note in the row's hover text", () => {
+  it("puts the complete title and state in the row's hover text", () => {
     const longTitle = "A title long enough to be truncated in a narrow Pane";
     const html = renderToStaticMarkup(
       <SubagentNoticeRow notice={{ ...completed, title: longTitle }} />,
@@ -107,7 +107,8 @@ describe("a Subagent Session notice row", () => {
       />,
     );
 
-    expect(html).toContain("Volli relaunched while its turn was active");
+    expect(html).toContain('title="Find artifact conventions — interrupted · Volli relaunched"');
+    expect(html).not.toContain("before it answered");
   });
 });
 
@@ -171,7 +172,8 @@ describe("other host-notice rows", () => {
 
     expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<BrowserIcon />)));
     expect(html).toContain(">GitHub</span>");
-    expect(html).toContain("You took control");
+    expect(html).toContain(">You took control</span>");
+    expect(html).not.toContain("Session writes are refused");
     expect(html).toContain("Browser Tab long-opaque-tab-id — GitHub");
     expect(html).not.toContain('aria-label="Copy"');
   });

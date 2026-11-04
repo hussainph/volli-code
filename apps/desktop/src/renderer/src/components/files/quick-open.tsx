@@ -222,10 +222,10 @@ export function QuickOpen({
               could matter — a file genuinely absent from a capped index — so a
               standing "20k limit" note is not chrome about nothing. */}
           {scope === null
-            ? "Select a project to search its files."
+            ? "No project selected"
             : truncated
-              ? "No matching files — the index hit its size limit."
-              : "No matching files."}
+              ? "No matching files · index limit reached"
+              : "No matching files"}
         </Command.Empty>
         {rows.map((row) => (
           <Command.Item

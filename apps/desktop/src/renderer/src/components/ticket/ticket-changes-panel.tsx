@@ -469,7 +469,6 @@ export function TicketChangesList({
         layout="stack"
         icon={CheckCircleIcon}
         title="No changes vs base"
-        detail="The branch is up to date."
         data-testid="ticket-changes-empty"
         className={RAIL_PANEL_MARGIN}
       />
@@ -784,15 +783,12 @@ export function TicketChangesPanel({
           worktree footer, which stands under this page as under every other. */}
       {ticket.worktreePath === null ? (
         <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-          <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-          {/* VC-16: the two scopings do not become one sentence here. A
+          {/* VC-16: the two scopings do not become one label here. A
              worktree ticket is waiting for a Session to cut one; a
-             main-checkout ticket is never going to have one, and telling it to
-             move to Doing would be an instruction that does nothing. */}
-          <p className="text-ui text-muted-foreground/70">
-            {ticket.usesWorktree
-              ? "Move this ticket to Doing to start one"
-              : "This ticket runs in the project checkout"}
+             main-checkout ticket is never going to have one, so "yet" would
+             be a promise that does nothing. */}
+          <p className="text-ui font-medium text-muted-foreground">
+            {ticket.usesWorktree ? "No worktree yet" : "Runs in the project checkout"}
           </p>
         </div>
       ) : !loaded ? (

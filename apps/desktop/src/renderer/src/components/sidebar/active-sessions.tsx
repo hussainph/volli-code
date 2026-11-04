@@ -1358,7 +1358,7 @@ export function ActiveSessions({
 
   const activeBand = (
     <SidebarGroup data-session-band="active" className="gap-1">
-      <SessionBandHeader label="Active" count={activeRows.length} />
+      <SessionBandHeader label="Active" />
       {activeRows.length === 0 && listingPending ? (
         // The rows' box, held while the listing is read. Live tabs this window
         // already holds are rows regardless (they come from the sessions store,

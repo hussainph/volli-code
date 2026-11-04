@@ -84,8 +84,8 @@ narrows they compress to the 24px gutter floor before text ever reflows.
 - **`<WorkbenchColumn>`** — the same column at the Tier B ceiling (`--container-workbench`), for a
   surface that needs width for tables but would look adrift edge-to-edge. Settings and Configure.
 - **`<PageHeader>`** — the page-level header, and the only one: `title` (always the page's `h1`),
-  optional `description`, optional right-parked `actions`, and `children` for controls that share
-  the title's row and wrap with it. `py-4`, wrap-friendly, gaps `4`/`2`. One axis, `variant`,
+  no subtitle, optional right-parked `actions`, and `children` for controls that share the title's
+  row and wrap with it. `py-4`, wrap-friendly, gaps `4`/`2`. One axis, `variant`,
   carries the tier: **`workbench`** (default) pays its own `px-gutter` and titles at `text-sm`, for
   a dense control row; **`reading`** adds no inset — it is mounted inside a `<ContentColumn>` that
   already owns one — and titles at `text-heading`, the masthead a step above the `text-sm` section

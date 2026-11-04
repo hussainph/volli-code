@@ -102,13 +102,10 @@ export function UpdateInstallDialog() {
               : `Update to Volli Code ${version}?`}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            The update has been downloaded. Installing restarts the app now
             {lines === null ? (
-              <LoadingLabel> — checking what's running</LoadingLabel>
-            ) : lines.length === 0 ? (
-              ". Nothing is running that a restart would interrupt."
+              <LoadingLabel>Checking what&rsquo;s running</LoadingLabel>
             ) : (
-              ", and that stops live work:"
+              "Restarts Volli now."
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>

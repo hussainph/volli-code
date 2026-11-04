@@ -132,9 +132,7 @@ export function SessionEnvironmentAlert() {
       if (!result.ok) {
         toastError(`Couldn't repair the Session PATH: ${result.error}`);
       } else if (measured !== undefined && measured.faults.length > 0) {
-        toastError(
-          "Volli still couldn't read your terminal's PATH. Review details for what it found.",
-        );
+        toastError("Volli still couldn't read your terminal's PATH");
       }
     } catch (error) {
       toastError(`Couldn't repair the Session PATH: ${errorMessage(error)}`);

@@ -129,7 +129,8 @@ describe("Storage backup restore", () => {
       projectPaths: { a: "/local/alpha", b: "/local/beta" },
     });
     expect(document.body.textContent).toContain("Backups never carry credentials.");
-    expect(document.body.textContent).toContain("Previous profile backup");
+    expect(document.body.textContent).toContain("Ready to restore on restart");
+    expect(document.body.textContent).not.toContain("Previous profile backup");
     await act(async () => button("Restart and restore").click());
     expect(mocks.restart).toHaveBeenCalledWith({ expectedRevision: "next" });
   });
@@ -160,7 +161,7 @@ describe("Storage backup restore", () => {
     expect(document.body.textContent).not.toContain("Preparing restore…");
     await act(async () => button("Cancel restore").click());
     expect(mocks.cancel).toHaveBeenCalledWith({ expectedRevision: "r" });
-    expect(document.body.textContent).toContain("current profile is unchanged");
+    expect(document.body.textContent).toContain("Restore cancelled");
   });
   it("shows an unavailable local restore rather than an empty inventory, and retries", async () => {
     mocks.status.mockRejectedValueOnce(new Error("Restart in local mode to restore a backup."));

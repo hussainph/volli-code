@@ -27,7 +27,6 @@ export function CommandsPane({ project }: { project: Project }) {
     <AsyncSection
       title="Commands"
       icon={CommandIcon}
-      hint={<>Type the name in any composer. Project commands override personal ones.</>}
       action={
         <div className="flex flex-wrap gap-2">
           <MarkdownCommandDialog projectId={project.id} onCreated={reload} />
@@ -37,7 +36,7 @@ export function CommandsPane({ project }: { project: Project }) {
       fill
       state={state}
       isEmpty={(data) => data.templates.length === 0}
-      empty="No commands yet."
+      empty="No commands"
     >
       {(data) => <CommandsTable templates={data.templates} filter={filter} onFilter={setFilter} />}
     </AsyncSection>
@@ -77,8 +76,8 @@ function CommandsTable({
           { value: "personal", label: "Personal" },
         ],
       }}
-      empty="No commands yet."
-      noResults="No commands match."
+      empty="No commands"
+      noResults="No commands match"
       columns={[
         {
           key: "name",

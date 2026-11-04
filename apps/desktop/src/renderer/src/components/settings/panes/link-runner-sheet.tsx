@@ -9,7 +9,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@renderer/components/ui/dialog";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Notice } from "@renderer/components/ui/notice";
@@ -102,6 +101,7 @@ export function LinkRunnerSheet({
       }}
     >
       <DialogContent
+        aria-describedby={undefined}
         onCloseAutoFocus={(event) => {
           if (restoreFocus) {
             event.preventDefault();
@@ -111,16 +111,11 @@ export function LinkRunnerSheet({
       >
         <DialogHeader>
           <DialogTitle>Link a runner</DialogTitle>
-          <DialogDescription>
-            Enter the code shown by volli-runner link on your machine.
-          </DialogDescription>
         </DialogHeader>
         <DialogBody className="flex flex-col gap-4">
           {done !== null ? (
             <p role="status" className="text-ui">
-              {done === "approve"
-                ? `${preview?.hostname} is approved. Waiting for the runner to finish linking.`
-                : "Link request denied."}
+              {done === "approve" ? `${preview?.hostname} is approved` : "Link request denied."}
             </p>
           ) : preview === null ? (
             <form
@@ -162,24 +157,18 @@ export function LinkRunnerSheet({
                 <dd>{new Date(preview.requestedAt).toLocaleString()}</dd>
               </dl>
               <p className="text-ui text-muted-foreground">
-                Only approve a machine you own. This machine will run your Sessions with your GitHub
-                access and your model connections. Its reported name and IP are hints, not proof of
-                identity.
+                Approve only a machine you own: it runs your Sessions with your GitHub access and
+                model connections, and its reported name and IP are not proof of identity.
               </p>
               {expired ? (
                 <Notice
                   tone="warning"
-                  title="This code has expired. Get a new code from the runner."
+                  title="Code expired. Get a new one from the runner."
                   announce
                 />
               ) : null}
             </>
           )}
-          {busy ? (
-            <p role="status" className="text-ui text-muted-foreground">
-              You can close this sheet. Your request may still finish.
-            </p>
-          ) : null}
           {error === null ? null : <Notice tone="error" title={error} announce />}
         </DialogBody>
         {done !== null ? (

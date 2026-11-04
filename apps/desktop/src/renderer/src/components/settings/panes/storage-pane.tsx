@@ -4,7 +4,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@renderer/components/ui/dialog";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
@@ -42,7 +41,6 @@ import { errorMessage } from "@volli/shared";
 import {
   DATA_EXPORT_ACTION_LABEL,
   DATA_EXPORT_CONFIRM_TITLE,
-  DATA_EXPORT_CONTENTS,
   DATA_EXPORT_LIMITS,
 } from "../../../../../data-export-copy";
 import type {
@@ -64,7 +62,6 @@ import {
   dirtyOrphanRow,
   historyRows,
   isScanStale,
-  orphanPolicyNote,
   planCleanup,
   preservationHistoryRows,
   retentionNote,
@@ -164,7 +161,7 @@ export function StorageOverviewPane() {
         (entry) => entry.artifactCount > 0 && entry.activeReason === null,
       ).length;
       setSummary(
-        `${worktrees.removable.length} unused worktree${worktrees.removable.length === 1 ? "" : "s"}, ${logs.inventory.candidateCount} log file${logs.inventory.candidateCount === 1 ? "" : "s"} and build output in ${output} checkout${output === 1 ? "" : "s"}.`,
+        `${worktrees.removable.length} unused worktree${worktrees.removable.length === 1 ? "" : "s"} · ${logs.inventory.candidateCount} log file${logs.inventory.candidateCount === 1 ? "" : "s"} · build output in ${output} checkout${output === 1 ? "" : "s"}`,
       );
     } catch (cause) {
       if (reads.isCurrent(token)) setScanError(errorMessage(cause));
@@ -182,10 +179,10 @@ export function StorageOverviewPane() {
           <SectionIconAction label="Scan unused files" busy={scanning} onAct={() => void scan()} />
         }
       >
-        <PrefRow
-          label="Unused files"
-          description={summary ?? "Scan for build output, session logs and unused worktrees."}
-        >
+        <PrefRow label="Unused files">
+          {summary === null ? null : (
+            <span className="text-ui text-muted-foreground">{summary}</span>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -226,12 +223,9 @@ export function StorageOverviewPane() {
           if (!next) setSummary(null);
         }}
       >
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="sm:max-w-3xl" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Review cleanup</DialogTitle>
-            <DialogDescription>
-              Scan each kind of file before choosing what to remove.
-            </DialogDescription>
           </DialogHeader>
           <DialogBody className="flex flex-col gap-4">
             {/* The artifacts a finished worktree is still carrying come first
@@ -292,12 +286,9 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
       <PrefRow
         label="Keep Done worktrees for"
         htmlFor="done-ttl-days"
-        // The sanctioned trust-boundary exception, and the reason it stays
-        // prose rather than becoming a hint: this governs an automatic
-        // deletion, and what gets deleted must not sit behind a disclosure.
-        // It names Keep because the exemption is only reachable from a ticket,
-        // and a policy whose opt-out is invisible here reads as unconditional.
-        description="Volli removes the folder and keeps the branch, its commits, the pull-request link, and the ticket. Keep on a ticket holds its folder."
+        // The one-line trust boundary: this governs an automatic deletion, so
+        // what it deletes, and what it never touches, stays on screen.
+        description="Removes the folder; keeps the branch, commits, PR link and ticket."
       >
         <CommitField
           id="done-ttl-days"
@@ -458,13 +449,6 @@ function BuildArtifactsSection() {
       <AsyncSection
         title="Build artifacts"
         icon={BroomIcon}
-        hint={
-          <>
-            A trim removes what git ignores — dependencies, build output, caches — and keeps .env,
-            keys, and other local configuration. Keeping a file keeps the folders around it, so a
-            folder that held one can stay behind part-emptied. One install puts a worktree back.
-          </>
-        }
         action={
           <SectionIconAction
             // "Scan", never "Rescan": VC-284 found that word on a button that
@@ -505,7 +489,7 @@ function BuildArtifactsSection() {
         }
         state={state}
         isEmpty={(entries) => entries !== null && entries.length === 0}
-        empty="No worktrees to trim."
+        empty="No worktrees"
       >
         {(entries) =>
           entries === null
@@ -517,8 +501,8 @@ function BuildArtifactsSection() {
                   meta={
                     entry.activeReason ??
                     (entry.artifactCount === 0
-                      ? "No ignored files."
-                      : `${entry.artifactCount} ignored path(s).`)
+                      ? "No ignored files"
+                      : `${entry.artifactCount} ignored path(s)`)
                   }
                   badges={
                     entry.artifactCount > 0 ? <Badge variant="outline">Artifacts</Badge> : null
@@ -547,11 +531,8 @@ function BuildArtifactsSection() {
             <AlertDialogTitle>Trim build artifacts?</AlertDialogTitle>
             <AlertDialogDescription>
               <span className="block">
-                Removes the git-ignored files in {trimmable.length} worktree(s) — dependencies,
-                build output, caches. Tracked files, uncommitted work, .env files, and keys stay,
-                and so do the folders around anything kept, so a folder holding one can remain
-                part-emptied. Volli re-checks every worktree before touching it and skips any with a
-                running agent, an open terminal, or uncommitted changes.
+                Removes git-ignored files in {trimmable.length} worktree(s). Tracked files,
+                uncommitted work, .env files and keys stay.
               </span>
               <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
                 {trimmable.map((entry) => entry.path).join("\n")}
@@ -630,7 +611,7 @@ function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
         <ItemRow key={`kept:${entry.path}`} name={entry.path} meta={`Kept — ${entry.reason}`} />
       ))}
       {keptCount > kept.length ? (
-        <ItemRow name={`… and ${keptCount - kept.length} more kept`} meta="Ignored, but kept." />
+        <ItemRow name={`… and ${keptCount - kept.length} more kept`} />
       ) : null}
       {report.skipped.map((skipped) => (
         <ItemRow
@@ -751,15 +732,7 @@ function PiSessionLogsSection() {
                 )}
               </span>
             </PrefRow>
-            <PrefRow
-              label="Orphaned logs"
-              hint={
-                <>
-                  Only logs not referenced by any Volli session are candidates. Scanning never
-                  deletes files.
-                </>
-              }
-            >
+            <PrefRow label="Orphaned logs">
               <span className="text-ui text-muted-foreground">
                 {state.status === "loading" ? <LoadingLabel>{summary}</LoadingLabel> : summary}
               </span>
@@ -812,9 +785,8 @@ function PiSessionLogsSection() {
             <AlertDialogTitle>Clean up orphaned Pi session logs?</AlertDialogTitle>
             <AlertDialogDescription>
               <span className="block">
-                Permanently deletes {inventory?.candidateCount ?? 0} confirmed orphan file(s) (
-                {formatFileSize(inventory?.candidateBytes ?? 0)}). Main checks every file and the
-                attachment set again before removal. This can&rsquo;t be undone.
+                Permanently deletes {inventory?.candidateCount ?? 0} file(s) (
+                {formatFileSize(inventory?.candidateBytes ?? 0)}). Can&rsquo;t be undone.
               </span>
               <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
                 {inventory?.candidates.map((candidate) => candidate.path).join("\n")}
@@ -995,23 +967,13 @@ export function DatabaseSection() {
 }
 
 /**
- * What the export is, said before it runs.
- *
- * A named component rather than inline JSX because the sentence is the
- * feature: the dialog it sits in only mounts when opened, so this is what a
- * test can hold, and the limits cannot quietly drift back into a promise of
- * "every project, ticket, comment, session, label, and setting" (VC-283).
- *
- * The exported/limited split is deliberate — the limits come FIRST, because a
- * person skimming reads one sentence and the one that matters is the one that
- * says a rescue is not possible from this file.
+ * What the export is not, said before it runs: the one caution at the moment of
+ * the choice. A named component so a test can hold it — the dialog only mounts
+ * when opened — and the limits cannot drift back into a promise of "every
+ * project, ticket, comment, session, label, and setting" (VC-283).
  */
 export function DataExportConfirmBody() {
-  return (
-    <>
-      {DATA_EXPORT_LIMITS} {DATA_EXPORT_CONTENTS}
-    </>
-  );
+  return <>{DATA_EXPORT_LIMITS}</>;
 }
 
 /** Truncates a long path to `start…end`, keeping both ends identifiable. */
@@ -1177,22 +1139,11 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
   // it may be READ but not acted on (VC-284).
   const stale = state.status === "ready" && isScanStale(state.data, setting);
   const plan = state.status === "ready" && !stale ? planCleanup(state.data) : null;
-  // The window every eligibility date on this list was measured against, read
-  // from the scan rather than re-fetched: the two must be the same number.
-  const retentionDays = state.status === "ready" ? state.data.retentionDays : null;
-
   return (
     <>
       <AsyncSection
         title="Orphaned worktrees"
         icon={TreeStructureIcon}
-        hint={
-          <>
-            Scanning only looks. Cleanup removes folders you confirm and keeps their branches;
-            anything with uncommitted work, recent use, or a live terminal or agent is left alone.
-            {retentionDays === null ? null : ` ${retentionNote(retentionDays)}`}
-          </>
-        }
         // One header action, per the kit's header grammar — and it is the SAFE
         // one. The destructive act is a row below, attached to the summary of
         // what a scan actually found, so it cannot be pressed by muscle memory
@@ -1218,7 +1169,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
           unfinishedRuns(report.runs).length === 0 &&
           runsWithFailures(report.runs).length === 0
         }
-        empty="No orphaned worktrees."
+        empty="No orphaned worktrees"
       >
         {(report) => (
           <>
@@ -1228,7 +1179,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * section's summoned hint, because an eligibility date nobody can
              * check against a policy is a date nobody can argue with.
              */}
-            <ItemRow name="Retention" meta={orphanPolicyNote(report.retentionDays)} />
+            <ItemRow name="Retention" meta={retentionNote(report.retentionDays)} />
 
             {/*
              * The retention window moved after this scan ran, so every date
@@ -1286,7 +1237,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
             {plan === null || plan.isEmpty ? null : (
               <ItemRow
                 name="Ready to clean up"
-                meta={`${plan.worktrees.length} folder(s) and ${plan.metadata.length} stale git record(s). Branches are kept.`}
+                meta={`${plan.worktrees.length} folder(s) · ${plan.metadata.length} stale git record(s)`}
               >
                 <Button
                   size="xs"

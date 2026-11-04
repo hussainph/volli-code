@@ -168,7 +168,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
     <>
       <PrefSection title="Workspace" icon={BuildingsIcon}>
         {workspaceId === null ? (
-          <Empty>No Workspace selected.</Empty>
+          <Empty>No Workspace selected</Empty>
         ) : (
           <ReadState
             view={workspace}
@@ -200,14 +200,10 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                 <PrefRow label="Your role">
                   <span className="text-ui">{roleLabel(value.role)}</span>
                 </PrefRow>
-                <PrefRow
-                  label="Membership"
-                  description={
-                    actor?.role === "owner" && !canLeave
-                      ? "Make someone else an owner before leaving."
-                      : undefined
-                  }
-                >
+                <PrefRow label="Membership">
+                  {actor?.role === "owner" && !canLeave ? (
+                    <span className="text-ui text-muted-foreground">Sole owner</span>
+                  ) : null}
                   <Button
                     variant="outline"
                     size="sm"
@@ -324,9 +320,6 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                       />
                     );
                   })}
-                  {value.length === 1 && value[0]?.userId === me?.userId ? (
-                    <Empty>Just you so far.</Empty>
-                  ) : null}
                 </>
               )}
             </ReadState>
@@ -528,8 +521,8 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
 }
 
 function previewLabel(preview: PendingInvite["preview"]): string | null {
-  if (preview === "sponsored" || preview === "already_granted") return "They can join now";
-  if (preview === "needs_access") return "They need preview access from Volli first";
+  if (preview === "sponsored" || preview === "already_granted") return "Can join";
+  if (preview === "needs_access") return "Needs preview access";
   // An older API, or a future verdict we cannot interpret: never invent a claim about access.
   return null;
 }
@@ -574,8 +567,7 @@ function InviteDialog({
             {created === undefined ? "Invite to Workspace" : "Invite created"}
           </DialogTitle>
           <DialogDescription>
-            People you invite see every project here and its ticket Sessions, including moved
-            history. Private chats stay private.
+            Invitees see every project and its ticket Sessions; private chats stay private.
           </DialogDescription>
         </DialogHeader>
         {created === undefined ? (

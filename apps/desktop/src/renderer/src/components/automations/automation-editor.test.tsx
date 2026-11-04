@@ -471,16 +471,13 @@ describe("the next-run line (VC-298)", () => {
     await mountEditor(KUWAIT_NINE_THIRTY);
 
     expect(nextLine()).toBeDefined();
-    expect(document.body.textContent).toContain(
-      "Runs up to 2 min late; skipped if Volli is closed or the Mac is asleep",
-    );
+    // The schedule control carries no policy sentence under it.
+    expect(document.body.textContent).not.toContain("min late");
 
     await act(async () => {
       useAutomationsStore.setState({ enabledIds: [] });
     });
     expect(nextLine()).toBeUndefined();
-    // The policy is the schedule's, whether or not it fires here right now.
-    expect(document.body.textContent).toContain("Runs up to 2 min late");
   });
 
   it("follows the time being edited before it is saved", async () => {

@@ -324,6 +324,11 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(bandText("previous")).toContain("Nothing yet");
     expect(container?.querySelector('[data-next-action="active"]')).not.toBeNull();
     expect(container?.querySelector('[data-next-action="previous"]')).not.toBeNull();
+    // A mark and a noun: no explainer under the empty state, and no zero
+    // beside a band header that the empty state already answers.
+    expect(bandText("active")).not.toContain("Start a chat");
+    expect(bandText("previous")).not.toContain("Return to earlier sessions");
+    expect(container?.querySelector("[data-band-count]")).toBeNull();
   });
 
   it("stands both skeletons down when the project listing fails, without either false empty", async () => {
@@ -707,9 +712,8 @@ describe("the Previous band's cap (VC-116)", () => {
       Array.from({ length: PREVIOUS_BAND_LIMIT }, (_, index) => `chat:c${index}`),
     );
     // The header still counts every Session back there, not the drawn ones.
-    // Its count is the band's first tabular figure; the rows' ages follow it.
     expect(
-      container?.querySelector('[data-session-band="previous"] .tabular-nums')?.textContent,
+      container?.querySelector('[data-session-band="previous"] [data-band-count]')?.textContent,
     ).toBe(String(PREVIOUS_BAND_LIMIT * 2 + 5));
     expect(reachButton("Show more")).not.toBeNull();
     expect(reachButton("Show less")).toBeNull();

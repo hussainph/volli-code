@@ -9,8 +9,8 @@ describe("PageHeader", () => {
 
     expect(html).toContain("<h1");
     expect(html).toContain("Board");
-    // No description paragraph and no actions cluster when neither was passed —
-    // an empty right-parked div would still consume the row's `ml-auto`.
+    // No subtitle paragraph, and no actions cluster when none was passed — an
+    // empty right-parked div would still consume the row's `ml-auto`.
     expect(html).not.toContain("<p");
     expect(html).not.toContain("ml-auto");
   });
@@ -28,15 +28,13 @@ describe("PageHeader", () => {
 
   it("takes its inset from the reading column and its title one step above the sections below", () => {
     const workbench = renderToStaticMarkup(<PageHeader title="Board" />);
-    const reading = renderToStaticMarkup(
-      <PageHeader variant="reading" title="Appearance" description="Theming for this project." />,
-    );
+    const reading = renderToStaticMarkup(<PageHeader variant="reading" title="Appearance" />);
 
     // Tier B pays its own gutter; Tier A is already inside <ContentColumn>'s.
     expect(workbench).toContain("px-gutter");
     expect(reading).not.toContain("px-gutter");
     expect(workbench).toContain("text-sm font-semibold");
     expect(reading).toContain("text-heading font-semibold");
-    expect(reading).toContain("Theming for this project.");
+    expect(reading).not.toContain("<p");
   });
 });

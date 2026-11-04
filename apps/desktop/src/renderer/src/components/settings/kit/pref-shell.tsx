@@ -7,7 +7,7 @@ import { Badge } from "@renderer/components/ui/badge";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
-import { SETTINGS_ROWS, PAGE_INTROS } from "../settings-inventory";
+import { SETTINGS_ROWS } from "../settings-inventory";
 
 export interface PrefCategory {
   key: string;
@@ -140,7 +140,7 @@ export function PrefShell({
                   </button>
                 ))}
                 {!results.length && (
-                  <p className="px-2 py-4 text-ui text-muted-foreground">No matching settings.</p>
+                  <p className="px-2 py-4 text-ui text-muted-foreground">No matching settings</p>
                 )}
               </>
             ) : (
@@ -193,11 +193,6 @@ export function PrefShell({
             >
               <header className="mb-8">
                 <h1 className="text-title font-semibold">{current?.label}</h1>
-                <p className="mt-2 text-ui text-muted-foreground">
-                  {PAGE_INTROS[current?.key ?? ""] ??
-                    PAGE_INTROS[`app:${current?.key}`] ??
-                    "Settings for this scope."}
-                </p>
               </header>
               <div className={cn("flex flex-col gap-8", current?.fill && "min-h-0 flex-1")}>
                 {current?.content}

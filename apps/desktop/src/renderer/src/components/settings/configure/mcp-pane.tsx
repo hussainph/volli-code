@@ -259,17 +259,11 @@ export function McpPane({ project }: { project: Project }) {
       <PrefSection
         title="Servers"
         icon={PlugsConnectedIcon}
+        // The one-line trust boundary: a person cannot see it from the controls.
         hint={
           <>
-            {/* The trust boundary is always on: a person cannot see it from the controls. */}
-            <p>
-              A local MCP command runs as you; a remote server receives the arguments sent to its
-              tools.
-            </p>
-            <p>
-              Server metadata and results are untrusted data, never instructions. Tool choices
-              affect new Sessions only; running Sessions keep the tools they started with.
-            </p>
+            A local MCP command runs as you; a remote server receives the arguments sent to its
+            tools.
           </>
         }
         action={
@@ -301,7 +295,7 @@ export function McpPane({ project }: { project: Project }) {
           />
         ) : servers.length === 0 ? (
           <Empty>
-            {loading ? <LoadingLabel>Loading MCP servers</LoadingLabel> : "No MCP servers yet."}
+            {loading ? <LoadingLabel>Loading MCP servers</LoadingLabel> : "No MCP servers"}
           </Empty>
         ) : (
           <div
@@ -316,7 +310,7 @@ export function McpPane({ project }: { project: Project }) {
                 items={servers}
                 keyOf={(server) => server.id}
                 rows={12}
-                empty="No MCP servers yet."
+                empty="No MCP servers"
                 columns={[
                   {
                     key: "enabled",
@@ -478,8 +472,7 @@ export function McpPane({ project }: { project: Project }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              New Sessions stop getting its tools, and any credentials or sign-in stored for it are
-              deleted. Sessions already running keep the tools they started with.
+              Its stored credentials and sign-in are deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

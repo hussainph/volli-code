@@ -181,7 +181,7 @@ export function CloudOptInDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Send decisions to {label}?</AlertDialogTitle>
           <AlertDialogDescription>
-            {shown === null ? "" : decisionCloudDisclosure(label)} Choose None at any time to stop.
+            {shown === null ? "" : decisionCloudDisclosure(label)}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -238,8 +238,7 @@ function AutoPickRow({
           <AlertDialogHeader>
             <AlertDialogTitle>Let {label} choose models?</AlertDialogTitle>
             <AlertDialogDescription>
-              {decisionCloudDisclosure(label, ["model.select"])} Switch it off at any time to stop;
-              a Session that is already running never changes model.
+              {decisionCloudDisclosure(label, ["model.select"])}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

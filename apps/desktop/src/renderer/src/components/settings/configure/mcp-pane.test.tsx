@@ -410,11 +410,11 @@ describe("the server table", () => {
     expect(remove).not.toHaveBeenCalled();
     const confirm = document.body.querySelector('[role="alertdialog"]') as HTMLElement;
     expect(confirm.textContent).toContain("Remove Fixture?");
-    expect(confirm.textContent).toContain("credentials or sign-in stored for it are deleted");
+    expect(confirm.textContent).toContain("Its stored credentials and sign-in are deleted.");
 
     await click(button("Remove", confirm));
     expect(remove).toHaveBeenCalledWith({ projectId: project.id, serverId: "server-1" });
-    expect(text()).toContain("No MCP servers yet.");
+    expect(text()).toContain("No MCP servers");
   });
 
   it("keeps a server when the removal is cancelled", async () => {
@@ -438,7 +438,7 @@ describe("server read recovery", () => {
       await render({ list });
       expect(text()).toContain("Couldn't read MCP servers");
       expect(text()).toContain("Database is busy.");
-      expect(text()).not.toContain("No MCP servers yet.");
+      expect(text()).not.toContain("No MCP servers");
       await click(button("Retry"));
       expect(list).toHaveBeenCalledTimes(2);
       expect(list).toHaveBeenLastCalledWith({ projectId: project.id });
@@ -1415,7 +1415,7 @@ describe("recent activity (VC-380)", () => {
   it("says when the list itself could not be read", async () => {
     await render({ list: vi.fn(async () => ({ ok: false as const, error: "No database." })) });
     expect(document.body.querySelector('[role="status"]')?.textContent).toContain("No database.");
-    expect(text()).not.toContain("No MCP servers yet.");
+    expect(text()).not.toContain("No MCP servers");
     expect(button("Retry")).toBeDefined();
   });
 });
