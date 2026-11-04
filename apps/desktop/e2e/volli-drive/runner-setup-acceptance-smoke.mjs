@@ -3,7 +3,7 @@
  * The BYO-6 runner-setup sheet, live (VC-1039): Settings → Runners →
  * "Add a runner" mints a one-time install token, a fake Linux box spends it
  * over the real `/runner/*` wire, and the open sheet turns into
- * "<name> is online. Pick it in the composer." The steps below print as they
+ * "<name> is online". The steps below print as they
  * run; each one is a fresh snapshot, one action, a fresh snapshot again.
  *
  * ONE isolated volli-drive dev instance, signed in as one person against ONE
@@ -78,7 +78,7 @@ const boxPath = fileURLToPath(new URL("./lib/runner-box.mjs", import.meta.url));
 /** What the person types in the sheet; the backend slugs it to the runner's name. */
 const NAME = "byo6-box";
 /** The sentence the open sheet must turn into once the box is really online. */
-const ONLINE = `${NAME} is online. Pick it in the composer.`;
+const ONLINE = `${NAME} is online`;
 const STEPS = [
   [1, "Sign in (Settings → Account, dev sign-in)"],
   [2, "Restart into Volli Cloud: this Mac is one of the person's runners, online"],

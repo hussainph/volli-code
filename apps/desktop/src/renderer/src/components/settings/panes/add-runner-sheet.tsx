@@ -9,7 +9,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@renderer/components/ui/dialog";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Notice } from "@renderer/components/ui/notice";
@@ -42,11 +41,7 @@ export function AddRunnerSheet(props: RunnerSheetProps) {
   const [variant, setVariant] = React.useState<"token" | "environment" | "sudo">("token");
   const variantId = React.useId();
   return (
-    <RunnerInstallSheet
-      {...props}
-      title="Add a runner"
-      description="Run this command on your Linux box."
-    >
+    <RunnerInstallSheet {...props} title="Add a runner">
       {(grant, name) => (
         <>
           <div className="flex items-center justify-between gap-4">
@@ -90,11 +85,9 @@ export function RunnerInstallSheet({
   onClose,
   restoreFocus,
   title,
-  description,
   children,
 }: RunnerSheetProps & {
   title: string;
-  description: string;
   children: (grant: InstallGrant, name: string) => React.ReactNode;
 }) {
   const [name, setName] = React.useState("");
@@ -188,6 +181,7 @@ export function RunnerInstallSheet({
       }}
     >
       <DialogContent
+        aria-describedby={undefined}
         onCloseAutoFocus={(event) => {
           if (restoreFocus) {
             event.preventDefault();
@@ -197,7 +191,6 @@ export function RunnerInstallSheet({
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <DialogBody className="flex flex-col gap-4">
           {grant === null ? (
@@ -214,7 +207,7 @@ export function RunnerInstallSheet({
                   autoFocus
                   value={name}
                   maxLength={80}
-                  placeholder="Use the box’s hostname"
+                  placeholder="Hostname"
                   disabled={busy}
                   onChange={(event) => setName(event.target.value)}
                 />
@@ -225,22 +218,19 @@ export function RunnerInstallSheet({
             </form>
           ) : online ? (
             <p role="status" className="text-ui text-positive">
-              {status.runner!.name} is online. Pick it in the composer.
+              {status.runner!.name} is online
             </p>
           ) : (
             <>
               {!inactive && !used ? (
                 <>
                   {children(grant, name)}
-                  <p className="text-ui text-muted-foreground">
-                    One use, valid for 1 hour. Keep this token private. Closing this sheet does not
-                    revoke it.
-                  </p>
+                  <p className="text-ui text-muted-foreground">One use · valid for 1 hour</p>
                 </>
               ) : null}
               <p role="status" className="text-ui text-muted-foreground">
                 {inactive ? (
-                  "This token has expired or been revoked."
+                  "Token expired or revoked"
                 ) : used ? (
                   <LoadingLabel>
                     {`${status.runner?.name ?? "Runner"} is linked. Waiting for it to come online`}
@@ -263,11 +253,6 @@ export function RunnerInstallSheet({
               ) : null}
             </>
           )}
-          {busy ? (
-            <p role="status" className="text-ui text-muted-foreground">
-              You can close this sheet. Your request may still finish.
-            </p>
-          ) : null}
           {error === null ? null : <Notice tone="error" title={error} announce />}
         </DialogBody>
         {grant === null ? null : (

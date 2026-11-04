@@ -143,7 +143,8 @@ describe("Runner setup sheets", () => {
       expiresAt: f.grant.expiresAt,
       runner: { id: "runner", name: "hetzner-1", status: "online" },
     });
-    expect(document.body.textContent).toContain("hetzner-1 is online. Pick it in the composer.");
+    expect(document.body.textContent).toContain("hetzner-1 is online");
+    expect(document.body.textContent).not.toContain("Pick it in the composer");
     await click("Done");
     expect(f.props.onClose).toHaveBeenCalledOnce();
     act(() => root.render(null));
@@ -190,7 +191,7 @@ describe("Runner setup sheets", () => {
     await click("Create install command");
     act(() => vi.advanceTimersByTime(3600001));
     expect(document.body.textContent).not.toContain(f.grant.installToken);
-    expect(document.body.textContent).toContain("expired or been revoked");
+    expect(document.body.textContent).toContain("Token expired or revoked");
     await click("Create a fresh command");
     expect(f.setup.revoke).toHaveBeenCalledWith("grant-id");
     expect(f.setup.create).toHaveBeenCalledTimes(2);
@@ -207,7 +208,9 @@ describe("Runner setup sheets", () => {
     );
     act(() => root.render(<AddRunnerSheet {...f.props} />));
     await click("Create install command");
-    expect(document.body.textContent).toContain("Your request may still finish");
+    // The button's spinner says it is working; no sentence explains closing.
+    expect(document.body.textContent).toContain("Creating");
+    expect(document.body.textContent).not.toContain("Your request may still finish");
     await click("Close");
     expect(f.props.onClose).toHaveBeenCalledOnce();
     act(() => root.render(null));
@@ -266,13 +269,12 @@ describe("Runner setup sheets", () => {
     act(() => root.render(<AlwaysOnRunnerSheet {...f.props} />));
     await click("Create install command");
     expect(document.body.textContent).toContain("#cloud-config");
-    expect(document.body.textContent).toContain("Start it within 1 hour");
+    expect(document.body.textContent).toContain("Ubuntu 24.04 user-data");
     expect(await pick("Provider", "DigitalOcean")).toEqual([
       "Hetzner",
       "DigitalOcean",
       "Other (cloud-init)",
     ]);
-    expect(document.body.textContent).toContain("on DigitalOcean");
     f.push({ state: "revoked", expiresAt: f.grant.expiresAt, runner: null });
     expect(document.body.textContent).not.toContain("#cloud-config");
   });

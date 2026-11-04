@@ -196,8 +196,8 @@ describe("Settings → Account", () => {
 
     act(() => button("Delete account…").click());
     expect(tier.rpc.account.requestDeletion.mutate).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("You can cancel within 30 days");
-    expect(document.body.textContent).toContain("Automatic erasure is not available");
+    expect(document.body.textContent).toContain("Restorable for 30 days");
+    expect(document.body.textContent).toContain("to erase your data");
     expect(document.body.textContent).toContain("privacy@volli.app");
     expect(document.body.textContent).not.toContain("Your account is deleted in 30 days.");
     const confirm = [...document.querySelectorAll("[role=alertdialog] button")].find(
@@ -227,7 +227,7 @@ describe("Settings → Account", () => {
       ...SIGNED_IN,
       account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.now() - 1 },
     });
-    expect(container.textContent).toContain("Cancellation window ended");
+    expect(container.textContent).toContain("Window ended");
     expect(container.textContent).toContain("privacy@volli.app");
     expect(container.textContent).not.toContain("Restore account");
     expect(tier.rpc.account.cancelDeletion.mutate).not.toHaveBeenCalled();
@@ -265,7 +265,7 @@ describe("Settings → Account", () => {
     const tier = standIn();
     act(() => root.render(<AccountPane rpc={tier.rpc} />));
     tier.push({ ...SIGNED_OUT, state: "unconfigured", provider: null });
-    expect(container.textContent).toContain("This build has no Volli Cloud sign-in.");
+    expect(container.textContent).toContain("No Volli Cloud sign-in in this build");
 
     tier.fail(new Error("The subscription's source failed"));
     expect(container.textContent).toContain("The subscription's source failed");
@@ -414,11 +414,11 @@ describe("Settings → Account → GitHub", () => {
 
     tier.github({ ...GITHUB_ACTIVE, requested: true });
     expect(container.querySelector("[role=status]")?.textContent).toBe(
-      "If you asked an organization owner to approve, Volli will show the account here once they do.",
+      "Owner approval may be pending",
     );
     expect(button("Install on an account").disabled).toBe(false);
     tier.github({ ...GITHUB_ACTIVE, installations: [] });
-    expect(container.textContent).toContain("No GitHub accounts yet.");
+    expect(container.textContent).toContain("No GitHub accounts");
     open.mockRestore();
   });
 
