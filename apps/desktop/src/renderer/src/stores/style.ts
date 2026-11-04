@@ -65,7 +65,11 @@ export async function startStylePreferences(): Promise<void> {
         ? '"Mona Sans Variable", system-ui, sans-serif'
         : "system-ui, -apple-system, sans-serif",
     );
-    document.documentElement.dataset.motion = state.motion ? "on" : "off";
+    const motion = state.motion ? "on" : "off";
+    if (document.documentElement.dataset.motion !== motion) {
+      document.documentElement.dataset.motion = motion;
+      window.dispatchEvent?.(new Event("volli-motion-change"));
+    }
   };
   paint();
   useStyleStore.subscribe(paint);

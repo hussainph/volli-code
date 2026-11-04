@@ -16,14 +16,18 @@ function getMediaQuery(): MediaQueryList {
 function subscribe(onChange: () => void): () => void {
   const query = getMediaQuery();
   query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
+  window.addEventListener("volli-motion-change", onChange);
+  return () => {
+    query.removeEventListener("change", onChange);
+    window.removeEventListener("volli-motion-change", onChange);
+  };
 }
 
 function getSnapshot(): boolean {
-  return getMediaQuery().matches;
+  return getMediaQuery().matches || document.documentElement.dataset.motion === "off";
 }
 
-/** Live `prefers-reduced-motion` flag; drives JS-side animation opt-outs. */
+/** Live system + app Motion preference; drives JS-side animation opt-outs. */
 export function useReducedMotion(): boolean {
   return React.useSyncExternalStore(subscribe, getSnapshot);
 }
