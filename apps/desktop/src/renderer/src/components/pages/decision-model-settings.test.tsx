@@ -8,6 +8,7 @@ import type { DecisionModelResult, DecisionModelSettingsView } from "../../../..
 import type { Project } from "@volli/shared";
 
 import { cloudSetting } from "./decision-model-model";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
 import {
   CloudOptInDialog,
@@ -106,7 +107,7 @@ async function render(node: React.ReactNode): Promise<void> {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => root?.render(node));
+  await act(async () => root?.render(<TooltipProvider>{node}</TooltipProvider>));
 }
 
 function button(text: string): HTMLButtonElement {

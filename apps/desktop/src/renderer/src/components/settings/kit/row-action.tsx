@@ -49,14 +49,14 @@ export function RowAction({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          size="icon-xs"
+          size="icon"
           variant="ghost"
           aria-label={label}
           disabled={disabled}
           className={destructive ? "text-destructive hover:text-destructive" : undefined}
           onClick={onAct}
         >
-          <Icon />
+          <Icon aria-hidden />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">{hint}</TooltipContent>

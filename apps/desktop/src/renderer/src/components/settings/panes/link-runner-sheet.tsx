@@ -4,11 +4,15 @@ import { toastError } from "@renderer/lib/toast";
 import { Input } from "@renderer/components/ui/input";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
 } from "@renderer/components/ui/dialog";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import { runnerSetupFailure, type LinkPreview, type RunnerSetup } from "./runner-setup";
 
 export function LinkRunnerSheet({
@@ -111,101 +115,104 @@ export function LinkRunnerSheet({
             Enter the code shown by volli-runner link on your machine.
           </DialogDescription>
         </DialogHeader>
-        {done !== null ? (
-          <>
+        <DialogBody className="flex flex-col gap-4">
+          {done !== null ? (
             <p role="status" className="text-ui">
               {done === "approve"
                 ? `${preview?.hostname} is approved. Waiting for the runner to finish linking.`
                 : "Link request denied."}
             </p>
+          ) : preview === null ? (
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!busy && code.trim()) void check();
+              }}
+            >
+              <label className="flex flex-col gap-2 text-ui">
+                Runner code
+                <Input
+                  autoFocus
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="ABCD-EFGH"
+                  maxLength={32}
+                  value={code}
+                  disabled={busy}
+                  onChange={(event) => setCode(event.target.value)}
+                />
+              </label>
+              <Button type="submit" disabled={busy || !code.trim()}>
+                {busy ? <LoadingLabel>Checking</LoadingLabel> : "Check code"}
+              </Button>
+            </form>
+          ) : (
+            <>
+              <dl className="grid grid-cols-2 gap-2 text-ui">
+                <dt className="text-muted-foreground">Machine</dt>
+                <dd className="break-all">{preview.hostname}</dd>
+                <dt className="text-muted-foreground">System</dt>
+                <dd>
+                  {preview.distro ?? preview.os} · {preview.arch}
+                </dd>
+                <dt className="text-muted-foreground">IP address</dt>
+                <dd>{preview.ip ?? "Not reported"}</dd>
+                <dt className="text-muted-foreground">Requested</dt>
+                <dd>{new Date(preview.requestedAt).toLocaleString()}</dd>
+              </dl>
+              <p className="text-ui text-muted-foreground">
+                Only approve a machine you own. This machine will run your Sessions with your GitHub
+                access and your model connections. Its reported name and IP are hints, not proof of
+                identity.
+              </p>
+              {expired ? (
+                <Notice
+                  tone="warning"
+                  title="This code has expired. Get a new code from the runner."
+                  announce
+                />
+              ) : null}
+            </>
+          )}
+          {busy ? (
+            <p role="status" className="text-ui text-muted-foreground">
+              You can close this sheet. Your request may still finish.
+            </p>
+          ) : null}
+          {error === null ? null : <Notice tone="error" title={error} announce />}
+        </DialogBody>
+        {done !== null ? (
+          <DialogFooter>
             <Button size="sm" onClick={onClose}>
               Done
             </Button>
-          </>
-        ) : preview === null ? (
-          <form
-            className="flex flex-col gap-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!busy && code.trim()) void check();
-            }}
-          >
-            <label className="flex flex-col gap-2 text-ui">
-              Runner code
-              <Input
-                autoFocus
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="ABCD-EFGH"
-                maxLength={32}
-                value={code}
-                disabled={busy}
-                onChange={(event) => setCode(event.target.value)}
-              />
-            </label>
-            <Button type="submit" disabled={busy || !code.trim()}>
-              {busy ? "Checking…" : "Check code"}
+          </DialogFooter>
+        ) : preview === null ? null : (
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                setPreview(null);
+                setError(null);
+              }}
+            >
+              Another code
             </Button>
-          </form>
-        ) : (
-          <>
-            <dl className="grid grid-cols-2 gap-2 text-ui">
-              <dt className="text-muted-foreground">Machine</dt>
-              <dd className="break-all">{preview.hostname}</dd>
-              <dt className="text-muted-foreground">System</dt>
-              <dd>
-                {preview.distro ?? preview.os} · {preview.arch}
-              </dd>
-              <dt className="text-muted-foreground">IP address</dt>
-              <dd>{preview.ip ?? "Not reported"}</dd>
-              <dt className="text-muted-foreground">Requested</dt>
-              <dd>{new Date(preview.requestedAt).toLocaleString()}</dd>
-            </dl>
-            <p className="text-ui text-muted-foreground">
-              Only approve a machine you own. This machine will run your Sessions with your GitHub
-              access and your model connections. Its reported name and IP are hints, not proof of
-              identity.
-            </p>
-            {expired ? (
-              <p role="alert" className="text-ui text-destructive">
-                This code has expired. Get a new code from the runner.
-              </p>
-            ) : null}
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy}
-                onClick={() => {
-                  setPreview(null);
-                  setError(null);
-                }}
-              >
-                Another code
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy || expired}
-                onClick={() => void decide("deny")}
-              >
-                Deny
-              </Button>
-              <Button size="sm" disabled={busy || expired} onClick={() => void decide("approve")}>
-                Approve runner
-              </Button>
-            </div>
-          </>
-        )}
-        {busy ? (
-          <p role="status" className="text-ui text-muted-foreground">
-            You can close this sheet. Your request may still finish.
-          </p>
-        ) : null}
-        {error === null ? null : (
-          <p role="alert" className="text-ui text-destructive">
-            {error}
-          </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || expired}
+              onClick={() => void decide("deny")}
+            >
+              Deny
+            </Button>
+            <Button size="sm" disabled={busy || expired} onClick={() => void decide("approve")}>
+              Approve runner
+            </Button>
+          </DialogFooter>
         )}
       </DialogContent>
     </Dialog>

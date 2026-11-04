@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Configure → MCP Servers: a fixed-column server table and bounded audit log.
  *
@@ -47,6 +48,8 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Switch } from "@renderer/components/ui/switch";
+import { Notice } from "@renderer/components/ui/notice";
+import { errorMessage } from "@volli/shared";
 import {
   DataTable,
   Empty,
@@ -97,7 +100,8 @@ function replaceServer(
 export function McpPane({ project }: { project: Project }) {
   const [servers, setServers] = React.useState<readonly McpServerRecord[]>([]);
   const [operations, setOperations] = React.useState<readonly McpOperationRecord[]>([]);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [readError, setReadError] = React.useState<string | null>(null);
   /**
    * The servers with an action running. Per server, so one row finishing
    * never frees another row that is still waiting on its own.
@@ -126,16 +130,22 @@ export function McpPane({ project }: { project: Project }) {
 
   const load = React.useCallback(async () => {
     setLoading(true);
-    const result = await window.api.mcp.list({ projectId: project.id });
-    setLoading(false);
-    if (!result.ok) {
-      setError(result.error);
-      return;
+    setReadError(null);
+    try {
+      const result = await window.api.mcp.list({ projectId: project.id });
+      if (!result.ok) {
+        setReadError(result.error);
+        return;
+      }
+      setError(null);
+      setServers(result.servers);
+      setOperations(result.operations);
+      setAccess(result.access ?? {});
+    } catch (cause) {
+      setReadError(errorMessage(cause));
+    } finally {
+      setLoading(false);
     }
-    setError(null);
-    setServers(result.servers);
-    setOperations(result.operations);
-    setAccess(result.access ?? {});
   }, [project.id]);
 
   React.useEffect(() => {
@@ -251,8 +261,15 @@ export function McpPane({ project }: { project: Project }) {
         icon={PlugsConnectedIcon}
         hint={
           <>
-            Server metadata and results are untrusted data, never instructions. Tool choices affect
-            new Sessions only; running Sessions keep the tools they started with.
+            {/* The trust boundary is always on: a person cannot see it from the controls. */}
+            <p>
+              A local MCP command runs as you; a remote server receives the arguments sent to its
+              tools.
+            </p>
+            <p>
+              Server metadata and results are untrusted data, never instructions. Tool choices
+              affect new Sessions only; running Sessions keep the tools they started with.
+            </p>
           </>
         }
         action={
@@ -266,22 +283,26 @@ export function McpPane({ project }: { project: Project }) {
           />
         }
       >
-        {/* The one always-on line, and the reason it is an exception to "let
-            controls talk": it is a trust boundary a person cannot see from the
-            controls. Everything else about MCP lives in the summoned hint. */}
-        <p className="mb-2 text-ui text-muted-foreground">
-          A local MCP command runs as you; a remote server receives the arguments sent to its tools.
-        </p>
         {error === null ? null : (
-          <p
-            role="alert"
-            className="mb-2 rounded-md bg-destructive/10 px-4 py-2 text-ui text-destructive"
-          >
-            {error}
-          </p>
+          <Notice tone="error" announce data-testid="mcp-error" className="mb-2" title={error} />
         )}
-        {servers.length === 0 ? (
-          <Empty>{loading ? "Loading MCP servers…" : "No MCP servers yet."}</Empty>
+        {readError !== null ? (
+          <Notice
+            tone="error"
+            announce
+            title="Couldn't read MCP servers"
+            detail={readError}
+            actions={
+              <Button size="xs" variant="outline" onClick={() => void load()}>
+                <ArrowClockwiseIcon />
+                Retry
+              </Button>
+            }
+          />
+        ) : servers.length === 0 ? (
+          <Empty>
+            {loading ? <LoadingLabel>Loading MCP servers</LoadingLabel> : "No MCP servers yet."}
+          </Empty>
         ) : (
           <div
             role="region"
@@ -297,6 +318,20 @@ export function McpPane({ project }: { project: Project }) {
                 rows={12}
                 empty="No MCP servers yet."
                 columns={[
+                  {
+                    key: "enabled",
+                    header: "Enabled",
+                    width: "5rem",
+                    cell: (server) => (
+                      <Switch
+                        aria-label={`${server.name} enabled`}
+                        checked={server.enabled}
+                        disabled={busy.has(server.id)}
+                        onCheckedChange={(enabled) => void toggleServer(server, enabled)}
+                      />
+                    ),
+                  },
+
                   {
                     key: "server",
                     header: "Server",
@@ -369,19 +404,6 @@ export function McpPane({ project }: { project: Project }) {
                         </span>
                       );
                     },
-                  },
-                  {
-                    key: "enabled",
-                    header: "Enabled",
-                    width: "5rem",
-                    cell: (server) => (
-                      <Switch
-                        aria-label={`${server.name} enabled`}
-                        checked={server.enabled}
-                        disabled={busy.has(server.id)}
-                        onCheckedChange={(enabled) => void toggleServer(server, enabled)}
-                      />
-                    ),
                   },
                   {
                     key: "actions",
@@ -516,7 +538,7 @@ function ServerActions({
   const health = serverHealth(server, access, signingIn === server.id);
   const otherSignIn = signingIn !== null && signingIn !== server.id;
   return (
-    <div className="flex w-full items-center justify-end gap-2 whitespace-nowrap">
+    <div className="flex w-full items-center justify-end gap-2">
       {health.fix === "sign-in" ? (
         <Button size="xs" variant="outline" disabled={busy || otherSignIn} onClick={onSignIn}>
           <SignInIcon />
@@ -539,7 +561,7 @@ function ServerActions({
       ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="icon-xs" variant="ghost" aria-label={`More for ${server.name}`}>
+          <Button size="icon-sm" variant="ghost" aria-label={`More for ${server.name}`}>
             <DotsThreeIcon weight="bold" />
           </Button>
         </DropdownMenuTrigger>

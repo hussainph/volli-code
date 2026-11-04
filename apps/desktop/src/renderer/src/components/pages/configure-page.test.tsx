@@ -119,12 +119,13 @@ describe("Configure rail", () => {
     // groups, seven categories"), and that line spent a ticket being wrong
     // while nothing failed. Pin it here: a category added or removed should
     // make someone reread the sentence that describes the rail.
-    expect(allCategories()).toHaveLength(7);
+    expect(allCategories()).toHaveLength(8);
     expect(categoryFor("authority")).toBeUndefined();
     expect(html).not.toContain("Protection");
     expect(html).toContain("Agent");
     expect(html).toContain("Project");
     for (const category of [
+      "Overview",
       "Skills",
       "Commands",
       "MCP Servers",
@@ -170,9 +171,9 @@ describe("Configure → Worktrees", () => {
     const html = renderConfigure("worktrees");
 
     expect(html).toContain("Branch from");
-    expect(html).toContain('value="trunk"');
-    expect(html).toContain("Then run");
-    expect(html).toContain('value="pnpm install"');
+    expect(html).toContain("trunk");
+    expect(html).toContain("Setup command");
+    expect(html).toContain(">pnpm install</textarea>");
   });
 
   it("keeps the app-wide orphan list off a single project's page", () => {
@@ -208,14 +209,13 @@ describe("Configure → Sessions", () => {
     expect(category?.keywords).not.toContain("harness");
   });
 
-  it("keeps a disabled model picker visible while its catalogue loads", () => {
+  it("holds model control geometry without claiming a selection while the catalogue loads", () => {
     const html = renderConfigure("sessions");
     const modelRow = html.slice(html.indexOf('data-testid="project-session-model"'));
 
-    expect(modelRow).toContain('id="project-session-model"');
-    expect(modelRow).toContain("Loading models");
-    expect(modelRow).toContain("disabled");
-    expect(modelRow).toContain('aria-label="Reasoning level"');
+    expect(modelRow).toContain('data-testid="project-session-model"');
+    expect(modelRow).toContain('data-slot="skeleton"');
+    expect(modelRow).not.toContain('aria-label="Reasoning level"');
   });
 });
 
@@ -225,11 +225,13 @@ describe("Configure → MCP", () => {
 
     expect(html).not.toContain("aren&#x27;t available yet");
     expect(html).not.toContain("inert");
-    expect(html).toContain("No MCP servers yet.");
+    // The first read is still in flight, so the pane says so rather than
+    // claiming an empty list it hasn't read yet.
+    expect(html).toContain("Loading MCP servers");
+    expect(html).not.toContain("No MCP servers yet.");
     expect(html).toContain("Add server");
     expect(html).not.toContain("Shell command");
-    // The one line the pane says without being asked: a trust boundary the
-    // controls cannot show. Everything else about MCP is a summoned hint.
+    // The trust boundary the controls cannot show, said beside the hint.
     expect(html).toContain("A local MCP command runs as you");
     // The form is a REQUEST now (VC-397): an always-open editor under a
     // catalog of 34 tools is what made this page unreadable. The transports it
@@ -244,7 +246,7 @@ describe("ConfigurePage", () => {
     // resolves to null and shows the empty state instead of the shell.
     const html = renderToStaticMarkup(<ConfigurePage />);
 
-    expect(html).toContain("Nothing to configure");
+    expect(html).toContain("Open a project");
     expect(html).not.toContain("Branch from");
   });
 });

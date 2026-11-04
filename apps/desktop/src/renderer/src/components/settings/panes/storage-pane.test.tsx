@@ -13,16 +13,41 @@ import type {
 } from "../../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
-import { DataExportConfirmBody, StoragePane } from "./storage-pane";
+import { DatabaseSection, DataExportConfirmBody, StorageOverviewPane } from "./storage-pane";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 
 // The build-artifact section reads its setting on mount over the Session RPC
-// client (`worktree.trimSettings`, VC-608).
+// client (`worktree.trimSettings`, VC-608); the backups section reads the
+// backup and restore projections over the same client.
 vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
   sessionRpcClient: () => ({
     worktree: {
       trimSettings: {
         query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+    backups: {
+      status: {
+        query: async () => ({
+          revision: "backup-revision-1",
+          running: false,
+          lastBackup: null,
+          notice: null,
+        }),
+      },
+      restoreStatus: {
+        query: async () => ({
+          revision: "restore-revision-1",
+          phase: "idle",
+          bundles: [],
+          selectedFile: null,
+          projects: [],
+          checkpoints: 0,
+          paused: false,
+          problems: [],
+          credentialsMessage: null,
+          previousProfile: null,
+        }),
       },
     },
   }),
@@ -174,10 +199,19 @@ async function open(): Promise<void> {
   await act(async () =>
     root?.render(
       <TooltipProvider>
-        <StoragePane />
+        <StorageOverviewPane />
       </TooltipProvider>,
     ),
   );
+}
+
+/** The page, then its Review cleanup sheet, where the cleanup sections live. */
+async function openReview(): Promise<HTMLElement> {
+  await open();
+  await act(async () => buttonNamed("Review cleanup").click());
+  const sheet = document.querySelector<HTMLElement>('[role="dialog"]');
+  if (!sheet) throw new Error("Review cleanup did not open");
+  return sheet;
 }
 
 function buttonNamed(name: string): HTMLButtonElement {
@@ -269,7 +303,7 @@ describe("Settings → Storage retention", () => {
 describe("Settings → Storage Pi session logs", () => {
   it("keeps cleanup disabled until scan, confirms exact paths, and returns the revision", async () => {
     const main = bridge();
-    await open();
+    await openReview();
 
     expect(buttonNamed("Clean up…").disabled).toBe(true);
     await act(async () => buttonNamed("Scan for orphaned Pi logs").click());
@@ -288,7 +322,7 @@ describe("Settings → Storage Pi session logs", () => {
 
   it("shows how much tool output is saved, against its bound, once scanned (VC-469)", async () => {
     bridge();
-    await open();
+    await openReview();
 
     expect(savedOutputRow()).toContain("Not scanned");
     await act(async () => buttonNamed("Scan for orphaned Pi logs").click());
@@ -299,10 +333,14 @@ describe("Settings → Storage Pi session logs", () => {
 
   it("renders scan failure with an in-place retry", async () => {
     const main = bridge({ ok: false, error: "fixture scan failed" });
-    await open();
+    await openReview();
 
     await act(async () => buttonNamed("Scan for orphaned Pi logs").click());
-    expect(document.querySelector("[role='alert']")?.textContent).toContain("fixture scan failed");
+    expect(
+      [...document.querySelectorAll("[role='status']")].some((node) =>
+        node.textContent?.includes("fixture scan failed"),
+      ),
+    ).toBe(true);
     expect(buttonNamed("Try again")).not.toBeNull();
 
     main.answerScan({ ok: true, inventory: INVENTORY });
@@ -311,10 +349,15 @@ describe("Settings → Storage Pi session logs", () => {
     expect(document.body.textContent).toContain("session-one");
   });
 
-  it("puts ordinary scan guidance in a hint rather than trust-boundary prose", () => {
-    const html = renderToStaticMarkup(<StoragePane />);
+  it("keeps scan guidance visible without an information trigger", async () => {
+    bridge();
+    const sheet = await openReview();
 
-    expect(html).toContain('aria-label="About Orphaned logs"');
+    expect(sheet.textContent).toContain(
+      "Only logs not referenced by any Volli session are candidates.",
+    );
+    expect(sheet.textContent).toContain("Scanning never deletes files.");
+    expect(sheet.querySelector('[aria-label="About Orphaned logs"]')).toBeNull();
   });
 });
 
@@ -324,7 +367,7 @@ describe("Settings → Storage Pi session logs", () => {
 describe("Settings → Storage build artifacts", () => {
   it("keeps the trim disabled until a scan, then names only the worktrees in scope", async () => {
     const main = bridge();
-    await open();
+    await openReview();
 
     expect(buttonNamed("Trim…").disabled).toBe(true);
     await act(async () => buttonNamed("Scan for build artifacts").click());
@@ -346,7 +389,7 @@ describe("Settings → Storage build artifacts", () => {
 
   it("reports what a finished trim took, kept, and refused", async () => {
     const main = bridge();
-    await open();
+    await openReview();
     await act(async () => buttonNamed("Scan for build artifacts").click());
     await act(async () => buttonNamed("Trim…").click());
 
@@ -369,7 +412,7 @@ describe("Settings → Storage build artifacts", () => {
 
   it("persists the automatic-trim opt-out", async () => {
     const main = bridge();
-    await open();
+    await openReview();
 
     const toggle = document.querySelector("#trim-on-finish");
     if (!(toggle instanceof HTMLElement)) throw new Error("no trim-on-finish switch");
@@ -379,12 +422,55 @@ describe("Settings → Storage build artifacts", () => {
   });
 });
 
-describe("Settings → Storage database section", () => {
+describe("Settings → Database section", () => {
+  async function mountDatabase() {
+    await act(async () =>
+      root?.render(
+        <TooltipProvider>
+          <DatabaseSection />
+        </TooltipProvider>,
+      ),
+    );
+  }
+
   it("names the action as a data export rather than a database export", () => {
-    const html = renderToStaticMarkup(<StoragePane />);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <DatabaseSection />
+      </TooltipProvider>,
+    );
 
     expect(html).toContain("Export data as JSON");
     expect(html).not.toContain("Database export");
+    // The first paint is a read in flight, drawn with its mark, not an ellipsis.
+    expect(html).toContain("Loading");
+    expect(html).not.toContain("Loading…");
+  });
+
+  it("shows the size it read", async () => {
+    bridge();
+    await mountDatabase();
+    expect(container?.textContent).toContain(formatFileSize(4_096));
+  });
+
+  it("keeps a failed size read on the section with a retry, not an empty value", async () => {
+    bridge();
+    const database = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false as const, error: "database locked" })
+      .mockResolvedValue({ ok: true as const, sizeBytes: 4_096 });
+    window.api.database = database as unknown as typeof window.api.database;
+    await mountDatabase();
+
+    const announced = container?.querySelector('[role="status"][aria-live="polite"]');
+    expect(announced?.textContent).toContain("Couldn't read the database size");
+    expect(announced?.textContent).toContain("database locked");
+    expect(container?.textContent).toContain("Unavailable");
+
+    await act(async () => buttonNamed("Try again").click());
+    expect(database).toHaveBeenCalledTimes(2);
+    expect(container?.textContent).toContain(formatFileSize(4_096));
+    expect(container?.textContent).not.toContain("Couldn't read the database size");
   });
 
   it("states the limits before the export runs, naming attachments and transcripts", () => {
@@ -400,28 +486,95 @@ describe("Settings → Storage database section", () => {
   });
 });
 
-describe("StoragePane", () => {
+describe("Storage page", () => {
   // A02: the one button on this pane said "Rescan orphaned worktrees" and sent
   // a request that pruned git metadata and deleted directories. The label a
   // person reads before pressing it is part of the fix, so it is asserted.
-  it("offers a scan, never a rescan, before anything has loaded", () => {
-    const html = renderToStaticMarkup(<StoragePane />);
-    const host = document.createElement("div");
-    host.innerHTML = html;
-    const worktrees = [...host.querySelectorAll("section")].find(
+  it("offers a scan, never a rescan, before anything has loaded", async () => {
+    bridge();
+    // The orphan scan the sheet starts never answers, so this is the sheet
+    // before anything has loaded.
+    window.api.worktree.orphans = vi.fn(
+      () => new Promise<never>(() => {}),
+    ) as unknown as typeof window.api.worktree.orphans;
+    const sheet = await openReview();
+    const worktrees = [...sheet.querySelectorAll("section")].find(
       (section) => section.querySelector("h2")?.textContent === "Orphaned worktrees",
     );
 
-    expect(html).toContain("Scan for orphaned worktrees");
-    expect(html).not.toContain("Rescan");
+    expect(worktrees).toBeDefined();
+    expect(sheet.querySelector('[aria-label="Scan for orphaned worktrees"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Rescan");
+    expect(
+      [...document.querySelectorAll("[aria-label]")].some((node) =>
+        node.getAttribute("aria-label")?.includes("Rescan"),
+      ),
+    ).toBe(false);
     // The worktree cleanup action is not reachable until a scan has produced one.
     expect(worktrees?.textContent).not.toContain("Clean up…");
   });
 
   it("says what retention takes and what it keeps, including the Keep exemption", () => {
-    const html = renderToStaticMarkup(<StoragePane />);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <StorageOverviewPane />
+      </TooltipProvider>,
+    );
 
     expect(html).toContain("keeps the branch, its commits, the pull-request link, and the ticket");
     expect(html).toContain("Keep on a ticket holds its folder");
+  });
+});
+
+describe("Storage overview", () => {
+  async function overview() {
+    await act(async () =>
+      root?.render(
+        <TooltipProvider>
+          <StorageOverviewPane />
+        </TooltipProvider>,
+      ),
+    );
+  }
+  it("scans all file families into one summary without deleting anything", async () => {
+    const api = bridge();
+    await overview();
+    expect(api.trimScan).not.toHaveBeenCalled();
+    await act(async () => buttonNamed("Scan unused files").click());
+    expect(api.trimScan).toHaveBeenCalledOnce();
+    expect(api.scanOrphans).toHaveBeenCalledOnce();
+    expect(container?.textContent).toContain(
+      "0 unused worktrees, 1 log file and build output in 1 checkout.",
+    );
+    expect(api.trim).not.toHaveBeenCalled();
+    expect(api.reclaimOrphans).not.toHaveBeenCalled();
+    // The database and its export live under Privacy & data.
+    expect(container?.textContent).not.toContain("Database");
+  });
+  it("keeps a failed scan distinct from an empty cleanup proposal", async () => {
+    bridge(new Error("Log scan unavailable"));
+    await overview();
+    await act(async () => buttonNamed("Scan unused files").click());
+    expect(container?.textContent).toContain("Couldn't scan unused files");
+    expect(container?.textContent).toContain("Log scan unavailable");
+    expect(container?.textContent).not.toContain("0 unused worktrees");
+  });
+  it("keeps local profile backups and restore on the page", async () => {
+    bridge();
+    await overview();
+    expect(container?.textContent).toContain("Backups");
+    expect(container?.textContent).toContain("No backup yet");
+    expect(buttonNamed("Back up now").disabled).toBe(false);
+    expect(buttonNamed("Restore…").disabled).toBe(false);
+    expect(buttonNamed("Show in Finder")).toBeTruthy();
+  });
+  it("opens the existing maintenance controls behind review without starting a sweep", async () => {
+    const api = bridge();
+    await overview();
+    await act(async () => buttonNamed("Review cleanup").click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Build artifacts");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Orphaned worktrees");
+    expect(api.trim).not.toHaveBeenCalled();
+    expect(api.reclaimOrphans).not.toHaveBeenCalled();
   });
 });

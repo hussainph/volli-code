@@ -109,7 +109,8 @@ function rowText(tier: string): string {
   return document.querySelector(`[data-testid="default-model-${tier}"]`)?.textContent ?? "";
 }
 
-describe("the model tiers in Model Access", () => {
+// This component remains the remote-host model sheet, not app Settings' pane.
+describe("the model tiers in the remote-host Model Access sheet", () => {
   it("draws all six tiers as one tree, the kind-of-work rows under Ticket Sessions", async () => {
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
     for (const tier of ["global", "ticket", "utility", "fast", "deep", "visual"]) {
@@ -126,9 +127,12 @@ describe("the model tiers in Model Access", () => {
     for (const tier of ["global", "ticket", "utility"]) {
       expect(nested?.querySelector(`[data-testid="default-model-${tier}"]`)).toBeNull();
     }
-    // Project precedence is the section's `(i)`, not a subtitle under its title.
-    expect(document.querySelector('[data-slot="pref-section-description"]')).toBeNull();
-    expect(document.querySelector('[aria-label="About Default models"]')).not.toBeNull();
+    // Precedence is visible below the section title, without an info button.
+    const section = document.querySelector('[data-slot="pref-section-title"]')!.closest("section")!;
+    expect(section.children[1]?.textContent).toBe(
+      "A project with a pinned model uses that model instead.",
+    );
+    expect(section.querySelector('[aria-label^="About"]')).toBeNull();
   });
 
   it("names the row an unset row follows, as that row is labelled", async () => {
@@ -151,19 +155,24 @@ describe("the model tiers in Model Access", () => {
     ).toBeNull();
   });
 
-  it("carries the job as the row's (i) only where the label does not name it", async () => {
-    // CLAUDE.md's copy rule: the label is the tier name, the `(i)` carries the
-    // one-line job, and nothing becomes a paragraph under a control. The hint
-    // lives in the glyph's tooltip, so what the row's own text holds is the
-    // label and the control — never the job line.
+  it("shows one purpose line below tiers whose labels do not name their job", async () => {
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
 
-    for (const tier of ["fast", "deep", "visual", "utility"]) {
-      expect(
-        document.querySelector(`[data-testid="default-model-${tier}"] [aria-label^="About"]`),
-      ).not.toBeNull();
+    const purposes = {
+      fast: "Quick, low-cost tasks.",
+      deep: "Complex reasoning, planning, and review.",
+      visual: "Images, screenshots, and pages.",
+      utility: "Chat names and summaries.",
+    };
+    for (const [tier, purpose] of Object.entries(purposes)) {
+      const row = document.querySelector(`[data-testid="default-model-${tier}"]`)!;
+      expect(row.querySelectorAll("p")).toHaveLength(1);
+      expect(row.querySelector("p")?.textContent).toBe(purpose);
+      expect(row.querySelector('[aria-label^="About"]')).toBeNull();
     }
-    expect(rowText("fast")).not.toContain("Quick, low-cost tasks.");
+    for (const tier of ["global", "ticket"]) {
+      expect(document.querySelector(`[data-testid="default-model-${tier}"] p`)).toBeNull();
+    }
     expect(rowText("global")).toBe("Board chatsChoose a model");
     expect(rowText("ticket")).toBe("Ticket SessionsSame as Board chats");
   });

@@ -1,5 +1,8 @@
+import { OverrideLinks } from "../settings-navigation";
+import { useProjectsStore } from "@renderer/stores/projects";
+import { CanvasInstrument } from "../kit/canvas-instrument";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
@@ -7,10 +10,10 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { resolveAppearance } from "@volli/shared";
 
-import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
+import { OverrideControl, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { fallbackTerminalThemeLabel, revealPath } from "@renderer/components/theme/appearance-rows";
-import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
-import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
+import { AppearanceModeChoice } from "@renderer/components/theme/canvas-editor";
+import { FontPicker } from "../kit/font-picker";
 import {
   buildTerminalSettingRows,
   type TerminalSettingKey,
@@ -22,42 +25,6 @@ import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/s
 import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model";
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
 
-/**
- * Settings → Appearance: the canvas editor, the light/dark choice, and the
- * terminal's theme.
- *
- * There is no Editor row. The editor wears one light theme or one dark one,
- * decided by the light/dark choice above it (VC-123) — so the control that
- * would have gone here already exists, one section up.
- *
- * Handoff: UI slop pass stripped tutorial descriptions/tooltips from this pane
- * (Terminal keeps one Ghostty trust line). Don't add helper text back —
- * AGENTS.md / CLAUDE.md ("UI copy: let controls talk").
- *
- * Four sections, and the first two are separate on purpose. The canvas is a
- * gradient; the appearance is light, dark or follow-the-system; the per-mode
- * dials in the engine exist precisely so ONE canvas renders correctly in BOTH
- * modes. They are also scoped independently — a project can override either
- * alone — so a single "App theme" section owning both would be the one shape
- * that cannot express what is stored.
- *
- * The terminal half is where decision #67 becomes visible. Volli NEVER writes
- * the user's own ghostty config; it writes an overlay file in ghostty's own
- * format, layered on top. So every row here states where its value came from
- * (`Inherited from Ghostty` / `Set by Volli`), reverting means REMOVING a key
- * from Volli's overlay rather than editing the user's file, and both files are
- * one click away — because the file, not this panel, is the full interface
- * (#68: the overlay takes any ghostty key, hand-written, and Volli honors it).
- *
- * The Theme row READS rather than picks (VC-413). The theme list it used to
- * open was a catalog vendored out of Ghostty.app, so it left with the catalog;
- * what the row still does is the part decision #67 actually promised — name the
- * theme in force, say which layer set it, and revert Volli's own key. The
- * control that chooses one is the config file, which is one click away.
- *
- * The editor has no row of its own either (VC-123). It wears one light theme or
- * one dark one, decided by Mode above.
- */
 export function AppearanceSettings() {
   const terminal = useThemeStore((state) => state.terminal);
   const hydrated = useThemeStore((state) => state.hydrated);
@@ -115,35 +82,10 @@ export function AppearanceSettings() {
   );
 }
 
-/**
- * The scope every control on this page writes to. Module-level so its identity
- * is stable — the editor holds it in `useCallback` dependencies, and a fresh
- * object each render would rebuild every handler on every paint of a surface
- * whose whole point is that it repaints continuously while you drag.
- */
 const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
 
-/**
- * The app-wide canvas, and the mode it is seen in.
- *
- * Reads `globalCanvas` rather than whatever is on screen, and that distinction
- * is the page's one subtlety: a project can override the canvas, so the window
- * you are looking at while you edit may not be the one this section owns. The
- * note below says so instead of letting an edit look like it failed.
- *
- * The mode it renders the pad at is the GLOBAL scope's own resolution too —
- * the same reason. A project pinned to light must not make this section
- * describe a light canvas the app-wide setting never asked for.
- *
- * LIGHT/DARK FLOATS ON THE PAD (the pad arrangement): to anyone changing how
- * the app looks, the mode and the canvas are one subject, and the pad is
- * where that subject is looked at. What the old sibling-row split protected
- * still holds — THE CANVAS DOES NOT NAME A MODE, and a project may override
- * mode or canvas alone — which is why the editor takes the control as a SLOT
- * (`mode`) this page fills, rather than owning one: Configure's page keeps
- * its mode on an overridable row of its own and passes nothing.
- */
 function AppThemeSection() {
+  const projects = useProjectsStore((state) => state.projects);
   const canvas = useThemeStore((state) => state.globalCanvas);
   const appearance = useThemeStore((state) => state.globalAppearance);
   const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
@@ -155,11 +97,16 @@ function AppThemeSection() {
   // project's own Configure page carries the divergence and its revert.
   return (
     <PrefSection
-      title="App theme"
+      title="Theme"
       icon={PaletteIcon}
-      hint={<>Your custom local project theme overrides global defaults.</>}
+      hint={
+        <OverrideLinks
+          projects={projects.filter((p) => p.themeCanvas != null || p.themeAppearance != null)}
+          page="appearance"
+        />
+      }
     >
-      <CanvasEditor
+      <CanvasInstrument
         scope={GLOBAL_SCOPE}
         canvas={canvas}
         resolved={resolved}
@@ -176,11 +123,6 @@ function AppThemeSection() {
   );
 }
 
-/**
- * Writes overlay keys and adopts the freshly-resolved appearance main hands
- * back, so the provenance labels update without a second round trip. Live
- * terminals repaint from main's own file-watch broadcast.
- */
 async function writeOverlay(edits: Record<string, string | null>): Promise<boolean> {
   const result = await writeThrough("update the terminal settings", () =>
     window.api.theme.writeGlobalOverlay(edits),
@@ -190,60 +132,26 @@ async function writeOverlay(edits: Record<string, string | null>): Promise<boole
   return true;
 }
 
-/** The origin label plus, when something set the key, its one-click revert. */
 function OriginBadge({ row }: { row: TerminalSettingRow }) {
   return (
-    <span className="flex items-center gap-1">
-      <ThemeOriginPill emphasized={row.source === "volli-global" || row.source === "volli-project"}>
-        {row.sourceLabel}
-      </ThemeOriginPill>
-      {row.revertible ? <RevertButton settingKey={row.key} /> : null}
-    </span>
-  );
-}
-
-/**
- * Revert = remove the key from Volli's overlay. That is the whole mechanism:
- * whatever the user's own config says then wins again, without Volli having
- * touched it.
- */
-function RevertButton({ settingKey }: { settingKey: TerminalSettingKey }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-label={`Revert ${settingKey}`}
-      title="Revert to Ghostty"
-      onClick={() => void writeOverlay({ [settingKey]: null })}
+    <OverrideControl
+      label={row.label}
+      inheritedValue="Ghostty"
+      overridden={row.source === "volli-global"}
+      onRevert={() => void writeOverlay({ [row.key]: null })}
     >
-      <ArrowCounterClockwiseIcon />
-    </Button>
+      <span className="sr-only">{row.sourceLabel}</span>
+    </OverrideControl>
   );
 }
 
-/**
- * What the terminal's theme currently is, and who said so.
- *
- * A VALUE, not a control (VC-413). The picker that used to sit here listed a
- * theme catalog vendored out of Ghostty.app; the app ships none, so there is
- * nothing to offer and Volli will not invent a list. The row keeps everything
- * that was ever true about it: the resolved name, the #67 origin label, and a
- * revert that removes Volli's key so the user's own config wins again. Choosing
- * a theme is `theme = …` in one of the two files below — #68's promise that the
- * file takes any ghostty key, unchanged.
- *
- * `row.value` is the name the CHAIN resolved, which may be a theme this machine
- * has no file for; the terminal is then wearing the token-derived palette. The
- * row still reports the name, because the config still says it and hiding that
- * would make the file and the panel disagree.
- */
 function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   // A string, so it is safe as a selector result (see `activeTheme`'s note), and
   // it is what makes the fallback label follow a mode flip live.
   const resolved = useThemeStore(effectiveAppearance);
 
   return (
-    <PrefRow label={row.label}>
+    <PrefRow label={row.label} description={row.sourceLabel}>
       <OriginBadge row={row} />
       <span className="text-ui text-muted-foreground">
         {row.value ?? fallbackTerminalThemeLabel(resolved)}
@@ -252,17 +160,9 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   );
 }
 
-/**
- * Font family, from the Local Font Access list of installed faces — so the
- * list can only contain families the terminal will actually be able to load.
- */
 function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   const [opened, setOpened] = React.useState(false);
   const [families, setFamilies] = React.useState<readonly string[] | null>(null);
-  const items = React.useMemo(
-    () => (families ?? []).map((family) => ({ value: family, label: family })),
-    [families],
-  );
 
   React.useEffect(() => {
     if (!opened || families !== null) return;
@@ -276,21 +176,23 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   }, [opened, families]);
 
   return (
-    <PrefRow label={row.label}>
+    <PrefRow label={row.label} description={row.sourceLabel}>
       <OriginBadge row={row} />
-      <ThemeComboBox
+      <FontPicker
         ariaLabel="Terminal font family"
         searchLabel="Search fonts"
         searchPlaceholder="Search fonts…"
         buttonLabel={row.value ?? "Ghostty default"}
         empty={
-          families === null
-            ? "Loading fonts…"
-            : families.length === 0
-              ? "No fonts found. Set font-family in the overlay file."
-              : "No matching font."
+          families === null ? (
+            <LoadingLabel>Loading fonts</LoadingLabel>
+          ) : families.length === 0 ? (
+            "No fonts found. Set font-family in the overlay file."
+          ) : (
+            "No matching font."
+          )
         }
-        items={items}
+        families={families ?? []}
         activeValue={row.value}
         // Enumerating the local font list is a permissioned round trip, so it
         // waits for the menu to actually open rather than running on mount.
@@ -303,24 +205,8 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   );
 }
 
-/** Font size bounds. Below 6pt the grid stops being legible; above 32 a pane holds almost nothing. */
 const FONT_SIZE_RANGE = { min: 6, max: 32 } as const;
 
-/**
- * A stepper rather than a free number field: every step lands on a valid size.
- *
- * Clicks arrive far faster than the overlay round-trip, so a step counts from
- * its own pending target rather than from the last resolved value — reading the
- * store would make the second of two fast clicks recompute the same number and
- * silently drop it. The pending target also drives the display, so the stepper
- * responds to the click rather than to the file write, and it is handed back to
- * the store once the last write in a burst settles (including a failed one:
- * `writeOverlay` has toasted, and the number must go back to what is stored).
- *
- * The writes are CHAINED, never concurrent: each is a read-modify-write of one
- * config file, and two in flight at once can interleave into a file that says
- * neither.
- */
 function FontSizeRow({ row }: { row: TerminalSettingRow }) {
   const current = useThemeStore((state) => state.terminal?.prefs.fontSize ?? null);
   const [pending, setPending] = React.useState<number | null>(null);
@@ -353,7 +239,7 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
   };
 
   return (
-    <PrefRow label={row.label}>
+    <PrefRow label={row.label} description={row.sourceLabel}>
       <OriginBadge row={row} />
       <div className="flex items-center gap-1">
         <Button

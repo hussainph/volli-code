@@ -303,12 +303,11 @@ function markBox(viewBox: string): { x: number; y: number; w: number; h: number 
  * means anything here, and a mark that turned red with the bars would be more
  * red ink in exactly the state Apple's own icon is recorded as failing.
  *
- * One metered account has no mark to draw — xAI, which simple-icons will not
- * carry — so the lettermark stays, and it stays drawn BARE rather than in
- * `ModelMark`'s muted rounded square: a filled square between two bars reads
- * as a third bar. A capital X is the one fallback that costs nothing here;
- * `O` for OpenCode was the one that could not stay, because a round letter
- * between two arcs reads as a second ring.
+ * An account whose provider has no mark to draw keeps the lettermark, and it
+ * stays drawn BARE rather than in `ModelMark`'s muted rounded square: a filled
+ * square between two bars reads as a third bar. `O` for OpenCode was the one
+ * letter that could not stay, because a round letter between two arcs reads
+ * as a second ring.
  */
 function AccountMark({ account }: { account: UsageAccountReading | null }) {
   if (account === null) return null;

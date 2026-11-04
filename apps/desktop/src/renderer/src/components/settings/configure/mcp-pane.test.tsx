@@ -203,6 +203,40 @@ async function setValue(selector: string, value: string): Promise<void> {
   });
 }
 
+/**
+ * A failure the pane or dialog reports: the error Notice's announced message,
+ * which carries the text alone (its Copy control sits outside the live region).
+ */
+const FAILURE = '[data-testid="mcp-error"] [role="status"]';
+
+/** Opens a shared Select from the keyboard and picks one option by its text. */
+async function choose(trigger: HTMLElement, label: string): Promise<readonly string[]> {
+  const scroll = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = () => {};
+  try {
+    trigger.focus();
+    await act(async () =>
+      trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    const options = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')];
+    const offered = options.map((option) => option.textContent?.trim() ?? "");
+    const option = options.find((candidate) => candidate.textContent?.trim() === label);
+    if (option === undefined) throw new Error(`Option ${label} not found in ${offered.join(", ")}`);
+    await act(async () => option.focus());
+    await act(async () =>
+      option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    return offered;
+  } finally {
+    HTMLElement.prototype.scrollIntoView = scroll;
+  }
+}
+
+/** The OAuth client secret's value field, present only for a kind that has a value. */
+function secretField(): HTMLInputElement | null {
+  return document.body.querySelector("#mcp-oauth-secret");
+}
+
 function checkbox(label: string): HTMLButtonElement {
   return labelled(label) as HTMLButtonElement;
 }
@@ -224,10 +258,10 @@ describe("the server table", () => {
     const table = document.body.querySelector("table")!;
     expect(table.querySelector("caption")?.textContent).toBe("MCP servers");
     expect([...table.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual([
+      "Enabled",
       "Server",
       "Tools",
       "Status",
-      "Enabled",
       "Actions",
     ]);
     expect(table.querySelectorAll('th[scope="col"]')).toHaveLength(5);
@@ -235,9 +269,9 @@ describe("the server table", () => {
     expect(rows).toHaveLength(2);
     for (const row of rows) {
       expect(row.querySelectorAll("td")).toHaveLength(5);
-      expect(row.children[0]?.querySelector('button[aria-label^="Open"]')).not.toBeNull();
-      expect(row.children[1]?.querySelector('button[aria-label^="Choose"]')).not.toBeNull();
-      expect(row.children[3]?.querySelector('[role="switch"]')).not.toBeNull();
+      expect(row.children[1]?.querySelector('button[aria-label^="Open"]')).not.toBeNull();
+      expect(row.children[2]?.querySelector('button[aria-label^="Choose"]')).not.toBeNull();
+      expect(row.children[0]?.querySelector('[role="switch"]')).not.toBeNull();
       expect(row.children[4]?.querySelector('button[aria-label^="More"]')).not.toBeNull();
     }
     await click(labelled("Choose Fixture tools"));
@@ -359,9 +393,7 @@ describe("the server table", () => {
 
     await click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
-      "Could not save the change.",
-    );
+    expect(document.body.querySelector(FAILURE)?.textContent).toBe("Could not save the change.");
   });
 
   it("refreshes from the menu, and removes only after a confirmation that says what goes", async () => {
@@ -397,6 +429,25 @@ describe("the server table", () => {
   });
 });
 
+describe("server read recovery", () => {
+  for (const rejected of [false, true]) {
+    it(`shows a failed read without an empty state and retries (${rejected ? "rejection" : "result"})`, async () => {
+      const list = vi.fn().mockResolvedValue({ ok: true, servers: [record()], operations: [] });
+      if (rejected) list.mockRejectedValueOnce(new Error("Database is busy."));
+      else list.mockResolvedValueOnce({ ok: false, error: "Database is busy." });
+      await render({ list });
+      expect(text()).toContain("Couldn't read MCP servers");
+      expect(text()).toContain("Database is busy.");
+      expect(text()).not.toContain("No MCP servers yet.");
+      await click(button("Retry"));
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(list).toHaveBeenLastCalledWith({ projectId: project.id });
+      expect(text()).toContain("Fixture");
+      expect(text()).not.toContain("Couldn't read MCP servers");
+    });
+  }
+});
+
 describe("opening a server", () => {
   it("shows its tools with descriptions, grouped and selectable, and saves tools alone without connecting", async () => {
     const saved = record({
@@ -423,7 +474,7 @@ describe("opening a server", () => {
     expect(dialog().textContent).toContain("list_items does a thing");
     expect(dialog().textContent).toContain("Read-only");
     expect(dialog().textContent).toContain("Can make changes");
-    expect(dialog().textContent).toContain("1 of 3 on");
+    expect(dialog().textContent).toContain("1 of 3 selected");
     // The filter, not the first button, has the caret: a long list is started there.
     expect(document.activeElement).toBe(dialog().querySelector('input[type="search"]'));
     expect(button("Save", dialog()).disabled).toBe(true);
@@ -451,7 +502,7 @@ describe("opening a server", () => {
     await click(labelled("Open Fixture"));
     await click(checkbox("echo"));
     await click(button("Save", dialog()));
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("Database is busy.");
+    expect(dialog().querySelector(FAILURE)?.textContent).toBe("Database is busy.");
     expect(checkbox("echo").getAttribute("aria-checked")).toBe("true");
   });
 
@@ -640,7 +691,7 @@ describe("opening a server", () => {
 
     await click(labelled("Open Sentry"));
     await click(button("Sign out", dialog()));
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("Could not sign out.");
+    expect(dialog().querySelector(FAILURE)?.textContent).toBe("Could not sign out.");
   });
 
   it("closes without a word to main when nothing was changed", async () => {
@@ -664,7 +715,11 @@ describe("adding a server", () => {
     expect(document.body.querySelector("#mcp-oauth-client-id")).toBeNull();
     await click(labelled("Show headers"));
     await click(button("Add header", dialog()));
-    expect(dialog().querySelector("select")?.textContent).toContain("Environment variable");
+    const kind = labelled("header 1 kind");
+    expect(kind.getAttribute("role")).toBe("combobox");
+    expect(kind.textContent).toContain("Stored secret");
+    expect(await choose(kind, "Stored secret")).toEqual(["Stored secret", "Environment variable"]);
+    expect(labelled("header 1 kind").textContent).toContain("Stored secret");
     expect(dialog().querySelector('input[type="password"]')).not.toBeNull();
   });
 
@@ -762,7 +817,7 @@ describe("adding a server", () => {
     await click(button("Add server"));
     await setValue("#mcp-url", "https://example.com/mcp");
     await click(button("Connect", dialog()));
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("Connection refused.");
+    expect(dialog().querySelector(FAILURE)?.textContent).toBe("Connection refused.");
     expect(() => button("Add server", dialog())).toThrow();
     expect(button("Connect", dialog()).disabled).toBe(false);
   });
@@ -785,7 +840,7 @@ describe("adding a server", () => {
     await click(button("Connect", dialog()));
     expect(dialog().textContent).toContain("This server needs you to sign in");
     // Said once, beside its fix — not again as an error.
-    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    expect(dialog().querySelector(FAILURE)).toBeNull();
 
     await click(button("Sign in", dialog()));
     expect(signIn).toHaveBeenCalledWith({
@@ -825,14 +880,12 @@ describe("adding a server", () => {
     await act(async () => pending.reject(new Error("IPC unavailable")));
 
     expect(dialog().textContent).not.toContain("Waiting for the browser");
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
-      "Could not sign in. Try again.",
-    );
+    expect(dialog().querySelector(FAILURE)?.textContent).toBe("Could not sign in. Try again.");
     expect(button("Sign in", dialog()).disabled).toBe(false);
     expect(dialog().querySelector("#mcp-url")?.matches(":disabled")).toBe(false);
     await click(button("Sign in", dialog()));
     expect(signIn).toHaveBeenCalledTimes(2);
-    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    expect(dialog().querySelector(FAILURE)).toBeNull();
     expect(dialog().textContent).toContain("Connected · 1 tool");
   });
 
@@ -866,7 +919,7 @@ describe("adding a server", () => {
       projectId: project.id,
       serverId: expect.stringMatching(/^mcp-/),
     });
-    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    expect(dialog().querySelector(FAILURE)).toBeNull();
   });
 
   it("shows a failed draft sign-in cancellation inside the dialog", async () => {
@@ -897,7 +950,7 @@ describe("adding a server", () => {
     await click(button("Sign in", dialog()));
     expect(() => button("Connect", dialog())).toThrow();
     await click(button("Cancel sign-in", dialog()));
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("Could not cancel sign-in.");
+    expect(dialog().querySelector(FAILURE)?.textContent).toBe("Could not cancel sign-in.");
     await act(async () => finish?.({ ok: false, cancelled: true, error: "cancelled" }));
   });
 
@@ -912,13 +965,8 @@ describe("adding a server", () => {
     await click(labelled("Show environment variables"));
     await click(button("Add variable", dialog()));
     await setValue('input[aria-label="variable 1 name"]', "API_KEY");
-    await act(async () => {
-      const select = document.body.querySelector(
-        'select[aria-label="API_KEY kind"]',
-      ) as HTMLSelectElement;
-      select.value = "reference";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
+    await choose(labelled("API_KEY kind"), "Environment variable");
+    expect(labelled("API_KEY kind").textContent).toContain("Environment variable");
     await setValue('input[aria-label="API_KEY reference"]', "${TOOLS_KEY}");
     await click(button("Connect", dialog()));
 
@@ -991,19 +1039,17 @@ describe("sign-in and credentials (VC-470)", () => {
       if (surface === "saved dialog") await click(labelled("Open Sentry"));
       const scope = surface === "row" ? document.body : dialog();
       await click(button("Sign in", scope));
-      expect(text()).toContain(surface === "row" ? "Signing in…" : "Waiting for the browser");
+      expect(text()).toContain(surface === "row" ? "Signing in" : "Waiting for the browser");
 
       await act(async () => pending.reject(new Error("IPC unavailable")));
 
-      expect(text()).not.toContain("Signing in…");
+      expect(text()).not.toContain("Signing in");
       expect(text()).not.toContain("Waiting for the browser");
-      expect(scope.querySelector('[role="alert"]')?.textContent).toBe(
-        "Could not sign in. Try again.",
-      );
+      expect(scope.querySelector(FAILURE)?.textContent).toBe("Could not sign in. Try again.");
       expect(button("Sign in", scope).disabled).toBe(false);
       await click(button("Sign in", scope));
       expect(signIn).toHaveBeenCalledTimes(2);
-      expect(scope.querySelector('[role="alert"]')).toBeNull();
+      expect(scope.querySelector(FAILURE)).toBeNull();
     },
   );
 
@@ -1028,10 +1074,10 @@ describe("sign-in and credentials (VC-470)", () => {
     });
 
     await click(button("Sign in"));
-    expect(text()).toContain("Signing in…");
+    expect(text()).toContain("Signing in");
     await click(button("Cancel"));
     expect(cancelSignIn).toHaveBeenCalledWith({ projectId: project.id, serverId: "remote-1" });
-    expect(document.body.querySelector('[role="alert"]')).toBeNull();
+    expect(document.body.querySelector(FAILURE)).toBeNull();
   });
 
   it("offers no sign-in for a local server, or for a remote one carrying its own Authorization header", async () => {
@@ -1177,6 +1223,112 @@ describe("sign-in and credentials (VC-470)", () => {
     expect(document.body.querySelector('[aria-label="Show custom OAuth client"]')).toBeNull();
   });
 
+  it("picks the OAuth client secret kind from the keyboard and sends only what that kind holds", async () => {
+    // Two refusals keep the connection open for editing between attempts; the
+    // third connects, so the draft can be added.
+    const test = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: "Connection refused." })
+      .mockResolvedValueOnce({ ok: false, error: "Connection refused." })
+      .mockResolvedValueOnce({ ok: true, catalog });
+    const save = vi.fn(async (input: { server: McpServerRecord }) => ({
+      ok: true as const,
+      server: record({ ...input.server, catalog }),
+    }));
+    await render({ list: listing([]), test, save });
+
+    await click(button("Add server"));
+    await setValue("#mcp-url", "https://mcp.example.com/mcp");
+    await click(labelled("Show custom OAuth client"));
+    const kind = (): HTMLButtonElement => labelled("Client secret kind") as HTMLButtonElement;
+
+    // No client, no secret: the kind is fixed at None and the keyboard opens nothing.
+    expect(kind().getAttribute("role")).toBe("combobox");
+    expect(kind().disabled).toBe(true);
+    expect(kind().textContent).toContain("None");
+    kind().focus();
+    await act(async () =>
+      kind().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    expect(document.body.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(secretField()).toBeNull();
+
+    await setValue("#mcp-oauth-client-id", "volli-client");
+    expect(kind().disabled).toBe(false);
+    expect(secretField()).toBeNull();
+
+    // None sends the client alone.
+    await click(button("Connect", dialog()));
+    expect(test).toHaveBeenLastCalledWith({
+      projectId: project.id,
+      server: expect.objectContaining({
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.com/mcp",
+          oauth: { clientId: "volli-client" },
+        },
+      }),
+    });
+
+    // A stored secret is typed write-only and travels once, in its slot.
+    expect(await choose(kind(), "Stored secret")).toEqual([
+      "None",
+      "Stored secret",
+      "Environment variable",
+    ]);
+    expect(kind().textContent).toContain("Stored secret");
+    expect(secretField()?.type).toBe("password");
+    expect(secretField()?.getAttribute("aria-label")).toBe("Client secret value");
+    await setValue("#mcp-oauth-secret", "fixture-secret");
+    await click(button("Connect", dialog()));
+    expect(test).toHaveBeenLastCalledWith({
+      projectId: project.id,
+      server: expect.objectContaining({
+        transport: {
+          type: "streamable-http",
+          url: "https://mcp.example.com/mcp",
+          oauth: { clientId: "volli-client", clientSecret: { kind: "secret" } },
+        },
+      }),
+      secrets: { "oauth:client-secret": "fixture-secret" },
+    });
+
+    // None hides the value field again.
+    await choose(kind(), "None");
+    expect(kind().textContent).toContain("None");
+    expect(secretField()).toBeNull();
+
+    // A reference is plain `${NAME}` text; the secret typed earlier is not sent.
+    await choose(kind(), "Environment variable");
+    expect(secretField()?.type).not.toBe("password");
+    expect(secretField()?.getAttribute("aria-label")).toBe("Client secret reference");
+    await setValue("#mcp-oauth-secret", "${CLIENT_SECRET}");
+    const transport = {
+      type: "streamable-http",
+      url: "https://mcp.example.com/mcp",
+      oauth: {
+        clientId: "volli-client",
+        clientSecret: { kind: "reference", template: "${CLIENT_SECRET}" },
+      },
+    };
+    await click(button("Connect", dialog()));
+    expect(test).toHaveBeenLastCalledWith({
+      projectId: project.id,
+      server: expect.objectContaining({ transport }),
+    });
+
+    await click(button("Add server", dialog()));
+    expect(save).toHaveBeenCalledTimes(1);
+    const saved = (save.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(saved).toEqual(
+      expect.objectContaining({
+        projectId: project.id,
+        server: expect.objectContaining({ transport }),
+      }),
+    );
+    expect(saved).not.toHaveProperty("secrets");
+  });
+
   it("says once that a plain-http endpoint on another host carries no credential", async () => {
     await render({
       list: listing([
@@ -1262,6 +1414,8 @@ describe("recent activity (VC-380)", () => {
 
   it("says when the list itself could not be read", async () => {
     await render({ list: vi.fn(async () => ({ ok: false as const, error: "No database." })) });
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe("No database.");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("No database.");
+    expect(text()).not.toContain("No MCP servers yet.");
+    expect(button("Retry")).toBeDefined();
   });
 });

@@ -98,6 +98,10 @@ describe("Settings → Hosts", () => {
     expect(rows[1]).toContain("hetzner-1");
     expect(rows[1]).toContain("SSH · deploy@hetzner-1 · 1.1.0");
     expect(rows[1]).toContain("Online");
+    const hostStatus = [
+      ...(root.querySelectorAll("[data-host-row]")[1]?.querySelectorAll("span") ?? []),
+    ].find((node) => node.textContent === "Online");
+    expect(hostStatus?.parentElement?.className).toContain("flex-wrap");
     // studio serves no project here, but still has engine-owned host health.
     expect(rows[2]).toContain("No projects yet");
     expect(rows[2]).toContain("Online");
@@ -118,6 +122,11 @@ describe("Settings → Hosts", () => {
     ).toHaveLength(0);
     expect(rowNames(root)[2]).toContain("No projects yet");
     expect(rowNames(root)[2]).toContain(label);
+    if (label === "Connecting") {
+      expect(
+        root.querySelectorAll("[data-host-row]")[2]?.querySelector('[role="presentation"]'),
+      ).not.toBeNull();
+    }
     if (link.status !== "offline") {
       expect(root.querySelector('[aria-label="Retry studio"]')).toBeNull();
     }
@@ -211,6 +220,10 @@ describe("Settings → Hosts", () => {
     expect(devices.map(([id]) => id)).toEqual(["host-device-dev-me", "host-device-dev-old"]);
     expect(devices[0]![1]).toContain("This Mac");
     expect(devices[1]![1]).not.toContain("This Mac");
+    const deviceName = root.querySelector('[data-testid="host-device-dev-old"] .line-through');
+    expect(deviceName?.classList.contains("text-ui")).toBe(true);
+    expect(deviceName?.classList.contains("font-medium")).toBe(true);
+    expect(deviceName?.classList.contains("truncate")).toBe(true);
     await click(root, "All hosts");
     await settle();
     expect(rowNames(root)[2]).toContain("studio");
@@ -303,7 +316,7 @@ describe("Settings → Hosts", () => {
     api.devicesOf.set(IDLE.id, new Error("Couldn’t reach studio"));
     const root = await renderPane();
     await openHost(root, "studio");
-    expect(root.querySelector('[role="alert"]')?.textContent).toContain("Couldn’t reach studio");
+    expect(root.querySelector('[role="status"]')?.textContent).toContain("Couldn’t reach studio");
     api.devicesOf.set(IDLE.id, []);
     await click(root, "Try again");
     await settle();

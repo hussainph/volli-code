@@ -58,33 +58,17 @@ import { toastError } from "@renderer/lib/toast";
  * "let controls talk" rule leaves room for: a mute switch's blast radius is not
  * visible in its label, and getting it wrong is silence.
  */
-const EVENT_ROWS: Record<NotificationEvent, { label: string; hint: React.ReactNode }> = {
+const EVENT_ROWS: Record<NotificationEvent, { label: string; hint: string }> = {
   "needs-you": {
     label: "An agent needs my input",
-    hint: (
-      <>
-        An unattended Automation Run that stops to ask or breaks, a session the watchdog finds
-        wedged, and a terminal harness that reports it is waiting on a human.
-      </>
-    ),
+    hint: "An unattended Automation needs input, a terminal is waiting, or a session stalls.",
   },
-  finished: {
-    label: "A pull request merges",
-    hint: <>Volli watches the pull request on a ticket&rsquo;s branch and says when it lands.</>,
-  },
+  finished: { label: "A pull request merges", hint: "A ticket’s pull request has merged." },
   swept: {
     label: "Volli reclaims a worktree",
-    hint: <>A ticket&rsquo;s folder removed after its time in Done. The branch is kept.</>,
+    hint: "The folder is removed after Done; the branch is kept.",
   },
-  update: {
-    label: "An update is ready",
-    hint: (
-      <>
-        Sent when a downloaded update is waiting to install. With a Volli window open, the
-        sidebar&rsquo;s update badge announces it instead.
-      </>
-    ),
-  },
+  update: { label: "An update is ready", hint: "A downloaded update is ready to install." },
 };
 
 const SYSTEM_SETTINGS_ROUTE = "System Settings → Notifications → Volli Code";
@@ -162,15 +146,7 @@ export function NotificationsPane() {
         <PrefRow
           label="Notify me"
           htmlFor="notify-me"
-          hint={
-            <>
-              Volli asks the system to show these; the system decides whether they appear, and{" "}
-              {SYSTEM_SETTINGS_ROUTE} is where that is allowed or refused. One isn&rsquo;t sent when
-              the exact question, failure, or ticket it is about is already in front of you in the
-              focused Volli window — a window behind another app, or one showing something else,
-              still gets it.
-            </>
-          }
+          description={`Allow Volli Code in ${SYSTEM_SETTINGS_ROUTE}. Alerts for the item in front of you are silenced.`}
         >
           <Switch
             id="notify-me"
@@ -184,7 +160,7 @@ export function NotificationsPane() {
             key={event}
             label={EVENT_ROWS[event].label}
             htmlFor={`notify-${event}`}
-            hint={EVENT_ROWS[event].hint}
+            description={EVENT_ROWS[event].hint}
           >
             <Switch
               id={`notify-${event}`}

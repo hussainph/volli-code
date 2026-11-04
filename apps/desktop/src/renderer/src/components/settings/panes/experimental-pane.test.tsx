@@ -20,8 +20,8 @@ vi.mock("sonner", () => ({
 
 import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
 
-import { ExperimentalSettings } from "./experimental-settings";
-import { SettingsPage } from "./settings-page";
+import { ExperimentalSettings } from "./experimental-pane";
+import { SettingsPage } from "@renderer/components/pages/settings-page";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -112,9 +112,8 @@ describe("Settings → Experimental", () => {
 
     await renderPane();
 
-    expect(experimentSwitch().disabled).toBe(true);
-    expect(experimentSwitch().getAttribute("aria-checked")).toBe("false");
-    expect(document.body.textContent).toContain("Loading…");
+    expect(document.querySelector('[data-testid="experiment-cloud-switch"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Loading experiments"]')).not.toBeNull();
 
     await act(async () => resolveRead?.(snapshot(false)));
 
@@ -131,7 +130,7 @@ describe("Settings → Experimental", () => {
     expect(experimentSwitch().getAttribute("aria-checked")).toBe("false");
     expect(experimentSwitch().disabled).toBe(false);
     expect(document.body.textContent).toContain(
-      "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
+      "Cloud features are experimental. Read the security notes before enabling them.",
     );
   });
 
@@ -191,7 +190,7 @@ describe("Settings → Experimental", () => {
       "Couldn't load experimental settings: database is locked",
       expect.anything(),
     );
-    expect(experimentSwitch().disabled).toBe(true);
+    expect(document.querySelector('[data-testid="experiment-cloud-switch"]')).toBeNull();
     const retry = [...document.querySelectorAll("button")].find(
       (button) => button.textContent?.trim() === "Retry",
     );

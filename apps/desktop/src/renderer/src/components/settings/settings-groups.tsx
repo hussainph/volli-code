@@ -12,6 +12,7 @@
  */
 import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
 import { ChartLineIcon } from "@phosphor-icons/react/dist/csr/ChartLine";
+import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
@@ -26,11 +27,11 @@ import { EXPERIMENTS, MODEL_TIER_ROWS, type ExperimentSnapshot } from "@volli/sh
 
 import { LogViewer } from "@renderer/components/logs/log-viewer";
 import { cloudMovesCategory } from "./cloud-moves-category";
-import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
-import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
-import { ExperimentalSettings } from "@renderer/components/pages/experimental-settings";
-import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
-import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
+import { PrivacyDataPane } from "./panes/privacy-data-pane";
+import { AppearanceSettings } from "./panes/appearance-pane";
+import { ExperimentalSettings } from "./panes/experimental-pane";
+import { ModelAccessSettings } from "./panes/models-pane";
+import { WebSearchPane } from "./panes/web-search-pane";
 import type { PrefGroup } from "@renderer/components/settings/kit";
 import { hasVisibleExperiments } from "@renderer/stores/experiments";
 import { accountCategory } from "./account-category";
@@ -38,11 +39,11 @@ import { hostsCategory } from "./hosts-category";
 import { runnersCategory } from "./runners-category";
 import { workspaceCategory } from "./workspace-category";
 import { AboutPane } from "./panes/about-pane";
-import { DisplaySection } from "./panes/display-section";
+
 import { GeneralPane } from "./panes/general-pane";
 import { IntegrationsPane } from "./panes/integrations-pane";
 import { NotificationsPane } from "./panes/notifications-pane";
-import { StoragePane } from "./panes/storage-pane";
+import { StorageOverviewPane } from "./panes/storage-pane";
 import { UpdatesPane } from "./panes/updates-pane";
 
 /**
@@ -110,11 +111,15 @@ export function settingsGroups(
           icon: GearSixIcon,
           keywords: [
             "window",
-            "show the project switcher",
-            "project switcher",
-            "keep the sidebar open",
-            "sidebar",
-            "rail",
+            "zoom",
+            "diff layout",
+            "display",
+            "inline",
+            "side by side",
+            "cost",
+            "token",
+            "show cost and token usage",
+            "usage",
           ],
           content: <GeneralPane />,
         },
@@ -166,12 +171,7 @@ export function settingsGroups(
             "usage",
             "spend",
           ],
-          content: (
-            <>
-              <AppearanceSettings />
-              <DisplaySection />
-            </>
-          ),
+          content: <AppearanceSettings />,
         },
         {
           key: "notifications",
@@ -208,7 +208,6 @@ export function settingsGroups(
             "anthropic",
             "openai",
             "codex",
-            "compaction",
             "reasoning",
             "sign in",
             "account",
@@ -219,20 +218,28 @@ export function settingsGroups(
             // a setting a person can see and cannot search for.
             ...MODEL_TIER_ROWS.map((row) => row.label.toLowerCase()),
             "default models",
-            "automatic compaction",
-            // Code Mode (VC-471): its section and switch, the "Pin a model"
-            // row behind Advanced, and the words someone looking for it uses.
-            "code mode",
-            "codemode",
-            "sandbox",
-            "javascript",
-            "program",
-            "pin a model",
             "catalog",
             "signed in",
             "available to connect",
-            // The Decision model section (VC-478), every label it can draw.
+          ],
+          content: <ModelAccessSettings autoSignInProviderId={signInProviderId} />,
+        },
+        {
+          key: "agents",
+          label: "Agents",
+          icon: RobotIcon,
+          keywords: [
+            "code mode",
+            "codemode",
+            "compaction",
             "decision model",
+            "automatic compaction",
+            "exceptions",
+            "add model exception",
+            "pick models automatically",
+            "sandbox",
+            "javascript",
+            "program",
             "classifier",
             "classify",
             "jev",
@@ -245,14 +252,14 @@ export function settingsGroups(
             "cloud model",
             "status",
           ],
-          content: <ModelAccessSettings autoSignInProviderId={signInProviderId} />,
+          content: <ModelAccessSettings agents />,
         },
         {
           key: "web",
           label: "Web Search",
           icon: GlobeIcon,
           keywords: ["search", "brave", "exa", "searxng", "api key", "provider", "instance"],
-          content: <WebAccessSettings />,
+          content: <WebSearchPane />,
         },
         {
           key: "integrations",
@@ -326,14 +333,8 @@ export function settingsGroups(
             "venv",
             "cache",
             "disk space",
-            "database",
-            "size",
-            "database export",
-            "export database",
-            "export data",
-            "export data as json",
-            "data export",
             "backup",
+            "backups",
             "local profile backups",
             "last backup",
             "backup notice",
@@ -343,10 +344,8 @@ export function settingsGroups(
             "restart and restore",
             "previous profile",
             "show in finder",
-            "json",
-            "reveal in finder",
           ],
-          content: <StoragePane />,
+          content: <StorageOverviewPane />,
         },
         {
           // Its own category rather than a row under General (VC-119): the
@@ -354,9 +353,19 @@ export function settingsGroups(
           // governs what leaves the machine, which is a thing somebody should
           // be able to find by looking rather than by scrolling.
           key: "telemetry",
-          label: "Telemetry",
+          label: "Privacy & data",
           icon: ChartLineIcon,
           keywords: [
+            "database",
+            "size",
+            "database export",
+            "export database",
+            "export data",
+            "export data as json",
+            "data export",
+            "backup",
+            "json",
+            "reveal in finder",
             "telemetry",
             "observability",
             "opentelemetry",
@@ -374,7 +383,7 @@ export function settingsGroups(
             "cost",
             "cache hit",
           ],
-          content: <AgentObservabilitySettings />,
+          content: <PrivacyDataPane />,
         },
         ...(options.logs === true
           ? [
@@ -451,6 +460,7 @@ export function settingsGroups(
             "path",
             "fix",
             "re-check",
+            "retry",
             "copy",
             "copy report",
             "report",

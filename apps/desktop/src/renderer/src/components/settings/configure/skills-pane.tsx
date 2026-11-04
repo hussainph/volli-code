@@ -60,9 +60,11 @@ import {
   CONTROL_W,
   Cell,
   DataTable,
+  DescriptionCell,
   RowAction,
   SectionAction,
 } from "@renderer/components/settings/kit";
+import { actionsColumnWidth } from "@renderer/components/settings/kit/data-table";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
 import { ContentPreviewDialog } from "./content-preview-dialog";
 import { skillBodyTokens, skillsIndexTokens } from "./skills-budget";
@@ -133,10 +135,14 @@ export function SkillsPane({ project }: { project: Project }) {
         hint={
           indexTokens === null ? (
             <>
-              Auto costs prompt budget every turn. Manual keeps <code>/name</code> working.
+              Auto is discovered by agents; Manual is available through <code>/name</code>; Off
+              hides it.
             </>
           ) : (
-            <>Auto entries add ~{formatTokens(indexTokens)} tokens to every turn.</>
+            <>
+              Auto adds ~{formatTokens(indexTokens)} tokens per turn; Manual waits for you; Off
+              hides it.
+            </>
           )
         }
         action={<SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />}
@@ -221,6 +227,7 @@ function SkillsTable({
   // to move reads as one that did not take. The write's answer settles it.
   const [pending, setPending] = React.useState<SkillModes | null>(null);
   const modes = pending ?? project.skillModes ?? {};
+  const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set());
 
   const shown = React.useMemo(
     () => (filter === "all" ? skills : skills.filter((skill) => skillScope(skill) === filter)),
@@ -253,6 +260,8 @@ function SkillsTable({
       items={shown}
       keyOf={(skill) => `${skillScope(skill)}/${skill.name}`}
       rows="fill"
+      minWidth={680}
+      selection={{ keys: selected, onChange: setSelected, labelOf: (skill) => skill.name }}
       search={(skill) => `${skill.name} ${skill.description}`}
       placeholder="Search skills"
       bulk={(matched) => <BulkMode skills={matched} onApply={setAllModes} />}
@@ -275,33 +284,36 @@ function SkillsTable({
           header: "Skill",
           width: "20%",
           cell: (skill) => (
-            <Cell strong title={skill.name}>
-              <span className="inline-flex items-center gap-1">
+            <span className="flex min-w-0 items-center gap-1">
+              {/* The name clips in a 20% column; ValueReveal gives it back
+                  whole on hover AND on keyboard focus, where a native title
+                  only ever answered a pointer. */}
+              <Cell strong reveal="Skill">
                 {skill.name}
-                {/*
-                 * A declared policy Volli could not take at face value — two
-                 * spellings that disagree, or a flag that is not a boolean.
-                 * It belongs on the row rather than in a log because the
-                 * symptom is invisible: the skill simply behaves as though the
-                 * author had written nothing, and nothing on screen would
-                 * otherwise say why.
-                 */}
-                {skill.policyDiagnostic === null ? null : (
-                  <WarningIcon
-                    className="size-3.5 shrink-0 text-muted-foreground"
-                    aria-label={`${skill.name}: ${skill.policyDiagnostic}`}
-                  >
-                    <title>{skill.policyDiagnostic}</title>
-                  </WarningIcon>
-                )}
-              </span>
-            </Cell>
+              </Cell>
+              {/*
+               * A declared policy Volli could not take at face value — two
+               * spellings that disagree, or a flag that is not a boolean.
+               * It belongs on the row rather than in a log because the
+               * symptom is invisible: the skill simply behaves as though the
+               * author had written nothing, and nothing on screen would
+               * otherwise say why.
+               */}
+              {skill.policyDiagnostic === null ? null : (
+                <WarningIcon
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                  aria-label={`${skill.name}: ${skill.policyDiagnostic}`}
+                >
+                  <title>{skill.policyDiagnostic}</title>
+                </WarningIcon>
+              )}
+            </span>
           ),
         },
         {
           key: "description",
           header: "Description",
-          cell: (skill) => <Cell muted>{skill.description}</Cell>,
+          cell: (skill) => <DescriptionCell>{skill.description}</DescriptionCell>,
         },
         {
           key: "source",
@@ -324,7 +336,9 @@ function SkillsTable({
         {
           key: "open",
           header: "Open",
-          width: "4.5rem",
+          // Measured for the two RowActions below, with the cell's own gap
+          // and insets, so neither glyph is clipped or pushed off the row.
+          width: actionsColumnWidth(2),
           align: "end",
           headerHidden: true,
           cell: (skill) => (
@@ -413,7 +427,7 @@ function BulkMode({
   onApply: (targets: readonly SkillReference[], mode: SkillMode) => Promise<void>;
 }) {
   const [busy, setBusy] = React.useState(false);
-  const label = `Set all ${skills.length} to…`;
+  const label = `Set selected ${skills.length} to…`;
 
   return (
     <Select

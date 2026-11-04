@@ -237,21 +237,10 @@ describe("NotificationsPane", () => {
   it("explains the OS's part and the exact-item rule without claiming a permission", async () => {
     await render();
 
-    // The prose lives behind the master row's summoned `(i)`, so the page
-    // itself lectures nobody; focusing the trigger opens it into the body.
-    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="About Notify me"]');
-    expect(trigger).not.toBeNull();
-    await act(async () => {
-      trigger!.focus();
-      // React hears focus as `focusin`; jsdom's `focus()` does not always raise it.
-      trigger!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-    });
-
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("the system decides whether they appear");
+    expect(container.querySelector('[aria-label="About Notify me"]')).toBeNull();
+    const text = container.textContent ?? "";
     expect(text).toContain("System Settings → Notifications → Volli Code");
-    expect(text).toContain("exact question, failure, or ticket");
-    expect(text).toContain("focused Volli window");
+    expect(text).toContain("Alerts for the item in front of you are silenced");
     // Never a permission state: Electron gives the app none to report.
     expect(text).not.toMatch(/\b(Allowed|Denied)\b/);
   });

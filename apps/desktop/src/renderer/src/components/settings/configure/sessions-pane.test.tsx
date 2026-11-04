@@ -104,6 +104,16 @@ function tryAgainButton(): HTMLButtonElement | undefined {
 }
 
 describe("SessionsPane's model catalog", () => {
+  it("marks a pending catalogue with a skeleton and no loading ellipsis", async () => {
+    const inspect = vi.fn<ModelAccessClient["inspect"]>(() => new Promise(() => {}));
+    await renderPane(inspect);
+    expect(document.querySelector('[role="status"][aria-label="Loading models"]')).not.toBeNull();
+    expect(
+      document.querySelector('[data-testid="project-session-model"] button[aria-label^="Model"]'),
+    ).toBeNull();
+    expect(document.body.textContent).not.toContain("Loading models…");
+  });
+
   it("draws the selected project model with its catalogue name and mark", async () => {
     const selection = {
       providerId: "anthropic",
@@ -123,13 +133,12 @@ describe("SessionsPane's model catalog", () => {
       ],
     });
     await renderPane(inspect, { ...PROJECT, sessionModel: selection });
-    const trigger = document.getElementById("project-session-model");
+    const trigger = document.querySelector<HTMLButtonElement>(
+      '[data-testid="project-session-model"] button[aria-label^="Model"]',
+    );
     expect(trigger?.textContent).toContain("Claude Opus 4.1");
     expect(trigger?.textContent).not.toContain("claude-opus-4-1");
-    const caption = trigger?.querySelector('[data-slot="model-name"]');
-    expect(caption).toBeDefined();
-    expect(caption).not.toBeNull();
-    expect(caption?.parentElement?.querySelector(":scope > svg[aria-hidden] path")).not.toBeNull();
+    expect(trigger?.querySelector("svg[aria-hidden] path")).not.toBeNull();
   });
 
   it("groups same-name models by provider and saves the chosen provider's IDs", async () => {
@@ -162,35 +171,29 @@ describe("SessionsPane's model catalog", () => {
     const setSessionDefaults = vi.fn(async () => ({ ok: true, project: PROJECT }));
     vi.stubGlobal("api", { projects: { setSessionDefaults } });
     await renderPane(inspect, { ...PROJECT, sessionModel: selection });
-    const trigger = document.getElementById("project-session-model");
-    expect(trigger).not.toBeNull();
-    await act(async () => {
-      trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    });
-
-    const groups = [...document.querySelectorAll('[data-slot="select-group"]')];
-    expect(groups).toHaveLength(2);
-    for (const provider of providers) {
-      const group = groups.find(
-        (candidate) =>
-          candidate.querySelector('[data-slot="select-label"]')?.textContent === provider.label,
-      );
-      expect(group).toBeDefined();
-      const label = group?.querySelector('[data-slot="select-label"]');
-      expect(group?.getAttribute("aria-labelledby")).toBe(label?.id);
-      const caption = group?.querySelector('[data-slot="model-name"]');
-      expect(caption?.textContent).toContain("GPT-5");
-      expect(
-        caption?.parentElement?.querySelector(":scope > svg[aria-hidden] path"),
-      ).not.toBeNull();
-    }
-    const codexGroup = groups.find(
-      (group) => group.querySelector('[data-slot="select-label"]')?.textContent === "OpenAI Codex",
+    const trigger = document.querySelector<HTMLButtonElement>(
+      '[data-testid="project-session-model"] button[aria-label^="Model"]',
     );
-    const option = codexGroup?.querySelector<HTMLElement>('[data-slot="select-item"]');
-    expect(option).toBeDefined();
-    expect(option).not.toBeNull();
-    await act(async () => option?.click());
+    expect(trigger).not.toBeNull();
+    await act(async () => trigger?.click());
+    const search = document.querySelector<HTMLInputElement>("[cmdk-input]");
+    expect(search).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+        search,
+        "GPT",
+      );
+      search!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const options = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")];
+    const codex = options.find(
+      (option) =>
+        option.closest("[cmdk-group]")?.textContent?.includes("OpenAI Codex") &&
+        option.textContent?.includes("GPT-5"),
+    );
+    expect(codex).toBeDefined();
+    expect(codex?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+    await act(async () => codex?.click());
     expect(setSessionDefaults).toHaveBeenCalledExactlyOnceWith({
       id: PROJECT.id,
       model: { ...selection, providerId: "openai-codex" },
@@ -277,6 +280,16 @@ describe("SessionsPane's instruction files", () => {
     await renderPane(vi.fn().mockResolvedValue(CATALOG));
 
     expect(api.fs.listDirectory).toHaveBeenCalledWith(PROJECT.path);
+    // The copy matches the runtime's prompt-file precedence.
+    expect(document.body.textContent).toContain(
+      "Chats start with AGENTS.md in their prompt, or CLAUDE.md when the repo has no AGENTS.md",
+    );
+    expect(document.body.textContent).toContain(
+      "as the file reads when each Chat starts. Terminal harnesses load their own",
+    );
+    expect(document.body.textContent).toContain(
+      "Claude Code reads CLAUDE.md, Codex, Cursor and OpenCode read AGENTS.md.",
+    );
     expect(row("AGENTS.md").textContent).toContain("not in this repo");
     expect(row("CLAUDE.md").textContent).toContain("not in this repo");
     expect(action("Preview AGENTS.md")).toBeNull();
@@ -326,9 +339,11 @@ describe("SessionsPane's instruction files", () => {
     } as never);
     await renderPane(vi.fn().mockResolvedValue(CATALOG));
 
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "Permission was denied",
-    );
+    expect(
+      [...document.querySelectorAll('[role="status"]')].some((node) =>
+        node.textContent?.includes("Permission was denied"),
+      ),
+    ).toBe(true);
     await act(async () => action("Check the repo again")?.click());
 
     expect(api.fs.listDirectory).toHaveBeenCalledTimes(2);
@@ -343,15 +358,41 @@ describe("SessionsPane's instruction files", () => {
     await act(async () => action("Preview AGENTS.md")?.click());
 
     const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
-    expect(dialog?.querySelector('[role="alert"]')?.textContent).toContain("File was not found");
+    // The failure is the shared error Notice: its message is the announced
+    // region, and its recovery is a sibling of it rather than inside it.
+    const announced = dialog?.querySelector('[role="status"][aria-live="polite"]');
+    expect(announced?.textContent).toContain("Couldn't read this file");
+    expect(announced?.textContent).toContain("File was not found");
+    expect(announced?.querySelector("button")).toBeNull();
 
     // A read that failed transiently is worth retrying, and the retry lands.
     const retry = [...(dialog?.querySelectorAll("button") ?? [])].find(
-      (button) => button.textContent === "Try again",
+      (button) => button.textContent === "Retry",
     );
     await act(async () => retry?.click());
     expect(api.files.read).toHaveBeenCalledTimes(2);
     expect(dialog?.querySelector(".typeset h1")?.textContent).toBe("AGENTS.md rules");
+  });
+
+  it("holds the preview's shape while a file is read, with no loading text on screen", async () => {
+    const api = stubRepo({ "AGENTS.md": "file" });
+    api.files.read.mockReturnValueOnce(new Promise(() => {}) as never);
+    await renderPane(vi.fn().mockResolvedValue(CATALOG));
+
+    await act(async () => action("Preview AGENTS.md")?.click());
+
+    const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
+    const region = dialog?.querySelector('[role="status"][aria-label="Loading file"]');
+    expect(region?.getAttribute("aria-busy")).toBe("true");
+    expect(region?.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(3);
+    expect(dialog?.textContent).not.toContain("Loading");
+    // The header's rule is the centred inset divider, not a full-bleed border.
+    expect(dialog?.querySelector('[data-slot="dialog-header"]')?.className).not.toContain(
+      "border-b",
+    );
+    const divider = dialog?.querySelector('[data-slot="separator"]');
+    expect(divider?.className).toContain("mx-auto");
+    expect(divider?.className).toContain("w-4/5");
   });
 
   it("treats CLAUDE.md symlinked to AGENTS.md as a link: Reveal only, never a failing Preview", async () => {
@@ -389,7 +430,8 @@ describe("SessionsPane's instruction files", () => {
 
     const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
     expect(dialog?.textContent).toContain("AGENTS.md is not a text file.");
-    expect(dialog?.querySelector('[role="alert"]')).toBeNull();
+    // Not a failure: no error Notice, so nothing announced and no Retry.
+    expect(dialog?.querySelector('[role="status"]')).toBeNull();
     expect([...(dialog?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
       "Close",
     ]);

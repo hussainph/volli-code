@@ -1,3 +1,4 @@
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import * as React from "react";
@@ -10,7 +11,6 @@ import {
 
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Notice } from "@renderer/components/ui/notice";
 import { Switch } from "@renderer/components/ui/switch";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
@@ -23,7 +23,6 @@ type LoadState =
   | { status: "loaded"; snapshot: ExperimentSnapshot }
   | { status: "error"; message: string };
 
-/** Settings → System → Experimental. The host owns this registry and its writes. */
 export function ExperimentalSettings() {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const [busy, setBusy] = React.useState(false);
@@ -84,6 +83,32 @@ export function ExperimentalSettings() {
   if (snapshot !== null && !hasVisibleExperiments(snapshot)) return null;
   const experiments = EXPERIMENTS.filter(({ id }) => snapshot?.[id].visible !== false);
 
+  if (state.status === "loading")
+    return (
+      <PrefSection title="Experimental" icon={FlaskIcon}>
+        <div className="space-y-4 p-4" aria-label="Loading experiments">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      </PrefSection>
+    );
+  if (state.status === "error")
+    return (
+      <PrefSection title="Experimental" icon={FlaskIcon}>
+        <Notice
+          announce
+          tone="error"
+          icon={WarningIcon}
+          title="Couldn't read experimental settings"
+          detail={state.message}
+          actions={
+            <Button size="sm" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
+          }
+        />
+      </PrefSection>
+    );
   return (
     <PrefSection title="Experimental" icon={FlaskIcon}>
       {experiments.map((experiment) => {
@@ -93,7 +118,24 @@ export function ExperimentalSettings() {
           <PrefRow
             key={experiment.id}
             label={experiment.label}
-            description={experiment.description}
+            description={
+              experiment.id === "cloud" ? (
+                <>
+                  Cloud features are experimental. Read the{" "}
+                  <a
+                    className="underline underline-offset-2"
+                    href="https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    security notes
+                  </a>{" "}
+                  before enabling them.
+                </>
+              ) : (
+                experiment.description
+              )
+            }
             testId={`experiment-${experiment.id}`}
           >
             {environmentLocked ? (
@@ -111,22 +153,6 @@ export function ExperimentalSettings() {
           </PrefRow>
         );
       })}
-
-      {state.status === "loading" ? <p className={EMPTY_INLINE}>Loading…</p> : null}
-      {state.status === "error" ? (
-        <Notice
-          announce
-          tone="error"
-          icon={WarningIcon}
-          title="Couldn't read experimental settings"
-          detail={state.message}
-          actions={
-            <Button size="xs" variant="outline" onClick={() => void load()}>
-              Retry
-            </Button>
-          }
-        />
-      ) : null}
     </PrefSection>
   );
 }

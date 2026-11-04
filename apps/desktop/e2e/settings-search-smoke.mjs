@@ -75,34 +75,47 @@ async function visibleRowLabels(page) {
   });
 }
 
-const railNames = async (page, surface) =>
-  (
-    await page
-      .getByRole("navigation", { name: `${surface} categories` })
-      .getByRole("button")
-      .allInnerTexts()
-  )
-    .map((text) => text.trim())
-    .filter(Boolean);
+/**
+ * Settings and Configure share one shell: one rail, named "Settings
+ * categories", whose header is the scope switch ("All projects" or the
+ * project). `scope` is the word a search result prints for that half —
+ * "All projects" or "Project" — so a label found only in the other scope's
+ * page of the same name does not count.
+ */
+const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
+
+/**
+ * The inner text of every rail button below the scope switch: category rows
+ * with the search empty, result rows while it holds a query.
+ */
+const railNames = (page) =>
+  settingsRail(page).evaluate((nav) =>
+    [...nav.querySelectorAll("button")]
+      .filter((button) => button.closest('[aria-label="Settings scope"]') === null)
+      .map((button) => (button.innerText ?? "").trim())
+      .filter(Boolean),
+  );
 
 /** Opens one category and returns every label it shows. */
-async function labelsFor(page, surface, category) {
-  const nav = page.getByRole("navigation", { name: `${surface} categories` });
+async function labelsFor(page, category) {
+  const nav = settingsRail(page);
   await nav.getByRole("searchbox").fill("");
   await nav.getByRole("button", { name: category, exact: true }).click();
   return visibleRowLabels(page);
 }
 
-/** Types `label` into rail search and reports whether `category` survives it. */
-async function reachable(page, surface, category, label) {
-  const nav = page.getByRole("navigation", { name: `${surface} categories` });
-  await nav.getByRole("searchbox").fill(label);
-  const found = await railNames(page, surface);
-  return found.includes(category);
+/**
+ * Types `label` into rail search and reports whether `category` survives it.
+ * A result row reads "<match>\n<scope> · <category>".
+ */
+async function reachable(page, scope, category, label) {
+  await settingsRail(page).getByRole("searchbox").fill(label);
+  const found = (await railNames(page)).map((row) => row.split("\n").at(-1)?.trim());
+  return found.includes(`${scope} · ${category}`);
 }
 
-async function auditSurface(page, surface, startAt) {
-  const categories = await railNames(page, surface);
+async function auditSurface(page, surface, scope, startAt) {
+  const categories = await railNames(page);
   await attempt(startAt, `${surface}: the rail offers its categories`, async () => ({
     ok: categories.length > 0,
     detail: categories.join(" · "),
@@ -111,15 +124,12 @@ async function auditSurface(page, surface, startAt) {
   let n = startAt;
   for (const category of categories) {
     n += 1;
-    const labels = await labelsFor(page, surface, category);
+    const labels = await labelsFor(page, category);
     const unreachable = [];
     for (const label of labels) {
-      if (!(await reachable(page, surface, category, label))) unreachable.push(label);
+      if (!(await reachable(page, scope, category, label))) unreachable.push(label);
     }
-    await page
-      .getByRole("navigation", { name: `${surface} categories` })
-      .getByRole("searchbox")
-      .fill("");
+    await settingsRail(page).getByRole("searchbox").fill("");
 
     await attempt(n, `${surface} → ${category}: every visible label finds this page`, async () => ({
       ok: unreachable.length === 0,
@@ -149,11 +159,15 @@ try {
 
   await must(1, "Settings opens on its category rail", async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-    await page.getByRole("navigation", { name: "Settings categories" }).waitFor();
+    const nav = settingsRail(page);
+    await nav.waitFor();
+    // The app-wide scope, explicitly: Settings reopens on its last page.
+    await nav.getByRole("button", { name: "All projects", exact: true }).click();
+    await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
     return { ok: true };
   });
 
-  const last = await auditSurface(page, "Settings", 2);
+  const last = await auditSurface(page, "Settings", "All projects", 2);
 
   // Configure needs a project. With none selected the page is an empty state
   // and there is no rail to audit — correct behaviour, not a failure, so the
@@ -161,9 +175,11 @@ try {
   const configure = page.getByRole("button", { name: "Configure", exact: true });
   if ((await configure.count()) > 0) {
     await configure.click();
-    const nav = page.getByRole("navigation", { name: "Configure categories" });
-    await nav.waitFor();
-    await auditSurface(page, "Configure", last + 1);
+    // Configure is the same rail in project scope ("All projects" unpressed).
+    await settingsRail(page)
+      .getByRole("button", { name: "All projects", pressed: false })
+      .waitFor();
+    await auditSurface(page, "Configure", "Project", last + 1);
   }
 
   exitCode = summarize();

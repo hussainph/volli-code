@@ -1,27 +1,13 @@
-/**
- * Settings → Agent telemetry (VC-119): the opt-in OTLP export switch.
- *
- * View glue only. The fold from a saved setting to what this pane shows lives in
- * `agent-observability-model.ts`, which is coverage-enrolled; this file draws it
- * and does the I/O.
- *
- * The switch and the address are saved together because they are one decision:
- * turning export on names where it goes. A refused address arrives here as the
- * endpoint policy's own sentence and is shown in the row rather than toasted
- * away — it is a correction to what was just typed, and it belongs beside the
- * field it was typed into. A collector that stops answering later shows up in
- * the same place, once, and never as a toast.
- */
 import { ChartLineIcon } from "@phosphor-icons/react/dist/csr/ChartLine";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { useCallback, useEffect, useState } from "react";
 import { errorMessage } from "@volli/shared";
 
-import type { AgentObservabilityView } from "../../../../ipc/contract";
+import type { AgentObservabilityView } from "../../../../../ipc/contract";
 import { agentObservabilityPanel } from "@renderer/components/pages/agent-observability-model";
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
 import { StatusDot } from "@renderer/components/ui/status-dot";
@@ -34,14 +20,6 @@ type LoadState =
   | { status: "loaded"; view: AgentObservabilityView }
   | { status: "error"; message: string };
 
-/**
- * How often a healthy exporter is re-asked whether it is still healthy.
- *
- * The transport discovers a collector that has gone away on its own schedule —
- * the first batch that does not land, which the metric reader may not attempt
- * for half a minute. This surface is pull-only, so without a re-ask the pane
- * would keep showing "Exporting" for a state main already knows is broken.
- */
 const DELIVERY_RECHECK_MS = 5000;
 
 export function AgentObservabilitySettings() {
@@ -69,13 +47,6 @@ export function AgentObservabilitySettings() {
     }
   }, [settingsFetch]);
 
-  /**
-   * Re-read the setting without touching the address field.
-   *
-   * Deliberately not {@link load}: that adopts the stored address, which would
-   * overwrite whatever somebody is in the middle of typing. A recheck is only
-   * ever about the delivery state.
-   */
   const recheck = useCallback(async () => {
     const token = settingsFetch.claim();
     try {
@@ -105,7 +76,6 @@ export function AgentObservabilitySettings() {
     return () => clearInterval(timer);
   }, [watchingDelivery, recheck]);
 
-  /** One shape for every write: run it, take the view, put a refusal in the row. */
   async function write(enabled: boolean, address: string): Promise<void> {
     if (busy) return;
     // A write is the newest word on this setting, so it supersedes any read
@@ -134,7 +104,10 @@ export function AgentObservabilitySettings() {
   if (state.status === "loading") {
     return (
       <PrefSection title="Agent telemetry" icon={ChartLineIcon}>
-        <p className={EMPTY_INLINE}>Loading…</p>
+        <div className="space-y-4 p-4" aria-label="Loading telemetry settings">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
       </PrefSection>
     );
   }
@@ -160,7 +133,10 @@ export function AgentObservabilitySettings() {
   const panel = agentObservabilityPanel(state.view);
   return (
     <PrefSection title="Agent telemetry" icon={ChartLineIcon}>
-      <PrefRow label="Export">
+      <PrefRow
+        label="Export agent telemetry"
+        description="Send agent traces and metrics to your collector."
+      >
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 text-ui text-muted-foreground">
             <StatusDot state={panel.dotState} />
@@ -176,8 +152,12 @@ export function AgentObservabilitySettings() {
         </div>
       </PrefRow>
 
-      <PrefRow label="Collector" htmlFor="agent-observability-endpoint" align="start">
-        <div className="flex w-80 flex-col items-end gap-2">
+      <PrefRow
+        label="Collector"
+        description="The destination for exported telemetry."
+        htmlFor="agent-observability-endpoint"
+      >
+        <div className="flex w-64 max-w-full flex-col items-end gap-2">
           <Input
             id="agent-observability-endpoint"
             value={endpoint}

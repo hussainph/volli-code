@@ -35,21 +35,21 @@ function renderPane(): string {
   );
 }
 
-describe("ModelAccessSettings", () => {
-  /**
-   * The rows whose label names no job carry it as the `(i)` beside the label,
-   * which is the one slot CLAUDE.md's copy rule leaves for it: the label is
-   * the tier name, the hint is the job, and nothing becomes a paragraph under
-   * a control. `PrefRow` draws the glyph, so what the markup shows is the
-   * button that opens it.
-   */
-  it("carries the utility purpose as the row's (i), not as prose under it", () => {
+// Still mounted by hosts/host-model-sheet; app Settings uses the new models pane.
+describe("ModelAccessSettings (remote-host sheet)", () => {
+  it("shows the utility purpose as one visible line below its label, without an info hint", () => {
     const html = renderPane();
-    const utilityRow = html.slice(html.indexOf('data-testid="default-model-utility"'));
+    const utilityRow = html.slice(
+      html.indexOf('data-testid="default-model-utility"'),
+      html.indexOf('data-testid="default-model-ticket"'),
+    );
 
-    expect(html).toContain('data-testid="default-model-utility"');
-    expect(utilityRow).toContain('aria-label="About Utility"');
-    expect(utilityRow).not.toContain('data-slot="pref-row-description"');
+    expect(utilityRow).toContain('data-slot="pref-row-label"');
+    expect(utilityRow).toContain(
+      '<p class="mt-1 text-ui leading-5 text-muted-foreground">Chat names and summaries.</p>',
+    );
+    expect(utilityRow).not.toContain('aria-label="About');
+    expect([...utilityRow.matchAll(/<p\b/g)]).toHaveLength(1);
   });
 
   it("indents the kind-of-work rows under Ticket Sessions and nothing else", () => {
@@ -78,10 +78,9 @@ describe("ModelAccessSettings", () => {
     expect(rows.utility?.hint).toBe("Chat names and summaries.");
   });
 
-  it("carries the job in the (i), never as prose under the control", () => {
-    // CLAUDE.md's copy rule, which this ticket restated: the label is the tier
-    // name and the `(i)` carries the one-line job. No row may take PrefRow's
-    // `description`, which is reserved for trust boundaries.
+  it("keeps one purpose line per tier rather than a second description", () => {
+    // PrefRow displays the hint as subtext. PURPOSE_ROWS must not supply a
+    // second description alongside that same purpose line.
     for (const row of PURPOSE_ROWS) {
       expect(row).not.toHaveProperty("description");
     }

@@ -249,9 +249,9 @@ export function thisMacStatus(snapshot: ThisMacRunnerSnapshot, now?: number): St
   switch (snapshot.state) {
     case "unregistered":
     case "registering":
-      return { state: "starting", label: "Adding…" };
+      return { state: "starting", label: "Adding" };
     case "connecting":
-      return { state: "starting", label: "Connecting…" };
+      return { state: "starting", label: "Connecting" };
     case "offline":
       return snapshot.since === null
         ? { state: "idle", label: "Offline" }

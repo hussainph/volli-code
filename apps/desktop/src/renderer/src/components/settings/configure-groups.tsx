@@ -1,5 +1,7 @@
+import { OverviewPane } from "./configure/overview-pane";
+import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 /**
- * The Configure rail: two groups, seven categories, this project always.
+ * The Configure rail: two groups, eight categories, this project always.
  *
  * AGENT CONFIG LANDS HERE because agent config *is* project-scoped — which
  * skills a repo's agents can reach and which commands it defines. Putting it
@@ -21,7 +23,7 @@ import type * as React from "react";
 
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
-import { ProjectAppearanceSettings } from "@renderer/components/pages/project-appearance-settings";
+import { ProjectAppearanceSettings } from "./panes/project-appearance-pane";
 import type { PrefGroup } from "@renderer/components/settings/kit";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
@@ -132,6 +134,21 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
       key: "project",
       label: "Project",
       categories: [
+        {
+          key: "overview",
+          label: "Overview",
+          icon: GearSixIcon,
+          keywords: [
+            "global overrides",
+            "reset",
+            "defaults",
+            "canvas",
+            "mode",
+            "chat model",
+            "decision model",
+          ],
+          content: local(project, <OverviewPane project={project} />),
+        },
         {
           key: "sessions",
           label: "Sessions",

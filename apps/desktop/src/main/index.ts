@@ -244,6 +244,7 @@ import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
 import { registerSecretIpc } from "./secrets/ipc";
+import { isSecretRenderer } from "./secrets/renderer-trust";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import {
   registerDegradedSessionRpcIpcHandlers,
@@ -1547,16 +1548,9 @@ const appStartup = app.whenReady().then(async () => {
   sessionWakeBus?.subscribe(({ event }) => {
     if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
   });
-  registerSecretIpc(secrets, (sender) => {
-    const url = sender.getURL();
-    const renderer = isDev ? process.env["ELECTRON_RENDERER_URL"] : PACKAGED_RENDERER_ENTRY_URL;
-    if (renderer === undefined || !URL.canParse(renderer) || !URL.canParse(url)) return false;
-    const actual = new URL(url);
-    const expected = new URL(renderer);
-    actual.hash = "";
-    expected.hash = "";
-    return actual.href === expected.href;
-  });
+  registerSecretIpc(secrets, (sender) =>
+    isSecretRenderer(sender.getURL(), isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined),
+  );
   const mcpSettings = liveHost?.runtimeServices.mcp ?? null;
   // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
   // workspace's installed copy unpackaged, and the copy electron-builder

@@ -176,8 +176,11 @@ try {
     await waitUntil(
       "the account row offers Sign out",
       async () => {
+        // The test id marks the row's name; its buttons are siblings, so the
+        // row is the shell one level up (see model-access-signin-smoke.mjs).
         const button = page
           .getByTestId(`account-${PROVIDER_ID}`)
+          .locator("xpath=..")
           .getByRole("button", { name: "Sign out", exact: true });
         return (await button.count()) === 1;
       },

@@ -31,6 +31,10 @@ const button = (text: string) => {
 const click = async (text: string) => {
   await act(async () => button(text).click());
 };
+const command = () => document.querySelector("pre")!.textContent!;
+/** What the sheet's notices announced, in order. */
+const announced = () =>
+  [...document.querySelectorAll("[aria-live]")].map((node) => node.textContent ?? "");
 const type = async (label: string, text: string) => {
   const input = [...document.querySelectorAll("label")]
     .find((item) => item.textContent?.includes(label))!
@@ -40,6 +44,33 @@ const type = async (label: string, text: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
+/** Opens the select labelled `label` from the keyboard, picks `option`, and returns every option's text. */
+async function pick(label: string, option: string): Promise<string[]> {
+  const labelled = [...document.querySelectorAll("label")].find(
+    (node) => node.textContent === label,
+  )!;
+  const trigger = document.getElementById(labelled.htmlFor)!;
+  expect(trigger.getAttribute("role")).toBe("combobox");
+  // jsdom has no layout; Radix scrolls the highlighted option into view.
+  const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = () => {};
+  try {
+    trigger.focus();
+    await act(async () => {
+      trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    const chosen = options.find((node) => node.textContent === option);
+    if (chosen === undefined) throw new Error(`Missing option: ${option}`);
+    await act(async () => chosen.focus());
+    await act(async () => {
+      chosen.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    return options.map((node) => node.textContent ?? "");
+  } finally {
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+  }
+}
 function fixture() {
   const grant = {
     installTokenId: "grant-id",
@@ -96,7 +127,7 @@ describe("Runner setup sheets", () => {
     await type("Runner name", "hetzner-1");
     await click("Create install command");
     expect(f.setup.create).toHaveBeenCalledWith("hetzner-1");
-    expect(document.body.textContent).toContain("Waiting for the box…");
+    expect(document.body.textContent).toContain("Waiting for the box");
     await click("Copy command");
     expect(copy.mock.calls[0]![0]).toContain("/v0.3.0/volli-runner-install.sh");
     expect(document.body.textContent).toContain("Copied");
@@ -117,6 +148,19 @@ describe("Runner setup sheets", () => {
     expect(f.props.onClose).toHaveBeenCalledOnce();
     act(() => root.render(null));
     expect(f.stop).toHaveBeenCalledOnce();
+  });
+
+  it("switches the install command between the user, environment and system variants", async () => {
+    const f = fixture();
+    act(() => root.render(<AddRunnerSheet {...f.props} />));
+    await click("Create install command");
+    expect(command()).toContain("| sh -s --");
+    expect(await pick("Install command", "System install (sudo)")).toEqual([
+      "User install",
+      "Environment variable",
+      "System install (sudo)",
+    ]);
+    expect(command()).toContain("| sudo sh -s --");
   });
 
   it("does not claim success on failures, supports status retry and explicit revocation", async () => {
@@ -196,9 +240,7 @@ describe("Runner setup sheets", () => {
     });
     act(() => root.render(<AddRunnerSheet {...f.props} />));
     await click("Create install command");
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "Settings → Account and sign in again",
-    );
+    expect(announced().join("\n")).toContain("Settings → Account and sign in again");
     expect(document.body.textContent).not.toContain(f.grant.installToken);
   });
 
@@ -215,9 +257,8 @@ describe("Runner setup sheets", () => {
     act(() => root.render(<AddRunnerSheet {...f.props} />));
     await click("Create install command");
     await click("Copy command");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-      "Couldn’t copy. Select the text and copy it manually.",
-    );
+    expect(announced()).toContain("Couldn’t copy. Select the text and copy it manually.");
+    expect(document.body.textContent).not.toContain("Copy error");
   });
 
   it("generates cloud-init with a fresh token and supports all three provider paths", async () => {
@@ -226,16 +267,11 @@ describe("Runner setup sheets", () => {
     await click("Create install command");
     expect(document.body.textContent).toContain("#cloud-config");
     expect(document.body.textContent).toContain("Start it within 1 hour");
-    const select = document.querySelector<HTMLSelectElement>('[aria-label="Provider"]')!;
-    expect([...select.options].map((option) => option.text)).toEqual([
+    expect(await pick("Provider", "DigitalOcean")).toEqual([
       "Hetzner",
       "DigitalOcean",
       "Other (cloud-init)",
     ]);
-    await act(async () => {
-      select.value = "DigitalOcean";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
     expect(document.body.textContent).toContain("on DigitalOcean");
     f.push({ state: "revoked", expiresAt: f.grant.expiresAt, runner: null });
     expect(document.body.textContent).not.toContain("#cloud-config");

@@ -75,6 +75,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Notice } from "@renderer/components/ui/notice";
 import { Segmented } from "@renderer/components/ui/segmented";
 import {
@@ -342,7 +343,9 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   if (state.status === "loading") {
     return (
       <PrefSection title="Decision model" icon={SignpostIcon}>
-        <p className={EMPTY_INLINE}>Loading…</p>
+        <p className={EMPTY_INLINE}>
+          <LoadingLabel>Loading</LoadingLabel>
+        </p>
       </PrefSection>
     );
   }
@@ -561,7 +564,9 @@ export function ProjectDecisionModelRow({
     return (
       <PrefRow label="Decision model" testId="project-decision-model">
         {state.status === "loading" ? (
-          <span className="text-ui text-muted-foreground">Loading…</span>
+          <span className="text-ui text-muted-foreground">
+            <LoadingLabel>Loading</LoadingLabel>
+          </span>
         ) : (
           <div className="flex items-center gap-3" title={state.message}>
             <span className="text-ui text-muted-foreground">Couldn&rsquo;t load</span>

@@ -1,13 +1,25 @@
 import * as React from "react";
+import { CONTROL_W } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
 } from "@renderer/components/ui/dialog";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { toastError } from "@renderer/lib/toast";
 import { runnerInstallCommand } from "./runner-install-command";
 import {
@@ -28,6 +40,7 @@ export interface RunnerSheetProps {
 
 export function AddRunnerSheet(props: RunnerSheetProps) {
   const [variant, setVariant] = React.useState<"token" | "environment" | "sudo">("token");
+  const variantId = React.useId();
   return (
     <RunnerInstallSheet
       {...props}
@@ -36,19 +49,21 @@ export function AddRunnerSheet(props: RunnerSheetProps) {
     >
       {(grant, name) => (
         <>
-          <label className="flex items-center justify-between gap-4 text-ui">
-            Install command
-            <select
-              aria-label="Install command"
-              value={variant}
-              onChange={(event) => setVariant(event.target.value as typeof variant)}
-              className="rounded-control border border-border bg-background px-2 py-1"
-            >
-              <option value="token">User install</option>
-              <option value="environment">Environment variable</option>
-              <option value="sudo">System install (sudo)</option>
-            </select>
-          </label>
+          <div className="flex items-center justify-between gap-4">
+            <label htmlFor={variantId} className="text-ui">
+              Install command
+            </label>
+            <Select value={variant} onValueChange={(next) => setVariant(next as typeof variant)}>
+              <SelectTrigger id={variantId} className={CONTROL_W.lg}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="token">User install</SelectItem>
+                <SelectItem value="environment">Environment variable</SelectItem>
+                <SelectItem value="sudo">System install (sudo)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <RunnerCopy
             value={runnerInstallCommand({
               appVersion: props.appVersion,
@@ -173,7 +188,6 @@ export function RunnerInstallSheet({
       }}
     >
       <DialogContent
-        className="max-h-[90vh] overflow-y-auto"
         onCloseAutoFocus={(event) => {
           if (restoreFocus) {
             event.preventDefault();
@@ -185,89 +199,93 @@ export function RunnerInstallSheet({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        {grant === null ? (
-          <form
-            className="flex flex-col gap-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!busy) void create();
-            }}
-          >
-            <label className="flex flex-col gap-2 text-ui">
-              Runner name
-              <Input
-                autoFocus
-                value={name}
-                maxLength={80}
-                placeholder="Use the box’s hostname"
-                disabled={busy}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </label>
-            <Button type="submit" disabled={busy}>
-              {busy ? "Creating…" : "Create install command"}
-            </Button>
-          </form>
-        ) : (
-          <>
-            {online ? (
-              <p role="status" className="text-ui text-positive">
-                {status.runner!.name} is online. Pick it in the composer.
+        <DialogBody className="flex flex-col gap-4">
+          {grant === null ? (
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!busy) void create();
+              }}
+            >
+              <label className="flex flex-col gap-2 text-ui">
+                Runner name
+                <Input
+                  autoFocus
+                  value={name}
+                  maxLength={80}
+                  placeholder="Use the box’s hostname"
+                  disabled={busy}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+              <Button type="submit" disabled={busy}>
+                {busy ? <LoadingLabel>Creating</LoadingLabel> : "Create install command"}
+              </Button>
+            </form>
+          ) : online ? (
+            <p role="status" className="text-ui text-positive">
+              {status.runner!.name} is online. Pick it in the composer.
+            </p>
+          ) : (
+            <>
+              {!inactive && !used ? (
+                <>
+                  {children(grant, name)}
+                  <p className="text-ui text-muted-foreground">
+                    One use, valid for 1 hour. Keep this token private. Closing this sheet does not
+                    revoke it.
+                  </p>
+                </>
+              ) : null}
+              <p role="status" className="text-ui text-muted-foreground">
+                {inactive ? (
+                  "This token has expired or been revoked."
+                ) : used ? (
+                  <LoadingLabel>
+                    {`${status.runner?.name ?? "Runner"} is linked. Waiting for it to come online`}
+                  </LoadingLabel>
+                ) : (
+                  <LoadingLabel>Waiting for the box</LoadingLabel>
+                )}
               </p>
-            ) : (
-              <>
-                {!inactive && !used ? (
-                  <>
-                    {children(grant, name)}
-                    <p className="text-ui text-muted-foreground">
-                      One use, valid for 1 hour. Keep this token private. Closing this sheet does
-                      not revoke it.
-                    </p>
-                  </>
-                ) : null}
-                <p role="status" className="text-ui text-muted-foreground">
-                  {inactive
-                    ? "This token has expired or been revoked."
-                    : used
-                      ? `${status.runner?.name ?? "Runner"} is linked. Waiting for it to come online…`
-                      : "Waiting for the box…"}
-                </p>
-                {watchFailed ? (
-                  <div role="alert" className="flex items-center justify-between gap-2 text-ui">
-                    <span>Couldn’t read the runner’s status.</span>
-                    <Button variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>
+              {watchFailed ? (
+                <Notice
+                  tone="error"
+                  title="Couldn’t read the runner’s status."
+                  announce
+                  actions={
+                    <Button variant="outline" size="xs" onClick={() => setAttempt((n) => n + 1)}>
                       Retry status
                     </Button>
-                  </div>
-                ) : null}
-              </>
-            )}
-            <div className="flex justify-end gap-2">
-              {!used && !inactive ? (
-                <Button variant="ghost" size="sm" disabled={busy} onClick={() => void revoke()}>
-                  Revoke token
-                </Button>
+                  }
+                />
               ) : null}
-              {inactive ? (
-                <Button size="sm" disabled={busy} onClick={() => void create()}>
-                  Create a fresh command
-                </Button>
-              ) : null}
-              <Button variant="outline" size="sm" onClick={onClose}>
-                Done
+            </>
+          )}
+          {busy ? (
+            <p role="status" className="text-ui text-muted-foreground">
+              You can close this sheet. Your request may still finish.
+            </p>
+          ) : null}
+          {error === null ? null : <Notice tone="error" title={error} announce />}
+        </DialogBody>
+        {grant === null ? null : (
+          <DialogFooter>
+            {!used && !inactive ? (
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => void revoke()}>
+                Revoke token
               </Button>
-            </div>
-          </>
-        )}
-        {busy ? (
-          <p role="status" className="text-ui text-muted-foreground">
-            You can close this sheet. Your request may still finish.
-          </p>
-        ) : null}
-        {error === null ? null : (
-          <p role="alert" className="text-ui text-destructive">
-            {error}
-          </p>
+            ) : null}
+            {inactive ? (
+              <Button size="sm" disabled={busy} onClick={() => void create()}>
+                Create a fresh command
+              </Button>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={onClose}>
+              Done
+            </Button>
+          </DialogFooter>
         )}
       </DialogContent>
     </Dialog>
@@ -302,9 +320,13 @@ export function RunnerCopy({ value, label }: { value: string; label: string }) {
         {copied ? "Copied" : label}
       </Button>
       {failed ? (
-        <p role="alert" className="text-ui text-destructive">
-          Couldn’t copy. Select the text and copy it manually.
-        </p>
+        // No "Copy error" beside it: the clipboard just refused this sheet.
+        <Notice
+          tone="error"
+          title="Couldn’t copy. Select the text and copy it manually."
+          copyText=""
+          announce
+        />
       ) : null}
     </div>
   );

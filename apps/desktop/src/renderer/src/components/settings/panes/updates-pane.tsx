@@ -1,3 +1,6 @@
+import { Skeleton } from "@renderer/components/ui/skeleton";
+import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Settings → Updates: which release line this install follows, and what is on
  * offer right now.
@@ -12,14 +15,14 @@
  * toggle. The confirm is one-directional on purpose — leaving canary is always
  * safe, so only entering it asks.
  *
- * VC-294: the pane keeps what the last check said (`updates-pane-model.ts`),
- * and a channel it could not read says so — a disabled select showing
- * "Stable" read as a preference this install did not offer, not as a fault.
+ * The pane keeps what the last check said (`updates-pane-model.ts`), and a
+ * channel it could not read says so — a disabled select showing "Stable" read
+ * as a preference this install did not offer, not as a fault.
  *
- * VC-851: the select shows the line this install actually follows — a canary
- * build that never chose reads Canary. Leaving canary is honoured from the
- * next launch (the running updater is not narrowed mid-run), and an installed
- * canary is never downgraded, so the pane says both the moment it happens.
+ * The select shows the line this install actually follows — a canary build
+ * that never chose reads Canary. Leaving canary is honoured from the next
+ * launch (the running updater is not narrowed mid-run), and an installed canary
+ * is never downgraded, so the pane says both the moment it happens.
  */
 import * as React from "react";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
@@ -27,8 +30,8 @@ import { errorMessage } from "@volli/shared";
 
 import type { UpdateChannel } from "../../../../../ipc/contract";
 import { CONTROL_W, Health, PrefRow, PrefSection } from "@renderer/components/settings/kit";
-import { Button } from "@renderer/components/ui/button";
 import { useNow } from "@renderer/components/hosts/use-hosts";
+import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
@@ -49,51 +52,44 @@ const LEAVING_CANARY_DETAIL =
 const ENTER_CANARY_WARNING =
   "Canary builds ship the newest work first and break more often. You can switch back, but an installed canary won't downgrade itself. Continue?";
 
-/** Runs the explicit check; only a failure to even ASK surfaces here (outcomes ride the state pushes). */
-function requestCheck(): void {
-  window.api.updates
-    .check()
-    .then((result) => {
-      if (!result.ok) toastError(`Couldn't check for updates: ${result.error}`);
-    })
-    .catch((error: unknown) => {
-      toastError(`Couldn't check for updates: ${errorMessage(error)}`);
-    });
+async function check() {
+  try {
+    const result = await window.api.updates.check();
+    if (!result.ok) toastError(`Couldn't check for updates: ${result.error}`);
+  } catch (cause) {
+    toastError(`Couldn't check for updates: ${errorMessage(cause)}`);
+  }
 }
 
 export function UpdatesPane() {
   const state = useUpdateStore((store) => store.state);
   const openDialog = useUpdateStore((store) => store.openDialog);
   const [channel, setChannel] = React.useState<UpdateChannel | null>(null);
-  /** Why the channel could not be read — a fault, never a disabled preference. */
   const [channelError, setChannelError] = React.useState<string | null>(null);
+  const reads = useLatestAsync();
   const [saving, setSaving] = React.useState(false);
   /** Stable was just chosen over Canary — not yet in effect (see LEAVING_CANARY_DETAIL). */
   const [leftCanary, setLeftCanary] = React.useState(false);
-  const [reads, setReads] = React.useState(0);
   // The clock behind "· 3h ago", read outside render (react/purity) and
   // ticking so the age keeps up while the pane stays open.
   const now = useNow(true, 30_000);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    const fail = (error: string): void => {
-      if (!cancelled) setChannelError(error);
-    };
-    window.api.updates
-      .channel()
-      .then((result) => {
-        if (cancelled) return;
-        // A broken db has no channel to read; the row says so rather than
-        // claiming "stable" it cannot verify.
-        if (result.ok) setChannel(result.channel);
-        else fail(result.error);
-      })
-      .catch((error: unknown) => fail(errorMessage(error)));
-    return () => {
-      cancelled = true;
-    };
+  const load = React.useCallback(async () => {
+    const token = reads.claim();
+    setChannelError(null);
+    try {
+      const result = await window.api.updates.channel();
+      if (!reads.isCurrent(token)) return;
+      if (result.ok) setChannel(result.channel);
+      else setChannelError(result.error);
+    } catch (cause) {
+      if (reads.isCurrent(token)) setChannelError(errorMessage(cause));
+    }
   }, [reads]);
+  React.useEffect(() => {
+    void load();
+    return () => reads.invalidate();
+  }, [load, reads]);
 
   async function choose(next: UpdateChannel): Promise<void> {
     if (saving || next === channel) return;
@@ -122,6 +118,7 @@ export function UpdatesPane() {
       {ready ? (
         <Notice
           tone="positive"
+          dismissalKey={`settings:updates:ready:${state?.targetVersion}`}
           icon={DownloadSimpleIcon}
           title={`Volli ${state?.targetVersion} is ready`}
           detail="It installs the next time you quit."
@@ -150,36 +147,33 @@ export function UpdatesPane() {
             </>
           }
         >
-          {channelError === null ? (
+          {channelError ? (
+            <Notice
+              tone="error"
+              title="Couldn't read the release channel"
+              detail={channelError}
+              actions={
+                <Button size="sm" onClick={() => void load()}>
+                  Retry
+                </Button>
+              }
+            />
+          ) : channel === null ? (
+            <Skeleton className="h-8 w-40" aria-label="Loading release channel" />
+          ) : (
             <Select
-              value={channel ?? ""}
+              value={channel}
               disabled={channel === null || saving}
               onValueChange={(next) => void choose(next as UpdateChannel)}
             >
               <SelectTrigger id="update-channel" className={CONTROL_W.md}>
-                <SelectValue placeholder="Loading…" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="stable">Stable</SelectItem>
                 <SelectItem value="canary">Canary</SelectItem>
               </SelectContent>
             </Select>
-          ) : (
-            <>
-              <span title={channelError}>
-                <Health state="error">Couldn&rsquo;t read the channel</Health>
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setChannelError(null);
-                  setReads((count) => count + 1);
-                }}
-              >
-                Retry
-              </Button>
-            </>
           )}
         </PrefRow>
 
@@ -206,9 +200,13 @@ export function UpdatesPane() {
             size="sm"
             variant="outline"
             disabled={state?.supported !== true || state.phase === "checking"}
-            onClick={requestCheck}
+            onClick={() => void check()}
           >
-            {state?.phase === "checking" ? "Checking…" : (status?.action ?? "Check now")}
+            {state?.phase === "checking" ? (
+              <LoadingLabel>Checking</LoadingLabel>
+            ) : (
+              (status?.action ?? "Check now")
+            )}
           </Button>
         </PrefRow>
       </PrefSection>

@@ -111,7 +111,7 @@ describe("updateStatus", () => {
   it("shows the phase while something is happening", () => {
     expect(updateStatus(snapshot({ phase: "checking" }), NOW)).toMatchObject({
       state: "working",
-      label: "Checking…",
+      label: "Checking",
     });
     expect(
       updateStatus(snapshot({ phase: "downloading", targetVersion: "0.3.0", percent: 41.6 }), NOW),

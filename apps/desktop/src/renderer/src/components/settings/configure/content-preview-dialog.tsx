@@ -14,8 +14,12 @@
  * The body renders through the same sanitizing markdown pipeline a Ticket
  * uses, because these files are markdown and nobody's prose reads better as
  * raw `#` and `*`.
+ *
+ * The header's rule is the system's centred inset divider, not a full-bleed
+ * border, and the states under it are the shared ones: a first read holds the
+ * prose's shape with skeleton bars inside a loading region (no "Loading" text
+ * on screen), and a failed read is a `Notice` carrying its own Retry.
  */
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import type { AsyncState } from "@renderer/components/settings/kit";
 import { Markdown } from "@renderer/components/ticket/markdown";
@@ -27,6 +31,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@renderer/components/ui/dialog";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { Notice } from "@renderer/components/ui/notice";
+import { Separator } from "@renderer/components/ui/separator";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 
 /** The body a preview shows. `truncated` when the reader stopped at its cap. */
@@ -69,7 +76,9 @@ export function ContentPreviewDialog({
         data-testid="content-preview-dialog"
         className="flex h-[70vh] max-h-none flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
       >
-        <DialogHeader className="shrink-0 gap-1 border-b border-border/50 py-4 pr-12 pl-4">
+        {/* No right inset of its own: DialogTitle already reserves the close
+            button's clearance whenever the dialog draws one. */}
+        <DialogHeader className="shrink-0 gap-1 p-4">
           <DialogTitle className="break-words">{title}</DialogTitle>
           <DialogDescription asChild>
             <div className="flex flex-col gap-1">
@@ -80,6 +89,7 @@ export function ContentPreviewDialog({
             </div>
           </DialogDescription>
         </DialogHeader>
+        <Separator className="mx-auto w-4/5" />
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           <PreviewContent body={body} />
         </div>
@@ -91,8 +101,7 @@ export function ContentPreviewDialog({
 function PreviewContent({ body }: { body: PreviewState }) {
   if (body.status === "loading") {
     return (
-      <div className="flex flex-col gap-2" aria-busy>
-        <span className="sr-only">Loading…</span>
+      <div className="flex flex-col gap-2" {...loadingRegionProps("file")}>
         <Skeleton className="h-4 w-2/3" />
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-5/6" />
@@ -104,13 +113,17 @@ function PreviewContent({ body }: { body: PreviewState }) {
   }
   if (body.status === "error") {
     return (
-      <div role="alert" className="flex items-center gap-2 text-ui">
-        <WarningIcon aria-hidden className="size-4 shrink-0 text-destructive" />
-        <span className="min-w-0 flex-1 text-muted-foreground">{body.message}</span>
-        <Button size="xs" variant="outline" onClick={body.onRetry}>
-          Try again
-        </Button>
-      </div>
+      <Notice
+        tone="error"
+        title="Couldn't read this file"
+        detail={body.message}
+        announce
+        actions={
+          <Button size="xs" variant="outline" onClick={body.onRetry}>
+            Retry
+          </Button>
+        }
+      />
     );
   }
   if (body.data.text.trim() === "") {

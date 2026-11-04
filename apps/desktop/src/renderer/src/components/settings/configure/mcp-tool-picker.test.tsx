@@ -156,9 +156,9 @@ describe("McpToolPicker", () => {
       group.getAttribute("aria-label"),
     );
     expect(groups).toEqual(["Show tools", "Read-only", "Can make changes", "Unavailable"]);
-    expect(view.textContent).toContain("1 of 4 on");
+    expect(view.textContent).toContain("1 of 4 selected");
     expect(view.textContent).toContain("1 of 2");
-    expect(view.querySelector('[aria-label="About read-only tools"]')).not.toBeNull();
+    expect(view.textContent).toContain("Read-only is the server’s claim, not a Volli guarantee.");
     expect(view.textContent).toContain("Destructive");
     // The exact name is never hidden behind the friendlier title.
     expect(view.textContent).toContain("List issues");
@@ -190,7 +190,7 @@ describe("McpToolPicker", () => {
 
     await click(box("Select all tools"));
     expect(state("Get issue (get_issue)")).toBe("false");
-    expect(container!.textContent).toContain("0 of 4 on");
+    expect(container!.textContent).toContain("0 of 4 selected");
   });
 
   it("turns a whole group on and off from its own checkbox, leaving the other group alone", async () => {
@@ -268,7 +268,7 @@ describe("McpToolPicker", () => {
   it("says a server offers no tools, rather than drawing an empty list", async () => {
     const view = await render([]);
     expect(view.textContent).toContain("This server offers no tools.");
-    expect(view.textContent).toContain("0 of 0 on");
+    expect(view.textContent).toContain("0 of 0 selected");
   });
 
   it("is one Tab stop: arrows, Home and End walk every checkbox, Right and Left reach details", async () => {

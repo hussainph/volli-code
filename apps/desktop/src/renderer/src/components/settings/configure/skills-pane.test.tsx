@@ -134,8 +134,22 @@ describe("Configure → Skills", () => {
           </TooltipProvider>,
         ),
       );
-      // The table clips the name, so the cell carries it whole on hover too.
-      expect(container.querySelector(`span[title="${long.name}"]`)).not.toBeNull();
+      // The table clips the name, so the cell is the shared ValueReveal: a
+      // focus stop naming it whole, never a hover-only native title.
+      const name = container.querySelector<HTMLButtonElement>(
+        `button[data-slot="value-reveal"][aria-label="Skill · ${long.name}"]`,
+      );
+      expect(name?.textContent).toBe(long.name);
+      expect(name?.className).toContain("truncate");
+      expect(container.querySelector(`[title="${long.name}"]`)).toBeNull();
+      // The actions column is measured for its two glyph actions, the cell's
+      // gap between them and its insets — not a fixed guess.
+      const open = [...container.querySelectorAll("col")].find((col) =>
+        col.style.width.includes("--spacing-control-default"),
+      );
+      expect(open?.style.width).toBe(
+        "calc(2 * var(--spacing-control-default) + 6 * var(--spacing))",
+      );
 
       const preview = container.querySelector<HTMLButtonElement>(
         `button[aria-label="Preview ${long.name}"]`,
@@ -154,7 +168,10 @@ describe("Configure → Skills", () => {
       container.remove();
       vi.unstubAllGlobals();
     }
-  });
+    // A full client mount of the table (a Select and two tooltip actions per
+    // row) and then the dialog's rendered markdown: no loop, but more than the
+    // default 5s budget on a machine shared with other test runs.
+  }, 20_000);
 
   describe("ruled", () => {
     const tdd = skills[0]!;
