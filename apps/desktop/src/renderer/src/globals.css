@@ -2621,6 +2621,11 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   padding-inline: 0;
   justify-content: flex-start;
 }
+/* Compact inspector properties align with 24px label chips. */
+.inspector-popup[data-size="sm"] {
+  height: var(--spacing-control-sm);
+  min-height: var(--spacing-control-sm);
+}
 .search-capsule {
   border: 1px solid var(--border-strong);
   border-radius: 999px;

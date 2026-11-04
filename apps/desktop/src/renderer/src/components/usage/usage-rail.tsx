@@ -226,6 +226,7 @@ export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
       summary={bySession.total}
       sessions={sessions}
       topModel={topModel}
+      models={byModel === null ? [] : modelRows(byModel, catalogue)}
       open={usageOpen}
       onOpenChange={(open) => useUiStore.getState().setRailFold("usage", open)}
     />

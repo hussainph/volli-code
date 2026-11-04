@@ -151,6 +151,7 @@ export const UsageBar = React.memo(function UsageBar({
 export function UsageClassRows({ summary }: { summary: SessionUsageSummary }) {
   const segments = usageBarSegments(summary);
   if (segments.length === 0) return null;
+  const total = totalUsageTokens(summary);
   return (
     <dl className="flex flex-col gap-2">
       {segments.map((segment) => (
@@ -160,9 +161,17 @@ export function UsageClassRows({ summary }: { summary: SessionUsageSummary }) {
             style={{ background: `var(--usage-ink)`, ...CLASS_STYLE[segment.id] }}
             className="size-2 shrink-0 rounded-full"
           />
-          <dt className="min-w-0 flex-1 truncate text-ui text-muted-foreground">{segment.label}</dt>
-          <dd className="shrink-0 text-ui text-foreground">
+          <dt
+            title={segment.label}
+            className="min-w-0 flex-1 truncate text-ui text-muted-foreground"
+          >
+            {segment.label}
+          </dt>
+          <dd className="flex shrink-0 items-baseline gap-2 text-ui text-foreground">
             <UsageTokenCount tokens={segment.tokens} />
+            <span className="w-12 text-right text-label tabular-nums text-muted-foreground">
+              {((segment.tokens / total) * 100).toFixed(1)}%
+            </span>
           </dd>
         </div>
       ))}

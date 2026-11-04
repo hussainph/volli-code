@@ -45,7 +45,6 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
 import { guardWrite, readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { Badge } from "@renderer/components/ui/badge";
 import {
@@ -56,7 +55,6 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   buildActivityFeed,
@@ -129,12 +127,12 @@ function EventLine({
     <div
       className={cn(
         "flex items-center gap-2 px-1 text-ui",
-        muted ? "text-muted-foreground/70" : "text-muted-foreground",
+        muted ? "text-tertiary-foreground" : "text-muted-foreground",
       )}
     >
       <Icon className={cn("shrink-0", muted ? "size-3" : "size-3.5")} />
       <span className="min-w-0 truncate">{sentence}</span>
-      <span className="shrink-0 text-muted-foreground/70">
+      <span className="shrink-0 text-tertiary-foreground">
         · {relativeTime(event.createdAt, now)}
       </span>
     </div>
@@ -190,7 +188,7 @@ function BunchRow({
             type="button"
             onClick={onToggle}
             aria-expanded={expanded}
-            className="flex shrink-0 items-center gap-1 rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+            className="flex shrink-0 items-center gap-1 rounded-sm text-tertiary-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           >
             {expanded ? "less" : `+${hidden} more`}
             <CaretDownIcon
@@ -198,7 +196,7 @@ function BunchRow({
             />
           </button>
         ) : null}
-        <span className="shrink-0 text-muted-foreground/70">· {relativeTime(at, now)}</span>
+        <span className="shrink-0 text-tertiary-foreground">· {relativeTime(at, now)}</span>
       </div>
       {expanded && hidden > 0 ? <BunchEventList events={events} now={now} /> : null}
     </li>
@@ -211,7 +209,7 @@ function AuthorChip({ actor, label }: { actor: string; label: string }) {
     <span
       className={cn(
         "inline-flex size-5 shrink-0 items-center justify-center rounded-full text-label font-semibold",
-        isAgentActor(actor) ? "bg-primary/10 text-primary" : "bg-accent text-foreground",
+        isAgentActor(actor) ? "bg-(--accent-tint) text-primary-text" : "bg-accent text-foreground",
       )}
       aria-hidden
     >
@@ -400,7 +398,7 @@ function Composer({
   }
 
   return (
-    <div className={cn(PROMPT_SURFACE, "flex flex-col overflow-hidden")}>
+    <div className="flex flex-col overflow-hidden rounded-container border border-border bg-card focus-within:border-ring">
       <ReadOnlyNote projectId={projectId} className="px-4 pt-3" />
       <textarea
         value={draft}
@@ -416,10 +414,9 @@ function Composer({
         aria-keyshortcuts="Meta+Enter Control+Enter"
         className="min-h-20 max-h-48 w-full resize-none bg-transparent px-4 py-4 text-sm text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
       />
-      <div className="prompt-toolbar flex items-center justify-end gap-2 px-2 py-2">
+      <div className="flex items-center justify-end gap-2 px-2 py-2">
         <Button
           size="sm"
-          className="prompt-primary"
           disabled={draft.trim() === "" || submitting || !canWrite}
           {...readOnlyMark(canWrite)}
           aria-keyshortcuts="Meta+Enter Control+Enter"
@@ -427,9 +424,8 @@ function Composer({
         >
           <PaperPlaneTiltIcon />
           Comment
-          {/* Same shortcut-chip treatment as the workspace picker's tooltip
-              (project-tile.tsx), tinted for the ember primary surface. */}
-          <kbd className="rounded-sm bg-primary-foreground/10 px-1 py-1 text-label font-normal text-primary-foreground/70">
+          {/* Keep the shortcut on the same tonal face as the action. */}
+          <kbd className="rounded-sm bg-(--accent-tint) px-1 py-1 text-label font-normal text-primary-text">
             ⌘↵
           </kbd>
         </Button>
@@ -629,10 +625,10 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   return (
     <section className="flex flex-col gap-4 border-t border-border pt-6">
       <div className="flex items-center justify-between gap-2">
-        <SectionHeading as="h3">Activity</SectionHeading>
+        <h3 className="text-heading font-semibold">Activity</h3>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" aria-label={`Filter activity: ${filter}`}>
+            <Button variant="inspector" size="sm" aria-label={`Filter activity: ${filter}`}>
               <ChatCircleIcon />
               {filter}
               <CaretDownIcon />

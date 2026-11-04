@@ -1,7 +1,5 @@
-/** Ticket usage stays pinned beneath Now. Tokens and cost share the header,
- * with a colour-owned token bar below. Attribution folds upward into a bounded
- * scroller, leaving the pressed trigger in place. Unmetered Tickets stay silent.
- * Summaries and fold state are props; usage-rail.tsx owns the live reads. */
+/** A single pinned spend reading. Class counts and attribution unfold above it,
+ * within the rail's existing bounded scroller. Unmetered Tickets stay silent. */
 import { ReceiptIcon } from "@phosphor-icons/react/dist/csr/Receipt";
 
 import type { SessionUsageSummary } from "@volli/shared";
@@ -15,7 +13,7 @@ import {
   RailFoldCaret,
   RailFoldTrigger,
 } from "@renderer/components/ticket/rail-panel-parts";
-import { UsageBar } from "@renderer/components/usage/usage-bar";
+import { UsageClassRows } from "@renderer/components/usage/usage-bar";
 import {
   UsageBreakdownFact,
   UsageSummaryFigure,
@@ -31,10 +29,13 @@ import {
   type UsageGroupRow,
 } from "@renderer/usage/usage-format";
 
+const NO_MODELS: readonly UsageGroupRow[] = [];
+
 export function TicketUsageBlock({
   summary,
   sessions,
   topModel,
+  models = NO_MODELS,
   className,
   open = false,
   onOpenChange,
@@ -42,13 +43,9 @@ export function TicketUsageBlock({
   summary: SessionUsageSummary;
   /** Every Session that ran on this Ticket, ordered by known cost, descending. */
   sessions: readonly UsageGroupRow[];
-  /**
-   * The model with the most known spend, as its row — already named against the
-   * catalogue and carrying the identity its mark is drawn from. Its NAME is
-   * what the fact says and never its cost: this is one fact, not the ranking,
-   * which stays Home's alone (see above).
-   */
+  /** Highest-spend model, with its catalogue identity rather than a wire id. */
   topModel: UsageGroupRow | null;
+  models?: readonly UsageGroupRow[];
   className?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -67,10 +64,7 @@ export function TicketUsageBlock({
           beside a `min-h-0 flex-1` scroller, and a footer that could shrink
           would be the member flexbox compresses first when the roster inside
           that scroller grows. */}
-      <footer
-        data-testid="ticket-usage-card"
-        className={cn(RAIL_FOOTER, "usage-instrument", className)}
-      >
+      <footer data-testid="ticket-usage-card" className={cn(RAIL_FOOTER, className)}>
         {/* The body comes BEFORE the row in the DOM: it opens upward. */}
         <RailFoldBody>
           <div
@@ -82,6 +76,7 @@ export function TicketUsageBlock({
               RAIL_PANEL_INSET,
             )}
           >
+            <UsageClassRows summary={summary} />
             {cached !== null || topModel !== null ? (
               <div className="flex flex-col gap-2">
                 {cached === null ? null : (
@@ -100,6 +95,7 @@ export function TicketUsageBlock({
                 the reader would have no way to see that a manual companion is
                 where the missing work went. */}
             {sessions.length > 0 ? <UsageRankList heading="By session" rows={sessions} /> : null}
+            <UsageRankList heading="By model" rows={models} />
           </div>
         </RailFoldBody>
         <RailFoldTrigger asChild>
@@ -114,11 +110,6 @@ export function TicketUsageBlock({
             <RailFoldCaret open={open} placement="footer" />
           </button>
         </RailFoldTrigger>
-        {tokens > 0 ? (
-          <div className={cn(RAIL_PANEL_INSET, "pb-4")}>
-            <UsageBar summary={summary} />
-          </div>
-        ) : null}
       </footer>
     </RailFold>
   );
