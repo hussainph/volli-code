@@ -215,6 +215,12 @@ const EXACT = {
   },
 
   // ── host ──────────────────────────────────────────────────────────────────
+  "volli:mcp-global": {
+    placement: "host",
+    owner: "stays",
+    reason:
+      "This machine’s shared MCP configuration and legacy import identities; credentials stay in the sealed MCP store.",
+  },
   "volli:installation-id": {
     placement: "host",
     owner: "VC-572",

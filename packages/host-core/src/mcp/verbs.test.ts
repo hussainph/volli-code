@@ -881,7 +881,7 @@ describe("what the MCP verbs never do", () => {
     expect(listMcpOperations(h.db, "project-one")[0]?.sessionId).toBe("caller-session");
   });
 
-  it("cannot reach another project's server, even by its exact id", async () => {
+  it("can manage the shared machine server from another project", async () => {
     const h = harness();
     await installed(h);
     const elsewhere: RuntimeSessionIdentity = { ...CALLER, projectId: "project-two" };
@@ -894,8 +894,8 @@ describe("what the MCP verbs never do", () => {
       },
     );
 
-    expect(result.text).toMatch(/No MCP server files in this project/);
-    expect(listMcpServers(h.db, "project-one")).toHaveLength(1);
+    expect(result.text).toMatch(/Removed/);
+    expect(listMcpServers(h.db, "project-one")).toHaveLength(0);
   });
 
   it("refuses in words when no MCP settings owner came up this launch", async () => {

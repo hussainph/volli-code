@@ -104,6 +104,7 @@ describe("app_state key registry", () => {
       "volli:model-picker-view": "client-local VC-572",
       "volli:vc354-perf:": "client-local stays",
       "volli:experimental-flags": "split VC-577",
+      "volli:mcp-global": "host stays",
       "volli:installation-id": "host VC-572",
       "volli:agent-tools-removed": "host VC-572",
       "volli:follow-up-clean-close": "host stays",
