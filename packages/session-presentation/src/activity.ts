@@ -1125,15 +1125,19 @@ export function splitPath(value: string): { directory: string; basename: string 
 // elsewhere must not become a status. A complete standalone paragraph heading
 // advances the status; an unfinished heading keeps the last complete one.
 const FIRST_BOLD = /^\s*\*\*([^*\n]+)\*\*/;
-const SUMMARY_HEADING = /(?:^|\n\s*\n)\s*\*\*([^*\n]+)\*\*(?=\s*(?:\n|$))/g;
+// One line, read on its own: no quantifier can run across a newline, so a
+// stream of blank lines costs linear time rather than polynomial.
+const HEADING_LINE = /^\s*\*\*([^*\n]+)\*\*\s*$/;
 
 function latestReasoningHeading(text: string): string | null {
   const first = FIRST_BOLD.exec(text)?.[1]?.trim();
   if (!first) return null;
   let heading = first;
-  for (const match of text.matchAll(SUMMARY_HEADING)) {
-    const candidate = match[1]?.trim();
+  let afterBlank = true;
+  for (const line of text.split("\n")) {
+    const candidate = afterBlank ? HEADING_LINE.exec(line)?.[1]?.trim() : undefined;
     if (candidate) heading = candidate;
+    afterBlank = line.trim() === "";
   }
   return heading;
 }
