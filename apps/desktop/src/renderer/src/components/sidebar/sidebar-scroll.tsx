@@ -354,7 +354,7 @@ export function SidebarScrollArea({
           className={cn(
             // z-10 clears the rows, and that is all a z-index can do here — the
             // grip is out of reach at any value (see the note at the top).
-            "absolute z-10 cursor-default rounded-full bg-border-strong transition-opacity duration-200 ease-out motion-reduce:transition-none",
+            "absolute z-10 cursor-default rounded-full bg-border-strong transition-opacity duration-(--duration-sheet) ease-out motion-reduce:transition-none",
             // Pointer-events rides with the opacity, never apart from it.
             scrolling || dragging
               ? "opacity-100"

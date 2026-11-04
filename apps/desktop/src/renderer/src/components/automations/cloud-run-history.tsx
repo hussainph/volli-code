@@ -60,7 +60,7 @@ export function cloudRunLabel(run: CloudRun): string {
         : run.sessionAccess === "gone"
           ? "Session removed"
           : run.sessionAccess === "starting"
-            ? "Starting…"
+            ? "Starting"
             : run.attendance === "unattended"
               ? "Automatic"
               : "By hand";

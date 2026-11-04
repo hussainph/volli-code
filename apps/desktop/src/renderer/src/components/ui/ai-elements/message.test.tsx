@@ -9,11 +9,10 @@ describe("conversation paper", () => {
         <MessageContent>Hello</MessageContent>
       </Message>,
     );
-    // These are CSS variables, not named Tailwind colours or radii. Their
-    // explicit variable utilities are necessary for the generated stylesheet.
+    // Accent paint is derived; geometry comes from the named shared scale.
     expect(html).toContain("group-[.is-user]:bg-(--accent-selected)");
     expect(html).toContain("group-[.is-user]:text-primary-text");
-    expect(html).toContain("group-[.is-user]:rounded-(--radius-floating)");
+    expect(html).toContain("group-[.is-user]:rounded-floating");
     expect(html).not.toContain("group-[.is-user]:bg-muted");
   });
 

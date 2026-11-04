@@ -802,7 +802,7 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
         weight="bold"
         aria-hidden
         className={cn(
-          "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+          "size-3 shrink-0 transition-transform duration-(--duration-menu-in) motion-reduce:transition-none",
           open && "rotate-90",
         )}
       />

@@ -78,7 +78,7 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
           <button
             type="button"
             aria-label={workspace?.name ?? "Workspaces"}
-            className="workspace-tile app-region-no-drag flex size-9 shrink-0 items-center justify-center rounded-(--radius-card) text-ui font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="workspace-tile app-region-no-drag flex size-9 shrink-0 items-center justify-center rounded-card text-ui font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {workspace === null ? <BuildingsIcon className="size-4" /> : monogram(workspace.name)}
           </button>

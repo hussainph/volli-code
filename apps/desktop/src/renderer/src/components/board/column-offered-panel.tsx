@@ -90,7 +90,7 @@ export function ColumnOfferedPanel({
       data-offered-inert={inert ? "true" : undefined}
       className={cn(
         "flex flex-col rounded-lg border border-border bg-popover shadow-overlay",
-        "transition-[gap,padding] duration-150 ease-out motion-reduce:transition-none",
+        "transition-[gap,padding] duration-(--duration-menu-in) ease-out motion-reduce:transition-none",
         expanded ? "gap-1 p-1" : "gap-0 p-1",
       )}
     >
@@ -172,7 +172,7 @@ function OfferedRow({
       title={label}
       className={cn(
         "flex items-center gap-2 rounded-md border text-left text-ui",
-        "transition-[background-color,border-color,color,padding] duration-150 ease-out motion-reduce:transition-none",
+        "transition-[background-color,border-color,color,padding] duration-(--duration-menu-in) ease-out motion-reduce:transition-none",
         expanded ? "px-2 py-2" : "px-1 py-0",
         dashed && !chosen ? "border-dashed border-border" : "border-transparent",
         chosen

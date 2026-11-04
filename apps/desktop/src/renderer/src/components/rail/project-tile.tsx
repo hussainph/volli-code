@@ -104,7 +104,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                     { "--tile-color": projectColor(project.colorIndex) } as React.CSSProperties
                   }
                   className={cn(
-                    "workspace-tile group/tile relative flex size-9 items-center justify-center rounded-(--radius-card) text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                    "workspace-tile group/tile relative flex size-9 items-center justify-center rounded-card text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                     isSelected && "workspace-tile-selected",
                   )}
                 >

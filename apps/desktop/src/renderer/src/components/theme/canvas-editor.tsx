@@ -334,7 +334,7 @@ function PadOrb({
         marginTop: -size / 2,
         background: stop.hex,
       }}
-      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
+      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-(--duration-sheet) ease-out focus-visible:ring-4 focus-visible:outline-2"
     />
   );
 }
@@ -417,7 +417,7 @@ function GradientPad({
  */
 function PadChip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="pointer-events-auto flex items-center gap-0.5 rounded-full bg-background/60 p-0.5 backdrop-blur-sm">
+    <div className="pointer-events-auto flex items-center gap-0.5 rounded-full glass-control p-0.5">
       {children}
     </div>
   );
@@ -643,7 +643,7 @@ function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string 
       viewBox={`0 ${-WAVE_BAND / 2} ${SLIDER_SQUIGGLE_WIDTH} ${WAVE_BAND}`}
       preserveAspectRatio="none"
       style={{ clipPath: clip }}
-      className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 overflow-visible transition-[clip-path] duration-150 ease-out motion-reduce:transition-none!"
+      className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 overflow-visible transition-[clip-path] duration-(--duration-menu-in) ease-out motion-reduce:transition-none!"
     >
       <path
         d={sliderSquigglePath(
@@ -660,7 +660,7 @@ function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string 
           transformBox: "fill-box",
           transformOrigin: "center",
         }}
-        className={`${ink} transition-transform duration-150 ease-out motion-reduce:transition-none!`}
+        className={`${ink} transition-transform duration-(--duration-menu-in) ease-out motion-reduce:transition-none!`}
       />
     </svg>
   );
@@ -734,7 +734,7 @@ function WaveSlider({
           <span
             aria-hidden
             style={{ left: seam }}
-            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-150 ease-out motion-reduce:transition-none!"
+            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-(--duration-menu-in) ease-out motion-reduce:transition-none!"
           />
           {/* Last, so it takes the pointer: the platform's own control with its
             paint suppressed, which keeps click-to-jump, the keyboard, and the

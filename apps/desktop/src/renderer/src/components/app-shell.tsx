@@ -874,14 +874,14 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute z-30 transition-opacity duration-150 ease-swift",
+              "pointer-events-none absolute z-30 transition-opacity duration-(--duration-menu-in) ease-swift",
               reveal.visible ? "opacity-0" : "opacity-100",
             )}
             style={{ top: 0, bottom: 0, left: panelLeft, width: SLIVER_WIDTH }}
           >
             <div
               className={cn(
-                "absolute inset-y-2 left-[2px] w-[2px] rounded-full transition-colors duration-150",
+                "absolute inset-y-2 left-[2px] w-[2px] rounded-full transition-colors duration-(--duration-menu-in)",
                 reveal.arming ? "bg-foreground/30" : "bg-foreground/10",
               )}
             />

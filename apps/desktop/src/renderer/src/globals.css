@@ -2700,7 +2700,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   height: 32px;
   flex-shrink: 0;
   align-self: center;
-  border-radius: 9px;
+  border-radius: var(--radius-row);
   corner-shape: squircle;
   background: var(--accent-tint);
   color: var(--primary-text);
@@ -2795,7 +2795,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   color: var(--foreground);
 }
 [data-volli-sidebar] [data-slot="sidebar-menu-button"] {
-  border-radius: 8px;
+  border-radius: var(--radius-row);
 }
 .session-envelope {
   background: color-mix(in srgb, var(--canvas-accent) 3.5%, transparent);
@@ -2825,7 +2825,7 @@ aside:has(> [data-volli-rail]) {
   top: 9px;
   bottom: 9px;
   width: 3px;
-  border-radius: 99px;
+  border-radius: 999px;
   background: var(--canvas-ink);
 }
 /* Pouring glass has no live hit targets or backdrop pass. The trigger's hover

@@ -110,7 +110,7 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
         "pointer-events-auto relative w-80 overflow-hidden rounded-container border border-border",
         "bg-popover shadow-overlay",
         // Entrance only — the bar below is information and never opts out.
-        !reducedMotion && "transition-[opacity,translate] duration-200 ease-swift",
+        !reducedMotion && "transition-[opacity,translate] duration-(--duration-sheet) ease-swift",
         !reducedMotion && "starting:translate-y-2 starting:opacity-0",
       )}
     >

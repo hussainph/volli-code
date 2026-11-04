@@ -191,7 +191,7 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-[180ms] ease-swift",
+          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-(--duration-menu-in) ease-swift",
           // Instant tracking while the resize grip is dragged (AppShell sets
           // data-resizing on the provider) — a timed transition would rubber-band.
           "group-data-[resizing]/sidebar-wrapper:transition-none",
@@ -206,7 +206,7 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) transition-[left,right,width] duration-[180ms] ease-swift",
+          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) transition-[left,right,width] duration-(--duration-menu-in) ease-swift",
           "group-data-[resizing]/sidebar-wrapper:transition-none",
           "group-data-[motion=instant]/sidebar-wrapper:transition-none",
           side === "left"
@@ -354,7 +354,7 @@ function SidebarGroupLabel({
       data-slot="sidebar-group-label"
       data-sidebar="group-label"
       className={cn(
-        "flex h-8 shrink-0 items-center rounded-md px-2 text-ui font-medium text-sidebar-foreground/70 ring-ring outline-hidden transition-[margin,opacity] duration-300 ease-swift focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
+        "flex h-8 shrink-0 items-center rounded-md px-2 text-ui font-medium text-sidebar-foreground/70 ring-ring outline-hidden transition-[margin,opacity] duration-(--duration-sheet) ease-swift focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         "group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0",
         className,
       )}
@@ -412,7 +412,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
  * press note in `ui/button.tsx` for why those are two different properties.
  */
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-ring outline-hidden transition-[transform,scale,background-color,color] duration-100 ease-out group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent-veil active:text-foreground motion-reduce:scale-100! disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-ring outline-hidden transition-[transform,scale,background-color,color] duration-(--duration-menu-out) ease-out group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent-veil active:text-foreground motion-reduce:scale-100! disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
   {
     variants: {
       variant: {

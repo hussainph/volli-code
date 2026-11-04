@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import { Button } from "./button";
 import { IdentityTile } from "./identity-tile";
 import { Input } from "./input";
@@ -12,6 +13,18 @@ import { Segmented } from "./segmented";
 const css = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
 
 describe("Glass primitives", () => {
+  it("keeps JS compositor clocks aligned with the shared CSS recipes", () => {
+    for (const [token, value] of [
+      ["menu-in", GLASS_MOTION.menuIn],
+      ["menu-out", GLASS_MOTION.menuOut],
+      ["sheet", GLASS_MOTION.sheet],
+    ] as const)
+      expect(css).toContain(`--duration-${token}: ${value}ms`);
+    expect(GLASS_MOTION.menuInSeconds * 1000).toBe(GLASS_MOTION.menuIn);
+    expect(GLASS_MOTION.menuOutSeconds * 1000).toBe(GLASS_MOTION.menuOut);
+    expect(GLASS_MOTION.sheetSeconds * 1000).toBe(GLASS_MOTION.sheet);
+    expect(css).toContain(`--ease-out: ${GLASS_MOTION.easeOutCss}`);
+  });
   it("keeps native button states and affordances across tonal, toolbar and inspector", () => {
     for (const variant of ["default", "toolbar", "inspector"] as const) {
       const html = renderToStaticMarkup(
@@ -59,7 +72,7 @@ describe("Glass primitives", () => {
     expect(css).toContain('.identity-tile[data-size="sm"]');
     // Root material values also need utility registrations for sheet callers.
     const themeUtilities = css.slice(css.indexOf("@theme inline {"), css.indexOf("@theme {"));
-    expect(themeUtilities).toContain("--radius-sheet: var(--radius-sheet)");
+    expect(themeUtilities).toContain("--radius-sheet: 14px");
     expect(themeUtilities).toContain("--shadow-glass: var(--shadow-glass)");
     expect(themeUtilities).toContain("--shadow-glass-small: var(--shadow-glass-small)");
     for (const [value, expected] of [

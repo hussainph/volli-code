@@ -1449,7 +1449,7 @@ export function ActiveSessions({
                 onToggleRead={entry.row.kind === "chat" ? toggleRead : null}
               />
             ) : (
-              <SidebarMenuItem key={entry.id} className="session-envelope rounded-(--radius-card)">
+              <SidebarMenuItem key={entry.id} className="session-envelope rounded-card">
                 <TicketGroupRow
                   ticket={entry.ticket}
                   ticketPrefix={project.ticketPrefix}

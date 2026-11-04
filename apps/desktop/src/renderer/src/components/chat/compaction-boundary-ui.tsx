@@ -51,7 +51,7 @@ export const CompactionProgress = React.memo(function CompactionProgress({
     <div
       role="status"
       title={compaction.reason === "manual" ? "Manual compaction" : "Automatic compaction"}
-      className="not-prose flex min-w-0 items-center gap-3 rounded-(--radius-card) border border-border bg-(--accent-tint) px-3 py-2 text-ui"
+      className="not-prose flex min-w-0 items-center gap-3 rounded-card border border-border bg-(--accent-tint) px-3 py-2 text-ui"
     >
       <Spinner aria-hidden role="presentation" className="size-4 shrink-0 text-primary-text" />
       <span className="font-medium text-foreground">Compacting context</span>

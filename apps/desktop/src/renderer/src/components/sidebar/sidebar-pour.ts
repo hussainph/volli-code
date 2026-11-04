@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
 
 /**
@@ -57,7 +58,7 @@ export function useSidebarPour({
         { translate: "none", transformOrigin: "0 0", transform: from, opacity: 1 },
         { translate: "none", transformOrigin: "0 0", transform: to, opacity: 0 },
       ],
-      { duration: 160, easing: "cubic-bezier(0.23, 1, 0.32, 1)", fill: "both" },
+      { duration: GLASS_MOTION.menuIn, easing: GLASS_MOTION.easeOutCss, fill: "both" },
     );
     animation.current = journey;
     journey.onfinish = () => {

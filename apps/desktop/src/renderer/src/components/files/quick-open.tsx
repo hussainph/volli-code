@@ -188,7 +188,7 @@ export function QuickOpen({
       // The ⌘K palette's overlay, to the token: two surfaces summoned by two
       // chords onto the same spot are one drawing, not two that resemble
       // each other.
-      overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
+      overlayClassName="fixed inset-0 z-50 bg-scrim"
       contentClassName={COMMAND_OVERLAY_FRAME}
     >
       <div className={COMMAND_SEARCH_FIELD}>

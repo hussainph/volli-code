@@ -248,7 +248,7 @@ export function SignInRow({
   return (
     <div
       className={cn(
-        "rounded-control transition-colors duration-150",
+        "rounded-control transition-colors duration-(--duration-menu-in)",
         open && "bg-background shadow-raised",
       )}
       data-row={row.key}

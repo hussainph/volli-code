@@ -1729,11 +1729,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
             // makes the aside the grip's positioning context; the width persists
             // app-wide via the ui store. The rail draws its own header and pages
             // (TicketRail) — this only sizes and frames the column.
-            <aside
-              className="glass relative flex shrink-0 flex-col border-l border-sidebar-border"
-              data-tint="true"
-              style={{ width: railWidth }}
-            >
+            <aside className="relative flex shrink-0 flex-col" style={{ width: railWidth }}>
               <RailResizeHandle />
               <TicketRail
                 projectId={projectId}

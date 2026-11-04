@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
 import {
   closestCorners,
@@ -296,7 +297,11 @@ function sameColumn(previous: readonly Ticket[], next: readonly Ticket[]): boole
  * whole subtree every time, which is the exact class of churn the provider
  * exists to stop.
  */
-const CLUSTER_SPRING = { type: "spring", duration: 0.24, bounce: 0.1 } as const;
+const CLUSTER_SPRING = {
+  type: "spring",
+  duration: GLASS_MOTION.snappySeconds,
+  bounce: 0.1,
+} as const;
 
 function DragOverlayBody({
   activeTicket,
@@ -329,7 +334,7 @@ function DragOverlayBody({
         />
       </div>
     ) : (
-      <div className="rounded-(--radius-card) shadow-card">
+      <div className="rounded-card shadow-card">
         <TicketCardContent
           ticket={ticket}
           ticketPrefix={ticketPrefix}
@@ -1304,7 +1309,7 @@ export const Board = React.memo(function Board({
                   className={cn(
                     "flex items-center gap-2 rounded-full border border-border bg-popover px-2 py-1 text-ui text-muted-foreground shadow-overlay",
                     !reducedMotion &&
-                      "transition-[opacity,translate] duration-200 ease-out starting:translate-y-1 starting:opacity-0",
+                      "transition-[opacity,translate] duration-(--duration-sheet) ease-out starting:translate-y-1 starting:opacity-0",
                   )}
                 >
                   <kbd className="rounded-sm border border-border px-1 font-mono text-label text-foreground">

@@ -594,7 +594,7 @@ describe("the two cards as one family", () => {
     // radius, its transparent rest border and its selected fill.
     const html = drawn(ask([askPrompt()]));
     const answer = answerRow(html, "release");
-    expect(answer).toContain("rounded-lg border border-transparent px-2");
+    expect(answer).toContain("rounded-row border border-transparent px-2");
     for (const bespoke of ["rounded-xl", "border-input", "bg-input/20", "bg-primary/10"])
       expect([bespoke, html.includes(bespoke)]).toEqual([bespoke, false]);
     // Content-height rows: they wrap, so no two-line floor centres a short

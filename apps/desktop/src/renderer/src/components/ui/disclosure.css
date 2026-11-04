@@ -4,10 +4,10 @@
   overflow: hidden;
 }
 .disclosure-content[data-state="open"] {
-  animation: disclosure-open 200ms var(--ease-out);
+  animation: disclosure-open var(--duration-sheet) var(--ease-out);
 }
 .disclosure-content[data-state="closed"] {
-  animation: disclosure-close 200ms var(--ease-out);
+  animation: disclosure-close var(--duration-menu-in) var(--ease-out);
 }
 @keyframes disclosure-open {
   from {

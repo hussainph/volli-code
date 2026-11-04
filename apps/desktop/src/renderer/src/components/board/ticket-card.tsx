@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { useDndMonitor } from "@dnd-kit/core";
@@ -79,7 +80,7 @@ export function TicketCardContent({
         // A quiet contact shadow lifts paper off the neutral column. The
         // detached drag preview keeps its deeper `shadow-card` halo.
         // px-3 preserves the dense card's title measure.
-        "flex flex-col gap-1 rounded-(--radius-card) border bg-card px-3 py-2 shadow-(--shadow-glass-small) cursor-default select-none",
+        "flex flex-col gap-1 rounded-card border bg-card px-3 py-2 shadow-(--shadow-glass-small) cursor-default select-none",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
         selected
@@ -122,7 +123,7 @@ export function TicketCardContent({
 // `--ease-out` by reference, not by re-typing it: this used to be the literal
 // that the token was later minted from, and a second copy is how a token
 // silently stops being one.
-export const SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
+export const SORT_TRANSITION = { duration: GLASS_MOTION.menuIn, easing: "var(--ease-out)" };
 
 /**
  * Sortable + context-menu wrapper shared by the board card and the list row:
@@ -209,7 +210,7 @@ export function SortableTicketShell({
           ref={setNodeRef}
           style={{ transform: CSS.Transform.toString(transform), transition }}
           className={cn(
-            "transition-[opacity] duration-150 ease-out",
+            "transition-[opacity] duration-(--duration-menu-in) ease-out",
             (isDragging || dragHidden) && "opacity-40",
           )}
           onClick={(event) =>

@@ -85,8 +85,8 @@ export function OpenProjectSheet() {
         aria-describedby={undefined}
         className={cn(
           "top-[14vh] flex max-h-[80vh] max-w-[30rem] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[30rem]",
-          "data-[state=open]:duration-[260ms] data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
-          "data-[state=closed]:duration-150 data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
+          "data-[state=open]:duration-(--duration-sheet) data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
+          "data-[state=closed]:duration-(--duration-menu-in) data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
         )}
       >
         <MotionConfig reducedMotion="user">

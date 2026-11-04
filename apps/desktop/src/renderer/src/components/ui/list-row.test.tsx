@@ -16,7 +16,7 @@ describe("ListRow", () => {
     expect(html).not.toContain("focus-visible:ring-ring/");
   });
 
-  it("shares source-list geometry and accent states without changing ordinary lists", () => {
+  it("shares source-list geometry and accent states with ordinary lists", () => {
     const html = renderToStaticMarkup(
       <ListRow primary="file.ts" onActivate={vi.fn()} selected variant="source" />,
     );
@@ -43,7 +43,7 @@ describe("ListRow", () => {
   it("keeps the selected fill instead of the hover one", () => {
     const html = renderToStaticMarkup(<ListRow primary="rail.tsx" selected onActivate={vi.fn()} />);
 
-    expect(html).toContain("bg-accent/70");
+    expect(html).toContain("bg-(--accent-selected)");
     expect(html).not.toContain("hover:bg-accent/50");
   });
 

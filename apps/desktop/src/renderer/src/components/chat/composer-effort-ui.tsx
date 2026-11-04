@@ -394,8 +394,8 @@ export function EffortSlider({
         }}
         className={cn(
           "pointer-events-none absolute inset-y-0 left-0 rounded-full",
-          "transition-[width,opacity] duration-150 ease-out",
-          "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+          "transition-[width,opacity] duration-(--duration-menu-in) ease-out",
+          "group-data-[dragging]/rail:duration-(--duration-menu-out) motion-reduce:transition-none!",
         )}
       />
 
@@ -420,7 +420,7 @@ export function EffortSlider({
           // finger that is already there; the spring back on release is the
           // only part that animates, and `--ease-out` is a hard decelerate, so
           // it reads as the material settling rather than as a second gesture.
-          "transition-[scale] duration-200 ease-out",
+          "transition-[scale] duration-(--duration-sheet) ease-out",
           "group-data-[dragging]/rail:transition-none motion-reduce:transition-none!",
         )}
       >
@@ -473,10 +473,10 @@ export function EffortSlider({
           }}
           className={cn(
             "absolute inset-0",
-            "transition-[clip-path] duration-150 ease-out",
+            "transition-[clip-path] duration-(--duration-menu-in) ease-out",
             // Shorter under the hand: 150ms reads as a snap when you click a
             // stop and as drag lag when you sweep through five of them.
-            "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+            "group-data-[dragging]/rail:duration-(--duration-menu-out) motion-reduce:transition-none!",
           )}
         />
 
@@ -522,7 +522,7 @@ export function EffortSlider({
             }}
             className={cn(
               "absolute top-1 h-1 w-px origin-top rounded-full bg-foreground/50",
-              "transition-colors duration-150 ease-out motion-reduce:transition-none!",
+              "transition-colors duration-(--duration-menu-in) ease-out motion-reduce:transition-none!",
               "data-[passed]:bg-foreground/90",
               "animate-[effort-notch_180ms_var(--ease-out)_both] motion-reduce:animate-none!",
             )}
@@ -588,8 +588,8 @@ export function EffortSlider({
             style={{ transform: `translateX(${filled}%)` }}
             className={cn(
               "absolute inset-y-0 left-0 w-full",
-              "transition-transform duration-150 ease-out",
-              "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+              "transition-transform duration-(--duration-menu-in) ease-out",
+              "group-data-[dragging]/rail:duration-(--duration-menu-out) motion-reduce:transition-none!",
             )}
           >
             <span
@@ -615,7 +615,7 @@ export function EffortSlider({
                 // ONCE PER GESTURE, for free: `data-dragging` arrives on
                 // pointer-down and leaves on release, so the swell and the
                 // spring back are the two edges of one attribute.
-                "transition-[scale,box-shadow] duration-150 ease-out",
+                "transition-[scale,box-shadow] duration-(--duration-menu-in) ease-out",
                 "group-data-[dragging]/rail:scale-x-200 group-data-[dragging]/rail:scale-y-115",
                 "group-data-[dragging]/rail:ring-3 group-data-[dragging]/rail:ring-foreground/30",
                 "motion-reduce:scale-100! motion-reduce:ring-0! motion-reduce:transition-none!",

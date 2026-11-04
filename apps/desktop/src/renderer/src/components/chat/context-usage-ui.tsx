@@ -181,7 +181,7 @@ function ContextBreakdown({
             onFocus={() => setHovered(cell.id)}
             onBlur={() => setHovered(null)}
             className={cn(
-              "aspect-square rounded-[2px] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              "aspect-square rounded-keycap outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
               SEGMENT_CELL[cell.id],
               hovered !== null && hovered !== cell.id && "opacity-40",
             )}
@@ -195,7 +195,7 @@ function ContextBreakdown({
         <div className="mt-2.5 flex h-4 items-center gap-2">
           <span
             aria-hidden
-            className={cn("size-2 shrink-0 rounded-[2px]", SEGMENT_CELL[detail.id])}
+            className={cn("size-2 shrink-0 rounded-keycap", SEGMENT_CELL[detail.id])}
           />
           <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
             {detail.label}

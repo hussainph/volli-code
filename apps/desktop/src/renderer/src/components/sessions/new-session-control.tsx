@@ -308,7 +308,7 @@ export function NewSessionControl({
                     // not a cancelled rotation. (`transform-none` was neither:
                     // v4 compiles `rotate-180` to the standalone `rotate`
                     // property, which `transform: none` cannot touch.)
-                    className="size-3 transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+                    className="size-3 transition-transform duration-(--duration-menu-in) ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
                   />
                 </Button>
               </DropdownMenuTrigger>

@@ -38,10 +38,10 @@ export const ToolRefreshNotice = React.memo(function ToolRefreshNotice({
       defaultOpen={defaultOpen}
       className="not-prose min-w-0 text-ui text-muted-foreground"
     >
-      <CollapsibleTrigger className="group/refresh flex w-full min-w-0 cursor-default items-center gap-1 rounded-row py-1 text-left font-medium outline-none select-none transition-colors duration-150 ease-swift hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring motion-reduce:transition-none">
+      <CollapsibleTrigger className="group/refresh flex w-full min-w-0 cursor-default items-center gap-1 rounded-row py-1 text-left font-medium outline-none select-none transition-colors duration-(--duration-menu-in) ease-swift hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring motion-reduce:transition-none">
         <CaretRightIcon
           aria-hidden
-          className="size-3 shrink-0 transition-transform duration-150 ease-swift group-data-[state=open]/refresh:rotate-90 motion-reduce:transition-none"
+          className="size-3 shrink-0 transition-transform duration-(--duration-menu-in) ease-swift group-data-[state=open]/refresh:rotate-90 motion-reduce:transition-none"
         />
         <span className="min-w-0 wrap-anywhere">
           Tools updated:{" "}

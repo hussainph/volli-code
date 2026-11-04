@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 /**
  * The lane view (VC-112, VC-132): one lane per board column, holding that
  * column's **Offered list in digit order**, arranged by dragging. Every offered
@@ -80,7 +81,7 @@ import {
 } from "@renderer/stores/automations";
 
 /** Sibling shift while a lane is arranged — the board card's own number, copied deliberately. */
-const LANE_SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
+const LANE_SORT_TRANSITION = { duration: GLASS_MOTION.menuIn, easing: "var(--ease-out)" };
 
 /** One lane's whole content, composed once for both the drawing and the drop. */
 interface Lane {
@@ -206,7 +207,7 @@ function LaneColumn({
 }) {
   const movable = draggableRows(lane);
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-(--radius-column) bg-muted p-2">
+    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-column bg-muted p-2">
       {/* `group/column-header` is what the bolt's hover reveal reads: the same
           control as the board's, so arming a column from the page and arming it
           from the board are provably one act (and one store door). */}
@@ -334,7 +335,7 @@ function LaneRow({
  */
 function OffBoardLane({ automations }: { automations: readonly Automation[] }) {
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-(--radius-column) border border-dashed border-border p-2">
+    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-column border border-dashed border-border p-2">
       <div className="flex items-center gap-2 px-1">
         <span className="text-ui font-medium text-muted-foreground">No column</span>
         <span className="text-label text-muted-foreground tabular-nums">

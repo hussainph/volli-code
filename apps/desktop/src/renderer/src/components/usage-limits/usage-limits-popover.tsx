@@ -334,7 +334,7 @@ function AccountItem({
           <BindingReading key={account.limits.checkedAt} window={account.binding} now={now} />
           <CaretDownIcon
             aria-hidden
-            className="size-3 shrink-0 text-muted-foreground transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+            className="size-3 shrink-0 text-muted-foreground transition-transform duration-(--duration-menu-in) ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
             weight="bold"
           />
         </span>

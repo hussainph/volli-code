@@ -235,7 +235,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
         type="button"
         {...readOnlyControl(composer.canWrite)}
         onClick={composer.openComposer}
-        className="flex h-8 w-full items-center gap-1 px-gutter text-ui text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
+        className="flex h-8 w-full items-center gap-1 px-gutter text-ui text-muted-foreground transition-colors duration-(--duration-menu-in) ease-out hover:text-foreground"
       >
         <PlusIcon className="size-3.5" />
         New
@@ -272,7 +272,7 @@ function EmptyDropRow({ status, aimed }: { status: TicketStatus; aimed: boolean 
     <div
       ref={setNodeRef}
       className={cn(
-        "flex h-9 items-center gap-2 border-b border-border/30 px-gutter transition-colors duration-150 ease-out",
+        "flex h-9 items-center gap-2 border-b border-border/30 px-gutter transition-colors duration-(--duration-menu-in) ease-out",
         isOver || aimed ? "bg-accent ring-1 ring-inset ring-primary/50" : "bg-muted/30",
       )}
     >

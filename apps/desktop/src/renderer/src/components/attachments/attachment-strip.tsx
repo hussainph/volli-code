@@ -117,7 +117,7 @@ export function AttachmentThumb({
   return (
     <div
       className={cn(
-        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-(--radius-card) border border-border bg-card p-2",
+        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-card border border-border bg-card p-2",
         className,
       )}
       title={`${attachment.originalName} · ${metadata}${attachment.state ? ` · ${stateLabels[attachment.state]}` : ""}`}

@@ -100,7 +100,7 @@ const TONE_STROKE: Record<UsageTone, string> = {
  * change worth seeing, because it says WHICH WAY the number went.
  */
 const MOTION =
-  "transition-[stroke-dasharray,opacity] duration-300 ease-out motion-reduce:transition-none";
+  "transition-[stroke-dasharray,opacity] duration-(--duration-sheet) ease-out motion-reduce:transition-none";
 
 function circumference(r: number): number {
   return 2 * Math.PI * r;

@@ -2112,7 +2112,7 @@ function ChatPlaneContent({
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
                   {messages.length > 0 ? (
-                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] glass-control shadow-glass-small" />
                   ) : null}
                 </Conversation>
               </RunningBashProvider>

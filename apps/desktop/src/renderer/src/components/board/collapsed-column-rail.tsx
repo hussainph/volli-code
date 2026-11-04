@@ -101,7 +101,7 @@ function CollapsedColumnTarget({
       data-board-column={status}
       data-drop-aimed={aimed || undefined}
       className={cn(
-        "relative transition-opacity duration-200 ease-out motion-reduce:transition-none",
+        "relative transition-opacity duration-(--duration-sheet) ease-out motion-reduce:transition-none",
         // Quieted while another column holds the picker, like the standing
         // columns. Opacity only: the pill is a dnd-kit droppable measured in
         // synchronous layout effects, and this wrapper is what holds its rect.
@@ -115,12 +115,12 @@ function CollapsedColumnTarget({
           if (!dragActive) onExpand(status);
         }}
         className={cn(
-          "flex w-full items-center justify-between rounded-(--radius-card) border border-border bg-muted px-4 py-2 text-left text-ui text-muted-foreground shadow-(--shadow-glass-small) outline-none",
+          "flex w-full items-center justify-between rounded-card border border-border bg-muted px-4 py-2 text-left text-ui text-muted-foreground shadow-(--shadow-glass-small) outline-none",
           // No scale in this list, ever: the pill is a dnd-kit droppable measured
           // in synchronous layout effects, and a scale mid-flight yields a new
           // rect every commit — measureRects loops to React's max update depth
           // (the DndContext crash). Enter is an opacity fade only.
-          "transition-[color,background-color,border-color,box-shadow,opacity] duration-150 ease-out",
+          "transition-[color,background-color,border-color,box-shadow,opacity] duration-(--duration-menu-in) ease-out",
           "hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
           animateEnter && "starting:opacity-0",
           // While any card is mid-drag every pill brightens into an affordance…

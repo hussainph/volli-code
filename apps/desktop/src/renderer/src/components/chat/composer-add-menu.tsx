@@ -97,7 +97,7 @@ export function ComposerAddMenu({
             // `ui/button.tsx` records for its press scale.
             className={cn(
               "prompt-add text-muted-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground",
-              "[&>svg]:transition-[rotate] [&>svg]:duration-150 [&>svg]:ease-out data-[state=open]:[&>svg]:rotate-45 motion-reduce:[&>svg]:transition-none",
+              "[&>svg]:transition-[rotate] [&>svg]:duration-(--duration-menu-in) [&>svg]:ease-out data-[state=open]:[&>svg]:rotate-45 motion-reduce:[&>svg]:transition-none",
               className,
             )}
           >

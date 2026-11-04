@@ -546,7 +546,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                   key={entry.id}
                   role="group"
                   aria-label={`Queued message: ${entry.text}`}
-                  className="rounded-(--radius-card) bg-muted"
+                  className="rounded-card bg-muted"
                 >
                   <ListRow
                     onActivate={null}

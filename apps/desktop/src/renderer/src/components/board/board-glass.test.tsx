@@ -58,9 +58,7 @@ describe("Glass board", () => {
           />,
         ),
       );
-      expect(host.querySelector("article")?.classList.contains("rounded-(--radius-card)")).toBe(
-        true,
-      );
+      expect(host.querySelector("article")?.classList.contains("rounded-card")).toBe(true);
       expect(
         host.querySelector(".session-ring.board-session-ring")?.getAttribute("data-activity"),
       ).toBe(sessionActivity);

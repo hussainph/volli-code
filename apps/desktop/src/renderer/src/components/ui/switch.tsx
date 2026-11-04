@@ -13,7 +13,7 @@ function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimi
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        "control-material [--control-fill:var(--border)] data-[state=checked]:[--control-fill:var(--primary)] peer inline-flex h-4 w-7 shrink-0 items-center rounded-full border border-border-strong shadow-control-pressed transition-colors duration-150 ease-out motion-reduce:transition-none outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-border",
+        "control-material [--control-fill:var(--border)] data-[state=checked]:[--control-fill:var(--primary)] peer inline-flex h-4 w-7 shrink-0 items-center rounded-full border border-border-strong shadow-control-pressed transition-colors duration-(--duration-menu-in) ease-out motion-reduce:transition-none outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-border",
         className,
       )}
       {...props}
@@ -21,7 +21,7 @@ function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimi
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "control-material [--control-fill:var(--control-light-paper)] pointer-events-none block size-3 rounded-full [background-color:var(--control-light-paper)] shadow-control ring-0 transition-transform duration-150 ease-out motion-reduce:transition-none data-[state=checked]:translate-x-[calc(100%+1px)] data-[state=unchecked]:translate-x-px",
+          "control-material [--control-fill:var(--control-light-paper)] pointer-events-none block size-3 rounded-full [background-color:var(--control-light-paper)] shadow-control ring-0 transition-transform duration-(--duration-menu-in) ease-out motion-reduce:transition-none data-[state=checked]:translate-x-[calc(100%+1px)] data-[state=unchecked]:translate-x-px",
         )}
       />
     </SwitchPrimitive.Root>

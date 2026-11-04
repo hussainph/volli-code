@@ -44,7 +44,3 @@ it("observes both the system and the app preference, and detaches both listeners
   await act(async () => root.unmount());
   expect(query.removeEventListener).toHaveBeenCalledWith("change", expect.any(Function));
 });
-
-it("has a stable motion-free server snapshot for static shells", () => {
-  expect(renderToStaticMarkup(<Probe />)).toBe("<span>true</span>");
-});

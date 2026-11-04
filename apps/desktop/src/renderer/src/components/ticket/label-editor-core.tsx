@@ -129,7 +129,7 @@ export function LabelEditorCore({
           type="button"
           aria-label={`Remove ${label}`}
           onClick={() => remove(label)}
-          className="-ml-1 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity duration-150 ease-out group-hover/chip:opacity-100 hover:text-foreground"
+          className="-ml-1 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity duration-(--duration-menu-in) ease-out group-hover/chip:opacity-100 hover:text-foreground"
         >
           <XIcon className="size-2.5" />
         </button>

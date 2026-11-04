@@ -343,10 +343,10 @@ export function MoveProgress({
               }}
             >
               {busy
-                ? "Working…"
+                ? "Working"
                 : confirming === null
                   ? "Continue"
-                  : ACTION_LABELS[confirming.action].replace("…", "")}
+                  : ACTION_LABELS[confirming.action].replace("", "")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

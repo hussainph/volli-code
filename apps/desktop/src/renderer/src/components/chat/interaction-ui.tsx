@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 /**
  * The generic interaction card, above the composer.
  *
@@ -198,7 +199,7 @@ function AnswerArrow({ focus }: { focus: string }) {
     <span
       aria-hidden
       className={cn(
-        "ml-auto flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity duration-150 group-hover:opacity-100 motion-reduce:transition-none",
+        "ml-auto flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity duration-(--duration-menu-in) group-hover:opacity-100 motion-reduce:transition-none",
         focus,
       )}
     >
@@ -1391,8 +1392,8 @@ export function ComposerInteractionStack({
   const originRef = React.useRef<HTMLDivElement>(null);
   const restoreComposerFocus = React.useRef(false);
   const transition = {
-    duration: reducedMotion ? 0 : 0.16,
-    ease: [0.23, 1, 0.32, 1] as const,
+    duration: reducedMotion ? 0 : GLASS_MOTION.menuInSeconds,
+    ease: GLASS_MOTION.easeOut,
   };
   const hidden = {
     opacity: 0,

@@ -74,7 +74,7 @@ export function RunnerStartStatusPanel({
           ? `Sent — waiting for ${name}`
           : `Confirming start on ${name}`);
   return (
-    <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-(--radius-card) border border-border bg-card px-4 py-3 text-ui">
+    <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-card border border-border bg-card px-4 py-3 text-ui">
       <span
         role={failed || error ? "alert" : "status"}
         className={failed || error ? "text-destructive" : "text-muted-foreground"}

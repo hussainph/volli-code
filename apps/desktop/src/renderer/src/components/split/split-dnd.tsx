@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 /**
  * ONE DRAG CONTEXT PER SURFACE (VC-202 §4).
  *
@@ -163,8 +164,8 @@ const splitCollision: CollisionDetection = (args) => {
  * kept, composed rather than replaced.
  */
 const GHOST_DROP_ANIMATION: DropAnimation = {
-  duration: 150,
-  easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+  duration: GLASS_MOTION.menuIn,
+  easing: GLASS_MOTION.easeOutCss,
   sideEffects: (parameters) => {
     parameters.dragOverlay.node.style.pointerEvents = "none";
     return defaultDropAnimationSideEffects({ styles: { active: { opacity: "0" } } })(parameters);
