@@ -1354,6 +1354,12 @@ export function ActiveSessions({
   const canShowMore = previousSlice.hiddenCount > 0;
   const canShowLess =
     previousLimit > PREVIOUS_BAND_LIMIT && previousEntries.length > PREVIOUS_BAND_LIMIT;
+  // Phase B wires modifier selection into this same row model; focus is already
+  // independent from both route selection and the selected-id set.
+  const [navigatorSelection, setNavigatorSelection] = React.useState<{
+    focusedId: string | null;
+    selectedIds: ReadonlySet<string>;
+  }>({ focusedId: null, selectedIds: new Set() });
   const navigator = React.useMemo(
     () =>
       sessionNavigatorRows({
@@ -1361,9 +1367,18 @@ export function ActiveSessions({
         previous: previousSlice.entries,
         expanded: expandedGroups,
         activeHeader,
+        selection: navigatorSelection,
         reach: canShowMore || canShowLess,
       }),
-    [activeRows, previousSlice.entries, expandedGroups, activeHeader, canShowMore, canShowLess],
+    [
+      activeRows,
+      previousSlice.entries,
+      expandedGroups,
+      activeHeader,
+      canShowMore,
+      canShowLess,
+      navigatorSelection,
+    ],
   );
 
   const renderNavigatorRow = (item: SessionNavigatorRow) => {
@@ -1395,7 +1410,7 @@ export function ActiveSessions({
             projectId={project.id}
             ticketPrefix={project.ticketPrefix}
             now={ageNow}
-            selected={isSelected(item.row)}
+            selected={item.selected || isSelected(item.row)}
             unread={unreadRow(item.row.id, unread)}
             vendor={vendorOf({
               id: item.row.id,
@@ -1418,7 +1433,7 @@ export function ActiveSessions({
             projectId={project.id}
             ticketPrefix={project.ticketPrefix}
             now={ageNow}
-            selected={isSelected(item.row)}
+            selected={item.selected || isSelected(item.row)}
             unread={unreadRow(item.row.id, unread)}
             vendor={vendorOf(item.row)}
             onSelect={openRow}
@@ -1512,7 +1527,18 @@ export function ActiveSessions({
    * sidebar. Nothing here consumes `pointerdown`: these rows are drag sources.
    */
   const bands = (
-    <div data-session-bands="" {...peek.rowProps("nav")} {...peek.scrollProps}>
+    <div
+      data-session-bands=""
+      {...peek.rowProps("nav")}
+      {...peek.scrollProps}
+      onFocusCapture={(event) => {
+        const row = event.target.closest<HTMLElement>("[data-peek-row]");
+        const id = row?.dataset.peekRow ?? null;
+        setNavigatorSelection((previous) =>
+          previous.focusedId === id ? previous : { ...previous, focusedId: id },
+        );
+      }}
+    >
       {onProfile === undefined ? (
         <>
           {activeBand}

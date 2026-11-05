@@ -61,7 +61,7 @@ describe("the badge", () => {
 
   it("draws the logo alone, muted, for a row that carries no state", () => {
     const html = markup({ state: null });
-    expect(html).toContain("grayscale");
+    expect(html).toContain("text-muted-foreground");
     expect(html).toContain('data-session-glyph="none"');
     // Nothing on the corner: there is no state to badge.
     expect(html).not.toContain("animate-spin");
@@ -76,7 +76,7 @@ describe("the badge", () => {
 
 describe("the box", () => {
   it("is a 24px tile in a card and a 20px slot in a one-line row", () => {
-    expect(markup({ state: "idle", size: "card" })).toContain("size-6 rounded-md");
+    expect(markup({ state: "idle", size: "card" })).toContain("size-6");
     const row = markup({ state: "idle", size: "row" });
     expect(row).toContain("size-5");
     expect(row).not.toContain("rounded-md");
@@ -106,11 +106,11 @@ describe("the name and the logo", () => {
     expect(chat).not.toBe(terminal);
   });
 
-  it("draws a provider with no mark of its own as its lettermark", () => {
-    // `ModelMark`'s fallback, reached through us: the initial of the label.
-    expect(markup({ state: "idle", providerId: "radius", providerLabel: "Radius" })).toContain(
-      ">R<",
-    );
+  it("uses the same flat seam glyph for every provider", () => {
+    const unknown = markup({ state: "idle", providerId: "radius", providerLabel: "Radius" });
+    expect(unknown).toContain("<svg");
+    expect(unknown).not.toContain(">R<");
+    expect(unknown).not.toContain("bg-muted");
   });
 });
 

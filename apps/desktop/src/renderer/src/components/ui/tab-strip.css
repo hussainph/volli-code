@@ -29,3 +29,34 @@
 .workspace-capsule-tab[data-icon-only="true"]:not(:has([data-slot="tab-close"])) {
   min-width: 36px;
 }
+
+.tab-items > div {
+  flex: 1 0 112px;
+  min-width: 112px;
+  max-width: 240px;
+}
+.tab-items > div:has([data-icon-only="true"]) {
+  flex: 0 0 36px;
+  min-width: 36px;
+}
+.tab-items .workspace-capsule-tab {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  flex: 1 1 auto;
+}
+[data-slot="tab-scroll"][data-overflow-left="true"] {
+  mask-image: linear-gradient(to right, transparent, black 16px);
+}
+[data-slot="tab-scroll"][data-overflow-right="true"] {
+  mask-image: linear-gradient(to left, transparent, black 16px);
+}
+[data-slot="tab-scroll"][data-overflow-left="true"][data-overflow-right="true"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 16px,
+    black calc(100% - 16px),
+    transparent
+  );
+}

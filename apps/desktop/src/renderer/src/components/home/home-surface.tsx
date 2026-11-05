@@ -601,26 +601,26 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             return;
           }
           useBrowserTabsStore.getState().remove(tabId);
-          leaveHomeStrip(selectedId, tabId);
+          leaveHomeStrip(selectedId, tabId, orderedTabIds);
         })
         .catch((reason: unknown) => {
           toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
         });
     },
-    [browserApi, selectedId],
+    [browserApi, selectedId, orderedTabIds],
   );
 
   /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
   const hideBrowser = React.useCallback(
     (tabId: string) => {
       if (selectedId === null) return;
-      void hideBrowserTab(browserApi, tabId, () => leaveHomeStrip(selectedId, tabId)).catch(
-        (reason: unknown) => {
-          toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
-        },
-      );
+      void hideBrowserTab(browserApi, tabId, () =>
+        leaveHomeStrip(selectedId, tabId, orderedTabIds),
+      ).catch((reason: unknown) => {
+        toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
+      });
     },
-    [browserApi, selectedId],
+    [browserApi, selectedId, orderedTabIds],
   );
 
   const handleClose = React.useCallback(
@@ -1020,6 +1020,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
               releaseActive();
               useProjectUiStore.getState().ungroupHome(selectedId, groupId);
             }}
+            onTakeOutTab={ungroupLocalTab}
+            onHideBrowser={hideBrowser}
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
             fileTabs={fileTabs}
@@ -1090,6 +1092,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                         projectId={selectedId}
                         tabIds={pane.tabIds}
                         activeTabId={pane.activeTabId ?? ""}
+                        onTakeOutTab={ungroupLocalTab}
+                        onHideBrowser={hideBrowser}
                         terminalTabs={terminalTabs}
                         chatIds={openChatIds}
                         fileTabs={fileTabs}
@@ -1200,6 +1204,8 @@ interface HomeStripProps {
   groups?: readonly TabGroup[];
   shownGroupId?: string | null;
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tabId: string): void;
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
@@ -1243,6 +1249,8 @@ function HomeTabs({
     groups: strip.groups,
     shownGroupId: strip.shownGroupId,
     onUngroup: strip.onUngroup,
+    onTakeOutTab: strip.onTakeOutTab,
+    onHideBrowser: strip.onHideBrowser,
     activeTabId: strip.activeTabId,
     onReorder: strip.onReorder,
     onSelect: strip.onSelect,

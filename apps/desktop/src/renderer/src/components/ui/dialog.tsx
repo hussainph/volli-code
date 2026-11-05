@@ -1,4 +1,4 @@
-"use client";
+import { overlayLayer } from "./overlay-layer";
 
 import * as React from "react";
 import { ControlShapeProvider } from "./control-shape";
@@ -28,7 +28,7 @@ function DialogClose({ ...props }: React.ComponentProps<typeof DialogPrimitive.C
 }
 
 function DialogPortal({ ...props }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
-  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />;
+  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} container={overlayLayer()} />;
 }
 
 function DialogOverlay({

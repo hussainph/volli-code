@@ -243,7 +243,8 @@ describe("ChatEmptyState", () => {
 
     openOverview();
     expect(document.body.querySelector('[data-empty-visual="venue"]')).not.toBeNull();
-    expect(markup).toContain("Worktree");
+    expect(markup).not.toContain("Worktree");
+    expect(markup).not.toContain("volli/VC-81-auto-title");
     expect(markup).not.toContain("data-working-copy-state");
   });
 });

@@ -449,8 +449,8 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
     <SidebarMenuItem
       id={navigatorOffset === undefined ? undefined : navigatorRowDomId(row.id)}
       data-nav-offset={navigatorOffset}
-      data-nav-height={navigatorOffset === undefined ? undefined : 42}
-      style={navigatorOffset === undefined ? undefined : { height: 42 }}
+      data-nav-height={navigatorOffset === undefined ? undefined : 46}
+      style={navigatorOffset === undefined ? undefined : { height: 46 }}
       data-peek-row={peekable ? row.id : undefined}
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}

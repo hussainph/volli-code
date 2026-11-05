@@ -1,3 +1,4 @@
+import { overlayLayer } from "./overlay-layer";
 import { GlassSurface } from "./surface";
 /** Pointer inspection, without an entrance on a high-frequency navigation path. */
 import type * as React from "react";
@@ -14,11 +15,13 @@ export function HoverCardContent({
   ...props
 }: React.ComponentProps<typeof Primitive.Content>) {
   return (
-    <Primitive.Portal>
+    <Primitive.Portal container={overlayLayer()}>
       <GlassSurface asChild tier="full">
         <Primitive.Content
           data-slot="hover-card-content"
           sideOffset={sideOffset}
+          avoidCollisions
+          collisionPadding={8}
           className={cn(
             "material-floating z-50 w-80 rounded-menu p-1 text-ui text-foreground",
             className,

@@ -58,6 +58,7 @@ export function Segmented<Key extends string>({
       aria-label={ariaLabel}
       data-testid={testId}
       data-slot="segmented"
+      data-icon-only={iconOnly || undefined}
       data-size={size}
       {...shapeProps}
       onPointerDown={(event) => {

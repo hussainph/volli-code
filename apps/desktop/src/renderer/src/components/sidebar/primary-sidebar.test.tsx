@@ -96,7 +96,9 @@ describe("primary sidebar content choice", () => {
     );
     const sessions = container.querySelector<HTMLButtonElement>('[data-choice="sessions"]')!;
     await act(async () => sessions.click());
-    expect(container.querySelector('[data-testid="sidebar-files"]')).toBeNull();
+    expect(
+      container.querySelector<HTMLElement>('[data-testid="sidebar-files"]')?.style.display,
+    ).toBe("none");
     expect(
       container.querySelector('[data-testid="sidebar-sessions"]')?.getAttribute("data-visible"),
     ).toBe("true");
@@ -119,12 +121,18 @@ describe("primary sidebar content choice", () => {
     await show();
     const header = container.querySelector("h3")!.parentElement!;
     expect(header.textContent).toContain("Active4");
-    expect(header.querySelector('[aria-label="Sidebar content"]')).not.toBeNull();
+    expect(header.querySelector('[aria-label="Sidebar content"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="sidebar-header"] [aria-label="Sidebar content"]'),
+    ).not.toBeNull();
     expect(container.querySelectorAll("h3")).toHaveLength(1);
     await act(async () =>
       container.querySelector<HTMLButtonElement>('[data-choice="files"]')!.click(),
     );
-    expect(header.querySelector("[data-band-count]")?.textContent).toBe("4");
+    expect(header.querySelector("[data-band-count]")).toBeNull();
+    expect(container.querySelector('[data-choice="files"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     listing.count = 0;
     await show();
     expect(container.querySelector("[data-band-count]")).toBeNull();

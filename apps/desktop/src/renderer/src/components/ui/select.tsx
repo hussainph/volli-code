@@ -1,4 +1,4 @@
-"use client";
+import { overlayLayer } from "./overlay-layer";
 import { GlassSurface } from "./surface";
 
 import * as React from "react";
@@ -93,7 +93,7 @@ function SelectContent({
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   const motion = useMotionOriginProps("select", props, false, true);
   return (
-    <SelectPrimitive.Portal>
+    <SelectPrimitive.Portal container={overlayLayer()}>
       <GlassSurface asChild tier="full">
         <SelectPrimitive.Content
           data-slot="select-content"

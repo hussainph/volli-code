@@ -38,6 +38,8 @@ import {
   SunIcon,
   TerminalIcon,
   CloseIcon,
+  ExternalIcon,
+  MinusIcon,
 } from "@renderer/components/ui/icon";
 
 import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
@@ -47,8 +49,8 @@ import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-m
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
-import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
-import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
+import { hidesToIsland, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 import {
   GroupedTabList,
@@ -221,6 +223,8 @@ export interface TicketTabListProps {
   shownGroupId?: string | null;
   /** Dissolve a group from its chip's menu; every tab stays open. */
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tab: TicketTabDescriptor): void;
   /** The ticket's owning project, used to resolve file tabs in main. */
   projectId: string;
   ticketId: string;
@@ -474,6 +478,7 @@ function TicketTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <TabContextActions />
         <SessionShare sessionId={sessionId} projectId={projectId} />
         {fileTarget !== null ? (
           <>
@@ -608,12 +613,11 @@ export function TicketPaneTabStrip({
   ...list
 }: TicketTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip
-      label={label}
-      reorder={reorderFor(list)}
-      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
-    >
-      <TicketTabList {...list} />
+    <TabStrip label={label} reorder={reorderFor(list)}>
+      <TicketTabList
+        {...list}
+        onTakeOutTab={list.onTakeOutTab ?? (onTakeOut ? () => onTakeOut() : undefined)}
+      />
     </TabStrip>
   );
 }
@@ -669,6 +673,8 @@ function TicketTabList({
   groups,
   shownGroupId,
   onUngroup,
+  onTakeOutTab,
+  onHideBrowser,
   onSelectTab,
   onCloseTab,
   onPinFileTab,
@@ -685,6 +691,26 @@ function TicketTabList({
       describe={ticketTabMenuLabel}
       onSelect={(tab) => onSelectTab(tab.id)}
       onUngroup={onUngroup}
+      onClose={onCloseTab}
+      actionsFor={(tab) => {
+        const actions: TabAction[] = [];
+        if (
+          onTakeOutTab &&
+          (groups === undefined ||
+            groups.some((group) => group.panes.some((pane) => pane.tabIds.includes(tab.id))))
+        )
+          actions.push({
+            label: "Take out of group",
+            icon: ExternalIcon,
+            run: () => onTakeOutTab(tab.id),
+          });
+        const browser = tab.browserTabId
+          ? useBrowserTabsStore.getState().byId[tab.browserTabId]
+          : undefined;
+        if (browser && hidesToIsland(browser) && onHideBrowser)
+          actions.push({ label: "Hide to Island", icon: MinusIcon, run: () => onHideBrowser(tab) });
+        return actions;
+      }}
     >
       {(tab, { active, tabStop, grouped }) => (
         <TicketTab

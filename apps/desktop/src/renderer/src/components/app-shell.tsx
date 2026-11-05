@@ -313,6 +313,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     zoneRef,
     bandRef,
     projectTiles: true,
+    closeOnNavigation: false,
     onProjectIntent,
   });
 
@@ -485,6 +486,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       // panel from its live value if the direction changes; the content hook
       // separately samples its live WAAPI translate before reversing.
       armRevealClock(panelRef.current, next, true);
+      panelRef.current?.removeAttribute("data-glass-blur");
       setSidebarPinned(next);
     },
     [setSidebarPinned],
@@ -733,11 +735,6 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               data-native-plane-overlay={nativePlaneOverlay ? "" : undefined}
               aria-hidden={!panelShown || undefined}
               inert={!panelShown || pouring}
-              data-glass-blur={pouring || contentMotion.moving ? "off" : undefined}
-              onTransitionRun={(event) => {
-                if (event.target === event.currentTarget)
-                  event.currentTarget.dataset.glassBlur = "off";
-              }}
               onTransitionEnd={(event) => {
                 if (event.target === event.currentTarget)
                   event.currentTarget.removeAttribute("data-glass-blur");

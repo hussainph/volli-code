@@ -1,11 +1,5 @@
 import type * as React from "react";
-import {
-  RefreshIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  OpenInsideIcon,
-  CodeIcon,
-} from "@renderer/components/ui/icon";
+import { RefreshIcon, ArrowLeftIcon, ArrowRightIcon, CodeIcon } from "@renderer/components/ui/icon";
 
 import type { BrowserTabHolder } from "@volli/shared";
 
@@ -13,12 +7,6 @@ import { BrowserHolderPill } from "@renderer/components/browser/browser-holder-p
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Spinner } from "@renderer/components/ui/spinner";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@renderer/components/ui/tooltip";
 import { browserTabDisplayTitle } from "@renderer/stores/browser-tabs";
 import type { BrowserTabState } from "../../../../ipc/contract";
 
@@ -36,9 +24,6 @@ export function normalizeBrowserAddress(raw: string): string {
   if (/^[a-z][a-z\d+.-]*:/i.test(target)) return target;
   return `https://${target}`;
 }
-
-/** The chrome's name for sending a Session's tab back to its Activity Island. */
-const HIDE_TO_ISLAND_LABEL = "Hide to Island";
 
 export interface BrowserChromeProps {
   tab: BrowserTabState;
@@ -87,7 +72,7 @@ export function BrowserChrome({
   onForward,
   onReload,
   onToggleDevTools,
-  onHide,
+  onHide: _onHide,
   onTakeOver,
   onAskToLeave,
   onHandBack,
@@ -171,26 +156,6 @@ export function BrowserChrome({
         >
           <CodeIcon />
         </Button>
-        {onHide !== undefined ? (
-          // The Island's own pair: its rows reveal with ArrowSquareOut, and
-          // this is the way back in.
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="toolbar"
-                  size="icon-sm"
-                  aria-label={HIDE_TO_ISLAND_LABEL}
-                  onClick={onHide}
-                >
-                  <OpenInsideIcon />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">{HIDE_TO_ISLAND_LABEL}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ) : null}
       </div>
       {error !== null ? (
         <div

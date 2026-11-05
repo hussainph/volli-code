@@ -1,3 +1,8 @@
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import {
+  startProjectChat,
+  startProjectTerminal,
+} from "@renderer/components/sessions/session-create";
 import * as React from "react";
 import { ControlShapeProvider } from "../ui/control-shape";
 import {
@@ -58,7 +63,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
  */
 // Plain per-window memory: no durable preference or renderer storage. The
 // choice survives sidebar remounts without changing any workspace's lifetime.
-let rememberedContent: "sessions" | "files" = "sessions";
+const rememberedContent = new Map<string, "sessions" | "files">();
 
 export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string | null } = {}) {
   const current = useSelectedProject();
@@ -81,11 +86,12 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
     },
     [selectedId],
   );
-  const [content, setContent] = React.useState(() => rememberedContent);
+  const [contents, setContents] = React.useState(() => new Map(rememberedContent));
+  const content = contents.get(selectedId ?? "") ?? "sessions";
   const filesVisible = content === "files";
   // The Session bands ride with Home, which is the one page their rows navigate
   // into — both a Ticket view and a Board Session are reached from there.
-  const sessionsVisible = !settingsOpen && activeNav === "home" && content === "sessions";
+  const sessionsVisible = activeNav === "home" && content === "sessions";
 
   return (
     <ControlShapeProvider context="sidebar">
@@ -98,9 +104,24 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
             is now a plain panel header. */}
           <SidebarHeader className="px-4 pt-3 pb-2">
             {selected ? (
-              <div className="min-w-0">
-                <div className="truncate text-ui font-semibold font-display">{selected.name}</div>
-                <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-ui font-semibold font-display">{selected.name}</div>
+                  <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
+                </div>
+                <Segmented
+                  ariaLabel="Sidebar content"
+                  iconOnly
+                  value={content}
+                  options={[
+                    { key: "sessions", label: "Sessions", icon: Chats },
+                    { key: "files", label: "Files", icon: TreeStructure },
+                  ]}
+                  onChange={(next) => {
+                    rememberedContent.set(selected.id, next);
+                    setContents((previous) => new Map(previous).set(selected.id, next));
+                  }}
+                />
               </div>
             ) : (
               <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
@@ -110,29 +131,30 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
           {selected ? (
             <>
               <NavList projectId={selected.id} />
-              <div className="sidebar-section-header shrink-0 py-2">
-                <SessionBandHeader
-                  label="Active"
-                  count={activeCount?.projectId === selected.id ? activeCount.count : undefined}
-                >
-                  <Segmented
-                    ariaLabel="Sidebar content"
-                    iconOnly
-                    value={content}
-                    options={[
-                      { key: "sessions", label: "Sessions", icon: Chats },
-                      { key: "files", label: "Files", icon: TreeStructure },
-                    ]}
-                    onChange={(next) => {
-                      rememberedContent = next;
-                      setContent(next);
-                    }}
-                  />
-                </SessionBandHeader>
-              </div>
-              {filesVisible && <SidebarFiles project={selected} />}
+
+              <React.Activity mode={filesVisible ? "visible" : "hidden"}>
+                <SidebarFiles project={selected} />
+              </React.Activity>
               <div className={cn("flex min-h-0 flex-1 flex-col", content === "files" && "hidden")}>
                 <SidebarScrollArea>
+                  <div className="sidebar-section-header shrink-0 py-2">
+                    <SessionBandHeader
+                      label="Active"
+                      count={
+                        content === "sessions" && activeCount?.projectId === selected.id
+                          ? activeCount.count
+                          : undefined
+                      }
+                    >
+                      <NewSessionControl
+                        projectId={selected.id}
+                        placement="rail"
+                        disabled={false}
+                        onNewChat={() => void startProjectChat(selected.id)}
+                        onNewTerminal={() => void startProjectTerminal(selected.id)}
+                      />
+                    </SessionBandHeader>
+                  </div>
                   <div className={cn(!sessionsVisible && "hidden")}>
                     {/* Render-hidden, not unmounted — so the section cannot tell it
                     is off screen, and the coarse chat-activity poll it runs

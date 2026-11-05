@@ -27,6 +27,7 @@ function Harness({
     enabled: true,
     ...refs,
     projectTiles: projects,
+    closeOnNavigation: !projects,
     onProjectIntent: onIntent,
   });
   return (
@@ -112,6 +113,20 @@ describe("pane hover intent", () => {
       expect(panel.style.getPropertyValue("--reveal-duration")).toBe("0ms");
     } finally {
       rail.remove();
+    }
+  });
+  it("keeps project peeks open through repeated row clicks with live glass from the first frame", async () => {
+    await act(async () => root.render(<Harness projects />));
+    await move(500, 200);
+    await move(250, 18, 100);
+    expect(visible()).toBe(true);
+    expect(panel.hasAttribute("data-glass-blur")).toBe(false);
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        (container.firstElementChild as HTMLButtonElement).click();
+        vi.advanceTimersByTime(500);
+      });
+      expect(visible()).toBe(true);
     }
   });
   it("uses a 140ms dwell on either the edge or its toolbar control", async () => {

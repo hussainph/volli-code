@@ -78,8 +78,10 @@ export function FileTree({
   onFolder,
   onExpandedChange,
   searchMatches,
+  scrollingHeading,
 }: {
   entries: readonly FileEntry[];
+  scrollingHeading?: React.ReactNode;
   projectId: string;
   ticketId?: string;
   query?: string;
@@ -104,6 +106,7 @@ export function FileTree({
   );
   const [focus, setFocus] = React.useState<string | null>(null);
   const [scroll, setScroll] = React.useState(0);
+  const headingHeight = scrollingHeading ? 32 : 0;
   const [height, setHeight] = React.useState(400);
   const scroller = React.useRef<HTMLDivElement>(null);
   const id = React.useId();
@@ -115,7 +118,7 @@ export function FileTree({
   );
   const focused = rows.some((row) => rowKey(row) === focus) ? focus : rows[0] && rowKey(rows[0]);
   const focusedIndex = rows.findIndex((row) => rowKey(row) === focused);
-  const first = Math.max(0, Math.floor(scroll / ROW_HEIGHT) - OVERSCAN);
+  const first = Math.max(0, Math.floor((scroll - headingHeight) / ROW_HEIGHT) - OVERSCAN);
   const last = Math.min(rows.length, Math.ceil((scroll + height) / ROW_HEIGHT) + OVERSCAN);
   const indices = Array.from({ length: Math.max(0, last - first) }, (_, index) => first + index);
   if (focusedIndex >= 0 && (focusedIndex < first || focusedIndex >= last))
@@ -158,7 +161,7 @@ export function FileTree({
     const element = scroller.current;
     if (!row || !element) return;
     setFocus(rowKey(row));
-    const top = bounded * ROW_HEIGHT;
+    const top = headingHeight + bounded * ROW_HEIGHT;
     if (top < element.scrollTop) element.scrollTop = top;
     else if (top + ROW_HEIGHT > element.scrollTop + element.clientHeight)
       element.scrollTop = top + ROW_HEIGHT - element.clientHeight;
@@ -240,6 +243,7 @@ export function FileTree({
         onKeyDown={keyDown}
         onScroll={(event) => setScroll(event.currentTarget.scrollTop)}
       >
+        {scrollingHeading ? <div className="h-8">{scrollingHeading}</div> : null}
         <div className="relative mx-2" style={{ height: rows.length * ROW_HEIGHT }}>
           {indices.map((index) => {
             const row = rows[index]!;

@@ -11,7 +11,6 @@ import {
 } from "@renderer/components/chat/empty-visual";
 import { BoardVisual } from "@renderer/components/chat/empty/board-visual";
 import { StreakVisual } from "@renderer/components/chat/empty/streak-visual";
-import { WorkingCopyChips } from "@renderer/components/chat/empty/working-copy-chips";
 import { WorkingCopyVisual } from "@renderer/components/chat/empty/working-copy-visual";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
@@ -76,7 +75,6 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
       className={cn(EMPTY_PAGE, "chat-quiet-center max-w-full py-0")}
     >
       <SectionHeading>New chat</SectionHeading>
-      {ready ? <WorkingCopyCaption workingCopy={workingCopy} /> : null}
       {scope === "project" ? <StreakVisual /> : null}
       {ready ? (
         <Popover>
@@ -144,10 +142,4 @@ function WorkingCopyDrawing({ workingCopy }: { workingCopy: WorkingCopyEntry | u
   if (workingCopy?.status === "ready")
     return <WorkingCopyVisual workingCopy={workingCopy.workingCopy} />;
   return null;
-}
-
-/** The chips, once there is a working copy to name. */
-function WorkingCopyCaption({ workingCopy }: { workingCopy: WorkingCopyEntry | undefined }) {
-  if (workingCopy?.status !== "ready") return null;
-  return <WorkingCopyChips workingCopy={workingCopy.workingCopy} />;
 }

@@ -1,15 +1,72 @@
 // @vitest-environment jsdom
-/** Inspector navigation uses the shared thumb and preserves every keyboard path. */
+/**
+ * The rail pill's motion gate (VC-406), at both ends of it: the RULE, and the
+ * EVENT PATH that sets it.
+ *
+ * The rule is pure — a keyboard walk and a reduced-motion reader get the same
+ * still pill, and every moving part of it reads one answer. The defect it pins
+ * was a gate spent on the button's own travel while the glyph inside it and the
+ * leaving label kept animating.
+ *
+ * The path is the half a helper test cannot see. Arrow/Home/End were gated, but
+ * Enter and Space activate a focused tab through a synthetic CLICK, so the
+ * pointer spring came back on the keystroke the walk had just refused. These
+ * tests drive real DOM events at the mounted pill and read `data-animated` on
+ * the tablist — the one answer every moving part below it composes — rather
+ * than measuring anything jsdom does not lay out.
+ */
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CircleIcon } from "@renderer/components/ui/icon";
-
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { RailModeTabs, type RailModeTab } from "./rail-mode-tabs";
+import { RailModeTabs, railTabMotion, type RailModeTab } from "./rail-mode-tabs";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+
+describe("railTabMotion", () => {
+  it("springs for a pointer selection", () => {
+    const plan = railTabMotion({ animateSelection: true, reducedMotion: false });
+
+    expect(plan.animated).toBe(true);
+    expect(plan.transition).toEqual({ type: "spring", duration: 0.32, bounce: 0.1 });
+    expect(plan.labelDuration).toBeGreaterThan(0);
+  });
+
+  it("stands still for a keyboard walk, label included", () => {
+    // A held arrow key walks the tablist faster than a 320ms settle, so the
+    // travel is refused — and so is the label's fade, which is the half of it
+    // that used to keep running.
+    const plan = railTabMotion({ animateSelection: false, reducedMotion: false });
+
+    expect(plan.animated).toBe(false);
+    expect(plan.transition).toEqual({ duration: 0 });
+    expect(plan.labelDuration).toBe(0);
+  });
+
+  it("stands still under reduced motion however the selection was made", () => {
+    for (const animateSelection of [true, false]) {
+      const plan = railTabMotion({ animateSelection, reducedMotion: true });
+
+      expect(plan.animated).toBe(false);
+      expect(plan.transition).toEqual({ duration: 0 });
+      expect(plan.labelDuration).toBe(0);
+    }
+  });
+
+  it("never leaves one part moving while another is gated", () => {
+    // The invariant, stated as one: `animated` is the only condition, so no
+    // input can produce a still pill with a moving label or the reverse.
+    for (const animateSelection of [true, false]) {
+      for (const reducedMotion of [true, false]) {
+        const plan = railTabMotion({ animateSelection, reducedMotion });
+        expect(plan.labelDuration > 0).toBe(plan.animated);
+        expect("type" in plan.transition).toBe(plan.animated);
+      }
+    }
+  });
+});
 
 const MODES: readonly RailModeTab<"now" | "files" | "diffs">[] = [
   { key: "now", label: "Now", icon: CircleIcon },
@@ -52,7 +109,7 @@ function tab(key: string): HTMLButtonElement {
 
 /** Whether the pill would animate the selection it is showing. */
 function animated(): string | null {
-  return query('[role="tablist"]').getAttribute("data-pointer-motion");
+  return query('[role="tablist"]').getAttribute("data-animated");
 }
 
 /**
@@ -154,17 +211,15 @@ describe("what sets the pill's gate", () => {
     expect(document.activeElement).toBe(tab("diffs"));
   });
 
-  it("keeps every icon named, including inactive pages", async () => {
+  it("leaves the label with exactly one tab, whichever way the selection was made", async () => {
     // The exit half of the gate, observed rather than measured: the word of the
     // tab being left is gone by the time the next activation could land.
     await activate(tab("files"), 0);
     expect(tab("files").textContent).toContain("Files");
-    expect(tab("now").querySelector(".sr-only")?.textContent).toBe("Now");
-    expect(tab("now").title).toBe("Now");
+    expect(tab("now").textContent).not.toContain("Now");
 
     await activate(tab("diffs"), 1);
     expect(tab("diffs").textContent).toContain("Diffs");
-    expect(tab("files").querySelector(".sr-only")?.textContent).toBe("Files");
-    expect(tab("diffs").getAttribute("aria-controls")).toBe("rail-page-diffs");
+    expect(tab("files").textContent).not.toContain("Files");
   });
 });

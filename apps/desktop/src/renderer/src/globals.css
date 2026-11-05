@@ -364,11 +364,7 @@
     );
   --glass-veil: rgb(40 40 42 / 0.56);
   --glass-pane-veil: rgb(26 26 28 / 0.52);
-  --glass-writing-veil: color-mix(
-    in srgb,
-    color-mix(in srgb, #e8652a 22%, #1a1a1c) 52%,
-    transparent
-  );
+  --glass-writing-veil: rgb(40 40 42 / 0.56);
   --glass-tone: brightness(1.56971) contrast(0.6149) brightness(0.7124) saturate(2.79074);
   --glass-rim: linear-gradient(
     180deg,
@@ -518,11 +514,7 @@
     );
   --glass-veil: rgb(255 255 255 / 0.56);
   --glass-pane-veil: rgb(255 255 255 / 0.46);
-  --glass-writing-veil: color-mix(
-    in srgb,
-    color-mix(in srgb, #e8652a 22%, #ffffff) 46%,
-    transparent
-  );
+  --glass-writing-veil: rgb(255 255 255 / 0.56);
   --glass-tone: contrast(0.44174) brightness(1.44847) saturate(1.91139);
   --glass-rim: linear-gradient(
     180deg,
@@ -1886,7 +1878,6 @@ article.bg-card {
 [cmdk-dialog] {
   --glass-refraction: ;
   --glass-post-blur: 0px;
-  position: relative;
   background: var(--glass-veil);
   border-color: transparent;
   box-shadow: var(--shadow-glass);
@@ -2411,7 +2402,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --radius-composer: 24px;
   --radius-bubble: 18px;
   --spacing-titlebar: 46px;
-  --spacing-chrome-control: 30px;
+  --spacing-chrome-control: 28px;
   --spacing-board-column: 236px;
   --container-transcript: 648px;
   --container-composer: 608px;
@@ -3054,7 +3045,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background: var(--fill-quaternary);
 }
 .board-card {
-  padding: 9px 11px 10px;
+  padding: 12px 14px;
   background: var(--card-face);
   box-shadow: var(--card-shadow);
 }
@@ -3397,4 +3388,71 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 }
 .board-card[data-selected="true"] {
   background: color-mix(in srgb, var(--foreground) 5%, var(--card-face));
+}
+
+/* Position belongs to layout, not material. Unlayered `position:relative` here
+ * used to beat dialog utilities and turn fixed viewport modals into flow boxes. */
+@layer base {
+  :where(.glass, .material-floating, [cmdk-dialog]) {
+    position: relative;
+  }
+}
+#volli-overlays {
+  display: contents;
+  position: static;
+  filter: none;
+  backdrop-filter: none;
+  transform: none;
+  translate: none;
+  contain: none;
+  will-change: auto;
+}
+/* No inspector content means no inspector control, including in the AX tree. */
+body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="shell"] {
+  display: none;
+}
+
+/* Comfortable native source-list rhythm: 46px primary / 32px secondary, 2px air. */
+.session-navigator [data-nav-height] {
+  margin-bottom: 2px;
+}
+[data-session-band="previous"] {
+  margin-top: 16px;
+}
+[data-volli-sidebar] [data-sidebar="menu"] {
+  gap: 2px;
+}
+
+/* Accessory chrome is a glyph and a hit area, not a small bordered pushbutton. */
+[data-control="button"][data-variant="toolbar"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+[data-control="button"][data-variant="toolbar"]:hover {
+  background: var(--fill-secondary);
+}
+[data-control="button"][data-variant="toolbar"][aria-pressed="true"] {
+  background: var(--fill-row-selected);
+}
+[data-slot="segmented"][data-icon-only="true"] {
+  background: transparent;
+  box-shadow: none;
+  border-color: transparent;
+}
+[data-slot="segmented"][data-icon-only="true"]::before {
+  box-shadow: none;
+  background: var(--fill-row-selected);
+}
+
+.chat-transcript [data-conversation-scroller] {
+  scroll-padding-top: 16px;
+  scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 12px,
+    black calc(100% - var(--composer-height, 0px) - 28px),
+    transparent calc(100% - var(--composer-height, 0px) - 8px)
+  );
 }

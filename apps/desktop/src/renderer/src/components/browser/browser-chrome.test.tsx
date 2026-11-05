@@ -242,16 +242,8 @@ describe("BrowserChrome Hide to Island (VC-1118)", () => {
     expect(html).not.toContain("Hide to Island");
   });
 
-  it("names the control accessibly and routes its press to the surface", () => {
-    let hidden = 0;
+  it("leaves Hide to Island on the tab, not in browser chrome", () => {
     const html = renderToStaticMarkup(<BrowserChrome {...props({ onHide: () => undefined })} />);
-    expect(html).toContain('aria-label="Hide to Island"');
-
-    const tree = BrowserChrome(props({ onHide: () => (hidden += 1) }));
-    const hide = findElements(tree, Button).find(
-      (button) => button.props["aria-label"] === "Hide to Island",
-    );
-    hide?.props.onClick?.();
-    expect(hidden).toBe(1);
+    expect(html).not.toContain("Hide to Island");
   });
 });

@@ -15,6 +15,8 @@ import {
   SunIcon,
   TerminalIcon,
   CloseIcon,
+  ExternalIcon,
+  MinusIcon,
   CloseSquareIcon,
 } from "@renderer/components/ui/icon";
 
@@ -26,7 +28,7 @@ import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-m
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
-import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
+import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
 import {
   GroupedTabList,
   groupTabItems,
@@ -56,7 +58,7 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
-import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { hidesToIsland, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 
 /**
@@ -127,6 +129,8 @@ export interface HomeTabListProps {
   shownGroupId?: string | null;
   /** Dissolve a group from its chip's menu; every tab stays open. */
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tabId: string): void;
   /**
    * The project whose Main checkout Home's File tabs come from — what Copy Path
    * resolves against. Home has no ticket, so those paths never resolve into a
@@ -248,13 +252,11 @@ export function HomePaneTabStrip({
   ...list
 }: HomeTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip
-      variant="folder"
-      label={label}
-      reorder={reorderFor(list)}
-      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
-    >
-      <HomeTabList {...list} />
+    <TabStrip variant="folder" label={label} reorder={reorderFor(list)}>
+      <HomeTabList
+        {...list}
+        onTakeOutTab={list.onTakeOutTab ?? (onTakeOut ? () => onTakeOut() : undefined)}
+      />
     </TabStrip>
   );
 }
@@ -309,6 +311,8 @@ function HomeTabList({
   groups,
   shownGroupId,
   onUngroup,
+  onTakeOutTab,
+  onHideBrowser,
   onSelect,
   onClose,
   onRename,
@@ -326,6 +330,29 @@ function HomeTabList({
       describe={homeTabMenuLabel}
       onSelect={onSelect}
       onUngroup={onUngroup}
+      onClose={onClose}
+      actionsFor={(tab) => {
+        const actions: TabAction[] = [];
+        if (
+          onTakeOutTab &&
+          (groups === undefined ||
+            groups.some((group) => group.panes.some((pane) => pane.tabIds.includes(tab.id))))
+        )
+          actions.push({
+            label: "Take out of group",
+            icon: ExternalIcon,
+            run: () => onTakeOutTab(tab.id),
+          });
+        const browser =
+          tab.kind === "browser" ? useBrowserTabsStore.getState().byId[tab.tabId] : undefined;
+        if (browser && hidesToIsland(browser) && onHideBrowser)
+          actions.push({
+            label: "Hide to Island",
+            icon: MinusIcon,
+            run: () => onHideBrowser(browser.tabId),
+          });
+        return actions;
+      }}
     >
       {(descriptor, { active, tabStop, grouped }) => {
         // A chip segment is the chip's: no drag of its own, no menu of its own.
@@ -347,22 +374,32 @@ function HomeTabList({
         }
         if (descriptor.kind === "browser") {
           return (
-            <Tab
-              key={descriptor.id}
-              data-testid="home-browser-tab"
-              label={descriptor.title}
-              title={descriptor.title}
-              active={active}
-              tabStop={tabStop}
-              dragId={dragId}
-              status={descriptor.loading ? "working" : undefined}
-              // Two marks, two facts: the glyph says whose tab this IS
-              // (VC-238), the dot says who may write to it right now (VC-239).
-              leading={<BrowserTabMark driven={descriptor.driven} />}
-              badge={<BrowserHolderDot holder={descriptor.heldBy} />}
-              onActivate={() => onSelect(descriptor)}
-              onClose={() => onClose(descriptor)}
-            />
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <Tab
+                  key={descriptor.id}
+                  data-testid="home-browser-tab"
+                  label={descriptor.title}
+                  title={descriptor.title}
+                  active={active}
+                  tabStop={tabStop}
+                  dragId={dragId}
+                  status={descriptor.loading ? "working" : undefined}
+                  // Two marks, two facts: the glyph says whose tab this IS
+                  // (VC-238), the dot says who may write to it right now (VC-239).
+                  leading={<BrowserTabMark driven={descriptor.driven} />}
+                  badge={<BrowserHolderDot holder={descriptor.heldBy} />}
+                  onActivate={() => onSelect(descriptor)}
+                  onClose={() => onClose(descriptor)}
+                />
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <TabContextActions />
+                <ContextMenuItem icon={CloseIcon} onSelect={() => onClose(descriptor)}>
+                  Close
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           );
         }
         if (descriptor.kind === "file") {
@@ -530,6 +567,7 @@ function HomeFileTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <TabContextActions />
         <CopyPathContextMenuItems target={{ projectId, relPath: tab.relPath }} />
         <ContextMenuSeparator />
         <WordWrapContextMenuItem />
@@ -659,6 +697,7 @@ function TerminalTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <TabContextActions />
         <ContextMenuItem icon={EditIcon} onSelect={shell.onStartRename}>
           Rename
         </ContextMenuItem>
@@ -777,6 +816,7 @@ function ChatTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <TabContextActions />
         <SessionShare sessionId={sessionId} projectId={projectId} />
         {canRename ? (
           <>

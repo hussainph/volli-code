@@ -1,3 +1,6 @@
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from "./dropdown-menu";
+import { ListRow } from "./list-row";
+import { TabActionDropdown, TabActionsContext } from "./tab-actions";
 /**
  * The app's one tab strip.
  *
@@ -46,13 +49,13 @@ import * as React from "react";
 import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import "./tab-strip.css";
 import {
-  ChevronLeftIcon,
-  ChevronRightIcon,
+  ChevronDownIcon,
   CircleIcon,
   SpinnerIcon,
   HelpIcon,
   WarningIcon,
   CloseIcon,
+  MinusIcon,
 } from "@renderer/components/ui/icon";
 
 import {
@@ -90,18 +93,22 @@ import {
   TooltipTrigger,
 } from "@renderer/components/ui/tooltip";
 import { useClippedReveal } from "@renderer/components/ui/value-reveal";
-import { prefersReducedMotion, useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
 import { tabDropOrder } from "./tab-reorder";
-import {
-  scrollTabsWithWheel,
-  tabOverflow,
-  tabScrollLeftFor,
-  tabScrollStep,
-  type TabOverflow,
-} from "./tab-scroll";
+import { scrollTabsWithWheel, tabOverflow, tabScrollLeftFor, type TabOverflow } from "./tab-scroll";
+
+interface TabInventoryEntry {
+  id: string;
+  label: string;
+  leading: React.ReactNode;
+  detail?: string;
+  status?: StatusDotState | null;
+  activate(): void;
+}
+const TabInventoryContext = React.createContext<Map<HTMLElement, TabInventoryEntry> | null>(null);
 
 export type TabVariant = "folder" | "pill";
 
@@ -327,7 +334,8 @@ export function TabStrip({
   children,
   ...props
 }: TabStripProps) {
-  const folder = variant === "folder";
+  const inventory = React.useRef(new Map<HTMLElement, TabInventoryEntry>());
+  const [inventoryRows, setInventoryRows] = React.useState<TabInventoryEntry[]>([]);
   // A surface above us already owns the gesture — see TabStripSurfaceContext.
   const inSurface = React.useContext(TabStripSurfaceContext);
   const scrollerRef = React.useRef<HTMLDivElement>(null);
@@ -429,16 +437,6 @@ export function TabStrip({
     if (scroller !== null) revealCurrentTab(scroller);
   }, [overflow.overflowing]);
 
-  // The motion preference is read at the press rather than during the render
-  // (`prefersReducedMotion`): this strip is drawn to a string by a good deal of
-  // the test suite, and `matchMedia` does not exist there — a flag a component
-  // only needs while it is moving has no business being a subscription.
-  const travel = (towards: "prev" | "next", pointer: boolean) => {
-    const scroller = scrollerRef.current;
-    if (scroller === null) return;
-    scrollTabsTo(scroller, tabScrollStep(scroller, towards), pointer && !prefersReducedMotion());
-  };
-
   const strip = (
     // A PROVIDER OF ITS OWN, so a tab's label reveal works wherever a strip is
     // drawn (VC-288 review). `SidebarProvider` mounts one around the whole app,
@@ -473,7 +471,7 @@ export function TabStrip({
         <div
           ref={areaRef}
           data-slot="tab-scroll-area"
-          className="tab-track flex h-8 min-w-0 flex-1 items-center self-center rounded-full p-0.5"
+          className="tab-track flex h-8 min-w-0 flex-1 items-center self-center overflow-hidden rounded-full p-0.5"
         >
           {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
             gesture was Shift+wheel and nothing else: a convention a mouse user
@@ -484,17 +482,11 @@ export function TabStrip({
             Both ends stay mounted while the strip overflows, with the arrived
             one disabled rather than removed: a chevron that vanishes at the end
             of a travel re-lays the tabs out under the pointer pressing it. */}
-          {overflow.overflowing ? (
-            <TabScrollAffordance
-              towards="prev"
-              folder={folder}
-              disabled={overflow.atStart}
-              onTravel={(pointer) => travel("prev", pointer)}
-            />
-          ) : null}
           <div
             ref={scrollerRef}
             data-slot="tab-scroll"
+            data-overflow-left={(overflow.overflowing && !overflow.atStart) || undefined}
+            data-overflow-right={(overflow.overflowing && !overflow.atEnd) || undefined}
             className={cn(
               "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
               "items-center",
@@ -504,27 +496,64 @@ export function TabStrip({
               role="tablist"
               aria-label={label}
               aria-orientation="horizontal"
-              className="flex min-w-full items-center gap-0.5"
+              className="tab-items flex min-w-full items-center gap-0.5"
             >
-              <TabVariantContext.Provider value={variant}>
-                {reorder === undefined ? (
-                  children
-                ) : (
-                  // Inside the tablist, where the tabs are; the sensors and the
-                  // DndContext sit outside it (below) so dnd-kit's two hidden
-                  // announcement nodes are not children of a `role="tablist"`.
-                  <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
-                )}
-              </TabVariantContext.Provider>
+              <TabInventoryContext.Provider value={inventory.current}>
+                <TabVariantContext.Provider value={variant}>
+                  {reorder === undefined ? (
+                    children
+                  ) : (
+                    // Inside the tablist, where the tabs are; the sensors and the
+                    // DndContext sit outside it (below) so dnd-kit's two hidden
+                    // announcement nodes are not children of a `role="tablist"`.
+                    <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
+                  )}
+                </TabVariantContext.Provider>
+              </TabInventoryContext.Provider>
             </div>
           </div>
           {overflow.overflowing ? (
-            <TabScrollAffordance
-              towards="next"
-              folder={folder}
-              disabled={overflow.atEnd}
-              onTravel={(pointer) => travel("next", pointer)}
-            />
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (open)
+                  setInventoryRows(
+                    Array.from(
+                      scrollerRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
+                    ).flatMap((node) => {
+                      const row = inventory.current.get(node);
+                      return row ? [row] : [];
+                    }),
+                  );
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="All tabs"
+                  className="shrink-0 rounded-full"
+                >
+                  <ChevronDownIcon className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80" aria-label="All tabs">
+                {inventoryRows.map((row) => (
+                  <ListRow
+                    key={row.id}
+                    density="two-line"
+                    leading={row.leading}
+                    primary={row.label}
+                    secondary={row.detail === row.label ? undefined : row.detail}
+                    trailing={
+                      row.status ? (
+                        <span className="text-label text-muted-foreground">{row.status}</span>
+                      ) : undefined
+                    }
+                    onActivate={row.activate}
+                  />
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
           {actions !== undefined ? (
             <div
@@ -562,41 +591,6 @@ const NO_TAB_OVERFLOW: TabOverflow = { overflowing: false, atStart: true, atEnd:
  * Outside the `role="tablist"`, deliberately: inside it these would join the
  * roving tabindex and be counted by every arrow key as two more tabs.
  */
-function TabScrollAffordance({
-  towards,
-  folder,
-  disabled,
-  onTravel,
-}: {
-  towards: "prev" | "next";
-  folder: boolean;
-  disabled: boolean;
-  onTravel(pointer: boolean): void;
-}) {
-  const Icon = towards === "prev" ? ChevronLeftIcon : ChevronRightIcon;
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      data-slot="tab-scroll-affordance"
-      data-towards={towards}
-      aria-label={towards === "prev" ? "Earlier tabs" : "Later tabs"}
-      disabled={disabled}
-      onClick={(event) => onTravel(event.detail > 0)}
-      // Edge-to-edge travel targets, not tabs or round floating buttons. Cancel
-      // the folder strip's top pad so the caret centres on the complete band.
-      className={cn(
-        "h-auto w-control-default shrink-0 self-stretch rounded-none border-border text-foreground disabled:text-muted-foreground disabled:opacity-100",
-        towards === "prev" ? "border-r" : "border-l",
-        folder && "-mt-2",
-      )}
-    >
-      <Icon className="size-4" />
-    </Button>
-  );
-}
-
 /** The sortable list itself, and the flag that tells a tab it may register. */
 function SortableTabs({ ids, children }: { ids: TabOrder; children: React.ReactNode }) {
   return (
@@ -750,6 +744,8 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   /** Not `onSelect`, which a div already owns as a DOM event. */
   onActivate(): void;
   onClose?(): void;
+  /** Rich member rows for a group tab; ordinary tabs use their action list. */
+  actionsContent?: React.ReactNode;
 }
 
 /**
@@ -883,9 +879,11 @@ function TabShell({
   drag = null,
   onActivate,
   onClose,
+  actionsContent,
   className,
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
+  const extraActions = React.useContext(TabActionsContext);
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
@@ -915,6 +913,11 @@ function TabShell({
   // inline edit are commit and cancel, and an × that blurs (committing) and
   // then closes is a destructive answer to a control reached for to dismiss.
   const showClose = closable && onClose !== undefined && !renamingNow;
+  const menuActions = [
+    ...extraActions,
+    ...(showClose ? [{ label: "Close", icon: CloseIcon, run: onClose!, destructive: true }] : []),
+  ];
+  const hide = extraActions.find((action) => action.label === "Hide to Island");
   // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288 review). The name below is
   // capped at `max-w-40` and truncates, and until now the rest of it lived in
   // `aria-label` alone — an answer for a screen reader and for nothing else,
@@ -927,6 +930,26 @@ function TabShell({
   const reveal = useClippedReveal(labelRef);
   const name = label;
   const detail = hint === undefined ? label : `${label} · ${hint}`;
+  const inventory = React.useContext(TabInventoryContext);
+  const inventoryId = React.useId();
+  React.useLayoutEffect(() => {
+    const node = shellRef.current;
+    if (!inventory || !node) return;
+    inventory.set(node, {
+      id: inventoryId,
+      label,
+      leading,
+      detail,
+      status,
+      activate: () => {
+        onActivate();
+        revealTab(node, false);
+      },
+    });
+    return () => {
+      inventory.delete(node);
+    };
+  }, [inventory, inventoryId, label, leading, detail, status, onActivate]);
 
   return (
     <Tooltip {...reveal}>
@@ -1053,6 +1076,27 @@ function TabShell({
               {revealLabel ? <TitleReveal text={label} automatic={automaticLabelChange} /> : label}
             </span>
           )}
+          {!renamingNow && (menuActions.length > 0 || actionsContent) ? (
+            <TabActionDropdown label={label} actions={menuActions}>
+              {actionsContent}
+            </TabActionDropdown>
+          ) : null}
+          {!renamingNow && hide ? (
+            <button
+              type="button"
+              data-slot="tab-minimise"
+              aria-label="Hide to Island"
+              title="Hide to Island"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                hide.run();
+              }}
+              className="flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 hover:bg-border hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+            >
+              <MinusIcon className="size-3" strokeWidth={2.25} />
+            </button>
+          ) : null}
           {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}
         </div>
       </TooltipTrigger>
@@ -1162,6 +1206,7 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
       type="button"
       data-slot="tab-close"
       data-testid="tab-close"
+      onPointerDown={(event) => event.stopPropagation()}
       aria-label={`Close ${label}`}
       // Stop the click from reaching the tab's own select handler, and pass the
       // keyboard on to a tab that will still be here afterwards.
@@ -1174,7 +1219,7 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
         // The house hover-reveal contract in full (`ticket/rail-panel-parts.tsx`
         // is the reference): the duration and the reduced-motion escape are
         // part of it, and every tab copy had dropped both.
-        "group/close flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+        "group/close flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
         dirty
           ? "opacity-100"
           : "opacity-0 group-aria-selected:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",

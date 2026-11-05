@@ -1,29 +1,6 @@
-/**
- * VC-30 / VC-402 — a Session's leading mark: the vendor's own logo, with the
- * state as a badge on its corner.
- *
- * It replaces the status dot on every Session row (the sidebar's two bands,
- * the Sessions inside a ticket folder, the in-ticket rail) and leads the peek
- * card's header, so one Session reads the same wherever it is drawn. The BADGE
- * keeps the vendor's mark in its own colours on a quiet tile, with the state
- * as a corner icon. A tinted logo cannot communicate brand and state colours
- * independently.
- *
- * TWO MAPS, AND WHY THERE IS NOT A THIRD. What a state LOOKS like belongs to
- * `ui/status-dot.tsx`, and what a Session's activity IS as a state belongs to
- * `ui/session-activity-status.ts` — callers pass the answer from
- * `sessionActivityDotState(...)` and this file re-derives nothing. What is new
- * here is only the four BADGE GLYPHS, and they paint with the semantic tone
- * tokens the dot already uses (`text-positive`, `text-attention`,
- * `text-destructive`, `text-muted-foreground`) rather than with a second
- * status→colour map. The lab's `STATUS_INK` copy is deliberately NOT ported: it
- * was a copy of a column PR #568 never merged, so it has no upstream to read.
- *
- * THE ACCESSIBLE NAME IS THE CALLER'S. The mark is in the tree because it says
- * something the row prints nowhere — which vendor — but the words for the state
- * are `SESSION_ACTIVITY_LABEL`'s, and composing them is the row's job (it knows
- * whether it is also printing them). This file never writes a state word.
- */
+/** Flat shared-seam identity with the existing semantic state badge. Provider
+ * and harness names remain accessible; no logo tiles or bespoke brand drawings.
+ * State is supplied by the caller's Session projection, never inferred here. */
 import * as React from "react";
 import {
   ChatIcon,
@@ -37,7 +14,6 @@ import {
 
 import { isFirstClassHarnessId, type FirstClassHarnessId, type HarnessId } from "@volli/shared";
 
-import { ModelMark } from "@renderer/components/models/model-identity";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 
@@ -123,8 +99,8 @@ export interface SessionGlyphProps {
 }
 
 export function SessionGlyph({
-  providerId,
-  providerLabel,
+  providerId: _providerId,
+  providerLabel: _providerLabel,
   state,
   kind,
   fallback,
@@ -143,24 +119,15 @@ export function SessionGlyph({
       data-session-glyph={state ?? "none"}
       className={cn(
         "relative inline-flex shrink-0 items-center justify-center",
-        tile ? "size-6 rounded-md bg-muted/50" : "size-5",
+        tile ? "size-6" : "size-5",
         tab && "mr-0.5",
       )}
     >
-      {providerId === null ? (
-        <Stand
-          aria-hidden
-          strokeWidth={2.25}
-          className={cn(tile ? "size-4" : "size-3.5", "text-muted-foreground")}
-        />
-      ) : (
-        <ModelMark
-          model={{ providerId, modelId: providerId, label: providerLabel }}
-          providerLabel={providerLabel}
-          by="provider"
-          className={cn(tile ? "size-4" : "size-3.5", state === null && "opacity-70 grayscale")}
-        />
-      )}
+      <Stand
+        aria-hidden
+        strokeWidth={2.25}
+        className={cn(tile ? "size-4" : "size-3.5", "text-muted-foreground")}
+      />
       {badge === null ? null : (
         <span
           aria-hidden

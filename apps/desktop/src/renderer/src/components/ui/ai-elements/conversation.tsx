@@ -207,6 +207,8 @@ function ConversationBridge({ children }: { children: ReactNode }) {
   const latest = useRef({ stopScroll, scrollRef });
   useLayoutEffect(() => {
     latest.current = { stopScroll, scrollRef };
+    const scroller = scrollRef.current;
+    if (scroller) scroller.dataset.conversationScroller = "";
   }, [scrollRef, stopScroll]);
   const control = useMemo<ConversationControl>(
     () => ({

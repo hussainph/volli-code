@@ -73,7 +73,10 @@ import {
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
-import { hideBrowserTab } from "@renderer/components/browser/show-browser-tab";
+import {
+  hideBrowserTab,
+  leaveTicketBrowserStrip,
+} from "@renderer/components/browser/show-browser-tab";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
 import { SplitDnd } from "@renderer/components/split/split-dnd";
 import {
@@ -1316,11 +1319,12 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
    * applies only when the departing tab was the one in front.
    */
   function dropBrowserTab(tab: TicketTabDescriptor): void {
-    removeTicketTabFromSplit(projectId, ticket.id, tab.id);
-    const active =
-      useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active ??
-      BODY_TAB_ID;
-    if (active === tab.id) setActiveTab(BODY_TAB_ID);
+    leaveTicketBrowserStrip(
+      projectId,
+      ticket.id,
+      tab.id,
+      tabs.map((candidate) => candidate.id),
+    );
   }
 
   /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
@@ -1667,6 +1671,8 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               onSelectTab={setActiveTab}
               onReorderTabs={(movedId, ids) => reorderInPane(SPLIT_VIEW_ROOT_PANE_ID, movedId, ids)}
               onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
+              onTakeOutTab={ungroupLocalTab}
+              onHideBrowser={hideBrowser}
               onCloseTab={closeTab}
               onRenameSessionTab={renameSessionTab}
               creating={creating || creatingChat}
@@ -1704,6 +1710,8 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
                     onSelectTab={setActiveTab}
                     onReorderTabs={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
                     onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
+                    onTakeOutTab={ungroupLocalTab}
+                    onHideBrowser={hideBrowser}
                     onCloseTab={closeTab}
                     onRenameSessionTab={renameSessionTab}
                     onTakeOut={

@@ -1,3 +1,4 @@
+import { SessionBandHeader } from "./session-band-header";
 import type { Project } from "@volli/shared";
 import { FileTreeNavigator } from "@renderer/components/files/file-tree-navigator";
 import { useUiStore } from "@renderer/stores/ui";
@@ -8,12 +9,9 @@ import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 
 /** Read the same takeover condition Home uses; a parked ticket is not scope. */
 export function SidebarFiles({ project }: { project: Project }) {
-  const settingsOpen = useUiStore((state) => state.settingsOpen);
   const ticketId = useProjectUiStore((state) => {
     const workspace = state.byProject[project.id];
-    return !settingsOpen &&
-      workspace?.nav === "home" &&
-      workspace.homeActiveTab === HOME_BOARD_TAB_ID
+    return workspace?.nav === "home" && workspace.homeActiveTab === HOME_BOARD_TAB_ID
       ? workspace.openTicketId
       : null;
   });
@@ -36,6 +34,7 @@ export function SidebarFiles({ project }: { project: Project }) {
   return (
     <FileTreeNavigator
       projectId={project.id}
+      scrollingHeading={<SessionBandHeader label="Files" />}
       ticketId={ticket?.id}
       root={ticket ? (ticket.branch ?? ticket.baseBranch ?? "No branch yet") : project.name}
       available={!ticket || ticket.worktreePath !== null}

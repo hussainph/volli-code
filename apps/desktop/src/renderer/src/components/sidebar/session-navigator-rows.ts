@@ -10,8 +10,8 @@ import type {
 } from "./active-session-listing";
 
 type Row =
-  | { kind: "band"; band: "active" | "previous"; key: string; height: 28 }
-  | { kind: "active"; band: "active"; key: string; height: 42; row: ActiveSessionRow }
+  | { kind: "band"; band: "active" | "previous"; key: string; height: 32 }
+  | { kind: "active"; band: "active"; key: string; height: 46; row: ActiveSessionRow }
   | {
       kind: "ticket";
       band: "previous";
@@ -30,7 +30,11 @@ type Row =
       lastInFolder?: boolean;
     }
   | { kind: "reach"; band: "previous"; key: string; height: 28 };
-export type SessionNavigatorRow = Row & { offset: number };
+export interface SessionNavigatorSelection {
+  focusedId: string | null;
+  selectedIds: ReadonlySet<string>;
+}
+export type SessionNavigatorRow = Row & { offset: number; selected: boolean; focused: boolean };
 export function navigatorRowDomId(rowId: string): string {
   return `session-nav-${encodeURIComponent(rowId)}`;
 }
@@ -41,17 +45,24 @@ export function sessionNavigatorRows(input: {
   expanded: readonly string[];
   activeHeader: boolean;
   reach: boolean;
+  selection?: SessionNavigatorSelection;
 }): SessionNavigatorRow[] {
   const rows: SessionNavigatorRow[] = [];
   let offset = 0;
   function append(row: Row) {
-    rows.push({ ...row, offset });
-    offset += row.height;
+    const id = row.kind === "active" || row.kind === "previous" ? row.row.id : row.key;
+    rows.push({
+      ...row,
+      offset,
+      selected: input.selection?.selectedIds.has(id) ?? false,
+      focused: input.selection?.focusedId === id,
+    });
+    offset += row.height + 2;
   }
-  if (input.activeHeader) append({ kind: "band", band: "active", key: "band:active", height: 28 });
+  if (input.activeHeader) append({ kind: "band", band: "active", key: "band:active", height: 32 });
   for (const row of input.active)
-    append({ kind: "active", band: "active", key: `active:${row.id}`, height: 42, row });
-  append({ kind: "band", band: "previous", key: "band:previous", height: 28 });
+    append({ kind: "active", band: "active", key: `active:${row.id}`, height: 46, row });
+  append({ kind: "band", band: "previous", key: "band:previous", height: 32 });
   const open = new Set(input.expanded);
   for (const entry of input.previous) {
     if (entry.kind === "session") {

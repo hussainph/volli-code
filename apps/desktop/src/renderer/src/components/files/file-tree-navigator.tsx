@@ -59,6 +59,7 @@ export function FileTreeNavigator(props: {
   selected?: string | null;
   referenced?: readonly FileEntry[];
   attachmentMenu?: React.ReactNode;
+  scrollingHeading?: React.ReactNode;
   onOpen(path: string): void;
   onPin(path: string): void;
   onRename(from: string, to: string): void;
@@ -80,6 +81,7 @@ function NavigatorScope({
   selected,
   referenced = NO_REFERENCES,
   attachmentMenu,
+  scrollingHeading,
   onOpen,
   onPin,
   onRename,
@@ -250,6 +252,7 @@ function NavigatorScope({
             read.hasData && (
               <FileTree
                 key={treeEpoch}
+                scrollingHeading={scrollingHeading}
                 entries={merged}
                 initialFolder={view.cwd}
                 projectId={projectId}

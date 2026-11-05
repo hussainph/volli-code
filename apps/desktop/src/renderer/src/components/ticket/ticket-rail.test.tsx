@@ -83,7 +83,7 @@ describe("TicketRail header", () => {
     const html = render();
     for (const label of ["Now", "Diffs", "Files", "Search"]) {
       expect(html).toContain(`aria-label="${label}"`);
-      expect(html).toContain(`<span class="sr-only">${label}</span>`);
+      if (label === "Now") expect(html).toContain(`>${label}</span>`);
     }
   });
 

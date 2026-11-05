@@ -224,6 +224,28 @@ describe("floating material as shipped", () => {
     const surface = document.querySelector(`[data-slot="${slot}"]`)!;
     expect(surface).not.toBeNull();
     expect(backdrop(surface)).toBe(BLUR);
+    expect(surface.closest("#volli-overlays")?.parentElement).toBe(document.body);
+    expect(host.contains(surface)).toBe(false);
+  });
+
+  it("keeps a dialog fixed even when the material stylesheet follows layout utilities", async () => {
+    sheet.textContent = ".fixed{position:fixed;top:50%;left:50%}" + shipped;
+    host.style.backdropFilter = "blur(9px)";
+    host.style.transform = "translateX(20px)";
+    host.style.contain = "paint";
+    await act(async () =>
+      root.render(
+        <Dialog open>
+          <DialogContent aria-describedby={undefined}>
+            <DialogTitle>Centred</DialogTitle>
+          </DialogContent>
+        </Dialog>,
+      ),
+    );
+    const dialog = document.querySelector('[data-slot="dialog-content"]')!;
+    expect(getComputedStyle(dialog).position).toBe("fixed");
+    expect(dialog.closest("#volli-overlays")?.parentElement).toBe(document.body);
+    expect(dialog.parentElement).not.toBe(host);
   });
 
   it("gives a dropdown submenu the same floating blur as its parent", async () => {

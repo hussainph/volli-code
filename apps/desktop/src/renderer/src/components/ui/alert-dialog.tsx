@@ -1,4 +1,4 @@
-"use client";
+import { overlayLayer } from "./overlay-layer";
 
 import * as React from "react";
 import { ControlShapeProvider } from "./control-shape";
@@ -24,7 +24,13 @@ function AlertDialogTrigger({
 }
 
 function AlertDialogPortal({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Portal>) {
-  return <AlertDialogPrimitive.Portal data-slot="alert-dialog-portal" {...props} />;
+  return (
+    <AlertDialogPrimitive.Portal
+      data-slot="alert-dialog-portal"
+      {...props}
+      container={overlayLayer()}
+    />
+  );
 }
 
 function AlertDialogOverlay({

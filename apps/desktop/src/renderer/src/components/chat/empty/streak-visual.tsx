@@ -12,6 +12,7 @@
  * off whatever the pointer is over instead.
  */
 import * as React from "react";
+import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
 import { STREAK_WEEKS, streakGrid, streakStep, streakWindowStart } from "@volli/shared";
 import type { StreakDay } from "@volli/shared";
 
@@ -31,7 +32,9 @@ export function StreakVisual() {
   const startedAt = useSessionStartsStore((state) => state.startedAt);
   const refresh = useSessionStartsStore((state) => state.refresh);
   const ramp = useStreakRamp();
-  const [hover, setHover] = React.useState<{ day: StreakDay; x: number; y: number } | null>(null);
+  const [hover, setHover] = React.useState<{ day: StreakDay; box: DOMRect } | null>(null);
+  const anchor = React.useRef({ getBoundingClientRect: () => hover?.box ?? new DOMRect() });
+  anchor.current = { getBoundingClientRect: () => hover?.box ?? new DOMRect() };
 
   // The window is a fact about now, so it is taken once per mount rather than
   // per render — a grid whose first cell slid while the pointer was over it
@@ -55,12 +58,7 @@ export function StreakVisual() {
           const day = grid.days[Number(cell.dataset.day)];
           if (day === undefined) return;
           const box = cell.getBoundingClientRect();
-          const bounds = event.currentTarget.getBoundingClientRect();
-          setHover({
-            day,
-            x: box.left - bounds.left + box.width / 2,
-            y: box.top - bounds.top,
-          });
+          setHover({ day, box });
         }}
         onPointerLeave={() => setHover(null)}
       >
@@ -82,15 +80,19 @@ export function StreakVisual() {
             />
           ))}
         </div>
-        {hover === null ? null : (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-ui text-popover-foreground shadow-overlay"
-            style={{ left: hover.x, top: hover.y - 6 }}
-          >
-            {dayLabel(hover.day)}
-          </div>
-        )}
+        <Popover open={hover !== null}>
+          <PopoverAnchor virtualRef={anchor} />
+          {hover === null ? null : (
+            <PopoverContent
+              role="tooltip"
+              side="top"
+              align="center"
+              className="pointer-events-none w-auto p-2 text-ui"
+            >
+              {dayLabel(hover.day)}
+            </PopoverContent>
+          )}
+        </Popover>
       </div>
       <div className="streak-stats">
         <div>

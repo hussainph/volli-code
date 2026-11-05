@@ -294,9 +294,8 @@ export function deriveCanvasPaint(
       "--canvas-mesh": canvasBackground(canvas, resolved, false),
       "--glass-veil": light ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
       "--glass-pane-veil": light ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
-      // Writing glass sits on opaque paper, not on the canvas. Use an authored
-      // tint colour at the same veil alpha rather than painting a second mesh.
-      "--glass-writing-veil": `color-mix(in srgb, color-mix(in srgb, ${canvas.stops[0].hex} 22%, ${light ? "#ffffff" : "#1a1a1c"}) ${light ? 46 : 52}%, transparent)`,
+      // Writing glass samples neutral paper, never the authored canvas hue.
+      "--glass-writing-veil": light ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
       "--glass-tone": REGULAR_TONE[resolved].map(([kind, value]) => `${kind}(${value})`).join(" "),
       "--glass-rim": light
         ? "linear-gradient(180deg, rgb(255 255 255 / .17), transparent 22%, transparent 78%, rgb(255 255 255 / .17))"

@@ -1,4 +1,4 @@
-"use client";
+import { overlayLayer } from "./overlay-layer";
 import { GlassSurface } from "./surface";
 
 import * as React from "react";
@@ -35,7 +35,13 @@ function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrim
 function DropdownMenuPortal({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
-  return <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />;
+  return (
+    <DropdownMenuPrimitive.Portal
+      data-slot="dropdown-menu-portal"
+      {...props}
+      container={overlayLayer()}
+    />
+  );
 }
 
 function DropdownMenuTrigger({
@@ -52,7 +58,7 @@ function DropdownMenuContent({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
-    <DropdownMenuPrimitive.Portal>
+    <DropdownMenuPrimitive.Portal container={overlayLayer()}>
       <GlassSurface asChild tier="full">
         <DropdownMenuPrimitive.Content
           data-slot="dropdown-menu-content"
@@ -219,7 +225,7 @@ function DropdownMenuSubContent({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
-    <DropdownMenuPrimitive.Portal>
+    <DropdownMenuPrimitive.Portal container={overlayLayer()}>
       <GlassSurface asChild tier="full">
         <DropdownMenuPrimitive.SubContent
           data-slot="dropdown-menu-sub-content"

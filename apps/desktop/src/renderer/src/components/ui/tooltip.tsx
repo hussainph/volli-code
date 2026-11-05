@@ -1,3 +1,4 @@
+import { overlayLayer } from "./overlay-layer";
 import * as React from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 
@@ -67,10 +68,12 @@ function TooltipContent({
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
   const motion = useMotionOriginProps("tooltip", props, false, true);
   return (
-    <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Portal container={overlayLayer()}>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}
+        avoidCollisions
+        collisionPadding={8}
         className={cn(
           // Repeat hovers are one gesture: Radix's instant-open state skips
           // both the wait and the entrance. Labels never move their target.

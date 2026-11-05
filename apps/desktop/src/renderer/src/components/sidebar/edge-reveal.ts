@@ -104,7 +104,7 @@ type Phase = "closed" | "arming" | "open" | "closing";
  * `ChromeBar`, whose element `AppShell` deliberately holds at one identity.
  */
 const TRIGGER_SELECTOR = '[data-sidebar-trigger], [data-slot="sidebar-trigger"]';
-const PROJECT_PEEK = { intent: 100, open: 100, close: 120, exitGrace: 0 } as const;
+const PROJECT_PEEK = { intent: 100, open: 100, close: 120, exitGrace: 300 } as const;
 
 /**
  * Whether `node` is inside a portalled overlay rather than the page under it.
@@ -280,7 +280,8 @@ export function useEdgeReveal({
             side,
             projectTiles ? PROJECT_PEEK : undefined,
           );
-        if (!instant && !prefersReducedMotion())
+        if (projectTiles) panelRef.current?.removeAttribute("data-glass-blur");
+        else if (!instant && !prefersReducedMotion())
           panelRef.current?.setAttribute("data-glass-blur", "off");
         // A dismissal must not answer the pointer still on the button with
         // another peek, including after a pour finishes under that pointer.

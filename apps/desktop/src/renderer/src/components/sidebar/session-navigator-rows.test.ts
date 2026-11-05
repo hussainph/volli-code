@@ -43,7 +43,7 @@ describe("flat fixed-height Session navigator", () => {
     let offset = 0;
     for (const row of open) {
       expect(row.offset).toBe(offset);
-      offset += row.height;
+      offset += row.height + 2;
     }
     expect(open.at(-2)).toMatchObject({ folderId: "ticket", lastInFolder: true, height: 32 });
     expect(open[1].key).toBe(closed[1].key);
@@ -61,7 +61,20 @@ describe("flat fixed-height Session navigator", () => {
       }).map(({ kind, offset }) => ({ kind, offset })),
     ).toEqual([
       { kind: "band", offset: 0 },
-      { kind: "previous", offset: 28 },
+      { kind: "previous", offset: 34 },
     ]);
   });
+});
+
+it("keeps multi-selection separate from the keyboard-focused row", () => {
+  const rows = sessionNavigatorRows({
+    active: [{ id: "a" }, { id: "b" }] as ActiveSessionRow[],
+    previous: [],
+    expanded: [],
+    activeHeader: false,
+    reach: false,
+    selection: { focusedId: "b", selectedIds: new Set(["a"]) },
+  });
+  expect(rows[0]).toMatchObject({ selected: true, focused: false, height: 46 });
+  expect(rows[1]).toMatchObject({ selected: false, focused: true, offset: 48 });
 });

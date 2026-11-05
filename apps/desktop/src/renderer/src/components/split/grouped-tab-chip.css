@@ -15,33 +15,27 @@
   right: 0;
 }
 
-/*
- * A SUMMARIZED group chip — a group that is not on screen (VC-614). The first
- * pane's front keeps a shortened label; the other panes fold into the chip's
- * `+n` count (`GroupMoreCount`), whose tooltip names them. Unlayered, so it
- * outranks the tab's own `max-w-*` utility.
- */
-[data-slot="grouped-tab-chip"][data-compact="true"] [data-testid="tab-hint"] {
-  display: none;
+.group-icon-stack {
+  display: flex;
+  align-items: center;
+  padding-right: 2px;
 }
-[data-slot="grouped-tab-chip"][data-compact="true"] [data-slot="tab-label"] {
-  max-width: 7rem;
+.group-icon-disc {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: var(--tab-group-face, var(--background));
+  box-shadow: 0 0 0 1px var(--tab-group-face, var(--background));
 }
-[data-slot="grouped-tab-chip"][data-compact="true"]
-  [data-slot="grouped-tab-member"]
-  + [data-slot="grouped-tab-member"] {
-  display: none;
+.group-icon-disc:first-child {
+  margin-left: 0;
 }
-
-.grouped-tab-capsule {
-  box-shadow: var(--shadow-glass-small);
+[data-slot="grouped-tab-chip"] {
+  --tab-group-face: var(--background);
 }
-.grouped-tab-capsule [data-slot="tab"] {
-  border-radius: 999px;
-}
-.grouped-tab-capsule [data-slot="grouped-tab-member"] {
-  border: 0;
-}
-.grouped-tab-capsule [data-slot="grouped-tab-member"] + [data-slot="grouped-tab-member"] {
-  box-shadow: inset 0.5px 0 0 var(--glass-edge);
+[data-slot="grouped-tab-chip"][data-active="true"] {
+  --tab-group-face: var(--tab-selected-face);
 }

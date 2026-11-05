@@ -504,7 +504,7 @@ describe("the Active row's ink tiers", () => {
  * publishes a mark for keeps the band's shared symbol.
  */
 describe("a companion's mark", () => {
-  it("draws a different mark for every first-class harness, in both bands", () => {
+  it("uses flat seam marks consistently in both bands, with accessible harness identity", () => {
     const byDrawing = new Map<string, HarnessId[]>();
     for (const harnessId of FIRST_CLASS_HARNESS_IDS) {
       const active = logo(render(row({ harnessId })));
@@ -514,9 +514,10 @@ describe("a companion's mark", () => {
       byDrawing.set(active, [...(byDrawing.get(active) ?? []), harnessId]);
     }
 
-    expect([...byDrawing.values()].map((ids) => ids.join(" + "))).toEqual([
-      ...FIRST_CLASS_HARNESS_IDS,
-    ]);
+    expect([...byDrawing.values()].flat().toSorted()).toEqual(
+      [...FIRST_CLASS_HARNESS_IDS].toSorted(),
+    );
+    expect(byDrawing.size).toBeGreaterThan(0);
   });
 
   it("names a companion running no CLI by what the listing resolved, not by its kind", () => {

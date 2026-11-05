@@ -1,4 +1,4 @@
-"use client";
+import { overlayLayer } from "./overlay-layer";
 import { GlassSurface } from "./surface";
 
 import * as React from "react";
@@ -113,7 +113,7 @@ function PopoverContent({
   const claimWheel = usePopoverWheelClaim();
   const motion = useMotionOriginProps("popover", props, false, true);
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={overlayLayer()}>
       <GlassSurface asChild tier={blur ? "full" : "pane"}>
         <PopoverPrimitive.Content
           data-slot="popover-content"
@@ -121,6 +121,8 @@ function PopoverContent({
           data-glass-blur={blur ? undefined : "off"}
           align={align}
           sideOffset={sideOffset}
+          avoidCollisions
+          collisionPadding={8}
           className={cn(
             // `animate-none!` is important on purpose: the reduced-motion gate
             // loses the specificity fight with `data-[state=open]:animate-in`

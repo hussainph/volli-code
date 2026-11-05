@@ -291,7 +291,7 @@ function scrollArea(): HTMLElement {
 }
 
 /** How much width one mounted chevron takes out of the scroller. */
-const AFFORDANCE_WIDTH = 28;
+const AFFORDANCE_WIDTH = 24;
 
 /**
  * The strip's geometry, INCLUDING the part that made the first attempt wrong:
@@ -308,8 +308,7 @@ function layoutStrip(options: { area?: number; content: number; scrollLeft?: num
   let content = options.content;
   let left = options.scrollLeft ?? 0;
   const affordances = (): number =>
-    (container?.querySelectorAll('[data-slot="tab-scroll-affordance"]').length ?? 0) *
-    AFFORDANCE_WIDTH;
+    (container?.querySelectorAll('[aria-label="All tabs"]').length ?? 0) * AFFORDANCE_WIDTH;
   const port = scroller();
   Object.defineProperty(scrollArea(), "clientWidth", { configurable: true, get: () => area });
   Object.defineProperty(port, "clientWidth", {
@@ -484,27 +483,25 @@ describe("TabStrip overflow", () => {
     expect(port.scrollLeft).toBe(120);
   });
 
-  it("offers a pointer a way to the tabs it cannot see, and only while there are some", () => {
+  it("offers one in-track inventory, never arrow/divider controls", async () => {
     renderTabs(9, 0);
-    // 356px of area, so that once the two chevrons have taken 28px each the
-    // scroller is the round 300px window the travel below is reckoned in.
-    const { port } = layoutStrip({ area: 356, content: 900 });
+    layoutStrip({ area: 356, content: 900 });
     resized();
-
-    const later = affordance("Later");
-    expect(later).not.toBeNull();
-    expect(later?.className).toContain("self-stretch");
-    expect(later?.className).toContain("rounded-none");
-    expect(later?.className).toContain("text-foreground");
-    expect(later?.className).toContain("-mt-2");
-    expect(later?.querySelector("svg")?.classList.contains("size-4")).toBe(true);
-    // Nothing to the left yet, so that end says so rather than pretending.
-    expect(affordance("Earlier")?.disabled).toBe(true);
-    expect(later?.disabled).toBe(false);
-
-    act(() => later?.click());
-    // Four fifths of a window, so one tab of the last view stays in this one.
-    expect(port.scrollLeft).toBe(240);
+    const all = container!.querySelector<HTMLButtonElement>('[aria-label="All tabs"]')!;
+    expect(all).not.toBeNull();
+    expect(scrollArea().contains(all)).toBe(true);
+    expect(affordance("Earlier")).toBeNull();
+    expect(affordance("Later")).toBeNull();
+    await act(async () =>
+      all.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    expect(menu.textContent).toContain("Tab 8");
+    const target = [...menu.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Tab 8"),
+    )!;
+    act(() => target.click());
+    expect(scroller().scrollLeft).toBeGreaterThan(0);
   });
 
   it("draws no affordance at all for a strip that fits", () => {
@@ -527,7 +524,7 @@ describe("TabStrip overflow", () => {
     renderTabs(9, 0);
     const strip = layoutStrip({ content: 900 });
     resized();
-    expect(affordance("Later")).not.toBeNull();
+    expect(container?.querySelector('[aria-label="All tabs"]')).not.toBeNull();
 
     // Six tabs closed: 250px of tabs in a 300px area. They fit — but they do
     // NOT fit the 244px the two mounted chevrons had left of the scroller, so a
@@ -548,7 +545,7 @@ describe("TabStrip overflow", () => {
     renderTabs(9, 0);
     const strip = layoutStrip({ content: 900 });
     resized();
-    expect(affordance("Later")).not.toBeNull();
+    expect(container?.querySelector('[aria-label="All tabs"]')).not.toBeNull();
 
     // A divider dragged, a rail closed: the window never changed, and only the
     // pane's own observer hears it.
@@ -573,8 +570,8 @@ describe("TabStrip overflow", () => {
     // furthest this scroller travels, and the tab's right edge asks for all of
     // it — without the second look, the tab a person just selected sits behind
     // the control that appeared to help them reach it.
-    expect(affordance("Later")).not.toBeNull();
-    expect(strip.port.scrollLeft).toBe(656);
+    expect(container?.querySelector('[aria-label="All tabs"]')).not.toBeNull();
+    expect(strip.port.scrollLeft).toBe(624);
   });
 
   it("re-reveals the focused tab when content before it grows", () => {
@@ -598,7 +595,7 @@ describe("TabStrip overflow", () => {
     expect(document.activeElement).toBe(tabs[2]);
     // The two 28px affordances leave a 344px scroller. The moved tab's right
     // edge plus the 8px reveal inset therefore lands at 264.
-    expect(strip.port.scrollLeft).toBe(500 + 100 + 8 - (400 - 56));
+    expect(strip.port.scrollLeft).toBe(500 + 100 + 8 - (400 - 24));
   });
 
   it("follows the keyboard's tab through a resize, not just the selected one", () => {
@@ -617,9 +614,9 @@ describe("TabStrip overflow", () => {
     resized();
 
     expect(document.activeElement).toBe(tabs[8]);
-    // 900 - (400 - 56) is the end of this scroller's travel, which is where the
+    // 900 - (400 - 24) is the end of this scroller's travel, which is where the
     // last tab's right edge and its inset land.
-    expect(strip.port.scrollLeft).toBe(556);
+    expect(strip.port.scrollLeft).toBe(524);
   });
 
   it("keeps the affordances out of the tablist they scroll", () => {
@@ -630,8 +627,9 @@ describe("TabStrip overflow", () => {
     act(() => observers[0]?.notify());
 
     const tablist = container?.querySelector('[role="tablist"]');
-    expect(tablist?.contains(affordance("Later"))).toBe(false);
-    expect(affordance("Later")?.tabIndex).toBe(0);
+    const all = container?.querySelector<HTMLButtonElement>('[aria-label="All tabs"]');
+    expect(tablist?.contains(all!)).toBe(false);
+    expect(all?.tabIndex).toBe(0);
   });
 
   it("still claims Shift+wheel, the gesture the affordances stand beside", () => {

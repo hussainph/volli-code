@@ -82,6 +82,9 @@ describe("deriveCanvasPaint", () => {
         expect(canvasTokens["--glass-pane-veil"]).toBe(
           mode === "light" ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
         );
+        expect(canvasTokens["--glass-writing-veil"]).toBe(
+          mode === "light" ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
+        );
         expect(canvasTokens["--glass-rim"]).toContain("180deg");
         expect(canvasTokens["--glass-rim"]).toContain("transparent 78%");
         expect(canvasTokens["--canvas-mesh"]).not.toContain("data:image");

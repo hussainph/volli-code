@@ -14,7 +14,10 @@ export function InspectorRow({
   return (
     <li
       {...props}
-      className={cn("grid grid-cols-[4rem_minmax(0,1fr)] items-start gap-2 px-2 py-1", className)}
+      className={cn(
+        "grid grid-cols-[4rem_minmax(0,1fr)] min-h-9 items-start gap-3 px-2 py-1.5",
+        className,
+      )}
     >
       <span className="flex h-control-sm items-center text-ui text-muted-foreground">{label}</span>
       <span className="flex min-h-control-sm min-w-0 items-center">{children}</span>
