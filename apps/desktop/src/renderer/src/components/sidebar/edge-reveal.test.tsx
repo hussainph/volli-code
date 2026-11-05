@@ -21,7 +21,7 @@ let refs: {
 };
 function Harness() {
   const reveal = useEdgeReveal({ enabled: true, ...refs });
-  return <span data-visible={reveal.visible} />;
+  return <span tabIndex={0} data-visible={reveal.visible} onFocus={reveal.onPanelFocus} />;
 }
 async function move(x: number, y: number, elapsed = 0) {
   await act(async () => {
@@ -102,5 +102,13 @@ describe("pane hover intent", () => {
     expect(visible()).toBe(false);
     expect(panel.style.getPropertyValue("--reveal-duration")).toBe("0ms");
     expect(panel.dataset.keyboardDismiss).toBe("true");
+  });
+  it("keyboard focus arms a zero clock before opening, and marks a non-pouring journey", async () => {
+    const target = container.firstElementChild!;
+    vi.spyOn(target, "matches").mockReturnValue(true);
+    await act(async () => target.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+    expect(visible()).toBe(true);
+    expect(panel.style.getPropertyValue("--reveal-duration")).toBe("0ms");
+    expect(panel.hasAttribute("data-keyboard-dismiss")).toBe(true);
   });
 });

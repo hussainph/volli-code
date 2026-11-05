@@ -63,7 +63,10 @@ export function ChromeBar() {
           canvas layer like the rail does. The ⌘K pill keeps its own material
           (`bg-foreground/10`), which was already written as a material over a
           fill rather than as a fill of its own. */}
-      <div className="app-region-drag relative flex h-9 shrink-0 items-center">
+      <div
+        data-slot="chrome-bar"
+        className="app-region-drag relative flex h-9 shrink-0 items-center"
+      >
         {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
           ending ≈70px) plus breathing room so the trigger doesn't crowd them.
           Fullscreen hides the lights, so the spacer collapses and the trigger
@@ -176,7 +179,7 @@ function ProjectRailToggle() {
   return (
     <Button
       variant="toolbar"
-      size="icon-sm"
+      size="icon"
       // No `aria-pressed`: the label below already carries the state, and the
       // button has no pressed appearance for it to describe. Both together
       // announce "Show project switcher, pressed" while the switcher is
@@ -205,7 +208,7 @@ function NavHistoryButtons() {
     <div className="glass-control app-region-no-drag flex translate-y-px items-center rounded-full [&_button]:border-0 [&_button]:bg-transparent [&_button]:shadow-none">
       <Button
         variant="toolbar"
-        size="icon-sm"
+        size="icon"
         disabled={!backEnabled}
         onClick={() => navBack()}
         aria-label="Back"
@@ -216,7 +219,7 @@ function NavHistoryButtons() {
       </Button>
       <Button
         variant="toolbar"
-        size="icon-sm"
+        size="icon"
         disabled={!forwardEnabled}
         onClick={() => navForward()}
         aria-label="Forward"
@@ -259,7 +262,7 @@ function TerminalFocusExit() {
   return (
     <Button
       variant="toolbar"
-      size="icon-sm"
+      size="icon"
       // mr-1 keeps it off the window's right edge; translate-y-px meets the
       // traffic lights, like every other icon button on this band.
       className="app-region-no-drag mr-1 translate-y-px"
@@ -304,7 +307,7 @@ function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
         <ProjectRailToggle />
         <SidebarTrigger
           variant="toolbar"
-          size="icon-sm"
+          size="icon"
           className="[&_svg:not([class*='size-'])]:size-4"
           aria-label="Toggle navigation sidebar"
           title="Toggle navigation sidebar (⌘B)"
@@ -329,7 +332,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       aria-haspopup="dialog"
       aria-label="Search tickets, sessions, and commands"
       title="Search tickets, sessions, and commands (⌘K)"
-      className="search-capsule app-region-no-drag flex h-control-sm w-[380px] max-w-[40vw] items-center gap-1 px-2 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="search-capsule glass-control app-region-no-drag flex h-control-sm w-[380px] max-w-[40vw] items-center gap-1 px-2 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>

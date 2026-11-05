@@ -122,6 +122,53 @@ describe("floating material as shipped", () => {
     expect(declarations).not.toMatch(/-webkit-backdrop-filter\s*:/);
   });
 
+  it("computes static navigation without blur while stationary peek keeps the live material", async () => {
+    await act(async () =>
+      root.render(
+        <>
+          <div className="glass" data-tint="true" data-glass-static="true" data-test="sidebar">
+            Navigation
+          </div>
+          <div data-glass-static="true">
+            <div className="glass" data-tint="true" data-test="inspector">
+              Inspector
+            </div>
+          </div>
+          <div className="glass" data-tint="true" data-test="peek">
+            Peek
+          </div>
+        </>,
+      ),
+    );
+    for (const name of ["sidebar", "inspector"]) {
+      const panel = host.querySelector(`[data-test="${name}"]`)!;
+      expect(backdrop(panel)).toBe("none");
+      expect(getComputedStyle(panel).contain).toBe("paint");
+    }
+    const peek = host.querySelector('[data-test="peek"]')!;
+    expect(backdrop(peek)).toBe(BLUR);
+    peek.setAttribute("data-glass-blur", "off");
+    expect(backdrop(peek)).toBe("none");
+    peek.removeAttribute("data-glass-blur");
+    expect(backdrop(peek)).toBe(BLUR);
+  });
+
+  it("pauses hidden pane descendants without pausing its own dismissal", async () => {
+    await act(async () =>
+      root.render(
+        <div data-inspector-panel="" aria-hidden="true">
+          <div className="glass" data-tint="true">
+            <span className="working">Working</span>
+          </div>
+        </div>,
+      ),
+    );
+    const panel = host.querySelector("[data-inspector-panel]")!;
+    expect(backdrop(panel.firstElementChild!)).toBe("none");
+    expect(getComputedStyle(host.querySelector(".working")!).animationPlayState).toBe("paused");
+    expect(getComputedStyle(panel).animationPlayState).not.toBe("paused");
+  });
+
   const floats: [string, string, () => React.ReactNode][] = [
     [
       "menu",

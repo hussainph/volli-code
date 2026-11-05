@@ -63,6 +63,16 @@ export function PrimarySidebar() {
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
+  const [activeCount, setActiveCount] = React.useState<{ projectId: string; count: number } | null>(
+    null,
+  );
+  const selectedId = selected?.id;
+  const reportActiveCount = React.useCallback(
+    (count: number) => {
+      if (selectedId !== undefined) setActiveCount({ projectId: selectedId, count });
+    },
+    [selectedId],
+  );
   const [content, setContent] = React.useState(() => rememberedContent);
   const filesVisible = content === "files";
   // The Session bands ride with Home, which is the one page their rows navigate
@@ -92,7 +102,10 @@ export function PrimarySidebar() {
           <>
             <NavList />
             <div className="shrink-0 px-2 py-2">
-              <SessionBandHeader label="Active">
+              <SessionBandHeader
+                label="Active"
+                count={activeCount?.projectId === selected.id ? activeCount.count : undefined}
+              >
                 <Segmented
                   ariaLabel="Sidebar content"
                   iconOnly
@@ -120,6 +133,7 @@ export function PrimarySidebar() {
                     project={selected}
                     visible={sessionsVisible}
                     activeHeader={false}
+                    onActiveCountChange={reportActiveCount}
                   />
                 </div>
               </SidebarScrollArea>

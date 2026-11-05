@@ -83,7 +83,7 @@ const NAV_CLOSE_MS = 140;
 /** Drawer tier, fast end — this opens far more often than a modal does. */
 export const OPEN_MS = 200;
 /** Exits are the system answering, not the user deciding. Mirror the path, not the clock. */
-export const CLOSE_MS = 160;
+export const CLOSE_MS = 110;
 /** Below this a scaled-down reversal stops reading as motion and starts reading as a glitch. */
 const MIN_REVEAL_MS = 90;
 /** Motion-off takes the endpoint; neither a travel nor a cross-fade. */
@@ -141,7 +141,7 @@ function inPortalledOverlay(node: EventTarget | null): boolean {
  * distance between them is the answer, in pixels, mid-transition, whatever
  * property the framework decided to animate it with.
  */
-function revealProgress(panel: HTMLElement): number {
+function revealProgress(panel: HTMLElement, side: "left" | "right"): number {
   const parent = panel.offsetParent;
   if (!(parent instanceof HTMLElement)) return 1;
   // The same number the withdrawn transform is built from, read back off the
@@ -151,9 +151,10 @@ function revealProgress(panel: HTMLElement): number {
     panel.offsetWidth +
     (Number.parseFloat(getComputedStyle(panel).getPropertyValue("--panel-hidden-shift")) || 0);
   if (travel <= 0) return 1;
-  const resting = parent.getBoundingClientRect().left + panel.offsetLeft;
+  const zoom = panel.getBoundingClientRect().width / panel.offsetWidth || 1;
+  const resting = parent.getBoundingClientRect().left + panel.offsetLeft * zoom;
   const shifted = panel.getBoundingClientRect().left - resting;
-  return Math.min(1, Math.max(0, 1 + shifted / travel));
+  return Math.min(1, Math.max(0, 1 + (side === "left" ? shifted : -shifted) / (travel * zoom)));
 }
 
 /**
@@ -177,14 +178,18 @@ export function armRevealClock(
   panel: HTMLElement | null,
   toVisible: boolean,
   fullJourney = false,
+  side: "left" | "right" = "left",
 ): void {
   if (panel === null) return;
   if (prefersReducedMotion()) {
     panel.style.setProperty("--reveal-duration", `${REDUCED_REVEAL_MS}ms`);
+    panel.removeAttribute("data-glass-blur");
     return;
   }
+  panel.dataset.glassBlur = "off";
+  panel.style.transitionTimingFunction = toVisible ? "var(--ease-swift)" : "var(--ease-out)";
   const base = toVisible ? OPEN_MS : CLOSE_MS;
-  const progress = fullJourney ? (toVisible ? 0 : 1) : revealProgress(panel);
+  const progress = fullJourney ? (toVisible ? 0 : 1) : revealProgress(panel, side);
   const remaining = toVisible ? 1 - progress : progress;
   panel.style.setProperty(
     "--reveal-duration",
@@ -217,11 +222,17 @@ export function useEdgeReveal({
   panelRef,
   zoneRef,
   bandRef,
+  triggerRef,
+  side = "left",
+  closeOnNavigation = true,
 }: {
   enabled: boolean;
   panelRef: React.RefObject<HTMLDivElement | null>;
   zoneRef: React.RefObject<HTMLDivElement | null>;
   bandRef: React.RefObject<HTMLDivElement | null>;
+  triggerRef?: React.RefObject<HTMLElement | null>;
+  side?: "left" | "right";
+  closeOnNavigation?: boolean;
 }): EdgeReveal {
   const [phase, setPhase] = React.useState<Phase>("closed");
   const phaseRef = React.useRef<Phase>("closed");
@@ -243,7 +254,7 @@ export function useEdgeReveal({
   }, []);
 
   const enter = React.useCallback(
-    (next: Phase) => {
+    (next: Phase, instant = false) => {
       if (phaseRef.current === next) return;
       const wasVisible = phaseRef.current === "open" || phaseRef.current === "closing";
       const willBeVisible = next === "open" || next === "closing";
@@ -251,7 +262,12 @@ export function useEdgeReveal({
       // timer and nothing else, so re-arming the clock there would overwrite a
       // live journey's duration with a measurement of a journey that is over.
       if (wasVisible !== willBeVisible) {
-        armRevealClock(panelRef.current, willBeVisible);
+        if (instant) {
+          panelRef.current?.style.setProperty("--reveal-duration", "0ms");
+          panelRef.current?.removeAttribute("data-glass-blur");
+        } else armRevealClock(panelRef.current, willBeVisible, false, side);
+        if (!instant && !prefersReducedMotion())
+          panelRef.current?.setAttribute("data-glass-blur", "off");
         // A dismissal must not answer the pointer still on the button with
         // another peek, including after a pour finishes under that pointer.
         if (!willBeVisible) triggerHoldRef.current = true;
@@ -259,7 +275,7 @@ export function useEdgeReveal({
       phaseRef.current = next;
       setPhase(next);
     },
-    [panelRef],
+    [panelRef, side],
   );
 
   const closeNow = React.useCallback(() => {
@@ -267,11 +283,14 @@ export function useEdgeReveal({
     enter("closed");
   }, [clearTimer, enter]);
 
-  const openNow = React.useCallback(() => {
-    clearTimer();
-    panelRef.current?.removeAttribute("data-keyboard-dismiss");
-    enter("open");
-  }, [clearTimer, enter, panelRef]);
+  const openNow = React.useCallback(
+    (instant = false) => {
+      clearTimer();
+      panelRef.current?.toggleAttribute("data-keyboard-dismiss", instant);
+      enter("open", instant);
+    },
+    [clearTimer, enter, panelRef],
+  );
 
   React.useEffect(() => {
     if (enabled) return;
@@ -296,7 +315,8 @@ export function useEdgeReveal({
     // `querySelector` inside `evaluate` would be a per-rAF DOM query for an
     // answer that cannot change while the effect lives. The RECT is still read
     // live each sample — layout moves, the element does not.
-    const triggerEl = bandRef.current?.querySelector(TRIGGER_SELECTOR) ?? null;
+    const triggerEl =
+      triggerRef?.current ?? bandRef.current?.querySelector(TRIGGER_SELECTOR) ?? null;
 
     function evaluate(point: Point): void {
       // A drag is a pointer-down interval. Nothing arms, nothing closes, and the
@@ -329,7 +349,7 @@ export function useEdgeReveal({
         if (phaseRef.current === "arming") return;
         enter("arming");
         clearTimer();
-        timerRef.current = window.setTimeout(openNow, TRIGGER_ENTER_DELAY_MS);
+        timerRef.current = window.setTimeout(() => openNow(), TRIGGER_ENTER_DELAY_MS);
         return;
       }
       // Any sample off the trigger releases the post-unpin latch.
@@ -366,7 +386,7 @@ export function useEdgeReveal({
         if (phaseRef.current === "arming") return;
         enter("arming");
         clearTimer();
-        timerRef.current = window.setTimeout(openNow, ENTER_DELAY_MS);
+        timerRef.current = window.setTimeout(() => openNow(), ENTER_DELAY_MS);
         return;
       }
 
@@ -438,8 +458,7 @@ export function useEdgeReveal({
       // primitive's own toggle fires on click. Closing on its pointer-down
       // would send the panel out and straight back in across one press, a
       // direction flip with no gesture behind it.
-      const onTrigger =
-        event.target instanceof Element && event.target.closest(TRIGGER_SELECTOR) !== null;
+      const onTrigger = event.target instanceof Node && triggerEl?.contains(event.target) === true;
       // Pressing anywhere else is the start of doing something else. No grace
       // period for that — the pane is in the way by definition.
       if (!insidePanel && !onTrigger) closeNow();
@@ -522,13 +541,13 @@ export function useEdgeReveal({
       document.removeEventListener("pointerleave", handleLeaveWindow);
       window.removeEventListener("keydown", handleKey);
     };
-  }, [enabled, panelRef, zoneRef, bandRef, clearTimer, closeNow, openNow, enter]);
+  }, [enabled, panelRef, zoneRef, bandRef, triggerRef, clearTimer, closeNow, openNow, enter]);
 
   React.useEffect(() => clearTimer, [clearTimer]);
 
   const onPanelClick = React.useCallback(
     (event: React.MouseEvent) => {
-      if (!enabled) return;
+      if (!enabled || !closeOnNavigation) return;
       if (phaseRef.current === "closed") return;
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -539,7 +558,7 @@ export function useEdgeReveal({
       clearTimer();
       timerRef.current = window.setTimeout(closeNow, NAV_CLOSE_MS);
     },
-    [enabled, clearTimer, closeNow],
+    [enabled, closeOnNavigation, clearTimer, closeNow],
   );
 
   /**
@@ -567,7 +586,7 @@ export function useEdgeReveal({
       // band. Pointer-acquired focus is the tail of a click inside a panel that
       // was already open, so it has nothing to summon and no claim to cancel a
       // withdrawal the pointer has already decided on.
-      if (keyboard && enabled && phaseRef.current !== "open") openNow();
+      if (keyboard && enabled && phaseRef.current !== "open") openNow(true);
     },
     [enabled, openNow],
   );

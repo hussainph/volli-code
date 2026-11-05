@@ -248,6 +248,7 @@ export function HomeTabStrip({
               size="icon-xs"
               variant="ghost"
               className="ml-1 h-full rounded-none"
+              data-inspector-trigger="home"
               onClick={onToggleRail}
               aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
               title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}

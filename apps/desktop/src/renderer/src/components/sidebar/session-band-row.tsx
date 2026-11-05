@@ -740,19 +740,14 @@ export function sessionGroupPanelId(ticketId: string): string {
  * showed it only when it exceeded one would make the common case unreadable to
  * anybody who had not noticed the rule.
  *
- * **Nothing animates except the caret.** A disclosure in a navigator is opened
- * tens of times a day, which is the frequency where motion should be reduced
- * rather than added, and animating the list's height would be layout and paint
- * inside a scroll container this band can fill. The caret's `transform` is the
- * whole treatment — the same one the sidebar's file tree settled on before it
- * retired (VC-122).
+ * The caller owns the ticket envelope's pointer-only height disclosure. Its
+ * keyboard route and every other sidebar disclosure take the endpoint.
  */
 export const TicketGroupRow = React.memo(function TicketGroupRow({
   ticket,
   ticketPrefix,
   count,
   newestAt,
-  now,
   open,
   selected,
   onToggle,
@@ -787,9 +782,11 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
       data-peek-row={folderRowId(ticket.id)}
       data-peek-surface="nav"
       onClick={() => onToggle(ticket.id)}
-      // No `title`, for the reason the rows above dropped theirs (D1): this row
-      // peeks its TICKET, and the card says the id and the title in full.
-      className="h-auto min-h-8 gap-1.5 rounded-lg py-1 text-ui active:scale-100"
+      title={newestAt > 0 ? new Date(newestAt).toLocaleString() : undefined}
+      aria-description={
+        newestAt > 0 ? `Latest session: ${new Date(newestAt).toLocaleString()}` : undefined
+      }
+      className="h-auto min-h-8 gap-1 rounded-lg py-1 text-ui active:scale-100"
     >
       <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
       <span className="min-w-0 flex-1 truncate text-muted-foreground">{ticket.title}</span>
@@ -811,16 +808,6 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
             spelled only where there is room for it, which is out of band. */}
         <span className="sr-only">{count === 1 ? " session" : " sessions"}</span>
       </span>
-      {/* The same `3ch` reservation the child rows make, for the same reason:
-          one trailing mark, one right edge, and a ticking age that cannot drag
-          the title's truncation point back and forth as "59m" becomes "1h".
-          And the same 0 sentinel they honour: "nothing durable can date this"
-          drawn as an age would read as the epoch, so the row says nothing. */}
-      {newestAt > 0 ? (
-        <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums text-muted-foreground">
-          {compactAge(newestAt, now)}
-        </span>
-      ) : null}
     </SidebarMenuButton>
   );
 });

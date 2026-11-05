@@ -27,7 +27,7 @@ describe("chrome band copy", () => {
     );
     expect(toggles).toHaveLength(2);
     for (const toggle of toggles) {
-      expect(toggle).toContain('data-size="icon-sm"');
+      expect(toggle).toContain('data-size="icon"');
       expect(toggle).toContain('data-variant="toolbar"');
     }
     expect(html).toContain("search-capsule");

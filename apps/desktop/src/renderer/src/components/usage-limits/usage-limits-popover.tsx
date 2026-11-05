@@ -208,11 +208,7 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
           variant="toolbar"
           size="icon-sm"
           className="app-region-no-drag shrink-0"
-          // Sized from the glyph rather than beside it: `icon-sm`'s own
-          // proportion is 3px of padding, and the two numbers this draws need
-          // a bigger box than the Gauge did. Writing it as arithmetic on the
-          // glyph's constant is what keeps a target that always fits the
-          // drawing it holds.
+          // The glyph stays optically inside the shared 28px chrome target.
           style={{ width: USAGE_ICON_BUTTON_PX, height: USAGE_ICON_BUTTON_PX }}
           // The name is now the reading — "Usage limits, 8% left on Anthropic
           // Session" — because a glyph that says something a screen reader

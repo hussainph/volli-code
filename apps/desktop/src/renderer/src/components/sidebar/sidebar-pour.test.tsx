@@ -8,6 +8,8 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let panel: HTMLDivElement;
 let band: HTMLDivElement;
+let panelRef: { current: HTMLDivElement };
+let bandRef: { current: HTMLDivElement };
 const cancel = vi.fn();
 let finish: (() => void) | null;
 const animate = vi.fn(() => {
@@ -23,8 +25,8 @@ function Harness({ shown, instant }: { shown: boolean; instant: boolean }) {
   const pouring = useSidebarPour({
     shown,
     instant,
-    panelRef: { current: panel },
-    bandRef: { current: band },
+    panelRef,
+    bandRef,
   });
   return <span data-pouring={pouring} />;
 }
@@ -46,6 +48,8 @@ beforeEach(() => {
   band = document.createElement("div");
   band.innerHTML = '<button data-slot="sidebar-trigger"></button>';
   document.body.append(band);
+  panelRef = { current: panel };
+  bandRef = { current: band };
   Object.defineProperties(panel, {
     offsetParent: { value: parent },
     offsetWidth: { value: 240 },
@@ -77,7 +81,7 @@ describe("sidebar pour", () => {
       KeyframeAnimationOptions,
     ];
     expect(frames[1].transform).toContain("translate(172px, -38px) scale(0.1,");
-    expect(options).toMatchObject({ duration: 160 });
+    expect(options).toMatchObject({ duration: 110 });
     expect(frames.every((frame) => frame.width === undefined && frame.height === undefined)).toBe(
       true,
     );
