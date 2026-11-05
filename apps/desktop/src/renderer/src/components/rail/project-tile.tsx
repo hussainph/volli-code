@@ -30,6 +30,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useUiStore } from "@renderer/stores/ui";
 
 interface ProjectTileProps {
   project: Project;
@@ -37,10 +38,17 @@ interface ProjectTileProps {
   index: number;
   /** True while this tile is the active dnd-kit drag item. */
   dimmed: boolean;
+  presentation?: "rail" | "menu";
 }
 
-export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
+export function ProjectTile({ project, index, dimmed, presentation = "rail" }: ProjectTileProps) {
   const select = useProjectsStore((state) => state.select);
+  const sidebarPinned = useUiStore((state) => state.sidebarPinned);
+  const showTooltip = sidebarPinned || presentation === "menu";
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (!showTooltip) setTooltipOpen(false);
+  }, [showTooltip]);
   const isSelected = useProjectsStore((state) => state.selectedProjectId === project.id);
   // A remote project's host (VC-711): its tile says where it runs, and this
   // Mac's folder actions stand down for it. Null for This Mac's, flag off too.
@@ -69,14 +77,21 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
       <div
         ref={setNodeRef}
         style={{ transform: CSS.Transform.toString(transform), transition }}
-        className={cn("app-region-no-drag shrink-0", dimmed && "opacity-[0.45]")}
+        className={cn(
+          "app-region-no-drag shrink-0",
+          presentation === "menu" && "w-full",
+          dimmed && "opacity-[0.45]",
+        )}
         {...attributes}
         {...listeners}
       >
         {/* Tooltip root sits between the two triggers so each `asChild` slots
             onto a prop-forwarding element and both merge onto the button. */}
         <ContextMenu>
-          <Tooltip>
+          <Tooltip
+            open={showTooltip && tooltipOpen}
+            onOpenChange={(next) => setTooltipOpen(showTooltip && next)}
+          >
             <ContextMenuTrigger asChild>
               <TooltipTrigger asChild>
                 <button
@@ -101,17 +116,33 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                       }),
                     );
                   }}
+                  data-project-tile={project.id}
                   aria-label={project.name}
                   aria-current={isSelected ? "true" : undefined}
                   style={
                     { "--tile-color": projectColor(project.colorIndex) } as React.CSSProperties
                   }
                   className={cn(
-                    "workspace-tile group/tile relative flex size-[38px] items-center justify-center rounded-row text-ui font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                    isSelected && "workspace-tile-selected",
+                    "group/tile relative flex items-center rounded-row text-ui font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                    presentation === "rail"
+                      ? "workspace-tile size-[38px] justify-center"
+                      : "h-9 w-full gap-2 px-2 text-left hover:bg-accent",
+                    isSelected &&
+                      (presentation === "rail"
+                        ? "workspace-tile-selected"
+                        : "bg-(--fill-row-selected)"),
                   )}
                 >
-                  {monogram(project.name)}
+                  {presentation === "rail" ? (
+                    monogram(project.name)
+                  ) : (
+                    <>
+                      <span className="workspace-tile project-menu-tile shrink-0">
+                        {monogram(project.name)}
+                      </span>
+                      <span className="min-w-0 truncate">{project.name}</span>
+                    </>
+                  )}
                   {remoteHost === null ? null : (
                     <span
                       aria-hidden

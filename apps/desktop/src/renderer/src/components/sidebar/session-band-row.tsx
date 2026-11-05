@@ -1,3 +1,4 @@
+import { navigatorRowDomId } from "./session-navigator-rows";
 /**
  * The two session-band rows and the small parts they share.
  *
@@ -402,8 +403,11 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
   vendor,
   onSelect,
   onToggleRead,
+  navigatorOffset,
 }: {
   row: ActiveSessionRow;
+  /** Fixed presentation extent in the navigator's flattened model. */
+  navigatorOffset?: number;
   /** Whose project this band belongs to — half of a drag payload's scope. */
   projectId: string;
   ticketPrefix: string;
@@ -443,6 +447,10 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
 
   return (
     <SidebarMenuItem
+      id={navigatorOffset === undefined ? undefined : navigatorRowDomId(row.id)}
+      data-nav-offset={navigatorOffset}
+      data-nav-height={navigatorOffset === undefined ? undefined : 42}
+      style={navigatorOffset === undefined ? undefined : { height: 42 }}
       data-peek-row={peekable ? row.id : undefined}
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
@@ -577,8 +585,14 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   onSelect,
   onToggleRead,
   showIdentity = true,
+  navigatorOffset,
+  folderId,
+  lastInFolder,
 }: {
   row: PreviousSessionRow;
+  navigatorOffset?: number;
+  folderId?: string;
+  lastInFolder?: boolean;
   /** Whose project this band belongs to — half of a drag payload's scope. */
   projectId: string;
   ticketPrefix: string;
@@ -625,6 +639,13 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   const sessionId = row.target?.kind === "chat" ? row.target.sessionId : null;
   return (
     <SidebarMenuItem
+      id={navigatorOffset === undefined ? undefined : navigatorRowDomId(row.id)}
+      data-nav-offset={navigatorOffset}
+      data-nav-height={navigatorOffset === undefined ? undefined : 32}
+      data-folder={folderId}
+      data-folder-last={lastInFolder || undefined}
+      className={folderId === undefined ? undefined : "session-navigator-child"}
+      style={navigatorOffset === undefined ? undefined : { height: 32 }}
       data-peek-row={peekable ? row.id : undefined}
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
@@ -724,10 +745,9 @@ export function sessionGroupPanelId(ticketId: string): string {
  * per ticket, holding its id, its title, how many sessions are behind it and
  * when the newest of them last did anything.
  *
- * **The caller supplies the `SidebarMenuItem`**, unlike the two rows above,
- * which wrap themselves in one. The list this row discloses has to sit inside
- * the same `<li>` to be that row's child, and only the caller holds both. A row
- * dropped straight into a `SidebarMenu` would put a `<button>` in a `<ul>`.
+ * The caller supplies the `SidebarMenuItem`, unlike the two rows above. In
+ * the flat navigator, `controls` addresses its visible sibling rows directly;
+ * another caller may retain the derived group-panel id.
  *
  * **It carries no status dot, and that is structural rather than an omission.**
  * A Session needing a human is pinned to the Active band for as long as it is
@@ -740,8 +760,8 @@ export function sessionGroupPanelId(ticketId: string): string {
  * showed it only when it exceeded one would make the common case unreadable to
  * anybody who had not noticed the rule.
  *
- * The caller owns the ticket envelope's pointer-only height disclosure. Its
- * keyboard route and every other sidebar disclosure take the endpoint.
+ * Disclosure is immediate in the fixed-height navigator. Row order and focus
+ * stay with the same keyboard model whether or not a viewport later windows it.
  */
 export const TicketGroupRow = React.memo(function TicketGroupRow({
   ticket,
@@ -751,6 +771,7 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
   open,
   selected,
   onToggle,
+  controls,
 }: {
   ticket: Ticket;
   ticketPrefix: string;
@@ -769,13 +790,15 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
    */
   selected: boolean;
   onToggle(ticketId: string): void;
+  /** Flattened navigators address the disclosed sibling rows directly. */
+  controls?: string;
 }) {
   return (
     <SidebarMenuButton
       size="sm"
       isActive={selected && !open}
       aria-expanded={open}
-      aria-controls={sessionGroupPanelId(ticket.id)}
+      aria-controls={controls ?? sessionGroupPanelId(ticket.id)}
       // The folder's peek hangs off the BUTTON, not off its `<li>`: that
       // element also holds the nested list of its Sessions, and a pointer over
       // a child must resolve to the child (D2, `use-session-peek.tsx`).

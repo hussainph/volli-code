@@ -71,6 +71,7 @@ export function TicketCardContent({
 
   return (
     <article
+      data-selected={selected || undefined}
       className={cn(
         // `relative` for the session ring below, which lies on the card's own
         // border line rather than outside it.
@@ -82,7 +83,7 @@ export function TicketCardContent({
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
         selected
-          ? "border-primary-text bg-(--accent-tint)"
+          ? "border-foreground/40 bg-(--fill-row-selected)"
           : "border-transparent hover:border-border-strong",
       )}
     >

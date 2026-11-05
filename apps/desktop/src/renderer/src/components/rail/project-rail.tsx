@@ -30,7 +30,9 @@ import { launchStore } from "@renderer/stores/launch";
  * `useProjectsStore` subscription still updates it normally — memo blocks
  * parent-driven renders, never a hook's own update.
  */
-export const ProjectRail = React.memo(function ProjectRail() {
+export const ProjectRail = React.memo(function ProjectRail({
+  presentation = "rail",
+}: { presentation?: "rail" | "menu" } = {}) {
   const projects = useProjectsStore((state) => state.projects);
   const reorder = useProjectsStore((state) => state.reorder);
   // Fixed for the window's life: main chose it before the window opened.
@@ -84,12 +86,19 @@ export const ProjectRail = React.memo(function ProjectRail() {
         onDragCancel={handleDragEnd}
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-0.5 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div
+            className={
+              presentation === "menu"
+                ? "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-1"
+                : "flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-0.5 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            }
+          >
             {cloudLaunch ? <CloudWorkspaceHead /> : null}
             {projects.map((project, index) => (
               <ProjectTile
                 key={project.id}
                 project={project}
+                presentation={presentation}
                 index={index}
                 dimmed={project.id === activeDragId}
               />

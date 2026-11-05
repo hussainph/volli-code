@@ -6,6 +6,7 @@ import {
   ChevronRightIcon,
   RestoreWindowIcon,
   SearchIcon,
+  WorkspaceIcon,
   SidebarIcon,
 } from "@renderer/components/ui/icon";
 
@@ -16,6 +17,9 @@ import { QuickOpen } from "@renderer/components/files/quick-open";
 import { UsageLimitsPopover } from "@renderer/components/usage-limits/usage-limits-popover";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
+import { SidebarLayoutMenu } from "./sidebar/sidebar-layout-menu";
+import { ProjectRail } from "./rail/project-rail";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { navBack, navForward } from "@renderer/hooks/use-nav-history";
@@ -74,13 +78,15 @@ export function ChromeBar() {
           <>
             <NavHistoryButtons />
             <div className="app-region-no-drag ml-px flex items-center gap-px">
-              <ProjectRailToggle />
-              <SidebarTrigger
-                variant="toolbar"
-                size="icon"
-                aria-label="Toggle navigation sidebar"
-                title="Toggle navigation sidebar (⌘B)"
-              />
+              <SidebarLayoutMenu>
+                <SidebarTrigger
+                  variant="toolbar"
+                  size="icon"
+                  aria-label="Toggle navigation sidebar"
+                  title="Toggle navigation sidebar (⌘B)"
+                />
+              </SidebarLayoutMenu>
+              <HiddenProjectsMenu />
             </div>
             {/* Which machine the project in front runs on (VC-576). Nothing
                 with the `cloud` flag off. */}
@@ -170,31 +176,21 @@ function TerminalFocusBreadcrumb() {
   );
 }
 
-/**
- * Visibility control for the outer Slack-style project switcher ("project" is
- * the one user-facing word for a rail entry — CONTEXT.md's ruling). It sits
- * immediately before the primary nav's existing SidebarTrigger so the
- * controls follow the same outside-to-inside order as the panes they affect.
- */
-function ProjectRailToggle() {
-  const projectRailHidden = useUiStore((state) => state.projectRailHidden);
-  const toggleProjectRailHidden = useUiStore((state) => state.toggleProjectRailHidden);
-
+/** Hidden rail content remains reachable with its own actions and reorder. */
+function HiddenProjectsMenu() {
+  const hidden = useUiStore((state) => state.projectRailHidden);
+  if (!hidden) return null;
   return (
-    <Button
-      variant="toolbar"
-      size="icon"
-      // No `aria-pressed`: the label below already carries the state, and the
-      // button has no pressed appearance for it to describe. Both together
-      // announce "Show project switcher, pressed" while the switcher is
-      // hidden, which reads as its own opposite.
-      onClick={() => toggleProjectRailHidden()}
-      aria-label={projectRailHidden ? "Show project switcher" : "Hide project switcher"}
-      title={`${projectRailHidden ? "Show" : "Hide"} project switcher`}
-    >
-      <SidebarIcon className="size-4" />
-      <span className="sr-only">Toggle project switcher</span>
-    </Button>
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="toolbar" size="icon" aria-label="Projects" title="Projects">
+          <WorkspaceIcon />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="h-80 w-64 p-1">
+        <ProjectRail presentation="menu" />
+      </PopoverContent>
+    </Popover>
   );
 }
 

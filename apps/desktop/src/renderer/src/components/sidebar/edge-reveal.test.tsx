@@ -19,8 +19,16 @@ let refs: {
   zoneRef: { current: HTMLDivElement };
   bandRef: { current: HTMLDivElement };
 };
-function Harness() {
-  const reveal = useEdgeReveal({ enabled: true, ...refs });
+function Harness({
+  projects = false,
+  onIntent,
+}: { projects?: boolean; onIntent?(id: string | null): void } = {}) {
+  const reveal = useEdgeReveal({
+    enabled: true,
+    ...refs,
+    projectTiles: projects,
+    onProjectIntent: onIntent,
+  });
   return (
     <button
       data-visible={reveal.visible}
@@ -75,6 +83,37 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("pane hover intent", () => {
+  it("peeks a project after 100ms without selecting it, holds focus, and lets Escape close instantly", async () => {
+    const onIntent = vi.fn();
+    await act(async () => root.render(<Harness projects onIntent={onIntent} />));
+    const rail = document.createElement("div");
+    rail.setAttribute("data-project-rail", "");
+    const tile = document.createElement("button");
+    tile.dataset.projectTile = "p2";
+    rail.append(tile);
+    document.body.append(rail);
+    try {
+      await act(async () => {
+        const event = new Event("pointermove", { bubbles: true });
+        Object.assign(event, { pointerType: "mouse", clientX: 30, clientY: 100 });
+        tile.dispatchEvent(event);
+        vi.advanceTimersByTime(99);
+      });
+      expect(visible()).toBe(false);
+      expect(onIntent).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTime(2));
+      expect(visible()).toBe(true);
+      expect(onIntent).toHaveBeenCalledExactlyOnceWith("p2");
+      await act(async () => (container.firstElementChild as HTMLButtonElement).focus());
+      await move(800, 400, 500);
+      expect(visible()).toBe(true);
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      expect(visible()).toBe(false);
+      expect(panel.style.getPropertyValue("--reveal-duration")).toBe("0ms");
+    } finally {
+      rail.remove();
+    }
+  });
   it("uses a 140ms dwell on either the edge or its toolbar control", async () => {
     expect(ENTER_DELAY_MS).toBe(140);
     expect(TRIGGER_ENTER_DELAY_MS).toBe(140);

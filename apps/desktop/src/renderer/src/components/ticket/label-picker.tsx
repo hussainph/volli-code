@@ -83,16 +83,19 @@ export function LabelPickerContent({
   projectId,
   value,
   onChange,
+  readOnly = false,
 }: {
   projectId: string;
   value: readonly string[];
   onChange: (next: string[]) => void;
+  /** Overflow metadata remains searchable on a read-only host. */
+  readOnly?: boolean;
 }) {
   const [query, setQuery] = React.useState("");
   const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
   const vocabulary = useLabelVocabulary(projectId);
   const options = labelPickerOptions(vocabulary, value, query);
-  const creatable = newLabelFromQuery(vocabulary, value, query);
+  const creatable = readOnly ? null : newLabelFromQuery(vocabulary, value, query);
 
   return (
     // Our own filter, so the rows stay in the vocabulary's alphabetical order
@@ -112,6 +115,7 @@ export function LabelPickerContent({
             value={option.name}
             // The closure, never cmdk's callback argument: it hands the value
             // back LOWERCASED, and `bug` is not the label `Bug`.
+            disabled={readOnly}
             onSelect={() => onChange(withLabelToggled(value, option.name))}
           >
             <LabelDot color={resolveLabelColor(projectLabels, option.name)} />

@@ -42,12 +42,15 @@ import {
   SessionBandFilterMenu,
   SessionBandHeader,
 } from "@renderer/components/sidebar/session-band-header";
-import { TicketGroupDisclosure } from "./ticket-group-disclosure";
+import {
+  navigatorRowDomId,
+  sessionNavigatorRows,
+  type SessionNavigatorRow,
+} from "./session-navigator-rows";
 import {
   ActiveBandRow,
   PreviousBandRow,
   SessionBandRowSkeleton,
-  sessionGroupPanelId,
   sessionRowVendor,
   TicketGroupRow,
   type SessionRowVendor,
@@ -245,17 +248,6 @@ function provisionalChatDraftSelector(
     return selected;
   };
 }
-
-/**
- * The nesting rule under a ticket entry, tightened from `SidebarMenuSub`'s
- * stock `mx-4 px-2` — the same call the sidebar's file tree made before it
- * retired (VC-122), and for the same reason: stock spends ~48px a level, which
- * a session row cannot pay out of a title that already truncates. The hairline
- * itself is the primitive's own `border-sidebar-border-veil`, so a nested
- * session is bracketed by the mark that tree taught this sidebar to mean
- * "inside".
- */
-const SESSION_GROUP_NEST = "mx-0 mt-0 gap-1 border-0 px-1 pb-1";
 
 /**
  * One object per distinct row vendor (VC-1078). `ActiveBandRow` and
@@ -1359,132 +1351,155 @@ export function ActiveSessions({
     onActiveCountChange?.(activeRows.length);
   }, [activeRows.length, onActiveCountChange]);
 
-  const activeBand = (
-    <SidebarGroup data-session-band="active" className="gap-1">
-      {activeHeader ? <SessionBandHeader label="Active" count={activeRows.length} /> : null}
-      {activeRows.length === 0 && listingPending ? (
-        // The rows' box, held while the listing is read. Live tabs this window
-        // already holds are rows regardless (they come from the sessions store,
-        // not the listing), so this only ever stands where nothing is known.
-        <SidebarMenu {...loadingRegionProps("sessions")}>
-          <SessionBandRowSkeleton primaryWidth="w-3/4" />
-          <SessionBandRowSkeleton primaryWidth="w-1/2" />
-        </SidebarMenu>
-      ) : activeRows.length === 0 && sessionsUnavailable !== null ? (
-        <p className={EMPTY_INLINE} data-testid="sessions-unavailable">
-          {sessionsUnavailable}
-        </p>
-      ) : activeRows.length === 0 && listingFailed ? (
-        // A failed baseline cannot establish that the Project is quiet. Keep
-        // this terse — the toast owns the bridge detail — but never let an
-        // unread roster become the false empty VC-383 removed.
-        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
-      ) : activeRows.length === 0 ? null : (
-        <SidebarMenu>
-          {activeRows.map((row) => (
-            <ActiveBandRow
-              key={row.id}
-              row={row}
-              projectId={project.id}
-              ticketPrefix={project.ticketPrefix}
-              now={ageNow}
-              selected={isSelected(row)}
-              unread={unreadRow(row.id, unread)}
-              vendor={vendorOf({
-                id: row.id,
-                kind: row.target?.kind === "chat" ? "chat" : "terminal",
-                harnessId: row.harnessId,
-                source: row.source,
-              })}
-              onSelect={openRow}
-              // A companion has no turns, so nothing about it is unread (A4 Q2).
-              onToggleRead={row.target?.kind === "chat" ? toggleRead : null}
-            />
-          ))}
-        </SidebarMenu>
-      )}
-    </SidebarGroup>
+  const canShowMore = previousSlice.hiddenCount > 0;
+  const canShowLess =
+    previousLimit > PREVIOUS_BAND_LIMIT && previousEntries.length > PREVIOUS_BAND_LIMIT;
+  const navigator = React.useMemo(
+    () =>
+      sessionNavigatorRows({
+        active: activeRows,
+        previous: previousSlice.entries,
+        expanded: expandedGroups,
+        activeHeader,
+        reach: canShowMore || canShowLess,
+      }),
+    [activeRows, previousSlice.entries, expandedGroups, activeHeader, canShowMore, canShowLess],
   );
-  const previousBand = (
-    <SidebarGroup data-session-band="previous" className="gap-1 pt-0">
-      {/* The count stays the number of SESSIONS, not of entries. It is the
-          band's answer to "how much is back there", and collapsing the rows
-          under their tickets must not make that number shrink. */}
-      <SessionBandHeader label="Previous" count={listing.previous.length}>
-        <SessionBandFilterMenu filter={filter} onChange={setFilter} />
-      </SessionBandHeader>
-      {previousEntries.length === 0 && listingPending ? (
-        <SidebarMenu {...loadingRegionProps("sessions")}>
-          <SessionBandRowSkeleton primaryWidth="w-2/3" />
-        </SidebarMenu>
-      ) : previousEntries.length === 0 &&
-        sessionsUnavailable !== null ? null : previousEntries.length === 0 && listingFailed ? (
-        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
-      ) : previousEntries.length === 0 ? null : (
-        <SidebarMenu>
-          {previousSlice.entries.map((entry) =>
-            entry.kind === "session" ? (
-              <PreviousBandRow
-                key={entry.id}
-                row={entry.row}
-                projectId={project.id}
-                ticketPrefix={project.ticketPrefix}
-                now={ageNow}
-                selected={isSelected(entry.row)}
-                unread={unreadRow(entry.id, unread)}
-                vendor={vendorOf(entry.row)}
-                onSelect={openRow}
-                onToggleRead={entry.row.kind === "chat" ? toggleRead : null}
-              />
-            ) : (
-              <TicketGroupDisclosure
-                key={entry.id}
-                id={sessionGroupPanelId(entry.id)}
-                open={expandedGroups.includes(entry.id)}
-                className={SESSION_GROUP_NEST}
-                header={
-                  <TicketGroupRow
-                    ticket={entry.ticket}
-                    ticketPrefix={project.ticketPrefix}
-                    count={entry.rows.length}
-                    newestAt={entry.newestAt}
-                    now={ageNow}
-                    open={expandedGroups.includes(entry.id)}
-                    selected={entry.id === selectedGroupId}
-                    onToggle={toggleGroup}
-                  />
-                }
-              >
-                {entry.rows.map((row) => (
-                  <PreviousBandRow
-                    key={row.id}
-                    row={row}
-                    projectId={project.id}
-                    ticketPrefix={project.ticketPrefix}
-                    now={ageNow}
-                    selected={isSelected(row)}
-                    unread={unreadRow(row.id, unread)}
-                    vendor={vendorOf(row)}
-                    onSelect={openRow}
-                    onToggleRead={row.kind === "chat" ? toggleRead : null}
-                    // The id is what the reader just expanded; repeating
-                    // it on every child costs ink and ~45px of title.
-                    showIdentity={false}
-                  />
-                ))}
-              </TicketGroupDisclosure>
-            ),
-          )}
+
+  const renderNavigatorRow = (item: SessionNavigatorRow) => {
+    switch (item.kind) {
+      case "band":
+        return (
+          <SidebarMenuItem
+            key={item.key}
+            data-nav-offset={item.offset}
+            data-nav-height={item.height}
+            style={{ height: item.height }}
+          >
+            <SessionBandHeader
+              label={item.band === "active" ? "Active" : "Previous"}
+              count={item.band === "active" ? activeRows.length : listing.previous.length}
+            >
+              {item.band === "previous" ? (
+                <SessionBandFilterMenu filter={filter} onChange={setFilter} />
+              ) : null}
+            </SessionBandHeader>
+          </SidebarMenuItem>
+        );
+      case "active":
+        return (
+          <ActiveBandRow
+            key={item.key}
+            navigatorOffset={item.offset}
+            row={item.row}
+            projectId={project.id}
+            ticketPrefix={project.ticketPrefix}
+            now={ageNow}
+            selected={isSelected(item.row)}
+            unread={unreadRow(item.row.id, unread)}
+            vendor={vendorOf({
+              id: item.row.id,
+              kind: item.row.target?.kind === "chat" ? "chat" : "terminal",
+              harnessId: item.row.harnessId,
+              source: item.row.source,
+            })}
+            onSelect={openRow}
+            onToggleRead={item.row.target?.kind === "chat" ? toggleRead : null}
+          />
+        );
+      case "previous":
+        return (
+          <PreviousBandRow
+            key={item.key}
+            navigatorOffset={item.offset}
+            folderId={item.folderId}
+            lastInFolder={item.lastInFolder}
+            row={item.row}
+            projectId={project.id}
+            ticketPrefix={project.ticketPrefix}
+            now={ageNow}
+            selected={isSelected(item.row)}
+            unread={unreadRow(item.row.id, unread)}
+            vendor={vendorOf(item.row)}
+            onSelect={openRow}
+            onToggleRead={item.row.kind === "chat" ? toggleRead : null}
+            showIdentity={item.folderId === undefined}
+          />
+        );
+      case "ticket":
+        return (
+          <SidebarMenuItem
+            key={item.key}
+            data-nav-offset={item.offset}
+            data-nav-height={item.height}
+            data-folder-open={item.open}
+            className="session-navigator-folder"
+            style={{ height: item.height }}
+          >
+            <TicketGroupRow
+              ticket={item.entry.ticket}
+              ticketPrefix={project.ticketPrefix}
+              count={item.entry.rows.length}
+              newestAt={item.entry.newestAt}
+              now={ageNow}
+              open={item.open}
+              selected={item.entry.id === selectedGroupId}
+              onToggle={toggleGroup}
+              controls={
+                item.open
+                  ? item.entry.rows.map((row) => navigatorRowDomId(row.id)).join(" ")
+                  : undefined
+              }
+            />
+          </SidebarMenuItem>
+        );
+      case "reach":
+        return (
           <PreviousBandReach
-            canShowMore={previousSlice.hiddenCount > 0}
-            canShowLess={
-              previousLimit > PREVIOUS_BAND_LIMIT && previousEntries.length > PREVIOUS_BAND_LIMIT
-            }
+            key={item.key}
+            canShowMore={canShowMore}
+            canShowLess={canShowLess}
             onShowMore={showMorePrevious}
             onShowLess={showLessPrevious}
           />
-        </SidebarMenu>
-      )}
+        );
+    }
+  };
+  const activeBand = (
+    <SidebarGroup data-session-band="active" className="session-navigator gap-0 py-0">
+      <SidebarMenu
+        {...(activeRows.length === 0 && listingPending ? loadingRegionProps("sessions") : {})}
+      >
+        {navigator.filter((row) => row.band === "active").map(renderNavigatorRow)}
+        {activeRows.length === 0 && listingPending ? (
+          <>
+            <SessionBandRowSkeleton primaryWidth="w-3/4" />
+            <SessionBandRowSkeleton primaryWidth="w-1/2" />
+          </>
+        ) : activeRows.length === 0 && (sessionsUnavailable !== null || listingFailed) ? (
+          <SidebarMenuItem
+            {...(sessionsUnavailable === null ? {} : { "data-testid": "sessions-unavailable" })}
+          >
+            <p className={EMPTY_INLINE}>{sessionsUnavailable ?? "Couldn't load sessions."}</p>
+          </SidebarMenuItem>
+        ) : null}
+      </SidebarMenu>
+    </SidebarGroup>
+  );
+  const previousBand = (
+    <SidebarGroup data-session-band="previous" className="session-navigator gap-0 py-0">
+      <SidebarMenu
+        {...(previousEntries.length === 0 && listingPending ? loadingRegionProps("sessions") : {})}
+      >
+        {navigator.filter((row) => row.band === "previous").map(renderNavigatorRow)}
+        {previousEntries.length === 0 && listingPending ? (
+          <SessionBandRowSkeleton primaryWidth="w-2/3" />
+        ) : previousEntries.length === 0 && sessionsUnavailable === null && listingFailed ? (
+          <SidebarMenuItem>
+            <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
+          </SidebarMenuItem>
+        ) : null}
+      </SidebarMenu>
     </SidebarGroup>
   );
 
@@ -1570,7 +1585,7 @@ function PreviousBandReach({
     action();
   };
   return (
-    <SidebarMenuItem className="flex gap-1">
+    <SidebarMenuItem data-nav-height="28" className="flex h-7 gap-1">
       {canShowMore ? (
         <Button
           ref={moreRef}

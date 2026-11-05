@@ -14,6 +14,13 @@ import type { BlobLinkView } from "@volli/shared";
 import { AttachmentImage } from "./blob-read";
 
 import { Button } from "@renderer/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@renderer/components/ui/dialog";
 import { Spinner } from "@renderer/components/ui/spinner";
 import { cn } from "@renderer/lib/utils";
 import { fileTypeLabel, formatFileSize, thumbKind } from "./attachment-model";
@@ -229,6 +236,70 @@ export interface AttachmentStripProps {
   attachments: readonly AttachmentCardView[];
   onRemove?: (attachment: BlobLinkView) => void;
   className?: string;
+  /** Chat drafts stay one token row; ticket capture keeps its own cards. */
+  presentation?: "cards" | "composer";
+}
+
+function ComposerAttachmentStrip({ attachments, onRemove, className }: AttachmentStripProps) {
+  const [open, setOpen] = React.useState(false);
+  const trigger = React.useRef<HTMLButtonElement>(null);
+  const returnFocus = React.useRef<HTMLTextAreaElement | null>(null);
+  const failures = attachments.filter((attachment) => attachment.state === "failed").length;
+  if (attachments.length === 0 && !open) return null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next)
+          returnFocus.current = trigger.current?.closest("form")?.querySelector("textarea") ?? null;
+        setOpen(next);
+      }}
+    >
+      <div
+        data-slot="composer-attachments"
+        className={cn("flex min-w-0 shrink-0 items-center", className)}
+      >
+        <DialogTrigger asChild>
+          <Button
+            ref={trigger}
+            type="button"
+            size="sm"
+            variant="ghost"
+            aria-label={`Manage ${attachments.length} attachments`}
+            className="min-w-0 max-w-full justify-start"
+          >
+            <FileIcon className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">
+              {attachments.length === 1
+                ? attachments[0].originalName
+                : `${attachments.length} attachments`}
+            </span>
+            {failures > 0 ? (
+              <span role="alert" className="shrink-0 text-destructive">
+                {failures} failed
+              </span>
+            ) : null}
+          </Button>
+        </DialogTrigger>
+      </div>
+      <DialogContent
+        className="flex max-h-[70vh] flex-col overflow-hidden"
+        onCloseAutoFocus={(event) => {
+          if (attachments.length === 0) {
+            event.preventDefault();
+            returnFocus.current?.focus();
+          }
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Attachments ({attachments.length})</DialogTitle>
+        </DialogHeader>
+        <div data-slot="attachment-manager" className="min-h-0 overflow-y-auto overscroll-contain">
+          <AttachmentStrip attachments={attachments} onRemove={onRemove} />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 /** Empty strips reserve no space. */
@@ -236,7 +307,16 @@ export function AttachmentStrip({
   attachments,
   onRemove,
   className,
+  presentation = "cards",
 }: AttachmentStripProps): React.ReactElement | null {
+  if (presentation === "composer")
+    return (
+      <ComposerAttachmentStrip
+        attachments={attachments}
+        onRemove={onRemove}
+        className={className}
+      />
+    );
   if (attachments.length === 0) return null;
   return (
     <div

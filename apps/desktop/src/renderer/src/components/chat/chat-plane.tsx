@@ -203,7 +203,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Notice } from "@renderer/components/ui/notice";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
@@ -1987,6 +1986,14 @@ function ChatPlaneContent({
     provisional === undefined &&
     session.sessionError !== null;
 
+  const quietEmpty =
+    !initialReadFailed &&
+    transcriptMessages.length === 0 &&
+    session.historyBefore === null &&
+    !historyPending &&
+    pendingMessages.length === 0 &&
+    !turnRunning &&
+    timelineBlocker === null;
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
   // A size query container, not just an inline one: the pending question below
@@ -2025,11 +2032,17 @@ function ChatPlaneContent({
               and this is what turns that back into the Blob it names. */}
             <MarkdownAttachmentsProvider attachments={materializedAttachments}>
               <RunningBashProvider sessionId={sessionId} active={surfaceVisible}>
-                <Conversation className="min-h-0 bg-background">
+                <Conversation className="chat-transcript min-h-0 bg-background">
                   {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-                  <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+                  <ConversationContent
+                    className={
+                      quietEmpty
+                        ? "chat-quiet-content h-full"
+                        : "gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]"
+                    }
+                  >
                     {initialReadFailed ? (
                       <ContentColumn>
                         {blocker ? <SessionBlocker blocker={blocker} /> : null}
@@ -2042,16 +2055,12 @@ function ChatPlaneContent({
                       // empty state below would say "nothing was ever said here"
                       // about a Session that may hold a thousand turns.
                       <TranscriptSkeleton />
-                    ) : transcriptMessages.length === 0 &&
-                      session.historyBefore === null &&
-                      pendingMessages.length === 0 &&
-                      !turnRunning &&
-                      timelineBlocker === null ? (
+                    ) : quietEmpty ? (
                       // Where this Session runs, drawn (VC-55). It replaces the bare
                       // mark that stood here — see `empty/chat-empty-state.tsx` for why
                       // that reversal is deliberate. What blocks TYPING still sits on
                       // the composer, where the typing is.
-                      <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                      <ConversationEmptyState className="chat-quiet-layout min-h-0 flex-1">
                         <ChatEmptyState projectId={projectId} ticketId={ticketId} />
                       </ConversationEmptyState>
                     ) : (

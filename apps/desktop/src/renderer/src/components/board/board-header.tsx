@@ -12,12 +12,9 @@ import {
 import { ArchiveDialog } from "@renderer/components/board/archive-dialog";
 import { boardSummary } from "@renderer/components/board/board-summary";
 import { FilterBar } from "@renderer/components/board/filter-bar";
-import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { PageHeader } from "@renderer/components/layout/page-header";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import { StatusDot } from "@renderer/components/ui/status-dot";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -193,57 +190,13 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
  * something when they do appear.
  */
 function BoardSummary({ visible, total }: { visible: number; total: number }) {
-  // Read here rather than taken as a prop from `BoardHeader`, so an agent's
-  // output re-renders this one span instead of the whole header row — and, far
-  // more importantly, never the board. See session-activity-context.tsx.
-  const activityByTicket = useBoardSessionActivityMap();
-  const summary = boardSummary({ visible, total, activityByTicket });
-  const live = summary.working + summary.waiting > 0;
-  if (summary.count === null && !live) return null;
-
+  // Live state belongs only to each card's ring. A filter count remains a
+  // separate query fact; total count is accessible but visually quiet.
+  const summary = boardSummary({ visible, total, activityByTicket: {} });
+  if (summary.count === null) return null;
   return (
-    <span className="flex items-center gap-2">
-      {summary.count === null ? null : (
-        <span className={visible === total ? "sr-only" : undefined}>
-          <Badge variant="count">{summary.count}</Badge>
-        </span>
-      )}
-      {live ? (
-        <span className="flex items-center gap-2 text-ui text-muted-foreground">
-          {visible !== total ? <span aria-hidden>·</span> : null}
-          {/* Waiting leads working, the precedence every surface in the app
-              gives it: an agent that has stopped to ask something is the one
-              thing here a person can act on. */}
-          {summary.waiting > 0 ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="flex cursor-default items-center gap-1 tabular-nums">
-                  <StatusDot state="waiting" />
-                  {summary.waiting} needs you
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                {summary.waiting} {summary.waiting === 1 ? "ticket needs" : "tickets need"} your
-                input
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-          {summary.working > 0 ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="flex cursor-default items-center gap-1 tabular-nums">
-                  <StatusDot state="working" />
-                  {summary.working} working
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                {summary.working} {summary.working === 1 ? "ticket has" : "tickets have"} an active
-                agent
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-        </span>
-      ) : null}
+    <span className={visible === total ? "sr-only" : undefined}>
+      <Badge variant="count">{summary.count}</Badge>
     </span>
   );
 }

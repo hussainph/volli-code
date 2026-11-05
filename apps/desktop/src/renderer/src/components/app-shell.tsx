@@ -27,7 +27,8 @@ import {
   isContentMoving,
   planContentMotion,
 } from "@renderer/components/sidebar/content-motion";
-import { useSidebarPour } from "@renderer/components/sidebar/sidebar-pour";
+import { useProjectsStore } from "@renderer/stores/projects";
+import { useOverlayScrollbars } from "@renderer/hooks/use-overlay-scrollbars";
 import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import {
   LIVE_WIDTH_PROPERTY,
@@ -268,6 +269,7 @@ function useSidebarContentMotion({
  * A stationary clip stops the left pane crossing the workspace rail. */
 export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}) {
   useProjectShortcuts();
+  useOverlayScrollbars();
   useNewTicketShortcut();
   useNavHistory();
   useProjectRootsSync();
@@ -299,6 +301,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   // to a PTY, so it is an unpin that no stored choice records.
   const docked = pinned && !terminalFocused;
 
+  const [peekProjectId, setPeekProjectId] = React.useState<string | null>(null);
+  const onProjectIntent = React.useCallback((id: string | null) => setPeekProjectId(id), []);
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const zoneRef = React.useRef<HTMLDivElement | null>(null);
   const bandRef = React.useRef<HTMLDivElement | null>(null);
@@ -308,8 +312,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     panelRef,
     zoneRef,
     bandRef,
+    projectTiles: true,
+    onProjectIntent,
   });
 
+  const peekAtPress = React.useRef({ projectId: peekProjectId, visible: reveal.visible });
+  peekAtPress.current = { projectId: peekProjectId, visible: reveal.visible };
   const railWidth = projectRailHidden || terminalFocused ? 0 : PROJECT_RAIL_WIDTH;
   const railHidden = projectRailHidden || terminalFocused;
   // `sidebarWidth` stores the full two-tier width and the panel is always what
@@ -408,12 +416,9 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     return () => window.cancelAnimationFrame(frame);
   }, [nativePlaneInstant]);
 
-  const pouring = useSidebarPour({
-    shown: panelShown,
-    instant: keyboardInstant || reducedMotion || terminalFocused || nativePlaneInstant,
-    panelRef,
-    bandRef,
-  });
+  // Pinned-projects peeks use the 100/120ms edge reveal, never a pour into
+  // the trigger. The inspector retains its own separate pour treatment.
+  const pouring = false;
   React.useLayoutEffect(() => {
     if (!keyboardInstant) return;
     const frame = window.requestAnimationFrame(() => setKeyboardInstant(false));
@@ -473,6 +478,9 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     (next: boolean, options?: { instant?: boolean }) => {
       setKeyboardInstant(options?.instant === true);
       setPinSuspended(false);
+      const peek = peekAtPress.current;
+      if (next && peek.visible && peek.projectId !== null)
+        useProjectsStore.getState().select(peek.projectId);
       // A deliberate pin toggle uses the full base clock. CSS retargets the
       // panel from its live value if the direction changes; the content hook
       // separately samples its live WAAPI translate before reversing.
@@ -500,7 +508,11 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
    * `SidebarProvider`) still reaches its consumers through this.
    */
   const railContent = React.useMemo(() => <ProjectRail />, []);
-  const paneContent = React.useMemo(() => <PrimarySidebar />, []);
+  const previewProjectId = !pinned && reveal.visible ? peekProjectId : null;
+  const paneContent = React.useMemo(
+    () => <PrimarySidebar previewProjectId={previewProjectId} />,
+    [previewProjectId],
+  );
   const chrome = React.useMemo(() => <ChromeBar />, []);
   const [inspectorHost, setInspectorHost] = React.useState<HTMLDivElement | null>(null);
   const content = React.useMemo(() => <MainContent override={mainContent} />, [mainContent]);
@@ -732,6 +744,10 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
                 if (event.target === event.currentTarget && !panelShown) {
                   setFloatingOverlayExiting(false);
                 }
+              }}
+              onClickCapture={() => {
+                if (!pinned && peekProjectId !== null && reveal.visible)
+                  useProjectsStore.getState().select(peekProjectId);
               }}
               onClick={reveal.onPanelClick}
               onFocus={reveal.onPanelFocus}

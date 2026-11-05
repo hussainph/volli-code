@@ -110,11 +110,11 @@ describe("TicketRail header", () => {
     const root = html.indexOf('data-volli-rail="ticket"');
     expect(root).toBeGreaterThan(-1);
     expect(root).toBeLessThan(html.indexOf('role="tablist"'));
-    expect(root).toBeLessThan(html.indexOf("overflow-y-auto"));
+    expect(root).toBeLessThan(html.indexOf("ticket-inspector-now"));
     expect([...html.matchAll(/data-volli-rail=/g)]).toHaveLength(1);
-    // The page still scrolls — only the bar is gone, so the overflow the
-    // scroller declares is untouched by the marker beside it.
-    expect(html).toContain("overflow-y-auto");
+    // Now keeps each roster bounded independently; host-supplied Diffs/Files
+    // retain their own overflow under this same rail marker.
+    expect(html).toContain("ticket-inspector-now");
   });
 
   // The stylesheet half of the same contract, read off the file rather than
@@ -198,7 +198,7 @@ describe("TicketRail's Now page", () => {
     };
 
     const properties = at('data-testid="ticket-rail-properties"');
-    const sessions = at('aria-label="New chat"');
+    const sessions = at('aria-label="Open a tab"');
     const automations = at('data-testid="ticket-rail-automations"');
 
     expect(properties).toBeLessThan(sessions);
@@ -221,9 +221,9 @@ describe("TicketRail's Now page", () => {
     for (const field of ["Status", "Priority", "Labels"]) {
       expect(page).toContain(field);
     }
-    // The compact Chat split uses its controls' own lift, not a raised frame
-    // around the whole group. Rail geometry must not silently become strip-sized.
-    expect(page).toMatch(/data-size="xs"[^>]*aria-label="New chat"/);
+    // The compact plus opens the same chooser as the strip, without an outlined
+    // split control. Rail geometry must not silently become strip-sized.
+    expect(page).toMatch(/data-size="icon-xs"[^>]*aria-label="Open a tab"/);
     expect(page).not.toContain("bg-card shadow-raised");
     for (const field of ["status", "priority"]) {
       expect(page).toContain(`data-testid="ticket-rail-property-${field}"`);
@@ -237,7 +237,7 @@ describe("TicketRail's Now page", () => {
   // the scroller is not the page's only child.
   it("hangs its usage footer outside the scrolling column", () => {
     const page = render().slice(render().indexOf('id="ticket-rail-page-now"'));
-    const scroller = page.indexOf("overflow-y-auto pb-8");
+    const scroller = page.indexOf("ticket-inspector-now");
 
     expect(scroller).toBeGreaterThan(-1);
     expect(page.indexOf("</section>", scroller)).toBeGreaterThan(scroller);
@@ -247,7 +247,7 @@ describe("TicketRail's Now page", () => {
     const html = render();
     const page = html.slice(html.indexOf('id="ticket-rail-page-now"'));
 
-    expect(page).toContain("gap-4 overflow-y-auto");
+    expect(page).toContain("gap-4 overflow-hidden");
     // A block that carried its own `pt-4` would double the rhythm against its
     // neighbours and leave a hole when absent.
     expect(page).not.toContain("pt-4 px-4");

@@ -67,7 +67,7 @@ describe("Glass board", () => {
     const css = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
     expect(css).toContain(":root .session-ring.board-session-ring");
     expect(css).toContain("--session-ring-seed: var(--canvas-accent)");
-    expect(css).toContain("--session-ring-color: var(--primary-text)");
+    expect(css).toContain("--session-ring-color: var(--canvas-accent)");
     expect(css).toContain(
       ':root[data-motion="off"] .board-session-ring[data-activity="working"]::before',
     );

@@ -1,6 +1,7 @@
-/** A quiet entry to writing; scope stays visible and charts live one click deeper. */
+/** Quiet center: real practice history inline, with alternate charts one disclosure deeper. */
 import * as React from "react";
-import { ChatPendingIcon, BarChartIcon } from "@renderer/components/ui/icon";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
+import { useSessionStartsStore } from "@renderer/stores/session-starts";
 
 import {
   EMPTY_VISUAL_LABELS,
@@ -49,6 +50,7 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
   const setVisual = useUiStore((state) => state.setHomeEmptyVisual);
   const visual = resolveEmptyVisual(scope, chosen);
   const offered = visualsForScope(scope);
+  const historyRead = useSessionStartsStore((state) => state.startedAt !== undefined);
 
   const workingCopy = useWorkingCopyStore(
     (state) => state.byScope[workingCopyKey(projectId, ticketId)],
@@ -67,52 +69,58 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
     void refreshWorkingCopy(projectId, ticketId);
   }, [projectId, ticketId, refreshWorkingCopy]);
 
+  const ready = scope === "project" ? historyRead : workingCopy?.status === "ready";
   return (
-    <div data-slot="chat-empty-state" className={cn(EMPTY_PAGE, "max-w-full py-0")}>
-      <ChatPendingIcon aria-hidden className="size-6 text-muted-foreground" />
+    <div
+      data-slot="chat-empty-state"
+      className={cn(EMPTY_PAGE, "chat-quiet-center max-w-full py-0")}
+    >
       <SectionHeading>New chat</SectionHeading>
-      <WorkingCopyCaption workingCopy={workingCopy} />
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button variant="ghost" size="sm" className="text-muted-foreground">
-            <BarChartIcon />
-            Session overview
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent
-          className="flex w-auto max-w-[calc(100vw-2rem)] flex-col items-center gap-4 p-4"
-          side="top"
-        >
-          {offered.length > 1 ? (
-            <Select
-              value={visual}
-              onValueChange={(key) => {
-                const next = offered.find((candidate) => candidate === key);
-                if (next) setVisual(next);
-              }}
-            >
-              <SelectTrigger
-                variant="inspector"
-                aria-label="Empty chat visual"
-                data-testid="empty-visual-picker"
-                className="w-auto self-end"
+      {ready ? <WorkingCopyCaption workingCopy={workingCopy} /> : null}
+      {scope === "project" ? <StreakVisual /> : null}
+      {ready ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="sm" className="text-muted-foreground">
+              Session overview
+              <ChevronDownIcon strokeWidth={2.25} className="size-3" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            className="flex w-auto max-w-[calc(100vw-2rem)] flex-col items-center gap-4 p-4"
+            side="top"
+          >
+            {offered.length > 1 ? (
+              <Select
+                value={visual}
+                onValueChange={(key) => {
+                  const next = offered.find((candidate) => candidate === key);
+                  if (next) setVisual(next);
+                }}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {offered.map((key) => (
-                  <SelectItem key={key} value={key}>
-                    {EMPTY_VISUAL_LABELS[key]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          {visual === "streak" ? <StreakVisual /> : null}
-          {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
-          {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
-        </PopoverContent>
-      </Popover>
+                <SelectTrigger
+                  variant="inspector"
+                  aria-label="Empty chat visual"
+                  data-testid="empty-visual-picker"
+                  className="w-auto self-end"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {offered.map((key) => (
+                    <SelectItem key={key} value={key}>
+                      {EMPTY_VISUAL_LABELS[key]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
+            {visual === "streak" ? <StreakVisual /> : null}
+            {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
+            {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
+          </PopoverContent>
+        </Popover>
+      ) : null}
     </div>
   );
 });
@@ -135,22 +143,7 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
 function WorkingCopyDrawing({ workingCopy }: { workingCopy: WorkingCopyEntry | undefined }) {
   if (workingCopy?.status === "ready")
     return <WorkingCopyVisual workingCopy={workingCopy.workingCopy} />;
-  // The waiting shape is the real one with nothing in it, rather than a height
-  // somebody measured once: an empty track and an invisible caption reserve
-  // exactly what the drawing will take, and stay right when it changes.
-  return (
-    <div
-      className="flex w-80 flex-col gap-3"
-      aria-hidden
-      data-working-copy-state={workingCopy?.status ?? "loading"}
-    >
-      <div className="h-8 rounded-control bg-muted" />
-      <div className="invisible flex items-baseline justify-center gap-3">
-        <span className="text-title">0</span>
-        <span className="text-ui">files changed</span>
-      </div>
-    </div>
-  );
+  return null;
 }
 
 /** The chips, once there is a working copy to name. */

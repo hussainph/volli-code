@@ -125,22 +125,48 @@ retain square internal seams.
 ### Navigation anatomy
 
 The canvas owns the title bar, project rail and 6px gutters. Navigation, paper and
-inspector are independent rounded cards. Back/forward and the sidebar toggles form
+inspector are independent rounded cards. Back/forward and one inner-sidebar toggle form
 one leading toolbar group; search is window-centred, usage sits beside it and the
 inspector toggle stays at the far right. Pinning changes reserved space, never
-ownership or lifetime of the inspector's live subtree.
+ownership or lifetime of the inspector's live subtree. Project tiles summon unpinned
+navigation after 100ms intent, with 100ms reveal / 120ms exit and no reserved space.
+Focus holds a peek; Escape dismisses it. ⌘B pins instantly from the keyboard.
+Rail visibility is in the layout context menu and ⌘⇧S, not a duplicate sidebar glyph.
+A hidden rail folds into the Projects and Workspaces menu with selection, reorder,
+context actions, add and Workspace switching intact.
 
 Tabs follow Rex: wide capsules on a neutral glass track, a lighter filled selected
 capsule, leading identity, title alone and close; Board is icon-only. A grouped
 chip's hover card shows its existing items as two-line rows, with existing liveness
 at the trailing edge. Its context menu, pane selection, dragging, rename, close and
-ungroup behaviour are unchanged. Tab selection has no transition.
+ungroup behaviour are unchanged. Tab selection has no transition. One `+` inside
+the trough opens the anchored Chat / Terminal / Browser chooser; the inspector
+uses the same chooser. Direct ⌘T / ⌥⌘T keep existing project/ticket/pane scope,
+cloud keeps Chat only, and the Runner picker stays with the control.
 
 Sidebar header, rows, section names and footer share an 18px leading ink inset.
 The project name is a measured 15/20px display title, not a new general-purpose type rung.
 Two-line rows are 42px (18px name, 14px metadata, 5px vertical inset), with a 20px
 identity tile. Selected navigation is a neutral 9% ink fill, not an accent outline.
 The Sessions/Files choice stays inline with Active; Active contains Sessions only.
+Bands (28px), ticket disclosures (32px) and Session rows (42px Active / 32px Previous)
+share one flat presentation model with stable keys and offsets. Expanded ticket
+children are plain rows, not inset cards. This model is viewport-ready; windowing
+and off-window focus routing are separate work.
+
+The empty project chat is a quiet centered title, real working-copy chips and a
+26×7 day matrix with equal-column Sessions / active days / nonzero streak metrics.
+The object caps at 640px; Session overview retains Streak / Board / Venue, while
+Tickets retain Venue only. Before a successful read, show only New chat and the
+anchored composer: no placeholder chart, skeleton or false zero.
+
+A draft's attachments use one count token opening a bounded manager; the composer
+never grows with attachment count. Inspector labels show two bounded pills and a
+`+N` searchable editor. Sessions and Automations own independent overflow so their
+headings cannot be buried by metadata. Board label pills are neutral; colour stays
+in label editors and pickers. A card's animated live ring is separate from its
+neutral selection border. Renderer scroll thumbs are trackless and visible only
+on scroll or hover.
 
 ### Measure and rhythm
 

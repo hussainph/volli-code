@@ -1723,7 +1723,7 @@
  * second colour or badge, distinguishes working from waiting. */
 :root .session-ring.board-session-ring {
   --session-ring-seed: var(--canvas-accent);
-  --session-ring-color: var(--primary-text);
+  --session-ring-color: var(--canvas-accent);
 }
 
 /* Motion off freezes a working arc; waiting still fills the whole ring. */
@@ -2132,10 +2132,11 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
 *::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 9999px;
-  background-color: var(--border);
+  background-color: transparent;
   background-clip: content-box;
 }
-*:hover::-webkit-scrollbar-thumb {
+*:hover::-webkit-scrollbar-thumb,
+*[data-scrolling]::-webkit-scrollbar-thumb {
   background-color: var(--border-strong);
 }
 *::-webkit-scrollbar-thumb:hover,
@@ -3294,4 +3295,106 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 .session-prompt > [data-slot="input-group"] {
   overflow: visible;
   border-radius: 0;
+}
+
+/* The roster and automation offer each own overflow; metadata cannot push
+ * either heading out of the inspector. Small collections keep natural height. */
+.ticket-inspector-now > [data-testid="ticket-rail-properties"] {
+  flex: none;
+}
+.ticket-inspector-now
+  > :is([data-testid="ticket-sessions"], [data-testid="ticket-rail-automations"]) {
+  flex: 0 1 auto;
+  min-height: 72px;
+  max-height: 50%;
+  overflow: hidden;
+}
+.ticket-inspector-now
+  > :is([data-testid="ticket-sessions"], [data-testid="ticket-rail-automations"])
+  > :first-child {
+  flex-shrink: 0;
+}
+.ticket-inspector-now [data-testid="ticket-sessions-peek"],
+.ticket-inspector-now [data-testid="ticket-rail-automation-list"] {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.session-navigator [data-nav-height] :is(.list-row, [data-slot="sidebar-menu-button"]) {
+  height: 100%;
+  min-height: 0;
+}
+/* Plain disclosure rows, never a card around a ticket and its children. */
+.session-navigator-child {
+  padding-inline: 4px;
+}
+
+/* Quiet center is one compact object; the composer is a separate anchored
+ * track, not part of the empty state's scrolling content. */
+.chat-quiet-content {
+  box-sizing: border-box;
+  min-height: 0;
+  padding: 16px 24px calc(var(--composer-height) + 32px);
+}
+.chat-quiet-layout {
+  min-height: 0;
+  padding: 0;
+}
+.chat-quiet-center {
+  width: 100%;
+  max-width: 640px;
+  gap: 12px;
+}
+.streak-summary {
+  display: flex;
+  width: 360px;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 14px;
+}
+.streak-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.streak-matrix {
+  display: grid;
+  grid-template-columns: repeat(26, minmax(0, 1fr));
+  grid-template-rows: repeat(7, 1fr);
+  grid-auto-flow: column;
+  gap: 4px;
+}
+.streak-cell {
+  width: 100%;
+  aspect-ratio: 1;
+}
+.streak-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  text-align: left;
+}
+.streak-stats > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+.chat-transcript {
+  margin-top: 8px;
+  mask-image: linear-gradient(to bottom, transparent, black 8px);
+}
+/* An overlay has paper, not canvas, behind it: keep its explicit authored
+ * tint without painting a duplicate mesh. */
+[data-volli-shell="ephemeral"] [data-volli-sidebar].glass {
+  background: var(--glass-writing-veil);
+}
+.project-menu-tile {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+.board-card[data-selected="true"] {
+  background: color-mix(in srgb, var(--foreground) 5%, var(--card-face));
 }

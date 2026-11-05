@@ -26,7 +26,8 @@ import {
   newLabelFromQuery,
 } from "@renderer/components/ticket/label-picker-model";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { useLabelVocabulary } from "@renderer/components/ticket/label-picker";
+import { LabelPickerContent, useLabelVocabulary } from "@renderer/components/ticket/label-picker";
+import { Button } from "@renderer/components/ui/button";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { InspectorPopup, InspectorRow } from "@renderer/components/ui/inspector";
@@ -82,16 +83,14 @@ function ValueTrigger({
   );
 }
 
-/** One applied label: its colour, its name, and its own Remove. */
+/** One applied label: a neutral name pill with its own Remove. */
 function LabelPill({
   name,
-  color,
   canWrite,
   removeRef,
   onRemove,
 }: {
   name: string;
-  color: string;
   /** Read-only (VC-576): the pill reads; its Remove stands down. */
   canWrite: boolean;
   removeRef: (node: HTMLButtonElement | null) => void;
@@ -101,13 +100,8 @@ function LabelPill({
     <span
       data-testid="ticket-rail-label-pill"
       data-label={name}
-      className="flex h-6 min-w-0 shrink items-center gap-1 rounded-control-small bg-(--accent-tint) py-0 pr-0.5 pl-1.5 text-ui"
+      className="flex h-6 min-w-0 shrink items-center gap-1 rounded-control-small bg-(--fill-secondary) py-0 pr-0.5 pl-1.5 text-ui"
     >
-      <span
-        aria-hidden
-        className="size-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: color }}
-      />
       <span className="min-w-0 truncate">{name}</span>
       <button
         type="button"
@@ -280,7 +274,6 @@ function LabelRun({
   canWrite: boolean;
   onChange: (next: string[]) => void;
 }) {
-  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
   const removeRefs = React.useRef(new Map<string, HTMLButtonElement>());
   const addRef = React.useRef<HTMLButtonElement | null>(null);
   /** The pill to focus once the run has re-rendered, or `null` for Add. */
@@ -305,18 +298,19 @@ function LabelRun({
     onChange(next);
   };
 
+  const shown = labels.slice(0, 2);
+  const hiddenCount = labels.length - shown.length;
   return (
     <span
       role="group"
-      aria-label={`Labels: ${labels.length === 0 ? "none" : labels.join(", ")}`}
+      aria-label={`Labels: ${labels.length === 0 ? "none" : hiddenCount > 0 ? labels.length : labels.join(", ")}`}
       data-testid="ticket-rail-label-run"
-      className="flex min-w-0 flex-1 flex-wrap items-center gap-1"
+      className="flex h-control-sm min-w-0 flex-1 items-center gap-1"
     >
-      {labels.map((name) => (
+      {shown.map((name) => (
         <LabelPill
           key={name}
           name={name}
-          color={resolveLabelColor(projectLabels, name)}
           canWrite={canWrite}
           removeRef={(node) => {
             if (node === null) removeRefs.current.delete(name);
@@ -325,6 +319,29 @@ function LabelRun({
           onRemove={() => remove(name)}
         />
       ))}
+      {hiddenCount > 0 ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              aria-label={`Manage labels, ${hiddenCount} more`}
+              className="shrink-0 px-1 tabular-nums"
+            >
+              +{hiddenCount}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-64 p-0">
+            <LabelPickerContent
+              projectId={projectId}
+              value={labels}
+              onChange={onChange}
+              readOnly={!canWrite}
+            />
+          </PopoverContent>
+        </Popover>
+      ) : null}
       <AddLabelControl
         projectId={projectId}
         applied={labels}

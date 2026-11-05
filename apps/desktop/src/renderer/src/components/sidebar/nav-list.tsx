@@ -24,8 +24,8 @@ const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: IconComponent
 ];
 
 /** Primary feature navigation. Agent configuration lives in the Settings footer. */
-export function NavList() {
-  const [activeNav, setActiveNav] = useActiveNav();
+export function NavList({ projectId }: { projectId?: string } = {}) {
+  const [activeNav, setActiveNav] = useActiveNav(projectId);
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 

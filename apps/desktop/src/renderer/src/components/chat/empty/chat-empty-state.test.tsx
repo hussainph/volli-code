@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { WorkingCopyReading, WorkingCopyMeasurement } from "@volli/shared";
 
+import { useSessionStartsStore } from "@renderer/stores/session-starts";
 import { ChatEmptyState } from "./chat-empty-state";
 import { WorkingCopyChips } from "./working-copy-chips";
 import { WorkingCopyVisual } from "./working-copy-visual";
@@ -70,6 +71,7 @@ afterEach(async () => {
   Reflect.deleteProperty(window, "api");
   useWorkingCopyStore.setState({ byScope: {} });
   useUiStore.setState({ homeEmptyVisual: "streak" });
+  useSessionStartsStore.setState({ startedAt: undefined, error: null });
   vi.unstubAllGlobals();
 });
 
@@ -153,9 +155,18 @@ describe("WorkingCopyChips", () => {
 
 /** The quiet entry preserves the existing charts behind a named disclosure. */
 describe("ChatEmptyState", () => {
-  it("defers the Board Session's charts and choices until overview is opened", async () => {
+  it("shows only New chat before the practice-history read, never a false zero or skeleton", () => {
+    const markup = draw(<ChatEmptyState projectId="p1" ticketId={null} />);
+    expect(markup).toContain("New chat");
+    expect(markup).not.toContain("data-day");
+    expect(markup).not.toContain("sessions");
+    expect(markup).not.toContain("Session overview");
+    expect(markup).not.toContain("skeleton");
+  });
+  it("draws successful practice history inline and keeps alternate charts in overview", async () => {
     await mount(<ChatEmptyState projectId="p1" ticketId={null} />, { state: "pending" });
-    expect(document.body.querySelector("[data-empty-visual]")).toBeNull();
+    expect(document.body.querySelectorAll("[data-day]")).toHaveLength(182);
+    expect(document.body.querySelector(".streak-stats")?.textContent).toBe("0sessions0active days");
     openOverview();
     expect(document.body.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
     expect(document.body.querySelector('[aria-label="Empty chat visual"]')).not.toBeNull();
@@ -179,7 +190,10 @@ describe("ChatEmptyState", () => {
   });
 
   it("offers a Ticket Session no visual picker and none of Home's charts", async () => {
-    await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, { state: "pending" });
+    await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+      state: "measured",
+      workingCopy: workingCopy(),
+    });
     openOverview();
     expect(document.body.querySelector('[aria-label="Empty chat visual"]')).toBeNull();
     expect(document.body.querySelector('[data-empty-visual="streak"]')).toBeNull();
@@ -193,7 +207,7 @@ describe("ChatEmptyState", () => {
     expect(markup).not.toContain('data-empty-visual="venue"');
   });
 
-  it("draws the waiting shape, not the main checkout, for a ticket still resolving its worktree (VC-286)", async () => {
+  it("keeps a resolving ticket quiet instead of drawing checkout facts or a skeleton", async () => {
     useWorkingCopyStore.setState({
       byScope: {
         // The project's own reading exists and is the main checkout — the
@@ -210,8 +224,8 @@ describe("ChatEmptyState", () => {
       state: "pending",
     });
 
-    openOverview();
-    expect(document.body.querySelector('[data-working-copy-state="resolving"]')).not.toBeNull();
+    expect(document.body.querySelector("[data-empty-visual]")).toBeNull();
+    expect(document.body.querySelector("[data-working-copy-state]")).toBeNull();
     expect(markup).not.toContain("Main checkout");
     expect(markup).not.toContain("Worktree");
     expect(markup).not.toContain('data-empty-visual="venue"');

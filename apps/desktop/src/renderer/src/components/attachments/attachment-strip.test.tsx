@@ -102,6 +102,44 @@ describe("attachment tile contract", () => {
   });
 });
 
+describe("bounded composer attachments", () => {
+  it.each([0, 3, 50])(
+    "keeps %i files in one token row and makes every removal reachable in the manager",
+    async (count) => {
+      const attachments = Array.from({ length: count }, (_, i) => ({
+        ...pdf,
+        linkId: `link-${i}`,
+        label: `File ${i}`,
+        originalName: `file-${i}.txt`,
+      }));
+      const remove = vi.fn();
+      await act(async () =>
+        root.render(
+          <AttachmentStrip presentation="composer" attachments={attachments} onRemove={remove} />,
+        ),
+      );
+      expect(host.querySelectorAll('[role="listitem"]')).toHaveLength(0);
+      const trigger = host.querySelector<HTMLButtonElement>(
+        `[aria-label="Manage ${count} attachments"]`,
+      );
+      if (count === 0) {
+        expect(trigger).toBeNull();
+        return;
+      }
+      expect(host.querySelectorAll('[data-slot="composer-attachments"]')).toHaveLength(1);
+      await act(async () => trigger?.click());
+      const manager = document.querySelector('[data-slot="attachment-manager"]');
+      expect(manager?.className).toContain("overflow-y-auto");
+      expect(manager?.querySelectorAll('[role="listitem"]')).toHaveLength(count);
+      const last = manager?.querySelector<HTMLButtonElement>(
+        `[aria-label="Remove File ${count - 1}"]`,
+      );
+      await act(async () => last?.click());
+      expect(remove).toHaveBeenCalledExactlyOnceWith(attachments[count - 1]);
+    },
+  );
+});
+
 describe("middleTruncate", () => {
   it("keeps short names whole and cuts long ones once, keeping the extension", () => {
     expect(middleTruncate("README")).toBe("README");

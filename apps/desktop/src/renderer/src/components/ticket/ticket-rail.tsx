@@ -202,10 +202,9 @@ export function TicketRail({
           // blocks stack in it, and what is pinned under it stays readable at
           // any scroll position.
           <>
-            {/* `pb-8` here rather than on the last block: the scratch hangs it
-                off its session list, but that list is the one block this file
-                does not own, so the page keeps its own floor. */}
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
+            {/* Bounded properties plus independent roster/offer scrollers:
+                growing metadata can never bury either section's header. */}
+            <div className="ticket-inspector-now flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-2">
               {/* What this Ticket IS: status, priority, labels — as rows. */}
               <TicketProperties projectId={projectId} ticket={ticket} />
               {/* The working set, with the record folded under it. The block

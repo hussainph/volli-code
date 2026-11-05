@@ -1,52 +1,13 @@
-/**
- * Starting a Session — one control, wherever one is offered.
- *
- * A split button: `[ + Chat │ ▾ ]`. The press starts a chat, the caret admits
- * the exception exists, and right-click reaches the same two items wherever the
- * caret happens to be drawn. It replaces the two shapes this app used to have
- * for one job — a two-button Chat/Terminal cluster in the ticket surfaces and a
- * bare "+" menu on the project's own strip — which cost the ticket a peer it
- * does not have and cost the project's strip a click on the act it exists for.
- *
- * The asymmetry it draws is one the code already has and neither shipped drawing
- * expressed: `@volli/agent-runtime` is the one structured executor, and a
- * terminal is an explicit manual companion, never a silent structured fallback
- * (CLAUDE.md). A split says exactly that — the default is a press, the companion
- * is a press plus something — where two identical ghost icon buttons say the
- * opposite.
- *
- * Browser joins the menu below a separator rather than standing as its own
- * button in the strip. One "+" is the workspace's single answer to "open
- * something here", and a second labelled button beside it re-asked the question
- * the split was built to settle. The separator carries the real distinction:
- * above it are Sessions, which run something; below it is a surface, which
- * shows something.
- *
- * "Chat with skill" is deliberately absent. A skill is a property of the chat
- * you are about to have, not a kind of thing to open, and pricing it at the top
- * level put a rarely-taken branch in front of the act this control exists for.
- *
- * The word earns its width twice over: it is what a first-run user reads, and a
- * labelled target is a BIGGER target, so Fitts pays for it again at the
- * hundredth use.
- *
- * Motion is CSS and compositor-only (transform/opacity/color), interruptible
- * because a transition restarts from the computed value, and given overshoot
- * nowhere — none of these presses carries momentum.
+/** One anchored tab chooser; direct Session shortcuts keep their existing scope.
+ * The context menu is the same offer. A Browser is a tab, not a Session, and a
+ * cloud launch offers only Chat plus the existing Runner picker.
  */
 import * as React from "react";
-import {
-  BrowserIcon,
-  ChevronDownIcon,
-  ChatIcon,
-  AddIcon,
-  TerminalIcon,
-} from "@renderer/components/ui/icon";
+import { BrowserIcon, ChatIcon, AddIcon, TerminalIcon } from "@renderer/components/ui/icon";
 
 import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import { useCanSendSession } from "@renderer/lib/cloud-session-read-only";
 import { launchStore } from "@renderer/stores/launch";
-import { ButtonGroup } from "@renderer/components/ui/button-group";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -79,18 +40,10 @@ export type NewSessionPlacement = "strip" | "rail" | "empty";
 
 /** Control scale, emphasis and label per room. */
 const DRAWING = {
-  // Quiet outline lift beside the tabs.
-  strip: { size: "sm", caret: "icon-sm", variant: "outline", label: "Chat" },
-  // The 300px ticket rail's Sessions header: one step down, level with a
-  // group heading.
-  rail: { size: "xs", caret: "icon-xs", variant: "outline", label: "Chat" },
-  // The only affordance on an empty surface, so it is solid and says what it
-  // does rather than naming a kind among tabs that no longer exist.
-  empty: { size: "sm", caret: "icon-sm", variant: "default", label: "New chat" },
-} as const satisfies Record<
-  NewSessionPlacement,
-  { size: "sm" | "xs"; caret: "icon-sm" | "icon-xs"; variant: "outline" | "default"; label: string }
->;
+  strip: { size: "icon", variant: "ghost" },
+  rail: { size: "icon-xs", variant: "ghost" },
+  empty: { size: "icon-sm", variant: "default" },
+} as const;
 
 /** What every row in either menu needs, and nothing about how it is drawn. */
 export interface NewSessionMenuRowHandlers {
@@ -262,70 +215,32 @@ export function NewSessionControl({
   });
 
   return (
-    <div className="inline-flex min-w-0 items-center gap-1">
+    <div {...readOnlyMark(canWrite)} className="inline-flex min-w-0 items-center gap-1">
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <ButtonGroup
-            {...readOnlyMark(canWrite)}
-            className={cn(
-              "shrink-0 rounded-control",
-              disabled && "pointer-events-none opacity-50",
-              className,
-            )}
-          >
-            <Button
-              type="button"
-              variant={drawing.variant}
-              size={drawing.size}
-              disabled={disabled}
-              aria-label="New chat"
-              {...(shortcuts ? { "aria-keyshortcuts": "Meta+T" } : {})}
-              onClick={onNewChat}
-              className="disabled:opacity-100"
-            >
-              {/* Outline, the baseline. The Button's own size rule draws this at
-                14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier
-                — and a weight step that only half its rooms earn is not a step.
-                The caret below is `size-3` in every room, so it keeps bold. */}
-              <AddIcon />
-              {drawing.label}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant={drawing.variant}
-                  size={drawing.caret}
-                  disabled={disabled}
-                  // Not "other session kinds" any more: a Browser Tab is not a
-                  // Session, and this menu now holds both.
-                  aria-label="Other things to open"
-                  // Keep an icon-sized target; the shared group owns the seam.
-                  className="group px-0 disabled:opacity-100"
-                >
-                  <ChevronDownIcon
-                    strokeWidth={2.25}
-                    // The flip is STATE, not decoration, so reduced motion drops
-                    // the travel and keeps the end position — `transition-none`,
-                    // not a cancelled rotation. (`transform-none` was neither:
-                    // v4 compiles `rotate-180` to the standalone `rotate`
-                    // property, which `transform: none` cannot touch.)
-                    className="size-3 transition-transform duration-(--duration-menu-in) ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-                  />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className="min-w-52"
-                align={align}
-                onCloseAutoFocus={handleCloseAutoFocus}
+        <DropdownMenu>
+          <ContextMenuTrigger asChild disabled={disabled}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant={drawing.variant}
+                size={drawing.size}
+                disabled={disabled}
+                aria-label="Open a tab"
+                title="Open a tab"
+                className={cn("shrink-0", className)}
               >
-                {items}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </ButtonGroup>
-        </ContextMenuTrigger>
-        {/* The same items on right-click, so turning to the caret is a
-          convenience and never the only route. */}
+                <AddIcon />
+              </Button>
+            </DropdownMenuTrigger>
+          </ContextMenuTrigger>
+          <DropdownMenuContent
+            className="min-w-52"
+            align={align}
+            onCloseAutoFocus={handleCloseAutoFocus}
+          >
+            {items}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <ContextMenuContent className="min-w-52" onCloseAutoFocus={handleCloseAutoFocus}>
           {newSessionMenuRows("context", {
             shortcuts,

@@ -27,6 +27,7 @@ import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
+import { useProjectsStore } from "@renderer/stores/projects";
 
 /**
  * The sidebar panel's contents: project header, feature nav, contextual content
@@ -59,9 +60,15 @@ import { useUiStore } from "@renderer/stores/ui";
 // choice survives sidebar remounts without changing any workspace's lifetime.
 let rememberedContent: "sessions" | "files" = "sessions";
 
-export function PrimarySidebar() {
-  const selected = useSelectedProject();
-  const [activeNav] = useActiveNav();
+export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string | null } = {}) {
+  const current = useSelectedProject();
+  const preview = useProjectsStore((state) =>
+    previewProjectId
+      ? state.projects.find((project) => project.id === previewProjectId)
+      : undefined,
+  );
+  const selected = preview ?? current;
+  const [activeNav] = useActiveNav(selected?.id);
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const [activeCount, setActiveCount] = React.useState<{ projectId: string; count: number } | null>(
@@ -102,7 +109,7 @@ export function PrimarySidebar() {
 
           {selected ? (
             <>
-              <NavList />
+              <NavList projectId={selected.id} />
               <div className="sidebar-section-header shrink-0 py-2">
                 <SessionBandHeader
                   label="Active"

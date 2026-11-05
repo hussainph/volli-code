@@ -78,6 +78,26 @@ function pills(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>('[data-testid="ticket-rail-label-pill"]')];
 }
 
+it("bounds a thousand applied labels before the editor opens", async () => {
+  const labels = Array.from({ length: 1000 }, (_, i) => `Label ${String(i).padStart(4, "0")}`);
+  await render({ ...TICKET, labels });
+  expect(pills()).toHaveLength(2);
+  expect(query<HTMLButtonElement>('[aria-label="Manage labels, 998 more"]').textContent).toBe(
+    "+998",
+  );
+  expect(document.querySelectorAll('[cmdk-item=""]')).toHaveLength(0);
+});
+
+it("searches and removes a label beyond the bounded run through its editor", async () => {
+  const labels = ["Label 0000", "Label 0001", "Label 0002", "Label 0999"];
+  await render({ ...TICKET, labels });
+  await press(query<HTMLButtonElement>('[aria-label="Manage labels, 2 more"]'));
+  await type("Label 0999");
+  expect(offered()).toEqual(["Label 0999"]);
+  await choose("Label 0999");
+  expect(setLabels).toHaveBeenCalledWith("t1", labels.slice(0, -1));
+});
+
 /** The pill names, in the order the run draws them. */
 function pillNames(): string[] {
   return pills().map((pill) => pill.dataset.label ?? "");

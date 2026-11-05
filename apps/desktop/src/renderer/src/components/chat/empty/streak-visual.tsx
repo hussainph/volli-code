@@ -42,12 +42,11 @@ export function StreakVisual() {
   }, [now, refresh]);
 
   const grid = React.useMemo(() => streakGrid(startedAt ?? [], now), [startedAt, now]);
-  // Nothing read yet: hold the space the grid will take rather than growing the
-  // surface under the reader a moment later.
-  const pending = startedAt === undefined;
+  // An unresolved read is not a zero and reserves no chart or skeleton.
+  if (startedAt === undefined) return null;
 
   return (
-    <div className="flex flex-col items-center gap-4" data-empty-visual="streak">
+    <div className="streak-summary" data-empty-visual="streak">
       <div
         className="relative"
         onPointerOver={(event) => {
@@ -65,8 +64,12 @@ export function StreakVisual() {
         }}
         onPointerLeave={() => setHover(null)}
       >
+        <div className="streak-axis text-label text-muted-foreground">
+          <span>{STREAK_WEEKS} weeks</span>
+          <span>Today</span>
+        </div>
         <div
-          className="grid grid-flow-col grid-rows-7 gap-1"
+          className="streak-matrix"
           role="img"
           aria-label={`${grid.total} sessions over ${STREAK_WEEKS} weeks`}
         >
@@ -74,8 +77,8 @@ export function StreakVisual() {
             <span
               key={day.index}
               data-day={day.index}
-              className="size-2.5 rounded-sm"
-              style={{ backgroundColor: ramp[pending ? 0 : streakStep(day.count)] }}
+              className="streak-cell rounded-sm"
+              style={{ backgroundColor: ramp[streakStep(day.count)] }}
             />
           ))}
         </div>
@@ -89,18 +92,21 @@ export function StreakVisual() {
           </div>
         )}
       </div>
-      {/* The counts are held back until the read lands rather than printed as
-          zeroes: "0 sessions" is a claim, and it would be a false one. */}
-      <div className={pending ? "invisible" : undefined}>
-        <div className="flex items-baseline justify-center gap-2">
-          <span className="text-title text-foreground tabular-nums">{grid.total}</span>
-          <span className="text-ui text-muted-foreground">sessions in {STREAK_WEEKS} weeks</span>
+      <div className="streak-stats">
+        <div>
+          <strong className="text-title font-medium tabular-nums">{grid.total}</strong>
+          <span className="text-label text-muted-foreground">sessions</span>
         </div>
-        <div className="flex items-center justify-center gap-4 pt-1 text-ui text-muted-foreground">
-          <span>{grid.activeDays} active days</span>
-          {/* Hidden at zero: "0-day streak" is a scolding, not a measurement. */}
-          {grid.currentStreak > 0 ? <span>{grid.currentStreak}-day streak</span> : null}
+        <div>
+          <strong className="text-title font-medium tabular-nums">{grid.activeDays}</strong>
+          <span className="text-label text-muted-foreground">active days</span>
         </div>
+        {grid.currentStreak > 0 ? (
+          <div>
+            <strong className="text-title font-medium tabular-nums">{grid.currentStreak}</strong>
+            <span className="text-label text-muted-foreground">day streak</span>
+          </div>
+        ) : null}
       </div>
     </div>
   );

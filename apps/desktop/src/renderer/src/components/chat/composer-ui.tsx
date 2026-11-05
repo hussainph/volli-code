@@ -668,6 +668,7 @@ export const SessionComposer = React.memo(function SessionComposer({
               everything around it ran edge to edge (VC-137). `w-full` is the
               same rule the textarea below already follows. */}
           <AttachmentStrip
+            presentation="composer"
             attachments={attachments}
             {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
             // `px-4`: the tiles' left edge is the text's left edge, one inset

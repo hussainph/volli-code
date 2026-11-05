@@ -241,6 +241,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
   return (
     <Button
       data-sidebar="trigger"
+      data-sidebar-trigger=""
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon"

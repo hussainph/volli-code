@@ -526,27 +526,19 @@ export function TabStrip({
               onTravel={(pointer) => travel("next", pointer)}
             />
           ) : null}
+          {actions !== undefined ? (
+            <div
+              // Named because it is the one part of a strip that does NOT belong
+              // to the strip's own pane: these controls act on the surface, so a
+              // split main bar has to be able to exclude them when it decides
+              // whether a press landed "in" a pane (`split-view-tab-bar.tsx`).
+              data-slot="tab-actions"
+              className="flex shrink-0 items-center pl-1"
+            >
+              {actions}
+            </div>
+          ) : null}
         </div>
-        {actions !== undefined ? (
-          // The divider is half the separation; vertical alignment is the rest.
-          // Tabs sit on the strip's bottom edge because they fuse with the plane
-          // below, so a control spanning the band's full height cannot be
-          // mistaken for one however it is styled. `-mt-2` cancels the strip's
-          // own top pad so the column reaches the true top edge.
-          <div
-            // Named because it is the one part of a strip that does NOT belong
-            // to the strip's own pane: these controls act on the surface, so a
-            // split main bar has to be able to exclude them when it decides
-            // whether a press landed "in" a pane (`split-view-tab-bar.tsx`).
-            data-slot="tab-actions"
-            className={cn(
-              "flex shrink-0 border-l border-border/70",
-              folder ? "-mt-2 items-stretch self-stretch pr-1 pl-2" : "items-center pl-2",
-            )}
-          >
-            {actions}
-          </div>
-        ) : null}
       </div>
     </TooltipProvider>
   );

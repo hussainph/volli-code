@@ -143,7 +143,7 @@ export function TicketCardLabels({
   if (!hasLabels) return null;
 
   const chip = (name: string) => (
-    <TagChip tag={name} color={resolveLabelColor(projectLabels, name)} />
+    <TagChip neutral tag={name} color={resolveLabelColor(projectLabels, name)} />
   );
 
   // The measure pass: every chip, laid out but not yet split. `invisible`
@@ -206,7 +206,12 @@ export function TicketCardLabels({
           >
             <div className="flex flex-wrap gap-1">
               {labels.map((name) => (
-                <TagChip key={name} tag={name} color={resolveLabelColor(projectLabels, name)} />
+                <TagChip
+                  neutral
+                  key={name}
+                  tag={name}
+                  color={resolveLabelColor(projectLabels, name)}
+                />
               ))}
             </div>
           </PopoverContent>
