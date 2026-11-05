@@ -329,27 +329,31 @@ describe("machine-wide MCP fold-in", () => {
     expect(listGlobalMcpServers(ctx.db)).toHaveLength(2);
   });
 
-  it("reads machine records from before legacy fingerprints without losing the imported union", () => {
-    otherProject();
-    putMcpServer(ctx.db, record({ enabled: false }));
-    putMcpServer(
-      ctx.db,
-      record({ id: "same", projectId: "p2", catalog: record({ id: "same" }).catalog }),
-    );
-    const before = listGlobalMcpServers(ctx.db);
-    const raw = ctx.db
-      .prepare("SELECT value FROM app_state WHERE key = 'volli:mcp-global'")
-      .get() as { value: string };
-    const state = JSON.parse(raw.value);
-    delete state.legacy;
-    ctx.db
-      .prepare("UPDATE app_state SET value = ? WHERE key = 'volli:mcp-global'")
-      .run(JSON.stringify(state));
+  it.each(["missing", "hashed"])(
+    "upgrades a %s legacy baseline without losing the imported union",
+    (baseline) => {
+      otherProject();
+      putMcpServer(ctx.db, record({ enabled: false }));
+      putMcpServer(
+        ctx.db,
+        record({ id: "same", projectId: "p2", catalog: record({ id: "same" }).catalog }),
+      );
+      const before = listGlobalMcpServers(ctx.db);
+      const raw = ctx.db
+        .prepare("SELECT value FROM app_state WHERE key = 'volli:mcp-global'")
+        .get() as { value: string };
+      const state = JSON.parse(raw.value);
+      if (baseline === "missing") delete state.legacy;
+      else state.legacy = { "server-1": "0".repeat(64), same: "1".repeat(64) };
+      ctx.db
+        .prepare("UPDATE app_state SET value = ? WHERE key = 'volli:mcp-global'")
+        .run(JSON.stringify(state));
 
-    expect(listGlobalMcpServers(ctx.db)).toEqual(before);
-    expect(getMcpServer(ctx.db, "server-1")?.enabled).toBe(false);
-    expect(getGlobalMcpServer(ctx.db, "same")?.id).toBe("same");
-  });
+      expect(listGlobalMcpServers(ctx.db)).toEqual(before);
+      expect(getMcpServer(ctx.db, "server-1")?.enabled).toBe(false);
+      expect(getGlobalMcpServer(ctx.db, "same")?.id).toBe("same");
+    },
+  );
 
   it("observes legacy endpoint and credential-reference edits even when their timestamps are unchanged", () => {
     putMcpServer(ctx.db, record());
@@ -363,6 +367,33 @@ describe("machine-wide MCP fold-in", () => {
 
     expect(getGlobalMcpServer(ctx.db, "server-1")?.transport).toEqual(transport);
     expect(listGlobalMcpServers(ctx.db)[0]?.transport).toEqual(transport);
+  });
+
+  it("observes OAuth client and secret-reference changes without requiring a timestamp change", () => {
+    const transport = {
+      type: "streamable-http" as const,
+      url: "https://tools.example/mcp",
+      oauth: { clientId: "client", clientSecret: { kind: "secret" as const } },
+    };
+    putGlobalMcpServer(ctx.db, record({ transport }));
+    for (const oauth of [
+      { clientId: "other-client", clientSecret: { kind: "secret" as const } },
+      {
+        clientId: "other-client",
+        clientSecret: { kind: "reference" as const, template: "${MCP_SECRET}" },
+      },
+      {
+        clientId: "other-client",
+        clientSecret: { kind: "reference" as const, template: "${NEW_MCP_SECRET}" },
+      },
+      { clientId: "other-client" },
+    ]) {
+      const edited = record({ transport: { ...transport, oauth } });
+      putMcpServer(ctx.db, edited);
+      expect(getGlobalMcpServer(ctx.db, edited.id)).toEqual(edited);
+      // A stable second read must not mistake the mirror for another edit.
+      expect(listGlobalMcpServers(ctx.db)).toEqual([edited]);
+    }
   });
 
   it("keeps deduped selections across reads and mirrors, but observes an edited alias without borrowing its credentials", () => {

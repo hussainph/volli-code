@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   MCP_DESCRIPTION_MAX_CHARS,
@@ -281,11 +280,13 @@ interface GlobalMcpState {
   aliases: Record<string, string>;
   retained: McpServerRow[];
   names: Record<string, string>;
-  /** Last imported/mirrored legacy row, so N-1 edits are not mistaken for stale copies. */
+  /** Serialized last imported/mirrored row; older builds wrote opaque hashes here. */
   legacy?: Record<string, string>;
 }
 
-function legacyFingerprint(row: McpServerRow): string {
+function legacySnapshot(row: McpServerRow): string {
+  // Compare configuration directly, not through a credential-derived hash.
+  // Like the rows themselves, transports contain credential references only.
   // Fixed field order works for both SQLite's column order and our mirrors,
   // without re-validating every catalog schema just to detect a changed row.
   const fields = [
@@ -305,7 +306,7 @@ function legacyFingerprint(row: McpServerRow): string {
     row.version,
     row.digest,
   ];
-  return createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+  return JSON.stringify(fields);
 }
 
 function storedRow(server: McpServerRecord): McpServerRow {
@@ -362,7 +363,7 @@ function globalState(db: Database.Database): GlobalMcpState {
         (candidate.legacy === null ||
           typeof candidate.legacy !== "object" ||
           Array.isArray(candidate.legacy) ||
-          Object.values(candidate.legacy).some((fingerprint) => typeof fingerprint !== "string")))
+          Object.values(candidate.legacy).some((snapshot) => typeof snapshot !== "string")))
     ) {
       throw new Error("Stored global MCP configuration is invalid.");
     }
@@ -377,16 +378,18 @@ function globalState(db: Database.Database): GlobalMcpState {
   let changed = raw === undefined || state.legacy === undefined;
   state.legacy ??= {};
   for (const row of legacy) {
-    const fingerprint = legacyFingerprint(row);
+    const snapshot = legacySnapshot(row);
     const previous: string | undefined = state.legacy[row.id];
-    if (previous !== fingerprint) {
-      state.legacy = { ...state.legacy, [row.id]: fingerprint };
+    if (previous !== snapshot) {
+      state.legacy = { ...state.legacy, [row.id]: snapshot };
       changed = true;
       // The machine record survives project deletion, but a real edit through
       // the legacy writer must remain visible to credential and endpoint guards.
       // Never re-import tombstoned ids, or overwrite the initial deduped union
       // merely because an unchanged legacy row differs from that union.
-      if (previous !== undefined && imported.has(row.id)) {
+      // An older opaque hash cannot be compared without hashing credentials
+      // again. Seed the new baseline, preserving the imported catalog union.
+      if (previous !== undefined && previous.startsWith("[") && imported.has(row.id)) {
         const canonical = state.rows.findIndex((candidate) => candidate.id === row.id);
         const retained = state.retained.findIndex((candidate) => candidate.id === row.id);
         if (canonical >= 0) {
@@ -487,7 +490,7 @@ export function putGlobalMcpServer(
     // may replace the machine row; otherwise deduped catalogs would be lost.
     const mirror = (value: McpServerRecord): void => {
       const saved = putMcpServer(db, value);
-      state.legacy = { ...state.legacy, [saved.id]: legacyFingerprint(storedRow(saved)) };
+      state.legacy = { ...state.legacy, [saved.id]: legacySnapshot(storedRow(saved)) };
     };
     // Keep the original owning project for N-1, never move or fabricate one.
     const legacy = getMcpServer(db, server.id);
