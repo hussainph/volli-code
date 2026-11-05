@@ -723,12 +723,13 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   /** Treatments on the label itself: italic for a preview, struck for an exit. */
   labelClassName?: string;
   /**
-   * Reveal the label word by word when it CHANGES (VC-81's landing-title
-   * motion). Opt-in: only chat Session tabs carry it — a file tab's label
-   * swaps on every save and a reveal there would read as the strip stuttering.
-   * Never animates on first mount, and never under reduced motion.
+   * Keep a landing-title label mounted across changes. Only chat Session tabs
+   * use it; automaticLabelChange separately grants animation for an explicitly
+   * automatic replacement. First mount, rename and unknown changes stay static.
    */
   revealLabel?: boolean;
+  /** Only an explicitly automatic title replacement may reveal. */
+  automaticLabelChange?: boolean;
   /** Non-null while this tab is being renamed in place. */
   renaming?: TabRenaming | null;
   /**
@@ -866,6 +867,7 @@ function TabShell({
   dirty = false,
   labelClassName,
   revealLabel = false,
+  automaticLabelChange = false,
   renaming = null,
   drag = null,
   onActivate,
@@ -1043,7 +1045,7 @@ function TabShell({
               data-slot="tab-label"
               className={cn("max-w-40 truncate", labelClassName)}
             >
-              {revealLabel ? <TitleReveal text={label} /> : label}
+              {revealLabel ? <TitleReveal text={label} automatic={automaticLabelChange} /> : label}
             </span>
           )}
           {hint !== undefined && !renamingNow ? (

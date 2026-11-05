@@ -990,9 +990,9 @@ function ComposerTextarea({
       aria-label="Message"
       aria-keyshortcuts="Enter Shift+Enter Meta+Enter Control+Enter"
       placeholder="Ask, plan, or implement…"
-      // A writing sheet, not a search field: 16px insets with room for a
-      // short paragraph. Content still grows to the existing scroll ceiling.
-      className="min-h-20 py-4 text-sm"
+      // One short paragraph at rest, including in a split. Field sizing still
+      // grows with content to the existing scroll ceiling; footer never clips.
+      className="min-h-10 py-2 text-sm"
       onChange={(event) => {
         markInteraction("draft-typing");
         caret.trackCaret(event.currentTarget);

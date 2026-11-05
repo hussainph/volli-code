@@ -21,6 +21,7 @@
  * renamable.
  */
 import * as React from "react";
+import { useAutomaticTitleChange } from "@renderer/chat/title-change";
 import { launchStore } from "@renderer/stores/launch";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
@@ -324,6 +325,7 @@ function TicketTab({
   // answer — one frozen shared constant — for every tab that is not a Session
   // and every Session no Automation started.
   const sessionId = tabSessionId(tab);
+  const automaticLabelChange = useAutomaticTitleChange(sessionId, tab.label);
   const liveProvider = useChatSessionsStore((state) =>
     sessionId === null
       ? null
@@ -399,6 +401,7 @@ function TicketTab({
       // A landing auto-title reveals here word by word (VC-81); file and
       // terminal tabs stay static.
       revealLabel={tab.kind === "chat"}
+      automaticLabelChange={automaticLabelChange}
       status={
         tab.kind === "chat"
           ? undefined

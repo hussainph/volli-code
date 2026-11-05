@@ -26,12 +26,6 @@
       "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
     },
     {
-      "path": "apps/desktop/src/renderer/src/components/chat/activity-island-ui.tsx",
-      "rule": "motion-literal",
-      "maxCount": 14,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
-    },
-    {
       "path": "apps/desktop/src/renderer/src/components/chat/activity-ui.tsx",
       "rule": "motion-literal",
       "maxCount": 2,

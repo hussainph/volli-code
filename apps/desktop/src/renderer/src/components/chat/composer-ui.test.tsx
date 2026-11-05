@@ -613,7 +613,7 @@ describe("the effort control's place in the footer", () => {
     expect(html).toContain("prompt-toolbar");
     expect(html).toContain("prompt-config");
     expect(html).toContain("prompt-primary rounded-full");
-    expect(html).toContain("min-h-20");
+    expect(html).toContain("min-h-10");
   });
 
   it("keeps prompt entry on the writing sheet without an expanded-editor icon", () => {

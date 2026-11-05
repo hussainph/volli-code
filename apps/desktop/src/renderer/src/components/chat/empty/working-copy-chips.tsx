@@ -54,7 +54,7 @@ function ScopeChip({
       full={full}
       reveal={full}
       side="bottom"
-      className="inline-flex h-7 max-w-48 items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground focus-visible:border-ring"
+      className="inline-flex h-5 max-w-48 items-center gap-1 rounded-full border border-border bg-card px-2 text-label text-muted-foreground focus-visible:border-ring"
     >
       <Icon strokeWidth={2.25} className="size-3 shrink-0" />
       <span className="min-w-0 truncate">{children}</span>
