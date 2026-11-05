@@ -68,7 +68,7 @@ export function ComposerBreadcrumb({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <ChevronRightIcon strokeWidth={2.25} className="size-3 shrink-0 text-muted-foreground/50" />
+      <ChevronRightIcon strokeWidth={2.25} className="size-3 shrink-0 text-muted-foreground" />
       <span className="shrink-0 text-ui text-muted-foreground">New ticket</span>
 
       <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -82,7 +82,7 @@ export function ComposerBreadcrumb({
           {expanded ? <CollapseIcon /> : <ExpandIcon />}
         </Button>
         <Button
-          variant="outline"
+          variant="ghost"
           size="icon"
           aria-label="Close"
           onClick={onClose}

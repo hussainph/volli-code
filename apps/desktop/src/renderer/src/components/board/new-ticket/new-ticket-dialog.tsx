@@ -42,7 +42,7 @@ export function NewTicketDialog() {
         data-testid="new-ticket-composer"
         showCloseButton={false}
         className={cn(
-          "material-thick gap-0 overflow-hidden rounded-sheet p-0 shadow-overlay",
+          "new-ticket-sheet material-solid gap-0 overflow-hidden rounded-sheet p-0 shadow-overlay",
           expanded ? "sm:max-w-3xl" : "sm:max-w-xl",
         )}
       >

@@ -100,6 +100,15 @@ describe("ArchiveRow — retained record", () => {
   });
 });
 
+it("shows one archive empty message with a compact project scope", async () => {
+  await renderArchive([]);
+  expect(dialog().querySelector('[data-slot="dialog-title"]')?.textContent).toBe("Archive");
+  const scope = dialog().querySelector('[data-slot="dialog-description"]');
+  expect(scope?.textContent).not.toContain("Archived tickets in");
+  expect(scope?.className).toContain("text-ui");
+  expect(dialog().querySelector("h2:not([data-slot])")?.textContent).toBe("No archived tickets");
+});
+
 describe("matchesArchiveQuery", () => {
   const ticket = archived({ ticketNumber: 42, title: "Fix the Terminal" });
 

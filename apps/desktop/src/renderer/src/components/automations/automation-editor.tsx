@@ -773,8 +773,8 @@ export function AutomationEditorPanel({
   }
 
   return (
-    <div data-slot="automation-editor" className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-4 border-b border-border px-6 py-4">
+    <div data-slot="automation-editor" className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header className="flex shrink-0 items-center gap-4 border-b border-border bg-background px-6 py-4">
         <input
           autoFocus
           value={name}
@@ -790,8 +790,8 @@ export function AutomationEditorPanel({
         </Button>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
-        <main className="min-h-0 overflow-y-auto p-6">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem] gap-(--glass-gap) pt-(--glass-gap)">
+        <main className="min-h-0 overflow-y-auto bg-background p-6">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
             <section className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-end gap-2">
@@ -831,7 +831,7 @@ export function AutomationEditorPanel({
 
         <aside
           data-tint="true"
-          className="glass flex min-h-0 flex-col gap-4 overflow-y-auto border-l border-border p-4"
+          className="glass flex min-h-0 flex-col gap-4 overflow-y-auto rounded-floating p-4 shadow-glass"
         >
           <PrefSection title="Ownership">
             <div className="flex flex-col gap-2 p-3">

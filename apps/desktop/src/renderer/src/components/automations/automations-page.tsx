@@ -93,7 +93,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { PageHeader } from "@renderer/components/layout/page-header";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -358,13 +359,20 @@ function AutomationsSurface({
       </>
     );
 
+  const emptyPage =
+    view === "lanes" ? automations.length === 0 : !showingActivity && target === null;
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="flex shrink-0 flex-wrap items-center gap-4 border-b border-border px-6 py-4">
-        <div className="flex items-center gap-2">
-          <AutomationIcon className="size-4 text-primary-text" />
-          <h1 className="text-sm font-semibold">Automations</h1>
-        </div>
+    <div className="automation-workbench flex min-h-0 flex-1 flex-col">
+      <PageHeader
+        title={
+          <span className="flex items-center gap-2">
+            <AutomationIcon className="size-4 text-primary-text" />
+            Automations
+          </span>
+        }
+        className="border-b border-border bg-background [&_h1]:text-title"
+      >
         <Segmented<AutomationPageView>
           ariaLabel="Automation layout"
           value={view}
@@ -374,15 +382,15 @@ function AutomationsSurface({
           ]}
           onChange={setView}
         />
-        <Button size="sm" onClick={createAutomation}>
+        <Button variant={emptyPage ? "outline" : "default"} size="sm" onClick={createAutomation}>
           <AddIcon />
           {target?.automation !== null && loadEditorDraft(projectId) !== null
             ? "Resume draft"
             : "New Automation"}
         </Button>
-      </header>
+      </PageHeader>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 gap-(--glass-gap) p-(--glass-gap)">
         <AutomationRail
           project={projectAutomations}
           global={globalAutomations}
@@ -395,7 +403,7 @@ function AutomationsSurface({
           onShowActivity={showProjectActivity}
         />
         {view === "lanes" ? (
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-6">
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-background p-6">
             {automations.length === 0 ? (
               <EmptyAutomations onCreate={createAutomation} />
             ) : (
@@ -530,10 +538,10 @@ function AutomationRail({
   return (
     <aside
       data-tint="true"
-      className="glass flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border p-2"
+      className="glass flex w-64 shrink-0 flex-col overflow-y-auto rounded-floating p-2 shadow-glass"
     >
       {creating ? (
-        <div className="mb-2 rounded-lg bg-accent px-2 py-2 text-ui font-medium text-foreground">
+        <div className="mb-2 rounded-lg bg-(--accent-selected) px-2 py-2 text-ui font-medium text-foreground">
           New Automation
         </div>
       ) : null}
@@ -542,18 +550,20 @@ function AutomationRail({
         .map((group) => (
           <section key={group.label} className="flex flex-col gap-1 pb-4">
             <div className="flex min-h-7 items-center px-2">
-              <SectionHeading>{group.label}</SectionHeading>
-              <button
+              <SectionHeading as="h3">{group.label}</SectionHeading>
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-sm"
                 aria-label={`New automation in ${group.label}`}
                 onClick={onCreate}
-                className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                className="ml-auto text-muted-foreground"
               >
-                <AddIcon strokeWidth={2.25} className="size-3" />
-              </button>
+                <AddIcon />
+              </Button>
             </div>
             {group.automations.length === 0 ? (
-              <p className="px-2 py-1 text-label text-muted-foreground">Nothing here</p>
+              <p className={cn(EMPTY_INLINE, "px-2 py-1")}>Nothing here</p>
             ) : (
               group.automations.map((automation) => (
                 <button
@@ -566,8 +576,8 @@ function AutomationRail({
                     "flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left outline-none",
                     "focus-visible:ring-2 focus-visible:ring-ring",
                     automation.id === selectedId
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:bg-accent/50",
+                      ? "bg-(--accent-selected) text-foreground"
+                      : "text-foreground hover:bg-(--accent-tint)",
                   )}
                 >
                   <span className="flex w-full min-w-0 items-center gap-2">
@@ -620,11 +630,11 @@ function AutomationRail({
           "mt-auto flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left outline-none",
           "focus-visible:ring-2 focus-visible:ring-ring",
           activitySelected
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground hover:bg-accent/50",
+            ? "bg-(--accent-selected) text-foreground"
+            : "text-foreground hover:bg-(--accent-tint)",
         )}
       >
-        <HistoryIcon className="size-4 shrink-0" />
+        <HistoryIcon className={cn("size-4 shrink-0", activitySelected && "text-primary-text")} />
         <span className="min-w-0 flex-1 truncate text-ui font-medium">Project activity</span>
       </button>
     </aside>
@@ -652,7 +662,7 @@ function ProjectActivity({
   loaded: boolean;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
       <div className="mx-auto w-full max-w-content px-6 py-6">
         <RunHistory
           projectId={projectId}
@@ -669,12 +679,12 @@ function ProjectActivity({
 
 function EmptyAutomations({ onCreate, history }: { onCreate(): void; history?: React.ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
       <div className="grid min-h-64 flex-1 place-items-center p-6">
-        <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-          <AutomationIcon className="size-5 text-muted-foreground" />
-          <h2 className="text-heading font-semibold">Nothing saved yet</h2>
-          <Button size="sm" onClick={onCreate}>
+        <div className={cn(EMPTY_PAGE, "max-w-sm")}>
+          <AutomationIcon className="size-6 text-muted-foreground" />
+          <SectionHeading>Nothing saved yet</SectionHeading>
+          <Button className="mt-2" size="sm" onClick={onCreate}>
             <AddIcon />
             New Automation
           </Button>

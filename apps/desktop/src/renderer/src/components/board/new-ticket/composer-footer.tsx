@@ -88,10 +88,7 @@ export function ComposerFooter({
           commits did not take. */}
       <div className="flex min-w-0 grow basis-38 flex-wrap items-center gap-1">
         {onAttachFiles === undefined ? null : (
-          <ComposerAttachButton
-            className="prompt-add bg-card shadow-raised"
-            onFiles={onAttachFiles}
-          />
+          <ComposerAttachButton className="prompt-add" onFiles={onAttachFiles} />
         )}
         {launch.kind === "kickoff" ? (
           <>
@@ -167,7 +164,7 @@ export function ComposerFooter({
               aria-label="Choose what starts"
               title="Choose what starts"
               data-testid="composer-launch-picker"
-              className="shrink-0 rounded-l-none border-l border-primary-foreground/30"
+              className="shrink-0 rounded-l-none border-l border-(--primary-text)/20"
             >
               <ChevronDownIcon strokeWidth={2.25} className="size-3" />
             </Button>

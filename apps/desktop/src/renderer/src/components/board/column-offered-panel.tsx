@@ -35,10 +35,9 @@
  * are dimmed, are not pointer targets, and the lit row is Move only, because
  * that is what every release in this one column does.
  *
- * Motion is appearance only: rows fade and the panel's own padding eases, and
- * nothing anywhere on this path dwells, debounces or animates a position the
- * pointer is aiming at. Under reduced motion the transitions drop and every
- * signifier — the ring, the digit, the bolt, the dashed Move only row — stays.
+ * Every size and highlight change is immediate: the pointer and digit hit
+ * tests must always agree with the visible target, including under a stationary
+ * pointer. Reduced motion retains the same ring, digit, bolt and Move only row.
  */
 import type * as React from "react";
 import { AutomationIcon } from "@renderer/components/ui/icon";
@@ -91,7 +90,6 @@ export function ColumnOfferedPanel({
       data-offered-inert={inert ? "true" : undefined}
       className={cn(
         "flex flex-col rounded-lg border border-border bg-popover shadow-overlay",
-        "transition-[gap,padding] duration-(--duration-menu-in) ease-out motion-reduce:transition-none",
         expanded ? "gap-1 p-1" : "gap-0 p-1",
       )}
     >
@@ -173,7 +171,6 @@ function OfferedRow({
       title={label}
       className={cn(
         "flex items-center gap-2 rounded-md border text-left text-ui",
-        "transition-[background-color,border-color,color,padding] duration-(--duration-menu-in) ease-out motion-reduce:transition-none",
         expanded ? "px-2 py-2" : "px-1 py-0",
         dashed && !chosen ? "border-dashed border-border" : "border-transparent",
         chosen

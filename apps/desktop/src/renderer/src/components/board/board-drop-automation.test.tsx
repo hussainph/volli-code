@@ -282,10 +282,12 @@ interface AnimateCall {
   element: Element;
   keyframes: Keyframe[];
   options: KeyframeAnimationOptions;
+  cancel: ReturnType<typeof vi.fn>;
 }
 
 /** Every `animate` call since the layout was installed, in order. */
 let animateCalls: AnimateCall[] = [];
+let holdSlotAnimations = false;
 
 /**
  * The Web Animations stub is what the Escape-cancel gestures next door never
@@ -304,23 +306,32 @@ function installAnimations(): () => void {
   const had = Object.prototype.hasOwnProperty.call(element, "animate");
   const real = element["animate"];
   animateCalls = [];
+  holdSlotAnimations = false;
   element["animate"] = function (
     this: Element,
     keyframes: Keyframe[],
     options: KeyframeAnimationOptions,
   ) {
-    animateCalls.push({ element: this, keyframes, options });
+    const events = new EventTarget();
+    const cancel = vi.fn(() => events.dispatchEvent(new Event("cancel")));
+    animateCalls.push({ element: this, keyframes, options, cancel });
     const animation = {
       onfinish: null as null | (() => void),
       oncancel: null as null | (() => void),
-      cancel() {},
+      addEventListener: events.addEventListener.bind(events),
+      cancel,
       finish() {},
       play() {},
       pause() {},
       effect: null,
       playState: "finished",
     };
-    setTimeout(() => animation.onfinish?.(), 0);
+    if (!holdSlotAnimations || !this.hasAttribute("data-board-ticket-slot")) {
+      setTimeout(() => {
+        animation.onfinish?.();
+        events.dispatchEvent(new Event("finish"));
+      }, 0);
+    }
     return animation;
   };
   if (!Object.prototype.hasOwnProperty.call(element, "getAnimations")) {
@@ -957,7 +968,7 @@ describe("a group of cards released into another column", () => {
   );
 
   it(
-    "slides every landed slot home with the shared Bouncy drop spring",
+    "lands with the shared Bouncy spring and cancels it when Motion turns off",
     async () => {
       // A third Todo card keeps Todo standing once the pair leaves it, so the
       // journey is the sideways one a person sees rather than a column
@@ -971,6 +982,7 @@ describe("a group of cards released into another column", () => {
       const pickedUp = new Map(
         ["t1", "t2"].map((id) => [id, slotNamed(id).getBoundingClientRect()] as const),
       );
+      holdSlotAnimations = true;
 
       await dragTodoCardIntoDoing();
       // The board defers the group write by one animation frame so dnd-kit can
@@ -1000,6 +1012,17 @@ describe("a group of cards released into another column", () => {
           { transform: "translate3d(0, 0, 0)" },
         ]);
         expect(slide.options).toEqual({ duration: 380, easing: BOUNCY });
+      }
+      try {
+        await act(async () => {
+          document.documentElement.dataset.motion = "off";
+          window.dispatchEvent(new Event("volli-motion-change"));
+        });
+        for (const slide of slides()) expect(slide.cancel).toHaveBeenCalledOnce();
+        expect(ticketSlots("doing")).toEqual(expect.arrayContaining(["t1", "t2"]));
+      } finally {
+        document.documentElement.removeAttribute("data-motion");
+        window.dispatchEvent(new Event("volli-motion-change"));
       }
       expect(loopErrors()).toEqual([]);
     },
