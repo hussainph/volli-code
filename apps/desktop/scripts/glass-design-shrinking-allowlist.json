@@ -2,6 +2,24 @@
   "note": "Migration debt only: one entry per file + rule. Ceilings cannot grow; lower counts and removed violations require shrinking/removing the entry. No automatic baseline-update command. Coordinator must review any new exception.",
   "entries": [
     {
+      "path": "apps/desktop/src/renderer/src/components/automations/automation-editor.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 3,
+      "reason": "Automation operation states intentionally use ellipsis captions, distinct from their resting actions; retain these exact labels across local and cloud views."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/automations-page.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 5,
+      "reason": "Automation operation states intentionally use ellipsis captions, distinct from their resting actions; retain these exact labels across local and cloud views."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/automations/cloud-run-history.tsx",
+      "rule": "copy-loading-ellipsis",
+      "maxCount": 2,
+      "reason": "Automation operation states intentionally use ellipsis captions, distinct from their resting actions; retain these exact labels across local and cloud views."
+    },
+    {
       "path": "apps/desktop/src/renderer/src/components/board/new-ticket/project-monogram.tsx",
       "rule": "colour-literal",
       "maxCount": 1,

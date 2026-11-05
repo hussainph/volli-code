@@ -11,6 +11,7 @@ import {
 import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { toastError } from "@renderer/lib/toast";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { PrefRow } from "@renderer/components/settings/kit/pref-row";
 import { Button } from "@renderer/components/ui/button";
 import {
   Select,
@@ -55,14 +56,14 @@ export function AutomationRunnerPicker({
       onValueChange={onChange}
       disabled={disabled || runners.length === 0}
     >
-      <SelectTrigger aria-label="Automation runner" className="w-auto min-w-32 max-w-64 text-label">
+      <SelectTrigger aria-label="Runner" className="w-auto min-w-32 max-w-64 text-label">
         <SelectValue
           placeholder={
             selected === null &&
             current !== undefined &&
             !runners.some((row) => row.id === current.id)
               ? `Update Volli on ${current.name}`
-              : "Choose a runner"
+              : "Select a runner"
           }
         />
       </SelectTrigger>
@@ -73,7 +74,7 @@ export function AutomationRunnerPicker({
             value={row.id}
             disabled={row.status !== "online" && row.status !== "degraded"}
           >
-            on {row.name}
+            {row.name}
             {row.id === thisMac ? " (this Mac)" : ""}
             {row.status === "online" ? "" : ` · ${row.status}`}
           </SelectItem>
@@ -103,6 +104,7 @@ export function CloudColumnArming({
   const runnerId = runner ?? thisMac;
   const canWrite = useCanWrite(projectId);
   const [saving, setSaving] = React.useState(false);
+  const lock = React.useRef(false);
   const paused = arming?.pausedAt != null;
   const name = automations.find((row) => row.id === arming?.automationId)?.name;
   const label =
@@ -112,7 +114,8 @@ export function CloudColumnArming({
         ? `${TICKET_STATUS_LABELS[status]} · Paused · Re-arm`
         : `${TICKET_STATUS_LABELS[status]} runs ${name ?? "Automation"} on ${arming.runnerName} · Armed by ${arming.armedByDisplayName}`;
   async function arm(automationId: string | null, onRunner = runnerId) {
-    if (!guardWrite(projectId)) return;
+    if (lock.current || !guardWrite(projectId)) return;
+    lock.current = true;
     setSaving(true);
     try {
       const refusal = await useAutomationsStore.getState().arm({
@@ -123,6 +126,7 @@ export function CloudColumnArming({
       });
       if (refusal !== null) toastError(`Couldn’t arm this column: ${refusal}`);
     } finally {
+      lock.current = false;
       setSaving(false);
     }
   }
@@ -148,7 +152,7 @@ export function CloudColumnArming({
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" className="flex w-64 flex-col gap-2">
-          <span className="text-ui font-medium">Arrives in {TICKET_STATUS_LABELS[status]}</span>
+          <span className="text-ui font-medium">{TICKET_STATUS_LABELS[status]}</span>
           {arming === undefined ? null : (
             <span className="text-label text-muted-foreground">
               {paused ? "Paused · " : ""}Armed by {arming.armedByDisplayName} · on{" "}
@@ -166,10 +170,10 @@ export function CloudColumnArming({
             disabled={!canWrite || saving || arming === undefined}
             onClick={() => void arm(null)}
           >
-            No Automation
+            No automation
           </Button>
           {offered.length === 0 ? (
-            <span className="text-label text-muted-foreground">No automation is offered here</span>
+            <span className="text-label text-muted-foreground">No automations offered</span>
           ) : (
             offered.map((row) => (
               <Button
@@ -196,9 +200,7 @@ export function CloudColumnArming({
       </Popover>
       {arming === undefined ? null : (
         <span className="max-w-40 truncate text-label text-muted-foreground">
-          {paused
-            ? "Paused · Re-arm"
-            : `on ${arming.runnerName} · Armed by ${arming.armedByDisplayName}`}
+          {paused ? "Paused · Re-arm" : `${arming.armedByDisplayName} · ${arming.runnerName}`}
         </span>
       )}
     </div>
@@ -219,66 +221,109 @@ export function CloudAutomationControls({
   const [runner, setRunner] = React.useState<string | null>(null);
   const canWrite = useCanWrite(projectId);
   const [saving, setSaving] = React.useState(false);
+  const lock = React.useRef(false);
   const paused = schedule?.pausedAt != null;
   const armed = schedule !== undefined && !paused;
   async function change(enabled: boolean, runnerId = runner ?? thisMac) {
-    if (!guardWrite(projectId)) return;
+    if (lock.current || !guardWrite(projectId)) return;
+    lock.current = true;
     setSaving(true);
     try {
       await useAutomationsStore
         .getState()
         .setEnabled(automation.id, enabled, runnerId ?? undefined);
     } finally {
+      lock.current = false;
       setSaving(false);
     }
   }
   if (automationTriggerSchedule(automation.trigger) === null)
     return (
-      <div className="flex items-center gap-1">
+      <>
         {automationTriggerColumns(automation.trigger).map((status) => (
-          <span key={status} className="flex items-center gap-1 text-label text-muted-foreground">
-            {TICKET_STATUS_LABELS[status]}
+          <PrefRow key={status} label={TICKET_STATUS_LABELS[status]}>
             <CloudColumnArming projectId={projectId} status={status} />
-          </span>
+          </PrefRow>
         ))}
-      </div>
+      </>
     );
   return (
-    <div className="flex items-center gap-2">
-      {schedule === undefined ? null : (
-        <span className="text-label text-muted-foreground">
-          {paused ? "Paused · " : ""}Armed by {schedule.armedByDisplayName} · on{" "}
-          {schedule.runnerName}
-        </span>
-      )}
-      <AutomationRunnerPicker
-        value={runner ?? (armed ? schedule.runnerId : thisMac)}
-        disabled={!canWrite || saving}
-        onChange={(id) => {
-          setRunner(id);
-          if (armed) void change(true, id);
-        }}
-      />
-      {paused ? (
-        <Button
-          size="sm"
-          variant="outline"
+    <>
+      <PrefRow label="Runner">
+        <AutomationRunnerPicker
+          value={runner ?? (armed ? schedule.runnerId : thisMac)}
           disabled={!canWrite || saving}
-          onClick={() => void change(true)}
-        >
-          Re-arm
-        </Button>
-      ) : null}
-      <label className="flex items-center gap-2 text-ui text-muted-foreground">
-        Armed
+          onChange={(id) => {
+            setRunner(id);
+            if (armed) void change(true, id);
+          }}
+        />
+      </PrefRow>
+      {schedule !== undefined && (
+        <PrefRow label="Armed by">
+          <span
+            aria-label={`Armed by ${schedule.armedByDisplayName} on ${schedule.runnerName}`}
+            className="text-ui wrap-anywhere"
+          >
+            {schedule.armedByDisplayName} · {schedule.runnerName}
+          </span>
+        </PrefRow>
+      )}
+      <PrefRow label="Armed">
+        {paused && (
+          <>
+            <span className="text-ui text-muted-foreground">Paused</span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!canWrite || saving}
+              onClick={() => void change(true)}
+            >
+              Re-arm
+            </Button>
+          </>
+        )}
         <Switch
           checked={armed}
           disabled={!canWrite || saving}
           aria-label={`Armed: ${automation.name}`}
-          onCheckedChange={(enabled) => void change(enabled)}
+          onCheckedChange={(value) => void change(value)}
         />
-      </label>
-    </div>
+      </PrefRow>
+    </>
+  );
+}
+
+/** Cloud state names backend arming, never this Mac's local permission. */
+export function CloudAutomationState({
+  projectId,
+  automation,
+}: {
+  projectId: string;
+  automation: Automation;
+}) {
+  const schedules = useCloudAutomationsStore((s) => s.schedules[projectId]);
+  const armings = useCloudAutomationsStore((s) => s.armings[projectId]);
+  if (automation.trigger.kind === "none") return <>Manual only</>;
+  if (automation.trigger.kind === "schedule") {
+    const schedule = schedules?.find((s) => s.automationId === automation.id);
+    if (!schedule) return <>Manual only</>;
+    if (schedule.pausedAt !== null) return <>Paused</>;
+    return <CloudNextScheduledRun projectId={projectId} automationId={automation.id} />;
+  }
+  const armed =
+    armings?.filter((a) => a.automationId === automation.id && a.pausedAt === null) ?? [];
+  const paused = armings?.some((a) => a.automationId === automation.id && a.pausedAt !== null);
+  return (
+    <>
+      {paused && armed.length === 0
+        ? "Paused"
+        : armed.length > 0
+          ? `Armed in ${armed.map((a) => TICKET_STATUS_LABELS[a.status]).join(", ")}`
+          : `Offered in ${automationTriggerColumns(automation.trigger)
+              .map((s) => TICKET_STATUS_LABELS[s])
+              .join(", ")}`}
+    </>
   );
 }
 
@@ -295,7 +340,7 @@ export function CloudNextScheduledRun({
   if (schedule === undefined || schedule.pausedAt !== null) return null;
   return (
     <p className="text-ui text-foreground tabular-nums">
-      Next:{" "}
+      Next ·{" "}
       {new Date(schedule.nextFireAt).toLocaleString(undefined, {
         weekday: "short",
         month: "short",
@@ -303,8 +348,9 @@ export function CloudNextScheduledRun({
         hour: "numeric",
         minute: "2-digit",
         timeZone: schedule.timezone,
-        timeZoneName: "short",
-      })}
+        hour12: false,
+      })}{" "}
+      · {schedule.timezone}
     </p>
   );
 }

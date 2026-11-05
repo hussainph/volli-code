@@ -29,7 +29,6 @@ import {
   isTicketStatus,
   modelTierRow,
   nextScheduleOccurrence,
-  scheduleSentence,
   TICKET_STATUS_LABELS,
   UNBOUND_RUN_LABEL,
 } from "@volli/shared";
@@ -54,7 +53,7 @@ import type {
  * and is therefore never one of the answers — the Trigger says only what
  * *else* starts an Automation.
  */
-export const MANUAL_TRIGGER_LABEL = "Only when I run it";
+export const MANUAL_TRIGGER_LABEL = "Manual only";
 
 /**
  * What a switched-off Automation says where it is OFFERED in a menu row — the
@@ -93,7 +92,28 @@ export function triggerLabel(trigger: AutomationTrigger): string {
   // easily lost: a reader who cannot see the zone cannot tell whether 21:00 is
   // theirs, and travelling is exactly when that matters.
   const schedule = automationTriggerSchedule(trigger);
-  if (schedule !== null) return scheduleSentence(schedule);
+  if (schedule !== null) {
+    const time =
+      schedule.preset === "hourly"
+        ? `:${String(schedule.minute).padStart(2, "0")}`
+        : `${String(schedule.hour).padStart(2, "0")}:${String(schedule.minute).padStart(2, "0")}`;
+    // Complete recurrence phrases are localization units, not weekday + English suffix.
+    const recurrence =
+      schedule.preset === "weekly"
+        ? (
+            {
+              monday: "Mondays",
+              tuesday: "Tuesdays",
+              wednesday: "Wednesdays",
+              thursday: "Thursdays",
+              friday: "Fridays",
+              saturday: "Saturdays",
+              sunday: "Sundays",
+            } as const
+          )[schedule.weekday]
+        : ({ hourly: "Hourly", daily: "Daily", weekdays: "Weekdays" } as const)[schedule.preset];
+    return `${recurrence} · ${time} · ${schedule.timeZone}`;
+  }
   const columns = automationTriggerColumns(trigger);
   if (columns.length === 0) return MANUAL_TRIGGER_LABEL;
   // The same verb the editor's second choice uses, finished by the columns —
@@ -141,7 +161,7 @@ function modelPairLabel(pair: { modelId: string; reasoningLevel: string }): stri
  * {@link runModelLabel} is where a Run says it.
  */
 export function runtimeLabel(runtime: AutomationRuntime): string {
-  if (runtime === null) return "Default model";
+  if (runtime === null) return "Project default";
   if (isAutomationRuntimeTier(runtime)) return modelTierRow(runtime.tier).label;
   if (!isAutomationRuntimePin(runtime)) return "Unreadable runtime";
   return modelPairLabel(runtime);
@@ -401,17 +421,17 @@ export function automationHistory(
 export function skipReasonLabel(skip: Pick<AutomationSkippedOccurrence, "reason">): string {
   switch (skip.reason.kind) {
     case "app-closed":
-      return "Skipped — Volli wasn’t running";
+      return "Skipped · Volli was closed";
     // Said as what was observed rather than as a cause: the app WAS running and
     // still did not reach the due time — a sleeping machine, a busy one, a
     // suspended process. Printing "Volli wasn't running" here would be a
     // sentence the reader could disprove.
     case "not-observed":
-      return "Skipped — Volli didn’t wake in time";
+      return "Skipped · Volli didn’t wake in time";
     case "run-refused":
-      return `Skipped — ${skip.reason.error}`;
+      return `Skipped · ${skip.reason.error}`;
     case "unknown":
-      return "Skipped — reason unreadable";
+      return "Skipped · Reason unavailable";
   }
 }
 
@@ -458,8 +478,29 @@ export function nextScheduledRun(input: {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    timeZone: input.timeZone,
-    timeZoneName: "short",
+    timeZone: input.schedule.timeZone,
+    hour12: false,
   });
-  return { at, label: `Next: ${reading}` };
+  return { at, label: `Next · ${reading} · ${input.schedule.timeZone}` };
+}
+
+/** Display groups never change a column's independent authored rank. */
+export function groupByTrigger(automations: readonly Automation[], query: string) {
+  const needle = query.trim().toLocaleLowerCase();
+  const matches = automations.filter((row) =>
+    `${row.name} ${triggerLabel(row.trigger)}`.toLocaleLowerCase().includes(needle),
+  );
+  return (
+    [
+      { kind: "schedule", label: "Schedules" },
+      { kind: "columns", label: "Columns" },
+      { kind: "none", label: "Manual" },
+    ] as const
+  ).map((group) => ({
+    kind: group.kind,
+    label: group.label,
+    automations: matches
+      .filter((row) => row.trigger.kind === group.kind)
+      .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+  }));
 }
