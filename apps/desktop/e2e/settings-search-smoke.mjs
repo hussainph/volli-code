@@ -17,10 +17,10 @@
  * how matching works, only that a word someone can see leads back to the page
  * it is on.
  *
- * MANUALLY RUN (needs a display + the built app); CI does not run it:
+ * Runs in CI's extended smoke tier. To run locally with a display + built app:
  *
- *   pnpm -w run build
- *   node apps/desktop/e2e/settings-search-smoke.mjs
+ *   vp run --filter @volli/desktop build
+ *   VOLLI_QUIET_WINDOWS=1 vp exec node apps/desktop/e2e/settings-search-smoke.mjs
  */
 import {
   assertBuiltRendererLoaded,
