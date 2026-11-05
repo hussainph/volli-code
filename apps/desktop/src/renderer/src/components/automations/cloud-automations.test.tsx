@@ -257,7 +257,7 @@ describe("cloud Run evidence", () => {
       "Skipped · Runner unavailable",
     ],
     [run({ status: "started", sessionAccess: "private" }), "Private Session"],
-    [run({ status: "started", sessionAccess: "starting" }), "Starting…"],
+    [run({ status: "started", sessionAccess: "starting" }), "Starting"],
     [run({ status: "started", sessionAccess: "gone" }), "Session removed"],
     [run({ status: "started", sessionAccess: "ready", attendance: "unattended" }), "Automatic"],
     [run({ status: "started", sessionAccess: "ready" }), "By hand"],
@@ -282,7 +282,7 @@ describe("cloud Run evidence", () => {
     expect(container.textContent).toContain("Waiting for Ada’s Mac");
     expect(container.textContent).toContain("3 missed");
     expect(container.textContent).toContain("Private Session");
-    expect(container.textContent).toContain("Starting…");
+    expect(container.textContent).toContain("Starting");
     expect(container.querySelectorAll('[data-run-history-run="skip"]')).toHaveLength(1);
     expect(
       container.querySelectorAll('[data-run-history-run] button[data-slot="list-row-main"]'),
@@ -332,7 +332,12 @@ describe("cloud Run evidence", () => {
         },
       })),
     );
-    expect(container.textContent).toContain("Starting…");
-    expect(container.querySelector("button")?.disabled).toBe(true);
+    expect(container.textContent).toContain("Starting");
+    const cancel = container.querySelector<HTMLButtonElement>("button");
+    expect(cancel?.textContent).toBe("Cancel");
+    expect(cancel?.disabled).toBe(true);
+    const errors = vi.mocked(toastError).mock.calls.length;
+    await act(async () => cancel?.click());
+    expect(toastError).toHaveBeenCalledTimes(errors);
   });
 });

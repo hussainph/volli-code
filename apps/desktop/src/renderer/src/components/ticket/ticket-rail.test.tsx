@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// @ts-expect-error — this test only uses the typed-at-runtime JSDOM parser.
+import { JSDOM } from "jsdom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { Ticket } from "@volli/shared";
@@ -210,9 +212,8 @@ describe("TicketRail's Now page", () => {
       html.indexOf('data-testid="ticket-repository-summary"'),
     );
 
-    const headings = [...page.matchAll(/<h3[^>]*>(.*?)<\/h3>/g)].map((match) =>
-      match[1].replace(/<[^>]*>/g, ""),
-    );
+    const fragment = JSDOM.fragment(page) as DocumentFragment;
+    const headings = [...fragment.querySelectorAll("h3")].map((heading) => heading.textContent);
     expect(headings).toEqual(["Sessions", "Automations"]);
     expect(page).not.toMatch(/<h[1-6][^>]*>Properties/);
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");

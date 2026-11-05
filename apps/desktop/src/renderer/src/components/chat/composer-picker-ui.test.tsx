@@ -39,8 +39,12 @@ describe("composer picker glyphs", () => {
         ]}
       />,
     );
-    const paths = [...html.matchAll(/<path d="([^"]+)"/g)].map((match) => match[1]);
-    expect(new Set(paths).size).toBe(2);
+    // Icons may contain several paths (or other SVG shapes). Compare the
+    // complete drawings, not the number of paths in the icon library.
+    const marks = [...html.matchAll(/<svg\b[^>]*>([\s\S]*?)<\/svg>/g)].map((match) => match[1]);
+    expect(marks).toHaveLength(2);
+    expect(marks.every((mark) => mark.length > 0)).toBe(true);
+    expect(new Set(marks).size).toBe(2);
     expect(html.match(/size-4 shrink-0 text-foreground/g)).toHaveLength(2);
     expect(html.match(/aria-hidden="true"/g)).toHaveLength(2);
   });

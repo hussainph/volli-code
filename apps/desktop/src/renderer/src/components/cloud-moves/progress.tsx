@@ -346,7 +346,7 @@ export function MoveProgress({
                 ? "Working"
                 : confirming === null
                   ? "Continue"
-                  : ACTION_LABELS[confirming.action].replace("", "")}
+                  : ACTION_LABELS[confirming.action]}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -511,7 +511,14 @@ describe("a provisional chat plane", () => {
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     const box = composer();
     if (box === null) throw new Error("expected a composer");
-    expect(container?.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
+    // Charts now live in the overview popover. Keep the chart mounted so the
+    // typing guard still exercises its theme reads rather than an absent chart.
+    const overview = [...(container?.querySelectorAll("button") ?? [])].find((button) =>
+      button.textContent?.includes("Session overview"),
+    );
+    if (overview === undefined) throw new Error("expected Session overview");
+    await act(async () => overview.click());
+    expect(document.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
 
     // The empty state's chart reads its colours off the root. A keystroke is
     // not a theme change, so typing must not read them again.
@@ -528,7 +535,7 @@ describe("a provisional chat plane", () => {
     // The words still reach the box and the Draft, exactly as before.
     expect(box.value).toBe(typed);
     expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe(typed);
-    expect(container?.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
+    expect(document.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
   });
 
   it("retains the persisted first message until the host accepts its queued command", async () => {
