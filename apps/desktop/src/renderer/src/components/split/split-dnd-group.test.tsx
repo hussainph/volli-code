@@ -299,6 +299,36 @@ describe("the top strip as a drop target", () => {
 });
 
 describe("the ghost's flight home", () => {
+  it("keeps keyboard ghost and sibling transitions instant through cancel, then restores pointer motion", () => {
+    mountPairSurface();
+    act(() =>
+      root.render(
+        <SplitDnd origin={null} panes={[]} onTabDrop={() => {}} onNativeDrop={() => {}}>
+          <TabStrip label="Surface" reorder={{ ids: ["source"], onReorder: () => {} }}>
+            <Tab label="Source" dragId="source" active tabStop onActivate={() => {}} />
+          </TabStrip>
+        </SplitDnd>,
+      ),
+    );
+    const start = (type: string) =>
+      act(() =>
+        harness.props!.onDragStart?.({
+          active: { id: "source", data: { current: { tabLabel: "Source" } } },
+          activatorEvent: new Event(type),
+        } as unknown as DragStartEvent),
+      );
+    start("keydown");
+    expect(harness.overlay?.dropAnimation).toBeNull();
+    expect(harness.overlay?.transition).toBe("");
+    expect((host.querySelector('[role="tab"]') as HTMLElement).style.transition).toBe("none");
+    act(() => harness.props!.onDragCancel?.({} as never));
+    expect(harness.overlay?.dropAnimation).toBeNull();
+    start("pointerdown");
+    expect(harness.overlay?.dropAnimation).not.toBeNull();
+    expect((host.querySelector('[role="tab"]') as HTMLElement).style.transition).toContain(
+      "transform",
+    );
+  });
   it("is inert from the release, and still hides the source while it lands", () => {
     mountPairSurface();
     const animation = harness.overlay!.dropAnimation as Exclude<

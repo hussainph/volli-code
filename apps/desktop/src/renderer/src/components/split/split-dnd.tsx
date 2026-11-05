@@ -241,11 +241,14 @@ export function SplitDnd({
   );
   const sensors = useSurfaceSensors();
   const reducedMotion = useReducedMotion();
+  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
+  const instant = reducedMotion || keyboardDrag;
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const [ghostLabel, setGhostLabel] = React.useState<string | null>(null);
   const nativePayload = useAcceptedNativeDrag(origin);
 
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
+    setKeyboardDrag(event.activatorEvent.type === "keydown");
     setActiveTabId(String(event.active.id));
     const label = event.active.data.current?.tabLabel;
     setGhostLabel(typeof label === "string" ? label : null);
@@ -300,7 +303,7 @@ export function SplitDnd({
       onDragCancel={handleDragCancel}
     >
       <SplitDndStateContext.Provider value={state}>
-        <TabStripSurface>
+        <TabStripSurface keyboardDrag={keyboardDrag}>
           <div ref={areaRef} data-split-area className="contents">
             {children}
           </div>
@@ -310,7 +313,8 @@ export function SplitDnd({
         // The tab returns to its slot in the time a dropdown opens. `null`
         // under reduced motion: a drop that lands is a state change, and the
         // flight back is the decoration the flag turns off.
-        dropAnimation={reducedMotion ? null : GHOST_DROP_ANIMATION}
+        transition={instant ? "" : undefined}
+        dropAnimation={instant ? null : GHOST_DROP_ANIMATION}
       >
         {ghostLabel === null ? null : <TabDragGhost label={ghostLabel} />}
       </DragOverlay>

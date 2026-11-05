@@ -63,6 +63,18 @@ describe("PaneEmptyState", () => {
     ]);
   });
 
+  it("keeps four peer open actions and separates the smaller quiet close", () => {
+    render();
+    expect(
+      rows()
+        .slice(0, 4)
+        .every((row) => row.dataset.size === "lg"),
+    ).toBe(true);
+    expect(rows().at(-1)?.dataset.size).toBe("default");
+    expect(rows().at(-1)?.className).toContain("mt-2");
+    expect(rows().at(-1)?.className).toContain("text-muted-foreground");
+  });
+
   it("names each row without its chord, and says the chord separately", () => {
     render();
 

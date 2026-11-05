@@ -178,7 +178,7 @@ export function AttachmentMenu<T extends AttachmentMenuEntry>({
       <PopoverTrigger asChild>
         <Button
           size="sm"
-          variant="toolbar"
+          variant="ghost"
           data-testid="rail-attachments-trigger"
           aria-label={label}
           // In both, because `aria-label` replaces the title for a screen

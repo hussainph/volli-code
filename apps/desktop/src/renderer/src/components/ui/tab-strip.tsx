@@ -143,13 +143,28 @@ const TabReorderContext = React.createContext(false);
  * fixture) keeps its own context and its own axis modifiers, unchanged.
  */
 const TabStripSurfaceContext = React.createContext(false);
+// Retain the last activation through drop/cancel so settling never adds a
+// keyboard timeline after dnd-kit clears its active event.
+const TabKeyboardDragContext = React.createContext(false);
 
 /**
  * Marks the subtree whose strips register into the caller's own `DndContext`.
  * Rendered by `split/split-dnd.tsx`, which is also what supplies that context.
  */
-export function TabStripSurface({ children }: { children: React.ReactNode }) {
-  return <TabStripSurfaceContext.Provider value>{children}</TabStripSurfaceContext.Provider>;
+export function TabStripSurface({
+  children,
+  keyboardDrag = false,
+}: {
+  children: React.ReactNode;
+  keyboardDrag?: boolean;
+}) {
+  return (
+    <TabStripSurfaceContext.Provider value>
+      <TabKeyboardDragContext.Provider value={keyboardDrag}>
+        {children}
+      </TabKeyboardDragContext.Provider>
+    </TabStripSurfaceContext.Provider>
+  );
 }
 
 /** Whether a strip drawn here belongs to a surface-level drag context. */
@@ -422,10 +437,10 @@ export function TabStrip({
   // (`prefersReducedMotion`): this strip is drawn to a string by a good deal of
   // the test suite, and `matchMedia` does not exist there — a flag a component
   // only needs while it is moving has no business being a subscription.
-  const travel = (towards: "prev" | "next") => {
+  const travel = (towards: "prev" | "next", pointer: boolean) => {
     const scroller = scrollerRef.current;
     if (scroller === null) return;
-    scrollTabsTo(scroller, tabScrollStep(scroller, towards), !prefersReducedMotion());
+    scrollTabsTo(scroller, tabScrollStep(scroller, towards), pointer && !prefersReducedMotion());
   };
 
   const strip = (
@@ -478,7 +493,7 @@ export function TabStrip({
               towards="prev"
               folder={folder}
               disabled={overflow.atStart}
-              onTravel={() => travel("prev")}
+              onTravel={(pointer) => travel("prev", pointer)}
             />
           ) : null}
           <div
@@ -512,7 +527,7 @@ export function TabStrip({
               towards="next"
               folder={folder}
               disabled={overflow.atEnd}
-              onTravel={() => travel("next")}
+              onTravel={(pointer) => travel("next", pointer)}
             />
           ) : null}
         </div>
@@ -568,7 +583,7 @@ function TabScrollAffordance({
   towards: "prev" | "next";
   folder: boolean;
   disabled: boolean;
-  onTravel(): void;
+  onTravel(pointer: boolean): void;
 }) {
   const Icon = towards === "prev" ? ChevronLeftIcon : ChevronRightIcon;
   return (
@@ -580,7 +595,7 @@ function TabScrollAffordance({
       data-towards={towards}
       aria-label={towards === "prev" ? "Earlier tabs" : "Later tabs"}
       disabled={disabled}
-      onClick={onTravel}
+      onClick={(event) => onTravel(event.detail > 0)}
       // Edge-to-edge travel targets, not tabs or round floating buttons. Cancel
       // the folder strip's top pad so the caret centres on the complete band.
       className={cn(
@@ -650,6 +665,7 @@ function TabStripDnd({
   reorder: TabStripReorder;
   children: React.ReactNode;
 }) {
+  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -669,9 +685,12 @@ function TabStripDnd({
       sensors={sensors}
       collisionDetection={closestCenter}
       modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+      onDragStart={(event) => setKeyboardDrag(event.activatorEvent.type === "keydown")}
       onDragEnd={handleDragEnd}
     >
-      {children}
+      <TabKeyboardDragContext.Provider value={keyboardDrag}>
+        {children}
+      </TabKeyboardDragContext.Provider>
     </DndContext>
   );
 }
@@ -782,13 +801,15 @@ export function Tab({ dragId, ...props }: TabProps) {
  */
 function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
   const reducedMotion = useReducedMotion();
+  const keyboardDrag = React.useContext(TabKeyboardDragContext);
+  const instant = reducedMotion || keyboardDrag;
   const inSurface = React.useContext(TabStripSurfaceContext);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: dragId,
     // `null` is dnd-kit's own "do not animate": under reduced motion the
     // siblings jump to their new places instead of sliding (same gate the board
     // card takes).
-    transition: reducedMotion ? null : TAB_SORT_TRANSITION,
+    transition: instant ? null : TAB_SORT_TRANSITION,
     // What the surface's `DragOverlay` ghost draws (VC-202). The label rather
     // than the descriptor: the ghost is the tab's own drawing, and the tab's
     // own drawing is what this component already is.
@@ -817,7 +838,7 @@ function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
         // Surface strips use fixed tab-edge pairing targets. Moving siblings
         // during a drag would separate the visible edge from its hit box.
         transform: inSurface ? undefined : CSS.Transform.toString(transform),
-        transition: transition ?? undefined,
+        transition: instant ? "none" : (transition ?? undefined),
       }}
       // Above its neighbours while it travels, so the tab being dragged is not
       // drawn under the ones it is passing, and the hand closes on it while it
@@ -896,7 +917,7 @@ function TabShell({
   React.useLayoutEffect(() => {
     if (!active) return;
     const shell = shellRef.current;
-    if (shell !== null) revealTab(shell, !prefersReducedMotion());
+    if (shell !== null) revealTab(shell, false);
   }, [active]);
   // The close is hidden mid-rename on purpose: the only two exits from an
   // inline edit are commit and cancel, and an × that blurs (committing) and
@@ -937,7 +958,7 @@ function TabShell({
           // `.focus()`.
           onFocus={(event) => {
             props.onFocus?.(event);
-            revealTab(event.currentTarget, !prefersReducedMotion());
+            revealTab(event.currentTarget, false);
           }}
           // dnd-kit's pointer activator, composed over whatever the caller already
           // listens for here (Radix's context menu uses this event for its
