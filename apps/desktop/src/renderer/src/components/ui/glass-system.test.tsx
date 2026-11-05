@@ -143,7 +143,7 @@ describe("Glass system surfaces", () => {
     expect(css).toContain(
       '[data-slot="alert-dialog-overlay"] {\n  animation-duration: var(--duration-sheet);',
     );
-    expect(css).toContain("transition-property: transform, opacity, box-shadow");
+    expect(css).toContain("transition-property: transform, opacity");
     expect(css).toContain(':root[data-motion="off"]');
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
   });

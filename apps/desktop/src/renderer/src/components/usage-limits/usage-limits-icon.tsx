@@ -22,7 +22,7 @@
  * popover; this prints both — the short span on top, the long one below, in
  * family order — and demotes each ring to a half-circle beside its own figure.
  * Two numbers in a glyph is more than an icon usually carries, and it is the
- * whole reason the glyph is 20px rather than the 14 the Gauge sat at: the
+ * whole reason the glyph is 26px rather than the 14 the Gauge sat at: the
  * ring's clear middle is a fixed FRACTION of its box, so at 14px two digits of
  * the system's smallest type are wider than the space that exists. The rest of
  * the picker's reasoning, and the shapes this beat, are in the lab scratch.
@@ -58,10 +58,18 @@ const MID = BOX / 2;
 /** The outermost ink the drawing may touch, leaving the 1px Phosphor leaves. */
 const EDGE = 11;
 
-/** Optical bounds inside the shared 28px canvas-chrome target. All arc and
- * zero-cap geometry below stays in the same 24-unit coordinate space. */
-export const USAGE_ICON_PX = 20;
-export const USAGE_ICON_BUTTON_PX = 28;
+/**
+ * What the glyph renders at, and the size everything else here is solved for.
+ *
+ * Not a taste and not a Phosphor default: two digits at the system's smallest
+ * type (`--text-label`, 11px) need a clear middle no 14px ring has, and the
+ * stacked pair needs more still. 26 is the rung where both figures come within
+ * a twentieth of the floor while the button stays inside a 36px band.
+ */
+export const USAGE_ICON_PX = 26;
+
+/** `icon-sm`'s own proportion: 3px of padding around the glyph, either side. */
+export const USAGE_ICON_BUTTON_PX = USAGE_ICON_PX + 6;
 
 /**
  * How the figures are set, in the 24-unit box.
@@ -83,7 +91,7 @@ const TONE_STROKE: Record<UsageTone, string> = {
   critical: "text-destructive",
 };
 
-/** Readings land immediately; only account-mark opacity may transition. */
+/** Arc geometry snaps to the reading; only occasional mark opacity may fade. */
 const MOTION =
   "transition-opacity duration-(--duration-menu-in) ease-out motion-reduce:transition-none";
 
@@ -124,8 +132,10 @@ const R = EDGE - SW / 2;
  * One arc: a circle wearing a dash pattern, rotated so `from` degrees means
  * degrees clockwise from twelve o'clock.
  *
- * Dash length carries amount without moving its starting point. Readings are
- * intentionally static: this is frequently updated data, not a gesture.
+ * Drawn as a dashed circle rather than a path so that its length is a CSS
+ * property the browser can interpolate. A `d` attribute cannot be transitioned,
+ * and the changes this glyph makes — a window refilling on reset, an account
+ * signing out — are exactly the ones worth seeing move rather than blink.
  */
 function Arc({
   from,
@@ -154,7 +164,7 @@ function Arc({
       // — it draws a bead at the arc's start. In this glyph that would put a
       // speck at the foot of a spent window's bar, which reads as dirt on the
       // screen. Squaring the cap at zero is what actually erases it; the
-      // element stays mounted either way so the length can still animate.
+      // element stays mounted either way without an interpolated paint sequence.
       strokeLinecap={drawn <= 0 ? "butt" : "round"}
       // `${drawn} ${circle}` and never a dashoffset: an offset would slide the
       // arc's start as its length changed, so a shrinking bar would appear to

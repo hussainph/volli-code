@@ -2,6 +2,7 @@ import * as React from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 
 function TooltipProvider({
   delayDuration = 400,
@@ -37,16 +38,22 @@ function Tooltip({
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
   return (
-    <TooltipPrimitive.Root
-      data-slot="tooltip"
-      disableHoverableContent={disableHoverableContent}
-      {...props}
-    />
+    <MotionOriginRoot scope="tooltip" {...props} hover>
+      {(motion) => (
+        <TooltipPrimitive.Root
+          data-slot="tooltip"
+          disableHoverableContent={disableHoverableContent}
+          {...props}
+          {...motion}
+        />
+      )}
+    </MotionOriginRoot>
   );
 }
 
 function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
+  const motion = useMotionOriginProps("tooltip", props, true);
+  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} {...motion} />;
 }
 
 /** The small pointer uses the same surface and edge ink as its label. */
@@ -58,6 +65,7 @@ function TooltipContent({
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  const motion = useMotionOriginProps("tooltip", props, false, true);
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
@@ -70,6 +78,7 @@ function TooltipContent({
           className,
         )}
         {...props}
+        {...motion}
       >
         {children}
         <TooltipPrimitive.Arrow

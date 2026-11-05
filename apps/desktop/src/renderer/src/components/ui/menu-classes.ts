@@ -51,16 +51,15 @@ export const MENU_SURFACE_FADE =
   "ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0";
 
 /**
- * The half that needs a real anchor: the zoom out of the trigger and the slide
- * away from it. Both read what the popper publishes — `data-side` and the
- * content transform origin — so a surface positioned any other way must NOT
+ * The half that needs a real anchor: a small scale from the trigger's
+ * published transform origin, never a translated reading target.
+ * A surface positioned any other way must NOT
  * take this. With no origin the zoom falls back to `50% 50%` and the surface
  * grows from its own middle while attached to something else. `ui/select.tsx`
  * is the one surface in this family that can be positioned another way, and so
  * composes the two halves itself instead of taking {@link MENU_SURFACE_MOTION}.
  */
-export const MENU_SURFACE_ANCHORED =
-  "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=open]:zoom-in-95";
+export const MENU_SURFACE_ANCHORED = "data-[state=open]:zoom-in-95";
 
 /** Open and close, shared by every trigger-anchored menu surface. */
 export const MENU_SURFACE_MOTION = `${MENU_SURFACE_FADE} ${MENU_SURFACE_ANCHORED}`;

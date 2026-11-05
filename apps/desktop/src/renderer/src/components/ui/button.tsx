@@ -27,8 +27,10 @@ const buttonVariants = cva(
         secondary:
           "control-material [--control-fill:var(--color-control-secondary)] border border-border-strong bg-control-secondary text-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed",
         ghost: "hover:bg-accent hover:text-foreground",
-        toolbar: "glass-control rounded-full text-foreground hover:bg-accent",
-        inspector: "inspector-popup text-foreground hover:bg-accent",
+        toolbar:
+          "glass-control rounded-full text-foreground hover:bg-accent aria-pressed:bg-(--accent-selected) aria-pressed:text-primary-text",
+        inspector:
+          "inspector-popup justify-start border-0 bg-transparent px-0 text-foreground shadow-none hover:bg-accent aria-pressed:bg-(--accent-selected) aria-pressed:text-primary-text",
         // --primary-text, not --primary: a link variant is read, not clicked
         // as a colored area, so it takes the accent's body-copy lightness.
         link: "text-primary-text underline-offset-4 hover:underline",

@@ -1,6 +1,5 @@
 import type * as React from "react";
 import { cn } from "@renderer/lib/utils";
-import "./disclosure.css";
 
 import { Collapsible as CollapsiblePrimitive } from "radix-ui";
 
@@ -25,15 +24,15 @@ function CollapsibleContent({
   className,
   animated = true,
   ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent> & { animated?: boolean }) {
+}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent> & {
+  /** Accepted for compatibility; generic disclosures never animate layout. */
+  animated?: boolean;
+}) {
   return (
     <CollapsiblePrimitive.CollapsibleContent
       data-slot="collapsible-content"
-      className={cn(
-        animated &&
-          "disclosure-content [--disclosure-height:var(--radix-collapsible-content-height)]",
-        className,
-      )}
+      data-animated={animated}
+      className={cn(className)}
       {...props}
     />
   );

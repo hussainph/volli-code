@@ -6,14 +6,20 @@ import { CloseIcon } from "@renderer/components/ui/icon";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 import { Button } from "@renderer/components/ui/button";
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+  return (
+    <MotionOriginRoot scope="dialog" {...props}>
+      {(motion) => <DialogPrimitive.Root data-slot="dialog" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function DialogTrigger({ ...props }: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
-  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />;
+  const motion = useMotionOriginProps("dialog", props);
+  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} {...motion} />;
 }
 
 function DialogClose({ ...props }: React.ComponentProps<typeof DialogPrimitive.Close>) {
@@ -28,6 +34,7 @@ function DialogOverlay({
   className,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+  const motion = useMotionOriginProps("dialog", props);
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
@@ -36,6 +43,7 @@ function DialogOverlay({
         className,
       )}
       {...props}
+      {...motion}
     />
   );
 }
@@ -48,6 +56,7 @@ function DialogContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
 }) {
+  const motion = useMotionOriginProps("dialog", props, false, true);
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -61,6 +70,7 @@ function DialogContent({
           className,
         )}
         {...props}
+        {...motion}
       >
         {children}
         {showCloseButton && (

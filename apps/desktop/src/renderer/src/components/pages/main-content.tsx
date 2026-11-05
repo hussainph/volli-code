@@ -10,7 +10,6 @@ import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-depen
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 import { Button } from "@renderer/components/ui/button";
-import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
@@ -77,7 +76,7 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           <EmptyProjectsState />
         ) : selected === null ? (
           <div className={cn("flex-1", EMPTY_PAGE)}>
-            <p className="text-sm text-muted-foreground">Select a project</p>
+            <h2 className="text-heading font-semibold text-foreground">Select a project</h2>
           </div>
         ) : activeNav === "automations" ? (
           // Plain conditional rendering: nothing
@@ -104,15 +103,11 @@ function EmptyProjectsState() {
       data-empty-projects-state
       className={cn("empty-projects-canvas relative flex-1 overflow-hidden", EMPTY_PAGE)}
     >
-      <div className="material-thick relative z-10 flex max-w-sm flex-col items-center rounded-sheet border border-border p-6 shadow-glass">
-        <IdentityTile aria-hidden className="mb-4">
-          <AddFolderIcon className="size-5" />
-        </IdentityTile>
-        <h1 className="text-title font-semibold">Add your first project</h1>
-        <Button className="mt-6 app-region-no-drag" onClick={() => void pickAndAdd()}>
-          Add Project…
-        </Button>
-      </div>
+      <AddFolderIcon aria-hidden className="size-6 text-muted-foreground" />
+      <h1 className="text-heading font-semibold">Add your first project</h1>
+      <Button className="mt-2 app-region-no-drag" onClick={() => void pickAndAdd()}>
+        Add project
+      </Button>
     </div>
   );
 }

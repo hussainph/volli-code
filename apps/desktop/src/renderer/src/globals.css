@@ -691,6 +691,8 @@
   & > :not([data-slot="button-group"]) > [data-control="button"],
   & > [data-slot="button-group-text"] {
     box-shadow:
+      var(--tw-ring-offset-shadow, 0 0 transparent),
+      var(--tw-ring-shadow, 0 0 transparent),
       inset 0 var(--control-edge-y) var(--control-edge-blur)
         color-mix(in oklab, var(--control-light) var(--control-highlight), transparent),
       inset 0 calc(-1 * var(--control-edge-y)) var(--control-edge-blur) var(--control-shade);
@@ -2558,7 +2560,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 }
 /* Flat faces. Tonal primary has a same-hue sheen, never a grey bevel. */
 [data-control="button"].control-material {
-  box-shadow: var(--shadow-glass-small);
+  box-shadow:
+    var(--tw-ring-offset-shadow, 0 0 transparent), var(--tw-ring-shadow, 0 0 transparent),
+    var(--shadow-glass-small);
   background-image: none;
 }
 .button-tonal {
@@ -2575,40 +2579,38 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-control="button"]:focus-visible:active {
   transform: none;
 }
-/* Docked glass samples only the static canvas, never live content behind it. */
-.glass[data-glass-static="true"] {
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-.glass-control {
-  background: color-mix(in srgb, var(--glass-fill) 90%, transparent);
-  border: 0.5px solid var(--glass-edge);
-  border-radius: 999px;
-  box-shadow: var(--shadow-glass-small);
-}
-.inspector-popup {
-  height: var(--spacing-control-default);
-  min-height: var(--spacing-control-default);
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  padding-inline: 0;
-  justify-content: flex-start;
-}
-/* Compact inspector properties align with 24px label chips. */
-.inspector-popup[data-size="sm"] {
-  height: var(--spacing-control-sm);
-  min-height: var(--spacing-control-sm);
-}
-.search-capsule {
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: transparent;
-  box-shadow: none;
+/* Material defaults sit below utility states (hover, focus rings and caller selection). */
+@layer components {
+  .glass-control {
+    background: color-mix(in srgb, var(--glass-fill) 90%, transparent);
+    border: 0.5px solid var(--glass-edge);
+    border-radius: 999px;
+    box-shadow: var(--shadow-glass-small);
+  }
+  .inspector-popup {
+    height: var(--spacing-control-default);
+    min-height: var(--spacing-control-default);
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    padding-inline: 0;
+    justify-content: flex-start;
+  }
+  /* Compact inspector properties align with 24px label chips. */
+  .inspector-popup[data-size="sm"] {
+    height: var(--spacing-control-sm);
+    min-height: var(--spacing-control-sm);
+  }
+  .search-capsule {
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: transparent;
+    box-shadow: none;
+  }
 }
 .segmented {
   border-radius: 999px;
-  background: var(--accent-tint);
+  background: var(--glass-fill);
 }
 .segmented::before {
   content: "";
@@ -2619,8 +2621,8 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   bottom: 2px;
   width: calc((100% - 4px) / var(--segment-count));
   border-radius: 999px;
-  background: var(--card);
-  box-shadow: var(--shadow-glass-small);
+  background: var(--accent-selected);
+  box-shadow: none;
   transform: translateX(calc(var(--segment-index) * 100%));
 }
 .segmented[data-pointer-motion="true"]::before {
@@ -2631,7 +2633,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border: 0;
   border-radius: 999px;
   background: transparent;
-  box-shadow: none;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 transparent), var(--tw-ring-shadow, 0 0 transparent);
   transform: none;
 }
 .segmented > [aria-pressed="true"] {
@@ -2861,7 +2863,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 
 /* Sonner retargets its stack with transitions. Do not animate layout height. */
 .toaster [data-sonner-toast] {
-  transition-property: transform, opacity, box-shadow;
+  transition-property: transform, opacity;
   transition-duration: var(--duration-menu-in);
   transition-timing-function: var(--ease-out);
 }
@@ -2980,4 +2982,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-effort-instant] [data-slot="effort-handle"] {
   scale: 1 !important;
   box-shadow: none !important;
+}
+
+/* Portaled primitives retain activation provenance through their closing Presence. */
+[data-motion-origin="keyboard"],
+[data-motion-origin="instant"],
+[data-motion-origin="keyboard"] *,
+[data-motion-origin="instant"] * {
+  animation: none !important;
+  transition: none !important;
 }
