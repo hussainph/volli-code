@@ -776,14 +776,14 @@ export function AutomationEditorPanel({
 
   return (
     <div data-slot="automation-editor" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-4 border-b border-border bg-background px-6 py-4">
+      <header className="flex shrink-0 flex-wrap items-center gap-4 border-b border-border bg-background px-6 py-4">
         <input
           autoFocus
           value={name}
           onChange={(event) => setName(event.currentTarget.value)}
           aria-label="Name"
           placeholder="Name this automation"
-          className="min-w-0 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
+          className="min-w-40 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
         />
         <DraftIndicator dirty={dirty} resumed={resumed} onDiscard={discardDraft} />
         {actions}

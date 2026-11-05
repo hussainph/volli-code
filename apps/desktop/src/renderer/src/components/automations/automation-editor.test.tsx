@@ -660,7 +660,11 @@ describe("automation editor drafts (VC-329)", () => {
     // passes — so every assertion below would report on a header that is not there.
     const header = indicator!.closest("header");
     expect(header).not.toBeNull();
-    expect(header!.querySelector('[aria-label="Name"]')).not.toBeNull();
+    const name = header!.querySelector('[aria-label="Name"]');
+    expect(name).not.toBeNull();
+    // Actions wrap instead of shrinking the name field to zero on narrow windows.
+    expect(header!.classList.contains("flex-wrap")).toBe(true);
+    expect(name!.classList.contains("min-w-40")).toBe(true);
     expect(header!.contains(buttonContaining("Discard draft"))).toBe(true);
     expect(header!.contains(buttonContaining("Create automation"))).toBe(true);
 
