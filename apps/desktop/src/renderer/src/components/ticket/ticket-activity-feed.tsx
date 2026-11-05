@@ -402,7 +402,7 @@ function Composer({
   return (
     <div>
       <ReadOnlyNote projectId={projectId} className="px-4 pb-2" />
-      <div className="flex items-end gap-2 overflow-hidden rounded-container border border-border bg-muted/30 px-3 py-1 focus-within:border-ring">
+      <div className="flex items-end gap-2 overflow-hidden rounded-floating border border-border bg-muted/30 px-3 py-1 focus-within:border-ring">
         <textarea
           rows={1}
           value={draft}
