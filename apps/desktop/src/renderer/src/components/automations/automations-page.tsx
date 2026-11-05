@@ -125,12 +125,8 @@ export function AutomationsPage() {
   if (project === null) {
     return (
       <div className={cn("flex-1", EMPTY_PAGE)}>
-        <div className="flex max-w-sm flex-col items-center">
-          <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2">
-            <AutomationIcon className="size-5 text-muted-foreground" />
-          </div>
-          <h1 className="text-heading font-semibold">No project selected</h1>
-        </div>
+        <AutomationIcon className="size-6 text-muted-foreground" />
+        <h1 className="text-heading font-semibold">No project selected</h1>
       </div>
     );
   }
