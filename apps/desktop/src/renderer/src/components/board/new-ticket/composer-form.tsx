@@ -554,6 +554,7 @@ export function ComposerForm({
           by 6px. */}
       <AttachmentStrip
         attachments={attachments}
+        presentation="composer"
         onRemove={(attachment) => void removeAttachment(attachment)}
         className="border-t border-border px-6 py-2"
       />

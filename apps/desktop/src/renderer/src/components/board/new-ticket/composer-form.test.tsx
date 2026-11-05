@@ -489,7 +489,7 @@ it("asks for the commit tray's own fold by marking its composer container", () =
   ).toBe("commit-tray");
 });
 
-it("gives the attachment strip the same air above the tiles and below them", async () => {
+it("keeps ticket attachments in the bounded composer manager", async () => {
   mocks.attachments.attachments = [
     {
       linkId: null,
@@ -510,9 +510,8 @@ it("gives the attachment strip the same air above the tiles and below them", asy
       />,
     ),
   );
-  // The strip is the last band before the tray's own top edge, so a top-only
-  // inset left the 64px tiles sitting ON that hairline beside the buttons.
-  const strip = host.querySelector('[aria-label="Attachments"]');
+  const strip = host.querySelector('[data-slot="composer-attachments"]');
+  expect(strip?.querySelector('[aria-label="Manage 1 attachments"]')).not.toBeNull();
   expect(strip?.className).toContain("py-2");
   expect(strip?.className).not.toContain("pt-2");
 });

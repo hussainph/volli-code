@@ -1180,6 +1180,7 @@ export const Board = React.memo(function Board({
               // shown → full sections; hidden (empty-at-start) → slim drop rows,
               // rendered only while dragging so a row can land in any status.
               <BoardListView
+                revealTicketId={revealTicketId}
                 projectId={projectId}
                 ticketPrefix={ticketPrefix}
                 projectLabels={projectLabels}
