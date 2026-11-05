@@ -1241,10 +1241,12 @@ async function main() {
               sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
               insetLeft: inset?.getBoundingClientRect().left ?? -1,
               chromeHeight: chrome?.getBoundingClientRect().height ?? -1,
+              // Inspector pages stay resident when withdrawn. Their boxes keep
+              // their dimensions, but inherited visibility hides the tab strip.
               tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
                 (element) =>
                   element instanceof HTMLElement &&
-                  element.offsetParent !== null &&
+                  element.checkVisibility({ checkVisibilityCSS: true }) &&
                   element.getBoundingClientRect().height > 0,
               ).length,
               asides: document.querySelectorAll('[data-inspector-panel][data-shown="true"]').length,
@@ -1282,7 +1284,7 @@ async function main() {
               tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
                 (element) =>
                   element instanceof HTMLElement &&
-                  element.offsetParent !== null &&
+                  element.checkVisibility({ checkVisibilityCSS: true }) &&
                   element.getBoundingClientRect().height > 0,
               ).length,
               asides: document.querySelectorAll('[data-inspector-panel][data-shown="true"]').length,

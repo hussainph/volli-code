@@ -64,7 +64,7 @@ export function globalAgentGroups(project: Project | null): readonly PrefGroup[]
           key: "skills",
           label: "Skills",
           icon: GuideIcon,
-          keywords: ["global", "workspace", "mode", "source"],
+          keywords: ["global", "workspace", "mode", "source", "activation project"],
           content: <ChooseProject />,
         },
         {
@@ -108,6 +108,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "off",
             "index",
             "prompt budget",
+            "activation project",
             "source",
             "description",
             "mode",

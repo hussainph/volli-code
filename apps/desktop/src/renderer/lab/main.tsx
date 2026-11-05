@@ -26,7 +26,8 @@
  * entry is not a build input and never ships. Add an idea by dropping one file
  * into `lab/scratches/`.
  */
-import "@fontsource-variable/geist-mono/wght.css";
+import "@fontsource/space-mono/400.css";
+import "@fontsource/space-mono/700.css";
 import "@fontsource-variable/mona-sans/wght.css";
 import "@fontsource-variable/mona-sans/wght-italic.css";
 // `globals.css` by way of lab.css, which additionally registers this folder as
