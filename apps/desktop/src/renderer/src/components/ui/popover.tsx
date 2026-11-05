@@ -1,4 +1,4 @@
-import { overlayLayer } from "./overlay-layer";
+import { useOverlayLayer } from "./overlay-layer";
 import { GlassSurface } from "./surface";
 
 import * as React from "react";
@@ -113,7 +113,7 @@ function PopoverContent({
   const claimWheel = usePopoverWheelClaim();
   const motion = useMotionOriginProps("popover", props, false, true);
   return (
-    <PopoverPrimitive.Portal container={overlayLayer()}>
+    <PopoverPrimitive.Portal container={useOverlayLayer()}>
       <GlassSurface asChild tier={blur ? "full" : "pane"}>
         <PopoverPrimitive.Content
           data-slot="popover-content"

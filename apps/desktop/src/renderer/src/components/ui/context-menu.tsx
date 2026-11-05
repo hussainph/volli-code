@@ -1,4 +1,4 @@
-import { overlayLayer } from "./overlay-layer";
+import { useOverlayLayer } from "./overlay-layer";
 import { GlassSurface } from "./surface";
 
 /**
@@ -62,7 +62,7 @@ function ContextMenuPortal({ ...props }: React.ComponentProps<typeof ContextMenu
     <ContextMenuPrimitive.Portal
       data-slot="context-menu-portal"
       {...props}
-      container={overlayLayer()}
+      container={useOverlayLayer()}
     />
   );
 }
@@ -116,7 +116,7 @@ function ContextMenuSubContent({
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
   const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
-    <ContextMenuPrimitive.Portal container={overlayLayer()}>
+    <ContextMenuPrimitive.Portal container={useOverlayLayer()}>
       <GlassSurface asChild tier="full">
         <ContextMenuPrimitive.SubContent
           data-slot="context-menu-sub-content"
@@ -142,7 +142,7 @@ function ContextMenuContent({
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
   const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
-    <ContextMenuPrimitive.Portal container={overlayLayer()}>
+    <ContextMenuPrimitive.Portal container={useOverlayLayer()}>
       <GlassSurface asChild tier="full">
         <ContextMenuPrimitive.Content
           data-slot="context-menu-content"

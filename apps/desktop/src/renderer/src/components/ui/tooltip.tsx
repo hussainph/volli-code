@@ -1,4 +1,4 @@
-import { overlayLayer } from "./overlay-layer";
+import { useOverlayLayer } from "./overlay-layer";
 import * as React from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 
@@ -68,7 +68,7 @@ function TooltipContent({
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
   const motion = useMotionOriginProps("tooltip", props, false, true);
   return (
-    <TooltipPrimitive.Portal container={overlayLayer()}>
+    <TooltipPrimitive.Portal container={useOverlayLayer()}>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}

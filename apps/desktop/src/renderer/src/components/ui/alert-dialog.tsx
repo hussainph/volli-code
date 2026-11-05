@@ -1,4 +1,4 @@
-import { overlayLayer } from "./overlay-layer";
+import { useOverlayLayer } from "./overlay-layer";
 
 import * as React from "react";
 import { ControlShapeProvider } from "./control-shape";
@@ -28,7 +28,7 @@ function AlertDialogPortal({ ...props }: React.ComponentProps<typeof AlertDialog
     <AlertDialogPrimitive.Portal
       data-slot="alert-dialog-portal"
       {...props}
-      container={overlayLayer()}
+      container={useOverlayLayer()}
     />
   );
 }
