@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { useCloudTeamStore, usePersonLabel } from "@renderer/lib/cloud-team";
 import {
@@ -56,7 +57,6 @@ import {
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
 } from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
@@ -457,7 +457,6 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const canWrite = useCanWrite(ticket.projectId);
   const entry = useTicketActivityStore((state) => state.byTicket[ticketId]);
   const listingState = useTicketActivityStore((state) => state.listingState[ticketId]);
-  const listingError = useTicketActivityStore((state) => state.listingError[ticketId] ?? null);
   const ensureActivity = useTicketActivityStore((state) => state.ensure);
   const refreshActivity = useTicketActivityStore((state) => state.refresh);
 
@@ -674,13 +673,22 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       ) : failed ? (
         // The toast owns the detail. This line only replaces the skeleton with
         // the concise truth that the activity baseline did not arrive.
-        <p className={EMPTY_INLINE} title={listingError ?? undefined}>
-          Couldn&apos;t load activity.
-        </p>
+        <PanelEmptyState
+          illustration="failed"
+          status="failed"
+          title="Couldn’t load activity"
+          action={{ label: "Try again", onAction: () => void refetch(true) }}
+        />
       ) : feed.length === 0 ? (
-        <p className={EMPTY_INLINE}>
-          {filter === "All" ? "No activity yet." : "No matching activity."}
-        </p>
+        <PanelEmptyState
+          illustration="archive"
+          title={filter === "All" ? "No activity yet" : "No matching activity"}
+          action={
+            filter === "All"
+              ? undefined
+              : { label: "Clear filters", onAction: () => setFilter("All") }
+          }
+        />
       ) : (
         <ul className="flex flex-col gap-2">
           {feed.map((item) =>

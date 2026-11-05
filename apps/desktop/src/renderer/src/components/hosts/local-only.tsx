@@ -10,7 +10,7 @@
  */
 import type * as React from "react";
 
-import { CloudOffIcon } from "@renderer/components/ui/icon";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
@@ -58,8 +58,14 @@ export function LocalOnly({
   if (fallback !== undefined) return fallback;
   return (
     <div className={cn("h-full min-h-0", EMPTY_PAGE, className)}>
-      <CloudOffIcon aria-hidden className="size-6 text-muted-foreground" />
-      <NotAvailableOnHost hostName={host.name} />
+      <div data-slot="host-local-only" role="status">
+        <EmptyState
+          tier="page"
+          illustration="folder"
+          status="unavailable"
+          title={notAvailableOn({ name: host.name })}
+        />
+      </div>
     </div>
   );
 }

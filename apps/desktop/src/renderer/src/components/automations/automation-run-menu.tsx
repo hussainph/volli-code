@@ -332,9 +332,8 @@ export function AutomationRunMenuItems({
         </ContextMenuGroup>
       ))}
       {rail.offered.length === 0 ? (
-        // Nothing offered: say so rather than leaving an empty popover (the
-        // Labels submenu's own idiom).
-        <div className={EMPTY_INLINE}>No automations offered in this column</div>
+        // Empty inline pickers keep only their accessible result announcement.
+        <div className="sr-only">No automations offered in this column</div>
       ) : null}
       {/* The nested override item VC-112 names. It spends the pick on THIS
           menu's default press — the column's Armed automation.

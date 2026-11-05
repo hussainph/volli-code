@@ -1,6 +1,6 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import {
-  ArchiveIcon,
   UndoIcon,
   ChevronLeftIcon,
   PullRequestIcon,
@@ -40,7 +40,6 @@ import {
 } from "@renderer/components/ui/dialog";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -386,11 +385,14 @@ function ArchiveList({
       {loadFailed && archived === undefined ? (
         // All three states take the empty geometry: they hold the same slot in
         // turn, and a different one would jump the dialog as the read lands.
-        <div className={cn(EMPTY_PAGE, "gap-4 text-muted-foreground")}>
-          <p className="text-sm">Couldn’t load the archive.</p>
-          <Button variant="outline" size="xs" onClick={load}>
-            Retry
-          </Button>
+        <div className={EMPTY_PAGE}>
+          <EmptyState
+            tier="page"
+            illustration="failed"
+            status="failed"
+            title="Couldn’t load the archive"
+            action={{ label: "Try again", onAction: load }}
+          />
         </div>
       ) : archived === undefined ? (
         <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
@@ -399,13 +401,17 @@ function ArchiveList({
           </p>
         </div>
       ) : archived.length === 0 ? (
-        <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
-          <ArchiveIcon className="size-6" />
-          <SectionHeading>No archived tickets</SectionHeading>
+        <div className={EMPTY_PAGE}>
+          <EmptyState tier="page" illustration="archive" title="Nothing archived" />
         </div>
       ) : shown.length === 0 ? (
-        <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
-          <p className="text-sm">No matching tickets.</p>
+        <div className={EMPTY_PAGE}>
+          <EmptyState
+            tier="page"
+            illustration="search"
+            title="No matching tickets"
+            action={{ label: "Clear search", onAction: () => setQuery("") }}
+          />
         </div>
       ) : (
         <ul ref={list} className="-mx-2 max-h-[min(55vh,26rem)] overflow-y-auto">

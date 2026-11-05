@@ -5,7 +5,6 @@ import { SearchIcon } from "@renderer/components/ui/icon";
 import { cn } from "@renderer/lib/utils";
 import {
   COMMAND_SEARCH_FIELD,
-  MENU_EMPTY,
   MENU_LABEL_CMDK,
   MENU_ROW,
   MENU_ROW_STATE_CMDK,
@@ -69,7 +68,7 @@ function CommandEmpty({
   return (
     <CommandPrimitive.Empty
       data-slot="command-empty"
-      className={cn(MENU_EMPTY, className)}
+      className={cn("sr-only", className)}
       {...props}
     />
   );

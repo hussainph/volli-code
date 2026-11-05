@@ -188,7 +188,7 @@ export function RunnerPicker({
           </p>
         ) : null}
         {state.runners.length === 0 && !state.error ? (
-          <p className="px-2 py-2 text-ui text-muted-foreground">No runners available</p>
+          <p className="sr-only">No runners available</p>
         ) : null}
         <DropdownMenuRadioGroup value={state.selected?.id ?? ""} onValueChange={state.choose}>
           {state.runners.map((runner) => (

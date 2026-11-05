@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
  * Settings → Hosts: the hosts this Mac knows, and one host's page — its name
  * (this Mac's label for it), its facts, its projects, the devices paired to
@@ -255,16 +256,10 @@ function HostList({
         ))}
         {hosts.length === 0 && readOnly === null ? (
           <div key="empty">
-            <ListRow
-              data-host-row=""
-              density="two-line"
-              leading={
-                <span className="grid size-6 shrink-0 place-items-center rounded-sm border border-dashed border-border text-muted-foreground">
-                  <AddIcon aria-hidden className="size-3.5" />
-                </span>
-              }
-              primary={<span className="truncate text-ui text-muted-foreground">Add a host…</span>}
-              onActivate={openAddHostSheet}
+            <PanelEmptyState
+              illustration="mcp"
+              title="No hosts"
+              action={{ label: "Add a host…", onAction: openAddHostSheet }}
             />
           </div>
         ) : null}
@@ -553,7 +548,7 @@ function ProjectsSection({ hostId }: { hostId: string }) {
       }
     >
       {mine.length === 0 && refused.length === 0 ? (
-        <Empty>{openHere(claims, hostId)}</Empty>
+        <Empty illustration="folder">{openHere(claims, hostId)}</Empty>
       ) : (
         <>
           {mine.map((project) => (

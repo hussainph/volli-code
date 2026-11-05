@@ -493,6 +493,7 @@ function BuildArtifactsSection() {
         state={state}
         isEmpty={(entries) => entries !== null && entries.length === 0}
         empty="No worktrees"
+        emptyIllustration="folder"
       >
         {(entries) =>
           entries === null
@@ -1173,6 +1174,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
           runsWithFailures(report.runs).length === 0
         }
         empty="No orphaned worktrees"
+        emptyIllustration="folder"
       >
         {(report) => (
           <>

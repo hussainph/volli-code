@@ -195,9 +195,9 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
           families === null ? (
             <LoadingLabel>Loading fonts</LoadingLabel>
           ) : families.length === 0 ? (
-            "No fonts found"
+            <span className="sr-only">No fonts found</span>
           ) : (
-            "No matching font"
+            <span className="sr-only">No matching font</span>
           )
         }
         families={families ?? []}

@@ -264,16 +264,18 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
           </>
         }
         action={
-          <Button
-            size="sm"
-            onClick={() => {
-              setError(null);
-              setDialog({ kind: "add" });
-            }}
-          >
-            <AddIcon />
-            Add server
-          </Button>
+          servers.length === 0 && !loading && readError === null ? undefined : (
+            <Button
+              size="sm"
+              onClick={() => {
+                setError(null);
+                setDialog({ kind: "add" });
+              }}
+            >
+              <AddIcon />
+              Add server
+            </Button>
+          )
         }
       >
         {error === null ? null : (
@@ -293,9 +295,25 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
             }
           />
         ) : servers.length === 0 ? (
-          <Empty>
-            {loading ? <LoadingLabel>Loading MCP servers</LoadingLabel> : "No MCP servers"}
-          </Empty>
+          loading ? (
+            <div className="p-4">
+              <LoadingLabel>Loading MCP servers</LoadingLabel>
+            </div>
+          ) : (
+            <Empty
+              illustration="mcp"
+              action={{
+                label: "Add server",
+                icon: <AddIcon />,
+                onAction: () => {
+                  setError(null);
+                  setDialog({ kind: "add" });
+                },
+              }}
+            >
+              No MCP servers
+            </Empty>
+          )
         ) : (
           <div
             role="region"
@@ -310,6 +328,7 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
                 keyOf={(server) => server.id}
                 rows={12}
                 empty="No MCP servers"
+                emptyIllustration="mcp"
                 columns={[
                   {
                     key: "enabled",

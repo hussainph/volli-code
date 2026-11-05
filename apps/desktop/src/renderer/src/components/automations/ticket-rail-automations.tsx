@@ -227,7 +227,7 @@ export function TicketAutomationsPanel({
         // header's own door is 20px above it, and a second copy of the same
         // door inside the empty state would be the same offer twice in one
         // glance.
-        <p className="px-2 text-label text-muted-foreground">No automations</p>
+        <p className="sr-only">No automations</p>
       ) : (
         <AutomationOfferList
           rows={rows}

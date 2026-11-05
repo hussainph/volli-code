@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
  * What is left of every subscription, from anywhere in the app (VC-350).
  *
@@ -70,7 +71,6 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Spinner } from "@renderer/components/ui/spinner";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
@@ -236,7 +236,7 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
           </Button>
         </div>
         <div className="max-h-96 overflow-y-auto overscroll-contain px-2">
-          <ReadingView reading={reading} now={now} pin={pin} />
+          <ReadingView reading={reading} now={now} pin={pin} onRetry={() => void load(true)} />
         </div>
       </PopoverContent>
     </Popover>
@@ -247,10 +247,12 @@ function ReadingView({
   reading,
   now,
   pin,
+  onRetry,
 }: {
   reading: Reading | null;
   now: number | undefined;
   pin: UsagePin | null;
+  onRetry(): void;
 }) {
   if (reading === null) {
     return (
@@ -260,10 +262,17 @@ function ReadingView({
     );
   }
   if (reading.kind === "failed") {
-    return <p className={EMPTY_INLINE}>Couldn&apos;t read usage limits</p>;
+    return (
+      <PanelEmptyState
+        illustration="failed"
+        status="failed"
+        title="Couldn’t read usage limits"
+        action={{ label: "Try again", onAction: onRetry }}
+      />
+    );
   }
   if (reading.accounts.length === 0) {
-    return <p className={EMPTY_INLINE}>No subscriptions with usage limits</p>;
+    return <PanelEmptyState illustration="board" title="No subscriptions with usage limits" />;
   }
   return (
     <Accordion

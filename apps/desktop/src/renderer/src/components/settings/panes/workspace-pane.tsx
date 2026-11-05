@@ -110,7 +110,9 @@ function ReadState<T>({
   if (view.kind === "failed") return <ReadFailed message={view.message} onRetry={onRetry} />;
   if (view.kind === "loading")
     return (
-      <Empty>{offline ? "Volli Cloud is offline." : <LoadingLabel>{loading}</LoadingLabel>}</Empty>
+      <Empty plain>
+        {offline ? "Volli Cloud is offline." : <LoadingLabel>{loading}</LoadingLabel>}
+      </Empty>
     );
   return children(view.value);
 }
@@ -171,7 +173,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
     <>
       <PrefSection title="Workspace" icon={WorkspaceIcon}>
         {workspaceId === null ? (
-          <Empty>No Workspace selected</Empty>
+          <Empty illustration="folder">Select a Workspace</Empty>
         ) : (
           <ReadState
             view={workspace}

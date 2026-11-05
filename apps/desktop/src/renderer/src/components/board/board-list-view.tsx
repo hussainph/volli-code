@@ -1,3 +1,5 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
+import { useBoardStore } from "@renderer/stores/board";
 import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -349,7 +351,15 @@ export function BoardListView({
       <BoardEmpty projectId={projectId} className="min-h-0 flex-1" />
     ) : (
       <div className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-sm text-muted-foreground">No tickets match</p>
+        <EmptyState
+          tier="page"
+          illustration="search"
+          title="No matching tickets"
+          action={{
+            label: "Clear filters",
+            onAction: () => useBoardStore.getState().clearFilter(projectId),
+          }}
+        />
       </div>
     );
   }

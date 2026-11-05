@@ -1,3 +1,6 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
+import { startProjectChat } from "@renderer/components/sessions/session-create";
+import { useCanSendSession } from "@renderer/lib/cloud-session-read-only";
 /**
  * Home's right rail — the Ticket view's Calm Stack one scope up (VC-55).
  *
@@ -309,6 +312,7 @@ function parseHomeChatTab(activeTabId: string): string | null {
  * for. It appears past four rows, counted over the whole roster.
  */
 function BoardSessionsBlock({ projectId }: { projectId: string }) {
+  const writable = useCanSendSession(projectId);
   const ensure = useProjectSessionsStore((state) => state.ensure);
   React.useEffect(() => {
     void ensure(projectId);
@@ -470,7 +474,19 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
       live.length === 0 &&
       earlier.length === 0 &&
       canClaimEmpty ? (
-        <p className={EMPTY_INLINE}>{searching ? "No matching sessions" : "No sessions yet"}</p>
+        <PanelEmptyState
+          illustration="chat"
+          title={searching ? "No matching sessions" : "No sessions"}
+          action={
+            searching
+              ? { label: "Clear search", onAction: () => setQuery("") }
+              : {
+                  label: "New chat",
+                  onAction: () => void startProjectChat(projectId),
+                  disabled: !writable,
+                }
+          }
+        />
       ) : null}
       {live.length > 0 ? (
         <ul className="flex flex-col" data-testid="home-sessions-live">

@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import {
   CLOUD_MOVE_STEPS,
@@ -112,7 +113,7 @@ export function MoveProgress({
   return (
     <>
       <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto text-ui">
-        {moves.length === 0 ? <p>No moves</p> : null}
+        {moves.length === 0 ? <PanelEmptyState illustration="folder" title="No moves" /> : null}
         {moves.map((move) => (
           <section
             key={move.moveId}

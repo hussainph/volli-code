@@ -1,3 +1,5 @@
+import { EmptyState, PanelEmptyState } from "@renderer/components/ui/empty-state";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * The Browser replay (VC-453): a Session's Browser Traces, stepped through
  * frame by frame. Opened from a browse row's card in the transcript and from
@@ -33,7 +35,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   VideoIcon,
-  ClickIcon,
   WarningIcon,
 } from "@renderer/components/ui/icon";
 
@@ -225,20 +226,15 @@ function TraceReplay({
         ) : null}
       </div>
       {state.kind === "loading" ? (
-        <div className="m-4 flex-1 animate-pulse rounded-md bg-muted/50" aria-hidden />
+        <div className="m-4 flex-1">
+          <LoadingLabel>Loading recording</LoadingLabel>
+        </div>
       ) : current === null || facts === null ? (
         <div
           className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center text-ui text-muted-foreground"
           data-trace-empty
         >
-          <div className="relative flex size-16 items-center justify-center rounded-container border border-border bg-card shadow-raised">
-            <VideoIcon aria-hidden className="size-8" />
-            <ClickIcon
-              aria-hidden
-              className="absolute -right-2 -bottom-2 size-6 text-primary-text"
-            />
-          </div>
-          <span className="font-medium text-foreground">Nothing recorded for this Session</span>
+          <EmptyState tier="page" illustration="file" title="Nothing recorded" />
         </div>
       ) : (
         <>
@@ -333,11 +329,15 @@ function Frame({
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-3">
       {pictureId === null ? (
-        <span className="text-ui text-muted-foreground">No picture for this step</span>
+        <PanelEmptyState
+          illustration="file"
+          status="unavailable"
+          title="No picture for this step"
+        />
       ) : picture.kind === "gone" ? (
-        <span className="text-ui text-muted-foreground">Picture unavailable</span>
+        <PanelEmptyState illustration="file" status="unavailable" title="Picture unavailable" />
       ) : drawn === null ? (
-        <div className="size-full animate-pulse rounded-sm bg-muted/50" aria-hidden />
+        <LoadingLabel>Loading picture</LoadingLabel>
       ) : (
         <img
           alt={

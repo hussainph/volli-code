@@ -446,7 +446,7 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
             <LoadingLabel>Loading</LoadingLabel>
           </div>
         ) : options.length === 0 ? (
-          <div className={EMPTY_INLINE}>No branches found</div>
+          <div className="sr-only">No branches found</div>
         ) : (
           <DropdownMenuRadioGroup
             value={ticket.baseBranch ?? ""}

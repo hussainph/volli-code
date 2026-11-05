@@ -1,3 +1,4 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -60,7 +61,6 @@ import { useAutomationsStore } from "@renderer/stores/automations";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
   COMMAND_FOOTER,
   COMMAND_OVERLAY_FRAME,
@@ -226,6 +226,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     [open, byProject, projectIds],
   );
   const [query, setQuery] = React.useState("");
+  const searchInput = React.useRef<HTMLInputElement>(null);
   // The `@` scope chip (VC-205): a completed `@sessions` narrows the palette
   // to one section. It is state beside the query, not text inside it, so the
   // token never pollutes what cmdk's native filter scores rows against.
@@ -484,6 +485,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           </span>
         ) : null}
         <Command.Input
+          ref={searchInput}
           autoFocus
           value={query}
           onValueChange={handleQueryChange}
@@ -502,7 +504,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         <kbd className={MENU_SHORTCUT}>Esc</kbd>
       </div>
       <Command.List className="min-h-0 max-h-[min(460px,60svh)] overflow-x-hidden overflow-y-auto overscroll-contain p-1">
-        <Command.Empty className={EMPTY_INLINE}>{paletteEmptyCopy(scope)}</Command.Empty>
+        <Command.Empty>
+          <EmptyState
+            tier="page"
+            illustration="search"
+            title={scope === null ? "No results" : paletteEmptyCopy(scope).replace(/[.]$/, "")}
+            line="Try another search."
+            action={{
+              label: "Clear search",
+              onAction: () => {
+                handleQueryChange("");
+                searchInput.current?.focus();
+              },
+            }}
+          />
+        </Command.Empty>
 
         {navigationFirst ? navigationGroup : null}
 

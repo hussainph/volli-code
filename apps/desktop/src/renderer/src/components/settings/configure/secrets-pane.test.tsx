@@ -183,7 +183,7 @@ describe("Configure Secrets", () => {
     expect(host.textContent).toContain("Couldn't load credentials.");
     expect(host.textContent).not.toContain("unsafe error");
     expect(toastError).not.toHaveBeenCalled();
-    expect(host.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
   });
 
   it("shows nothing about the store while it is ready or empty", async () => {
@@ -205,7 +205,7 @@ describe("Configure Secrets", () => {
     expect(status?.textContent).toContain(line);
     // A refused key configuration is fixed, never reset.
     expect(status?.textContent?.includes("Reset…")).toBe(state !== "refused");
-    expect(host.textContent).toContain("No saved credentials");
+    expect(host.textContent).not.toContain("No secrets");
   });
 
   it.each([

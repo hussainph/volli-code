@@ -246,7 +246,9 @@ export function McpToolPicker({
         <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
           {listed.length === 0 ? (
             <div className="flex flex-col items-start gap-2 px-2 py-4 text-ui text-muted-foreground">
-              <span>{tools.length === 0 ? "This server offers no tools." : "No tools match."}</span>
+              <span className="sr-only">
+                {tools.length === 0 ? "This server offers no tools." : "No tools match."}
+              </span>
               {narrowed ? (
                 <Button
                   size="xs"

@@ -9,7 +9,7 @@ import { SessionEnvironmentAlert } from "@renderer/components/session-environmen
 import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
-import { Button } from "@renderer/components/ui/button";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
@@ -70,7 +70,7 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           <EmptyProjectsState />
         ) : selected === null ? (
           <div className={cn("flex-1", EMPTY_PAGE)}>
-            <h2 className="text-heading font-semibold text-foreground">Select a project</h2>
+            <EmptyState tier="page" illustration="folder" title="Select a project" />
           </div>
         ) : activeNav === "automations" ? (
           // Plain conditional rendering: nothing
@@ -97,11 +97,16 @@ function EmptyProjectsState() {
       data-empty-projects-state
       className={cn("empty-projects-canvas relative flex-1 overflow-hidden", EMPTY_PAGE)}
     >
-      <AddFolderIcon aria-hidden className="size-6 text-muted-foreground" />
-      <h1 className="text-heading font-semibold">Add your first project</h1>
-      <Button className="mt-2 app-region-no-drag" onClick={() => void pickAndAdd()}>
-        Add project
-      </Button>
+      <EmptyState
+        tier="page"
+        illustration="folder"
+        title="No projects"
+        action={{
+          label: "Add project",
+          icon: <AddFolderIcon />,
+          onAction: () => void pickAndAdd(),
+        }}
+      />
     </div>
   );
 }

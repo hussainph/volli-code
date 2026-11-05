@@ -29,7 +29,8 @@ import type { RailReadFeedback } from "@renderer/components/ticket/rail-read-fee
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { Skeleton } from "@renderer/components/ui/skeleton";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -421,21 +422,17 @@ export function RailReadFaultBody({
   if (feedback === null || feedback.place !== "body" || feedback.kind !== "failed") return null;
   return (
     <div
-      role="alert"
       data-testid={testId}
       data-read-status="failed"
       title={detail ?? undefined}
-      className={cn(
-        "flex items-center gap-2 rounded-lg border border-dashed border-sidebar-border px-2 py-2 text-ui text-muted-foreground",
-        className,
-      )}
+      className={className}
     >
-      <WarningIcon aria-hidden strokeWidth={2.25} className="size-3.5 shrink-0 text-destructive" />
-      <span className="min-w-0 flex-1 truncate">{feedback.face}</span>
-      <Button size="xs" variant="outline" onClick={onRetry}>
-        <RefreshIcon />
-        Retry
-      </Button>
+      <PanelEmptyState
+        illustration="failed"
+        status="failed"
+        title={feedback.face.replace(/[.]$/, "")}
+        action={{ label: "Retry", onAction: onRetry }}
+      />
     </div>
   );
 }
@@ -731,9 +728,7 @@ export function RailFaultBanner({
 export function RailPanelSkeleton({ label, testId }: { label: string; testId: string }) {
   return (
     <div className="flex flex-col gap-2 p-4" data-testid={testId} aria-label={`Loading ${label}`}>
-      {["w-4/5", "w-3/5", "w-full"].map((width) => (
-        <Skeleton key={width} className={cn("h-8", width)} />
-      ))}
+      <LoadingLabel>Loading {label}</LoadingLabel>
     </div>
   );
 }

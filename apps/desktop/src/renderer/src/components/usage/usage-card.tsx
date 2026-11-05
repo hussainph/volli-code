@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /** Cost leads the glance; exact tokens and attribution stay available on demand. */
 import type * as React from "react";
 import { type IconComponent, ChevronDownIcon } from "@renderer/components/ui/icon";
@@ -390,7 +391,7 @@ export function UsageBreakdownFact({ label, value }: { label: string; value: Rea
 export function UsageCardEmptyFace({ detail }: { detail?: string | null }) {
   return (
     <div className="flex flex-col gap-2 px-4 py-4">
-      <p className="text-ui text-muted-foreground">No metered model calls yet</p>
+      <PanelEmptyState illustration="board" title="No metered calls yet" />
       {detail === null || detail === undefined ? null : (
         <p className="text-ui text-muted-foreground tabular-nums">{detail}</p>
       )}

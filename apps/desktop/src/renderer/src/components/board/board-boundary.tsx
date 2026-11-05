@@ -30,11 +30,8 @@
  * button would only tell them the app had given up.
  */
 import * as React from "react";
-import { RefreshIcon, WarningIcon } from "@renderer/components/ui/icon";
 
-import { Button } from "@renderer/components/ui/button";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
-import { cn } from "@renderer/lib/utils";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 
 interface BoardBoundaryProps {
   /** Resets the verdict when it changes — a different project is a different board. */
@@ -85,25 +82,18 @@ export class BoardBoundary extends React.Component<BoardBoundaryProps, BoardBoun
     }
 
     return (
-      <div className={cn("min-h-0 flex-1", EMPTY_PAGE)} data-board-boundary-fallback>
-        <WarningIcon aria-hidden className="size-8 text-destructive" />
-        <h2 className="text-heading font-semibold text-foreground">Board unavailable</h2>
-        <p role="alert" className="text-ui text-muted-foreground">
-          The board stopped responding.
-        </p>
-        <Button
-          variant="outline"
-          size="lg"
-          onClick={() =>
-            this.setState((current) => ({
-              failed: false,
-              attempt: current.attempt + 1,
-            }))
-          }
-        >
-          <RefreshIcon aria-hidden />
-          Reload the board
-        </Button>
+      <div className={"min-h-0 flex-1"} data-board-boundary-fallback>
+        <EmptyState
+          tier="page"
+          illustration="failed"
+          status="failed"
+          title="Board unavailable"
+          action={{
+            label: "Reload the board",
+            onAction: () =>
+              this.setState((current) => ({ failed: false, attempt: current.attempt + 1 })),
+          }}
+        />
       </div>
     );
   }

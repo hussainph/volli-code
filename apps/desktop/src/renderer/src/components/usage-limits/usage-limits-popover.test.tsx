@@ -135,7 +135,7 @@ async function renderPopover(inspect: ModelAccessClient["inspect"]): Promise<voi
  * guarantee VC-376 made when it made the name dynamic.
  */
 function button(label: string): HTMLButtonElement {
-  const found = document.querySelector(`[aria-label^="${label}"]`);
+  const found = document.querySelector(`button[aria-label^="${label}"]`);
   if (!(found instanceof HTMLButtonElement)) throw new Error(`${label} button not found`);
   return found;
 }

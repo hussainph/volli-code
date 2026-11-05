@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
  * The dev log viewer (VC-699): this Mac's log and every connected host's, in
  * one time-ordered stream.
@@ -31,7 +32,6 @@ import { errorMessage, LOG_LEVELS, type HostLogEntry, type LogLevel } from "@vol
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { InputGroup, InputGroupInput, InputGroupAddon } from "@renderer/components/ui/input-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -337,16 +337,25 @@ function LogRows({
   showSource,
   onFilter,
   empty,
+  onClear,
 }: {
   lines: readonly ViewerLine[];
   labels: ReadonlyMap<string, string>;
   showSource: boolean;
   onFilter(field: "traceId" | "sessionId" | "ticketId" | "component", value: string): void;
   empty: string;
+  onClear?(): void;
 }) {
   const shown =
     lines.length > VIEWER_RENDER_CAP ? lines.slice(lines.length - VIEWER_RENDER_CAP) : lines;
-  if (shown.length === 0) return <p className={EMPTY_INLINE}>{empty}</p>;
+  if (shown.length === 0)
+    return (
+      <PanelEmptyState
+        illustration="file"
+        title={empty}
+        action={onClear ? { label: "Clear filters", onAction: onClear } : undefined}
+      />
+    );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto rounded-container border border-border bg-card">
       <div className="sticky top-0 grid grid-cols-2 gap-2 border-b border-border bg-card px-4 py-2 text-ui font-medium text-muted-foreground @sm/logs:grid-cols-[6rem_4rem_minmax(0,1fr)] @2xl/logs:grid-cols-[6rem_4rem_8rem_minmax(0,1fr)] @4xl/logs:grid-cols-[6rem_4rem_8rem_7rem_minmax(0,1fr)]">
@@ -623,7 +632,8 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
           labels={labels}
           showSource
           onFilter={(field, value) => set(field, value)}
-          empty={lines.length === 0 ? "No lines" : "No lines match"}
+          empty={lines.length === 0 ? "No log entries" : "No matching log entries"}
+          onClear={lines.length === 0 ? undefined : () => setFilter(EMPTY_FILTER)}
         />
       )}
     </div>
@@ -665,7 +675,7 @@ export function LogStream({
         labels={labels}
         showSource={sources.length > 1}
         onFilter={() => undefined}
-        empty="Nothing logged yet"
+        empty="No log entries"
       />
     </div>
   );

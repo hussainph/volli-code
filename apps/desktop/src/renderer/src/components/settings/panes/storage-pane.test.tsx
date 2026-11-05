@@ -337,7 +337,7 @@ describe("Settings → Storage Pi session logs", () => {
 
     await act(async () => buttonNamed("Scan for orphaned Pi logs").click());
     expect(
-      [...document.querySelectorAll("[role='status']")].some((node) =>
+      [...document.querySelectorAll("[role='alert']")].some((node) =>
         node.textContent?.includes("fixture scan failed"),
       ),
     ).toBe(true);

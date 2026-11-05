@@ -71,7 +71,7 @@ describe("virtual file tree", () => {
         ?.dispatchEvent(new KeyboardEvent("keydown", { key: pressed, metaKey, bubbles: true }));
     });
   }
-  it("illustrates a genuinely empty tree, never a filter with no matches", async () => {
+  it("uses distinct file and filtered-search reasons without fabricating tree rows", async () => {
     const open = vi.fn();
     const pin = vi.fn();
     for (const query of ["", "missing"]) {
@@ -82,8 +82,12 @@ describe("virtual file tree", () => {
           </TooltipProvider>,
         ),
       );
-      expect(container.querySelector('[data-next-action="files"]') !== null).toBe(!query);
-      expect(container.textContent).toContain(query ? "No matches" : "No files");
+      expect(container.querySelector(".empty-art")?.getAttribute("data-composition")).toBe(
+        query ? "search" : "file",
+      );
+      expect(container.querySelector("h2")?.textContent).toBe(
+        query ? "No matching files" : "No files",
+      );
       expect(container.querySelectorAll('[role="treeitem"]')).toHaveLength(0);
     }
     expect(open).not.toHaveBeenCalled();

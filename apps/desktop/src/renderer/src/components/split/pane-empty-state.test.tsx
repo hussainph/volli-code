@@ -1,39 +1,22 @@
 // @vitest-environment jsdom
-/**
- * What an empty pane offers, and what it deliberately does not say.
- *
- * The rows are asserted by ROLE and NAME rather than by markup: they are the
- * surface-opening verbs, with chords where available, and an accessible name that
- * swallowed its own shortcut hint ("New chat ⌘T") would be the failure nobody
- * looking at the screen could see.
- */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { PaneEmptyState } from "./pane-empty-state";
-
-let container: HTMLElement | null = null;
-let root: Root | null = null;
-
+let container: HTMLDivElement, root: Root;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
+  container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
 });
-
-afterEach(() => {
-  act(() => root?.unmount());
-  container?.remove();
-  container = null;
-  root = null;
+afterEach(async () => {
+  await act(async () => root.unmount());
+  container.remove();
   vi.unstubAllGlobals();
 });
-
-function render(handlers: Partial<React.ComponentProps<typeof PaneEmptyState>> = {}): void {
-  act(() => {
-    root?.render(
+function render(handlers: Partial<React.ComponentProps<typeof PaneEmptyState>> = {}) {
+  act(() =>
+    root.render(
       <PaneEmptyState
         onNewChat={vi.fn()}
         onNewTerminal={vi.fn()}
@@ -42,19 +25,27 @@ function render(handlers: Partial<React.ComponentProps<typeof PaneEmptyState>> =
         onClosePane={vi.fn()}
         {...handlers}
       />,
-    );
-  });
+    ),
+  );
 }
-
-function rows(): HTMLButtonElement[] {
-  return Array.from(container?.querySelectorAll("button") ?? []);
+async function openMenu() {
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Pane actions"]')!
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      ),
+  );
 }
-
+const entries = () => [
+  ...container.querySelectorAll<HTMLElement>('[data-slot="pane-empty-row"]'),
+  ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+];
 describe("PaneEmptyState", () => {
-  it("offers the five verbs, in the order the surface answers them", () => {
+  it("offers all five verbs, with secondary choices in the shared pane inventory", async () => {
     render();
-
-    expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual([
+    await openMenu();
+    expect(entries().map((row) => row.getAttribute("aria-label"))).toEqual([
       "New chat",
       "New terminal",
       "New browser",
@@ -62,73 +53,59 @@ describe("PaneEmptyState", () => {
       "Close pane",
     ]);
   });
-
-  it("keeps four peer open actions and separates the smaller quiet close", () => {
+  it("uses a compact panel illustration, one primary action and a separated close", async () => {
     render();
-    expect(
-      rows()
-        .slice(0, 4)
-        .every((row) => row.dataset.size === "lg"),
-    ).toBe(true);
-    expect(rows().at(-1)?.dataset.size).toBe("default");
-    expect(rows().at(-1)?.className).toContain("mt-2");
-    expect(rows().at(-1)?.className).toContain("text-muted-foreground");
+    expect(container.querySelector(".empty-state")?.getAttribute("data-tier")).toBe("panel");
+    expect(container.querySelectorAll(".empty-state button")).toHaveLength(1);
+    await openMenu();
+    expect(document.querySelector('[role="menu"] [role="separator"]')).not.toBeNull();
+    expect(entries().at(-1)?.textContent).toBe("Close pane");
   });
-
-  it("names each row without its chord, and says the chord separately", () => {
+  it("names chat without its chord and preserves the keyboard focus landing target", () => {
     render();
-
-    const [chat] = rows();
-    // The hint is visible…
-    expect(chat?.textContent).toContain("⌘T");
-    // …and it is not part of what the row is called.
-    expect(chat?.getAttribute("aria-label")).toBe("New chat");
-    expect(chat?.getAttribute("aria-keyshortcuts")).toBe("Meta+T");
+    const chat = container.querySelector('[data-slot="pane-empty-row"]')!;
+    expect(chat.textContent).toContain("⌘T");
+    expect(chat.getAttribute("aria-label")).toBe("New chat");
+    expect(chat.getAttribute("aria-keyshortcuts")).toBe("Meta+T");
   });
-
-  it("gives Browser no chord, because there is none", () => {
+  it("gives Browser no invented chord", async () => {
     render();
-    const browser = rows().find((row) => row.getAttribute("aria-label") === "New browser");
-    expect(browser?.getAttribute("aria-keyshortcuts")).toBeNull();
-    expect(browser?.textContent).toBe("New browser");
+    await openMenu();
+    const browser = entries().find((row) => row.getAttribute("aria-label") === "New browser")!;
+    expect(browser.getAttribute("aria-keyshortcuts")).toBeNull();
+    expect(browser.textContent).toBe("New browser");
   });
-
-  it("gives Close pane no chord, because there is none", () => {
+  it("gives Close pane no invented chord", async () => {
     render();
-
-    const close = rows().at(-1);
-    expect(close?.getAttribute("aria-keyshortcuts")).toBeNull();
-    expect(close?.textContent).toBe("Close pane");
+    await openMenu();
+    expect(entries().at(-1)?.getAttribute("aria-keyshortcuts")).toBeNull();
   });
-
-  it("runs the surface's own callbacks", () => {
-    const onNewChat = vi.fn();
-    const onNewTerminal = vi.fn();
-    const onNewBrowser = vi.fn();
-    const onOpenFile = vi.fn();
-    const onClosePane = vi.fn();
-    render({ onNewChat, onNewTerminal, onNewBrowser, onOpenFile, onClosePane });
-
-    for (const row of rows()) {
-      act(() => {
-        row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
-    }
-
-    expect(onNewChat).toHaveBeenCalledTimes(1);
-    expect(onNewTerminal).toHaveBeenCalledTimes(1);
-    expect(onNewBrowser).toHaveBeenCalledTimes(1);
-    expect(onOpenFile).toHaveBeenCalledTimes(1);
-    expect(onClosePane).toHaveBeenCalledTimes(1);
-  });
-
-  it("says nothing else at all — no heading, no prose", () => {
-    render();
-
-    // CLAUDE.md: let controls talk. The only text on this surface is the five
-    // labels and their three chords.
-    expect(container?.textContent).toBe(
-      "New chat⌘TNew terminal⌥⌘TNew browserOpen file…⌘PClose pane",
+  it("runs each original callback, including after the inventory has closed and reopened", async () => {
+    const actions = {
+      onNewChat: vi.fn(),
+      onNewTerminal: vi.fn(),
+      onNewBrowser: vi.fn(),
+      onOpenFile: vi.fn(),
+      onClosePane: vi.fn(),
+    };
+    render(actions);
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="New chat"]')!.click(),
     );
+    for (const name of ["New terminal", "New browser", "Open file…", "Close pane"]) {
+      await openMenu();
+      await act(async () =>
+        entries()
+          .find((row) => row.getAttribute("aria-label") === name)!
+          .click(),
+      );
+    }
+    for (const action of Object.values(actions)) expect(action).toHaveBeenCalledOnce();
+  });
+  it("states the reason without adding chat onboarding copy", () => {
+    render();
+    expect(container.querySelector("h2")?.textContent).toBe("No open tabs");
+    expect(container.querySelector("p")).toBeNull();
+    expect(container.textContent).not.toContain("drag a tab");
   });
 });

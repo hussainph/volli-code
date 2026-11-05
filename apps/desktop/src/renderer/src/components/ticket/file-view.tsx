@@ -1,6 +1,6 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
-import { FileIcon } from "@renderer/components/ui/icon";
 
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
@@ -888,8 +888,12 @@ function LocalFileView({
   // binary
   return (
     <div className={cn("flex-1", EMPTY_PAGE, "gap-4")}>
-      <FileIcon className="size-6 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">No preview</p>
+      <EmptyState
+        tier="page"
+        illustration="file"
+        status="unavailable"
+        title="No preview available"
+      />
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /** Subscription allowances as Instrument rings. Each ring measures quota left;
  * the notch measures time left against the same anchored snapshot. Tone carries
  * pace as well as amount. Pins remain explicit host-owned controls. */
@@ -36,11 +37,15 @@ export function AccountUsage({
   pin?: UsageWindowPin;
 }) {
   if (limits.unavailable !== undefined) {
+    if (limits.unavailable.reason === "unsupported")
+      return (
+        <div data-testid={testId}>
+          <PanelEmptyState illustration="board" status="unavailable" title="No usage windows" />
+        </div>
+      );
     return (
       <p data-testid={testId} className="mb-4 text-ui text-muted-foreground last:mb-0">
-        {limits.unavailable.reason === "unsupported"
-          ? "No usage windows"
-          : "Couldn't read usage limits"}
+        Couldn't read usage limits
       </p>
     );
   }

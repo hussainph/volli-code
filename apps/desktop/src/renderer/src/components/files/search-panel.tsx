@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Search — the rail's find-across-files page, at both scopes (VC-193, plan
@@ -359,6 +360,7 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
         projectId={projectId}
         ticketId={ticketId}
         onOpenMatch={openMatch}
+        onClearSearch={() => setRaw("")}
       />
     </div>
   );
@@ -374,6 +376,7 @@ function SearchResults({
   projectId,
   ticketId,
   onOpenMatch,
+  onClearSearch,
 }: {
   groups: readonly SearchGroup[];
   query: string | null;
@@ -388,6 +391,7 @@ function SearchResults({
   projectId: string;
   ticketId: string | null;
   onOpenMatch(relPath: string, match: FileSearchMatch, query: string): void;
+  onClearSearch(): void;
 }) {
   // Idle is a resting state: the field above is the whole of it.
   if (idle) return null;
@@ -401,9 +405,14 @@ function SearchResults({
     }
     if (!canClaimEmpty) return null;
     return (
-      <p data-testid="file-search-empty" className={EMPTY_INLINE}>
-        No matches
-      </p>
+      <div data-testid="file-search-empty">
+        <PanelEmptyState
+          illustration="search"
+          title="No matches"
+          line="Try another search."
+          action={{ label: "Clear search", onAction: onClearSearch }}
+        />
+      </div>
     );
   }
   return (

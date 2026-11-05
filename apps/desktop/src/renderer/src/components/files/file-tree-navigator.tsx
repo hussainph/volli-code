@@ -1,3 +1,4 @@
+import { PanelEmptyState, useEmptyStateTier } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import {
   RefreshIcon as ArrowClockwise,
@@ -165,6 +166,7 @@ function NavigatorScope({
         directories.filter((path) => path !== removed && !path.startsWith(`${removed}/`)),
       ),
   };
+  const emptyTier = useEmptyStateTier();
   const mutations = useFileNavigatorMutations({ scope, cwd: view.cwd, host });
   const feedback = railReadFeedback(read, "Files");
   const merged = React.useMemo(() => {
@@ -195,12 +197,13 @@ function NavigatorScope({
         attachmentMenu={attachmentMenu}
         actions={
           <>
-            {available && (
-              <NewFileRailAction
-                disabled={!mutations.canWrite}
-                onNewFile={() => mutations.startDraft("file")}
-              />
-            )}
+            {available &&
+              !(emptyTier === "panel" && read.hasData && merged.length === 0 && !view.query) && (
+                <NewFileRailAction
+                  disabled={!mutations.canWrite}
+                  onNewFile={() => mutations.startDraft("file")}
+                />
+              )}
             <Button
               size="icon-sm"
               variant="ghost"
@@ -245,9 +248,9 @@ function NavigatorScope({
             testId="file-tree-error"
           />
           {!available && merged.length === 0 ? (
-            <p data-testid="ticket-files-no-worktree" className="p-4 text-ui text-muted-foreground">
-              No worktree yet
-            </p>
+            <div data-testid="ticket-files-no-worktree">
+              <PanelEmptyState illustration="folder" status="unavailable" title="No worktree yet" />
+            </div>
           ) : (
             read.hasData && (
               <FileTree
@@ -258,6 +261,7 @@ function NavigatorScope({
                 projectId={projectId}
                 ticketId={ticketId}
                 query={view.query}
+                onClearSearch={() => setView({ ...view, query: "" })}
                 selected={selected}
                 controls={available ? mutations : undefined}
                 onOpen={onOpen}

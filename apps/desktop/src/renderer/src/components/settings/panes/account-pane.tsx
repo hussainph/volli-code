@@ -316,7 +316,7 @@ function GithubAccounts({
       }
     >
       {installations === null ? null : installations.length === 0 ? (
-        <Empty>No GitHub accounts</Empty>
+        <Empty illustration="mcp">No GitHub accounts</Empty>
       ) : (
         <div data-testid="github-installations">
           {installations.map((installation) => (

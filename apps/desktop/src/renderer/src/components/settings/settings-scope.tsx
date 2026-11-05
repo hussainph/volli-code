@@ -11,7 +11,7 @@ import { monogram, projectColor, type Project } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 
@@ -127,15 +127,11 @@ export function SettingsProjectWelcome({
   onOpen(): void;
 }) {
   return (
-    <div className="flex min-h-80 flex-col justify-center gap-6 py-8">
-      <NextActionIllustration kind={hasProjects ? "selection" : "project"} />
-      <h2 className="text-title font-semibold">
-        {hasProjects ? "No project selected" : "No projects"}
-      </h2>
-      <Button className="w-fit" onClick={onOpen}>
-        <FolderOpenIcon />
-        Open a project
-      </Button>
-    </div>
+    <EmptyState
+      tier="panel"
+      illustration="folder"
+      title={hasProjects ? "No project selected" : "No projects"}
+      action={{ label: "Open a project", icon: <FolderOpenIcon />, onAction: onOpen }}
+    />
   );
 }

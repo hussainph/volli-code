@@ -1,3 +1,4 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
 /**
  * Quick-open (⌘P) — jump to a file by name (plan §4.4, wall W4).
  *
@@ -34,7 +35,6 @@ import {
   quickOpenScope,
   quickOpenSurfaceFiles,
 } from "@renderer/components/files/quick-open-model";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
   COMMAND_FOOTER,
   COMMAND_OVERLAY_FRAME,
@@ -87,6 +87,7 @@ export function QuickOpen({
   );
 
   const [query, setQuery] = React.useState("");
+  const searchInput = React.useRef<HTMLInputElement>(null);
   const [index, setIndex] = React.useState<readonly IndexedFile[]>([]);
   const [truncated, setTruncated] = React.useState(false);
   // The gesture that is about to select: ⌘Enter, or a ⌘-click. See the header
@@ -208,6 +209,7 @@ export function QuickOpen({
       <div className={COMMAND_SEARCH_FIELD}>
         <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <Command.Input
+          ref={searchInput}
           autoFocus
           value={query}
           onValueChange={setQuery}
@@ -229,17 +231,31 @@ export function QuickOpen({
         data-testid="quick-open-list"
         className="min-h-0 max-h-[min(460px,60svh)] overflow-x-hidden overflow-y-auto overscroll-contain p-1"
       >
-        <Command.Empty className={EMPTY_INLINE}>
-          {/* Three different nothings, said apart. "No matching files" over a
-              window with no project selected would be true of the query and
-              false about the reason; the truncation line is said only where it
-              could matter — a file genuinely absent from a capped index — so a
-              standing "20k limit" note is not chrome about nothing. */}
-          {scope === null
-            ? "No project selected"
-            : truncated
-              ? "No matching files · index limit reached"
-              : "No matching files"}
+        <Command.Empty>
+          <EmptyState
+            tier="panel"
+            illustration={scope === null ? "folder" : "search"}
+            status={scope === null ? "unavailable" : "filtered"}
+            title={
+              scope === null
+                ? "Select a project"
+                : truncated
+                  ? "No matching indexed files"
+                  : "No matching files"
+            }
+            line={truncated ? "Narrow the search." : undefined}
+            action={
+              scope === null
+                ? undefined
+                : {
+                    label: "Clear search",
+                    onAction: () => {
+                      setQuery("");
+                      searchInput.current?.focus();
+                    },
+                  }
+            }
+          />
         </Command.Empty>
         {rows.map((row) => (
           <Command.Item

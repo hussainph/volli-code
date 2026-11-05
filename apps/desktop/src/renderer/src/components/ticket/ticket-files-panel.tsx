@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
  * Ticket Files mounts the shared virtual tree over its scoped host index.
  * Body references join that hierarchy; attachments remain in the paperclip.
@@ -38,7 +39,6 @@ import {
   type TicketFileRefRow,
   type TicketWorktreeEntry,
 } from "@renderer/components/ticket/ticket-files-model";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -311,7 +311,7 @@ export function TicketFilesList({
   worktree,
   controls,
   canClaimEmpty = true,
-  emptyLabel = "Nothing here yet",
+  emptyLabel = "No files",
   onPreviewFile,
   onPinFile,
   onOpenDirectory,
@@ -346,9 +346,21 @@ export function TicketFilesList({
   if (draft === null && referenced.length === 0 && worktree.length === 0) {
     if (!canClaimEmpty) return null;
     return (
-      <p data-testid="ticket-files-empty" className={EMPTY_INLINE}>
-        {emptyLabel}
-      </p>
+      <div data-testid="ticket-files-empty">
+        <PanelEmptyState
+          illustration="file"
+          title={emptyLabel}
+          action={
+            controls
+              ? {
+                  label: "New file",
+                  onAction: () => controls.startDraft("file"),
+                  disabled: !controls.canWrite,
+                }
+              : undefined
+          }
+        />
+      </div>
     );
   }
 

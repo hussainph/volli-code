@@ -340,6 +340,7 @@
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(2 0 0 / 0.5);
   --canvas-accent: #e8652a;
+  --canvas-secondary-stop: #e0457b;
   --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
   --accent-tint: color-mix(in srgb, #e8652a 10%, #1e1e1e);
   --accent-selected: color-mix(in srgb, #e8652a 18%, #1e1e1e);
@@ -490,6 +491,7 @@
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(72 42 30 / 0.3);
   --canvas-accent: #e8652a;
+  --canvas-secondary-stop: #e0457b;
   --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
   --accent-tint: color-mix(in srgb, #e8652a 10%, #ffffff);
   --accent-selected: color-mix(in srgb, #e8652a 18%, #ffffff);

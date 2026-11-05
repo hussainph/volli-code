@@ -328,9 +328,7 @@ function LaneColumn({
           <ColumnArmingButton projectId={projectId} status={lane.status} />
         </fieldset>
       </div>
-      {lane.rows.length === 0 ? (
-        <p className="px-1 py-1 text-ui text-muted-foreground">No automations offered</p>
-      ) : null}
+      {lane.rows.length === 0 ? <p className="sr-only">No automations offered</p> : null}
       <SortableContext
         items={movable.map((automation) => laneRowId(lane.status, automation.id))}
         strategy={verticalListSortingStrategy}

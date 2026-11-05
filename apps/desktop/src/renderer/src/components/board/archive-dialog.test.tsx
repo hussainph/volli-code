@@ -106,7 +106,7 @@ it("shows one archive empty message with a compact project scope", async () => {
   const scope = dialog().querySelector('[data-slot="dialog-description"]');
   expect(scope?.textContent).not.toContain("Archived tickets in");
   expect(scope?.className).toContain("text-ui");
-  expect(dialog().querySelector("h2:not([data-slot])")?.textContent).toBe("No archived tickets");
+  expect(dialog().querySelector("h2:not([data-slot])")?.textContent).toBe("Nothing archived");
 });
 
 describe("matchesArchiveQuery", () => {
@@ -289,7 +289,7 @@ describe("ArchiveList — search", () => {
     ]);
 
     await type(field, "nothing like this");
-    expect(dialog().textContent).toContain("No matching tickets.");
+    expect(dialog().textContent).toContain("No matching tickets");
     expect(search()).not.toBeNull();
   });
 

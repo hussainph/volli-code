@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -1199,9 +1200,21 @@ export function TicketSessionsPanel({
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.
           // Gated on a read having LANDED — a refused one has proved nothing.
-          <p className={EMPTY_INLINE}>
-            {searching ? "No matching sessions" : "No active sessions"}
-          </p>
+          <PanelEmptyState
+            illustration="chat"
+            title={
+              searching
+                ? "No matching sessions"
+                : history.length > 0
+                  ? "No active sessions"
+                  : "No sessions"
+            }
+            action={
+              searching
+                ? { label: "Clear search", onAction: () => setRosterQuery("") }
+                : { label: "New chat", onAction: onNewChat, disabled: effectiveCreating }
+            }
+          />
         ) : null}
         {/* ONE peek surface over both halves: the handlers go on the block that
             holds the rows, never on a row, so a press is still a drag or a

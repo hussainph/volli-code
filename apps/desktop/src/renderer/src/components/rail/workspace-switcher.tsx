@@ -104,7 +104,7 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
               ))}
             </DropdownMenuRadioGroup>
           ) : (
-            <Empty>
+            <Empty plain>
               {state.workspaces.kind === "failed"
                 ? state.workspaces.message
                 : state.readOnly
@@ -112,7 +112,7 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
                   : "Loading Workspaces"}
             </Empty>
           )}
-          {state.mine.kind === "failed" && <Empty>{state.mine.message}</Empty>}
+          {state.mine.kind === "failed" && <Empty plain>{state.mine.message}</Empty>}
           {(state.workspaces.kind === "failed" || state.mine.kind === "failed") && (
             <DropdownMenuItem onSelect={state.retry}>
               <RefreshIcon />

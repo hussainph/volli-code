@@ -177,8 +177,8 @@ describe("HomeRail", () => {
     expect(markup).toContain('aria-label="Search"');
     // All three pages are icons, with labels retained for assistive technology.
     expect(markup).toContain(">Now<");
-    expect(markup).toContain('class="sr-only">Files');
-    expect(markup).toContain('class="sr-only">Search');
+    expect(markup).toContain('aria-label="Files"');
+    expect(markup).toContain('aria-label="Search"');
   });
 
   // VC-406. Home hardcoded `data-narrow="false"` while the Ticket rail computed
@@ -427,7 +427,7 @@ describe("HomeRail", () => {
     const markup = draw(HOME_BOARD_TAB_ID);
 
     expect(markup).toContain('data-testid="home-sessions-loading"');
-    expect(markup).not.toContain("No sessions yet");
+    expect(markup).not.toContain("No sessions");
   });
 
   it("says the roster is empty only once the listing has said so", () => {
@@ -438,7 +438,7 @@ describe("HomeRail", () => {
     const markup = draw(HOME_BOARD_TAB_ID);
 
     expect(markup).not.toContain('data-testid="home-sessions-loading"');
-    expect(markup).toContain("No sessions yet");
+    expect(markup).toContain("No sessions");
   });
 
   // VC-406: Home mapped every open, non-ended
@@ -509,7 +509,7 @@ describe("HomeRail", () => {
     const markup = draw(HOME_BOARD_TAB_ID);
 
     expect(markup).not.toContain('data-testid="home-sessions-loading"');
-    expect(markup).not.toContain("No sessions yet");
+    expect(markup).not.toContain("No sessions");
     // The failure is the body, and it brings the retry with it: a refused read
     // that drew nothing but a sentence left the reader with no way to try again.
     expect(markup).toContain('data-testid="home-sessions-error"');
@@ -530,7 +530,7 @@ describe("HomeRail", () => {
       const markup = draw(HOME_BOARD_TAB_ID);
       expect(markup).toContain('data-testid="home-sessions-unavailable"');
       expect(markup).toContain("Sessions aren’t available on box — update it to use them here");
-      expect(markup).not.toContain("No sessions yet");
+      expect(markup).not.toContain("No sessions");
       expect(markup).not.toContain("Retry");
     } finally {
       Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), { unavailable: {} });

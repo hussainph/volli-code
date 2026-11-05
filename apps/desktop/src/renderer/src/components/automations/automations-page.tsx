@@ -88,7 +88,7 @@ import { useCloudAutomationsStore } from "@renderer/stores/cloud-automations/sta
 import { CloudRunHistory } from "./cloud-run-history";
 import { AutomationRuntimeValue } from "./automation-runtime-value";
 import { Command, CommandInput, CommandList, CommandItem } from "@renderer/components/ui/command";
-import { EmptyState } from "./empty-state";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import "./automations.css";
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
@@ -384,7 +384,6 @@ function AutomationsSurface({
               tier="page"
               illustration="failed"
               title="Couldn’t load automations"
-              accessibleLabel="Automations"
               status="failed"
               action={{ label: "Retry", onAction: () => setRetry((n) => n + 1) }}
             />
@@ -437,7 +436,6 @@ function AutomationsSurface({
             tier="page"
             illustration="automation"
             title="No automations yet"
-            accessibleLabel="Automations"
             action={{
               label: "New automation",
               onAction: create,
@@ -595,7 +593,7 @@ function AutomationList({
       ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {groups.every((g) => g.automations.length === 0) ? (
-          <p className="p-2 text-ui text-muted-foreground">No matching automations</p>
+          <p className="sr-only">No matching automations</p>
         ) : (
           groups
             .filter((g) => g.automations.length > 0)
@@ -953,7 +951,7 @@ function RunOnTicketDialog({
           />
           <CommandList>
             {matches.length === 0 ? (
-              <p className="p-3 text-ui text-muted-foreground">No matching tickets</p>
+              <p className="sr-only">No matching tickets</p>
             ) : (
               matches.map((ticket) => (
                 <CommandItem

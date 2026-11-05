@@ -293,7 +293,8 @@ describe("what the page draws", () => {
       { ok: true, files: [], matches: 0, limit: "none" },
     );
     await type("absent");
-    expect(rows('[data-testid="file-search-empty"]')[0]?.textContent).toBe("No matches");
+    expect(rows('[data-testid="file-search-empty"] h2')[0]?.textContent).toBe("No matches");
+    expect(rows('[data-testid="file-search-empty"] button')[0]?.textContent).toBe("Clear search");
   });
 
   it("reports a failed search rather than drawing it as no matches", async () => {

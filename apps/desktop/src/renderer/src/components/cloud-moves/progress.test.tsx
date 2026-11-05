@@ -264,8 +264,8 @@ describe("Move progress and outcomes", () => {
       "becomes writable",
     );
     await act(async () =>
-      [...document.querySelectorAll("button")]
-        .findLast((item) => item.textContent === "Cancel move")!
+      [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+        .find((item) => item.textContent === "Cancel move")!
         .click(),
     );
     expect(api.command).toHaveBeenLastCalledWith({ moveId: "move", action: "cancel" });

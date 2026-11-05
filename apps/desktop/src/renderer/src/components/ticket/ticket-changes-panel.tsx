@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
  * Diffs navigator — the Calm Stack's changes page
  * (the retired ticket-right-sidebar lab scratch's `ChangesPanel`).
@@ -93,7 +94,7 @@ import { parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -390,7 +391,7 @@ function ChangeRow({
  */
 function noVisibleRowsLabel(filtered: boolean, hiddenCount: number): string {
   if (!filtered) return "No changed files shown";
-  return hiddenCount > 0 ? "No matches among the files shown" : "No files match";
+  return hiddenCount > 0 ? "No matching files shown" : "No matching changes";
 }
 
 /** Presentational flat list. */
@@ -401,6 +402,7 @@ export function TicketChangesList({
   filtered = false,
   canClaimEmpty = true,
   hiddenCount = 0,
+  onClearFilters,
 }: {
   rows: readonly ChangeListRow[];
   /**
@@ -435,6 +437,7 @@ export function TicketChangesList({
    * and named beside the empty sentence too when nothing is visible at all.
    */
   hiddenCount?: number;
+  onClearFilters?: () => void;
 }) {
   if (rows.length === 0) {
     if (!canClaimEmpty) return null;
@@ -446,9 +449,16 @@ export function TicketChangesList({
     if (filtered || hiddenCount > 0) {
       return (
         <div className={cn("flex shrink-0 flex-col gap-1", RAIL_PANEL_MARGIN)}>
-          <p data-testid="ticket-changes-filter-empty" className={EMPTY_INLINE}>
-            {noVisibleRowsLabel(filtered, hiddenCount)}
-          </p>
+          <div data-testid="ticket-changes-filter-empty">
+            <PanelEmptyState
+              illustration="search"
+              title={noVisibleRowsLabel(filtered, hiddenCount)}
+              line={hiddenCount > 0 ? "Narrow the search." : undefined}
+              action={
+                onClearFilters ? { label: "Clear filters", onAction: onClearFilters } : undefined
+              }
+            />
+          </div>
           {hiddenCount > 0 ? (
             <p
               data-testid="ticket-changes-truncated"
@@ -463,9 +473,9 @@ export function TicketChangesList({
       );
     }
     return (
-      <p data-testid="ticket-changes-empty" className={cn(EMPTY_INLINE, RAIL_PANEL_MARGIN)}>
-        No changes vs base
-      </p>
+      <div data-testid="ticket-changes-empty" className={RAIL_PANEL_MARGIN}>
+        <PanelEmptyState illustration="file" title="No changes vs base" />
+      </div>
     );
   }
 
@@ -782,9 +792,11 @@ export function TicketChangesPanel({
              worktree ticket is waiting for a Session to cut one; a
              main-checkout ticket is never going to have one, so "yet" would
              be a promise that does nothing. */}
-          <p className="text-ui font-medium text-muted-foreground">
-            {ticket.usesWorktree ? "No worktree yet" : "Runs in the project checkout"}
-          </p>
+          <PanelEmptyState
+            illustration="folder"
+            status="unavailable"
+            title={ticket.usesWorktree ? "No worktree yet" : "Runs in the project checkout"}
+          />
         </div>
       ) : !loaded ? (
         <RailPanelSkeleton label="changes" testId="ticket-changes-loading" />
@@ -801,6 +813,7 @@ export function TicketChangesPanel({
           currentPath={parseDiffTabId(activeTabId)}
           onSelectRow={handleSelect}
           hiddenCount={nav.hiddenCount}
+          onClearFilters={() => setView({ cwd: "", filtering: true, query: "" })}
         />
       )}
     </div>

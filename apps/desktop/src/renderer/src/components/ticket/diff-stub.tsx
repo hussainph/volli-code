@@ -1,5 +1,5 @@
 import { baseNameOf } from "@volli/shared";
-import { FindFileIcon } from "@renderer/components/ui/icon";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
@@ -16,16 +16,11 @@ export function DiffStub({
 }) {
   return (
     <div data-testid="ticket-diff-stub" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-      <FindFileIcon aria-hidden className="size-8 text-muted-foreground" />
-      <h2 className="text-heading font-semibold text-foreground wrap-anywhere">{stubReason}</h2>
-      <p className="max-w-full font-mono text-ui text-muted-foreground wrap-anywhere" title={path}>
+      <EmptyState tier="page" illustration="file" status="unavailable" title={stubReason} />
+      <span className="sr-only">
         {baseNameOf(path)}
-      </p>
-      {previousPath !== null ? (
-        <p className="max-w-full font-mono text-ui text-muted-foreground wrap-anywhere">
-          ← {previousPath}
-        </p>
-      ) : null}
+        {previousPath === null ? "" : ` ← ${previousPath}`}
+      </span>
     </div>
   );
 }

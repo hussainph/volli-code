@@ -179,7 +179,9 @@ export function SkillsPane({
                 <TooltipContent>~{formatTokens(indexTokens)} tokens per turn</TooltipContent>
               </Tooltip>
             )}
-            <SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />
+            {state.status === "ready" && state.data.skills.length === 0 ? null : (
+              <SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />
+            )}
           </div>
         }
         before={
@@ -211,7 +213,10 @@ export function SkillsPane({
         fill
         state={state}
         isEmpty={(data) => data.skills.length === 0}
-        empty="No skills in .agents/skills"
+        empty="No skills"
+        emptyIllustration="skill"
+        emptyLine="Add to .agents/skills."
+        emptyAction={{ label: "Reload", onAction: reload }}
       >
         {(data) => (
           <SkillsTable
@@ -324,8 +329,9 @@ function SkillsTable({
       search={(skill) => `${skill.name} ${skill.description}`}
       placeholder="Search skills"
       bulk={(matched) => <BulkMode skills={matched} onApply={setAllModes} />}
-      empty="No skills in .agents/skills"
-      noResults="No skills match"
+      empty="No skills"
+      emptyIllustration="skill"
+      noResults="No matching skills"
       columns={[
         {
           key: "name",

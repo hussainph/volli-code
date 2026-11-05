@@ -39,7 +39,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
@@ -206,7 +205,7 @@ function AddLabelControl({
           <CommandList className="max-h-56">
             {options.length === 0 && creatable === null ? (
               // Not "none left": the field itself is the remaining answer.
-              <div className={EMPTY_INLINE}>Type a new label name</div>
+              <div className="sr-only">Type a new label name</div>
             ) : null}
             {options.map((option) => (
               <CommandItem

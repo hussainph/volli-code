@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import { CodeIcon, CloseIcon, InfoIcon } from "@renderer/components/ui/icon";
 
 import * as React from "react";
@@ -261,7 +262,7 @@ export function CodeModeSettings({
           </div>
         ))}
         {pins.length === 0 ? (
-          <div className="p-4 text-ui text-muted-foreground">No model exceptions</div>
+          <PanelEmptyState illustration="mcp" title="No model exceptions" />
         ) : null}
       </PrefSection>
     </div>

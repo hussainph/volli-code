@@ -165,9 +165,7 @@ function BranchListBody({
   }
   if (groups.length === 0) {
     return (
-      <div className={EMPTY_INLINE}>
-        {query.trim() === "" ? "No branches" : "No matching branches"}
-      </div>
+      <div className="sr-only">{query.trim() === "" ? "No branches" : "No matching branches"}</div>
     );
   }
   return <BranchRows groups={groups} value={value} onPick={onPick} />;

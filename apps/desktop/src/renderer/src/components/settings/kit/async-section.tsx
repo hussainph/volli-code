@@ -9,13 +9,12 @@
  * was also what a broken read said.
  */
 import type * as React from "react";
-import { type IconComponent, WarningIcon } from "@renderer/components/ui/icon";
+import { type IconComponent } from "@renderer/components/ui/icon";
 
-import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
-import { Notice } from "@renderer/components/ui/notice";
-import { Skeleton } from "@renderer/components/ui/skeleton";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { PanelEmptyState, type EmptyIllustration } from "@renderer/components/ui/empty-state";
 
 import { PrefSection } from "./pref-section";
 
@@ -25,50 +24,45 @@ export type AsyncState<T> =
   | { status: "error"; message: string; onRetry: () => void }
   | { status: "ready"; data: T };
 
-/** The skeleton a first read draws. Uses the repo's primitive. */
-function LoadingRows({ label, rows = 3 }: { label: string; rows?: number }) {
+/** A held loading region; never a successful empty state. */
+function LoadingRows({ label }: { label: string }) {
   return (
-    <div className="flex flex-col divide-y divide-border" {...loadingRegionProps(label)}>
-      <span className="sr-only">Loading</span>
-      {Array.from({ length: rows }, (_, index) => (
-        <div key={index} className="flex min-h-16 items-center justify-between gap-6 px-4 py-4">
-          <div className="w-2/3 space-y-2">
-            <Skeleton className="h-4 w-2/5" />
-            <Skeleton className="h-3 w-3/4" />
-          </div>
-          <Skeleton className="h-6 w-20" />
-        </div>
-      ))}
+    <div className="min-h-16 p-4" {...loadingRegionProps(label)}>
+      <LoadingLabel>Loading {label.toLowerCase()}</LoadingLabel>
     </div>
   );
 }
 
-/**
- * A failed read, with its recovery beside it.
- *
- * The retry lives here rather than in a toast for the reason the audit found
- * the hard way: a failure whose Retry is in a dismissed toast is a failure
- * with no way back.
- */
-function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
+function ErrorRow({ message, onRetry }: { message: string; onRetry(): void }) {
   return (
-    <Notice
-      tone="error"
-      icon={WarningIcon}
+    <PanelEmptyState
+      illustration="failed"
+      status="failed"
       title={message}
-      className="m-4"
-      announce
-      actions={
-        <Button size="xs" variant="outline" onClick={onRetry}>
-          Try again
-        </Button>
-      }
+      action={{ label: "Try again", onAction: onRetry }}
     />
   );
 }
 
-export function Empty({ children }: { children: React.ReactNode }) {
-  return <p className={`${EMPTY_INLINE} px-4`}>{children}</p>;
+/** Legacy collection adapter; pending/status nodes are deliberately not empties. */
+export function Empty({
+  children,
+  illustration = "file",
+  line,
+  action,
+  plain = false,
+}: {
+  children: React.ReactNode;
+  illustration?: EmptyIllustration;
+  line?: string;
+  action?: React.ComponentProps<typeof PanelEmptyState>["action"];
+  plain?: boolean;
+}) {
+  return !plain && typeof children === "string" ? (
+    <PanelEmptyState illustration={illustration} title={children} line={line} action={action} />
+  ) : (
+    <div className={`${EMPTY_INLINE} px-4`}>{children}</div>
+  );
 }
 
 export function AsyncSection<T>({
@@ -81,6 +75,9 @@ export function AsyncSection<T>({
   state,
   isEmpty,
   empty,
+  emptyIllustration = "file",
+  emptyLine,
+  emptyAction,
   children,
 }: {
   title: string;
@@ -98,6 +95,9 @@ export function AsyncSection<T>({
   state: AsyncState<T>;
   isEmpty?: (data: T) => boolean;
   empty?: string;
+  emptyIllustration?: EmptyIllustration;
+  emptyLine?: string;
+  emptyAction?: React.ComponentProps<typeof PanelEmptyState>["action"];
   children: (data: T) => React.ReactNode;
 }) {
   return (
@@ -115,7 +115,9 @@ export function AsyncSection<T>({
       ) : null}
       {state.status === "ready" ? (
         isEmpty?.(state.data) ? (
-          <Empty>{empty ?? "Nothing yet"}</Empty>
+          <Empty illustration={emptyIllustration} line={emptyLine} action={emptyAction}>
+            {empty ?? `No ${title.toLowerCase()}`}
+          </Empty>
         ) : (
           children(state.data)
         )

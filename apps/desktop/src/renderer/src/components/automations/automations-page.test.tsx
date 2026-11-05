@@ -632,7 +632,7 @@ describe("running by hand", () => {
     });
 
     const ticketNotice = paragraph("No matching tickets");
-    expect(ticketNotice.classList.contains("text-ui")).toBe(true);
+    expect(ticketNotice.classList.contains("sr-only")).toBe(true);
     expect(ticketNotice.classList.contains("text-sm")).toBe(false);
   });
 });

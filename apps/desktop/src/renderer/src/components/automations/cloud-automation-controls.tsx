@@ -173,7 +173,7 @@ export function CloudColumnArming({
             No automation
           </Button>
           {offered.length === 0 ? (
-            <span className="text-label text-muted-foreground">No automations offered</span>
+            <span className="sr-only">No automations offered</span>
           ) : (
             offered.map((row) => (
               <Button

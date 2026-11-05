@@ -114,6 +114,7 @@ export function IntegrationsPane() {
       state={state}
       isEmpty={(availableApps) => availableApps.length === 0}
       empty="No supported apps found"
+      emptyIllustration="mcp"
     >
       {() => null}
     </AsyncSection>

@@ -110,7 +110,7 @@ describe("IntegrationsPane", () => {
 
     expect(text()).toContain(SCAN_FAILED);
     expect(text()).not.toContain(NO_APPS);
-    expect(container?.querySelector("[role='status']")).not.toBeNull();
+    expect(container?.querySelector("[role='alert']")).not.toBeNull();
     // One recovery action, not one per row.
     expect(
       [...(container?.querySelectorAll("button") ?? [])].filter(

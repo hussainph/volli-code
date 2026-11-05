@@ -26,6 +26,7 @@
  * makes truncation safe rather than lossy. Past ~1,000 the answer is Virtuoso
  * (not installed, deliberately), not a bigger cap and not pagination.
  */
+import type { EmptyIllustration } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { SearchIcon } from "@renderer/components/ui/icon";
 
@@ -105,13 +106,17 @@ export function DataTable<T>({
   columns,
   search,
   query,
+  onClearSearch,
   placeholder = "Search",
   filter,
   bulk,
   rows = 8,
   maxItems = 500,
   empty,
-  noResults = "Nothing matches.",
+  noResults,
+  emptyIllustration = "file",
+  emptyLine,
+  emptyAction,
   label,
   selection,
   minWidth = 560,
@@ -131,6 +136,7 @@ export function DataTable<T>({
    * header had exactly one action slot going spare.
    */
   query?: string;
+  onClearSearch?: () => void;
   placeholder?: string;
   filter?: TableFilter;
   /**
@@ -160,6 +166,9 @@ export function DataTable<T>({
   maxItems?: number;
   empty: string;
   noResults?: string;
+  emptyIllustration?: EmptyIllustration;
+  emptyLine?: string;
+  emptyAction?: React.ComponentProps<typeof Empty>["action"];
   /** The table's accessible name. */
   label: string;
   /** Selection is controlled and bulk actions receive only the visible selected set. */
@@ -216,7 +225,12 @@ export function DataTable<T>({
   // a row — `rows={8}` was showing seven.
   const maxBodyHeight = fill ? undefined : rows * ROW_H + HEAD_H;
 
-  if (items.length === 0 && !filter?.isFiltering) return <Empty>{empty}</Empty>;
+  if (items.length === 0 && !filter?.isFiltering)
+    return (
+      <Empty illustration={emptyIllustration} line={emptyLine} action={emptyAction}>
+        {empty}
+      </Empty>
+    );
 
   return (
     <div className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}>
@@ -353,7 +367,22 @@ export function DataTable<T>({
             ))}
           </tbody>
         </table>
-        {shown.length === 0 ? <Empty>{noResults}</Empty> : null}
+        {shown.length === 0 ? (
+          <Empty
+            illustration="search"
+            action={{
+              label: "Clear search",
+              onAction: () => {
+                setOwnQuery("");
+                onClearSearch?.();
+                const first = filter?.options[0];
+                if (first) filter?.onChange(first.value);
+              },
+            }}
+          >
+            {noResults ?? `No matching ${label.toLowerCase()}`}
+          </Empty>
+        ) : null}
       </div>
       {withheld > 0 ? (
         <p className="text-ui text-muted-foreground">

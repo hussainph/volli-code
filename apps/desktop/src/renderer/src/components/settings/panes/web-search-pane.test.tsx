@@ -46,7 +46,8 @@ async function mount(
 }
 it("holds row geometry without offering unread credentials", async () => {
   await mount(vi.fn(() => new Promise(() => {})));
-  expect(host.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
+  expect(host.querySelector('[aria-busy="true"]')).not.toBeNull();
+  expect(host.querySelector(".empty-state")).toBeNull();
   expect(host.querySelector('input[type="radio"]')).toBeNull();
 });
 it("shows one provider table with credential readiness and no secret values", async () => {

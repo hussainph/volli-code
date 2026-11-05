@@ -146,9 +146,7 @@ function LocalColumnArmingButton({
       <DropdownMenuContent align="start" className="w-80">
         <DropdownMenuLabel>Arrives in {TICKET_STATUS_LABELS[status]}</DropdownMenuLabel>
         {offered.length === 0 ? (
-          <div className="px-2 py-4 text-ui text-muted-foreground">
-            No automations in this column
-          </div>
+          <div className="sr-only">No automations in this column</div>
         ) : (
           <DropdownMenuRadioGroup
             value={armed?.id ?? DISARMED}

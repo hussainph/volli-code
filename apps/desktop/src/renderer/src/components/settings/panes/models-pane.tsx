@@ -427,8 +427,10 @@ function CatalogSection({
         rows={8}
         search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
         query={query}
+        onClearSearch={() => setQuery("")}
         placeholder="Search models"
         empty="No models"
+        emptyIllustration="mcp"
         noResults="No models match."
         columns={[
           {

@@ -504,7 +504,7 @@ describe("Read failures, offline and scope changes", () => {
     h.answer("invites:listMine", [
       { inviteId: "mine", workspaceName: "Team", invitedByName: "Robin", role: "member" },
     ]);
-    expect(text()).toContain("No Workspace selected");
+    expect(text()).toContain("Select a Workspace");
     expect(button("Join")).toBeDefined();
     expect(text()).not.toContain("Who can invite");
   });

@@ -216,7 +216,11 @@ export function CreateRunAutomationItems({
   if (!ready || groups.length === 0) {
     return (
       <div className="px-2 py-1 text-ui text-muted-foreground">
-        {ready ? "No ticket automations" : <LoadingLabel>Reading automations</LoadingLabel>}
+        {ready ? (
+          <span className="sr-only">No ticket automations</span>
+        ) : (
+          <LoadingLabel>Reading automations</LoadingLabel>
+        )}
       </div>
     );
   }

@@ -29,7 +29,6 @@ import { AttachmentIcon, CloseIcon } from "@renderer/components/ui/icon";
 
 import { useFilePicker } from "@renderer/components/attachments/composer-attach-button";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 
@@ -76,7 +75,7 @@ export function AttachmentMenuDetail<T extends AttachmentMenuEntry>({
   return (
     <>
       {attachments.length === 0 ? (
-        <p data-testid="rail-attachments-empty" className={EMPTY_INLINE}>
+        <p data-testid="rail-attachments-empty" className="sr-only">
           Nothing attached yet
         </p>
       ) : (

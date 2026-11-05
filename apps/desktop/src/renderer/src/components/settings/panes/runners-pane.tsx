@@ -329,7 +329,7 @@ function RunnerList({
     !rows.some((row) => row.id === thisMacId)
       ? { name: snapshot.runnerName ?? "This Mac", status: local }
       : null;
-  if (ordered.length === 0 && pending === null) return <Empty>No runners</Empty>;
+  if (ordered.length === 0 && pending === null) return <Empty illustration="mcp">No runners</Empty>;
   return (
     <div className="flex flex-col">
       {pending === null ? null : (

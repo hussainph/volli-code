@@ -399,14 +399,14 @@ describe("the feed while its first read is in flight (VC-383)", () => {
     await mount();
 
     expect(loading()).not.toBeNull();
-    expect(container?.textContent).not.toContain("No activity yet.");
+    expect(container?.textContent).not.toContain("No activity yet");
     expect(loading()?.querySelectorAll("li[aria-hidden]")).toHaveLength(2);
 
     await act(async () => {
       answer?.();
     });
     expect(loading()).toBeNull();
-    expect(container?.textContent).toContain("No activity yet.");
+    expect(container?.textContent).toContain("No activity yet");
   });
 
   it("stands the skeleton down for a failed baseline without calling the feed empty", async () => {
@@ -415,8 +415,8 @@ describe("the feed while its first read is in flight (VC-383)", () => {
     await mount();
 
     expect(loading()).toBeNull();
-    expect(container?.textContent).not.toContain("No activity yet.");
-    expect(container?.textContent).toContain("Couldn't load activity.");
+    expect(container?.textContent).not.toContain("No activity yet");
+    expect(container?.textContent).toContain("Couldn’t load activity");
   });
 });
 

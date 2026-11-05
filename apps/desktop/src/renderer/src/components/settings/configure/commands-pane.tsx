@@ -78,7 +78,7 @@ function CommandsTable({
         ],
       }}
       empty="No commands"
-      noResults="No commands match"
+      noResults="No matching commands"
       columns={[
         {
           key: "name",

@@ -105,79 +105,84 @@ export function SecretsPane({ project }: { project: Project }) {
           ) : undefined
         }
       >
-        {(items) => (
-          <DataTable
-            label="Saved credentials"
-            items={items}
-            keyOf={(s) => s.id}
-            minWidth={600}
-            empty="No saved credentials"
-            columns={[
-              { key: "name", header: "Name", cell: (s) => <Cell strong>{s.name}</Cell> },
-              {
-                key: "scope",
-                header: "Scope",
-                width: "6rem",
-                cell: (s) => <Cell muted>{scopeLabel(s)}</Cell>,
-              },
-              {
-                key: "used",
-                header: "Last used",
-                width: "9rem",
-                cell: (s) => (
-                  <Cell muted>
-                    {s.lastUsedAt === null ? "Never" : new Date(s.lastUsedAt).toLocaleString()}
-                  </Cell>
-                ),
-              },
-              {
-                key: "value",
-                header: "Value",
-                width: "8rem",
-                cell: (s) => (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label={`Replace ${s.name}`}
-                    onClick={() => setEditing(s)}
-                  >
-                    <span className="font-mono">••••••••</span>
-                  </Button>
-                ),
-              },
-              {
-                key: "actions",
-                header: "Actions",
-                headerHidden: true,
-                width: "2.5rem",
-                align: "end",
-                cell: (s) => (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`More actions for ${s.name}`}
-                      >
-                        <MoreIcon />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setEditing(s)}>
-                        <EditIcon />
-                        Replace
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setRevoking(s)}>
-                        <DeleteIcon />
-                        Revoke…
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ),
-              },
-            ]}
-          />
-        )}
+        {(items) =>
+          items.length === 0 &&
+          credentials !== null &&
+          LOCKED_LINE[credentials.state] !== undefined ? null : (
+            <DataTable
+              label="Saved credentials"
+              items={items}
+              keyOf={(s) => s.id}
+              minWidth={600}
+              empty="No secrets"
+              emptyIllustration="secret"
+              columns={[
+                { key: "name", header: "Name", cell: (s) => <Cell strong>{s.name}</Cell> },
+                {
+                  key: "scope",
+                  header: "Scope",
+                  width: "6rem",
+                  cell: (s) => <Cell muted>{scopeLabel(s)}</Cell>,
+                },
+                {
+                  key: "used",
+                  header: "Last used",
+                  width: "9rem",
+                  cell: (s) => (
+                    <Cell muted>
+                      {s.lastUsedAt === null ? "Never" : new Date(s.lastUsedAt).toLocaleString()}
+                    </Cell>
+                  ),
+                },
+                {
+                  key: "value",
+                  header: "Value",
+                  width: "8rem",
+                  cell: (s) => (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Replace ${s.name}`}
+                      onClick={() => setEditing(s)}
+                    >
+                      <span className="font-mono">••••••••</span>
+                    </Button>
+                  ),
+                },
+                {
+                  key: "actions",
+                  header: "Actions",
+                  headerHidden: true,
+                  width: "2.5rem",
+                  align: "end",
+                  cell: (s) => (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`More actions for ${s.name}`}
+                        >
+                          <MoreIcon />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setEditing(s)}>
+                          <EditIcon />
+                          Replace
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setRevoking(s)}>
+                          <DeleteIcon />
+                          Revoke…
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ),
+                },
+              ]}
+            />
+          )
+        }
       </AsyncSection>
       <Dialog
         open={editing !== null}

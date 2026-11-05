@@ -85,7 +85,11 @@ export function ModelAccessAccounts({
     <>
       <PrefSection title="Signed in" icon={SuccessIcon}>
         <div data-slot="model-access-accounts" className="px-4">
-          {connected.length === 0 ? <Empty>No connected accounts</Empty> : connected.map(row)}
+          {connected.length === 0 ? (
+            <Empty illustration="mcp">No connected accounts</Empty>
+          ) : (
+            connected.map(row)
+          )}
         </div>
       </PrefSection>
 
@@ -132,7 +136,16 @@ function FilteredAccounts({
       }
     >
       <div data-slot="model-access-accounts-available" className="px-4">
-        {shown.length === 0 ? <Empty>No providers match</Empty> : shown.map(row)}
+        {shown.length === 0 ? (
+          <Empty
+            illustration="search"
+            action={{ label: "Clear search", onAction: () => setQuery("") }}
+          >
+            No matching providers
+          </Empty>
+        ) : (
+          shown.map(row)
+        )}
         {!expanded && !query.trim() && shown.length < providers.length ? (
           <Button size="sm" variant="ghost" className="my-2" onClick={() => setExpanded(true)}>
             Show all {providers.length} providers

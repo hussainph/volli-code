@@ -109,6 +109,7 @@ export function WebSearchPane() {
               keyOf={(p) => p.id}
               rows={4}
               empty="No search providers"
+              emptyIllustration="search"
               columns={[
                 {
                   key: "provider",

@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
 import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
@@ -177,7 +178,7 @@ export function MovePreflight({
         {preflight !== null && !reading ? (
           <>
             {preflight.projects.length === 0 ? (
-              <p>No local projects</p>
+              <PanelEmptyState illustration="folder" title="No local projects" />
             ) : (
               <div className="flex flex-col gap-4">
                 {preflight.projects.map((project) => (

@@ -45,7 +45,6 @@ import {
 import { useLabelVocabulary } from "@renderer/components/ticket/label-picker";
 import { withLabelToggled } from "@renderer/components/ticket/label-picker-model";
 import { latestResumableSession } from "@renderer/components/ticket/session-history";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { useBoardStore } from "@renderer/stores/board";
 import {
@@ -101,7 +100,7 @@ function TicketLabelItems({
   const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
   const vocabulary = useLabelVocabulary(projectId);
 
-  if (vocabulary.length === 0) return <div className={EMPTY_INLINE}>No labels</div>;
+  if (vocabulary.length === 0) return <div className="sr-only">No labels</div>;
 
   return (
     <>

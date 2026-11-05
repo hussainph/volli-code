@@ -34,7 +34,7 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { SOURCE_LIST_ROW } from "@renderer/components/ui/list-row";
-import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import { cn } from "@renderer/lib/utils";
 
@@ -79,12 +79,14 @@ export function FileTree({
   onExpandedChange,
   searchMatches,
   scrollingHeading,
+  onClearSearch,
 }: {
   entries: readonly FileEntry[];
   scrollingHeading?: React.ReactNode;
   projectId: string;
   ticketId?: string;
   query?: string;
+  onClearSearch?(): void;
   initialFolder?: string;
   selected?: string | null;
   controls?: FileNavigatorControls;
@@ -454,15 +456,25 @@ export function FileTree({
             );
           })}
         </div>
-        {rows.length === 0 &&
-          (query ? (
-            <p className="p-4 text-ui text-muted-foreground">No matches</p>
-          ) : (
-            <div className="flex flex-col gap-2 p-4 text-ui text-muted-foreground">
-              <NextActionIllustration kind="files" />
-              <p>No files</p>
-            </div>
-          ))}
+        {rows.length === 0 && controls?.edit.kind !== "draft" ? (
+          <PanelEmptyState
+            illustration={query ? "search" : "file"}
+            title={query ? "No matching files" : "No files"}
+            action={
+              query
+                ? onClearSearch
+                  ? { label: "Clear search", onAction: onClearSearch }
+                  : undefined
+                : controls
+                  ? {
+                      label: "New file",
+                      onAction: () => controls.startDraft("file"),
+                      disabled: !controls.canWrite,
+                    }
+                  : undefined
+            }
+          />
+        ) : null}
       </div>
     </>
   );

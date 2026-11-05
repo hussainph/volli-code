@@ -31,11 +31,11 @@ async function mount() {
 it("keeps model setup reachable from the paper sheet even when inspection fails", async () => {
   boundary.inspect.mockRejectedValue(new Error("Unavailable"));
   const host = await mount();
-  expect(host.querySelector(".material-thick.rounded-sheet")).not.toBeNull();
-  expect(host.querySelector('[data-slot="identity-tile"] svg')).not.toBeNull();
+  expect(host.querySelector('.empty-state[data-tier="page"]')).not.toBeNull();
+  expect(host.querySelector('[data-composition="mcp"] svg')).not.toBeNull();
   expect(host.textContent).toContain("No model provider");
   const setup = [...host.querySelectorAll("button")].find((b) => b.textContent === "Model Access")!;
-  expect(setup.dataset.variant).toBe("default");
+  expect(setup.dataset.variant).toBe("outline");
   act(() => setup.click());
   expect(useUiStore.getState().settingsOpen).toBe(true);
   expect(useUiStore.getState().settingsCategory).toBe("model-access");
@@ -54,7 +54,8 @@ it("retains provider sign-in and signed-in/no-default branches", async () => {
   };
   boundary.inspect.mockResolvedValue({ providers: [provider], models: [] });
   const host = await mount();
-  expect(host.textContent).toContain("Sign in");
+  expect(host.textContent).toContain("Model Access");
+  expect(host.querySelectorAll("button")).toHaveLength(1);
   await act(async () => root?.unmount());
   root = createRoot(host);
   boundary.inspect.mockResolvedValue({ providers: [provider], models: [{ state: "available" }] });
