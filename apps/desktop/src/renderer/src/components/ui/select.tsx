@@ -1,4 +1,5 @@
 "use client";
+import { GlassSurface } from "./surface";
 
 import * as React from "react";
 import { useControlShape, type ControlShape } from "./control-shape";
@@ -93,46 +94,48 @@ function SelectContent({
   const motion = useMotionOriginProps("select", props, false, true);
   return (
     <SelectPrimitive.Portal>
-      <SelectPrimitive.Content
-        data-slot="select-content"
-        className={cn(
-          MENU_SURFACE,
-          "material-floating",
-          MENU_SURFACE_FADE,
-          "relative overflow-x-hidden overflow-y-auto",
-          // Everything below the fade is popper-only, and not as a style
-          // choice: `SelectItemAlignedPosition` publishes NONE of it. It sets
-          // no `data-side`, and both `--radix-select-content-transform-origin`
-          // and `--radix-select-content-available-height` are written by
-          // `SelectPopperPosition` alone. Applied unconditionally, the origin
-          // resolves to an undefined var, is invalid at computed-value time,
-          // and silently falls back to `50% 50%` — an item-aligned select that
-          // zooms out of its own middle while sitting on the trigger. The
-          // height clamp fails the same way (item-aligned carries an inline
-          // `maxHeight` instead). Item-aligned therefore fades and does not
-          // zoom: the honest motion for a surface with no published anchor.
-          position === "popper" &&
-            "max-h-(--radix-select-content-available-height) origin-(--radix-select-content-transform-origin) data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
-          position === "popper" && MENU_SURFACE_ANCHORED,
-          className,
-        )}
-        position={position}
-        align={align}
-        {...props}
-        {...motion}
-      >
-        <SelectScrollUpButton />
-        <SelectPrimitive.Viewport
+      <GlassSurface asChild tier="full">
+        <SelectPrimitive.Content
+          data-slot="select-content"
           className={cn(
-            MENU_SURFACE_PAD,
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_FADE,
+            "relative overflow-x-hidden overflow-y-auto",
+            // Everything below the fade is popper-only, and not as a style
+            // choice: `SelectItemAlignedPosition` publishes NONE of it. It sets
+            // no `data-side`, and both `--radix-select-content-transform-origin`
+            // and `--radix-select-content-available-height` are written by
+            // `SelectPopperPosition` alone. Applied unconditionally, the origin
+            // resolves to an undefined var, is invalid at computed-value time,
+            // and silently falls back to `50% 50%` — an item-aligned select that
+            // zooms out of its own middle while sitting on the trigger. The
+            // height clamp fails the same way (item-aligned carries an inline
+            // `maxHeight` instead). Item-aligned therefore fades and does not
+            // zoom: the honest motion for a surface with no published anchor.
             position === "popper" &&
-              "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1",
+              "max-h-(--radix-select-content-available-height) origin-(--radix-select-content-transform-origin) data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+            position === "popper" && MENU_SURFACE_ANCHORED,
+            className,
           )}
+          position={position}
+          align={align}
+          {...props}
+          {...motion}
         >
-          {children}
-        </SelectPrimitive.Viewport>
-        <SelectScrollDownButton />
-      </SelectPrimitive.Content>
+          <SelectScrollUpButton />
+          <SelectPrimitive.Viewport
+            className={cn(
+              MENU_SURFACE_PAD,
+              position === "popper" &&
+                "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1",
+            )}
+          >
+            {children}
+          </SelectPrimitive.Viewport>
+          <SelectScrollDownButton />
+        </SelectPrimitive.Content>
+      </GlassSurface>
     </SelectPrimitive.Portal>
   );
 }

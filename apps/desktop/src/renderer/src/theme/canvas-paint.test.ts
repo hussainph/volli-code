@@ -16,6 +16,7 @@ import {
   CANVAS_TOKEN_NAMES,
   applyResolvedAppearanceClass,
   deriveCanvasPaint,
+  regularGlassBackdrop,
   paintCanvas,
   resetSystemAppearanceWatchForTests,
   systemPrefersDark,
@@ -81,14 +82,14 @@ describe("deriveCanvasPaint", () => {
         expect(canvasTokens["--glass-pane-veil"]).toBe(
           mode === "light" ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
         );
-        expect(canvasTokens["--glass-rim"]).toContain("150deg");
-        expect(canvasTokens["--glass-spec"]).toContain("180deg");
+        expect(canvasTokens["--glass-rim"]).toContain("180deg");
+        expect(canvasTokens["--glass-rim"]).toContain("transparent 78%");
         expect(canvasTokens["--canvas-mesh"]).not.toContain("data:image");
         for (const peak of effectiveStopHexes(canvas, mode)) {
           const surface = compositeHex(
             mode === "light" ? "#ffffff" : "#1a1a1c",
             mode === "light" ? 0.46 : 0.52,
-            peak,
+            regularGlassBackdrop(peak, mode),
           );
           expect(wcagContrast(canvasTokens["--glass-secondary"], surface)).toBeGreaterThanOrEqual(
             4.5,

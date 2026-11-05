@@ -29,7 +29,10 @@ describe("Glass primitives", () => {
       expect(html).toContain('aria-label="Workspace"');
       expect(html).toContain("data-material=");
     }
-    expect(css).toContain("backdrop-filter: blur(24px) saturate(1.8)");
+    expect(css).toContain("blur(var(--glass-blur))");
+    expect(css).toContain("--glass-blur: 5.7px");
+    expect(css).toContain("--glass-post-blur: 0.4px");
+    expect(css).not.toContain("var(--glass-spec)");
     expect(css).toContain("background: var(--glass-rim)");
     expect(css).not.toContain('.glass[data-glass-static="true"]');
   });
@@ -144,7 +147,9 @@ describe("Glass primitives", () => {
     expect(css).toContain('.material-floating[data-tint="true"]');
     expect(css).toContain('[data-glass-blur="off"]');
     expect(css).toContain(":is(.glass, .material-floating) :is(.glass, .material-floating)");
-    expect(css).toContain("var(--bx, 0px) var(--by, 0px)");
+    expect(css).not.toContain(
+      "linear-gradient(var(--glass-veil), var(--glass-veil)), var(--canvas-mesh)",
+    );
     expect(css).toContain(':root[data-motion="off"]');
     for (const name of ["snappy", "smooth", "bouncy"])
       expect(css).toContain(`--spring-${name}: linear(`);

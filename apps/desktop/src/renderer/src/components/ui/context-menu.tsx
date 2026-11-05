@@ -1,4 +1,5 @@
 "use client";
+import { GlassSurface } from "./surface";
 
 /**
  * The context-menu primitives, and one policy that binds every item in them:
@@ -110,19 +111,21 @@ function ContextMenuSubContent({
   const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
     <ContextMenuPrimitive.Portal>
-      <ContextMenuPrimitive.SubContent
-        data-slot="context-menu-sub-content"
-        className={cn(
-          MENU_SURFACE,
-          "material-floating",
-          MENU_SURFACE_PAD,
-          MENU_SURFACE_MOTION,
-          "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
-          className,
-        )}
-        {...props}
-        {...motion}
-      />
+      <GlassSurface asChild tier="full">
+        <ContextMenuPrimitive.SubContent
+          data-slot="context-menu-sub-content"
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
     </ContextMenuPrimitive.Portal>
   );
 }
@@ -134,19 +137,21 @@ function ContextMenuContent({
   const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
     <ContextMenuPrimitive.Portal>
-      <ContextMenuPrimitive.Content
-        data-slot="context-menu-content"
-        className={cn(
-          MENU_SURFACE,
-          "material-floating",
-          MENU_SURFACE_PAD,
-          MENU_SURFACE_MOTION,
-          "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
-          className,
-        )}
-        {...props}
-        {...motion}
-      />
+      <GlassSurface asChild tier="full">
+        <ContextMenuPrimitive.Content
+          data-slot="context-menu-content"
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
     </ContextMenuPrimitive.Portal>
   );
 }

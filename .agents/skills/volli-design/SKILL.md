@@ -67,7 +67,7 @@ symbol. Provider/brand marks and identity tiles retain their own drawings.
 | Reading paper | Never |
 
 Tint is a per-surface boolean, not a new Settings control. Pinned navigation uses the
-same 24px/1.8 optical glass as stationary peeks, never a 90% opaque substitute.
+same measured 5.7px pane-tier blur/tone as stationary peeks. Only bounded overlays opt into cached full-tier displacement plus 0.4px post-lens reconstruction; no sheen, duplicate mesh, or masked rim on small controls.
 Never nest backdrop filters.
 Turn blur off during a morph (`data-glass-blur="off"`, or `blur={false}`). Paper remains neutral;
 accent is the first canvas stop. Use `--flow` for large accent areas and meters, tonal for the

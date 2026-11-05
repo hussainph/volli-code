@@ -31,13 +31,22 @@ Tint is a design-time material choice, not a user preference or a new theme axis
 | Buttons, small controls | Off | `.glass-control`, no backdrop pass |
 | Content paper | Never | `.material-thick` / `.material-solid` |
 
-Navigation glass uses a 46% white / 52% dark neutral veil; ordinary glass uses
-58% / 56%. A viewport-aligned mesh, 24px blur with 1.8 saturation, a top specular
-wash and a directional masked rim make one continuous material across the window.
-The canvas retains authored hues in both appearances: the default pools are
-62% / 58% opaque over a neutral floor mixed with the primary at 22% / 26%.
-Vibrancy changes pool opacity rather than lightness-banding the authored colours.
-Grain belongs to the canvas, not a second stretched texture on each glass pane.
+Navigation glass retains the mock's 46% white / 52% dark neutral veil; ordinary
+glass uses 56%. The pane tier has one measured 5.7px blur/tone chain, a static
+1px horizontal rim and two soft shadows; no duplicate canvas, SVG or sheen.
+Light tone is contrast .44174 / brightness 1.44847 / saturation 1.91139; dark
+uses brightness 1.56971 / contrast .61490 / brightness .71240 / saturation 2.79074.
+`GlassSurface tier="full"` opts bounded menus, popovers and the search capsule
+into cached device-resolution displacement plus 0.4px post-lens reconstruction.
+Maps are acquired only on mount/resize, never scroll; oversized overlays stay
+pane-tier. At most 16 unused geometries are retained. Small controls use a cheap
+inset shadow, never a masked gradient rim. No blur value animates. The composer
+sits on opaque paper: its boolean tint uses the first authored hue mixed into
+the same 46/52% veil, not a second mesh masquerading as a backdrop.
+
+The canvas retains authored hues in both appearances: default pools are 62% /
+58% opaque over a neutral floor mixed with the primary at 22% / 26%. Vibrancy
+changes opacity, not authored lightness. Grain belongs only to the canvas.
 
 Pinned navigation and stationary peeks use the same optical recipe. Reveal, pin
 and pour disable blur synchronously, as do nested glass and hidden resident panes.

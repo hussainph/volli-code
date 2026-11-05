@@ -123,8 +123,9 @@ export const CANVAS_TOKEN_NAMES = [
   "--canvas-mesh",
   "--glass-veil",
   "--glass-pane-veil",
+  "--glass-writing-veil",
+  "--glass-tone",
   "--glass-rim",
-  "--glass-spec",
   "--glass-ink",
   "--glass-secondary",
   "--fill-row-selected",
@@ -188,6 +189,49 @@ export function systemPrefersDark(): boolean {
  * pool — so an ink chosen against the gradient alone would be chosen against
  * surfaces that are no longer the hardest ones on screen.
  */
+const REGULAR_TONE = {
+  light: [
+    ["contrast", 0.44174],
+    ["brightness", 1.44847],
+    ["saturate", 1.91139],
+  ],
+  dark: [
+    ["brightness", 1.56971],
+    ["contrast", 0.6149],
+    ["brightness", 0.7124],
+    ["saturate", 2.79074],
+  ],
+} as const;
+
+const clampGlassChannel = (value: number) => Math.max(0, Math.min(1, value));
+
+/** The CSS filter chain in sRGB, before the mock's neutral veil is composited.
+ * Ink must be solved against measured glass, not against unfiltered canvas. */
+export function regularGlassBackdrop(hex: string, mode: ResolvedAppearance): string {
+  let rgb = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  for (const [kind, value] of REGULAR_TONE[mode]) {
+    if (kind === "saturate") {
+      const [r, g, b] = rgb,
+        s = value;
+      rgb = [
+        (0.213 + 0.787 * s) * r + (0.715 - 0.715 * s) * g + (0.072 - 0.072 * s) * b,
+        (0.213 - 0.213 * s) * r + (0.715 + 0.285 * s) * g + (0.072 - 0.072 * s) * b,
+        (0.213 - 0.213 * s) * r + (0.715 - 0.715 * s) * g + (0.072 + 0.928 * s) * b,
+      ].map(clampGlassChannel);
+    } else
+      rgb = rgb.map((channel) =>
+        clampGlassChannel(kind === "contrast" ? (channel - 0.5) * value + 0.5 : channel * value),
+      );
+  }
+  return `#${rgb
+    .map((channel) =>
+      Math.round(channel * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
 export function deriveCanvasPaint(
   canvas: Canvas,
   resolved: ResolvedAppearance,
@@ -209,7 +253,7 @@ export function deriveCanvasPaint(
   // Solve meaningful glass text against every peak, not against neutral paper.
   // Very pale authored dark canvases may need dark ink on their glass.
   const glassPools = effectiveStopHexes(canvas, resolved).map((hex) =>
-    compositeHex(paneFill, paneAlpha, hex),
+    compositeHex(paneFill, paneAlpha, regularGlassBackdrop(hex, resolved)),
   );
   const contrast = (hex: string) =>
     Math.min(...glassPools.map((surface) => wcagContrast(hex, surface)));
@@ -248,14 +292,15 @@ export function deriveCanvasPaint(
       "--glass-fill": resolved === "light" ? "#fafafa" : "#282828",
       "--glass-edge": light ? "rgb(0 0 0 / .11)" : "rgb(0 0 0 / .6)",
       "--canvas-mesh": canvasBackground(canvas, resolved, false),
-      "--glass-veil": light ? "rgb(255 255 255 / .58)" : "rgb(40 40 42 / .56)",
+      "--glass-veil": light ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
       "--glass-pane-veil": light ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
+      // Writing glass sits on opaque paper, not on the canvas. Use an authored
+      // tint colour at the same veil alpha rather than painting a second mesh.
+      "--glass-writing-veil": `color-mix(in srgb, color-mix(in srgb, ${canvas.stops[0].hex} 22%, ${light ? "#ffffff" : "#1a1a1c"}) ${light ? 46 : 52}%, transparent)`,
+      "--glass-tone": REGULAR_TONE[resolved].map(([kind, value]) => `${kind}(${value})`).join(" "),
       "--glass-rim": light
-        ? "linear-gradient(150deg, #fff 0%, rgb(255 255 255 / .55) 30%, rgb(255 255 255 / .25) 62%, rgb(255 255 255 / .7) 100%)"
-        : "linear-gradient(150deg, rgb(255 255 255 / .34) 0%, rgb(255 255 255 / .12) 30%, rgb(255 255 255 / .04) 62%, rgb(255 255 255 / .16) 100%)",
-      "--glass-spec": light
-        ? "linear-gradient(180deg, rgb(255 255 255 / .75), transparent 38%)"
-        : "linear-gradient(180deg, rgb(255 255 255 / .10), transparent 40%)",
+        ? "linear-gradient(180deg, rgb(255 255 255 / .17), transparent 22%, transparent 78%, rgb(255 255 255 / .17))"
+        : "linear-gradient(180deg, rgb(255 255 255 / .21), transparent 22%, transparent 78%, rgb(255 255 255 / .21))",
       "--glass-ink": glassInk,
       "--glass-secondary": glassSecondary,
       "--fill-row-selected": `color-mix(in oklab, ${glassInk} 9%, transparent)`,

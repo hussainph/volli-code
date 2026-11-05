@@ -7,7 +7,7 @@
  * plus a trailing `-webkit-backdrop-filter` into the prefixed spelling alone.
  * Chromium does not parse that spelling, so a source rule that reads correctly
  * can still leave every menu, popover and dialog computing
- * `backdrop-filter: none`, with crisp text showing through the 90% tint.
+ * `backdrop-filter: none`, with crisp text showing through the neutral veil.
  *
  * So this runs the material section through the same `optimize` call the
  * Tailwind Vite plugin makes in a build. Like Chromium, jsdom ignores the
@@ -64,11 +64,12 @@ function tailwindOptimize(): (
   return fromPlugin("@tailwindcss/node").optimize;
 }
 
-const BLUR = "blur(24px) saturate(1.8)";
+const BLUR =
+  "blur(var(--glass-blur)) var(--glass-refraction,) blur(var(--glass-post-blur)) var(--glass-tone)";
 const backdrop = (el: Element) =>
   getComputedStyle(el)
     .getPropertyValue("backdrop-filter")
-    .replace(/\)(?=\S)/g, ") ");
+    .replace(/\)(?=[a-z])/g, ") ");
 
 let shipped = "";
 let root: Root;
@@ -112,10 +113,12 @@ afterEach(async () => {
 
 describe("floating material as shipped", () => {
   it("keeps the standard backdrop-filter spelling through the build's optimizer", () => {
-    expect(shipped).toMatch(/[;{]backdrop-filter:\s*blur\(24px\)\s*saturate\(1\.8\)/);
-    // The tint stays 90%: jsdom cannot resolve `color-mix` over a variable, so
-    // the shipped rule is read as text.
-    expect(shipped).toContain("var(--material-solid-fill) 90%, transparent)");
+    expect(shipped).toContain("backdrop-filter:blur(var(--glass-blur))");
+    expect(source).toContain("--glass-blur: 5.7px");
+    expect(source.replace(/\s+/g, " ")).toContain(
+      "contrast(0.44174) brightness(1.44847) saturate(1.91139)",
+    );
+    expect(shipped).toContain("background:var(--glass-veil)");
     // Hand-written prefixes are what the optimizer folded away; it adds the
     // prefix itself for any target that needs one.
     const declarations = source.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -216,7 +219,7 @@ describe("floating material as shipped", () => {
     ],
   ];
 
-  it.each(floats)("%s computes the 24px backdrop blur", async (_name, slot, ui) => {
+  it.each(floats)("%s retains the measured backdrop chain", async (_name, slot, ui) => {
     await act(async () => root.render(ui()));
     const surface = document.querySelector(`[data-slot="${slot}"]`)!;
     expect(surface).not.toBeNull();

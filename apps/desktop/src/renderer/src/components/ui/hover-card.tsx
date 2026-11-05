@@ -1,3 +1,4 @@
+import { GlassSurface } from "./surface";
 /** Pointer inspection, without an entrance on a high-frequency navigation path. */
 import type * as React from "react";
 import { ControlShapeProvider } from "./control-shape";
@@ -14,17 +15,19 @@ export function HoverCardContent({
 }: React.ComponentProps<typeof Primitive.Content>) {
   return (
     <Primitive.Portal>
-      <Primitive.Content
-        data-slot="hover-card-content"
-        sideOffset={sideOffset}
-        className={cn(
-          "material-floating z-50 w-80 rounded-menu p-1 text-ui text-foreground",
-          className,
-        )}
-        {...props}
-      >
-        <ControlShapeProvider context="popover">{children}</ControlShapeProvider>
-      </Primitive.Content>
+      <GlassSurface asChild tier="full">
+        <Primitive.Content
+          data-slot="hover-card-content"
+          sideOffset={sideOffset}
+          className={cn(
+            "material-floating z-50 w-80 rounded-menu p-1 text-ui text-foreground",
+            className,
+          )}
+          {...props}
+        >
+          <ControlShapeProvider context="popover">{children}</ControlShapeProvider>
+        </Primitive.Content>
+      </GlassSurface>
     </Primitive.Portal>
   );
 }

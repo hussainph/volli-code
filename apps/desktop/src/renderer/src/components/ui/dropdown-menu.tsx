@@ -1,4 +1,5 @@
 "use client";
+import { GlassSurface } from "./surface";
 
 import * as React from "react";
 import { ChevronRightIcon, CheckIcon } from "@renderer/components/ui/icon";
@@ -52,20 +53,22 @@ function DropdownMenuContent({
   const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
     <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content
-        data-slot="dropdown-menu-content"
-        sideOffset={sideOffset}
-        className={cn(
-          MENU_SURFACE,
-          "material-floating",
-          MENU_SURFACE_PAD,
-          MENU_SURFACE_MOTION,
-          "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
-          className,
-        )}
-        {...props}
-        {...motion}
-      />
+      <GlassSurface asChild tier="full">
+        <DropdownMenuPrimitive.Content
+          data-slot="dropdown-menu-content"
+          sideOffset={sideOffset}
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
     </DropdownMenuPrimitive.Portal>
   );
 }
@@ -217,19 +220,21 @@ function DropdownMenuSubContent({
   const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
     <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.SubContent
-        data-slot="dropdown-menu-sub-content"
-        className={cn(
-          MENU_SURFACE,
-          "material-floating",
-          MENU_SURFACE_PAD,
-          MENU_SURFACE_MOTION,
-          "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
-          className,
-        )}
-        {...props}
-        {...motion}
-      />
+      <GlassSurface asChild tier="full">
+        <DropdownMenuPrimitive.SubContent
+          data-slot="dropdown-menu-sub-content"
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
     </DropdownMenuPrimitive.Portal>
   );
 }

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { GlassSurface } from "./ui/surface";
 import { ControlShapeProvider } from "./ui/control-shape";
 import {
   ChevronLeftIcon,
@@ -318,21 +319,23 @@ function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
  */
 function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-haspopup="dialog"
-      aria-label="Search tickets, sessions, and commands"
-      title="Search tickets, sessions, and commands (⌘K)"
-      className="search-capsule glass-control app-region-no-drag flex h-(--spacing-chrome-control) w-[380px] max-w-[40vw] items-center gap-2 px-3 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>
-      {/* The keycap reads as cut out of the pill, so it goes the other way:
+    <GlassSurface asChild tier="full" size="control">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-haspopup="dialog"
+        aria-label="Search tickets, sessions, and commands"
+        title="Search tickets, sessions, and commands (⌘K)"
+        className="search-capsule glass-control app-region-no-drag flex h-(--spacing-chrome-control) w-[380px] max-w-[40vw] items-center gap-2 px-3 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>
+        {/* The keycap reads as cut out of the pill, so it goes the other way:
           toward the canvas floor. `--background` is near-black in dark (what
           the literal used to be) and near-white in light, which is what a key
           cap looks like on a light chrome. */}
-      <kbd className="shrink-0 font-sans text-label text-muted-foreground">⌘K</kbd>
-    </button>
+        <kbd className="shrink-0 font-sans text-label text-muted-foreground">⌘K</kbd>
+      </button>
+    </GlassSurface>
   );
 }

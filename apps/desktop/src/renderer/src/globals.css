@@ -364,16 +364,21 @@
     );
   --glass-veil: rgb(40 40 42 / 0.56);
   --glass-pane-veil: rgb(26 26 28 / 0.52);
-  --glass-rim: linear-gradient(
-    150deg,
-    rgb(255 255 255 / 0.34) 0%,
-    rgb(255 255 255 / 0.12) 30%,
-    rgb(255 255 255 / 0.04) 62%,
-    rgb(255 255 255 / 0.16) 100%
+  --glass-writing-veil: color-mix(
+    in srgb,
+    color-mix(in srgb, #e8652a 22%, #1a1a1c) 52%,
+    transparent
   );
-  --glass-spec: linear-gradient(180deg, rgb(255 255 255 / 0.1), transparent 40%);
+  --glass-tone: brightness(1.56971) contrast(0.6149) brightness(0.7124) saturate(2.79074);
+  --glass-rim: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.21),
+    transparent 22%,
+    transparent 78%,
+    rgb(255 255 255 / 0.21)
+  );
   --glass-ink: #f5f5f5;
-  --glass-secondary: #b9b9b9;
+  --glass-secondary: #bababa;
   --fill-row-selected: color-mix(in oklab, #f5f5f5 9%, transparent);
   --fill-row-hover: color-mix(in oklab, #f5f5f5 4.7%, transparent);
   --fill-quaternary: rgb(255 255 255 / 0.027);
@@ -511,18 +516,23 @@
       color-mix(in oklab, #f3a33c 62%, transparent),
       transparent 74%
     );
-  --glass-veil: rgb(255 255 255 / 0.58);
+  --glass-veil: rgb(255 255 255 / 0.56);
   --glass-pane-veil: rgb(255 255 255 / 0.46);
-  --glass-rim: linear-gradient(
-    150deg,
-    #fff 0%,
-    rgb(255 255 255 / 0.55) 30%,
-    rgb(255 255 255 / 0.25) 62%,
-    rgb(255 255 255 / 0.7) 100%
+  --glass-writing-veil: color-mix(
+    in srgb,
+    color-mix(in srgb, #e8652a 22%, #ffffff) 46%,
+    transparent
   );
-  --glass-spec: linear-gradient(180deg, rgb(255 255 255 / 0.75), transparent 38%);
+  --glass-tone: contrast(0.44174) brightness(1.44847) saturate(1.91139);
+  --glass-rim: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.17),
+    transparent 22%,
+    transparent 78%,
+    rgb(255 255 255 / 0.17)
+  );
   --glass-ink: #171717;
-  --glass-secondary: #545454;
+  --glass-secondary: #5a5a5a;
   --fill-row-selected: color-mix(in oklab, #171717 9%, transparent);
   --fill-row-hover: color-mix(in oklab, #171717 4.7%, transparent);
   --fill-quaternary: rgb(0 0 0 / 0.027);
@@ -1731,9 +1741,9 @@
   }
 }
 
-/* Glass, tuned material ladder. Viewport-aligned authored mesh, optical
- * neutral veil, specular wash and masked rim. Docked navigation and peeks
- * share the live 24px/1.8 recipe; motion and nested surfaces disable blur.
+/* Glass, tuned material ladder. Measured regular tone and blur, a static
+ * horizontal rim and two soft shadows. Pane is CSS-only; bounded full-tier
+ * overlays add cached displacement and post-lens reconstruction.
  * Reading paper, terminals and native browser work planes remain opaque. */
 :root,
 .dark,
@@ -1840,30 +1850,12 @@ article.bg-card {
   --sidebar-foreground: var(--material-foreground);
   --muted-foreground: var(--material-foreground);
 }
-/* Only transient floats sample arbitrary content. Command embedded in a
- * popover/dialog shares its parent's material instead of adding another pass.
- * Floats sit over arbitrary, often high-contrast content (a dialog footer's
- * primary button under a popover), so their tint is 90%, not the static
- * ladder's 76%: wherever the blur pass is not composited, what shows through
- * stays a faint ghost rather than legible text.
- *
- * `backdrop-filter` is written UNPREFIXED ONLY, in every rule of this file.
- * Lightning CSS (Tailwind's optimizer and the build's minifier) folds a
- * `-webkit-backdrop-filter` written after the standard property into one
- * declaration and keeps only the prefixed spelling. Chromium does not parse
- * that spelling, so every float would compute `backdrop-filter: none` and show
- * crisp text through its tint. The build adds the prefix itself for any target
- * that needs it (`floating-material.test.tsx`). */
+/* Keep backdrop-filter unprefixed here: the build optimizer adds any required
+ * prefix itself. Hand-writing both can discard Chromium's standard spelling. */
 .material-floating,
 [cmdk-dialog],
 .toaster [data-sonner-toast].material-floating {
   --material-solid-fill: var(--popover);
-  background: color-mix(in oklab, var(--material-solid-fill) 90%, transparent);
-  border-color: var(--border-strong);
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
-    var(--shadow-overlay);
-  backdrop-filter: blur(24px) saturate(1.8);
   contain: paint;
 }
 /* Only DOM-nested floats share their parent's material. Portaled submenus
@@ -1887,21 +1879,26 @@ article.bg-card {
 [data-slot="tooltip-content"].material-floating {
   contain: none;
 }
-/* Glass surfaces share viewport coordinates without measuring on every scroll.
- * --bx/--by can be supplied by a morph host using its captured window offset.
- * Permanent paper never blurs. Small controls borrow the material without a pass. */
+/* One material chain. Tint keeps the mock's neutral 46–56% veil over the
+ * actual canvas; never paint a duplicate canvas beneath the blur. */
 .glass,
-.material-floating {
+.material-floating,
+[cmdk-dialog] {
+  --glass-refraction: ;
+  --glass-post-blur: 0px;
   position: relative;
-  background: var(--glass-spec), linear-gradient(var(--glass-veil), var(--glass-veil));
-  border-color: var(--glass-edge);
-  box-shadow:
-    var(--shadow-glass),
-    0 0 0 0.5px var(--glass-edge);
+  background: var(--glass-veil);
+  border-color: transparent;
+  box-shadow: var(--shadow-glass);
   color: var(--foreground);
-  backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(var(--glass-blur)) var(--glass-refraction,) blur(var(--glass-post-blur))
+    var(--glass-tone);
 }
-.glass::after {
+[data-glass-tier="full"] {
+  --glass-post-blur: 0.4px;
+}
+.glass::after,
+.material-floating::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -1914,19 +1911,26 @@ article.bg-card {
     linear-gradient(var(--foreground) 0 0) content-box,
     linear-gradient(var(--foreground) 0 0);
   mask-composite: exclude;
+  mix-blend-mode: plus-lighter;
 }
 .glass[data-tint="true"],
 .material-floating[data-tint="true"],
 .material-regular,
 .glass-tinted {
-  background:
-    var(--glass-spec), linear-gradient(var(--glass-veil), var(--glass-veil)), var(--canvas-mesh);
-  background-size: 100vw 100vh;
-  background-position: var(--bx, 0px) var(--by, 0px);
-  background-attachment: fixed;
-}
-:is([data-volli-sidebar], [data-volli-rail]).glass {
   --glass-veil: var(--glass-pane-veil);
+  background: var(--glass-veil);
+}
+.session-prompt.glass[data-tint="true"] {
+  background: var(--glass-writing-veil);
+}
+/* Numerous small controls must not each pay for a masked rim. */
+[data-glass-size="control"]::after {
+  display: none;
+}
+[data-glass-size="control"] {
+  box-shadow:
+    var(--shadow-glass-small),
+    inset 0 0 0 0.5px var(--glass-edge);
 }
 /* Withdrawn resident panes keep identity but spend no descendant animation or
  * blur budget. Do not pause the panel's own reveal/pour. */
@@ -2417,7 +2421,8 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --duration-sheet: 220ms;
   --duration-press: 120ms;
   --press-scale: 0.97;
-  --shadow-glass: 0 4px 16px rgb(0 0 0 / 0.055), 0 1px 2px rgb(0 0 0 / 0.04);
+  --glass-blur: 5.7px;
+  --shadow-glass: 0 4px 14px rgb(0 0 0 / 0.1), 0 0 0.5px rgb(0 0 0 / 0.1);
   --shadow-glass-small: 0 1px 3px rgb(0 0 0 / 0.06);
   --spring-smooth: linear(
     0,
@@ -2577,7 +2582,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --duration-bouncy: 380ms;
 }
 :root.dark {
-  --shadow-glass: 0 6px 20px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.22);
+  --shadow-glass: 0 4px 14px rgb(0 0 0 / 0.14), 0 0 0.5px rgb(0 0 0 / 0.12);
   --shadow-glass-small: 0 1px 3px rgb(0 0 0 / 0.25);
 }
 /* Flat faces. Tonal primary has a same-hue sheen, never a grey bevel. */
@@ -2605,9 +2610,11 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 @layer components {
   .glass-control {
     background: var(--glass-veil);
-    border: 0.5px solid var(--glass-edge);
+    border: 0;
     border-radius: 999px;
-    box-shadow: var(--shadow-glass-small);
+    box-shadow:
+      var(--shadow-glass-small),
+      inset 0 0 0 0.5px var(--glass-edge);
   }
   .inspector-popup {
     height: var(--spacing-control-default);
@@ -2809,9 +2816,11 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 /* Controls on canvas share a neutral face; selected navigator rows share the
  * exact 18% tint used by Session ListRow, independently of focus. */
 [data-slot="chrome-bar"] .search-capsule.glass-control {
-  background: color-mix(in oklab, var(--background) 35%, transparent);
+  background: var(--glass-veil);
   border: 0;
-  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 28%, transparent);
+  box-shadow:
+    var(--shadow-glass-small),
+    inset 0 0 0 0.5px var(--glass-edge);
   color: var(--canvas-ink);
 }
 [data-volli-sidebar] [data-slot="sidebar-menu-button"][data-active="true"] {
@@ -3115,7 +3124,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-image: linear-gradient(var(--fill-secondary), var(--fill-secondary));
 }
 [data-control="button"].glass-control {
-  background-image: var(--glass-spec);
+  background-image: none;
 }
 [data-control="button"].glass-control:active:not(:disabled) {
   background-color: var(--fill-row-selected);
@@ -3155,7 +3164,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-attachment: scroll;
 }
 .tab-track {
-  background: var(--glass-spec), var(--fill-secondary);
+  background: var(--fill-secondary);
 }
 
 [data-volli-sidebar] [data-slot="sidebar-header"] .font-display {
