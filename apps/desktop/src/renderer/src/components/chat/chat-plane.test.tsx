@@ -148,7 +148,9 @@ describe("ChatTurn copy control", () => {
     });
 
     expect(html).toContain('aria-label="Copy"');
-    expect(html).toContain('data-size="icon"');
+    expect(html).toContain('data-size="icon-sm"');
+    expect(html).toContain('data-message-copy=""');
+    expect(html).toContain("size-3.5");
     expect(html).toContain('title="Copy"');
     expect(html).not.toContain("left-[calc(100%");
     expect(html).not.toContain("pointer-events-none absolute top-0");

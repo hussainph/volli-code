@@ -3325,14 +3325,16 @@ function MessageCopyAction({ text }: { text: string }) {
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size="icon-sm"
+      data-message-copy=""
+      data-feedback={copyState === "idle" ? undefined : copyState}
       title={copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
       aria-label={
         copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"
       }
       onClick={() => void copyText(text).then(setCopyState)}
     >
-      <CopyStateIcon className={cn("size-4", copyState === "failed" && "text-destructive")} />
+      <CopyStateIcon className={cn("size-3.5", copyState === "failed" && "text-destructive")} />
     </Button>
   );
 }

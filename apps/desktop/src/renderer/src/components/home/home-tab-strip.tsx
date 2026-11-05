@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useAutomaticTitleChange } from "@renderer/chat/title-change";
 import { launchStore } from "@renderer/stores/launch";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
@@ -754,6 +755,7 @@ function ChatTab({
   ...shell
 }: KindTabProps & { sessionId: string; title: string; status: TicketTabStatus }) {
   const canRename = launchStore() !== "cloud";
+  const automaticLabelChange = useAutomaticTitleChange(sessionId, title);
   const provenance = useSessionProvenance(projectId, sessionId);
   const liveProvider = useChatSessionsStore(
     (state) => state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null,
@@ -786,6 +788,7 @@ function ChatTab({
       // A landing auto-title reveals here word by word (VC-81); terminal
       // and board tabs stay static.
       revealLabel
+      automaticLabelChange={automaticLabelChange}
       leading={
         <SessionGlyph
           providerId={providerId}
