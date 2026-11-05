@@ -105,6 +105,16 @@ async function moveViaContextMenu(page, displayId, columnLabel) {
   await moveTo.hover();
   const target = page.getByRole("menuitem", { name: columnLabel, exact: true });
   await target.waitFor();
+  // The glass submenu scales from its anchor. Visibility alone can expose a
+  // row before its final hit box exists; cross into it only after the entrance.
+  await waitUntil("the Move to submenu entrance to finish", () =>
+    target.evaluate((element) =>
+      element
+        .closest('[data-slot="context-menu-sub-content"]')
+        .getAnimations()
+        .every((animation) => animation.playState === "finished"),
+    ),
+  );
   await target.click();
 }
 

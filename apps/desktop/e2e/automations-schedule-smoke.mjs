@@ -139,7 +139,7 @@ try {
       // what "no cron expression is accepted anywhere in the UI" means at the
       // only surface that authors one.
       await form.getByRole("radio", { name: "On a schedule" }).click();
-      const preset = form.getByLabel("Schedule");
+      const preset = form.getByRole("combobox", { name: "Schedule", exact: true });
       await preset.waitFor({ timeout: 10000 });
       // Through the preset control both ways, so this asserts the control
       // DRIVES the record rather than agreeing with a default. An hourly

@@ -5,8 +5,8 @@
  * CRUD and the Run door. What this one proves is what the PAGE promises, and
  * every claim below is one a unit test cannot make:
  *
- *   1. A fourth nav row exists beside Home and Configure, and clicking it
- *      lands on a page — not on a room inside Home.
+ *   1. A dedicated Automations nav control exists, and clicking it lands on
+ *      a page — not on a room inside Home.
  *   2. The New form opens EMPTY behind a `/skill` placeholder, on the manual
  *      Trigger and an inherited Runtime — and creating through it works, for
  *      both Ownerships, so the page lists its own and the global ones.
@@ -107,6 +107,9 @@ try {
 
   app = await launch({ dbPath, userDataDir });
   let page = await app.firstWindow();
+  // Exercise the editor with its full action row on a compact window too;
+  // a wide local display otherwise hides a name field collapsed by controls.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 800));
   page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
   assertBuiltRendererLoaded(page);
   await assertProfileIsolated(app, userDataDir);
@@ -151,7 +154,7 @@ try {
     );
   }
 
-  await must(1, "a fourth nav row opens the Automations page", async () => {
+  await must(1, "the dedicated nav control opens the Automations page", async () => {
     const nav = page.getByRole("button", { name: "Automations", exact: true }).first();
     await nav.click();
     // The page's own heading, not the nav row's label: this asserts we ARRIVED.
@@ -201,7 +204,7 @@ try {
     await form.getByLabel("Name").fill("Nightly sweep");
     await form.getByLabel("Instructions").fill("Run the nightly sweep");
     // Ownership decides WHERE it is listed, and is editable on create only.
-    await form.getByLabel("Ownership").click();
+    await form.getByRole("combobox", { name: "Ownership", exact: true }).click();
     await page.getByRole("option", { name: "All projects" }).click();
     await form.getByRole("button", { name: "Create automation" }).click();
     await page
@@ -209,9 +212,8 @@ try {
       .filter({ hasText: "Nightly sweep" })
       .waitFor({ timeout: 15000 });
 
-    // Lowercased because `innerText` reports the RENDERED text and the section
-    // eyebrows are `uppercase` in CSS. This probe is about which Automations
-    // are listed under which Ownership, not about letter case.
+    // This probe is about which Automations are listed under which Ownership,
+    // not about letter case.
     const body = (await page.locator("body").innerText()).toLowerCase();
     const ok =
       body.includes("this project") &&
