@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { attachGlassOptics } from "./glass-optics";
@@ -91,4 +92,27 @@ describe("bounded full-tier glass optics", () => {
     expect(make).not.toHaveBeenCalled();
     reduced.remove();
   });
+});
+
+it("preserves the exact displacement bytes while skipping the neutral interior", () => {
+  const fixtures = [
+    [71, 49, 12, 1, "042068e6bf63432028b4e1e6fb75a9f9aeeb547b47c2b65ddab4a58a91698ada"],
+    [173, 217, 12, 2, "3d9f7e241314b89d98cee3086695bc27ab4014b25ba7e31ce2e20aee9dff606d"],
+    [340, 500, 12, 2, "bdfea69ddfa75d5db653074b18a117c744ee318db3897df138166c78f1020120"],
+    [420, 240, 70, 2, "7674bc81cf8e794674e67c94ad9762c24bd3cd6c9a56fc68484fc409f5b10f17"],
+    [84, 84, 42, 2, "ed7573f2269ce1a711870050d2231710fd1e6a3a27a90a695470f973a8d0af9e"],
+    [23, 25, 6, 1, "d127d1213a6c7de27550ac70abeb2977cf82df6f3e540177126b12d1c1cd6d21"],
+  ] as const;
+  for (const [w, h, r, dpr, hash] of fixtures) {
+    vi.stubGlobal("devicePixelRatio", dpr);
+    const make = canvas();
+    const node = fixture(w, h);
+    node.style.borderRadius = `${r}px`;
+    const stop = attachGlassOptics(node);
+    const data = make.mock.results.at(-1)!.value.data;
+    expect(createHash("sha256").update(data).digest("hex"), [w, h, r, dpr].join("/")).toBe(hash);
+    stop();
+    node.remove();
+    vi.restoreAllMocks();
+  }
 });

@@ -103,6 +103,16 @@ const CURVES: readonly Curve[] = [
     ],
   ],
 ];
+// All curves have an exactly neutral interior after their final nonzero
+// segment. Trailing zero samples do not extend the lens's influence.
+const MAX_LENS_DEPTH =
+  Math.max(
+    ...CURVES.map(([, curve]) => {
+      let end = curve.length - 1;
+      while (end > 0 && curve[end - 1][1] === 0) end--;
+      return curve[end][0];
+    }),
+  ) + 0.25;
 const NS = "http://www.w3.org/2000/svg";
 interface Lens {
   id: string;
@@ -176,8 +186,16 @@ function acquire(el: HTMLElement): { key: string; release(): void } | null {
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
     const image = ctx.createImageData(canvas.width, canvas.height);
+    image.data.fill(128);
+    for (let alpha = 3; alpha < image.data.length; alpha += 4) image.data[alpha] = 255;
+    // The rounded-rectangle signed distance is beyond every curve's support
+    // inside this inset. Those pixels are EXACTLY neutral, not an approximation.
+    // Keep device resolution and the shipped interpolation/map bytes unchanged.
+    const edge = Math.ceil(Math.max(r, MAX_LENS_DEPTH) * dpr);
     for (let py = 0; py < canvas.height; py++)
       for (let px = 0; px < canvas.width; px++) {
+        if (py >= edge && py < canvas.height - edge && px === edge && px < canvas.width - edge)
+          px = canvas.width - edge;
         const x = (px + 0.5) / dpr - w / 2,
           y = (py + 0.5) / dpr - h / 2;
         const qx = Math.abs(x) - (w / 2 - r),

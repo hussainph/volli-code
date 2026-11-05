@@ -1,3 +1,4 @@
+import { afterPaint } from "@renderer/lib/after-paint";
 import { observePaneLayout, paneResizeActive } from "@renderer/lib/pane-resize";
 import * as React from "react";
 import { useBlobReader } from "@renderer/components/attachments/blob-read";
@@ -92,6 +93,8 @@ export interface MonacoDocumentEditorProps {
   /** 28px empty document target; focus height remains the host's decision. */
   compact?: boolean;
   autoFocus?: boolean;
+  /** Let an enclosing transient shell present before initializing its view. */
+  deferUntilPaint?: boolean;
   /**
    * Classes for the editor host. Min/max height belong here and are honoured
    * (see the auto-height note on the component); PADDING does not — the host's
@@ -210,6 +213,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     placeholder,
     compact = false,
     autoFocus,
+    deferUntilPaint = false,
     className,
     style,
     ariaLabel,
@@ -338,15 +342,20 @@ export const MonacoDocumentEditor = React.forwardRef<
     if (host === null) return;
 
     let cancelled = false;
+    const paint = new AbortController();
     let view: editor.IStandaloneCodeEditor | null = null;
     let lease: DocumentMonacoLease | null = null;
     let attachment: DocumentModeAttachment | null = null;
     const subscriptions: { dispose(): void }[] = [];
     host.dataset.monacoStatus = "loading";
 
-    void loadMonacoRuntime()
+    const prepare = async () => {
+      if (deferUntilPaint) await afterPaint(paint.signal);
+      return cancelled ? null : loadMonacoRuntime();
+    };
+    void prepare()
       .then((runtime) => {
-        if (cancelled) return;
+        if (cancelled || runtime === null) return;
         const seed = seedRef.current;
         const seedRevision = liveRef.current.revision ?? null;
         lease = runtime.registry.acquire({
@@ -468,6 +477,7 @@ export const MonacoDocumentEditor = React.forwardRef<
 
     return () => {
       cancelled = true;
+      paint.abort();
       attachment?.dispose();
       attachmentRef.current = null;
       for (const subscription of subscriptions) subscription.dispose();
@@ -492,7 +502,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         liveRef.current.onDirtyChange?.(false);
       }
     };
-  }, [applyExternal, emitDirty, key, viewId]);
+  }, [applyExternal, emitDirty, key, viewId, deferUntilPaint]);
 
   // External value → document sync. While focused we can't move the caret, so
   // remember it and let the blur handler adopt it if the buffer is untouched.
