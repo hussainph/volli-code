@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 /**
  * Pointer intent for the summoned sidebar panel: when a pointer at the window's
  * left edge means "show me the sidebar", and when it means anything else.
@@ -81,9 +82,9 @@ const BAND_COOLDOWN_MS = 250;
 const NAV_CLOSE_MS = 140;
 
 /** Drawer tier, fast end — this opens far more often than a modal does. */
-export const OPEN_MS = 200;
+export const OPEN_MS = GLASS_MOTION.peekIn;
 /** Exits are the system answering, not the user deciding. Mirror the path, not the clock. */
-export const CLOSE_MS = 110;
+export const CLOSE_MS = GLASS_MOTION.peekOut;
 /** Below this a scaled-down reversal stops reading as motion and starts reading as a glitch. */
 const MIN_REVEAL_MS = 90;
 /** Motion-off takes the endpoint; neither a travel nor a cross-fade. */
@@ -104,7 +105,12 @@ type Phase = "closed" | "arming" | "open" | "closing";
  * `ChromeBar`, whose element `AppShell` deliberately holds at one identity.
  */
 const TRIGGER_SELECTOR = '[data-sidebar-trigger], [data-slot="sidebar-trigger"]';
-const PROJECT_PEEK = { intent: 100, open: 100, close: 120, exitGrace: 300 } as const;
+const PROJECT_PEEK = {
+  intent: 100,
+  open: GLASS_MOTION.peekIn,
+  close: GLASS_MOTION.peekOut,
+  exitGrace: 300,
+} as const;
 
 /**
  * Whether `node` is inside a portalled overlay rather than the page under it.
@@ -148,9 +154,7 @@ function revealProgress(panel: HTMLElement, side: "left" | "right"): number {
   // The same number the withdrawn transform is built from, read back off the
   // element rather than recomputed — one source, so the clock and the distance
   // can never describe different journeys.
-  const travel =
-    panel.offsetWidth +
-    (Number.parseFloat(getComputedStyle(panel).getPropertyValue("--panel-hidden-shift")) || 0);
+  const travel = 12;
   if (travel <= 0) return 1;
   const zoom = panel.getBoundingClientRect().width / panel.offsetWidth || 1;
   const resting = parent.getBoundingClientRect().left + panel.offsetLeft * zoom;
@@ -188,8 +192,8 @@ export function armRevealClock(
     panel.removeAttribute("data-glass-blur");
     return;
   }
-  panel.dataset.glassBlur = "off";
-  panel.style.transitionTimingFunction = toVisible ? "var(--ease-swift)" : "var(--ease-out)";
+  panel.removeAttribute("data-glass-blur");
+  panel.style.transitionTimingFunction = GLASS_MOTION.easeOutCss;
   const base = toVisible ? (timing?.open ?? OPEN_MS) : (timing?.close ?? CLOSE_MS);
   const progress = fullJourney ? (toVisible ? 0 : 1) : revealProgress(panel, side);
   const remaining = toVisible ? 1 - progress : progress;
@@ -280,9 +284,7 @@ export function useEdgeReveal({
             side,
             projectTiles ? PROJECT_PEEK : undefined,
           );
-        if (projectTiles) panelRef.current?.removeAttribute("data-glass-blur");
-        else if (!instant && !prefersReducedMotion())
-          panelRef.current?.setAttribute("data-glass-blur", "off");
+        panelRef.current?.removeAttribute("data-glass-blur");
         // A dismissal must not answer the pointer still on the button with
         // another peek, including after a pour finishes under that pointer.
         if (!willBeVisible) triggerHoldRef.current = true;

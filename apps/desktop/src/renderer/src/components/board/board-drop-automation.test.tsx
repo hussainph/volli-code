@@ -939,7 +939,7 @@ describe("a group of cards released into another column", () => {
       await act(async () =>
         useProjectUiStore.setState({ byProject: { p1: { ...DEFAULT_PROJECT_UI, boardView } } }),
       );
-      expect([...renders.policies.values()].every((policy) => policy !== null)).toBe(true);
+      expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
       await act(async () => {
         document.documentElement.dataset.motion = "off";
         window.dispatchEvent(new Event("volli-motion-change"));
@@ -949,7 +949,7 @@ describe("a group of cards released into another column", () => {
         delete document.documentElement.dataset.motion;
         window.dispatchEvent(new Event("volli-motion-change"));
       });
-      expect([...renders.policies.values()].every((policy) => policy !== null)).toBe(true);
+      expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
       if (boardView === "list") {
         const grip = document.querySelector<HTMLElement>("[data-ticket-row]")!;
         await act(async () =>
@@ -966,7 +966,7 @@ describe("a group of cards released into another column", () => {
             new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
           ),
         );
-        expect([...renders.policies.values()].every((policy) => policy !== null)).toBe(true);
+        expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
       }
     },
   );
@@ -1005,6 +1005,9 @@ describe("a group of cards released into another column", () => {
         );
       });
       expect(ticketSlots("backlog")).toContain(DRAGGED);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      });
       expect(animateCalls).toEqual([]);
       expect(loopErrors()).toEqual([]);
     },
@@ -1055,7 +1058,10 @@ describe("a group of cards released into another column", () => {
           { transform: `translate3d(${from.left - to.left}px, ${from.top - to.top}px, 0)` },
           { transform: "translate3d(0, 0, 0)" },
         ]);
-        expect(slide.options).toEqual({ duration: 380, easing: BOUNCY });
+        expect(slide.options).toMatchObject({ duration: 240 });
+        expect(String((slide.options as KeyframeAnimationOptions).easing).replace(/\s+/g, "")).toBe(
+          BOUNCY.replace(/\s+/g, ""),
+        );
       }
       try {
         await act(async () => {

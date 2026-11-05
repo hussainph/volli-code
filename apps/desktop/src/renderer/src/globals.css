@@ -1925,10 +1925,6 @@ article.bg-card {
 }
 /* Withdrawn resident panes keep identity but spend no descendant animation or
  * blur budget. Do not pause the panel's own reveal/pour. */
-:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"]
-  :is(.glass, .material-floating) {
-  backdrop-filter: none !important;
-}
 :is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *,
 :is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::before,
 :is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::after {
@@ -2418,54 +2414,70 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --shadow-glass-small: 0 1px 3px rgb(0 0 0 / 0.06);
   --spring-smooth: linear(
     0,
-    0.0139,
-    0.0495,
-    0.0995,
-    0.1582,
-    0.2215,
-    0.2864,
-    0.3507,
-    0.4129,
-    0.472,
-    0.5273,
-    0.5786,
-    0.6256,
-    0.6685,
-    0.7073,
-    0.7423,
-    0.7736,
-    0.8015,
-    0.8263,
-    0.8483,
-    0.8677,
-    0.8848,
-    0.8998,
-    0.913,
-    0.9246,
-    0.9347,
-    0.9435,
-    0.9511,
-    0.9578,
-    0.9636,
-    0.9686,
-    0.9729,
-    0.9767,
-    0.98,
-    0.9828,
-    0.9852,
-    0.9873,
-    0.9891,
-    0.9906,
-    0.992,
-    0.9931,
-    0.9941,
-    0.995,
-    0.9957,
-    0.9963,
-    0.9968,
-    0.9973,
-    0.9977,
-    0.998
+    0.008092,
+    0.029669,
+    0.061252,
+    0.100018,
+    0.143692,
+    0.190453,
+    0.238858,
+    0.287775,
+    0.336328,
+    0.38385,
+    0.429847,
+    0.473964,
+    0.515956,
+    0.555669,
+    0.593022,
+    0.627986,
+    0.660578,
+    0.690848,
+    0.718868,
+    0.74473,
+    0.768538,
+    0.790403,
+    0.810439,
+    0.828763,
+    0.845492,
+    0.860738,
+    0.874611,
+    0.887218,
+    0.898658,
+    0.909027,
+    0.918415,
+    0.926904,
+    0.934574,
+    0.941497,
+    0.947739,
+    0.953364,
+    0.958428,
+    0.962984,
+    0.967079,
+    0.970758,
+    0.974062,
+    0.977026,
+    0.979683,
+    0.982065,
+    0.984199,
+    0.98611,
+    0.987819,
+    0.989348,
+    0.990715,
+    0.991937,
+    0.993029,
+    0.994003,
+    0.994873,
+    0.99565,
+    0.996342,
+    0.996959,
+    0.99751,
+    0.998,
+    0.998437,
+    0.998826,
+    0.999173,
+    0.999481,
+    0.999756,
+    1
   );
   --duration-smooth: 270ms;
   --spring-snappy: linear(
@@ -2522,56 +2534,72 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --duration-snappy: 225ms;
   --spring-bouncy: linear(
     0,
-    0.0126,
-    0.0462,
-    0.0952,
-    0.1549,
-    0.2214,
-    0.2916,
-    0.3629,
-    0.4333,
-    0.5014,
-    0.566,
-    0.6264,
-    0.6821,
-    0.7327,
-    0.7783,
-    0.8188,
-    0.8545,
-    0.8856,
-    0.9123,
-    0.9351,
-    0.9542,
-    0.9701,
-    0.9831,
-    0.9936,
-    1.0018,
-    1.0081,
-    1.0127,
-    1.016,
-    1.0182,
-    1.0194,
-    1.0199,
-    1.0198,
-    1.0192,
-    1.0183,
-    1.0172,
-    1.0159,
-    1.0145,
-    1.0131,
-    1.0117,
-    1.0103,
-    1.009,
-    1.0078,
-    1.0066,
-    1.0056,
-    1.0047,
-    1.0038,
-    1.0031,
-    1.0024,
-    1.0019
+    0.006493,
+    0.024377,
+    0.051471,
+    0.08585,
+    0.125827,
+    0.169936,
+    0.21691,
+    0.265664,
+    0.315274,
+    0.364968,
+    0.414103,
+    0.462154,
+    0.508701,
+    0.553413,
+    0.596041,
+    0.636405,
+    0.674383,
+    0.709906,
+    0.742946,
+    0.773512,
+    0.801644,
+    0.827403,
+    0.850873,
+    0.87215,
+    0.891341,
+    0.908563,
+    0.923937,
+    0.937585,
+    0.949632,
+    0.9602,
+    0.969411,
+    0.97738,
+    0.984221,
+    0.990041,
+    0.994941,
+    0.999018,
+    1.002362,
+    1.005057,
+    1.007179,
+    1.008801,
+    1.009987,
+    1.010799,
+    1.011289,
+    1.011507,
+    1.011497,
+    1.011299,
+    1.010946,
+    1.01047,
+    1.009899,
+    1.009255,
+    1.00856,
+    1.007831,
+    1.007083,
+    1.006328,
+    1.005578,
+    1.004842,
+    1.004125,
+    1.003434,
+    1.002773,
+    1.002145,
+    1.001553,
+    1.000998,
+    1.00048,
+    1
   );
-  --duration-bouncy: 380ms;
+  --duration-bouncy: 240ms;
 }
 :root.dark {
   --shadow-glass: 0 4px 14px rgb(0 0 0 / 0.14), 0 0 0.5px rgb(0 0 0 / 0.12);
@@ -2797,14 +2825,6 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-inspector-panel][data-shown] {
   translate: 0 0;
 }
-[data-inspector-panel][data-pane-pouring="true"],
-[data-pane-pouring="true"][data-inspector-trigger] {
-  pointer-events: none;
-}
-[data-pane-pouring="true"] .glass,
-[data-pane-pouring="true"].glass {
-  backdrop-filter: none !important;
-}
 /* Controls on canvas share a neutral face; selected navigator rows share the
  * exact 18% tint used by Session ListRow, independently of focus. */
 [data-slot="chrome-bar"] .search-capsule.glass-control {
@@ -2844,15 +2864,6 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   width: 3px;
   border-radius: 999px;
   background: var(--canvas-ink);
-}
-/* Pouring glass has no live hit targets or backdrop pass. The trigger's hover
- * latch is released only after a fresh pointer departure, not by animation end. */
-[data-pane-pouring="true"][data-slot="sidebar"],
-[data-pane-pouring="true"] [data-slot="sidebar-trigger"] {
-  pointer-events: none;
-}
-[data-pane-pouring="true"][data-slot="sidebar"] .glass {
-  backdrop-filter: none !important;
 }
 /* Transient controls share flat glass; context menus retain their action glyphs.
  * Plain command menus show labels and selection marks, not decorative icons.
@@ -3455,4 +3466,72 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
     black calc(100% - var(--composer-height, 0px) - 28px),
     transparent calc(100% - var(--composer-height, 0px) - 8px)
   );
+}
+
+/* Mirrored peeks: small spatial cue, fixed material, no width or filter tween. */
+[data-pane-side] {
+  opacity: 0;
+  translate: 12px 0;
+  transition-property: translate, opacity, visibility;
+  transition-duration: var(--reveal-duration, 170ms), var(--reveal-duration, 170ms), 0s;
+  transition-delay: 0s, 0s, var(--reveal-duration, 170ms);
+  transition-timing-function: var(--ease-out);
+  visibility: hidden;
+}
+[data-pane-side="left"] {
+  translate: -12px 0;
+}
+[data-pane-side][data-shown] {
+  transition-delay: 0s;
+  translate: 0 0;
+  opacity: 1;
+  visibility: visible;
+}
+
+[data-motion="instant"] [data-pane-side],
+[data-pin-motion="instant"] [data-pane-side] {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pane-side] {
+    transition: none;
+  }
+}
+
+/* Explicit native live-resize exception: one registered value drives both
+ * sides of each divider. Heavy descendants defer their resize until settled. */
+@property --left-pane-push {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+@property --right-pane-push {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+[data-volli-surface] {
+  contain: layout paint;
+}
+[data-left-pane-push-active] [data-pane-side="left"] {
+  translate: calc(var(--left-pane-push) - var(--pane-full-width)) 0;
+  opacity: 1;
+  visibility: visible;
+  transition: none;
+}
+[data-right-pane-push-active] [data-pane-side="right"] {
+  translate: calc(var(--pane-full-width) - var(--right-pane-push)) 0;
+  opacity: 1;
+  visibility: visible;
+  transition: none;
+}
+
+/* Narrow source headers use the approved icon-only fallback: 76px, no clipped word. */
+@container project-header (max-width:220px) {
+  .sidebar-view-switcher [role="tab"] {
+    width: 32px;
+  }
+  .sidebar-view-switcher [data-slot="view-switcher-label"] {
+    display: none;
+  }
 }

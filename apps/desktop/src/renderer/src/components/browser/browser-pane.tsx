@@ -1,3 +1,8 @@
+import {
+  paneResizeActive,
+  usePaneResizeActive,
+  onPaneResizeSettled,
+} from "@renderer/lib/pane-resize";
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
 
@@ -101,6 +106,7 @@ function useRendererOverlayActive(
       });
     };
     const schedule = (): void => {
+      if (paneResizeActive()) return;
       overlayScan = undefined;
       queue();
     };
@@ -144,6 +150,7 @@ function useRendererOverlayActive(
       "animationcancel",
     ];
     read();
+    const resizeSettled = onPaneResizeSettled(schedule);
     const observer = new MutationObserver(schedule);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
     const resize = new ResizeObserver(schedule);
@@ -155,6 +162,7 @@ function useRendererOverlayActive(
     return () => {
       observer.disconnect();
       resize.disconnect();
+      resizeSettled();
       window.removeEventListener("resize", schedule);
       document.removeEventListener("scroll", schedule, true);
       for (const event of motionEvents) document.removeEventListener(event, motion, true);
@@ -209,8 +217,10 @@ export function BrowserPane({
   const [error, setError] = React.useState<string | null>(null);
   const [frames, setFrames] = React.useState<readonly BrowserTabCaptureFrame[]>([]);
   const [captureSettled, setCaptureSettled] = React.useState(false);
-  const overlayActive = useRendererOverlayActive(anchorRef, visible);
-  const planeVisible = planeVisibility({ visible, overlayActive, captureSettled });
+  const paneResizing = usePaneResizeActive();
+  const rendererOverlay = useRendererOverlayActive(anchorRef, visible);
+  const overlayActive = rendererOverlay || paneResizing;
+  const planeVisible = !paneResizing && planeVisibility({ visible, overlayActive, captureSettled });
   const paintPixels = shouldPaintPlanePixels({ visible, frameCount: frames.length });
 
   // A state push should move an untouched address bar but must not erase an
@@ -327,13 +337,17 @@ export function BrowserPane({
     // The controller invokes this lazy read only for the latest observation in
     // a frame, avoiding a synchronous layout read for notifications it drops.
     const readBounds = () => anchor.getBoundingClientRect();
-    const measure = () => controller.reportBounds(readBounds);
+    const measure = () => {
+      if (!paneResizeActive()) controller.reportBounds(readBounds);
+    };
+    const offResize = onPaneResizeSettled(measure);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(anchor);
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
+      offResize();
       window.removeEventListener("resize", measure);
       controller.dispose();
       if (controllerRef.current === controller) controllerRef.current = null;

@@ -3,7 +3,6 @@ import { InspectorHostContext } from "./sidebar/inspector-host";
 import { GlassSurface, PaperSurface } from "./ui/surface";
 
 import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
-import { hasVisibleNativePlane } from "@renderer/components/browser/browser-plane-freeze";
 import { ChromeBar } from "@renderer/components/chrome-bar";
 import { HostIsland } from "@renderer/components/hosts/host-island";
 import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
@@ -16,17 +15,11 @@ import { SessionDetailDialog } from "@renderer/components/sessions/session-detai
 import { SessionShareDialog } from "@renderer/components/sessions/session-team";
 import {
   armRevealClock,
-  CLOSE_MS,
-  OPEN_MS,
   useEdgeReveal,
   ZONE_TOP_DEAD_BAND,
   ZONE_WIDTH,
 } from "@renderer/components/sidebar/edge-reveal";
-import {
-  type ContentMotionJourney,
-  isContentMoving,
-  planContentMotion,
-} from "@renderer/components/sidebar/content-motion";
+import { usePaneMotion } from "@renderer/components/sidebar/pane-motion";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useOverlayScrollbars } from "@renderer/hooks/use-overlay-scrollbars";
 import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
@@ -80,189 +73,6 @@ const CLIP_SPILL = 60;
  */
 const RAIL_OFF_ZONE_EXTRA = SHELL_INSET;
 
-/** A live journey, plus the handle and endpoints only the DOM side needs. */
-type ContentMotionRecord = ContentMotionJourney & {
-  animation: Animation;
-  from: number;
-  to: number;
-};
-
-/**
- * The live used value of a WAAPI standalone `translate`, in this row's CSS px.
- *
- * The computed style is the truth — it is what the compositor is drawing — but
- * a `translate` that has not resolved yet parses as `NaN`, so the running
- * animation's own progress is the second reading rather than a guess.
- */
-function liveTranslateX(element: HTMLElement, motion: ContentMotionRecord): number {
-  const parsed = Number.parseFloat(getComputedStyle(element).translate);
-  if (Number.isFinite(parsed)) return parsed;
-  const progress = motion.animation.effect?.getComputedTiming().progress;
-  return typeof progress === "number"
-    ? motion.from + (motion.to - motion.from) * progress
-    : motion.from;
-}
-
-/**
- * Moves the content half of a pin/unpin without animating its layout width.
- *
- * The final layouts still differ — a pinned sidebar genuinely gives the content
- * less room — so transform-only cannot mean "never resize". It means resize
- * once at an endpoint where the changed right edge is outside the viewport:
- *
- * - open: keep the unpinned (wide) layout, translate it right, then atomically
- *   reserve the gap and remove the equal translate;
- * - close: atomically release the gap under an equal translate, then animate
- *   that translate back to zero.
- *
- * WAAPI is deliberate rather than an rAF writer. Once started, Chromium can run
- * a `translate` animation on the compositor while renderer JS is starved — the
- * exact condition this path has to survive.
- *
- * Everything this hook DECIDES lives in `sidebar/content-motion.ts`, under the
- * coverage gate. What stays here is the part only a browser can do: measuring
- * the two boxes, running the animation, and holding React state.
- */
-function useSidebarContentMotion({
-  pinned,
-  instant,
-  panelRef,
-}: {
-  pinned: boolean;
-  instant: boolean;
-  panelRef: React.RefObject<HTMLDivElement | null>;
-}): {
-  contentRef: React.RefObject<HTMLElement | null>;
-  layoutPinned: boolean;
-  moving: boolean;
-} {
-  const contentRef = React.useRef<HTMLElement | null>(null);
-  const [layoutPinned, setLayoutPinned] = React.useState(pinned);
-  const [animating, setAnimating] = React.useState(false);
-  const targetRef = React.useRef(pinned);
-  const closingFromRef = React.useRef<number | null>(null);
-  const motionRef = React.useRef<ContentMotionRecord | null>(null);
-
-  React.useLayoutEffect(() => {
-    const content = contentRef.current;
-    const panel = panelRef.current;
-    const record = motionRef.current;
-
-    const settle = (next: boolean): void => {
-      targetRef.current = pinned;
-      closingFromRef.current = null;
-      record?.animation.cancel();
-      motionRef.current = null;
-      setAnimating(false);
-      if (layoutPinned !== next) setLayoutPinned(next);
-    };
-
-    // No surface yet, or a host with no WAAPI: the endpoint is the whole
-    // journey. Answered here rather than in the planner because it is a fact
-    // about the document, not a rule about the gesture.
-    if (content === null || panel === null || typeof content.animate !== "function") {
-      settle(pinned);
-      return;
-    }
-
-    const plan = planContentMotion(
-      {
-        pinned,
-        target: targetRef.current,
-        layoutPinned,
-        instant,
-        journey: record,
-        closingFrom: closingFromRef.current,
-      },
-      // Called at most once, and only on a pass that is going to move
-      // something — see `MeasureContentMotion` for why that matters.
-      () => ({
-        // Both card endpoints have the same 6px inset. Recover the spacer's
-        // full share from the pane's inset box; never interpolate that width.
-        travel: panel.offsetWidth + SHELL_INSET,
-        at: record === null ? 0 : liveTranslateX(content, record),
-      }),
-    );
-
-    switch (plan.kind) {
-      case "hold":
-        return;
-      case "settle":
-        settle(plan.layoutPinned);
-        return;
-      case "clear-fill":
-        record?.animation.cancel();
-        motionRef.current = null;
-        setAnimating(false);
-        return;
-      case "release-layout":
-        // The parked translate is held by whatever is on the element now: a
-        // landed opening's `fill: "forwards"`, or nothing at all when the
-        // layout is already where the transform would put it. Either way the
-        // animation that walks it back to zero starts on the next pass, from
-        // `closingFrom`.
-        targetRef.current = pinned;
-        closingFromRef.current = plan.from;
-        setAnimating(true);
-        setLayoutPinned(false);
-        return;
-      case "animate": {
-        targetRef.current = pinned;
-        closingFromRef.current = null;
-        record?.animation.cancel();
-        setAnimating(true);
-        const animation = content.animate(
-          [{ translate: `${plan.from}px 0px` }, { translate: `${plan.to}px 0px` }],
-          {
-            duration: pinned ? OPEN_MS : CLOSE_MS,
-            easing: getComputedStyle(content)
-              .getPropertyValue(pinned ? "--ease-swift" : "--ease-out")
-              .trim(),
-            fill: "forwards",
-          },
-        );
-        const started: ContentMotionRecord = {
-          animation,
-          from: plan.from,
-          to: plan.to,
-          targetPinned: pinned,
-          settling: false,
-        };
-        motionRef.current = started;
-        animation.onfinish = () => {
-          if (motionRef.current !== started) return;
-          // BOTH directions commit their layout here, and the symmetry is
-          // load-bearing rather than tidy. An opening holds its transform while
-          // React pins the layout underneath it; a close releases the layout it
-          // already released before it started. That second one reads as
-          // redundant and is exactly what was missing when a close could inherit
-          // a landed opening's record and leave the spacer reserved forever.
-          if (started.targetPinned) {
-            started.settling = true;
-            setLayoutPinned(true);
-            return;
-          }
-          animation.cancel();
-          motionRef.current = null;
-          setAnimating(false);
-          setLayoutPinned(false);
-        };
-        return;
-      }
-    }
-  }, [instant, layoutPinned, panelRef, pinned]);
-
-  React.useEffect(
-    () => () => {
-      motionRef.current?.animation.cancel();
-      motionRef.current = null;
-    },
-    [],
-  );
-
-  return { contentRef, layoutPinned, moving: isContentMoving({ animating, layoutPinned, pinned }) };
-}
-
 /** Window canvas, resident navigation islands and the neutral reading card.
  * Pinning reserves space once at the compositor endpoint; peeking overlays the
  * same subtree. The permanent rail and native-scale traffic lights never move.
@@ -291,7 +101,6 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   const [resizing, setResizing] = React.useState(false);
   const [geometryInstant, setGeometryInstant] = React.useState(false);
   const [keyboardInstant, setKeyboardInstant] = React.useState(false);
-  const [nativePlaneInstant, setNativePlaneInstant] = React.useState(false);
   const [pinSuspended, setPinSuspended] = React.useState(false);
   const terminalFocused = terminalFocusTarget !== null;
   // What the layout below reads. The stored choice, minus a suspension nothing
@@ -338,19 +147,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     previousPanelShown.current = panelShown;
     // Instant exits dispatch no transitionend. Release the Browser freeze in
     // that same commit, including when Motion is turned off during an exit.
-    if (
-      pinned ||
-      terminalFocused ||
-      panelShown ||
-      nativePlaneInstant ||
-      reducedMotion ||
-      keyboardInstant
-    ) {
+    if (pinned || terminalFocused || panelShown || reducedMotion || keyboardInstant) {
       setFloatingOverlayExiting(false);
     } else if (wasShown) {
       setFloatingOverlayExiting(true);
     }
-  }, [nativePlaneInstant, panelShown, pinned, terminalFocused, reducedMotion, keyboardInstant]);
+  }, [panelShown, pinned, terminalFocused, reducedMotion, keyboardInstant]);
   // How far past `-100%` the panel parks to be gone. Only far enough to clear
   // the clip line, because the clip is what "gone" now means: its own width
   // lands the right edge on the panel box's own left edge, `floatingInset` puts
@@ -377,56 +179,16 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     return () => window.cancelAnimationFrame(frame);
   }, [railWidth, terminalFocused]);
 
-  /* THE NATIVE-PLANE EXCEPTION, and it is a hatch of its OWN.
-   *
-   * A live WebContentsView is a child of the window, not a node in this
-   * document, so it cannot ride the content surface's transform. While one is on
-   * screen the pin takes both endpoints directly instead: `nativePlaneInstant`
-   * settles the content half, and `data-pin-motion` below freezes the panel
-   * half, for the one frame it takes them to commit.
-   *
-   * Deliberately NOT folded into `data-motion=instant`. That hatch belongs to
-   * terminal focus and rail geometry, it is read by the sidebar primitive's own
-   * width transitions, and its contract is one frame of snapped GEOMETRY — not
-   * "nothing in this shell may animate". Overloading it made ⌘B silently
-   * animation-free whenever a Browser Tab was on screen, which is a different
-   * promise from the one that attribute makes.
-   *
-   * Armed off the resolved pin TARGET rather than inside the ⌘B handler, because
-   * that handler was never the only writer: Settings' "Keep the sidebar open"
-   * switch calls the store directly, and the fullscreen suspension is not a
-   * control at all. A guard living at one control is a guard the other two walk
-   * past. Watching the target catches every writer there will ever be, at a cost
-   * of one commit of arming that React flushes before paint — the journey the
-   * first commit starts is cancelled by the second, and no frame is painted in
-   * between. */
-  const previousDocked = React.useRef(docked);
-  React.useLayoutEffect(() => {
-    if (previousDocked.current === docked) return;
-    previousDocked.current = docked;
-    if (hasVisibleNativePlane(document)) setNativePlaneInstant(true);
-  }, [docked]);
-
-  // Hold the suppression through the first paint of the endpoint swap, then let
-  // go. The Browser owner can replace this exception with a capture/ready
-  // protocol; starting a DOM transform before its native view is hidden visibly
-  // detaches page pixels from the Browser chrome for up to the capture deadline.
-  React.useLayoutEffect(() => {
-    if (!nativePlaneInstant) return;
-    const frame = window.requestAnimationFrame(() => setNativePlaneInstant(false));
-    return () => window.cancelAnimationFrame(frame);
-  }, [nativePlaneInstant]);
-
-  // Pinned-projects peeks use the 100/120ms edge reveal, never a pour into
-  // the trigger. The inspector retains its own separate pour treatment.
-  const pouring = false;
+  // Native planes and expensive editor grids defer resize under the shared
+  // pane transaction fence, rather than observing every animated width.
   React.useLayoutEffect(() => {
     if (!keyboardInstant) return;
     const frame = window.requestAnimationFrame(() => setKeyboardInstant(false));
     return () => window.cancelAnimationFrame(frame);
   }, [keyboardInstant]);
-  const contentMotion = useSidebarContentMotion({
-    pinned: docked,
+  const contentMotion = usePaneMotion({
+    side: "left",
+    mode: docked ? "pinned" : panelShown ? "peeking" : "closed",
     // A resize drag needs exact pointer tracking, and terminal/rail geometry has
     // always owned the shell's instant escape hatch. Settle any in-flight pin
     // journey before either changes the width token underneath it.
@@ -435,17 +197,15 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       terminalFocused ||
       geometryInstant ||
       geometryChanged ||
-      nativePlaneInstant ||
       keyboardInstant ||
       reducedMotion,
     panelRef,
+    bandRef,
+    geometryKey: sidebarWidth,
   });
-  // The spacer still owns the final layout, but it now has only two values and
-  // never transitions between them. Opening snaps it under the translated
-  // content at the end; closing releases it under an equal translate at the
-  // start. A drag remains CSS-only because the reserved value is the same live
-  // `--panel-w` custom property as every other sidebar box.
-  const gapWidth = contentMotion.layoutPinned ? "var(--panel-w)" : "0px";
+  // Both divider edges read this one live value. React commits only intent;
+  // the registered property drives native layout during the finite spring.
+  const gapWidth = "var(--left-pane-push, var(--panel-w))";
   // Native child views do not inherit renderer transforms. Use the same captured
   // stand-in path as a floating sidebar while the whole content surface moves.
   const nativePlaneOverlay =
@@ -487,6 +247,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       // separately samples its live WAAPI translate before reversing.
       armRevealClock(panelRef.current, next, true);
       panelRef.current?.removeAttribute("data-glass-blur");
+      panelRef.current?.toggleAttribute("data-keyboard-dismiss", options?.instant === true);
       setSidebarPinned(next);
     },
     [setSidebarPinned],
@@ -546,10 +307,6 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
         // shell attribute.
         data-volli-shell={terminalFocused ? "focused" : pinned ? "framed" : "ephemeral"}
         data-motion={terminalFocused || geometryInstant || keyboardInstant ? "instant" : undefined}
-        data-pane-pouring={pouring || undefined}
-        // The pin journey's own hatch, separate from `data-motion` above and read
-        // only by the panel's reveal. See the native-plane exception.
-        data-pin-motion={nativePlaneInstant ? "instant" : undefined}
         data-resizing={resizing || undefined}
         style={
           {
@@ -658,7 +415,6 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               // Names the app's principal surface for probes that need to anchor on
               // the card rather than guess at it.
               data-volli-surface=""
-              data-glass-blur={contentMotion.moving ? "off" : undefined}
               className={cn(
                 "overflow-hidden",
                 terminalFocused
@@ -734,7 +490,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               data-slot="sidebar"
               data-native-plane-overlay={nativePlaneOverlay ? "" : undefined}
               aria-hidden={!panelShown || undefined}
-              inert={!panelShown || pouring}
+              inert={!panelShown}
               onTransitionEnd={(event) => {
                 if (event.target === event.currentTarget)
                   event.currentTarget.removeAttribute("data-glass-blur");
@@ -749,31 +505,11 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               onClick={reveal.onPanelClick}
               onFocus={reveal.onPanelFocus}
               onBlur={reveal.onPanelBlur}
+              data-pane-side="left"
+              data-shown={panelShown || contentMotion.moving || undefined}
               className={cn(
-                "pointer-events-auto absolute flex transform-gpu text-sidebar-foreground",
-                // `translate` FIRST, and it is the one that does the work.
-                // Tailwind v4 compiles `translate-x-*` to the standalone
-                // `translate` property, not into `transform` — so a transition
-                // list naming only `transform` covers a property nothing is
-                // changing, and the panel teleports at full opacity instead of
-                // sliding. `transform` stays because `transform-gpu` writes it,
-                // and neither costs anything.
-                "transition-[translate,transform,opacity] motion-reduce:transition-none ease-swift [transition-duration:var(--reveal-duration,200ms)] group-data-[pin-motion=instant]/sidebar-wrapper:transition-none group-data-[motion=instant]/sidebar-wrapper:transition-none",
-                // No `will-change` here, and that is not an omission.
-                // `transform-gpu` above writes `transform: translateZ(0)`, which
-                // already gives this element its own compositor layer for as long
-                // as it exists — so the hint had nothing left to promote, and it
-                // named `transform` while the property that actually moves is
-                // `translate` (see below).
-                "rounded-floating",
-                panelShown
-                  ? "translate-x-0"
-                  : // Reduced motion: the surface arrives where it will rest
-                    // instead of travelling 250px across the reader's field of
-                    // view. Opacity is the only thing left moving, and briefly.
-                    "translate-x-[calc(-100%-var(--panel-hidden-shift))] motion-reduce:translate-x-0 motion-reduce:opacity-0",
-                // Terminal focus is not a reveal: the canvas is being handed to a
-                // PTY, so the panel leaves without a journey to watch.
+                "absolute flex rounded-floating text-sidebar-foreground",
+                panelShown ? "pointer-events-auto" : "pointer-events-none",
                 terminalFocused && "invisible",
               )}
               style={
@@ -845,6 +581,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             }}
           />
         </div>
+        {contentMotion.decoration}
         <Toaster />
         {/* The armed-column delay window (VC-128, main-owned in VC-226).
           Window-level beside the Toaster rather than inside the board: any

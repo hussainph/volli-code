@@ -1,5 +1,5 @@
+import { GLASS_MOTION, cssTimeMs, springEasing } from "@renderer/lib/glass-motion";
 import { useBoardMotionVisibility } from "@renderer/hooks/use-motion-visibility";
-import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
 import {
   closestCorners,
@@ -464,7 +464,11 @@ export const Board = React.memo(function Board({
   const boardRef = React.useRef<HTMLDivElement>(null);
   useBoardMotionVisibility(boardRef);
   const [drag, setDrag] = React.useState<DragState | null>(null);
-  const pendingSlotAnimation = React.useRef<Map<string, DOMRect> | null>(null);
+  const pendingSlotAnimation = React.useRef<{
+    rects: Map<string, DOMRect>;
+    instant: boolean;
+  } | null>(null);
+  const releaseInstant = React.useRef(true);
   const landingAnimations = React.useRef(new Set<Animation>());
   const dropOverlayRef = React.useRef<HTMLElement>(null);
   // Selection is store-backed (session-only), so sidebar/detail navigation can
@@ -479,9 +483,11 @@ export const Board = React.memo(function Board({
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
   // One policy for both views, not a monitor and preference subscription per card.
-  const instantSort = reducedMotion || drag?.keyboard === true;
+  const instantSort = reducedMotion || drag === null || drag.keyboard;
   React.useEffect(() => {
     if (!reducedMotion) return;
+    releaseInstant.current = true;
+    pendingSlotAnimation.current = null;
     for (const animation of landingAnimations.current) animation.cancel();
     landingAnimations.current.clear();
     // Finish dnd-kit's own overlay so its completion removes the picture too.
@@ -499,15 +505,18 @@ export const Board = React.memo(function Board({
   const dropMotion = React.useMemo(() => {
     if (reducedMotion) return null;
     const style = getComputedStyle(document.documentElement);
-    const easing = style.getPropertyValue("--spring-bouncy").trim();
-    const duration = Number.parseFloat(style.getPropertyValue("--duration-bouncy"));
-    return easing !== "" && duration > 0 ? { duration, easing } : null;
+    const duration = Math.min(
+      GLASS_MOTION.pointerDrop,
+      cssTimeMs(style.getPropertyValue("--duration-bouncy")) ?? GLASS_MOTION.pointerDrop,
+    );
+    return duration > 0 ? { duration, easing: springEasing("drop") } : null;
   }, [reducedMotion]);
   React.useLayoutEffect(() => {
-    const sourceRects = pendingSlotAnimation.current;
-    if (sourceRects === null) return;
+    const pending = pendingSlotAnimation.current;
+    if (pending === null) return;
+    const sourceRects = pending.rects;
     pendingSlotAnimation.current = null;
-    if (reducedMotion) return;
+    if (reducedMotion || pending.instant) return;
 
     for (const [ticketId, source] of sourceRects) {
       const slot = ticketSlotElement(ticketId);
@@ -516,13 +525,8 @@ export const Board = React.memo(function Board({
       const dx = source.left - destination.left;
       const dy = source.top - destination.top;
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-      const style = getComputedStyle(slot);
-      const easing = style.getPropertyValue("--spring-bouncy").trim();
-      const duration = Number.parseFloat(style.getPropertyValue("--duration-bouncy"));
-      // Web Animations does not resolve `var(...)` in its options dictionary;
-      // read the canonical motion token from the element instead. If a future
-      // shell omits it, skip the flourish rather than throwing during layout.
-      if (easing === "" || !(duration > 0)) continue;
+      const duration = GLASS_MOTION.pointerDrop;
+      const easing = springEasing("drop");
       for (const animation of slot.getAnimations()) animation.cancel();
       slot.dataset.boardSlotAnimated = "true";
       const animation = slot.animate(
@@ -973,6 +977,7 @@ export const Board = React.memo(function Board({
       view: boardView,
       countdownOpen,
     };
+    releaseInstant.current = reducedMotion || activatorEvent.type === "keydown";
     setDrag({
       activeTicket,
       keyboard: activatorEvent.type === "keydown",
@@ -1087,7 +1092,10 @@ export const Board = React.memo(function Board({
     // changes parents. The board's layout effect consumes the captured source
     // rects immediately after the destination DOM commits, before it paints.
     window.requestAnimationFrame(() => {
-      pendingSlotAnimation.current = sourceRects;
+      pendingSlotAnimation.current =
+        sourceRects === null
+          ? null
+          : { rects: sourceRects, instant: completed.keyboard || reducedMotion };
       void useBoardStore
         .getState()
         .moveTickets(projectId, completed.ticketIds, drop.toStatus, drop.toIndex, choice);
@@ -1096,7 +1104,8 @@ export const Board = React.memo(function Board({
       // effect sees it. The effect clears eagerly, and this is only a stale-ref
       // fallback for a no-op/unmount path.
       window.setTimeout(() => {
-        if (pendingSlotAnimation.current === sourceRects) pendingSlotAnimation.current = null;
+        if (pendingSlotAnimation.current?.rects === sourceRects)
+          pendingSlotAnimation.current = null;
       }, 1_000);
     });
   }
@@ -1121,6 +1130,7 @@ export const Board = React.memo(function Board({
   }
 
   function handleDragCancel() {
+    releaseInstant.current = true;
     applyPicker({ kind: "drag-end" });
     frozen.current = null;
     setDrag(null);
@@ -1281,12 +1291,13 @@ export const Board = React.memo(function Board({
               // cannot have: the release would run the column's default
               // instead of what the hand was pointing at.
               className="pointer-events-none"
-              transition={drag?.keyboard ? "" : undefined}
+              transition={instantSort ? "" : undefined}
               dropAnimation={
                 // A picked release lands where the PICKER says, which is not
                 // necessarily where the card is: animating the card into the
                 // slot it was hovering would draw the wrong landing.
                 reducedMotion ||
+                releaseInstant.current ||
                 drag?.keyboard ||
                 isPickerOpen(picker) ||
                 (drag?.ticketIds.length ?? 0) > 1

@@ -1,3 +1,4 @@
+import { observePaneLayout, paneResizeActive } from "@renderer/lib/pane-resize";
 import * as React from "react";
 import { useBlobReader } from "@renderer/components/attachments/blob-read";
 import type { editor } from "monaco-editor";
@@ -381,6 +382,7 @@ export const MonacoDocumentEditor = React.forwardRef<
           theme: activeMonacoEditorThemeId(),
           ariaLabel: liveRef.current.ariaLabel,
           model: lease.model,
+          automaticLayout: false,
         });
         editorRef.current = view;
 
@@ -407,12 +409,14 @@ export const MonacoDocumentEditor = React.forwardRef<
         // every measurable box.
         const editorView = view;
         const fitToContent = (): void => {
+          if (paneResizeActive()) return;
           const contentHeight = editorView.getContentHeight();
           host.style.height = `${contentHeight}px`;
           editorView.layout({ width: host.clientWidth, height: host.clientHeight });
           liveRef.current.onContentHeightChange?.(contentHeight);
         };
         subscriptions.push(editorView.onDidContentSizeChange(fitToContent));
+        subscriptions.push({ dispose: observePaneLayout(host, fitToContent) });
         fitToContent();
 
         const model = lease.model;

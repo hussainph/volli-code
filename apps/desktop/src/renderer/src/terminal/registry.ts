@@ -1,3 +1,4 @@
+import { onPaneResizeSettled } from "@renderer/lib/pane-resize";
 /**
  * Module-level registry of live terminal engines, keyed by sessionId. Living
  * OUTSIDE the React tree is the whole point: engines must survive every
@@ -15,6 +16,7 @@ import { XtermEngine } from "./xterm-engine";
 import type { TerminalEngine } from "./engine";
 
 const engines = new Map<string, TerminalEngine>();
+const unsubscribePaneResize = onPaneResizeSettled(fitLiveEngines);
 
 function fitLiveEngines(): void {
   for (const engine of engines.values()) {
@@ -97,6 +99,7 @@ import.meta.hot?.dispose(() => {
   unsubscribeTerminalAppearanceChanged();
   unsubscribeDevicePixelRatio?.();
   unsubscribePageHide?.();
+  unsubscribePaneResize();
 });
 
 /** The engine for `sessionId`, constructing it on first request. */

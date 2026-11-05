@@ -135,7 +135,7 @@ describe("fileEditorConstructionOptions", () => {
       glyphMargin: false,
       padding: { top: 32, bottom: 96 },
       // Untouched defaults still come through.
-      automaticLayout: true,
+      automaticLayout: false,
     });
   });
 

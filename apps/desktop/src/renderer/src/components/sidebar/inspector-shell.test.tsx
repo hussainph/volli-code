@@ -60,6 +60,7 @@ beforeEach(async () => {
   useUiStore.setState({ railCollapsed: false, railWidth: 300 });
   animate.mockClear();
   cancel.mockClear();
+  Object.defineProperty(HTMLElement.prototype, "animate", { configurable: true, value: animate });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -68,6 +69,8 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.useRealTimers();
+  Reflect.deleteProperty(HTMLElement.prototype, "animate");
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 async function setup(owner: "home" | "ticket") {
@@ -101,13 +104,13 @@ describe("resident inspector", () => {
       const child = host.querySelector("[data-live-child]");
       await click(1);
       expect(panel.getAttribute("aria-hidden")).toBe("true");
-      expect(panel.parentElement!.style.width).toBe("0px");
+      expect(panel.parentElement!.style.width).toBe("var(--right-pane-push, 0px)");
       expect(animate).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ duration: 110 }),
       );
-      expect(panel.dataset.glassBlur).toBe("off");
-      expect(button.dataset.panePouring).toBe("true");
+      expect(panel.dataset.glassBlur).toBeUndefined();
+      expect(button.dataset.panePouring).toBeUndefined();
       // Settle via the same preference gate used when Motion is turned off live.
       preferences.reduced = true;
       await act(async () => root.render(<Harness owner={owner} />));
@@ -122,7 +125,7 @@ describe("resident inspector", () => {
       expect(panel.getAttribute("aria-hidden")).toBeNull();
       expect(panel.style.getPropertyValue("--reveal-duration")).not.toBe("0ms");
       await click(1);
-      expect(panel.parentElement!.style.width).toBe("300px");
+      expect(panel.parentElement!.style.width).toBe("var(--right-pane-push, 0px)");
       expect(host.querySelector("[data-live-child]")).toBe(child);
     });
   }
@@ -147,34 +150,17 @@ describe("resident inspector", () => {
     await move(980, 18, 140);
     const child = host.querySelector("[data-live-child]");
     await move(400, 400, EXIT_GRACE_MS);
-    expect(animate).toHaveBeenCalledOnce();
+    expect(animate).not.toHaveBeenCalled();
     expect(host.querySelector("[data-live-child]")).toBe(child);
   });
-  it("reserves right-hand width only when the pointer opening reaches its compositor endpoint", async () => {
+  it("commits right-hand width once, without a competing clip-path track", async () => {
     await setup("home");
     await click(0);
-    const reading = panel.parentElement!.previousElementSibling as HTMLElement;
-    let finish: (() => void) | null = null;
-    const contentCancel = vi.fn();
-    const contentAnimate = vi.fn(() => {
-      const result = { cancel: contentCancel, onfinish: null as (() => void) | null };
-      Object.defineProperty(result, "onfinish", {
-        set: (value: () => void) => {
-          finish = value;
-        },
-      });
-      return result;
-    });
-    Object.defineProperty(reading, "animate", { value: contentAnimate });
     await click(1);
-    expect(panel.parentElement!.style.width).toBe("0px");
-    expect(contentAnimate).toHaveBeenCalledWith(
-      [{ clipPath: "inset(0px 0px 0px 0px)" }, { clipPath: "inset(0px 300px 0px 0px)" }],
-      expect.objectContaining({ duration: 200 }),
+    expect(panel.parentElement!.style.width).toBe("var(--right-pane-push, 0px)");
+    expect(animate.mock.calls.every((args) => !JSON.stringify(args).includes("clipPath"))).toBe(
+      true,
     );
-    await act(async () => finish?.());
-    expect(panel.parentElement!.style.width).toBe("300px");
-    expect(contentCancel).toHaveBeenCalled();
   });
 });
 
@@ -197,7 +183,7 @@ describe("inspector shell placement", () => {
     await act(async () => root.render(<Workspace enabled />));
     const draft = outlet.querySelector("input")!;
     expect(paper.contains(draft)).toBe(false);
-    expect(outlet.querySelector("aside")!.style.width).toBe("300px");
+    expect(outlet.querySelector("aside")!.style.width).toBe("var(--right-pane-push, 0px)");
     await act(async () => useUiStore.setState({ railCollapsed: true }));
     expect(outlet.querySelector("input")).toBe(draft);
     await act(async () => root.render(<Workspace enabled={false} />));
