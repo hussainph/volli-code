@@ -36,6 +36,18 @@ afterEach(async () => {
 const buttons = () => Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
 
 describe("Glass system surfaces", () => {
+  it("keeps source headers at the muted medium UI tier and named tabs readable before scrolling", () => {
+    const headers = css.match(/\[data-volli-sidebar\] \.sidebar-band-header h3 \{([^}]+)\}/)?.[1];
+    expect(headers).toContain("font-size: var(--text-ui)");
+    expect(headers).toContain("font-weight: 500");
+    expect(headers).toContain("color: var(--muted-foreground)");
+    const tabs = readFileSync(resolve(import.meta.dirname, "tab-strip.css"), "utf8");
+    const bare = tabs.match(/\.tab-items > \.workspace-capsule-tab \{([^}]+)\}/)?.[1];
+    expect(bare).toContain("min-width: 160px");
+    expect(bare).toContain("flex: 1 0 160px");
+    expect(tabs).toContain('.tab-items > .workspace-capsule-tab[data-icon-only="true"]');
+  });
+
   it("keeps Save, Discard and Cancel distinct, including the destructive choice", async () => {
     const onChoose = vi.fn();
     const onCancel = vi.fn();

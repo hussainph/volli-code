@@ -3288,9 +3288,10 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   color: var(--tertiary-foreground);
 }
 [data-volli-sidebar] .sidebar-band-header h3 {
-  font-size: var(--text-label);
-  line-height: 14px;
-  font-weight: 600;
+  font-size: var(--text-ui);
+  line-height: var(--text-ui--line-height);
+  font-weight: 500;
+  color: var(--muted-foreground);
 }
 /* The form already clips to its 24px perimeter. A second rounded clip inside
  * the writing inset cuts the first empty-state glyph and caret. */
@@ -3459,13 +3460,21 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
 .chat-transcript [data-conversation-scroller] {
   scroll-padding-top: 16px;
   scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px);
+}
+/* The mask owns a bounded, non-scrolling viewport, never the full scrollback.
+ * The detached affordance has its own clear band rather than covering a line. */
+.chat-transcript [data-conversation-viewport] {
+  --scroll-edge-clearance: 8px;
   mask-image: linear-gradient(
     to bottom,
     transparent,
     black 12px,
-    black calc(100% - var(--composer-height, 0px) - 28px),
-    transparent calc(100% - var(--composer-height, 0px) - 8px)
+    black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
+    transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
   );
+}
+.chat-transcript:has([data-slot="conversation-scroll-button"]) [data-conversation-viewport] {
+  --scroll-edge-clearance: 48px;
 }
 
 /* Mirrored peeks: small spatial cue, fixed material, no width or filter tween. */

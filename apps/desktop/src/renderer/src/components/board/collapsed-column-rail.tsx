@@ -7,7 +7,6 @@ import {
   ColumnOfferedPanel,
   type ColumnOfferedPanelProps,
 } from "@renderer/components/board/column-offered-panel";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
 
 /**
@@ -53,7 +52,6 @@ export const CollapsedColumnRail = React.memo(function CollapsedColumnRail({
 
   return (
     <div className="flex w-44 flex-none cursor-default flex-col gap-1">
-      <SectionHeading as="span">Empty</SectionHeading>
       {statuses.map((status) => (
         <CollapsedColumnTarget
           key={status}

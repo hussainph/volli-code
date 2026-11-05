@@ -58,7 +58,7 @@ const TRIGGER_BOX_PX = 24;
 const FILTER_GLYPH_NUDGE = (TRIGGER_BOX_PX - GLYPH_PX) / 2;
 
 /**
- * The band label, in sentence case at the label tier, and the band's count
+ * The band label, in sentence case at the UI tier, and the band's count
  * where it says something the rows do not.
  *
  * Both bands expose their total next to the label. Previous counts Sessions,
@@ -80,7 +80,7 @@ export function SessionBandHeader({
       {count === undefined || count === 0 ? null : (
         <span
           data-band-count=""
-          className="sidebar-band-count text-label font-medium tabular-nums text-muted-foreground"
+          className="sidebar-band-count text-ui font-medium tabular-nums text-muted-foreground"
         >
           {count}
         </span>

@@ -483,15 +483,9 @@ export function TabStrip({
           data-slot="tab-scroll-area"
           className="tab-track relative flex h-8 min-w-0 flex-1 items-center self-center overflow-hidden rounded-full p-0.5"
         >
-          {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
-            gesture was Shift+wheel and nothing else: a convention a mouse user
-            has to already know, on a strip whose scrollbar is deliberately
-            hidden. The keyboard's way is the arrows it always had — what VC-288
-            added there is that focus now drags the strip along with it.
-
-            Both ends stay mounted while the strip overflows, with the arrived
-            one disabled rather than removed: a chevron that vanishes at the end
-            of a travel re-lays the tabs out under the pointer pressing it. */}
+          {/* The clip contains wheel/keyboard travel and its edge fades. One
+            trailing inventory chevron exposes every tab; there are no scroll
+            arrows or extra icon previews competing with the captions. */}
           <div
             ref={scrollerRef}
             data-slot="tab-scroll"

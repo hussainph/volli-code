@@ -507,6 +507,12 @@ describe("a provisional chat plane", () => {
   });
 
   it("types into the Draft without re-reading the document's styles per keystroke (VC-1079)", async () => {
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "sessions.starts": async () => ({ ok: true, startedAt: [] }),
+      }),
+    );
     const { store } = provisionalChatStore();
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     const box = composer();
@@ -2676,7 +2682,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       expect(container?.querySelector('[data-slot="session-blocker"]')).toBeNull();
       await ingest(store, [boundary(2, "turn.completed")]);
       expect(container?.querySelectorAll('[data-slot="session-blocker"]')).toHaveLength(1);
-      const scroller = container!.querySelector('[role="log"]')!.firstElementChild as HTMLElement;
+      const scroller = container!.querySelector<HTMLElement>("[data-conversation-scroller]")!;
       Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2000 });
       Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
       // Reading a nested scrollable message detaches following through the real

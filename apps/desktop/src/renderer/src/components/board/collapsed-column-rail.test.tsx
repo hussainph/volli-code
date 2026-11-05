@@ -74,6 +74,12 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 });
 
+it("names each collapsed column without a stray Empty heading", async () => {
+  await mount({});
+  expect(container?.textContent).toContain("Done");
+  expect(container?.textContent).not.toContain("Empty");
+});
+
 afterEach(async () => {
   await act(async () => {
     root?.unmount();

@@ -2072,11 +2072,9 @@ function ChatPlaneContent({
                       </ChatTranscript>
                     )}
                   </ConversationContent>
-                  {/* The scroller's edge mask fades passing content; no painted blur/scrim. */}
-                  {/* Glass, not a plug: this button only exists while the reader is
-              scrolled up, so there is always live text behind it. An empty
-              transcript never gets one — the empty state is taller than the
-              plane, so the scroller is legitimately not at its bottom. */}
+                  {/* The bounded viewport owns the scroll-edge mask. While
+                    detached, it reserves a text-free band for the latest button
+                    above the composer. Empty transcripts never get the button. */}
                   {messages.length > 0 ? (
                     <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] glass-control shadow-glass-small" />
                   ) : null}

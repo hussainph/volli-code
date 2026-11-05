@@ -25,7 +25,15 @@ import { ArrowDownIcon } from "@renderer/components/ui/icon";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import type { ComponentProps, ReactNode } from "react";
-import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { StickToBottomContext } from "use-stick-to-bottom";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
@@ -227,7 +235,12 @@ function ConversationBridge({ children }: { children: ReactNode }) {
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
 
 export const ConversationContent = ({ className, ...props }: ConversationContentProps) => (
-  <StickToBottom.Content className={cn("flex flex-col gap-8 p-4", className)} {...props} />
+  <div
+    data-conversation-viewport=""
+    className="h-full overflow-hidden [contain:layout_paint] isolate"
+  >
+    <StickToBottom.Content className={cn("flex flex-col gap-8 p-4", className)} {...props} />
+  </div>
 );
 
 export type ConversationEmptyStateProps = ComponentProps<"div">;
@@ -255,19 +268,47 @@ export const ConversationScrollButton = ({
   className,
   ...props
 }: ConversationScrollButtonProps) => {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+  const { isAtBottom, scrollToBottom, scrollRef, contentRef } = useStickToBottomContext();
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller === null) return;
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      setAwayFromBottom(
+        scroller.clientHeight > 0 &&
+          scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 2,
+      );
+    };
+    const schedule = () => {
+      if (frame === 0) frame = requestAnimationFrame(read);
+    };
+    read();
+    scroller.addEventListener("scroll", schedule, { passive: true });
+    const observer = new ResizeObserver(schedule);
+    observer.observe(scroller);
+    if (contentRef.current) observer.observe(contentRef.current);
+    return () => {
+      scroller.removeEventListener("scroll", schedule);
+      observer.disconnect();
+      if (frame !== 0) cancelAnimationFrame(frame);
+    };
+  }, [scrollRef, contentRef, isAtBottom]);
 
   const handleScrollToBottom = useCallback(() => {
     scrollToBottom();
   }, [scrollToBottom]);
 
   return (
-    !isAtBottom && (
+    !isAtBottom &&
+    awayFromBottom && (
       <Button
         // Icon-only, so it needs a name of its own — there is no text to borrow.
         aria-label="Scroll to latest"
+        data-slot="conversation-scroll-button"
         className={cn(
-          "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted",
+          "absolute z-10 bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted",
           className,
         )}
         onClick={handleScrollToBottom}
