@@ -35,6 +35,8 @@ it("only reveals an exact automatic replacement, not manual or stream/CLI change
   expect(host.querySelector(".title-reveal-word")).not.toBeNull();
   await render("Unattributed refinement");
   expect(host.querySelector(".title-reveal-word")).toBeNull();
+  await render("Automatic title");
+  expect(host.querySelector(".title-reveal-word")).toBeNull();
   act(() => recordTitleChange("session", "Manual rename", false));
   await render("Manual rename");
   expect(host.querySelector(".title-reveal-word")).toBeNull();

@@ -54,12 +54,10 @@ describe("nextRevealState", () => {
     expect(nextRevealState(first, "CLI rename", false).revealing).toBeNull();
   });
 
-  it("cancels a live reveal without replaying when motion returns", () => {
+  it("keeps the one-shot latch after its automatic provenance is consumed", () => {
     const first = nextRevealState(INITIAL_REVEAL_STATE, "Chat");
     const revealing = nextRevealState(first, "Automatic title", true);
-    const cancelled = nextRevealState(revealing, "Automatic title", false);
-    expect(cancelled.revealing).toBeNull();
-    expect(nextRevealState(cancelled, "Automatic title", true).revealing).toBeNull();
+    expect(nextRevealState(revealing, "Automatic title", false)).toBe(revealing);
   });
 });
 

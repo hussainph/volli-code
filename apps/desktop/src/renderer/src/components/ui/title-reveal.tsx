@@ -46,19 +46,17 @@ export const INITIAL_REVEAL_STATE: TitleRevealState = { seen: null, revealing: n
 /**
  * The state this component should hold for `text`, given what it holds now.
  *
- * An unchanged automatic text keeps its latch across streaming re-renders.
- * First mount, manual and unknown-origin replacements stay static. Removing
- * permission (including a live preference change) clears the latch, so turning
- * Motion back on cannot replay a reveal that was cancelled.
+ * An unchanged text keeps its latch across streaming re-renders, even after
+ * its one-shot provenance has been consumed. First mount, manual and unknown
+ * replacements stay static. The component separately clears the latch on a
+ * live Motion preference change, so restoring it cannot replay a cancelled reveal.
  */
 export function nextRevealState(
   state: TitleRevealState,
   text: string,
   automatic = false,
 ): TitleRevealState {
-  if (state.seen === text) {
-    return automatic || state.revealing === null ? state : { ...state, revealing: null };
-  }
+  if (state.seen === text) return state;
   return { seen: text, revealing: state.seen === null || !automatic ? null : text };
 }
 
@@ -95,10 +93,11 @@ export function TitleReveal({ text, automatic = false, className }: TitleRevealP
   // Adjusting state during render, the documented React pattern for deriving
   // from changed props: React re-runs this component immediately, before any
   // DOM is touched, so no frame ever paints the stale answer.
-  const settled = nextRevealState(state, text, automatic && !instant);
+  const updated = nextRevealState(state, text, automatic && !instant);
+  const settled = instant && updated.revealing !== null ? { ...updated, revealing: null } : updated;
   if (settled !== state) setState(settled);
 
-  const reveal = automatic && !instant && isRevealing(settled, text);
+  const reveal = !instant && isRevealing(settled, text);
   const words = text.split(" ");
   const keys = titleWordKeys(words);
 
