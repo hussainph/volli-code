@@ -201,8 +201,9 @@ function NavigatorScope({
             )}
             <Button
               size="icon-sm"
-              variant="toolbar"
+              variant="ghost"
               aria-label="Collapse folders"
+              title="Collapse folders"
               onClick={() => {
                 setTreeEpoch((value) => value + 1);
                 setView({ ...view, cwd: "" });
@@ -212,8 +213,9 @@ function NavigatorScope({
             </Button>
             <Button
               size="icon-sm"
-              variant="toolbar"
+              variant="ghost"
               aria-label="Refresh files"
+              title="Refresh files"
               disabled={read.pending}
               onClick={() => void refresh()}
             >

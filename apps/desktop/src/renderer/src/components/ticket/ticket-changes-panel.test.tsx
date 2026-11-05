@@ -205,9 +205,11 @@ describe("TicketChangesList markup", () => {
     expect(html).toContain("src/old.ts");
   });
 
-  it("renders a framed empty state when there are no changes", () => {
+  it("renders an inline empty state without success-card chrome when there are no changes", () => {
     const html = render([]);
     expect(html).toContain("No changes vs base");
+    expect(html).toContain("text-left");
+    expect(html).not.toContain('data-slot="notice"');
     expect(html).not.toContain("The branch is up to date.");
   });
 

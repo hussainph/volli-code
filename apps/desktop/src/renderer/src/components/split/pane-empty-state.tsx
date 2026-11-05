@@ -9,6 +9,7 @@ import {
 
 import { MENU_SHORTCUT } from "@renderer/components/ui/menu-classes";
 import { Button } from "@renderer/components/ui/button";
+import { cn } from "@renderer/lib/utils";
 
 /**
  * WHAT AN EMPTY PANE OFFERS (VC-202 §3).
@@ -77,7 +78,7 @@ export function PaneEmptyState({
           keyshortcuts="Meta+P"
           onSelect={onOpenFile}
         />
-        <PaneEmptyRow icon={CloseIcon} label="Close pane" onSelect={onClosePane} />
+        <PaneEmptyRow icon={CloseIcon} label="Close pane" onSelect={onClosePane} close />
       </div>
     </div>
   );
@@ -89,7 +90,9 @@ function PaneEmptyRow({
   shortcut,
   keyshortcuts,
   onSelect,
+  close = false,
 }: {
+  close?: boolean;
   icon: Icon;
   label: string;
   /** The chord this row also answers to, drawn in the trailing slot. */
@@ -102,7 +105,7 @@ function PaneEmptyRow({
     <Button
       type="button"
       variant="ghost"
-      size="lg"
+      size={close ? "default" : "lg"}
       // The row a `⌘\` pane hands keyboard focus to — see
       // `hooks/use-split-shortcuts.ts` for why a keyboard split moves focus
       // when a pointer one deliberately does not.
@@ -111,9 +114,12 @@ function PaneEmptyRow({
       aria-label={label}
       {...(keyshortcuts === undefined ? {} : { "aria-keyshortcuts": keyshortcuts })}
       onClick={onSelect}
-      className="w-full justify-start rounded-row px-2 text-ui hover:bg-(--accent-tint)"
+      className={cn(
+        "w-full justify-start rounded-row px-2 text-ui hover:bg-(--accent-tint)",
+        close && "mt-2 text-muted-foreground",
+      )}
     >
-      {/* Five peers, all in the shared outline family. */}
+      {/* Shared outline family; the close acts on the pane rather than filling it. */}
       <Glyph aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
       {shortcut === undefined ? null : <span className={MENU_SHORTCUT}>{shortcut}</span>}

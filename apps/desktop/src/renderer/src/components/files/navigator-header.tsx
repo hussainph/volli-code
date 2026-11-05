@@ -33,11 +33,11 @@
 import type * as React from "react";
 import { UndoIcon, FolderOpenIcon, SearchIcon } from "@renderer/components/ui/icon";
 
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { cn } from "@renderer/lib/utils";
 
 export function FilesNavigatorHeader({
   status,
@@ -82,35 +82,51 @@ export function FilesNavigatorHeader({
   return (
     <header
       data-testid="files-navigator-header"
-      className={cn("flex shrink-0 flex-col gap-1.5 pt-1 pb-2", RAIL_PANEL_INSET)}
+      className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-2"
     >
-      <div className="flex min-h-7 items-center gap-1">
-        {cwd === "" ? (
-          <span className="flex min-w-0 flex-1 items-center gap-1 text-ui font-medium text-foreground">
-            <FolderOpenIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            <span className="truncate">{root}</span>
-          </span>
-        ) : (
-          // The folder's name IS the way out of it: one target, so a reader
-          // never has to find a separate control to leave.
-          <button
-            type="button"
-            data-testid={upTestId}
-            onClick={onNavigateUp}
-            aria-label={`Leave ${cwd}`}
-            className="flex min-w-0 flex-1 items-center gap-1 rounded-sm font-mono text-ui text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <UndoIcon aria-hidden className="size-3 shrink-0" />
-            <span className="truncate">{cwd}</span>
-          </button>
-        )}
+      <div data-slot="navigator-header-band" className="flex min-h-7 items-center gap-1">
+        <SectionHeading as="h3" aria-label={cwd === "" ? root : cwd} className="min-w-0 flex-1">
+          {cwd === "" ? (
+            <ValueReveal
+              term="Scope"
+              full={root}
+              className="flex min-h-6 w-full min-w-0 items-center gap-1 rounded-control-small text-left"
+            >
+              <FolderOpenIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+              <span dir="rtl" className="min-w-0 truncate text-left">
+                <span dir="ltr">{root}</span>
+              </span>
+            </ValueReveal>
+          ) : (
+            // The folder's name IS the way out of it: one target, so a reader
+            // never has to find a separate control to leave.
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  data-testid={upTestId}
+                  onClick={onNavigateUp}
+                  aria-label={`Leave ${cwd}`}
+                  title={cwd}
+                  className="flex min-h-6 w-full min-w-0 items-center gap-1 rounded-control-small text-ui outline-none hover:text-primary-text focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <UndoIcon aria-hidden className="size-3 shrink-0" />
+                  <span dir="rtl" className="min-w-0 truncate text-left">
+                    <span dir="ltr">{cwd}</span>
+                  </span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{cwd}</TooltipContent>
+            </Tooltip>
+          )}
+        </SectionHeading>
         {actions}
         {attachmentMenu}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               size="icon-sm"
-              variant="toolbar"
+              variant="ghost"
               aria-label="Filter files"
               aria-pressed={filtering}
               onClick={onToggleFilter}

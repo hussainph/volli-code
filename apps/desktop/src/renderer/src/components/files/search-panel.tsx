@@ -62,7 +62,6 @@ import {
 import {
   RailHeadingReadStatus,
   RailReadFaultBody,
-  RAIL_PANEL_INSET,
   RAIL_PANEL_MARGIN,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
@@ -71,6 +70,8 @@ import {
 } from "@renderer/components/ticket/rail-read-feedback";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { fileRevealKey, requestFileReveal } from "@renderer/editor/reveal-line";
 import { cn } from "@renderer/lib/utils";
 import type { FileSearchFile, FileSearchLimit, FileSearchMatch } from "../../../../ipc/contract";
@@ -277,11 +278,14 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
 
   return (
     <div data-testid="file-search-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-        <div className="flex items-center gap-2">
+      <header className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-2">
+        <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <p className="text-ui font-medium">Search</p>
+            <div
+              data-slot="navigator-header-band"
+              className="flex min-h-7 min-w-0 items-center gap-1"
+            >
+              <SectionHeading as="h3">Search</SectionHeading>
               {/* The read's own state rides this row rather than a strip below
                   it, and brings the retry a stale list needs. */}
               <RailHeadingReadStatus
@@ -294,12 +298,19 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
             {/* The navigator's own mono sub-line, saying which checkout these
                 results come from — the branch in a Ticket view, the
                 project in Home. */}
-            <p
-              data-testid="file-search-scope"
-              className="truncate font-mono text-ui text-muted-foreground"
+            <ValueReveal
+              term="Scope"
+              full={root}
+              className="block min-h-6 w-full min-w-0 rounded-control-small text-left"
             >
-              {root}
-            </p>
+              <span
+                data-testid="file-search-scope"
+                dir="rtl"
+                className="block truncate text-left font-mono text-label text-muted-foreground"
+              >
+                <span dir="ltr">{root}</span>
+              </span>
+            </ValueReveal>
           </div>
           <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         </div>

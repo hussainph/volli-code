@@ -50,7 +50,6 @@ import {
   type IconComponent,
   RefreshIcon,
   ArrowRightIcon,
-  SuccessIcon,
   DiffIcon,
   SearchIcon,
   MinusIcon,
@@ -73,7 +72,6 @@ import {
 } from "@renderer/components/files/navigator-scope-state";
 import {
   DiffTotals,
-  RAIL_PANEL_INSET,
   RAIL_PANEL_MARGIN,
   RailFaultBanner,
   RailHeadingReadStatus,
@@ -94,12 +92,10 @@ import {
 import { parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
-import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { Notice } from "@renderer/components/ui/notice";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { isTextClipped } from "@renderer/components/ui/value-reveal";
 import { cn } from "@renderer/lib/utils";
@@ -165,8 +161,8 @@ const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: IconComponent; ink: str
 function ChangesTitle({ count }: { count: number }) {
   return (
     <>
-      <SectionHeading>Diffs</SectionHeading>
-      <Badge variant="count-pill">{count}</Badge>
+      <SectionHeading as="h3">Diffs</SectionHeading>
+      <span className="text-label tabular-nums text-muted-foreground">{count}</span>
     </>
   );
 }
@@ -258,7 +254,7 @@ function HeaderAction({
       <TooltipTrigger asChild>
         <Button
           size="icon-sm"
-          variant="toolbar"
+          variant="ghost"
           aria-label={label}
           aria-pressed={pressed}
           onClick={onClick}
@@ -466,18 +462,10 @@ export function TicketChangesList({
         </div>
       );
     }
-    // A framed note rather than a centred sentence in an empty column: "nothing
-    // changed" is a state the branch is IN, and a card says that the way the
-    // rail's worktree footer says everything else about the worktree.
     return (
-      <Notice
-        tone="positive"
-        layout="stack"
-        icon={SuccessIcon}
-        title="No changes vs base"
-        data-testid="ticket-changes-empty"
-        className={RAIL_PANEL_MARGIN}
-      />
+      <p data-testid="ticket-changes-empty" className={cn(EMPTY_INLINE, RAIL_PANEL_MARGIN)}>
+        No changes vs base
+      </p>
     );
   }
 
@@ -726,10 +714,10 @@ export function TicketChangesPanel({
 
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
+      <header className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-2">
         {/* The name, the count and the read's own state, then the page's two
             acts. */}
-        <div className="flex min-h-7 items-center gap-1">
+        <div data-slot="navigator-header-band" className="flex min-h-7 items-center gap-1">
           <ChangesTitle count={total} />
           <RailHeadingReadStatus
             feedback={feedback}

@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { FileSearchResult } from "../../../../ipc/contract";
 import { fileRevealKey, takeFileReveal } from "@renderer/editor/reveal-line";
 import { FileSearchPanel, searchSummaryLine } from "./search-panel";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import {
   clearRememberedNavigatorViews,
   navigatorScopeKey,
@@ -62,7 +63,9 @@ async function mount(
   root = createRoot(container);
   await act(async () => {
     root?.render(
-      <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />,
+      <TooltipProvider>
+        <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />
+      </TooltipProvider>,
     );
   });
   return { search };
@@ -116,6 +119,7 @@ beforeEach(() => {
     "ResizeObserver",
     class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
@@ -136,6 +140,20 @@ afterEach(async () => {
 });
 
 describe("what the page sends", () => {
+  it("uses a compact heading and keyboard-reachable full scope", async () => {
+    await mount({ kind: "home", projectId: "p1" });
+    expect(container?.querySelector("h3")?.textContent).toBe("Search");
+    const scope = container?.querySelector<HTMLElement>('[data-testid="file-search-scope"]');
+    expect(scope?.className).toContain("text-label");
+    expect(scope?.getAttribute("dir")).toBe("rtl");
+    const reveal = scope?.closest("button");
+    expect(reveal?.getAttribute("aria-label")).toBe("Scope · volli/VC-193-search");
+    act(() => reveal?.focus());
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+      "volli/VC-193-search",
+    );
+  });
+
   it("asks nothing until there is a query", async () => {
     const { search } = await mount({ kind: "home", projectId: "p1" });
 
@@ -557,7 +575,9 @@ describe("a scope swapped under the page", () => {
   async function show(scope: SearchScope): Promise<void> {
     await act(async () => {
       root?.render(
-        <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />,
+        <TooltipProvider>
+          <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />
+        </TooltipProvider>,
       );
     });
   }

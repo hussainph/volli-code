@@ -164,9 +164,11 @@ describe("TabStrip arrangement", () => {
 
     press(chat!, "Space", " ");
     await settle();
+    expect(chat?.style.transition).toBe("none");
     press(chat!, "ArrowRight", "ArrowRight");
     await settle();
     press(chat!, "Space", " ");
+    expect(chat?.style.transition).toBe("none");
 
     expect(onReorder).toHaveBeenCalledWith("chat:c1", ["file:app.ts", "chat:c1"]);
   });
@@ -430,6 +432,7 @@ describe("TabStrip overflow", () => {
   it("follows the keyboard onto a tab the arrows walked out of view", () => {
     renderTabs(9, 0);
     const port = measureScroller(9);
+    const glide = vi.spyOn(port, "scrollTo");
     const tabs = tabsInStrip();
     tabs[0]?.focus();
 
@@ -439,6 +442,7 @@ describe("TabStrip overflow", () => {
 
     expect(document.activeElement).toBe(tabs[8]);
     expect(port.scrollLeft).toBe(600);
+    expect(glide).not.toHaveBeenCalled();
   });
 
   it("leaves the strip where it is when the tab is already whole in view", () => {
