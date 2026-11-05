@@ -179,7 +179,8 @@ on scroll or hover.
 ### Measure and rhythm
 
 - **Tier A, reading:** Ticket body, prose and reading empty states use `<ContentColumn>`:
-  `mx-auto w-full max-w-content px-gutter`, a 45rem / 720px measure.
+  `mx-auto w-full max-w-content px-gutter`, a 45rem / 720px measure. Ticket title,
+  properties and document use `measure="document"`, a 37.5rem / 600px measure.
 - **Tier B, workbench:** Board, terminals, editors and diffs earn width; align workbench
   edges to the `gutter` token (24px). Settings uses `<WorkbenchColumn>`, capped
   at 80rem / 1280px. Do not put workbenches inside the reading measure.

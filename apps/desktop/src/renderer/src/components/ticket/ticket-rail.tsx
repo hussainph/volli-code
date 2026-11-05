@@ -76,7 +76,6 @@ import type { Ticket } from "@volli/shared";
 
 import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
-import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketUsageRailFooter } from "@renderer/components/usage/usage-rail";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
@@ -202,11 +201,9 @@ export function TicketRail({
           // blocks stack in it, and what is pinned under it stays readable at
           // any scroll position.
           <>
-            {/* Bounded properties plus independent roster/offer scrollers:
-                growing metadata can never bury either section's header. */}
+            {/* Independent working-set and offer scrollers. Ticket metadata
+                is edited beside its title on the document tab. */}
             <div className="ticket-inspector-now flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-2">
-              {/* What this Ticket IS: status, priority, labels — as rows. */}
-              <TicketProperties projectId={projectId} ticket={ticket} />
               {/* The working set, with the record folded under it. The block
                   a person reads most often, so it sits nearest the top. */}
               <TicketSessionsPanel

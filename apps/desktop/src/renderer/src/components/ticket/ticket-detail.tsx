@@ -1,3 +1,4 @@
+import { TicketProperties } from "./ticket-properties";
 import * as React from "react";
 import { cloudSession, followCloudSession } from "@renderer/lib/cloud-client";
 import { BlobReadProvider } from "@renderer/components/attachments/blob-read";
@@ -1536,9 +1537,10 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
         )}
       >
         {tab.kind === "body" && (
-          <ContentColumn>
+          <ContentColumn measure="document">
             <div className="mb-2 font-mono text-label text-primary-text">{displayId}</div>
             <TicketTitle ticket={ticket} />
+            <TicketProperties projectId={projectId} ticket={ticket} presentation="summary" />
             {/* "Running on hetzner-1" (VC-576): only for a host other than
                 This Mac, and only with the `cloud` flag on. */}
             <RunningOnLabel projectId={projectId} className="mt-2" />

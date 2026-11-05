@@ -400,36 +400,36 @@ function Composer({
   }
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-container border border-border bg-card focus-within:border-ring">
-      <ReadOnlyNote projectId={projectId} className="px-4 pt-3" />
-      <textarea
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            void submit();
-          }
-        }}
-        placeholder="Add a comment…"
-        aria-label="Add a comment"
-        aria-keyshortcuts="Meta+Enter Control+Enter"
-        className="min-h-20 max-h-48 w-full resize-none bg-transparent px-4 py-4 text-sm text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
-      />
-      <div className="flex items-center justify-end gap-2 px-2 py-2">
+    <div>
+      <ReadOnlyNote projectId={projectId} className="px-4 pb-2" />
+      <div className="flex items-end gap-2 overflow-hidden rounded-container border border-border bg-muted/30 px-3 py-1 focus-within:border-ring">
+        <textarea
+          rows={1}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              void submit();
+            }
+          }}
+          placeholder="Add a comment…"
+          aria-label="Add a comment"
+          aria-keyshortcuts="Meta+Enter Control+Enter"
+          className="min-h-8 max-h-48 min-w-0 flex-1 resize-none bg-transparent py-1.5 text-ui text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
+        />
         <Button
-          size="sm"
+          shape="circle"
+          size="icon-sm"
+          aria-label="Comment"
+          title="Comment (⌘Enter)"
           disabled={draft.trim() === "" || submitting || !canWrite}
           {...readOnlyMark(canWrite)}
           aria-keyshortcuts="Meta+Enter Control+Enter"
           onClick={() => void submit()}
         >
           <DispatchIcon />
-          Comment
-          {/* Keep the shortcut on the same tonal face as the action. */}
-          <kbd className="rounded-sm bg-(--accent-tint) px-1 py-1 text-label font-normal text-primary-text">
-            ⌘↵
-          </kbd>
+          <span className="sr-only">Comment</span>
         </Button>
       </div>
     </div>
@@ -624,15 +624,14 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   ];
 
   return (
-    <section className="flex flex-col gap-4 border-t border-border pt-6">
+    <section className="flex flex-col gap-3 pt-4">
       <div className="flex items-center justify-between gap-2">
         <SectionHeading as="h2">Activity</SectionHeading>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="inspector" size="sm" aria-label={`Filter activity: ${filter}`}>
+            <Button variant="toolbar" size="icon-sm" aria-label={`Filter activity: ${filter}`}>
               <ChatIcon />
-              {filter}
-              <ChevronDownIcon />
+              <span className="sr-only">{filter}</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">

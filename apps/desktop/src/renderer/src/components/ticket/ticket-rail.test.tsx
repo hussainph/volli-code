@@ -153,13 +153,13 @@ describe("TicketRail header", () => {
 // which drives the real tabs; what is left to prove here is that Now is that
 // default and that it is one page holding all three blocks.
 describe("TicketRail's Now page", () => {
-  it("is the default page, and folds properties, automations and sessions into it", () => {
+  it("is the default working-set page, with metadata beside the document title", () => {
     expect(useUiStore.getInitialState().railMode).toBe("now");
     const html = render();
 
     expect(html).toContain('id="ticket-rail-page-now"');
     expect(html).toContain('aria-labelledby="ticket-rail-tab-now"');
-    expect(html).toContain('data-testid="ticket-rail-properties"');
+    expect(html).not.toContain('data-testid="ticket-rail-properties"');
     expect(html).toContain('data-testid="ticket-rail-automations"');
     expect(html).toContain("Sessions");
   });
@@ -189,7 +189,7 @@ describe("TicketRail's Now page", () => {
   // every few minutes, then the list they press now and again. Asserted on the
   // markup's own sequence because a reorder in the composition is a one-line
   // change that no other test would notice.
-  it("opens with the facts, then the roster, then the acts", () => {
+  it("opens with the roster before the acts", () => {
     const html = render();
     const at = (needle: string) => {
       const index = html.indexOf(needle);
@@ -197,11 +197,9 @@ describe("TicketRail's Now page", () => {
       return index;
     };
 
-    const properties = at('data-testid="ticket-rail-properties"');
     const sessions = at('aria-label="Open a tab"');
     const automations = at('data-testid="ticket-rail-automations"');
 
-    expect(properties).toBeLessThan(sessions);
     expect(sessions).toBeLessThan(automations);
   });
 
@@ -219,14 +217,14 @@ describe("TicketRail's Now page", () => {
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
     expect(page).not.toContain("Run once");
     for (const field of ["Status", "Priority", "Labels"]) {
-      expect(page).toContain(field);
+      expect(page).not.toContain(`aria-label="${field}:`);
     }
     // The compact plus opens the same chooser as the strip, without an outlined
     // split control. Rail geometry must not silently become strip-sized.
     expect(page).toMatch(/data-size="icon-xs"[^>]*aria-label="Open a tab"/);
     expect(page).not.toContain("bg-card shadow-raised");
     for (const field of ["status", "priority"]) {
-      expect(page).toContain(`data-testid="ticket-rail-property-${field}"`);
+      expect(page).not.toContain(`data-testid="ticket-rail-property-${field}"`);
     }
   });
 
@@ -265,15 +263,13 @@ describe("TicketRail's Now page", () => {
     expect(html).not.toContain('id="ticket-rail-page-search"');
   });
 
-  it("keeps the ticket's repository facts out of the properties section", () => {
+  it("keeps repository facts in the pinned repository footer", () => {
     const html = render();
-    const properties = html.slice(
-      html.indexOf('data-testid="ticket-rail-properties"'),
-      html.indexOf('data-testid="ticket-sessions"'),
+    const footer = html.slice(html.indexOf('data-testid="ticket-repository-summary"'));
+    expect(footer).toContain("volli/VC-6-calm-stack");
+    expect(html.slice(0, html.indexOf('data-testid="ticket-repository-summary"'))).not.toContain(
+      "volli/VC-6-calm-stack",
     );
-
-    expect(properties).not.toContain("volli/VC-6-calm-stack");
-    expect(properties).not.toContain("/worktrees/");
   });
 });
 

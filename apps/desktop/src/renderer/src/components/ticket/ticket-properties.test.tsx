@@ -62,9 +62,12 @@ const moveTicket = vi.fn();
 const setTicketPriority = vi.fn();
 const setLabels = vi.fn();
 
-async function render(ticket: Ticket = TICKET) {
+async function render(
+  ticket: Ticket = TICKET,
+  presentation: "inspector" | "summary" = "inspector",
+) {
   await act(async () => {
-    root?.render(<TicketProperties projectId="p1" ticket={ticket} />);
+    root?.render(<TicketProperties projectId="p1" ticket={ticket} presentation={presentation} />);
   });
 }
 
@@ -85,7 +88,7 @@ it("bounds a thousand applied labels before the editor opens", async () => {
   expect(query<HTMLButtonElement>('[aria-label="Manage labels, 998 more"]').textContent).toBe(
     "+998",
   );
-  expect(document.querySelectorAll('[cmdk-item=""]')).toHaveLength(0);
+  expect(document.querySelectorAll('[data-slot="command-item"]')).toHaveLength(0);
 });
 
 it("searches and removes a label beyond the bounded run through its editor", async () => {
@@ -116,7 +119,7 @@ async function press(element: HTMLElement): Promise<void> {
 function optionRow(label: string): HTMLElement {
   const found = [
     ...document.querySelectorAll<HTMLElement>(
-      '[data-slot="dropdown-menu-radio-item"],[cmdk-item=""]',
+      '[data-slot="dropdown-menu-radio-item"],[data-slot="command-item"]',
     ),
   ].find((candidate) => candidate.textContent?.trim() === label);
   if (found === undefined) throw new Error(`no option named ${label}`);
@@ -136,7 +139,7 @@ async function type(text: string): Promise<void> {
 
 /** The words on every row of the open list. */
 function offered(): string[] {
-  return [...document.querySelectorAll('[cmdk-item=""]')].map(
+  return [...document.querySelectorAll('[data-slot="command-item"]')].map(
     (row) => row.textContent?.trim() ?? "",
   );
 }
@@ -413,4 +416,15 @@ it("retains the board priority severity signal in the native trigger and every c
     expect(glyph?.querySelectorAll(`div[style*="var(--${ink})"]`)).toHaveLength(count);
     expect(glyph?.querySelectorAll("div")).toHaveLength(3);
   }
+});
+
+it("keeps summary metadata as named capsule controls with the same status write path", async () => {
+  await render(TICKET, "summary");
+  const status = query<HTMLButtonElement>('[aria-label="Status: Todo"]');
+  expect(status.dataset.shape).toBe("capsule");
+  expect(status.dataset.variant).toBe("secondary");
+  expect(query('[data-testid="ticket-rail-property-row-status"]').className).toContain("contents");
+  await press(status);
+  await choose("Doing");
+  expect(moveTicket).toHaveBeenCalledWith("p1", "t1", "doing", Number.MAX_SAFE_INTEGER);
 });

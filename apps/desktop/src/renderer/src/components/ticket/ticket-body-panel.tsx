@@ -68,7 +68,7 @@ export function TicketBodyPanel({
     // cannot render in one and fail in the other. The editor takes the links
     // directly because Monaco is outside React's tree.
     <MarkdownAttachmentsProvider attachments={attachments}>
-      <ContentColumn className="flex flex-col gap-6 pt-4 pb-16">
+      <ContentColumn measure="document" className="flex flex-col gap-6 pt-4 pb-16">
         {bodyStatus === "loading" ? <TicketBodyPlaceholder /> : null}
         {bodyStatus === "failed" ? (
           <div data-testid="ticket-body-failed">

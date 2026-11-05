@@ -59,6 +59,7 @@ function ValueTrigger({
   value,
   canWrite,
   children,
+  summary = false,
 }: {
   label: string;
   field: string;
@@ -66,18 +67,29 @@ function ValueTrigger({
   /** Read-only (VC-576): the value still reads; the menu does not open. */
   canWrite: boolean;
   children?: React.ReactNode;
+  summary?: boolean;
 }) {
+  const props = {
+    disabled: !canWrite,
+    "aria-label": `${field}: ${label}`,
+    "data-testid": `ticket-rail-property-${field.toLowerCase()}`,
+    "data-value": value,
+  };
+  const content = (
+    <>
+      {children}
+      <span className="min-w-0 truncate">{label}</span>
+    </>
+  );
   return (
     <DropdownMenuTrigger asChild>
-      <InspectorPopup
-        disabled={!canWrite}
-        aria-label={`${field}: ${label}`}
-        data-testid={`ticket-rail-property-${field.toLowerCase()}`}
-        data-value={value}
-      >
-        {children}
-        <span className="min-w-0 truncate">{label}</span>
-      </InspectorPopup>
+      {summary ? (
+        <Button {...props} variant="secondary" shape="capsule" size="sm">
+          {content}
+        </Button>
+      ) : (
+        <InspectorPopup {...props}>{content}</InspectorPopup>
+      )}
     </DropdownMenuTrigger>
   );
 }
@@ -358,7 +370,17 @@ function LabelRun({
   );
 }
 
-export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+export function TicketProperties({
+  projectId,
+  ticket,
+  presentation = "inspector",
+}: {
+  projectId: string;
+  ticket: Ticket;
+  presentation?: "inspector" | "summary";
+}) {
+  const summary = presentation === "summary";
+  const rowClass = summary ? "contents [&>span:first-child]:sr-only" : undefined;
   const statusLabel = TICKET_STATUS_LABELS[ticket.status];
   const StatusIcon = STATUS_ICON[ticket.status];
   const priorityLabel = TICKET_PRIORITY_LABELS[ticket.priority];
@@ -367,16 +389,21 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
     <section
       aria-label="Properties"
       data-testid="ticket-rail-properties"
-      className={cn("flex flex-col gap-1", RAIL_PANEL_INSET)}
+      className={cn("flex min-w-0 flex-col gap-1", summary ? "mt-3" : RAIL_PANEL_INSET)}
     >
-      <ul className="flex flex-col">
-        <InspectorRow label="Status" data-testid="ticket-rail-property-row-status">
+      <ul className={summary ? "flex min-w-0 flex-wrap items-center gap-1.5" : "flex flex-col"}>
+        <InspectorRow
+          className={rowClass}
+          label="Status"
+          data-testid="ticket-rail-property-row-status"
+        >
           <DropdownMenu>
             <ValueTrigger
               label={statusLabel}
               field="Status"
               value={ticket.status}
               canWrite={canWrite}
+              summary={summary}
             >
               <StatusIcon aria-hidden className="size-3.5 text-muted-foreground" />
             </ValueTrigger>
@@ -407,13 +434,18 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
             </DropdownMenuContent>
           </DropdownMenu>
         </InspectorRow>
-        <InspectorRow label="Priority" data-testid="ticket-rail-property-row-priority">
+        <InspectorRow
+          className={rowClass}
+          label="Priority"
+          data-testid="ticket-rail-property-row-priority"
+        >
           <DropdownMenu>
             <ValueTrigger
               label={priorityLabel}
               field="Priority"
               value={ticket.priority}
               canWrite={canWrite}
+              summary={summary}
             >
               <span aria-hidden className="flex size-3.5 shrink-0 items-center justify-center">
                 <PriorityIndicator priority={ticket.priority} />
@@ -444,7 +476,11 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
             </DropdownMenuContent>
           </DropdownMenu>
         </InspectorRow>
-        <InspectorRow label="Labels" data-testid="ticket-rail-property-row-labels">
+        <InspectorRow
+          className={rowClass}
+          label="Labels"
+          data-testid="ticket-rail-property-row-labels"
+        >
           <LabelRun
             projectId={projectId}
             labels={ticket.labels}

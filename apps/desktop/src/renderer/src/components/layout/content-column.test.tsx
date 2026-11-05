@@ -23,3 +23,8 @@ describe("reading containers", () => {
     expect(renderToStaticMarkup(<Message from="user" />)).toContain("max-w-[95%]");
   });
 });
+
+it("keeps ticket anatomy on one explicit document measure without narrowing prose elsewhere", () => {
+  expect(renderToStaticMarkup(<ContentColumn measure="document" />)).toContain("max-w-document");
+  expect(renderToStaticMarkup(<ContentColumn />)).toContain("max-w-content");
+});
