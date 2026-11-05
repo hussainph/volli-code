@@ -46,10 +46,14 @@ export function TabActionDropdown({
 }) {
   const [open, setOpen] = React.useState(false);
   const pointer = React.useRef(false);
-  const changeOpen = (next: boolean) => {
-    setOpen(next);
-    onOpenChange?.(next);
-  };
+  const changeOpen = React.useCallback(
+    (next: boolean) => {
+      setOpen(next);
+      onOpenChange?.(next);
+    },
+    [onOpenChange],
+  );
+  const dismiss = React.useCallback(() => changeOpen(false), [changeOpen]);
   return (
     <DropdownMenu open={open} onOpenChange={changeOpen}>
       <DropdownMenuTrigger asChild>
@@ -78,7 +82,7 @@ export function TabActionDropdown({
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
-        <TabDropdownDismissContext.Provider value={() => changeOpen(false)}>
+        <TabDropdownDismissContext.Provider value={dismiss}>
           {children}
         </TabDropdownDismissContext.Provider>
         {actions.map((action) => (
