@@ -272,6 +272,17 @@ describe("column arming", () => {
     const input = document.querySelector<HTMLInputElement>('[aria-label="Search automations"]')!;
     expect(input).not.toBeNull();
     expect(document.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(21);
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(input, "no such automation");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain("No matching automations");
+    expect(document.querySelector('[role="option"]')?.textContent).toContain("No automation");
+    await act(async () => {
+      setValue.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     await act(async () =>
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
     );

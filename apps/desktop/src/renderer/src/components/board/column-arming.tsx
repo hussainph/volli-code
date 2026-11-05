@@ -169,6 +169,14 @@ function LocalColumnArmingButton({
           <TooltipContent>{label}</TooltipContent>
         </Tooltip>
         <PopoverContent align="start" className="w-80 gap-0 p-0">
+          {query.trim() &&
+          !offered.some((automation) =>
+            automation.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+          ) ? (
+            <p role="status" className="px-3 py-2 text-ui text-muted-foreground">
+              No matching automations
+            </p>
+          ) : null}
           <SearchableCommand
             items={choices}
             keyOf={(automation) => automation.id}
