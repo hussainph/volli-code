@@ -197,7 +197,9 @@ export function UsageCardRow({
           <Icon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{label}</span>
           {trailing === null || trailing === undefined ? null : (
-            <span className="shrink-0 text-ui tabular-nums text-muted-foreground">{trailing}</span>
+            <span className="shrink-0 text-right text-ui tabular-nums text-muted-foreground">
+              {trailing}
+            </span>
           )}
           <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
         </button>
@@ -275,14 +277,16 @@ export function UsageRankList({
 }) {
   if (rows.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2">
-      <SectionHeading as="h3">{heading}</SectionHeading>
-      <dl className="flex flex-col gap-2">
+    <section className="usage-rank-list shrink-0" aria-label={heading}>
+      <SectionHeading as="h3" className="flex min-h-7 items-center">
+        {heading}
+      </SectionHeading>
+      <dl>
         {rows.map((row) => (
           <UsageRankRow key={row.key} row={row} />
         ))}
       </dl>
-    </div>
+    </section>
   );
 }
 
@@ -296,11 +300,11 @@ export function UsageRankList({
 export function UsageRankRow({ row }: { row: UsageGroupRow }) {
   const cost = formatUsageCost(row.usage);
   return (
-    <div className="flex items-center justify-between gap-2">
+    <div className="flex min-h-7 items-center justify-between gap-2">
       <dt className="flex min-w-0 items-center gap-2 text-ui text-foreground">
         <UsageRowSubject row={row} />
       </dt>
-      <dd className="shrink-0 text-ui tabular-nums text-muted-foreground">
+      <dd className="shrink-0 text-right text-ui tabular-nums text-muted-foreground">
         {cost === null ? "—" : <UsageCostFigure summary={row.usage} />}
       </dd>
     </div>
@@ -326,9 +330,14 @@ export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
   const model = row.model ?? null;
   if (model === null)
     return (
-      <span className="min-w-0 truncate" title={row.label}>
+      <ValueReveal
+        term="Session"
+        full={row.label}
+        side="left"
+        className="min-h-6 min-w-0 truncate rounded-sm text-left"
+      >
         {row.label}
-      </span>
+      </ValueReveal>
     );
   return (
     <>
@@ -354,7 +363,7 @@ export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
  */
 export function UsageBreakdownFact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
+    <div className="flex min-h-7 shrink-0 items-center justify-between gap-2 border-t border-border">
       <span className="shrink-0 text-ui text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center justify-end gap-2 text-ui tabular-nums text-foreground">
         {/* A drawn value brings its own parts — a model's mark and its name; a

@@ -1,6 +1,6 @@
 /** One pinned spend reading for the project/session inspector. Accounting and
  * the time-window control unfold into a bounded scroller, never a dashboard. */
-import { UsageIcon, ChatIcon, ReceiptIcon, FilterIcon } from "@renderer/components/ui/icon";
+import { UsageIcon, ChatIcon, CostIcon, FilterIcon } from "@renderer/components/ui/icon";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
@@ -118,10 +118,13 @@ export function HomeUsageFooter({
         <RailFoldBody>
           <div
             data-testid="home-usage-body"
+            role="region"
+            aria-label="Project usage breakdown"
+            tabIndex={0}
             className={cn(
               // `overscroll-contain` so reaching the end of the ranking does not
               // hand the wheel to the page scroller behind it.
-              "flex max-h-40 flex-col gap-3 overflow-y-auto overscroll-contain border-b border-sidebar-border/70 pt-3 pb-4",
+              "usage-breakdown-scroll flex max-h-40 flex-col gap-2 overflow-y-auto overscroll-contain border-b border-sidebar-border/70 py-2 [scroll-padding-block:8px]",
               RAIL_PANEL_INSET,
             )}
           >
@@ -167,7 +170,7 @@ export function HomeUsageFooter({
             {session === null || sessionCost === null ? null : (
               <div
                 data-testid="home-usage-session"
-                className="flex items-center justify-between gap-2 border-t border-border pt-2"
+                className="flex min-h-7 shrink-0 items-center justify-between gap-2 border-t border-border"
               >
                 <span className="shrink-0 text-ui text-muted-foreground">This session</span>
                 <UsageCostFigure summary={session} className="text-ui text-foreground" />
@@ -185,7 +188,7 @@ export function HomeUsageFooter({
             } breakdown`}
             className={cn(RAIL_FOOTER_ROW, "py-2")}
           >
-            <ReceiptIcon className="size-4 shrink-0 text-muted-foreground" />
+            <CostIcon className="size-4 shrink-0 text-muted-foreground" />
             {cost === null ? (
               // Nothing metered is not a free project — it is an unmeasured one,
               // and `$0.00` here would be the most misleading string this

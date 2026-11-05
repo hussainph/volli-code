@@ -28,10 +28,9 @@ import { errorMessage, type DiffStat } from "@volli/shared";
 import type { RailReadFeedback } from "@renderer/components/ticket/rail-read-feedback";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
-import { SECTION_HEADING, SectionHeading } from "@renderer/components/ui/section-heading";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
@@ -81,9 +80,9 @@ export function RailSectionHeadingRow({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="mb-1 flex items-center justify-between gap-2 px-2">
+    <div className="mb-1 flex min-h-7 items-center justify-between gap-2 px-2">
       <span className="flex min-w-0 items-center gap-1.5">
-        <SectionHeading>{label}</SectionHeading>
+        <SectionHeading as="h3">{label}</SectionHeading>
         {status}
       </span>
       {children}
@@ -92,59 +91,16 @@ export function RailSectionHeadingRow({
 }
 
 /**
- * The rail's ONE fold: what opens and closes in place on a rail page, and how
- * it moves (VC-406). Three things fold — the roster's record under the
- * Sessions eyebrow, the worktree body under its footer row, the cost breakdown
- * under its — and they are one object drawn three times, so the motion is
- * spelled once here.
- *
- * THE TRIGGER NEVER MOVES. A body that opens BELOW its trigger (the eyebrow's
- * record) grows downward into the scroller; a body that opens ABOVE its
- * trigger (a footer row's) grows upward into the space the scroller gives
- * back. Either way the thing the pointer is on stays under the pointer, and a
- * second press lands where the first did. The alternative for a footer —
- * header above body, the row rising by the body's height — was drawn and
- * rejected in the comparison scratch: it reads correctly and it moves the
- * target out from under the hand, which is worse.
- *
- * THE MOTION is a measured `height` TRANSITION — 200ms on the strong
- * `--ease-out`, the caret 150ms on the same curve — and it is a transition
- * rather than the `collapsible-down/up` keyframes `ui/accordion.tsx` runs on
- * for one reason: a fold is pressed twice in a second. Keyframes restart from
- * their own zero, so a close interrupted halfway jumped back to full height
- * and fell again. A transition retargets from the CURRENT computed height, so
- * a reversal continues from where the eye is. `height` is a layout property
- * and normally the wrong thing to animate, but a fold's whole effect is that
- * the surface around it resizes; the layout pass is the purpose, not the cost,
- * and 200ms bounds it. Nothing else animates: the rows inside do not fade or
- * slide, because they are data the reader came to read.
- *
- * NOT RADIX. Radix's `Collapsible` was what this was, and its `Presence` only
- * watches CSS ANIMATIONS (`animationName`), so a transition-driven close
- * unmounts the body on the first frame — and its content keeps its own
- * measurement effect, which zeroes `transitionDuration` on every state change.
- * The pieces it did give away are cheap to keep honest here: `useId` wires
- * `aria-controls`/`aria-expanded` to the body, `Slot` keeps `asChild`, and the
- * body still unmounts its children once closed rather than sitting mounted
- * under a clip.
- *
- * THE GATES ship with it. A toggle from the KEYBOARD (`event.detail === 0`,
- * how a browser reports Enter/Space on a button) and `prefers-reduced-motion`
- * — read at the moment of the toggle, so a setting changed mid-session lands
- * on the next press — both drop the height transition AND the caret's turn:
- * the state change is instant, not merely faster. The closing body is `inert`
- * from the first frame of the close, and if focus was inside it when the close
- * began it returns to the trigger rather than falling to the document.
+ * Inspector disclosures are immediate. The sidebar ticket-group envelope is
+ * the only height-animated disclosure; it owns its separate motion path.
+ * Keep controlled state, trigger/body identity and focus return here, without
+ * measuring content or retaining closed rows for a transition.
  */
-const FOLD_MS = 200;
-
 type RailFoldContextValue = {
   open: boolean;
-  /** Whether the CURRENT change runs with no motion at all. */
-  instant: boolean;
   contentId: string;
   triggerRef: React.RefObject<HTMLElement | null>;
-  toggle(instant: boolean): void;
+  toggle(): void;
 };
 
 const RailFoldContext = React.createContext<RailFoldContextValue | null>(null);
@@ -171,9 +127,6 @@ export function RailFold({
   asChild?: boolean;
 }) {
   const [uncontrolled, setUncontrolled] = React.useState(defaultOpen);
-  // React state rather than a ref: the caret is a sibling of the body and has
-  // to be drawn without its transition in the SAME commit the state flips in.
-  const [instant, setInstant] = React.useState(false);
   const contentId = React.useId();
   const triggerRef = React.useRef<HTMLElement | null>(null);
   const isOpen = open ?? uncontrolled;
@@ -181,16 +134,14 @@ export function RailFold({
   const value = React.useMemo<RailFoldContextValue>(
     () => ({
       open: isOpen,
-      instant,
       contentId,
       triggerRef,
-      toggle(keyboard) {
-        setInstant(keyboard || prefersReducedMotion());
+      toggle() {
         if (open === undefined) setUncontrolled(!isOpen);
         onOpenChange?.(!isOpen);
       },
     }),
-    [isOpen, instant, contentId, open, onOpenChange],
+    [isOpen, contentId, open, onOpenChange],
   );
 
   const Comp = asChild ? Slot.Root : "div";
@@ -232,161 +183,53 @@ export function RailFoldTrigger({
       aria-expanded={fold.open}
       onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
         onClick?.(event);
-        // `detail` is 0 for Enter/Space on a button and ≥1 for a real click:
-        // the keyboard path is the one that must not animate.
-        if (!event.defaultPrevented) fold.toggle(event.detail === 0);
+        if (!event.defaultPrevented) fold.toggle();
       }}
     />
   );
 }
 
-/** The fold's body: measured, transitioned, clipped while it moves. */
+/** Closed rows unmount immediately; closing from inside returns focus. */
 export function RailFoldBody({ className, children, ...props }: React.ComponentProps<"div">) {
   const fold = useRailFold("RailFoldBody");
-  const { open } = fold;
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
-  const contentRef = React.useRef<HTMLDivElement | null>(null);
-  // Mounted while open AND through a close, so the body has something to
-  // measure on the way down; dropped once it is shut.
-  const [present, setPresent] = React.useState(open);
-  const shown = React.useRef(open);
-  const mounted = React.useRef(false);
   const focusInside = React.useRef(false);
-  /** Detaches the in-flight run's listener and fallback timer. */
-  const settle = React.useRef<(() => void) | null>(null);
 
   React.useLayoutEffect(() => {
-    const body = bodyRef.current;
-    if (body === null) return;
-
-    /**
-     * A close pulls the ground out from under whatever was focused inside it.
-     * `inert` lands in the same commit and blurs it to nothing, so the flag is
-     * kept by the body's own focus events and a blur with no `relatedTarget`
-     * — focus that went NOWHERE — does not clear it.
-     */
-    function returnFocus(node: HTMLElement): void {
-      const active = document.activeElement;
-      const lost = active === null || active === document.body || node.contains(active);
-      if (focusInside.current && lost) fold.triggerRef.current?.focus();
-      focusInside.current = false;
+    if (fold.open) return;
+    const active = document.activeElement;
+    if (
+      focusInside.current &&
+      (active === null || active === document.body || bodyRef.current?.contains(active))
+    ) {
+      fold.triggerRef.current?.focus();
     }
-    function rest(node: HTMLElement): void {
-      node.style.transition = "";
-      // `auto` while open, so the body tracks content that grows under it.
-      node.style.height = open ? "auto" : "0px";
-      if (!open) setPresent(false);
-    }
-
-    // The first frame is a resting state, never a movement: a rail that
-    // unfolded everything it remembered on every mount would animate a layout
-    // the reader never asked to change.
-    if (!mounted.current) {
-      mounted.current = true;
-      body.style.height = open ? "auto" : "0px";
-      return;
-    }
-    if (shown.current === open) return;
-    // Opening: mount the children first, then measure them on the next pass.
-    if (open && !present) {
-      setPresent(true);
-      return;
-    }
-    shown.current = open;
-    // Detach only — the height stays where the interrupted run left it, which
-    // is what the reversal transitions FROM.
-    settle.current?.();
-    if (!open) returnFocus(body);
-
-    if (fold.instant || prefersReducedMotion()) {
-      rest(body);
-      return;
-    }
-
-    const from = body.getBoundingClientRect().height;
-    const to = open ? (contentRef.current?.getBoundingClientRect().height ?? 0) : 0;
-    body.style.transition = "none";
-    body.style.height = `${from}px`;
-    void body.offsetHeight; // commit the start height before the target lands
-    body.style.transition = `height ${FOLD_MS}ms var(--ease-out)`;
-    body.style.height = `${to}px`;
-
-    function finish(): void {
-      settle.current?.();
-      // Re-checked because a closure loses the guard above, not because the
-      // ref can empty: the run is detached before the body can unmount.
-      if (body !== null) rest(body);
-    }
-    function onEnd(event: TransitionEvent): void {
-      if (event.target === body && event.propertyName === "height") finish();
-    }
-    body.addEventListener("transitionend", onEnd);
-    // A transition that never runs (a body that measures zero either way, a
-    // display-less environment) still has to land the resting state.
-    const timer = window.setTimeout(finish, FOLD_MS + 60);
-    settle.current = () => {
-      body.removeEventListener("transitionend", onEnd);
-      window.clearTimeout(timer);
-      settle.current = null;
-    };
-  }, [open, present, fold.instant, fold.triggerRef]);
-
-  // Content that grows while the body is opening retargets the run in flight
-  // (a read landing under a fold that is still moving). Never while closing:
-  // the destination there is zero whatever the content does.
-  React.useEffect(() => {
-    const body = bodyRef.current;
-    const content = contentRef.current;
-    if (body === null || content === null || typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(() => {
-      if (settle.current === null || !shown.current) return;
-      body.style.height = `${content.getBoundingClientRect().height}px`;
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, []);
-
-  React.useEffect(() => () => settle.current?.(), []);
+    focusInside.current = false;
+  }, [fold.open, fold.triggerRef]);
 
   return (
     <div
+      {...props}
       ref={bodyRef}
       id={fold.contentId}
       data-slot="rail-fold-body"
-      data-state={open ? "open" : "closed"}
-      // Nothing inside a shutting body is reachable — by tab, by pointer or by
-      // a screen reader — while it is still on screen.
-      inert={!open}
+      data-state={fold.open ? "open" : "closed"}
+      inert={!fold.open}
+      hidden={!fold.open}
       onFocus={() => {
         focusInside.current = true;
       }}
       onBlur={(event) => {
         if (event.relatedTarget !== null) focusInside.current = false;
       }}
-      className={cn("overflow-hidden", !open && "h-0", className)}
-      {...props}
+      className={className}
     >
-      {/* The measured child: its height is the fold's target, and what a
-          ResizeObserver watches. The clip lives on the parent. */}
-      <div ref={contentRef}>{present ? children : null}</div>
+      {fold.open ? children : null}
     </div>
   );
 }
 
-/**
- * The caret that says which way a fold opens, and whether it is open.
- *
- * An eyebrow's fold opens DOWN, under the label, so its caret points right
- * while closed and turns to point down: the file-browser idiom, read by
- * everyone. A footer row's fold opens UP, over the row, so its caret points
- * up while closed and turns to point down once the body is standing above
- * it — pointing at where the body went, and at what pressing again does.
- *
- * It turns with the body or not at all: the fold's instant gates reach the
- * caret through the context, so a keyboard press changes a still picture and
- * the CSS gate keeps covering a reduced-motion change that came from anywhere
- * else.
- */
+/** Direction changes with the disclosure, never on a separate animation clock. */
 export function RailFoldCaret({
   open,
   placement,
@@ -395,14 +238,12 @@ export function RailFoldCaret({
   placement: "eyebrow" | "footer";
 }) {
   const Caret = placement === "eyebrow" ? ChevronRightIcon : ChevronUpIcon;
-  const instant = React.useContext(RailFoldContext)?.instant ?? false;
   return (
     <Caret
       aria-hidden
       strokeWidth={placement === "eyebrow" ? 2.25 : undefined}
       className={cn(
-        "shrink-0 text-muted-foreground transition-transform duration-(--duration-menu-in) ease-out motion-reduce:transition-none",
-        instant && "transition-none",
+        "shrink-0 text-muted-foreground",
         placement === "eyebrow" ? "size-2.5" : "size-3",
         open && (placement === "eyebrow" ? "rotate-90" : "rotate-180"),
       )}
@@ -441,26 +282,26 @@ export function RailFoldHeadingRow({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="mb-1 flex items-center justify-between gap-2 px-2">
+    <div className="mb-1 flex min-h-7 items-center justify-between gap-2 px-2">
       <span className="flex min-w-0 items-center gap-1.5">
         {foldable ? (
           // Still a heading in the document — the button is INSIDE it, so the
           // outline keeps its section and the trigger keeps its name.
-          <h2 className={SECTION_HEADING}>
+          <SectionHeading as="h3">
             <RailFoldTrigger asChild>
               <button
                 type="button"
                 aria-label={triggerLabel}
                 data-testid={testId}
-                className="flex items-center gap-1 rounded-sm outline-none transition-colors duration-(--duration-menu-in) ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+                className="flex min-h-6 items-center gap-1 rounded-sm outline-none hover:text-primary-text focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {label}
                 <RailFoldCaret open={open} placement="eyebrow" />
               </button>
             </RailFoldTrigger>
-          </h2>
+          </SectionHeading>
         ) : (
-          <SectionHeading>{label}</SectionHeading>
+          <SectionHeading as="h3">{label}</SectionHeading>
         )}
         {status}
       </span>

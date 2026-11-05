@@ -321,6 +321,7 @@ describe("a model row", () => {
     expect(text(ranking)).toContain("Wire the projection");
     expect(ranking).not.toContain("<svg");
     expect(ranking).not.toContain('aria-label="Model ·');
+    expect(ranking).toContain('aria-label="Session · Wire the projection"');
   });
 });
 
@@ -398,6 +399,11 @@ describe("the fold's height budget", () => {
       expect(body.className).toContain("max-h-40");
       expect(body.className).toContain("overflow-y-auto");
       expect(body.className).toContain("overscroll-contain");
+      expect(body.className).toContain("[scroll-padding-block:8px]");
+      expect(body.className).toContain("py-2");
+      expect(body.tabIndex).toBe(0);
+      expect(body.getAttribute("role")).toBe("region");
+      expect(body.getAttribute("aria-label")).toMatch(/usage breakdown$/);
     }
   });
 
@@ -434,5 +440,17 @@ describe("the fold's height budget", () => {
     // pressing it cannot be confused with opening the fold.
     expect(body.textContent).not.toContain("Project usage");
     expect(body.querySelector('[role="combobox"][aria-label="Usage window"]')).not.toBeNull();
+  });
+});
+
+describe("compact accounting rows", () => {
+  it("keeps every class/rank row 28px and makes long Session names keyboard-readable", () => {
+    const body = node(ticket({ open: true }), "ticket-usage-body");
+    for (const row of body.querySelectorAll("dl > div")) expect(row.className).toContain("min-h-7");
+    expect(body.querySelector('button[aria-label^="Session ·"]')).not.toBeNull();
+    for (const group of body.querySelectorAll("section.usage-rank-list")) {
+      expect(group.querySelector("h3")?.className).toContain("min-h-7");
+      expect(group.querySelector("dl > div")).not.toBeNull();
+    }
   });
 });

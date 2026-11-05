@@ -264,10 +264,11 @@ export function TicketBodyEditor({
           onBlur={() => debouncer.flush()}
           onContentHeightChange={setContentHeight}
           placeholder="Add description…"
+          compact
           ariaLabel="Ticket description"
           fileRefs={fileRefs}
           attachments={attachments}
-          className="min-h-32"
+          className="min-h-7 focus-within:min-h-32"
           style={clamped ? { maxHeight: BODY_CLAMP_PX } : undefined}
           ref={editorRef}
         />
@@ -279,12 +280,10 @@ export function TicketBodyEditor({
             type="button"
             onClick={() => setExpanded((value) => !value)}
             aria-expanded={expanded}
-            className="mt-1 flex items-center gap-1 rounded-sm px-1 text-ui text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+            className="mt-1 flex min-h-6 items-center gap-1 rounded-sm px-1 text-ui text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
             {expanded ? "Collapse" : "Expand"}
-            <ChevronDownIcon
-              className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
-            />
+            <ChevronDownIcon className={cn("size-3 shrink-0", expanded && "rotate-180")} />
           </button>
         ) : null}
       </div>

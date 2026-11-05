@@ -88,6 +88,8 @@ export interface MonacoDocumentEditorProps {
    */
   savePolicy?: Extract<DocumentSavePolicy, "autosave" | "draft">;
   placeholder?: string;
+  /** 28px empty document target; focus height remains the host's decision. */
+  compact?: boolean;
   autoFocus?: boolean;
   /**
    * Classes for the editor host. Min/max height belong here and are honoured
@@ -205,6 +207,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact = false,
     autoFocus,
     className,
     style,
@@ -232,6 +235,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact,
     ariaLabel,
     autoFocus,
   });
@@ -244,6 +248,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact,
     ariaLabel,
     autoFocus,
   };
@@ -372,6 +377,7 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         view = runtime.monaco.editor.create(host, {
           ...documentModeOptions({ placeholder: liveRef.current.placeholder }),
+          ...(liveRef.current.compact ? { padding: { top: 2, bottom: 2 } } : {}),
           theme: activeMonacoEditorThemeId(),
           ariaLabel: liveRef.current.ariaLabel,
           model: lease.model,
