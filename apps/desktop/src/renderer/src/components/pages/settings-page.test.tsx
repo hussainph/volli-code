@@ -105,10 +105,13 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("Loading");
   });
 
-  it("orders Appearance as canvas, mode, style and motion without explaining the controls", () => {
+  it("orders Appearance before its compact canvas and accent rows, style and motion", () => {
     const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="appearance" />);
-    const content = html.slice(html.indexOf('data-testid="canvas-pad"'));
-    expect(content.indexOf('data-testid="appearance-mode"')).toBeGreaterThan(0);
+    const content = html.slice(html.indexOf('data-slot="pref-content"'));
+    expect(content.indexOf('data-slot="canvas-instrument"')).toBeGreaterThan(
+      content.indexOf('data-testid="appearance-mode"'),
+    );
+    expect(content).toContain('aria-label="Custom accent colour"');
     expect(content.indexOf('aria-label="Style"')).toBeGreaterThan(
       content.indexOf('data-testid="appearance-mode"'),
     );

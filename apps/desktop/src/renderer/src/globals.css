@@ -3560,3 +3560,73 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
     display: none;
   }
 }
+
+/* Preferences is one floating glass window: no scrim, no duplicate canvas and
+ * no second material boundary around either side of its split interior. */
+[data-slot="dialog-content"].settings-window {
+  width: min(820px, calc(100vw - 32px));
+  max-width: min(820px, calc(100vw - 32px));
+  height: min(600px, calc(100svh - 64px));
+  max-height: calc(100svh - 64px);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: var(--radius-floating);
+}
+.settings-window-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 6px 12px;
+}
+.settings-window [data-slot="pref-content"] {
+  border-radius: var(--radius-container) 0 0 0;
+}
+[data-settings-scope] [data-selected="true"] {
+  background: var(--fill-secondary);
+  box-shadow: inset 0 0 0 0.5px var(--border-strong);
+}
+[data-slot="pref-group"] {
+  overflow: clip;
+}
+.settings-window [data-slot="pref-group"] {
+  background: var(--fill-quaternary);
+  box-shadow: none;
+}
+
+[data-slot="canvas-instrument"] {
+  border-top: 0.5px solid var(--border);
+}
+.accent-swatch {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 0.5px var(--border-strong);
+  outline-offset: 3px;
+}
+.accent-swatch[aria-pressed="true"],
+.accent-swatch:focus-visible {
+  outline: 2px solid var(--ring);
+}
+.accent-canvas {
+  color: var(--foreground);
+}
+.accent-hue {
+  appearance: none;
+  height: 12px;
+  border-radius: 999px;
+}
+.accent-hue::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 0.5px var(--foreground);
+}

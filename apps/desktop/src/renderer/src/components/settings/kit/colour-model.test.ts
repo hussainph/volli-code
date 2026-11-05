@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_CANVAS } from "@volli/shared";
-import { harmonize, harmonyHue, toHex, toHsl } from "./colour-model";
+import { harmonize, harmonyHue, toHex, toHsl, hsvHex, toHsv } from "./colour-model";
 
 describe("Settings colour instrument", () => {
+  it("round trips the custom pad's HSV colours, including black and grey", () => {
+    for (const hex of ["#000000", "#ffffff", "#808080", "#ff0000", "#00ff00", "#0000ff", "#2ba39c"])
+      expect(hsvHex(...toHsv(hex))).toBe(hex);
+    expect(hsvHex(360, 100, 100)).toBe("#ff0000");
+  });
   it("keeps each companion's hue distinct in either harmony and at every primary position", () => {
     for (const style of ["analogous", "complementary"] as const)
       for (let primary = 0; primary < 5; primary++) {

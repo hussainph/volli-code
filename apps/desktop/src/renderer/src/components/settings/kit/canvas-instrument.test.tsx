@@ -33,6 +33,12 @@ async function mountEditor(props: React.ComponentProps<typeof CanvasEditor>) {
   return document;
 }
 
+async function openControl(label: string) {
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click(),
+  );
+}
+
 async function typeInto(input: HTMLInputElement, value: string): Promise<void> {
   await act(async () => {
     const setValue = Object.getOwnPropertyDescriptor(
@@ -69,6 +75,7 @@ describe("CanvasEditor", () => {
       onCanvasChange,
     });
 
+    await openControl("Edit canvas");
     const add = document.querySelector<HTMLButtonElement>('button[aria-label="Add a colour"]');
     if (add === null) throw new Error("missing add colour button");
     await act(async () => add.click());
@@ -87,6 +94,7 @@ describe("CanvasEditor", () => {
     useThemeStore.setState({ preview: SINGLE_CANVAS, commitPreview });
     const document = await mountEditor({ scope: GLOBAL, canvas: SINGLE_CANVAS, resolved: "dark" });
 
+    await openControl("Edit canvas");
     const add = document.querySelector<HTMLButtonElement>('button[aria-label="Add a colour"]');
     if (add === null) throw new Error("missing add colour button");
     await act(async () => add.click());
@@ -101,6 +109,7 @@ describe("CanvasEditor", () => {
       resolved: "dark",
       onCanvasChange: vi.fn(),
     });
+    await openControl("Custom accent colour");
     const input = document.querySelector<HTMLInputElement>(
       'input[aria-label="Primary colour hex"]',
     );
@@ -121,6 +130,7 @@ describe("CanvasEditor", () => {
       resolved: "dark",
       onCanvasChange: vi.fn(),
     });
+    await openControl("Custom accent colour");
     const input = document.querySelector<HTMLInputElement>(
       'input[aria-label="Primary colour hex"]',
     );
@@ -134,22 +144,16 @@ describe("CanvasEditor", () => {
     expect(useThemeStore.getState().preview).toEqual(DEFAULT_CANVAS);
   });
 
-  it("previews rotary keys and commits only on release", async () => {
+  it("previews native slider input and commits only on release", async () => {
     const commitPreview = vi.fn(async () => true);
     useThemeStore.setState({ preview: null, commitPreview });
-    const document = await mountEditor({ scope: GLOBAL, canvas: DEFAULT_CANVAS, resolved: "dark" });
-    const knob = document.querySelector<HTMLElement>('[role="slider"][aria-label="Vibrancy"]')!;
-    expect(knob.className).toContain("glass-control");
-    expect(knob.className).toContain("border-(--glass-edge)");
-    expect(knob.querySelector("[aria-hidden]")?.className).not.toContain("border");
-    expect(knob.querySelector("[aria-hidden]")?.className).not.toContain("shadow");
-    await act(async () =>
-      knob.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })),
-    );
+    await mountEditor({ scope: GLOBAL, canvas: DEFAULT_CANVAS, resolved: "dark" });
+    const slider = document.querySelector<HTMLInputElement>('input[aria-label="Vibrancy"]')!;
+    await typeInto(slider, String(DEFAULT_CANVAS.vibrancy + 0.01));
     expect(useThemeStore.getState().preview?.vibrancy).toBeCloseTo(DEFAULT_CANVAS.vibrancy + 0.01);
     expect(commitPreview).not.toHaveBeenCalled();
     await act(async () =>
-      knob.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowUp", bubbles: true })),
+      slider.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowUp", bubbles: true })),
     );
     expect(commitPreview).toHaveBeenCalledWith(GLOBAL);
   });
@@ -162,6 +166,7 @@ it.each([
 ])("accepts the existing %s hex format and settles canonically", async (entry, normalized) => {
   const onCanvasChange = vi.fn();
   const doc = await mountEditor({ canvas: SINGLE_CANVAS, resolved: "light", onCanvasChange });
+  await openControl("Custom accent colour");
   const field = doc.querySelector<HTMLInputElement>('[aria-label="Primary colour hex"]')!;
   await act(async () => field.focus());
   await typeInto(field, entry);
@@ -175,42 +180,27 @@ it.each([
   expect(field.value).toBe(normalized);
 });
 
-it("restores preset browsing, paging, current indication and stop-limit details", async () => {
+it("offers Canvas, seven accent swatches and Custom without inline HSL controls", async () => {
   const onCanvasChange = vi.fn();
-  const canvas = {
-    ...SINGLE_CANVAS,
-    stops: [{ ...SINGLE_CANVAS.stops[0], hex: CANVAS_SWATCH_PAGES[0][0] }],
-  };
-  const doc = await mountEditor({ canvas, resolved: "dark", onCanvasChange });
-  const limit = doc.querySelector<HTMLElement>('[aria-label="You need at least one colour"]')!;
-  expect(limit.tabIndex).toBe(0);
-  await act(async () => limit.focus());
-  await vi.waitFor(() =>
-    expect(doc.querySelector('[role="tooltip"]')?.textContent).toContain("at least one colour"),
-  );
+  const doc = await mountEditor({ canvas: SINGLE_CANVAS, resolved: "light", onCanvasChange });
+  expect(doc.querySelectorAll(".accent-swatch")).toHaveLength(8);
+  expect(doc.querySelector('input[aria-label="Hue"]')).toBeNull();
   await act(async () =>
-    doc.querySelector<HTMLButtonElement>('button[aria-label="Primary colour presets"]')!.click(),
-  );
-  expect(
-    doc
-      .querySelector(`button[aria-label="${CANVAS_SWATCH_PAGES[0][0]}"]`)
-      ?.getAttribute("aria-pressed"),
-  ).toBe("true");
-  await act(async () =>
-    doc.querySelector<HTMLButtonElement>('[aria-label="More swatches"]')!.click(),
-  );
-  const next = CANVAS_SWATCH_PAGES[1][0];
-  await act(async () =>
-    doc.querySelector<HTMLButtonElement>(`button[aria-label="${next}"]`)!.click(),
+    doc.querySelector<HTMLButtonElement>('[aria-label="Blue accent"]')!.click(),
   );
   expect(onCanvasChange).toHaveBeenLastCalledWith(
-    expect.objectContaining({ stops: [expect.objectContaining({ hex: next })] }),
+    expect.objectContaining({
+      stops: [expect.objectContaining({ hex: CANVAS_SWATCH_PAGES[0][7] })],
+    }),
   );
-  expect(doc.querySelector('[aria-label="Previous swatches"]')).not.toBeNull();
+  await openControl("Custom accent colour");
+  expect(doc.querySelector('[aria-label="Saturation and brightness"]')).not.toBeNull();
+  expect(doc.querySelector('input[aria-label="Hue"]')).not.toBeNull();
 });
 
 it("names the non-primary removal target and explains the maximum at a keyboard stop", async () => {
   const doc = await mountEditor({ scope: GLOBAL, canvas: DEFAULT_CANVAS, resolved: "dark" });
+  await openControl("Edit canvas");
   expect(doc.querySelector('[aria-label="Remove colour 3"]')).not.toBeNull();
   const limit = doc.querySelector<HTMLElement>(
     '[aria-label="A canvas can have at most 3 colours"]',

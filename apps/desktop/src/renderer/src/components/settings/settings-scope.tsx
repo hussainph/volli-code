@@ -46,7 +46,11 @@ export function SettingsScope({
 }) {
   const [open, setOpen] = React.useState(false);
   return (
-    <div className="space-y-2" aria-label="Settings scope">
+    <div
+      data-settings-scope
+      className="space-y-1 border-b border-border/50 pb-3"
+      aria-label="Settings scope"
+    >
       <ListRow
         leading={
           <span className="grid size-7 shrink-0 place-items-center">

@@ -26,7 +26,6 @@ const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: IconComponent
 /** Primary feature navigation. Agent configuration lives in the Settings footer. */
 export function NavList({ projectId }: { projectId?: string } = {}) {
   const [activeNav, setActiveNav] = useActiveNav(projectId);
-  const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 
   return (
@@ -34,10 +33,10 @@ export function NavList({ projectId }: { projectId?: string } = {}) {
       <SidebarMenu>
         {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
           <SidebarMenuItem key={key}>
-            {/* The Settings overlay dims the nav highlight and any click closes
-                it — picking a page always lands you on that page. */}
+            {/* Preferences floats over the unchanged workspace. Picking a page
+                still closes it and performs this navigation in the same click. */}
             <SidebarMenuButton
-              isActive={!settingsOpen && activeNav === key}
+              isActive={activeNav === key}
               onClick={() => {
                 setSettingsOpen(false);
                 setActiveNav(key);

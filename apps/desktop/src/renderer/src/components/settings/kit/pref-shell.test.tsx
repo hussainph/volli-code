@@ -47,9 +47,9 @@ it("keeps rail identities centred, selection, counts and attention on tinted gla
     ),
   );
   const nav = host.querySelector("nav")!;
-  expect(nav.classList.contains("glass")).toBe(true);
-  expect(nav.dataset.tint).toBe("true");
-  expect(nav.dataset.glassStatic).toBe("true");
+  expect(nav.dataset.slot).toBe("pref-navigation");
+  expect(nav.classList.contains("glass")).toBe(false);
+  expect(host.querySelector('[data-slot="pref-shell"]')?.getAttribute("style")).toBeNull();
   expect(nav.querySelector('[data-slot="identity-tile"][data-size="sm"] svg')).not.toBeNull();
   const selected = nav.querySelector<HTMLButtonElement>('[aria-current="page"]')!;
   expect(selected.textContent).toContain("3");
@@ -92,7 +92,7 @@ it("preserves result routing, empty results and native search clearing", () => {
   expect(onSelect).toHaveBeenCalledWith("appearance");
   expect(input.value).toBe("");
   type("no-such-preference");
-  expect(host.textContent).toContain("No matching settings");
+  expect(host.textContent).not.toContain("No matching settings");
   expect(host.querySelector('[role="status"]')?.textContent).toBe("0 settings found");
   expect(host.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
   type("");
@@ -114,8 +114,8 @@ it("uses sibling floating glass and paper planes with the shared heading ladder"
       />,
     ),
   );
-  expect(host.querySelector("nav")?.className).toContain("rounded-floating");
-  expect(host.querySelector("nav")?.className).not.toContain("border-r");
+  expect(host.querySelector("nav")?.className).not.toContain("rounded-floating");
+  expect(host.querySelector("nav")?.className).toContain("border-r");
   expect(host.querySelector("h1")?.className).toContain("text-title");
   expect(host.querySelector("h3")?.className).toContain("text-ui font-semibold");
 });

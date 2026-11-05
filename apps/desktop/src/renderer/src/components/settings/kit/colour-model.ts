@@ -64,3 +64,33 @@ export function harmonize(
     })),
   };
 }
+
+/** HSV is the geometry of the Custom colour pad, not a stored theme shape. */
+export function toHsv(hex: string): readonly [number, number, number] {
+  const channels = [1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16) / 255);
+  const [r, g, b] = channels;
+  const high = Math.max(r, g, b),
+    low = Math.min(r, g, b),
+    range = high - low;
+  const hue =
+    range === 0
+      ? 0
+      : high === r
+        ? ((g - b) / range + 6) % 6
+        : high === g
+          ? (b - r) / range + 2
+          : (r - g) / range + 4;
+  return [hue * 60, high === 0 ? 0 : (range / high) * 100, high * 100];
+}
+export function hsvHex(hue: number, saturation: number, brightness: number): string {
+  const h = (((hue % 360) + 360) % 360) / 60,
+    s = saturation / 100,
+    v = brightness / 100;
+  const channel = (n: number) => {
+    const k = (n + h) % 6;
+    return Math.round(255 * (v - v * s * Math.max(0, Math.min(k, 4 - k, 1))))
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${channel(5)}${channel(3)}${channel(1)}`;
+}

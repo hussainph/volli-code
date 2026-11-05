@@ -36,7 +36,7 @@ it("hides only an explicitly redundant title while preserving the named group an
   );
   expect(html).toContain("aria-labelledby=");
   expect(html).toContain('data-slot="pref-section-title"');
-  expect(html).toContain("text-heading font-semibold");
+  expect(html).toContain("text-ui font-medium");
   expect(html).toContain("gap-2 sr-only");
   expect(html).toContain("Reload");
   expect(html).toContain("rounded-container border");

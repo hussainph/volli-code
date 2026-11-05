@@ -43,7 +43,7 @@ export function PrefRow({
       data-testid={testId}
       data-slot="pref-row"
       className={cn(
-        "@container/pref-row flex min-h-16 flex-wrap justify-between gap-x-6 gap-y-2 border-t border-border/50 px-4 py-4 first:border-t-0",
+        "@container/pref-row relative flex min-h-10 flex-wrap justify-between gap-x-4 gap-y-2 border-t border-border/50 px-3 py-2 first:border-t-0",
         "items-center",
       )}
     >

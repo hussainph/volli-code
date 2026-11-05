@@ -4,7 +4,7 @@ import { AddFolderIcon } from "@renderer/components/ui/icon";
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
 import { CloudMoveReadOnlyBanner } from "@renderer/components/cloud-moves/cloud-moves";
-import { SettingsPage } from "@renderer/components/pages/settings-page";
+import { SettingsPanel } from "@renderer/components/settings/settings-panel";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
 import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
@@ -31,15 +31,13 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
     setActiveNav("home");
   }, [activeNav, setActiveNav]);
   const settingsOpen = useUiStore((state) => state.settingsOpen);
-  const settingsCategory = useUiStore((state) => state.settingsCategory);
-  const settingsSignInProviderId = useUiStore((state) => state.settingsSignInProviderId);
 
   // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
   // Home hosts the layer that owns every live PTY terminal in the app, so it is
   // ALWAYS mounted and merely hidden via CSS — switching nav, switching
   // projects, or opening Settings must not tear its terminals down. Settings
   // has no process lifetime, so it keeps plain conditional rendering.
-  const homeVisible = !settingsOpen && selected !== null && activeNav === "home";
+  const homeVisible = selected !== null && activeNav === "home";
 
   if (override !== undefined) {
     return <div className="relative flex min-h-0 flex-1 flex-col">{override}</div>;
@@ -64,13 +62,9 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           top edge of whatever is below it. It is a fragment on purpose: it
           shares this flex column rather than nesting one inside it. */}
       <HomeSurface visible={homeVisible} />
+      {settingsOpen ? <SettingsPanel /> : null}
       {
-        settingsOpen ? (
-          <SettingsPage
-            initialCategoryKey={settingsCategory ?? undefined}
-            initialSignInProviderId={settingsSignInProviderId ?? undefined}
-          />
-        ) : pending !== null ? (
+        pending !== null ? (
           <div className={cn("flex-1", EMPTY_PAGE)} />
         ) : selected === null && projectCount === 0 ? (
           <EmptyProjectsState />

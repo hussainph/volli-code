@@ -183,7 +183,10 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
               until main's first snapshot, leaving the row exactly as it was. */}
             <div className="flex items-center gap-1">
               <div className="min-w-0 flex-1">
-                <SettingsMenuButton active={settingsOpen} onSelect={() => setSettingsOpen(true)} />
+                <SettingsMenuButton
+                  active={settingsOpen}
+                  onSelect={() => setSettingsOpen(!settingsOpen)}
+                />
               </div>
               <UpdateButton />
             </div>

@@ -1,17 +1,10 @@
 /** Settings canvas instrument. Uses the existing store preview and commit contract. */
 import * as React from "react";
-import {
-  HalfCircleIcon,
-  GroupIcon,
-  MinusIcon,
-  AddIcon,
-  PaletteIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-} from "@renderer/components/ui/icon";
+import { MinusIcon, AddIcon } from "@renderer/components/ui/icon";
 
 import {
   addStop,
+  DEFAULT_CANVAS,
   canvasBackground,
   grainLayer,
   MAX_STOPS,
@@ -22,19 +15,15 @@ import {
   type CanvasStop,
   type ResolvedAppearance,
 } from "@volli/shared";
-import {
-  padAnchor,
-  CANVAS_SWATCH_PAGES,
-  swatchPageOf,
-  normalizeStopHex,
-  droppedStopIndex,
-} from "@renderer/components/theme/canvas-editor-model";
+import { padAnchor, droppedStopIndex } from "@renderer/components/theme/canvas-editor-model";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { Button } from "@renderer/components/ui/button";
-import { Input } from "@renderer/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
-import { harmonize, toHex, toHsl } from "./colour-model";
+import { harmonize } from "./colour-model";
+import { AccentChoice } from "./accent-choice";
+import { PrefRow } from "./pref-row";
+import { Segmented } from "@renderer/components/ui/segmented";
 const PAD_ASPECT = "16 / 10";
 const PAD_DOT_SPACING = 14;
 const ORB_SIZE = 28;
@@ -413,334 +402,142 @@ export function CanvasInstrument({
 
   const [harmony, setHarmony] = React.useState<"complementary" | "analogous">("complementary");
   const primary = live.stops[live.primaryIndex].hex;
-  const [hex, setHex] = React.useState(primary);
-  const editingHex = React.useRef(false);
-  React.useEffect(() => {
-    if (!editingHex.current) setHex(primary);
-  }, [primary]);
-  const hsl = toHsl(primary);
   const colour = (next: string) => edit((current) => harmonize(current, next, harmony));
-  const settleHex = () => {
-    const parsed = normalizeStopHex(hex);
-    if (parsed === null) {
-      setHex(primary);
-      return;
-    }
-    colour(parsed);
-    settle();
-    setHex(parsed);
-  };
   const dropped = droppedStopIndex(live);
   const atMaximum = live.stops.length >= MAX_STOPS;
   return (
-    <div className="flex w-full flex-col gap-4 p-4">
-      <div className="flex flex-wrap items-start gap-6">
-        <div className="relative w-80 max-w-full">
-          <GradientPad
-            canvas={live}
-            resolved={resolved}
-            onMove={(index, x, y) => edit((current) => moveStop(current, index, x, y))}
-            onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
-            onSettle={settle}
-          />
-          {mode && <div className="absolute top-2 left-2">{mode}</div>}
-          <div className="absolute right-2 bottom-2 flex gap-1 rounded-control bg-card p-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  tabIndex={dropped === null ? 0 : undefined}
-                  className="inline-flex rounded-control outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={dropped === null ? "You need at least one colour" : undefined}
+    <div data-slot="canvas-instrument">
+      <PrefRow label="Canvas">
+        {mode}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="Edit canvas"
+              className="w-24"
+              style={{ background: canvasBackground(live, resolved) }}
+            >
+              <span className="sr-only">Canvas</span>
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="flex w-80 max-w-full flex-col gap-3" align="end">
+            <GradientPad
+              canvas={live}
+              resolved={resolved}
+              onMove={(index, x, y) => edit((current) => moveStop(current, index, x, y))}
+              onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
+              onSettle={settle}
+            />
+            <div className="flex justify-end gap-1">
+              <StopLimit reason={dropped === null ? "You need at least one colour" : null}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={dropped === null ? "Remove a colour" : `Remove colour ${dropped + 1}`}
+                  disabled={dropped === null}
+                  onClick={() => commit(removeStop)}
                 >
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={
-                      dropped === null ? "Remove a colour" : `Remove colour ${dropped + 1}`
-                    }
-                    disabled={dropped === null}
-                    onClick={() => commit(removeStop)}
-                  >
-                    <MinusIcon />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>
-                {dropped === null ? "You need at least one colour" : `Remove colour ${dropped + 1}`}
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  tabIndex={atMaximum ? 0 : undefined}
-                  className="inline-flex rounded-control outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={
-                    atMaximum ? `A canvas can have at most ${MAX_STOPS} colours` : undefined
+                  <MinusIcon />
+                </Button>
+              </StopLimit>
+              <StopLimit
+                reason={atMaximum ? `A canvas can have at most ${MAX_STOPS} colours` : null}
+              >
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Add a colour"
+                  disabled={atMaximum}
+                  onClick={() =>
+                    commit((current) => {
+                      const next = addStop(current);
+                      return harmonize(next, next.stops[next.primaryIndex].hex, harmony);
+                    })
                   }
                 >
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Add a colour"
-                    disabled={atMaximum}
-                    onClick={() =>
-                      commit((current) => {
-                        const next = addStop(current);
-                        return harmonize(next, next.stops[next.primaryIndex].hex, harmony);
-                      })
-                    }
-                  >
-                    <AddIcon />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>
-                {atMaximum ? `A canvas can have at most ${MAX_STOPS} colours` : "Add a colour"}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-6">
-          <Rotary
-            label="Vibrancy"
-            value={live.vibrancy}
-            onChange={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
-            onSettle={settle}
-            onCancel={abandon}
-          />
-          <Rotary
-            label="Grain"
-            value={live.grain}
-            onChange={(grain) => edit((current) => ({ ...current, grain }))}
-            onSettle={settle}
-            onCancel={abandon}
-          />
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <span className="text-ui font-medium">Primary colour</span>
-        <div className="flex items-center gap-2">
-          <PrimaryPresets
-            value={primary}
-            onPick={(next) => {
-              editingHex.current = false;
-              commit((current) => harmonize(current, next, harmony));
-            }}
-          />
-          {(["complementary", "analogous"] as const).map((kind) => {
-            const Icon = kind === "complementary" ? HalfCircleIcon : GroupIcon;
-            const label = kind === "complementary" ? "Complementary harmony" : "Analogous harmony";
-            return (
-              <Button
-                key={kind}
-                variant={kind === harmony ? "secondary" : "ghost"}
-                size="icon-sm"
-                aria-label={label}
-                title={label}
-                aria-pressed={kind === harmony}
-                onClick={() => {
-                  setHarmony(kind);
-                  commit((current) => harmonize(current, primary, kind));
-                }}
-              >
-                <Icon />
-              </Button>
-            );
-          })}
-          <Input
-            aria-label="Primary colour hex"
-            value={hex}
-            spellCheck={false}
-            className="w-24 font-mono"
-            onFocus={() => {
-              editingHex.current = true;
-            }}
-            onChange={(e) => {
-              setHex(e.target.value);
-              const parsed = normalizeStopHex(e.target.value);
-              if (parsed !== null) colour(parsed);
-            }}
-            onBlur={() => {
-              editingHex.current = false;
-              settleHex();
-            }}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return;
-              if (e.key === "Enter") {
-                e.preventDefault();
-                settleHex();
-              }
-              if (e.key === "Escape") {
-                editingHex.current = false;
-                abandon();
-                setHex(canvas.stops[canvas.primaryIndex].hex);
-              }
-            }}
-          />
-        </div>
-      </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {["Hue", "Saturation", "Lightness"].map((name, i) => (
-          <label key={name} className="flex flex-col gap-2 text-ui text-muted-foreground">
-            <span className="flex justify-between gap-2">
-              <span>{name}</span>
-              <output className="font-mono">
-                {hsl[i]}
-                {i === 0 ? "°" : "%"}
-              </output>
-            </span>
-            <input
-              type="range"
-              aria-label={name}
-              min={0}
-              max={i === 0 ? 360 : 100}
-              value={hsl[i]}
-              className="w-full accent-primary"
-              onChange={(e) => {
-                const next = [...hsl];
-                next[i] = Number(e.target.value);
-                colour(toHex(next[0], next[1], next[2]));
-              }}
-              onPointerUp={settle}
-              onKeyUp={settle}
-              onBlur={settle}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") abandon();
+                  <AddIcon />
+                </Button>
+              </StopLimit>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </PrefRow>
+      <PrefRow label="Accent">
+        <AccentChoice
+          value={primary}
+          canvasColour={DEFAULT_CANVAS.stops[0].hex}
+          onPick={(next) => commit((current) => harmonize(current, next, harmony))}
+          onPreview={colour}
+          onCommit={settle}
+          onCancel={abandon}
+        >
+          <div className="flex items-center justify-between gap-2 text-ui">
+            <span>Harmony</span>
+            <Segmented
+              ariaLabel="Colour harmony"
+              size="sm"
+              value={harmony}
+              options={[
+                { key: "complementary", label: "Complementary" },
+                { key: "analogous", label: "Analogous" },
+              ]}
+              onChange={(kind) => {
+                setHarmony(kind);
+                commit((current) => harmonize(current, primary, kind));
               }}
             />
-          </label>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function Rotary({
-  label,
-  value,
-  onChange,
-  onSettle,
-  onCancel,
-}: {
-  label: string;
-  value: number;
-  onChange(next: number): void;
-  onSettle(): void;
-  onCancel(): void;
-}) {
-  const drag = React.useRef<{ y: number; value: number } | null>(null);
-  const change = (next: number) => onChange(Math.min(1, Math.max(0, next)));
-  return (
-    <div className="flex w-24 flex-col items-center gap-4">
-      <span className="text-ui font-medium">{label}</span>
-      <div
-        role="slider"
-        tabIndex={0}
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(value * 100)}
-        className="glass-control grid size-20 touch-none place-items-center rounded-full border border-(--glass-edge) shadow-glass-small outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onPointerDown={(e) => {
-          e.currentTarget.focus();
-          e.currentTarget.setPointerCapture(e.pointerId);
-          drag.current = { y: e.clientY, value };
-        }}
-        onPointerMove={(e) => {
-          if (drag.current) change(drag.current.value + (drag.current.y - e.clientY) / 160);
-        }}
-        onPointerUp={() => {
-          drag.current = null;
-          onSettle();
-        }}
-        onPointerCancel={() => {
-          drag.current = null;
-          onCancel();
-        }}
-        onLostPointerCapture={() => {
-          if (drag.current) {
-            drag.current = null;
-            onCancel();
-          }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            drag.current = null;
-            onCancel();
-            return;
-          }
-          if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key))
-            return;
-          e.preventDefault();
-          change(
-            e.key === "Home"
-              ? 0
-              : e.key === "End"
-                ? 1
-                : value + (["ArrowUp", "ArrowRight"].includes(e.key) ? 0.01 : -0.01),
-          );
-        }}
-        onKeyUp={onSettle}
-        onBlur={onSettle}
-      >
-        <span
-          aria-hidden
-          className="relative block size-16 rounded-full"
-          style={{ transform: `rotate(${-135 + value * 270}deg)` }}
-        >
-          <span className="absolute top-2 left-1/2 h-4 w-1 -translate-x-1/2 rounded-full bg-primary" />
-        </span>
-      </div>
-      <output className="font-mono text-ui tabular-nums">{Math.round(value * 100)}%</output>
-    </div>
-  );
-}
-
-function PrimaryPresets({ value, onPick }: { value: string; onPick(hex: string): void }) {
-  const [page, setPage] = React.useState(() => Math.max(0, swatchPageOf(value)));
-  React.useEffect(() => {
-    const match = swatchPageOf(value);
-    if (match >= 0) setPage(match);
-  }, [value]);
-  const turn = (step: number) =>
-    setPage(
-      (current) => (current + step + CANVAS_SWATCH_PAGES.length) % CANVAS_SWATCH_PAGES.length,
-    );
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Primary colour presets">
-          <PaletteIcon />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-auto max-w-full p-2">
-        <div className="flex items-center gap-2">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Previous swatches"
-            onClick={() => turn(-1)}
-          >
-            <ChevronLeftIcon />
-          </Button>
-          <div role="group" aria-label="Primary colour presets" className="grid grid-cols-3 gap-2">
-            {CANVAS_SWATCH_PAGES[page].map((swatch) => (
-              <button
-                key={swatch}
-                type="button"
-                aria-label={swatch}
-                aria-pressed={swatch === value}
-                onClick={() => onPick(swatch)}
-                style={{ background: swatch }}
-                className="size-7 rounded-full outline-none ring-offset-2 ring-offset-background hover:ring-2 hover:ring-ring focus-visible:ring-2 focus-visible:ring-ring aria-pressed:ring-2 aria-pressed:ring-ring"
-              />
-            ))}
           </div>
-          <Button size="icon-sm" variant="ghost" aria-label="More swatches" onClick={() => turn(1)}>
-            <ChevronRightIcon />
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
+        </AccentChoice>
+      </PrefRow>
+      {(
+        [
+          ["Vibrancy", "vibrancy"],
+          ["Grain", "grain"],
+        ] as const
+      ).map(([label, key]) => (
+        <PrefRow key={key} label={label}>
+          <input
+            type="range"
+            className="w-36 accent-primary"
+            aria-label={label}
+            min={0}
+            max={1}
+            step={0.01}
+            value={live[key]}
+            onChange={(event) =>
+              edit((current) => ({ ...current, [key]: Number(event.target.value) }))
+            }
+            onPointerUp={settle}
+            onKeyUp={settle}
+            onBlur={settle}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") abandon();
+            }}
+          />
+          <output className="w-10 text-right text-ui tabular-nums">
+            {Math.round(live[key] * 100)}%
+          </output>
+        </PrefRow>
+      ))}
+    </div>
+  );
+}
+
+function StopLimit({ reason, children }: { reason: string | null; children: React.ReactNode }) {
+  if (reason === null) return children;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          aria-label={reason}
+          className="inline-flex rounded-control outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{reason}</TooltipContent>
+    </Tooltip>
   );
 }

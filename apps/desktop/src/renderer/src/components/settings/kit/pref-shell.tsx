@@ -97,17 +97,12 @@ export function PrefShell({
   }, [activeKey, highlight]);
   return (
     <TooltipProvider>
-      <div
-        className="flex h-full min-h-0 w-full flex-1 gap-(--glass-gap) p-(--glass-gap)"
-        style={{ background: "var(--canvas)", backgroundAttachment: "fixed" }}
-      >
+      <div data-slot="pref-shell" className="flex min-h-0 w-full flex-1 overflow-hidden">
         <nav
           aria-label={`${surfaceLabel} categories`}
-          data-tint="true"
-          data-glass-static="true"
-          className="glass flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto rounded-floating p-4 shadow-glass"
+          data-slot="pref-navigation"
+          className="flex w-[220px] shrink-0 flex-col gap-3 overflow-x-hidden overflow-y-auto border-r border-border/50 px-3 pb-4 pt-2"
         >
-          {header}
           <InputGroup className="search-capsule">
             <InputGroupAddon>
               <SearchIcon />
@@ -120,6 +115,7 @@ export function PrefShell({
               onChange={(e) => setQuery(e.target.value)}
             />
           </InputGroup>
+          {header}
           <div className="min-h-0 flex-1 overflow-y-auto">
             <p
               role="status"
@@ -157,9 +153,6 @@ export function PrefShell({
                     </span>
                   </button>
                 ))}
-                {!results.length && (
-                  <p className="px-2 py-4 text-ui text-muted-foreground">No matching settings</p>
-                )}
               </>
             ) : (
               groups.map((group) => (
@@ -179,7 +172,7 @@ export function PrefShell({
                       className={cn(
                         "flex w-full items-center gap-2 rounded-row px-2 py-2 text-left text-ui text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                         category.key === current?.key
-                          ? "bg-(--accent-selected)"
+                          ? "bg-(--accent-selected) text-primary-text"
                           : "hover:bg-(--accent-tint)",
                       )}
                     >
@@ -205,17 +198,18 @@ export function PrefShell({
         </nav>
         <div
           ref={scroller}
-          className="material-solid min-w-0 flex-1 overflow-y-auto rounded-floating"
+          data-slot="pref-content"
+          className="material-solid min-w-0 flex-1 overflow-y-auto"
         >
-          <div className={cn("px-12 pt-8 pb-16", current?.fill && "flex h-full flex-col")}>
+          <div className={cn("px-6 pt-4 pb-6", current?.fill && "flex h-full flex-col")}>
             <div
               className={cn(
                 "w-full",
                 current?.fill ? "flex min-h-0 flex-1 flex-col" : "max-w-[720px]",
               )}
             >
-              <PageHeader title={current?.label} variant="reading" className="mb-8 py-0" />
-              <div className={cn("flex flex-col gap-8", current?.fill && "min-h-0 flex-1")}>
+              <PageHeader title={current?.label} variant="reading" className="mb-4 py-0" />
+              <div className={cn("flex flex-col gap-5", current?.fill && "min-h-0 flex-1")}>
                 {current?.content}
               </div>
             </div>

@@ -1,4 +1,4 @@
-import { ChevronDownIcon, CodeIcon, CloseIcon, InfoIcon } from "@renderer/components/ui/icon";
+import { CodeIcon, CloseIcon, InfoIcon } from "@renderer/components/ui/icon";
 
 import * as React from "react";
 import {
@@ -16,21 +16,9 @@ import {
 
 import { ModelName } from "@renderer/components/models/model-identity";
 import type { ProviderModelGroup } from "@renderer/components/pages/model-access-settings";
-import {
-  Cell,
-  CONTROL_W,
-  DataTable,
-  PrefRow,
-  PrefSection,
-  RowAction,
-} from "@renderer/components/settings/kit";
+import { PrefRow, PrefSection, RowAction } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@renderer/components/ui/collapsible";
 import {
   Select,
   SelectContent,
@@ -41,7 +29,6 @@ import {
 import { Switch } from "@renderer/components/ui/switch";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
-import { cn } from "@renderer/lib/utils";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Notice } from "@renderer/components/ui/notice";
 import { ModelControl } from "../kit/model-control";
@@ -73,7 +60,6 @@ export function CodeModeSettings({
   const [policy, setPolicy] = React.useState<CodeModePolicy | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [attempt, setAttempt] = React.useState(0);
-  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   // What main last said it holds. A failed save goes back to THIS, not to the
   // state the save started from — that may itself have been an earlier save's
   // optimistic guess, still in flight.
@@ -171,181 +157,114 @@ export function CodeModeSettings({
   };
 
   return (
-    <PrefSection title="Code Mode" icon={CodeIcon}>
-      {/* The control is the explanation (AGENTS.md, "let controls talk"):
-          what each mode does, which models get which, and that the switch
-          also governs large-server deferral are in the Code Mode guide, not
-          under the switch. */}
-      <PrefRow label="Code Mode" testId="code-mode">
-        <Switch
-          aria-label="Code Mode for new Sessions"
-          data-testid="code-mode-switch"
-          checked={current.enabled}
-          disabled={!loaded}
-          onCheckedChange={(enabled) => void save({ ...current, enabled })}
-        />
-      </PrefRow>
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <div className="border-t border-border/50 pt-4">
-          <div className="flex items-center gap-2">
-            <CollapsibleTrigger asChild>
-              <Button
-                size="xs"
-                variant="ghost"
-                className="-ml-2"
-                aria-label={`${advancedOpen ? "Hide" : "Show"} advanced Code Mode settings`}
-                data-testid="code-mode-advanced"
-              >
-                <ChevronDownIcon
-                  aria-hidden
-                  className={cn("transition-transform", advancedOpen && "rotate-180")}
-                />
-                Model exceptions
-                {pins.length > 0 ? (
-                  <span className="text-muted-foreground">{pins.length} exceptions</span>
-                ) : null}
+    <div role="group" aria-label="Code Mode" className="flex flex-col gap-5">
+      <PrefSection
+        title="Default"
+        icon={CodeIcon}
+        action={
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Code Mode meanings and defaults">
+                <InfoIcon />
               </Button>
-            </CollapsibleTrigger>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="Code Mode meanings and defaults">
-                  <InfoIcon />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="flex max-w-sm flex-col gap-2 text-ui" align="start">
-                <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-2">
-                  <dt className="font-medium">{CODE_MODE_MODE_LABELS.off}</dt>
-                  <dd>No Code Mode, except to defer a very large MCP server.</dd>
-                  <dt className="font-medium">{CODE_MODE_MODE_LABELS.both}</dt>
-                  <dd>Code Mode beside every tool; the model chooses.</dd>
-                  <dt className="font-medium">{CODE_MODE_MODE_LABELS.only}</dt>
-                  <dd>
-                    Program-callable tools are reached only through Code Mode. Smallest prompt.
-                  </dd>
-                </dl>
-                <div>
-                  <strong>Defaults</strong>
-                  <ul>
-                    {CODE_MODE_MODEL_DEFAULTS.map((row) => (
-                      <li key={row.family}>
-                        {row.family}: {CODE_MODE_MODE_LABELS[row.mode]}
-                      </li>
-                    ))}
-                    <li>Every other model: {CODE_MODE_MODE_LABELS.off}</li>
-                  </ul>
-                </div>
-                <span>
-                  Turning Code Mode off also declares every large-server tool again. Changes apply
-                  to new Sessions.
-                </span>
-              </PopoverContent>
-            </Popover>
+            </PopoverTrigger>
+            <PopoverContent className="flex max-w-sm flex-col gap-2 text-ui" align="start">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-2">
+                <dt className="font-medium">{CODE_MODE_MODE_LABELS.off}</dt>
+                <dd>No Code Mode, except to defer a very large MCP server.</dd>
+                <dt className="font-medium">{CODE_MODE_MODE_LABELS.both}</dt>
+                <dd>Code Mode beside every tool; the model chooses.</dd>
+                <dt className="font-medium">{CODE_MODE_MODE_LABELS.only}</dt>
+                <dd>Program-callable tools are reached only through Code Mode.</dd>
+              </dl>
+              <ul>
+                {CODE_MODE_MODEL_DEFAULTS.map((row) => (
+                  <li key={row.family}>
+                    {row.family}: {CODE_MODE_MODE_LABELS[row.mode]}
+                  </li>
+                ))}
+                <li>Every other model: {CODE_MODE_MODE_LABELS.off}</li>
+              </ul>
+              <span>
+                Turning Code Mode off also declares every large-server tool again. Changes apply to
+                new Sessions.
+              </span>
+            </PopoverContent>
+          </Popover>
+        }
+      >
+        <PrefRow label="Code Mode" testId="code-mode">
+          <Switch
+            aria-label="Code Mode for new Sessions"
+            data-testid="code-mode-switch"
+            checked={current.enabled}
+            disabled={!loaded}
+            onCheckedChange={(enabled) => void save({ ...current, enabled })}
+          />
+        </PrefRow>
+      </PrefSection>
+      <PrefSection title="Exceptions">
+        <PrefRow label="Add model exception" testId="code-mode-pin">
+          <PinPicker
+            pickable={pickable}
+            providers={providers}
+            pinned={current.models}
+            disabled={!pinsEditable || pins.length >= CODE_MODE_POLICY_MODELS_MAX}
+            onPin={(model) => setPin(codeModeModelKey(model), defaultCodeModeMode(model.modelId))}
+          />
+        </PrefRow>
+        {!current.enabled ? (
+          <div data-testid="code-mode-off-note" className="px-3 py-2 text-ui text-muted-foreground">
+            Inactive while Code Mode is off
           </div>
-          <CollapsibleContent>
-            <div className="flex flex-col gap-4 pt-4">
-              {loaded && !current.enabled ? (
-                // A blocked state with one recovery — the switch above.
-                <p className="text-ui text-muted-foreground" data-testid="code-mode-off-note">
-                  Inactive while Code Mode is off
-                </p>
-              ) : null}
-              {/* Its own box, so the row's `first:`/`last:` rules hold and it
-                  draws no hairline against the note above it. */}
-              <div>
-                <PrefRow label="Add model exception" testId="code-mode-pin">
-                  <PinPicker
-                    pickable={pickable}
-                    providers={providers}
-                    pinned={current.models}
-                    disabled={!pinsEditable || pins.length >= CODE_MODE_POLICY_MODELS_MAX}
-                    onPin={(model) =>
-                      setPin(codeModeModelKey(model), defaultCodeModeMode(model.modelId))
-                    }
-                  />
-                </PrefRow>
+        ) : null}
+        {pins.map((pin) => (
+          <div
+            key={pin.key}
+            data-slot="pref-row"
+            className="flex flex-wrap items-center gap-2 border-t border-border/50 px-3 py-2"
+          >
+            <div className="min-w-0 flex-1 break-words">
+              <ModelName model={pin.model} models={models} providers={providers} alwaysProvider />
+              <div className="text-label text-muted-foreground">
+                Default: {CODE_MODE_MODE_LABELS[defaultCodeModeMode(pin.model.modelId)]}
               </div>
-              {pins.length > 0 ? (
-                <DataTable
-                  label="Model exceptions"
-                  items={pins}
-                  keyOf={(pin) => pin.key}
-                  rows={6}
-                  empty="No model exceptions"
-                  columns={[
-                    {
-                      key: "model",
-                      header: "Model",
-                      cell: (pin) => (
-                        <ModelName
-                          model={pin.model}
-                          models={models}
-                          providers={providers}
-                          alwaysProvider
-                        />
-                      ),
-                    },
-                    {
-                      key: "default",
-                      header: "Default",
-                      width: "5rem",
-                      cell: (pin) => (
-                        <Cell muted>
-                          {CODE_MODE_MODE_LABELS[defaultCodeModeMode(pin.model.modelId)]}
-                        </Cell>
-                      ),
-                    },
-                    {
-                      key: "mode",
-                      header: "Mode",
-                      width: "8rem",
-                      cell: (pin) => (
-                        <Select
-                          value={pin.mode}
-                          disabled={!pinsEditable}
-                          onValueChange={(mode) => setPin(pin.key, mode as CodeModeMode)}
-                        >
-                          <SelectTrigger
-                            size="sm"
-                            className={CONTROL_W.sm}
-                            aria-label={`Code Mode for ${pin.model.label}`}
-                            data-testid={`code-mode-pin-${pin.key}`}
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {CODE_MODE_MODES.map((mode) => (
-                              <SelectItem key={mode} value={mode}>
-                                {CODE_MODE_MODE_LABELS[mode]}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ),
-                    },
-                    {
-                      key: "remove",
-                      header: "Remove",
-                      width: "3rem",
-                      align: "end",
-                      headerHidden: true,
-                      cell: (pin) => (
-                        <RowAction
-                          label={`Remove exception for ${pin.model.label}`}
-                          hint="Remove exception"
-                          icon={CloseIcon}
-                          disabled={!pinsEditable}
-                          onAct={() => setPin(pin.key, null)}
-                        />
-                      ),
-                    },
-                  ]}
-                />
-              ) : null}
             </div>
-          </CollapsibleContent>
-        </div>
-      </Collapsible>
-    </PrefSection>
+            <Select
+              value={pin.mode}
+              disabled={!pinsEditable}
+              onValueChange={(mode) => setPin(pin.key, mode as CodeModeMode)}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-auto max-w-full"
+                aria-label={`Code Mode for ${pin.model.label}`}
+                data-testid={`code-mode-pin-${pin.key}`}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CODE_MODE_MODES.map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {CODE_MODE_MODE_LABELS[mode]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <RowAction
+              label={`Remove exception for ${pin.model.label}`}
+              hint="Remove exception"
+              icon={CloseIcon}
+              disabled={!pinsEditable}
+              onAct={() => setPin(pin.key, null)}
+            />
+          </div>
+        ))}
+        {pins.length === 0 ? (
+          <div className="p-4 text-ui text-muted-foreground">No model exceptions</div>
+        ) : null}
+      </PrefSection>
+    </div>
   );
 }
 

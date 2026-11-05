@@ -40,6 +40,7 @@ export function PrefSection({
   return (
     <section
       aria-labelledby={titleId}
+      data-slot="pref-section"
       className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}
     >
       {/* A heading and its actions share an axis outside the framed row group. */}
@@ -51,7 +52,12 @@ export function PrefSection({
       >
         <div className={cn("flex min-w-0 items-center gap-2", titleHidden && "sr-only")}>
           {Icon ? <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : null}
-          <SectionHeading as="h2" id={titleId} data-slot="pref-section-title" className="min-w-0">
+          <SectionHeading
+            as="h2"
+            id={titleId}
+            data-slot="pref-section-title"
+            className="min-w-0 text-ui font-medium"
+          >
             {title}
           </SectionHeading>
         </div>
@@ -60,6 +66,7 @@ export function PrefSection({
       {hint ? <div className="text-ui text-muted-foreground">{hint}</div> : null}
       {/* A direct first row suppresses its top rule against the group's border. */}
       <div
+        data-slot="pref-group"
         className={cn(
           "rounded-container border border-border bg-card",
           fill && "flex min-h-0 flex-1 flex-col",

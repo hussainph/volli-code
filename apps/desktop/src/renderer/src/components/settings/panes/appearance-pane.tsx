@@ -115,7 +115,6 @@ function AppThemeSection() {
         />
       }
     >
-      <CanvasInstrument scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
       <PrefRow label="Appearance">
         <AppearanceModeChoice
           value={appearance}
@@ -123,6 +122,7 @@ function AppThemeSection() {
           onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
         />
       </PrefRow>
+      <CanvasInstrument scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
       <StyleChoice />
       <PrefRow label="Motion" htmlFor="appearance-motion">
         <Switch id="appearance-motion" checked={motion} onCheckedChange={setMotion} />

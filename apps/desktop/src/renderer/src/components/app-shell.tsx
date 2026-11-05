@@ -8,6 +8,7 @@ import { HostIsland } from "@renderer/components/hosts/host-island";
 import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
+import { useSettingsShortcut } from "@renderer/components/settings/settings-panel";
 import { FolderClaimDialog } from "@renderer/components/rail/folder-claim-dialog";
 import { CloudMovesRoot } from "@renderer/components/cloud-moves/cloud-moves";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
@@ -79,6 +80,7 @@ const RAIL_OFF_ZONE_EXTRA = SHELL_INSET;
  * A stationary clip stops the left pane crossing the workspace rail. */
 export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}) {
   useProjectShortcuts();
+  useSettingsShortcut();
   useOverlayScrollbars();
   useNewTicketShortcut();
   useNavHistory();
