@@ -909,7 +909,7 @@ it("mounts only the source-list viewport and moves keyboard focus across its win
         chatRecord({
           sessionId: `c${i}`,
           ticketId: null,
-          role: "home",
+          role: "project",
           createdAt: now - i,
           lastActivityAt: now - i,
         }),
