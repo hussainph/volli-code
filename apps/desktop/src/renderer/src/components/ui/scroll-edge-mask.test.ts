@@ -8,5 +8,7 @@ it("fades only the cut ends of source lists and virtual file trees", () => {
   expect(scrollEdgeMask({ atTop: false, atBottom: true })).toBe(
     "linear-gradient(to bottom, transparent 0, currentColor 12px, currentColor 100%)",
   );
-  expect(scrollEdgeMask({ atTop: false, atBottom: false })).toContain("transparent 0, currentColor 12px");
+  expect(scrollEdgeMask({ atTop: false, atBottom: false })).toContain(
+    "transparent 0, currentColor 12px",
+  );
 });
