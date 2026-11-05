@@ -3213,6 +3213,8 @@ export interface PromptTemplateIndexInput {
 export type PromptTemplateIndexResult = Result<{
   templates: PromptTemplate[];
   skills: SkillReference[];
+  /** Candidate directories skipped by the bounded scan, not a count of readable skills. */
+  omittedSkillDirectories?: number;
 }>;
 
 // ---- find across files (plan §4.7) ----------------------------------------

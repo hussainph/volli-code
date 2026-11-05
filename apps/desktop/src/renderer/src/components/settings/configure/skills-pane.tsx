@@ -1,3 +1,4 @@
+import { Notice } from "@renderer/components/ui/notice";
 /**
  * Settings → Skills: what this project's agents can reach, and what they are
  * told about unprompted.
@@ -219,12 +220,34 @@ export function SkillsPane({
         emptyAction={{ label: "Reload", onAction: reload }}
       >
         {(data) => (
-          <SkillsTable
-            project={project}
-            skills={data.skills}
-            filter={filter}
-            onPreview={setPreviewing}
-          />
+          <>
+            {data.omittedSkillDirectories ? (
+              <Notice
+                title={`${data.omittedSkillDirectories} skill directories not read`}
+                detail="Discovery reads the first 200 directories per location."
+                actions={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      void writeThrough("reveal skills", () =>
+                        window.api.fs.revealInFinder(`${project.path}/.agents/skills`),
+                      )
+                    }
+                  >
+                    <FolderOpenIcon />
+                    Reveal skills folder
+                  </Button>
+                }
+              />
+            ) : null}
+            <SkillsTable
+              project={project}
+              skills={data.skills}
+              filter={filter}
+              onPreview={setPreviewing}
+            />
+          </>
         )}
       </AsyncSection>
       <ContentPreviewDialog
