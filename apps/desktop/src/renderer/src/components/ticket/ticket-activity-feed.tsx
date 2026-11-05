@@ -58,6 +58,7 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   buildActivityFeed,
@@ -628,7 +629,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   return (
     <section className="flex flex-col gap-4 border-t border-border pt-6">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-heading font-semibold">Activity</h3>
+        <SectionHeading as="h2">Activity</SectionHeading>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="inspector" size="sm" aria-label={`Filter activity: ${filter}`}>

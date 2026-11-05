@@ -183,7 +183,7 @@ describe("the property rows", () => {
       expect(trigger.dataset.size).toBe("sm");
       expect(trigger.textContent).toContain(value);
       expect(trigger.getAttribute("aria-label")).toBe(`${label}: ${value}`);
-      expect(trigger.querySelectorAll("svg")).toHaveLength(2);
+      expect(trigger.querySelectorAll("svg")).toHaveLength(field === "priority" ? 1 : 2);
       expect(trigger.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     }
     const labels = query('[data-testid="ticket-rail-property-row-labels"]');
@@ -373,4 +373,24 @@ describe("the label run", () => {
 
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Add label");
   });
+});
+
+it("retains the board priority severity signal in the native trigger and every choice (PAR-11)", async () => {
+  await render();
+  const trigger = query<HTMLElement>('[data-testid="ticket-rail-property-priority"]');
+  const signal = trigger.querySelector('[role="img"][aria-label="Priority: Medium"]');
+  expect(signal).not.toBeNull();
+  expect(signal?.querySelectorAll('div[style*="var(--primary-text)"]')).toHaveLength(2);
+  await press(trigger);
+  for (const [label, count, ink] of [
+    ["Low", 1, "muted-foreground"],
+    ["Medium", 2, "primary-text"],
+    ["High", 3, "destructive"],
+  ] as const) {
+    const choice = optionRow(label);
+    const glyph = choice.querySelector(`[role="img"][aria-label="Priority: ${label}"]`);
+    expect(glyph).not.toBeNull();
+    expect(glyph?.querySelectorAll(`div[style*="var(--${ink})"]`)).toHaveLength(count);
+    expect(glyph?.querySelectorAll("div")).toHaveLength(3);
+  }
 });

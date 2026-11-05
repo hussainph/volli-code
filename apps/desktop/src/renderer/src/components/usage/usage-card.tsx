@@ -278,12 +278,12 @@ export function UsageRankList({
   if (rows.length === 0) return null;
   return (
     <section className="usage-rank-list shrink-0" aria-label={heading}>
-      <SectionHeading as="h3" className="flex min-h-7 items-center">
+      <SectionHeading as="h3" className="sr-only">
         {heading}
       </SectionHeading>
       <dl>
-        {rows.map((row) => (
-          <UsageRankRow key={row.key} row={row} />
+        {rows.map((row, index) => (
+          <UsageRankRow key={row.key} row={row} heading={index === 0 ? heading : undefined} />
         ))}
       </dl>
     </section>
@@ -297,11 +297,16 @@ export function UsageRankList({
  * version suffix is a smaller loss than a price losing a digit, and the figure
  * is the column the eye is scanning down.
  */
-export function UsageRankRow({ row }: { row: UsageGroupRow }) {
+export function UsageRankRow({ row, heading }: { row: UsageGroupRow; heading?: string }) {
   const cost = formatUsageCost(row.usage);
   return (
     <div className="flex min-h-7 items-center justify-between gap-2">
       <dt className="flex min-w-0 items-center gap-2 text-ui text-foreground">
+        {/* Attribution shares its first row: a bounded scroller can never leave
+            a standalone heading cut off against the pinned total. */}
+        {heading ? (
+          <span className="shrink-0 text-label text-muted-foreground">{heading}</span>
+        ) : null}
         <UsageRowSubject row={row} />
       </dt>
       <dd className="shrink-0 text-right text-ui tabular-nums text-muted-foreground">
@@ -346,7 +351,7 @@ export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
         term="Model"
         full={`${row.label} · ${model.providerLabel}`}
         side="left"
-        className="min-w-0 truncate rounded-sm text-left"
+        className="min-h-6 min-w-0 truncate rounded-sm text-left"
       >
         {row.label}
       </ValueReveal>

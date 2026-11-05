@@ -22,7 +22,6 @@
 .usage-breakdown-scroll {
   scrollbar-width: auto;
   scrollbar-gutter: stable;
-  scroll-snap-type: y proximity;
   outline: none;
 }
 .usage-breakdown-scroll:focus-visible {
@@ -36,12 +35,4 @@
 .usage-breakdown-scroll::-webkit-scrollbar-thumb {
   background-color: var(--muted-foreground);
   border-width: 2px;
-}
-/* Snap boundaries put the heading and its first 28px row together, rather
- * than resting with an orphan title against the pinned total. Long groups
- * still scroll freely inside their oversized snap area. */
-.usage-breakdown-scroll > * {
-  flex-shrink: 0;
-  scroll-snap-align: start;
-  scroll-margin-block: 8px;
 }

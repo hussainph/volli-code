@@ -449,7 +449,10 @@ describe("compact accounting rows", () => {
     for (const row of body.querySelectorAll("dl > div")) expect(row.className).toContain("min-h-7");
     expect(body.querySelector('button[aria-label^="Session ·"]')).not.toBeNull();
     for (const group of body.querySelectorAll("section.usage-rank-list")) {
-      expect(group.querySelector("h3")?.className).toContain("min-h-7");
+      expect(group.querySelector("h3")?.className).toContain("sr-only");
+      expect(group.querySelector("dl > div dt")?.textContent).toContain(
+        group.getAttribute("aria-label"),
+      );
       expect(group.querySelector("dl > div")).not.toBeNull();
     }
   });

@@ -1199,7 +1199,7 @@ export function TicketSessionsPanel({
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.
           // Gated on a read having LANDED — a refused one has proved nothing.
-          <p className={SESSION_SECTION_EMPTY}>
+          <p className={EMPTY_INLINE}>
             {searching ? "No matching sessions" : "No active sessions"}
           </p>
         ) : null}
