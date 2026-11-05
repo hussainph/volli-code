@@ -411,6 +411,20 @@ describe("the schedule time field", () => {
 });
 
 describe("schedule wording", () => {
+  it("does not describe the local scheduler's asleep policy in a cloud schedule", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    await mountEditor(
+      automation({
+        trigger: {
+          kind: "schedule",
+          schedule: { preset: "hourly", minute: 0, timeZone: "Europe/London" },
+        },
+      }),
+    );
+    expect(document.querySelector('[aria-label="Schedule"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Schedule policy"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Mac is asleep");
+  });
   it("gives Weekly one visible day choice beside its time", async () => {
     await mountEditor(
       automation({
@@ -471,7 +485,16 @@ describe("the next-run line (VC-298)", () => {
     await mountEditor(KUWAIT_NINE_THIRTY);
 
     expect(nextLine()).toBeDefined();
-    // The schedule control carries no policy sentence under it.
+    // Policy is disclosed, not a standing paragraph under the controls.
+    expect(document.body.textContent).not.toContain("min late");
+    const policy = document.querySelector<HTMLButtonElement>('[aria-label="Schedule policy"]')!;
+    expect(policy.dataset.variant).toBe("ghost");
+    await act(async () => policy.click());
+    expect(document.body.textContent).toContain("Runs up to 2 min late");
+    expect(document.body.textContent).toContain("skipped if Volli is closed or the Mac is asleep");
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
     expect(document.body.textContent).not.toContain("min late");
 
     await act(async () => {

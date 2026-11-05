@@ -691,14 +691,6 @@ export const Board = React.memo(function Board({
     [storeTickets],
   );
 
-  // Columns and pills only play their enter transition when they appear on an
-  // ALREADY-mounted board (a drop expanded a column, a filter emptied one).
-  // Opening the board page — a many-times-a-day action — stays instant.
-  const boardMounted = React.useRef(false);
-  React.useEffect(() => {
-    boardMounted.current = true;
-  }, []);
-
   // What this project's columns offer and what they arm (VC-128). Read when the
   // board appears rather than subscribed, for the palette's reason: the record
   // changes only through this app's own doors, and a drop must be able to
@@ -1242,7 +1234,6 @@ export const Board = React.memo(function Board({
                     onOpen={handleOpen}
                     composerInitiallyOpen={expandedEmptyStatus === status}
                     onComposerClose={handleComposerClose}
-                    animateEnter={boardMounted.current}
                     // A card keyboard focus is coming home to (VC-419). Only
                     // the column that holds it hears about it; every other one
                     // is handed `null` and does nothing.
@@ -1257,7 +1248,6 @@ export const Board = React.memo(function Board({
                     statuses={hidden}
                     dragActive={drag !== null}
                     onExpand={setExpandedEmptyStatus}
-                    animateEnter={boardMounted.current}
                     offeredFor={offeredPanelFor}
                     dimmedFor={dimmedFor}
                     aimedFor={aimedFor}

@@ -35,7 +35,6 @@ export const CollapsedColumnRail = React.memo(function CollapsedColumnRail({
   statuses,
   dragActive,
   onExpand,
-  animateEnter,
   offeredFor,
   dimmedFor,
   aimedFor,
@@ -43,8 +42,6 @@ export const CollapsedColumnRail = React.memo(function CollapsedColumnRail({
   statuses: TicketStatus[];
   dragActive: boolean;
   onExpand(status: TicketStatus): void;
-  /** Play the enter transition — true for pills appearing on an already-mounted board. */
-  animateEnter: boolean;
   /** This pill's Offered list mid-drag, or `undefined` when there is none to draw. */
   offeredFor?: (status: TicketStatus) => ColumnOfferedPanelProps | undefined;
   /** Quieted because another column is currently grown into landing targets. */
@@ -63,7 +60,6 @@ export const CollapsedColumnRail = React.memo(function CollapsedColumnRail({
           status={status}
           dragActive={dragActive}
           onExpand={onExpand}
-          animateEnter={animateEnter}
           offered={offeredFor?.(status)}
           dimmed={dimmedFor?.(status) ?? false}
           aimed={aimedFor?.(status) ?? false}
@@ -77,7 +73,6 @@ function CollapsedColumnTarget({
   status,
   dragActive,
   onExpand,
-  animateEnter,
   offered,
   dimmed,
   aimed,
@@ -85,7 +80,6 @@ function CollapsedColumnTarget({
   status: TicketStatus;
   dragActive: boolean;
   onExpand(status: TicketStatus): void;
-  animateEnter: boolean;
   offered: ColumnOfferedPanelProps | undefined;
   dimmed: boolean;
   aimed: boolean;
@@ -101,7 +95,7 @@ function CollapsedColumnTarget({
       data-board-column={status}
       data-drop-aimed={aimed || undefined}
       className={cn(
-        "relative transition-opacity duration-(--duration-sheet) ease-out motion-reduce:transition-none",
+        "relative",
         // Quieted while another column holds the picker, like the standing
         // columns. Opacity only: the pill is a dnd-kit droppable measured in
         // synchronous layout effects, and this wrapper is what holds its rect.
@@ -116,13 +110,7 @@ function CollapsedColumnTarget({
         }}
         className={cn(
           "flex w-full items-center justify-between rounded-card border border-border bg-muted px-4 py-2 text-left text-ui text-muted-foreground shadow-(--shadow-glass-small) outline-none",
-          // No scale in this list, ever: the pill is a dnd-kit droppable measured
-          // in synchronous layout effects, and a scale mid-flight yields a new
-          // rect every commit — measureRects loops to React's max update depth
-          // (the DndContext crash). Enter is an opacity fade only.
-          "transition-[color,background-color,border-color,box-shadow,opacity] duration-(--duration-menu-in) ease-out",
-          "hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-          animateEnter && "starting:opacity-0",
+          "hover:bg-(--accent-tint) hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
           // While any card is mid-drag every pill brightens into an affordance…
           dragActive && "border-border text-foreground",
           // …and the hovered one lights up as the drop target.

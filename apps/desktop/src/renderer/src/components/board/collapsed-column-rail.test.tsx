@@ -58,7 +58,6 @@ async function mount(options: {
         statuses={["needs_review", "done"]}
         dragActive
         onExpand={() => {}}
-        animateEnter={false}
         offeredFor={options.offeredFor}
         dimmedFor={options.dimmedFor}
       />,
