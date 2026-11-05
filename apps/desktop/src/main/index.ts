@@ -607,9 +607,9 @@ function createWindow(
     // (.app-region-drag in globals.css) and the traffic-light whitespace —
     // everything below that band is ordinary layout.
     titleBarStyle: "hiddenInset",
-    // Centers the 12px traffic-light group inside ChromeBar's 36px band
-    // ((36 - 12) / 2 = 12). Must stay in sync with ChromeBar's h-9 height
-    // (chrome-bar.tsx), the same way backgroundColor below tracks the canvas.
+    // Centers the 12px traffic-light group inside ChromeBar's 46px band
+    // ((46 - 12) / 2 = 17). Must stay in sync with --spacing-titlebar
+    // (globals.css), the same way backgroundColor below tracks the canvas.
     trafficLightPosition: { x: 16, y: 17 },
     // The canvas's own base fill (window-theme.ts runs the same pure pipeline
     // the renderer does, preferring the background the renderer last actually

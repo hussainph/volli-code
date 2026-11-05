@@ -74,8 +74,8 @@ const CLIP_SPILL = 60;
 const RAIL_OFF_ZONE_EXTRA = SHELL_INSET;
 
 /** Window canvas, resident navigation islands and the neutral reading card.
- * Pinning reserves space once at the compositor endpoint; peeking overlays the
- * same subtree. The permanent rail and native-scale traffic lights never move.
+ * Pinning continuously pushes the pane and paper edges together; peeking overlays
+ * the same subtree. The permanent rail and native-scale traffic lights never move.
  * A stationary clip stops the left pane crossing the workspace rail. */
 export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}) {
   useProjectShortcuts();
@@ -392,10 +392,9 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             {railContent}
           </Sidebar>
 
-          {/* The entire FINAL docked-vs-floating difference, expressed as one
-            width. It deliberately has no transition: `useSidebarContentMotion`
-            moves the content presentation on the compositor, then changes this
-            inline geometry once where the two renderings coincide. */}
+          {/* The reservation and panel consume one animated width. Heavy
+            renderers defer their own resize under the pane transaction fence;
+            the paper still follows the divider continuously. */}
           <div
             data-pane-reservation="left"
             aria-hidden

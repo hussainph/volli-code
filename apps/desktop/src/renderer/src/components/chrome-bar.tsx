@@ -67,8 +67,8 @@ export function ChromeBar() {
         data-slot="chrome-bar"
         className="app-region-drag relative flex h-(--spacing-titlebar) shrink-0 items-center"
       >
-        {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
-          ending ≈70px) plus breathing room so the trigger doesn't crowd them.
+        {/* Clears the native traffic-light group plus breathing room so the
+          trigger doesn't crowd it.
           Fullscreen hides the lights, so the spacer collapses and the trigger
           slides to the left edge — same animation the old rail-top-strip used. */}
         <div className={cn("shrink-0", fullScreen ? "w-2" : "w-[100px]")} />

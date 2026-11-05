@@ -9,8 +9,8 @@ import { useUiStore } from "@renderer/stores/ui";
 import { armRevealClock, useEdgeReveal, ZONE_TOP_DEAD_BAND, ZONE_WIDTH } from "./edge-reveal";
 import { usePaneMotion } from "./pane-motion";
 
-/** The resident right-hand sibling of the primary sidebar. Only its spacer
- * changes layout, once per pin; hover and dismissal move the same live subtree. */
+/** The resident right-hand sibling of the primary sidebar. Its spacer and pane
+ * share the live push width; peeks overlay the same resident subtree. */
 export function InspectorShell({
   enabled,
   owner,
