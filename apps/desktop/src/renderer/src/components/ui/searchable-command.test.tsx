@@ -43,6 +43,12 @@ it("bounds 1000 choices and reaches the last logical item from the keyboard", as
   expect(host.querySelectorAll('[role="option"]')).toHaveLength(20);
   const input = host.querySelector("input")!;
   await act(async () =>
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+    ),
+  );
+  expect(choose).not.toHaveBeenCalled();
+  await act(async () =>
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
   );
   expect(host.querySelectorAll('[role="option"]')).toHaveLength(20);

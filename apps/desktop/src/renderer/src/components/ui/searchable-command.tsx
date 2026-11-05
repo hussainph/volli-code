@@ -80,6 +80,7 @@ export function SearchableCommand<T>({
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={placeholder}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
             if (event.key === "Enter" && index >= 0) {
               event.preventDefault();
               event.stopPropagation();

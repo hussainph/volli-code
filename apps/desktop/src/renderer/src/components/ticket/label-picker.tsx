@@ -107,7 +107,7 @@ export function LabelPickerContent({
       placeholder="Search labels…"
       disabled={readOnly}
       empty="No labels"
-      keyOf={(option) => (option.create ? `new-label:${option.name}` : option.name)}
+      keyOf={(option) => `${option.create ? "create" : "label"}:${option.name}`}
       onSelect={(option) => {
         if (option.create) {
           onChange([...value, option.name]);
