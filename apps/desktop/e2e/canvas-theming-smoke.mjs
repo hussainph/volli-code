@@ -278,12 +278,8 @@ function oklchL(hex) {
  * The best Lc ANY ink can score on `surface` — pure black or pure white,
  * whichever wins.
  *
- * Needed because one declared floor is physically unreachable and the engine
- * clamps rather than throwing: at light's
- * settled spread `--sidebar` lands at L 0.840, where even black scores 74.8
- * against a floor of 75. So the assertion that can actually be kept is "meets
- * its floor, or is AT its surface's ceiling" — which still catches anything
- * short for a reason other than physics.
+ * A floor can be capped by its surface's physical ceiling. Requiring the
+ * ceiling in that case still catches a shortfall unrelated to physics.
  */
 const ceilingOn = (surface) => Math.max(lc("#000000", surface), lc("#ffffff", surface));
 
@@ -785,7 +781,11 @@ async function watchCanvasPaints(page) {
       const value = document.documentElement.style
         .getPropertyValue("--canvas")
         .trim()
-        .toLowerCase();
+        .toLowerCase()
+        // Same normalization as readAppliedTokens; this callback is serialized
+        // into the renderer and cannot close over normalizeToken above.
+        .replace(/\s+/g, " ")
+        .replace(/\d*\.\d+/g, (number) => String(Number(number)));
       // Deduped against the last entry: one repaint writes every token, so the
       // observer fires many times for a single swap.
       if (value !== "" && paints.at(-1) !== value) paints.push(value);
@@ -961,12 +961,7 @@ try {
   await attempt(5, "APCA/ΔL floors hold on the applied light values", async () => {
     const t = await readAppliedTokens(page, Object.keys(LIGHT));
     const failures = [];
-    // `--sidebar-foreground` on `--sidebar` is the ONE floor light's settled
-    // spread puts physically out of reach (§7.1): `--sidebar` lands at L 0.840
-    // where even pure black scores 74.8 against a declared 75. So the assertion
-    // is "meets the floor, or is at its surface's ceiling" — which still fails
-    // anything short for a reason other than physics, and would name a NEW
-    // capped token if a retune ever created one.
+    // Honor a physical ceiling without accepting an avoidable shortfall.
     const floor = (label, text, surface, min) => {
       const actual = lc(t[text], t[surface]);
       if (actual >= min) return;
@@ -1101,12 +1096,14 @@ cursor-style = block
       vibrancy: AUTHORED_VIBRANCY,
       grain: AUTHORED_GRAIN,
     });
+    const beforeDrag = await storedGlobalCanvas(page);
+    const originX = beforeDrag.stops[beforeDrag.primaryIndex].x;
     await dragPrimaryStop(page, { dx: -90, dy: 40 });
 
     const stored = await waitUntil("the dragged stop to persist", async () => {
       const canvas = await storedGlobalCanvas(page);
       const stop = canvas?.stops[canvas.primaryIndex];
-      return stop !== undefined && Math.abs(stop.x - 0.68) > 0.02 ? canvas : null;
+      return stop !== undefined && Math.abs(stop.x - originX) > 0.02 ? canvas : null;
     });
     const after = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
 

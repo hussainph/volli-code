@@ -412,10 +412,10 @@ async function main() {
     // ===================================================================
     await attempt(
       0,
-      "Fresh profile: one textured project-start canvas with a display heading and text-only action",
+      "Fresh profile: one textured project-start canvas with a compact heading and tonal action",
       async () => {
         const state = page.locator("[data-empty-projects-state]");
-        const primaryAction = page.getByRole("button", { name: "Add Project…", exact: true });
+        const primaryAction = page.getByRole("button", { name: "Add project", exact: true });
         const heading = page.getByRole("heading", { name: "Add your first project", exact: true });
         const oldSidebarPrompt = page.getByText("Add a project to get started", { exact: true });
         const oldSidebarHeader = page.getByText("No project selected", { exact: true });
@@ -432,9 +432,8 @@ async function main() {
           (await state.count()) === 1 &&
           (await primaryAction.count()) === 1 &&
           (await primaryAction.locator("svg").count()) === 0 &&
-          // text-title (24px) — the app's largest step since the type-scale
-          // language landed (DESIGN.md); the old >=32 display size is gone.
-          headingSize >= 24 &&
+          // EMPTY_PAGE uses the shared 18px heading; page mastheads stay 24px.
+          headingSize === 18 &&
           (await oldSidebarPrompt.count()) === 0 &&
           (await oldSidebarHeader.count()) === 0 &&
           texture.canvas !== "none" &&

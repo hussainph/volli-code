@@ -559,7 +559,7 @@ async function main() {
 
         // A file OPENED from the rail while the group is shown joins the
         // focused pane — pane 2 — in front of the terminal.
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         await aside.getByTestId("ticket-rail-tab-files").click();
         await waitUntil(
           "the second file row",
@@ -816,7 +816,7 @@ async function main() {
       8,
       "a file row dragged from the rail onto a pane's right edge opens it in a new pane",
       async () => {
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         await aside.getByTestId("ticket-rail-tab-files").click();
         await waitUntil(
           "the files tree",
@@ -1020,7 +1020,7 @@ async function main() {
 
     // ---- 10. A within-strip reorder still means what it meant ---------------
     await attempt(10, "a drag inside the top strip reorders it, exactly as before", async () => {
-      const aside = page.locator("aside");
+      const aside = page.locator('[data-inspector-panel][data-shown="true"]');
       // Pin both files so neither can replace the other as a preview.
       await aside.locator(FILE_ROW).dblclick();
       await aside.locator(SECOND_ROW).dblclick();

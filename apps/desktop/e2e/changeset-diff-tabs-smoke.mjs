@@ -340,7 +340,7 @@ async function main() {
     await card.dblclick();
     await waitUntil("detail", async () => (await page.getByRole("tablist").count()) >= 1);
 
-    const aside = page.locator("aside");
+    const aside = page.locator('[data-inspector-panel][data-shown="true"]');
     await waitUntil("rail visible", async () => (await aside.count()) === 1);
 
     // ---- 1. Changes list ----------------------------------------------------

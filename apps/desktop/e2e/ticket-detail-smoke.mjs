@@ -830,7 +830,7 @@ async function main() {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
 
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         await startTerminalSession(aside);
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
@@ -1092,7 +1092,7 @@ async function main() {
       "Rail: Now is the default page and folds sessions + status/priority in; no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         // Now is the default rail page, and it holds the session list.
         const sessionsHeading =
           (await aside.getByRole("heading", { name: "Sessions" }).count()) >= 1;
@@ -1134,7 +1134,7 @@ async function main() {
       "Rail mode switch never changes the active main-view tab (decision #46)",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
 
         await docTab(page).click();
         await waitUntil("Ticket Body tab selected", async () => {
@@ -1247,7 +1247,7 @@ async function main() {
                   element.offsetParent !== null &&
                   element.getBoundingClientRect().height > 0,
               ).length,
-              asides: document.querySelectorAll("aside").length,
+              asides: document.querySelectorAll('[data-inspector-panel][data-shown="true"]').length,
               terminalVisible:
                 markedTerminal instanceof HTMLElement && markedTerminal.offsetParent !== null,
             };
@@ -1285,7 +1285,7 @@ async function main() {
                   element.offsetParent !== null &&
                   element.getBoundingClientRect().height > 0,
               ).length,
-              asides: document.querySelectorAll("aside").length,
+              asides: document.querySelectorAll('[data-inspector-panel][data-shown="true"]').length,
               terminalVisible:
                 markedTerminal instanceof HTMLElement && markedTerminal.offsetParent !== null,
             };
@@ -1351,7 +1351,7 @@ async function main() {
             (await page.getByRole("tab", { name: SESSION_INITIAL, exact: true }).count()) === 0;
           return hasNew && goneOld;
         });
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         const railRenamed = await waitUntil("rail row shows new title", async () => {
           return (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
         });
@@ -1402,7 +1402,7 @@ async function main() {
       "Rail toggle: the tab strip's corner button and ⌥⌘B hide/show the right rail; left collapsed for the restart-persistence check",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         await waitUntil("rail visible initially", async () => (await aside.count()) === 1);
 
         // The tab strip's corner sits directly above the pane it collapses.
@@ -1497,12 +1497,13 @@ async function main() {
         });
 
         // Rail collapsed state persisted across restart (no rail rendered yet).
-        const railCollapsedPersisted = (await page.locator("aside").count()) === 0;
+        const railCollapsedPersisted =
+          (await page.locator('[data-inspector-panel][data-shown="true"]').count()) === 0;
         // Bring it back to assert the session record survived. Reported rather
         // than thrown: if the collapse did NOT persist, ⌥⌘B hides an already-
         // visible rail and the wait below times out saying nothing about why.
         await page.keyboard.press("Alt+Meta+b");
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         const railRestored = await waitUntil(
           "rail restored after restart",
           async () => (await aside.count()) === 1,

@@ -1006,6 +1006,20 @@ describe("the first-paint hint", () => {
     expect(report.planeBackground).not.toBe(report.background);
   });
 
+  it("surfaces a rejected first-paint write without crashing the paint", async () => {
+    const { store } = freshStore({
+      setFirstPaint: vi.fn(async () => {
+        throw new Error("write interrupted");
+      }),
+    });
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+    await settle();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      expect.stringContaining("write interrupted"),
+      expect.anything(),
+    );
+  });
+
   it("surfaces a failed hint write rather than letting it stop silently", async () => {
     // A hint that quietly stopped updating shows up as a boot flash nobody can
     // explain, one launch later.

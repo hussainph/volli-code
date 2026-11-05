@@ -504,7 +504,7 @@ async function main() {
       });
     await waitUntil("ticket card", async () => (await card.count()) === 1);
     await card.dblclick();
-    const aside = page.locator("aside");
+    const aside = page.locator('[data-inspector-panel][data-shown="true"]');
     await waitUntil("ticket rail", async () => (await aside.count()) === 1);
     await openFileFromRail(aside);
     await waitFileText(page, "export const changeSet = 1;", false);

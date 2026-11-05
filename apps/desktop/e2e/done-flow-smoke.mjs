@@ -232,7 +232,9 @@ async function main() {
      * what the previous one left behind.
      */
     async function unfoldWorktreeBody() {
-      const fold = page.locator("aside").getByTestId("ticket-repository-fold");
+      const fold = page
+        .locator('[data-inspector-panel][data-shown="true"]')
+        .getByTestId("ticket-repository-fold");
       await waitUntil("worktree fold present", async () => (await fold.count()) === 1, {
         timeout: 10000,
       });
@@ -275,7 +277,9 @@ async function main() {
      */
     async function clickRailButton(displayId, name, { timeout = 15000 } = {}) {
       if ((await docTab(displayId).count()) !== 1) await openDetail(displayId);
-      const button = page.locator("aside").getByRole("button", { name });
+      const button = page
+        .locator('[data-inspector-panel][data-shown="true"]')
+        .getByRole("button", { name });
       await waitUntil(`rail button "${name}" to appear`, async () => (await button.count()) >= 1, {
         timeout,
       });
