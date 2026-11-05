@@ -68,7 +68,7 @@ export async function startStylePreferences(): Promise<void> {
     const motion = state.motion ? "on" : "off";
     if (document.documentElement.dataset.motion !== motion) {
       document.documentElement.dataset.motion = motion;
-      window.dispatchEvent?.(new Event("volli-motion-change"));
+      window.dispatchEvent(new Event("volli-motion-change"));
     }
   };
   paint();
