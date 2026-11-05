@@ -104,10 +104,10 @@ function tryAgainButton(): HTMLButtonElement | undefined {
 }
 
 describe("SessionsPane's model catalog", () => {
-  it("marks a pending catalogue with a skeleton and no loading ellipsis", async () => {
+  it("leaves a pending catalogue silent without invented model options", async () => {
     const inspect = vi.fn<ModelAccessClient["inspect"]>(() => new Promise(() => {}));
     await renderPane(inspect);
-    expect(document.querySelector('[role="status"][aria-label="Loading models"]')).not.toBeNull();
+    expect(document.querySelector('[role="status"][aria-label="Loading models"]')).toBeNull();
     expect(
       document.querySelector('[data-testid="project-session-model"] button[aria-label^="Model"]'),
     ).toBeNull();
@@ -333,11 +333,14 @@ describe("SessionsPane's instruction files", () => {
     } as never);
     await renderPane(vi.fn().mockResolvedValue(CATALOG));
 
-    expect(
-      [...document.querySelectorAll('[role="status"]')].some((node) =>
-        node.textContent?.includes("Permission was denied"),
-      ),
-    ).toBe(true);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn't load instructions",
+    );
+    const details = [...document.querySelectorAll("details")].find((node) =>
+      node.textContent?.includes("Permission was denied"),
+    );
+    expect(details).toBeDefined();
+    expect(details?.open).toBe(false);
     await act(async () => action("Check the repo again")?.click());
 
     expect(api.fs.listDirectory).toHaveBeenCalledTimes(2);
@@ -356,7 +359,9 @@ describe("SessionsPane's instruction files", () => {
     // region, and its recovery is a sibling of it rather than inside it.
     const announced = dialog?.querySelector('[role="status"][aria-live="polite"]');
     expect(announced?.textContent).toContain("Couldn't read this file");
-    expect(announced?.textContent).toContain("File was not found");
+    expect(announced?.textContent).not.toContain("File was not found");
+    expect(dialog?.querySelector("details")?.textContent).toContain("File was not found");
+    expect(dialog?.querySelector("details")?.open).toBe(false);
     expect(announced?.querySelector("button")).toBeNull();
 
     // A read that failed transiently is worth retrying, and the retry lands.
@@ -368,7 +373,7 @@ describe("SessionsPane's instruction files", () => {
     expect(dialog?.querySelector(".typeset h1")?.textContent).toBe("AGENTS.md rules");
   });
 
-  it("holds the preview's shape while a file is read, with no loading text on screen", async () => {
+  it("keeps the preview pending without skeletons or loading text", async () => {
     const api = stubRepo({ "AGENTS.md": "file" });
     api.files.read.mockReturnValueOnce(new Promise(() => {}) as never);
     await renderPane(vi.fn().mockResolvedValue(CATALOG));
@@ -378,7 +383,7 @@ describe("SessionsPane's instruction files", () => {
     const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
     const region = dialog?.querySelector('[role="status"][aria-label="Loading file"]');
     expect(region?.getAttribute("aria-busy")).toBe("true");
-    expect(region?.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(3);
+    expect(region?.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(0);
     expect(dialog?.textContent).not.toContain("Loading");
     // The header's rule is the centred inset divider, not a full-bleed border.
     expect(dialog?.querySelector('[data-slot="dialog-header"]')?.className).not.toContain(

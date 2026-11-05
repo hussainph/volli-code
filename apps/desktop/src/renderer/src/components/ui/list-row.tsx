@@ -33,11 +33,10 @@
  *
  * Two-line navigation is 42px: an 18px name, 14px metadata and 10px
  * vertical inset. The geometry lives in the shared CSS recipe and also
- * applies to skeletons, so hydration does not move the neighbours.
+ * applies consistently to every navigation surface.
  */
 import type * as React from "react";
 
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { cn } from "@renderer/lib/utils";
 
 export type ListRowDensity = "row" | "two-line";
@@ -45,15 +44,6 @@ export type ListRowDensity = "row" | "two-line";
 /** Dense source navigation uses the same accent washes as the sidebar. */
 export const SOURCE_LIST_ROW =
   "rounded-row hover:bg-(--accent-tint) data-[selected=true]:bg-(--accent-selected)";
-
-/**
- * The fixed Tailwind widths every VC-383 loading row deliberately draws.
- *
- * Width is placeholder geometry, not a styling escape hatch: allowing a bare
- * string here would let a caller add a new visual rhythm without documenting
- * it alongside the skeleton it changes.
- */
-export type LoadingBarWidth = "w-1/2" | "w-2/5" | "w-3/5" | "w-2/3" | "w-3/4" | "w-10" | "w-12";
 
 const DENSITY: Record<ListRowDensity, string> = {
   row: "py-2",
@@ -221,41 +211,3 @@ export function ListRow({
  * bars keep the two-line placeholder's measured vertical footprint until the
  * real labels replace them. The ladder's 8px gap changes that first paint.
  */
-export function ListRowSkeleton({
-  primaryWidth,
-  trailingWidth,
-  mark = false,
-  density = "row",
-  className,
-  ...rest
-}: React.HTMLAttributes<HTMLElement> & {
-  /** The fixed width utility for the name's bar. */
-  primaryWidth: LoadingBarWidth;
-  /** The fixed width utility for the figure at the end, or none. */
-  trailingWidth?: LoadingBarWidth;
-  /** Whether the row will carry a leading mark — a dot or a glyph. */
-  mark?: boolean;
-  density?: ListRowDensity;
-}) {
-  return (
-    <div
-      aria-hidden
-      data-density={density}
-      className={cn(
-        "list-row flex w-full items-center gap-2 rounded-row px-2",
-        DENSITY[density],
-        className,
-      )}
-      {...rest}
-    >
-      {mark ? <Skeleton className="size-3 shrink-0 rounded-full" /> : null}
-      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <Skeleton className={cn("h-4", primaryWidth)} />
-        {density === "two-line" ? <Skeleton className="h-3.5 w-2/5" /> : null}
-      </span>
-      {trailingWidth !== undefined ? (
-        <Skeleton className={cn("h-3 shrink-0", trailingWidth)} />
-      ) : null}
-    </div>
-  );
-}

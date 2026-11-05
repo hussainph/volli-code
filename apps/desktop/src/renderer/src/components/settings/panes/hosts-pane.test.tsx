@@ -174,13 +174,12 @@ describe("Settings → Hosts", () => {
     expect(root.querySelector('[aria-label="Retry studio"]')).toBeNull();
   });
 
-  it("offers Add a host… as the one row when only This Mac is here", async () => {
+  it("offers Add a host… exactly once when only This Mac is here", async () => {
     const root = await renderPane([]);
     const rows = rowNames(root);
-    expect(rows).toHaveLength(2);
-    expect(rows[1]).toContain("Add a host…");
-    const add = root.querySelectorAll<HTMLElement>("[data-host-row]")[1]!;
-    await act(async () => add.click());
+    expect(rows).toHaveLength(1);
+    expect(root.querySelectorAll('button[aria-label="Add a host…"]')).toHaveLength(1);
+    await click(root, "Add a host…");
     expect(useRemoteHostsStore.getState().addHost.open).toBe(true);
   });
 
@@ -316,7 +315,10 @@ describe("Settings → Hosts", () => {
     api.devicesOf.set(IDLE.id, new Error("Couldn’t reach studio"));
     const root = await renderPane();
     await openHost(root, "studio");
-    expect(root.querySelector('[role="status"]')?.textContent).toContain("Couldn’t reach studio");
+    expect(root.querySelector('[role="alert"] h2')?.textContent).toBe(
+      "Couldn't load paired devices",
+    );
+    expect(root.querySelector("details")?.textContent).toContain("Couldn’t reach studio");
     api.devicesOf.set(IDLE.id, []);
     await click(root, "Try again");
     await settle();

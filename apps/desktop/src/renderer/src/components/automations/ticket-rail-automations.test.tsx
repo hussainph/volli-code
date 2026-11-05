@@ -528,14 +528,10 @@ describe("the offer list", () => {
     await render();
 
     expect(text()).not.toContain("No automations");
-    // The wait is drawn as rows, not as a sentence (VC-406): two skeleton rows
-    // before anything has been read, so the first read moves as little as it
-    // can and a re-read moves nothing.
+    // A first read paints neither fabricated rows nor a successful empty claim.
     expect(text()).not.toContain("Reading automations");
     const unread = document.querySelector('[data-testid="ticket-rail-automations-unread"]');
-    expect(unread).not.toBeNull();
-    expect(unread?.getAttribute("aria-busy")).toBe("true");
-    expect(unread?.children).toHaveLength(2);
+    expect(unread).toBeNull();
   });
 
   it("lists nothing, and claims nothing, until its own reads have landed", async () => {
@@ -550,7 +546,7 @@ describe("the offer list", () => {
     await render();
 
     expect(rows()).toHaveLength(0);
-    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).toBeNull();
     // And no claim about the project, which it has not read.
     expect(text()).not.toContain("No automations");
 
@@ -578,7 +574,7 @@ describe("the offer list", () => {
     await render();
 
     expect(rows()).toHaveLength(0);
-    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).toBeNull();
 
     // The read lands on the truth: nothing arms this column any more.
     await act(async () => {
@@ -765,7 +761,7 @@ describe("what it says about its own read", () => {
     expect(rows()).toHaveLength(0);
     expect(text()).not.toContain("Review sweep");
     expect(readStatus()).toBeNull();
-    expect(skeleton()).not.toBeNull();
+    expect(skeleton()).toBeNull();
     expect(text()).not.toContain("No automations");
 
     await act(async () => {

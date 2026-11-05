@@ -388,7 +388,7 @@ describe("activity filters", () => {
 describe("the feed while its first read is in flight (VC-383)", () => {
   const loading = () => container?.querySelector('[data-testid="ticket-activity-loading"]') ?? null;
 
-  it("holds the rows' box, then says empty only once the read has answered so", async () => {
+  it("waits silently and says empty only once the read has answered so", async () => {
     let answer: (() => void) | null = null;
     doors.events.mockImplementationOnce(
       () =>
@@ -398,9 +398,9 @@ describe("the feed while its first read is in flight (VC-383)", () => {
     );
     await mount();
 
-    expect(loading()).not.toBeNull();
+    expect(loading()).toBeNull();
     expect(container?.textContent).not.toContain("No activity yet");
-    expect(loading()?.querySelectorAll("li[aria-hidden]")).toHaveLength(2);
+    expect(container?.querySelector('[data-slot="skeleton"]')).toBeNull();
 
     await act(async () => {
       answer?.();

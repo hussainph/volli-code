@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { ChevronDownIcon, ChevronUpIcon } from "@renderer/components/ui/icon";
 
@@ -50,7 +51,6 @@ import {
 import {
   ActiveBandRow,
   PreviousBandRow,
-  SessionBandRowSkeleton,
   sessionRowVendor,
   TicketGroupRow,
   type SessionRowVendor,
@@ -1487,15 +1487,24 @@ export function ActiveSessions({
       >
         {navigator.filter((row) => row.band === "active").map(renderNavigatorRow)}
         {activeRows.length === 0 && listingPending ? (
-          <>
-            <SessionBandRowSkeleton primaryWidth="w-3/4" />
-            <SessionBandRowSkeleton primaryWidth="w-1/2" />
-          </>
+          <></>
         ) : activeRows.length === 0 && (sessionsUnavailable !== null || listingFailed) ? (
           <SidebarMenuItem
             {...(sessionsUnavailable === null ? {} : { "data-testid": "sessions-unavailable" })}
           >
-            <p className={EMPTY_INLINE}>{sessionsUnavailable ?? "Couldn't load sessions."}</p>
+            {sessionsUnavailable !== null ? (
+              <p className={EMPTY_INLINE}>{sessionsUnavailable}</p>
+            ) : (
+              <PanelEmptyState
+                illustration="failed"
+                status="failed"
+                title="Couldn't load sessions"
+                action={{
+                  label: "Try again",
+                  onAction: () => void refreshProjectSessions(project.id),
+                }}
+              />
+            )}
           </SidebarMenuItem>
         ) : null}
       </SidebarMenu>
@@ -1507,11 +1516,20 @@ export function ActiveSessions({
         {...(previousEntries.length === 0 && listingPending ? loadingRegionProps("sessions") : {})}
       >
         {navigator.filter((row) => row.band === "previous").map(renderNavigatorRow)}
-        {previousEntries.length === 0 && listingPending ? (
-          <SessionBandRowSkeleton primaryWidth="w-2/3" />
-        ) : previousEntries.length === 0 && sessionsUnavailable === null && listingFailed ? (
+        {previousEntries.length === 0 && listingPending ? null : previousEntries.length === 0 &&
+          activeRows.length > 0 &&
+          sessionsUnavailable === null &&
+          listingFailed ? (
           <SidebarMenuItem>
-            <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
+            <PanelEmptyState
+              illustration="failed"
+              status="failed"
+              title="Couldn't load sessions"
+              action={{
+                label: "Try again",
+                onAction: () => void refreshProjectSessions(project.id),
+              }}
+            />
           </SidebarMenuItem>
         ) : null}
       </SidebarMenu>

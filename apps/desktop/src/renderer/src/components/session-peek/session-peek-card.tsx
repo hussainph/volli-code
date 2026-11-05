@@ -54,7 +54,6 @@ import { InteractionCard } from "@renderer/components/chat/interaction-ui";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Spinner } from "@renderer/components/ui/spinner";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { relativeTime } from "@renderer/lib/relative-time";
@@ -284,11 +283,7 @@ function Summary({
     <CardBlock icon={<HistoryIcon className="size-4 text-muted-foreground" />}>
       <div className="text-muted-foreground" data-summary-state={state} aria-busy={loading}>
         {state === "loading" ? (
-          <div role="status" aria-label="Reading the session" className="flex flex-col gap-2">
-            <Skeleton aria-hidden className="h-2 w-full" />
-            <Skeleton aria-hidden className="h-2 w-[90%]" />
-            <Skeleton aria-hidden className="h-2 w-[65%]" />
-          </div>
+          <div role="status" aria-label="Reading the session" className="flex flex-col gap-2"></div>
         ) : state === "unavailable" ? (
           <p>Summary unavailable</p>
         ) : (

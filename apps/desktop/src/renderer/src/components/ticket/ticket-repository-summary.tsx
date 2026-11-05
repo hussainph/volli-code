@@ -128,7 +128,6 @@ import { worktreeGlance } from "@renderer/components/ticket/worktree-glance-mode
 import { Button } from "@renderer/components/ui/button";
 import { Badge } from "@renderer/components/ui/badge";
 import { Checkbox } from "@renderer/components/ui/checkbox";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
 import {
   Dialog,
@@ -1220,10 +1219,7 @@ export function TicketRepositorySummary({
                   role="status"
                   aria-label="Reading worktree"
                   className="flex flex-col gap-2 px-4 py-4"
-                >
-                  <Skeleton className="h-4 w-3/4" />
-                  <Skeleton className="h-4 w-1/2" />
-                </div>
+                ></div>
               ) : status === null ? null : (
                 <WorktreeStateStrip status={status} />
               )}

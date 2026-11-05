@@ -70,7 +70,6 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { cn } from "@renderer/lib/utils";
@@ -222,18 +221,7 @@ function CheckoutBody({
     workingCopy.status === "loading" ||
     workingCopy.status === "resolving"
   ) {
-    return (
-      <div
-        role="status"
-        aria-label="Reading checkout"
-        data-testid="home-checkout-loading"
-        className="flex flex-col gap-2"
-      >
-        {["w-3/5", "w-2/5"].map((width) => (
-          <Skeleton aria-hidden key={width} className={cn("h-4", width)} />
-        ))}
-      </div>
-    );
+    return null;
   }
   if (workingCopy.status === "error") {
     // The rail's fault rule: the sentence a person needs on the row, the

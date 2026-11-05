@@ -54,7 +54,6 @@ import { Switch } from "@renderer/components/ui/switch";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
 import { ModelControl } from "../kit/model-control";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Notice } from "@renderer/components/ui/notice";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -275,10 +274,7 @@ export function ModelAccessSettings({
       ) : null}
       {hostName === undefined && !agents && loading && providers.length === 0 ? (
         <PrefSection title="Accounts" icon={ProcessorIcon}>
-          <div className="space-y-4 p-4" aria-label="Loading model accounts">
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-          </div>
+          <div className="space-y-4 p-4" aria-label="Loading model accounts"></div>
         </PrefSection>
       ) : null}
       {hostName === undefined && !agents ? (
@@ -315,11 +311,7 @@ export function ModelAccessSettings({
           }
         >
           {loading ? (
-            <div className="space-y-4 p-4" aria-label="Loading model defaults">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-            </div>
+            <div className="space-y-4 p-4" aria-label="Loading model defaults"></div>
           ) : (
             loadError === null &&
             PURPOSE_ROWS.filter((row) => row.depth === 0).map((row) => renderDefaultRow(row))
@@ -358,9 +350,7 @@ export function ModelAccessSettings({
       {agents && (
         <PrefSection title="Compaction" icon={CollapseVerticalIcon}>
           {loading ? (
-            <div className="p-4" aria-label="Loading compaction">
-              <Skeleton className="h-8 w-full" />
-            </div>
+            <div className="p-4" aria-label="Loading compaction"></div>
           ) : (
             loadError === null && (
               <PrefRow label="Automatic compaction" testId="auto-compaction">

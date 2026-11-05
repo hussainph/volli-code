@@ -43,7 +43,6 @@ import {
   SelectItem,
 } from "@renderer/components/ui/select";
 import { Spinner } from "@renderer/components/ui/spinner";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
@@ -621,10 +620,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
           role="status"
           aria-label="Reading logs"
           className="flex flex-col gap-2 rounded-container border border-border bg-card p-4"
-        >
-          <Skeleton aria-hidden className="h-4 w-3/4" />
-          <Skeleton aria-hidden className="h-4 w-1/2" />
-        </div>
+        ></div>
       ) : lines.length === 0 &&
         sources.some((source) => views[source.id]?.status === "failed") ? null : (
         <LogRows

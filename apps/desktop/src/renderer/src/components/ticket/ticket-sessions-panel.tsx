@@ -49,8 +49,7 @@ import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { SessionTeamMark, SessionShare } from "@renderer/components/sessions/session-team";
@@ -428,19 +427,6 @@ function SessionRow({
  * and the status phrase at the right. No words — the rows that replace this
  * carry the words.
  */
-function SessionListSkeleton() {
-  return (
-    <div
-      className="flex flex-col gap-1"
-      {...loadingRegionProps("sessions")}
-      data-testid="ticket-sessions-loading"
-    >
-      {(["w-3/5", "w-2/5"] as const).map((width) => (
-        <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-12" />
-      ))}
-    </div>
-  );
-}
 
 /**
  * What a chat row's mark is NAMED after: the provider whose logo it draws, or
@@ -1170,12 +1156,12 @@ export function TicketSessionsPanel({
             />
           </div>
         ) : null}
-        {feedback?.kind === "reading" ? (
-          // The baseline read is in flight. The heading and its "+" stay live
-          // above — a pending list blocks nothing about starting a Session —
-          // and the rows hold their box below.
-          <SessionListSkeleton />
-        ) : null}
+        {feedback?.kind === "reading"
+          ? // The baseline read is in flight. The heading and its "+" stay live
+            // above — a pending list blocks nothing about starting a Session —
+            // and the rows hold their box below.
+            null
+          : null}
         {/* A refused baseline knows nothing about this Ticket's Sessions. The
             toast carries the bridge detail; this keeps the block from claiming
             the roster is empty when it has never been read, and carries the one

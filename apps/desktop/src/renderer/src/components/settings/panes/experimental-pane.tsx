@@ -1,4 +1,3 @@
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { ExternalIcon, ExperimentalIcon, WarningIcon } from "@renderer/components/ui/icon";
 
 import * as React from "react";
@@ -89,10 +88,7 @@ export function ExperimentalSettings() {
   if (state.status === "loading")
     return (
       <PrefSection title="Experimental" icon={ExperimentalIcon}>
-        <div className="space-y-4 p-4" aria-label="Loading experiments">
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-        </div>
+        <div className="space-y-4 p-4" aria-label="Loading experiments"></div>
       </PrefSection>
     );
   if (state.status === "error")

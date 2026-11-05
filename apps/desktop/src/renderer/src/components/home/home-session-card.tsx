@@ -110,7 +110,6 @@ import {
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
@@ -339,9 +338,7 @@ function WorkingCopyRows({
     return (
       <div aria-hidden data-testid="home-working-copy-loading">
         {["w-3/5", "w-2/5"].map((width) => (
-          <div key={width} className={cn(CARD_ROW, RAIL_CARD_SEAM)}>
-            <Skeleton className={cn("h-3", width)} />
-          </div>
+          <div key={width} className={cn(CARD_ROW, RAIL_CARD_SEAM)}></div>
         ))}
       </div>
     );

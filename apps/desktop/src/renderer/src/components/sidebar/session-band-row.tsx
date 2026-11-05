@@ -85,9 +85,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { ListRow, type LoadingBarWidth } from "@renderer/components/ui/list-row";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { sessionActivityDotState } from "@renderer/components/ui/session-activity-status";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { compactAge, relativeTime } from "@renderer/lib/relative-time";
@@ -834,27 +833,3 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
     </SidebarMenuButton>
   );
 });
-
-/**
- * The box a band row will take, while the project's listing is being read
- * (VC-383).
- *
- * The Active row's 52px two-line footprint and 24px Session mark, so real
- * rows land where their placeholders stood. The shorter bars keep their
- * measured 6px join. Widths are per row and fixed: the band is waiting, and
- * redrawing a placeholder adds motion to a surface that has none to give.
- * Inert, with no hover fill: there is nothing under it to activate.
- */
-export function SessionBandRowSkeleton({ primaryWidth }: { primaryWidth: LoadingBarWidth }) {
-  return (
-    <SidebarMenuItem aria-hidden>
-      <div className="flex min-h-13 w-full items-center gap-2 rounded-md px-2 py-1.5">
-        <Skeleton className="size-6 shrink-0 rounded-control" />
-        <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <Skeleton className={cn("h-3.5", primaryWidth)} />
-          <Skeleton className="h-3 w-1/3" />
-        </span>
-      </div>
-    </SidebarMenuItem>
-  );
-}

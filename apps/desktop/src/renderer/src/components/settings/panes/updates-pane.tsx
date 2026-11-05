@@ -1,4 +1,3 @@
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
@@ -143,9 +142,7 @@ export function UpdatesPane() {
                 </Button>
               }
             />
-          ) : channel === null ? (
-            <Skeleton className="h-8 w-40" aria-label="Loading release channel" />
-          ) : (
+          ) : channel === null ? null : (
             <Select
               value={channel}
               disabled={channel === null || saving}

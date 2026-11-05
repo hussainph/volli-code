@@ -33,14 +33,28 @@ function LoadingRows({ label }: { label: string }) {
   );
 }
 
-function ErrorRow({ message, onRetry }: { message: string; onRetry(): void }) {
+function ErrorRow({
+  label,
+  message,
+  onRetry,
+}: {
+  label: string;
+  message: string;
+  onRetry(): void;
+}) {
   return (
-    <PanelEmptyState
-      illustration="failed"
-      status="failed"
-      title={message}
-      action={{ label: "Try again", onAction: onRetry }}
-    />
+    <div>
+      <PanelEmptyState
+        illustration="failed"
+        status="failed"
+        title={`Couldn't load ${label.toLowerCase()}`}
+        action={{ label: "Try again", onAction: onRetry }}
+      />
+      <details className="px-4 pb-3 text-ui text-muted-foreground">
+        <summary>Details</summary>
+        <p className="break-words">{message}</p>
+      </details>
+    </div>
   );
 }
 
@@ -111,7 +125,7 @@ export function AsyncSection<T>({
       {before}
       {state.status === "loading" ? <LoadingRows label={title} /> : null}
       {state.status === "error" ? (
-        <ErrorRow message={state.message} onRetry={state.onRetry} />
+        <ErrorRow label={title} message={state.message} onRetry={state.onRetry} />
       ) : null}
       {state.status === "ready" ? (
         isEmpty?.(state.data) ? (

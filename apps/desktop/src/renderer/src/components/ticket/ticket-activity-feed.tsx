@@ -57,9 +57,7 @@ import {
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
 } from "@renderer/components/ui/dropdown-menu";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   buildActivityFeed,
   commentAuthorLabel,
@@ -652,25 +650,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         </DropdownMenu>
       </div>
 
-      {pending ? (
-        // The cache has no landed baseline for this ticket yet (VC-383). This
-        // used to be an empty list — not the empty sentence, not a placeholder,
-        // nothing between the heading and the composer — so the feed read as
-        // absent rather than as on its way. Two bunch rows' worth of the feed's
-        // own line: a glyph's slot and a sentence, at `text-ui`.
-        <ul
-          className="flex flex-col gap-2"
-          {...loadingRegionProps("activity")}
-          data-testid="ticket-activity-loading"
-        >
-          {["w-3/5", "w-2/5"].map((width) => (
-            <li key={width} aria-hidden className="flex items-center gap-2 px-1">
-              <Skeleton className="size-3.5 shrink-0 rounded-sm" />
-              <Skeleton className={cn("h-3.5", width)} />
-            </li>
-          ))}
-        </ul>
-      ) : failed ? (
+      {pending ? null : failed ? (
         // The toast owns the detail. This line only replaces the skeleton with
         // the concise truth that the activity baseline did not arrive.
         <PanelEmptyState

@@ -7,7 +7,6 @@ import type { AgentObservabilityView } from "../../../../../ipc/contract";
 import { agentObservabilityPanel } from "@renderer/components/pages/agent-observability-model";
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
 import { StatusDot } from "@renderer/components/ui/status-dot";
@@ -104,10 +103,7 @@ export function AgentObservabilitySettings() {
   if (state.status === "loading") {
     return (
       <PrefSection title="Agent telemetry" icon={TrendIcon}>
-        <div className="space-y-4 p-4" aria-label="Loading telemetry settings">
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-        </div>
+        <div className="space-y-4 p-4" aria-label="Loading telemetry settings"></div>
       </PrefSection>
     );
   }

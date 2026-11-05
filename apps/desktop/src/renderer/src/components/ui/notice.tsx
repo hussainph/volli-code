@@ -157,8 +157,16 @@ export function Notice({
           >
             {title}
           </p>
-          {detail === undefined ? null : <p className="mt-1 text-ui">{detail}</p>}
+          {detail === undefined || tone === "error" ? null : (
+            <p className="mt-1 text-ui">{detail}</p>
+          )}
         </div>
+        {tone === "error" && detail !== undefined ? (
+          <details className="mt-1 text-ui">
+            <summary>Details</summary>
+            <div className="[overflow-wrap:anywhere]">{detail}</div>
+          </details>
+        ) : null}
         {(expandable && (overflowing || expanded)) || (tone === "error" && plainText) ? (
           <div className="flex flex-wrap items-center gap-2 pt-2">
             {expandable && (overflowing || expanded) ? (

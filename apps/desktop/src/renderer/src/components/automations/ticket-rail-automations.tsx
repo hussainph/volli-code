@@ -124,8 +124,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { ListRow, ListRowSkeleton, type LoadingBarWidth } from "@renderer/components/ui/list-row";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
@@ -335,47 +334,11 @@ function useRunLaunches(): RunLaunches {
   };
 }
 
-/**
- * The FIRST read's wait, at the list's own height.
- *
- * The rail re-reads on EVERY planning change — any board move, any label
- * edit, this Ticket's own status pill — and it used to draw that wait as one
- * line, "Reading automations…". A block that is three rows tall collapsing to
- * one line and re-expanding a moment later moves everything under it by a
- * hundred pixels, twice, for a read that almost always lands the same rows it
- * left.
- *
- * A re-read no longer reaches this at all: the rows it last read stay drawn
- * and the eyebrow carries the caveat, because a skeleton over retained data
- * hides the very thing the reader was looking at to say something they can
- * read in the heading instead. What is left here is the case with nothing to
- * retain — a first read, or an arrival on a project this block has not read —
- * drawn as two skeleton rows so the first landing moves as little as it can.
- * `ListRowSkeleton` is the roster's own placeholder, at the row's own inset
- * and height.
- */
-const UNREAD_WIDTHS: readonly LoadingBarWidth[] = ["w-2/5", "w-3/4", "w-1/2"];
-
+/** A re-read retains its last-good rows; first reads fabricate nothing. */
 const NO_ROWS: readonly RailAutomationRow[] = [];
 
 function UnreadRows() {
-  const rows = 2;
-  return (
-    <div
-      className="flex flex-col"
-      data-testid="ticket-rail-automations-unread"
-      {...loadingRegionProps("automations")}
-    >
-      {Array.from({ length: rows }, (_, index) => (
-        <ListRowSkeleton
-          key={index}
-          mark
-          primaryWidth={UNREAD_WIDTHS[index % UNREAD_WIDTHS.length] ?? "w-1/2"}
-          trailingWidth="w-12"
-        />
-      ))}
-    </div>
-  );
+  return null;
 }
 
 /**

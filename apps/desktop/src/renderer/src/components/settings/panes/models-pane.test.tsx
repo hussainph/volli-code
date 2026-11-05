@@ -32,7 +32,7 @@ it("holds account geometry before model defaults while settings are unread", () 
   expect(html.indexOf("Loading model accounts")).toBeLessThan(
     html.indexOf("Loading model defaults"),
   );
-  expect(html).toContain('data-slot="skeleton"');
+  expect(html).not.toContain('data-slot="skeleton"');
   expect(html).not.toContain("Code Mode");
   expect(html).not.toContain("Decision model");
   expect(html).not.toContain('aria-label="Model:');
@@ -40,7 +40,8 @@ it("holds account geometry before model defaults while settings are unread", () 
 it("separates agent behavior from model accounts and tier defaults", () => {
   const html = markup(true);
   expect(html).toContain("Decision model");
-  expect(html).toContain("Code Mode");
+  // Code Mode paints no unverified controls until the policy read lands.
+  expect(html).not.toContain("Code Mode");
   expect(html).toContain("Loading compaction");
   expect(html).not.toContain("Default models");
   expect(html).not.toContain("Loading model accounts");

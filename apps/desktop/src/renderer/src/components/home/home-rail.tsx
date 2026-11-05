@@ -98,8 +98,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
@@ -445,17 +444,6 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
           variant="search"
           className="text-ui md:text-ui"
         />
-      ) : null}
-      {!hasData && feedback?.kind === "reading" ? (
-        <div
-          className="flex flex-col"
-          {...loadingRegionProps("sessions")}
-          data-testid="home-sessions-loading"
-        >
-          {(["w-3/5", "w-2/5"] as const).map((width) => (
-            <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-10" />
-          ))}
-        </div>
       ) : null}
       {/* A refused baseline knows nothing about this Project's durable
           Sessions. The toast has the bridge detail; this line keeps the rail

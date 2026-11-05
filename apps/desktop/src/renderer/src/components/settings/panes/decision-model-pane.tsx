@@ -1,4 +1,3 @@
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { DirectionsIcon, WarningIcon } from "@renderer/components/ui/icon";
 
@@ -295,10 +294,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   if (state.status === "loading") {
     return (
       <PrefSection title="Decision model" icon={DirectionsIcon}>
-        <div className="space-y-4 p-4" aria-label="Loading decision model">
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-        </div>
+        <div className="space-y-4 p-4" aria-label="Loading decision model"></div>
       </PrefSection>
     );
   }

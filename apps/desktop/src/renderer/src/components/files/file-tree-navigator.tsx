@@ -16,7 +16,6 @@ import { Button } from "@renderer/components/ui/button";
 import {
   NewFileRailAction,
   RailHeadingReadStatus,
-  RailPanelSkeleton,
   RailReadFaultBody,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
@@ -237,9 +236,7 @@ function NavigatorScope({
           />
         }
       />
-      {feedback?.place === "body" && feedback.kind === "reading" ? (
-        <RailPanelSkeleton label="files" testId="file-tree-loading" />
-      ) : (
+      {feedback?.place === "body" && feedback.kind === "reading" ? null : (
         <>
           <RailReadFaultBody
             feedback={feedback}

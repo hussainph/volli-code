@@ -76,7 +76,6 @@ import {
   RAIL_PANEL_MARGIN,
   RailFaultBanner,
   RailHeadingReadStatus,
-  RailPanelSkeleton,
   RailReadFaultBody,
   RailRowActions,
 } from "@renderer/components/ticket/rail-panel-parts";
@@ -798,9 +797,7 @@ export function TicketChangesPanel({
             title={ticket.usesWorktree ? "No worktree yet" : "Runs in the project checkout"}
           />
         </div>
-      ) : !loaded ? (
-        <RailPanelSkeleton label="changes" testId="ticket-changes-loading" />
-      ) : (
+      ) : !loaded ? null : (
         <TicketChangesList
           rows={rows}
           // Only a landed read may say the branch is clean. A filtered list

@@ -193,7 +193,6 @@ import { notAvailableOn, useRemoteHostName } from "@renderer/components/hosts/us
 import { useRemoteSessionOnScreen } from "@renderer/lib/remote-sessions";
 import { useCloudSessionOnScreen } from "@renderer/lib/use-cloud-session-on-screen";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
-import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -2011,13 +2010,7 @@ function ChatPlaneContent({
                       </ContentColumn>
                     ) : transcriptMessages.length === 0 &&
                       session.historyBefore === null &&
-                      historyPending ? (
-                      // History is on its way (VC-383). A null projection with no
-                      // Draft behind it means the snapshot has not landed, and the
-                      // empty state below would say "nothing was ever said here"
-                      // about a Session that may hold a thousand turns.
-                      <TranscriptSkeleton />
-                    ) : quietEmpty ? (
+                      historyPending ? null : quietEmpty ? ( // Pending history is neither an empty Session nor fabricated rows.
                       // Where this Session runs, drawn (VC-55). It replaces the bare
                       // mark that stood here — see `empty/chat-empty-state.tsx` for why
                       // that reversal is deliberate. What blocks TYPING still sits on

@@ -339,8 +339,9 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(loading().length).toBe(0);
     expect(bandText("active")).not.toContain("No active sessions");
     expect(bandText("previous")).not.toContain("Nothing yet");
-    expect(bandText("active")).toContain("Couldn't load sessions.");
-    expect(bandText("previous")).toContain("Couldn't load sessions.");
+    expect(bandText("active")).toContain("Couldn't load sessions");
+    expect(bandText("previous")).not.toContain("Couldn't load sessions");
+    expect(container?.querySelectorAll('[role="alert"]')).toHaveLength(1);
     expect(container?.querySelector("[data-next-action]")).toBeNull();
   });
 

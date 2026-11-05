@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { AutomationIcon } from "@renderer/components/ui/icon";
 
@@ -85,7 +86,7 @@ export function CloudRunHistory({
   return (
     <section className="flex flex-col gap-1">
       {loaded && rows.length === 0 ? (
-        <p className="py-2 text-ui text-muted-foreground">No runs yet</p>
+        <PanelEmptyState illustration="automation" title="No runs yet" />
       ) : null}
       {!loaded ? (
         <p role="status" aria-busy="true" className="text-ui text-muted-foreground">

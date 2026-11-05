@@ -35,7 +35,6 @@ import {
 } from "@renderer/components/settings/kit";
 import { MODELS_CATEGORY_KEY } from "@renderer/components/settings/settings-groups";
 import { ModelControl } from "../kit/model-control";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Notice } from "@renderer/components/ui/notice";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { writeThrough } from "@renderer/stores/mutate";
@@ -154,9 +153,7 @@ export function SessionsPane({ project }: { project: Project }) {
              * for both controls beside the label. Stack this one compound
              * value rather than clip its provider identity or the reset.
              */}
-            {modelCatalogStatus === "loading" ? (
-              <Skeleton className="h-8 w-80" role="status" aria-label="Loading models" />
-            ) : modelCatalogStatus === "error" ? (
+            {modelCatalogStatus === "loading" ? null : modelCatalogStatus === "error" ? (
               <Notice tone="error" title="Couldn't read models" />
             ) : modelCatalogStatus === "unavailable" ? (
               <span className="text-ui text-muted-foreground">

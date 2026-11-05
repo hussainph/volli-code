@@ -29,7 +29,6 @@ import type { RailReadFeedback } from "@renderer/components/ticket/rail-read-fee
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
@@ -421,18 +420,19 @@ export function RailReadFaultBody({
 }) {
   if (feedback === null || feedback.place !== "body" || feedback.kind !== "failed") return null;
   return (
-    <div
-      data-testid={testId}
-      data-read-status="failed"
-      title={detail ?? undefined}
-      className={className}
-    >
+    <div data-testid={testId} data-read-status="failed" className={className}>
       <PanelEmptyState
         illustration="failed"
         status="failed"
         title={feedback.face.replace(/[.]$/, "")}
         action={{ label: "Retry", onAction: onRetry }}
       />
+      {detail ? (
+        <details className="px-4 text-ui text-muted-foreground">
+          <summary>Details</summary>
+          <p className="break-words">{detail}</p>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -725,13 +725,6 @@ export function RailFaultBanner({
  * wait is a list — and it holds the column's width steady instead of collapsing
  * to a sentence and snapping back.
  */
-export function RailPanelSkeleton({ label, testId }: { label: string; testId: string }) {
-  return (
-    <div className="flex flex-col gap-2 p-4" data-testid={testId} aria-label={`Loading ${label}`}>
-      <LoadingLabel>Loading {label}</LoadingLabel>
-    </div>
-  );
-}
 
 /**
  * New File, in the navigator header, at BOTH scopes (VC-191).

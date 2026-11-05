@@ -383,7 +383,7 @@ describe("HomeRail", () => {
     useUiStore.getInitialState().railFolds = { ...DEFAULT_RAIL_FOLDS, worktree: true };
     // Before any read: the body waits, and the row states no fact — a
     // placeholder fact would be a claim about a tree nobody has looked at.
-    expect(draw("chat:s1")).toContain('data-testid="home-checkout-loading"');
+    expect(draw("chat:s1")).not.toContain('data-testid="home-checkout-loading"');
     expect(draw("chat:s1")).not.toContain('data-testid="home-checkout-glance"');
 
     useWorkingCopyStore.getInitialState().byScope = {
@@ -426,7 +426,7 @@ describe("HomeRail", () => {
     // project has no Sessions.
     const markup = draw(HOME_BOARD_TAB_ID);
 
-    expect(markup).toContain('data-testid="home-sessions-loading"');
+    expect(markup).not.toContain('data-testid="home-sessions-loading"');
     expect(markup).not.toContain("No sessions");
   });
 

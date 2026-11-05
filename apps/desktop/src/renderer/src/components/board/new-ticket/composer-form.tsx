@@ -500,6 +500,7 @@ export function ComposerForm({
         />
         <MonacoDocumentEditor
           ref={editorRef}
+          deferUntilPaint
           // No ticket exists yet, so the draft body borrows a ticket-body
           // identity under a reserved id. Ticket ids are UUIDs, so this can
           // never collide with a real body's model.

@@ -17,8 +17,7 @@
  *
  * The header's rule is the system's centred inset divider, not a full-bleed
  * border, and the states under it are the shared ones: a first read holds the
- * prose's shape with skeleton bars inside a loading region (no "Loading" text
- * on screen), and a failed read is a `Notice` carrying its own Retry.
+ * loading region without fabricated prose (no "Loading" text on screen), and a failed read is a `Notice` carrying its own Retry.
  */
 
 import type { AsyncState } from "@renderer/components/settings/kit";
@@ -34,7 +33,6 @@ import {
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { Notice } from "@renderer/components/ui/notice";
 import { Separator } from "@renderer/components/ui/separator";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 
 /** The body a preview shows. `truncated` when the reader stopped at its cap. */
 export interface PreviewBody {
@@ -100,13 +98,7 @@ export function ContentPreviewDialog({
 
 function PreviewContent({ body }: { body: PreviewState }) {
   if (body.status === "loading") {
-    return (
-      <div className="flex flex-col gap-2" {...loadingRegionProps("file")}>
-        <Skeleton className="h-4 w-2/3" />
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-5/6" />
-      </div>
-    );
+    return <div className="flex flex-col gap-2" {...loadingRegionProps("file")}></div>;
   }
   if (body.status === "unavailable") {
     return <p className="text-ui text-muted-foreground">{body.message}</p>;

@@ -38,6 +38,7 @@ export function CommandsPane({ project }: { project: Project }) {
       state={state}
       isEmpty={(data) => data.templates.length === 0}
       empty="No commands"
+      emptyAction={{ label: "Reload", onAction: reload }}
     >
       {(data) => <CommandsTable templates={data.templates} filter={filter} onFilter={setFilter} />}
     </AsyncSection>
