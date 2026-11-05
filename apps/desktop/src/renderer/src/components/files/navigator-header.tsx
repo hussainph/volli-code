@@ -85,7 +85,7 @@ export function FilesNavigatorHeader({
       className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-2"
     >
       <div data-slot="navigator-header-band" className="flex min-h-7 items-center gap-1">
-        <SectionHeading as="h3" className="min-w-0 flex-1">
+        <SectionHeading as="h3" aria-label={cwd === "" ? root : cwd} className="min-w-0 flex-1">
           {cwd === "" ? (
             <ValueReveal
               term="Scope"
