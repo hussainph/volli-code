@@ -1,3 +1,4 @@
+import { scrollEdgeMask } from "@renderer/components/ui/scroll-edge-mask";
 import * as React from "react";
 import {
   ChevronDownIcon as CaretDown,
@@ -242,6 +243,12 @@ export function FileTree({
         tabIndex={0}
         aria-activedescendant={focused ? rowId(focused) : undefined}
         className="group/tree relative min-h-0 flex-1 overflow-auto outline-none"
+        style={{
+          maskImage: scrollEdgeMask({
+            atTop: scroll <= 0,
+            atBottom: scroll + height >= rows.length * ROW_HEIGHT + headingHeight - 1,
+          }),
+        }}
         onKeyDown={keyDown}
         onScroll={(event) => setScroll(event.currentTarget.scrollTop)}
       >

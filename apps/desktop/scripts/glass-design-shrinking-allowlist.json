@@ -34,7 +34,7 @@
     {
       "path": "apps/desktop/src/renderer/src/components/browser/session-cursor.css",
       "rule": "motion-literal",
-      "maxCount": 12,
+      "maxCount": 8,
       "reason": "Remote cursor presence, click and caret clocks retain their established browser-pointer lifetimes in this pass."
     },
     {
@@ -144,12 +144,6 @@
       "rule": "colour-literal",
       "maxCount": 1,
       "reason": "White project identity initials stay legible over authored project swatches rather than appearance-dependent body ink."
-    },
-    {
-      "path": "apps/desktop/src/renderer/src/components/sidebar/sidebar-scroll.tsx",
-      "rule": "colour-literal",
-      "maxCount": 4,
-      "reason": "Opaque black is an alpha-mask endpoint for scroll-edge fades, never visible paint."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor-model.ts",

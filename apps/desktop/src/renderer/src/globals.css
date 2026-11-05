@@ -3704,3 +3704,11 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
     transform: var(--overlay-from-transform, none);
   }
 }
+
+/* Light writing glass needs a dark boundary as well as the bright refractive
+ * rim: a plus-lighter rim alone vanishes over nearly white paper. */
+:root.light .session-prompt.glass {
+  box-shadow:
+    inset 0 0 0 0.5px var(--glass-edge),
+    var(--shadow-card);
+}
