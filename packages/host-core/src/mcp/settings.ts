@@ -242,7 +242,9 @@ export class McpSettingsService {
     );
   }
 
-  list(projectId: string): readonly McpServerRecord[] {
+  /** Settings lists shared entries; an attachment lists only its frozen tool identities. */
+  list(projectId: string, tools?: readonly McpToolDefinition[]): readonly McpServerRecord[] {
+    if (tools !== undefined) return this.forSession(projectId, tools);
     return this.#paths.kind === "cloud"
       ? listMcpServers(this.#db, projectId)
       : listGlobalMcpServers(this.#db);
@@ -397,6 +399,8 @@ export class McpSettingsService {
     const prepared = this.#prepare(input.projectId, input.server);
     if (!prepared.ok) return prepared;
     const existing = this.#get(prepared.server.id);
+    const storedBefore = JSON.stringify(existing);
+    const changedWhileConnecting = `${prepared.server.name} was changed while this was connecting, so nothing was written. Retry to use the current configuration.`;
     if (
       this.global &&
       existing &&
@@ -449,11 +453,8 @@ export class McpSettingsService {
       // (a header added, a secret stored) must not be written over by a save
       // that never saw it — nor have that secret pruned by `#keepSecrets`.
       const latest = this.#get(prepared.server.id);
-      if ((latest?.updatedAt ?? null) !== (existing?.updatedAt ?? null)) {
-        return {
-          ok: false,
-          error: `${prepared.server.name} was changed while this was connecting, so nothing was written. Retry to use the current configuration.`,
-        };
+      if (JSON.stringify(latest) !== storedBefore) {
+        return { ok: false, error: changedWhileConnecting };
       }
       const invalid = catalog.filter((tool) => tool.definition === null);
       if (existing !== undefined && invalid.length > 0) {
@@ -493,6 +494,10 @@ export class McpSettingsService {
       const blocked = mcpConnectionBlock(error);
       const routed = blocked === undefined ? {} : { blocked };
       if (existing === undefined) return { ok: false, error: errorText, ...routed };
+      // A failed discovery has no more right to overwrite a newer Settings
+      // edit than a successful one, including two writes in one millisecond.
+      if (JSON.stringify(this.#get(existing.id)) !== storedBefore)
+        return { ok: false, error: changedWhileConnecting };
       return {
         ok: false,
         error: errorText,

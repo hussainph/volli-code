@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   MCP_DESCRIPTION_MAX_CHARS,
@@ -280,6 +281,31 @@ interface GlobalMcpState {
   aliases: Record<string, string>;
   retained: McpServerRow[];
   names: Record<string, string>;
+  /** Last imported/mirrored legacy row, so N-1 edits are not mistaken for stale copies. */
+  legacy?: Record<string, string>;
+}
+
+function legacyFingerprint(row: McpServerRow): string {
+  // Fixed field order works for both SQLite's column order and our mirrors,
+  // without re-validating every catalog schema just to detect a changed row.
+  const fields = [
+    row.id,
+    row.project_id,
+    row.name,
+    row.enabled,
+    row.transport,
+    row.catalog,
+    row.stale,
+    row.error,
+    row.refreshed_at,
+    row.created_at,
+    row.updated_at,
+    row.source,
+    row.registry_type,
+    row.version,
+    row.digest,
+  ];
+  return createHash("sha256").update(JSON.stringify(fields)).digest("hex");
 }
 
 function storedRow(server: McpServerRecord): McpServerRow {
@@ -331,7 +357,12 @@ function globalState(db: Database.Database): GlobalMcpState {
       candidate.aliases === null ||
       typeof candidate.aliases !== "object" ||
       Array.isArray(candidate.aliases) ||
-      Object.values(candidate.aliases).some((id) => typeof id !== "string")
+      Object.values(candidate.aliases).some((id) => typeof id !== "string") ||
+      (candidate.legacy !== undefined &&
+        (candidate.legacy === null ||
+          typeof candidate.legacy !== "object" ||
+          Array.isArray(candidate.legacy) ||
+          Object.values(candidate.legacy).some((fingerprint) => typeof fingerprint !== "string")))
     ) {
       throw new Error("Stored global MCP configuration is invalid.");
     }
@@ -343,8 +374,28 @@ function globalState(db: Database.Database): GlobalMcpState {
     db,
     "SELECT * FROM mcp_servers ORDER BY created_at, id",
   ).all();
-  let changed = raw === undefined;
+  let changed = raw === undefined || state.legacy === undefined;
+  state.legacy ??= {};
   for (const row of legacy) {
+    const fingerprint = legacyFingerprint(row);
+    const previous: string | undefined = state.legacy[row.id];
+    if (previous !== fingerprint) {
+      state.legacy = { ...state.legacy, [row.id]: fingerprint };
+      changed = true;
+      // The machine record survives project deletion, but a real edit through
+      // the legacy writer must remain visible to credential and endpoint guards.
+      // Never re-import tombstoned ids, or overwrite the initial deduped union
+      // merely because an unchanged legacy row differs from that union.
+      if (previous !== undefined && imported.has(row.id)) {
+        const canonical = state.rows.findIndex((candidate) => candidate.id === row.id);
+        const retained = state.retained.findIndex((candidate) => candidate.id === row.id);
+        if (canonical >= 0) {
+          const name = state.names[row.id] === row.name ? state.rows[canonical]!.name : row.name;
+          state.rows[canonical] = { ...row, name };
+          state.names = { ...state.names, [row.id]: row.name };
+        } else if (retained >= 0) state.retained[retained] = row;
+      }
+    }
     if (imported.has(row.id)) continue;
     const server = mapRow(row);
     // Compare the complete sanitized transport: same executable/URL with
@@ -432,11 +483,17 @@ export function putGlobalMcpServer(
     else state.rows[index] = row;
     state.names = { ...state.names, [server.id]: server.name };
     if (!state.imported.includes(server.id)) state.imported.push(server.id);
+    // Record our own mirrors as the baseline. Only a subsequent legacy write
+    // may replace the machine row; otherwise deduped catalogs would be lost.
+    const mirror = (value: McpServerRecord): void => {
+      const saved = putMcpServer(db, value);
+      state.legacy = { ...state.legacy, [saved.id]: legacyFingerprint(storedRow(saved)) };
+    };
     // Keep the original owning project for N-1, never move or fabricate one.
     const legacy = getMcpServer(db, server.id);
     const owner = legacy?.projectId ?? server.projectId;
     if (prepared<[string], { id: string }>(db, "SELECT id FROM projects WHERE id = ?").get(owner)) {
-      putMcpServer(db, { ...checked, projectId: owner });
+      mirror({ ...checked, projectId: owner });
     }
     for (const [alias, canonical] of Object.entries(state.aliases)) {
       if (canonical !== server.id) continue;
@@ -446,8 +503,7 @@ export function putGlobalMcpServer(
         retained.updated_at = server.updatedAt;
       }
       const previous = getMcpServer(db, alias);
-      if (previous)
-        putMcpServer(db, { ...previous, enabled: server.enabled, updatedAt: server.updatedAt });
+      if (previous) mirror({ ...previous, enabled: server.enabled, updatedAt: server.updatedAt });
     }
     writeGlobal(db, state);
     return checked;

@@ -329,6 +329,61 @@ describe("machine-wide MCP fold-in", () => {
     expect(listGlobalMcpServers(ctx.db)).toHaveLength(2);
   });
 
+  it("reads machine records from before legacy fingerprints without losing the imported union", () => {
+    otherProject();
+    putMcpServer(ctx.db, record({ enabled: false }));
+    putMcpServer(
+      ctx.db,
+      record({ id: "same", projectId: "p2", catalog: record({ id: "same" }).catalog }),
+    );
+    const before = listGlobalMcpServers(ctx.db);
+    const raw = ctx.db
+      .prepare("SELECT value FROM app_state WHERE key = 'volli:mcp-global'")
+      .get() as { value: string };
+    const state = JSON.parse(raw.value);
+    delete state.legacy;
+    ctx.db
+      .prepare("UPDATE app_state SET value = ? WHERE key = 'volli:mcp-global'")
+      .run(JSON.stringify(state));
+
+    expect(listGlobalMcpServers(ctx.db)).toEqual(before);
+    expect(getMcpServer(ctx.db, "server-1")?.enabled).toBe(false);
+    expect(getGlobalMcpServer(ctx.db, "same")?.id).toBe("same");
+  });
+
+  it("observes legacy endpoint and credential-reference edits even when their timestamps are unchanged", () => {
+    putMcpServer(ctx.db, record());
+    const [original] = listGlobalMcpServers(ctx.db);
+    const transport = {
+      type: "streamable-http" as const,
+      url: "https://changed.example/mcp",
+      headers: [{ name: "Authorization", source: { kind: "secret" as const } }],
+    };
+    putMcpServer(ctx.db, { ...original!, transport });
+
+    expect(getGlobalMcpServer(ctx.db, "server-1")?.transport).toEqual(transport);
+    expect(listGlobalMcpServers(ctx.db)[0]?.transport).toEqual(transport);
+  });
+
+  it("keeps deduped selections across reads and mirrors, but observes an edited alias without borrowing its credentials", () => {
+    otherProject();
+    putMcpServer(ctx.db, record({ enabled: false }));
+    putMcpServer(
+      ctx.db,
+      record({ id: "same", projectId: "p2", catalog: record({ id: "same" }).catalog }),
+    );
+    const [global] = listGlobalMcpServers(ctx.db);
+    expect(global?.enabled).toBe(true);
+    expect(listGlobalMcpServers(ctx.db)[0]?.enabled).toBe(true);
+    putGlobalMcpServer(ctx.db, { ...global!, updatedAt: 200 });
+    expect(listGlobalMcpServers(ctx.db)[0]?.enabled).toBe(true);
+
+    const transport = { type: "streamable-http" as const, url: "https://alias.example/mcp" };
+    putMcpServer(ctx.db, { ...getMcpServer(ctx.db, "same")!, transport });
+    expect(getGlobalMcpServer(ctx.db, "same")?.transport).toEqual(transport);
+    expect(getGlobalMcpServer(ctx.db, "server-1")?.transport).toEqual(global?.transport);
+  });
+
   it("mirrors edits for N-1, keeps frozen duplicate ids, and survives deleting the source project", () => {
     otherProject();
     putMcpServer(ctx.db, record());

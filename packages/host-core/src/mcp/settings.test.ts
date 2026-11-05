@@ -162,6 +162,41 @@ describe("McpSettingsService", () => {
     expect(closed).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "preserves a same-millisecond Settings edit while discovery settles (failed: %s)",
+    async (fails) => {
+      const settings = service();
+      await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+      const connecting = new McpSettingsService({
+        db: ctx.db,
+        now: () => 100,
+        open: async (): Promise<McpProtocolClient> => ({
+          listTools: async () => {
+            expect(
+              settings.setEnabled({ projectId: "p1", serverId: draft.id, enabled: false }).ok,
+            ).toBe(true);
+            if (fails) throw new Error("discovery failed after the edit");
+            return listedTools;
+          },
+          callTool: vi.fn(),
+          close: closed,
+        }),
+      });
+
+      expect(
+        await connecting.save({ projectId: "p1", server: draft, enabledTools: ["echo"] }),
+      ).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("was changed while this was connecting"),
+      });
+      expect(settings.list("p1")[0]).toMatchObject({
+        enabled: false,
+        stale: false,
+        updatedAt: 100,
+      });
+    },
+  );
+
   it("a failed refresh preserves the last catalog and marks it stale with a clear error", async () => {
     const settings = service();
     await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
