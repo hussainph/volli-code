@@ -91,16 +91,9 @@ const TONE_STROKE: Record<UsageTone, string> = {
   critical: "text-destructive",
 };
 
-/**
- * Small, gentle, and off under reduced motion.
- *
- * Only the length of an arc and the mark's opacity move. A glyph in window
- * chrome that animated its position or its size would be a thing moving in the
- * corner of the eye all day; a bar that grows into its new value is the one
- * change worth seeing, because it says WHICH WAY the number went.
- */
+/** Arc geometry snaps to the reading; only occasional mark opacity may fade. */
 const MOTION =
-  "transition-[stroke-dasharray,opacity] duration-(--duration-sheet) ease-out motion-reduce:transition-none";
+  "transition-opacity duration-(--duration-menu-in) ease-out motion-reduce:transition-none";
 
 function circumference(r: number): number {
   return 2 * Math.PI * r;
@@ -171,7 +164,7 @@ function Arc({
       // — it draws a bead at the arc's start. In this glyph that would put a
       // speck at the foot of a spent window's bar, which reads as dirt on the
       // screen. Squaring the cap at zero is what actually erases it; the
-      // element stays mounted either way so the length can still animate.
+      // element stays mounted either way without an interpolated paint sequence.
       strokeLinecap={drawn <= 0 ? "butt" : "round"}
       // `${drawn} ${circle}` and never a dashoffset: an offset would slide the
       // arc's start as its length changed, so a shrinking bar would appear to

@@ -56,6 +56,25 @@ describe("Glass primitives", () => {
     expect(target.dataset).toEqual({ pointerMotion: "false" });
     expect(renderToStaticMarkup(tree)).toContain("--segment-index:1");
     expect(css).toContain('.segmented[data-pointer-motion="true"]::before');
+    const track = css.slice(css.indexOf(".segmented {"), css.indexOf(".segmented::before"));
+    const thumb = css.slice(
+      css.indexOf(".segmented::before"),
+      css.indexOf(".segmented[data-pointer-motion"),
+    );
+    expect(track).toContain("background: var(--glass-fill)");
+    expect(thumb).toContain("background: var(--accent-selected)");
+    expect(thumb).toContain("box-shadow: none");
+  });
+  it("keeps material defaults below hover/selected utilities and composes focus rings", () => {
+    expect(css).toMatch(/@layer components \{\s*\.glass-control/);
+    const layer = css.slice(
+      css.indexOf("@layer components {", css.indexOf("/* Material defaults")),
+      css.indexOf(".segmented {"),
+    );
+    expect(layer).toContain(".inspector-popup");
+    expect(layer).toContain(".search-capsule");
+    expect(css).toContain("var(--tw-ring-offset-shadow, 0 0 transparent)");
+    expect(css).toContain("var(--tw-ring-shadow, 0 0 transparent)");
   });
   it("uses outline-capsule search without losing the field label", () => {
     const html = renderToStaticMarkup(<Input variant="search" type="search" aria-label="Search" />);

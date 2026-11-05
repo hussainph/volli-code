@@ -6,6 +6,7 @@ import { ChevronDownIcon, ChevronUpIcon, CheckIcon } from "@renderer/components/
 import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 import { FIELD_INVALID } from "@renderer/components/ui/field-classes";
 import {
   MENU_INDICATOR,
@@ -21,7 +22,11 @@ import {
 } from "@renderer/components/ui/menu-classes";
 
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />;
+  return (
+    <MotionOriginRoot scope="select" {...props}>
+      {(motion) => <SelectPrimitive.Root data-slot="select" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function SelectGroup({ ...props }: React.ComponentProps<typeof SelectPrimitive.Group>) {
@@ -42,6 +47,7 @@ function SelectTrigger({
   size?: "sm" | "default";
   variant?: "regular" | "inspector";
 }) {
+  const motion = useMotionOriginProps("select", props);
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
@@ -52,10 +58,12 @@ function SelectTrigger({
         // keeps the keyboard ring — button.tsx's quiet recipe, not a field one.
         "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring",
         FIELD_INVALID,
-        variant === "inspector" && "inspector-popup",
+        variant === "inspector" &&
+          "inspector-popup justify-start border-0 bg-transparent px-0 shadow-none hover:shadow-none active:shadow-none",
         className,
       )}
       {...props}
+      {...motion}
     >
       {children}
       <SelectPrimitive.Icon asChild>
@@ -72,6 +80,7 @@ function SelectContent({
   align = "center",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  const motion = useMotionOriginProps("select", props, false, true);
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -100,6 +109,7 @@ function SelectContent({
         position={position}
         align={align}
         {...props}
+        {...motion}
       >
         <SelectScrollUpButton />
         <SelectPrimitive.Viewport

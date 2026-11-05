@@ -6,6 +6,21 @@ const classes = (variant: "default" | "destructive" | "outline" | "secondary" | 
   new Set(buttonVariants({ variant }).split(/\s+/));
 
 describe("control contrast recipe", () => {
+  it.each(["toolbar", "inspector"] as const)(
+    "preserves %s caller selection and keyboard focus",
+    (variant) => {
+      const html = renderToStaticMarkup(
+        <Button variant={variant} aria-pressed className="bg-(--accent-selected) text-primary-text">
+          Wrap
+        </Button>,
+      );
+      expect(html).toContain('aria-pressed="true"');
+      expect(html).toContain("bg-(--accent-selected)");
+      expect(html).toContain("aria-pressed:bg-(--accent-selected)");
+      expect(html).toContain("focus-visible:ring-2");
+      expect(html).toContain("hover:bg-accent");
+    },
+  );
   it("uses tonal accent ink and tint at rest and hover", () => {
     const recipe = classes("default");
     expect(recipe.has("bg-accent")).toBe(true);

@@ -5,8 +5,6 @@ import { Accordion as AccordionPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
 
-import "./disclosure.css";
-
 /** Grouped disclosure; the host may override the shared UI type baseline. */
 function Accordion({ ...props }: React.ComponentProps<typeof AccordionPrimitive.Root>) {
   return <AccordionPrimitive.Root data-slot="accordion" {...props} />;
@@ -54,7 +52,7 @@ function AccordionContent({
   return (
     <AccordionPrimitive.Content
       data-slot="accordion-content"
-      className="disclosure-content min-w-0 text-ui [--disclosure-height:var(--radix-accordion-content-height)]"
+      className="min-w-0 text-ui"
       {...props}
     >
       <div className={cn("min-w-0 max-w-full px-2 pb-2 [overflow-wrap:anywhere]", className)}>

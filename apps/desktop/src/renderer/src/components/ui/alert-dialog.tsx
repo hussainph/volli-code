@@ -4,16 +4,22 @@ import * as React from "react";
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 import { Button } from "@renderer/components/ui/button";
 
 function AlertDialog({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
+  return (
+    <MotionOriginRoot scope="alert-dialog" {...props}>
+      {(motion) => <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function AlertDialogTrigger({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Trigger>) {
-  return <AlertDialogPrimitive.Trigger data-slot="alert-dialog-trigger" {...props} />;
+  const motion = useMotionOriginProps("alert-dialog", props);
+  return <AlertDialogPrimitive.Trigger data-slot="alert-dialog-trigger" {...props} {...motion} />;
 }
 
 function AlertDialogPortal({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Portal>) {
@@ -24,6 +30,7 @@ function AlertDialogOverlay({
   className,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Overlay>) {
+  const motion = useMotionOriginProps("alert-dialog", props);
   return (
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
@@ -33,6 +40,7 @@ function AlertDialogOverlay({
         className,
       )}
       {...props}
+      {...motion}
     />
   );
 }
@@ -44,6 +52,7 @@ function AlertDialogContent({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: "default" | "sm";
 }) {
+  const motion = useMotionOriginProps("alert-dialog", props, false, true);
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
@@ -55,6 +64,7 @@ function AlertDialogContent({
           className,
         )}
         {...props}
+        {...motion}
       />
     </AlertDialogPortal>
   );

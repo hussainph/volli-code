@@ -6,6 +6,7 @@ import { ChevronRightIcon, CheckIcon } from "@renderer/components/ui/icon";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 import {
   MENU_INDICATOR,
   MENU_INDICATOR_MARK,
@@ -23,7 +24,11 @@ import {
 } from "@renderer/components/ui/menu-classes";
 
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
+  return (
+    <MotionOriginRoot scope="dropdown-menu" {...props}>
+      {(motion) => <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function DropdownMenuPortal({
@@ -35,7 +40,8 @@ function DropdownMenuPortal({
 function DropdownMenuTrigger({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
-  return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />;
+  const motion = useMotionOriginProps("dropdown-menu", props);
+  return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} {...motion} />;
 }
 
 function DropdownMenuContent({
@@ -43,6 +49,7 @@ function DropdownMenuContent({
   sideOffset = 4,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
@@ -57,6 +64,7 @@ function DropdownMenuContent({
           className,
         )}
         {...props}
+        {...motion}
       />
     </DropdownMenuPrimitive.Portal>
   );
@@ -173,7 +181,13 @@ function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"spa
 }
 
 function DropdownMenuSub({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>) {
-  return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />;
+  return (
+    <MotionOriginRoot scope="dropdown-menu" {...props} hover>
+      {(motion) => (
+        <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} {...motion} />
+      )}
+    </MotionOriginRoot>
+  );
 }
 
 function DropdownMenuSubTrigger({
@@ -181,11 +195,13 @@ function DropdownMenuSubTrigger({
   children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger>) {
+  const motion = useMotionOriginProps("dropdown-menu", props, true);
   return (
     <DropdownMenuPrimitive.SubTrigger
       data-slot="dropdown-menu-sub-trigger"
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, "plain-menu-row", className)}
       {...props}
+      {...motion}
     >
       {children}
       <ChevronRightIcon data-slot="menu-submenu-caret" strokeWidth={2.25} className="ml-auto" />
@@ -198,6 +214,7 @@ function DropdownMenuSubContent({
   className,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+  const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.SubContent
@@ -211,6 +228,7 @@ function DropdownMenuSubContent({
           className,
         )}
         {...props}
+        {...motion}
       />
     </DropdownMenuPrimitive.Portal>
   );

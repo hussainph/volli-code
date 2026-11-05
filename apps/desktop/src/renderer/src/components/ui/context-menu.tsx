@@ -20,6 +20,7 @@ import {
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 import {
   MENU_INDICATOR,
   MENU_INDICATOR_MARK,
@@ -37,13 +38,18 @@ import {
 } from "@renderer/components/ui/menu-classes";
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
-  return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />;
+  return (
+    <MotionOriginRoot scope="context-menu" {...props}>
+      {(motion) => <ContextMenuPrimitive.Root data-slot="context-menu" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function ContextMenuTrigger({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Trigger>) {
-  return <ContextMenuPrimitive.Trigger data-slot="context-menu-trigger" {...props} />;
+  const motion = useMotionOriginProps("context-menu", props);
+  return <ContextMenuPrimitive.Trigger data-slot="context-menu-trigger" {...props} {...motion} />;
 }
 
 function ContextMenuGroup({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Group>) {
@@ -55,7 +61,11 @@ function ContextMenuPortal({ ...props }: React.ComponentProps<typeof ContextMenu
 }
 
 function ContextMenuSub({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Sub>) {
-  return <ContextMenuPrimitive.Sub data-slot="context-menu-sub" {...props} />;
+  return (
+    <MotionOriginRoot scope="context-menu" {...props} hover>
+      {(motion) => <ContextMenuPrimitive.Sub data-slot="context-menu-sub" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function ContextMenuRadioGroup({
@@ -73,11 +83,13 @@ function ContextMenuSubTrigger({
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger> & {
   icon: Icon;
 }) {
+  const motion = useMotionOriginProps("context-menu", props, true);
   return (
     <ContextMenuPrimitive.SubTrigger
       data-slot="context-menu-sub-trigger"
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
       {...props}
+      {...motion}
     >
       <ItemIcon aria-hidden />
       {children}
@@ -95,6 +107,7 @@ function ContextMenuSubContent({
   className,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
+  const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.SubContent
@@ -108,6 +121,7 @@ function ContextMenuSubContent({
           className,
         )}
         {...props}
+        {...motion}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -117,6 +131,7 @@ function ContextMenuContent({
   className,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
+  const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -130,6 +145,7 @@ function ContextMenuContent({
           className,
         )}
         {...props}
+        {...motion}
       />
     </ContextMenuPrimitive.Portal>
   );
