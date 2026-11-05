@@ -5,6 +5,7 @@ const KNOWN_RULES = new Set([
   "colour-literal",
   "type-literal-size",
   "icon-duotone",
+  "icon-set-import",
   "material-hand-rolled-blur",
   "radius-off-scale",
   "motion-literal",

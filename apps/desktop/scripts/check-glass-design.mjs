@@ -18,6 +18,7 @@ import { reportFindings } from "./design-guardrail-allowlist.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../../..");
 const RENDERER = "apps/desktop/src/renderer/";
+const ICON_SEAM = `${RENDERER}src/components/ui/icon.tsx`;
 const GLOBALS = `${RENDERER}src/globals.css`;
 // The colour pipeline's renderer writer emits derived CSS variables, not UI paint.
 const CANVAS_PAINT = `${RENDERER}src/theme/canvas-paint.ts`;
@@ -25,6 +26,7 @@ const RULES = [
   "colour-literal",
   "type-literal-size",
   "icon-duotone",
+  "icon-set-import",
   "material-hand-rolled-blur",
   "radius-off-scale",
   "motion-literal",
@@ -188,6 +190,26 @@ export function inspectGlass(path, source) {
         checkString(node.value, node.start);
       if (node.type === "TemplateElement")
         checkString(node.value.cooked ?? node.value.raw, node.start);
+      if (
+        /^(?:ImportDeclaration|ImportExpression|ExportNamedDeclaration|ExportAllDeclaration)$/.test(
+          node.type,
+        ) &&
+        typeof node.source?.value === "string"
+      ) {
+        const name = node.source.value;
+        if (
+          /^@phosphor-icons\/react(?:\/|$)/.test(name) ||
+          (name.startsWith("@hugeicons/") &&
+            (path !== ICON_SEAM ||
+              !["@hugeicons/react", "@hugeicons/core-free-icons"].includes(name) ||
+              node.specifiers?.some((item) => item.type === "ImportNamespaceSpecifier")))
+        )
+          add(
+            "icon-set-import",
+            node.start,
+            "Use the semantic ui/icon seam and only the MIT free Stroke Rounded set",
+          );
+      }
       if (
         node.type === "ImportDeclaration" &&
         !/(?:^|\/)hooks\/use-reduced-motion$/.test(node.source.value) &&

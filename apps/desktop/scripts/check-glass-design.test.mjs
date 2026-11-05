@@ -9,6 +9,36 @@ const cssPath = PATH.replace(".tsx", ".css");
 const rules = (source, path = PATH) => inspectGlass(path, source).map((item) => item.rule);
 
 const cases = [
+  ['import { SearchIcon } from "@phosphor-icons/react";', ["icon-set-import"]],
+  ['import { SearchIcon } from "@phosphor-icons/react/dist/csr/Search";', ["icon-set-import"]],
+  ['import { HugeiconsIcon } from "@hugeicons/react";', ["icon-set-import"]],
+  ['import { Search01Icon } from "@hugeicons/core-free-icons";', ["icon-set-import"]],
+  ['export { Search01Icon } from "@hugeicons/core-free-icons";', ["icon-set-import"]],
+  ['export * from "@hugeicons/core-free-icons";', ["icon-set-import"]],
+  ['const icons = import("@hugeicons/core-free-icons");', ["icon-set-import"]],
+  ['import { SearchIcon } from "@renderer/components/ui/icon";', []],
+  ['// import { X } from "@phosphor-icons/react";', []],
+  [
+    'import { Search01Icon } from "@hugeicons/core-free-icons";',
+    [],
+    "apps/desktop/src/renderer/src/components/ui/icon.tsx",
+  ],
+  [
+    'import { HugeiconsIcon } from "@hugeicons/react";',
+    [],
+    "apps/desktop/src/renderer/src/components/ui/icon.tsx",
+  ],
+  [
+    'import { Search01Icon } from "@hugeicons/core-stroke-rounded";',
+    ["icon-set-import"],
+    "apps/desktop/src/renderer/src/components/ui/icon.tsx",
+  ],
+  [
+    'import * as pack from "@hugeicons/core-free-icons";',
+    ["icon-set-import"],
+    "apps/desktop/src/renderer/src/components/ui/icon.tsx",
+  ],
+
   ['<p className="text-[13px]/6" />', ["type-literal-size"]],
   ['import { useReducedMotion } from "another-library";', ["motion-reduced-hook"]],
   ['const color = "#fff";', [], "apps/desktop/src/renderer/src/theme/canvas-paint.ts"],

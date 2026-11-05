@@ -57,8 +57,8 @@ Data and UI:
 - **UI copy: let controls talk.** No `description` on `SettingsSection`/`SettingsRow`, no tutorial tooltips or explanatory paragraphs unless asked. Labels are nouns. Exceptions: irreversible confirms, one-line trust boundaries, blocked states with one recovery action. Module comments carry architecture; UI strings don't repeat them.
 - **Color tokens are generated, not authored**, from a stored canvas and appearance. Regenerate `globals.css` with `node apps/desktop/scripts/generate-theme-css.mjs`; never hand-tune it. New color tokens go in `THEME_TOKEN_NAMES`/`CANVAS_TOKEN_NAMES`. Never persist resolved tokens. Every surface must hold up across canvases in light and dark. Detail: `conventions.md`.
 - Spacing, width and type follow `docs/DESIGN.md`: no arbitrary `text-[Npx]`.
-- Every context-menu action carries a Phosphor icon via the shared primitive.
-- **Icons are outline by default.** `fill` marks only the one exception among neighbours; `bold` is the small-size weight; never `duotone`. Detail: `conventions.md`.
+- Every context-menu action carries an icon from the shared set via the shared primitive.
+- **Icons use the shared semantic seam** (`components/ui/icon.tsx`), backed only by Hugeicons free Stroke Rounded (MIT). Outline stroke is 1.5; ≤12px and deliberate heavier symbols use 2.25. Mark active/error exceptions with accent/destructive ink or selected backgrounds, never fake fill. No direct vendor imports outside the seam; never Pro, bulk, solid or `duotone`. Detail: `conventions.md`.
 - **Surface every failed mutation; never swallow errors.** The one exception is background work no one asked for (e.g. auto-titling), which logs and keeps its fallback. Errors are for failed operations, not for user choices we disagree with. Fault surfaces show the problem and one fixing action, and keep diagnostics in the support report.
 - **The shipped licence notice is generated.** Regenerate `apps/desktop/THIRD-PARTY-NOTICES` with `node scripts/generate-third-party-notices.mjs` after any production dependency change; CI's `check:notices` fails on drift. Detail: `conventions.md`.
 

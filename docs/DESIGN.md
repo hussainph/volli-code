@@ -118,11 +118,14 @@ monospace; terminals retain the person's Ghostty font.
 No sixth 12px rung and no arbitrary `text-[Npx]`. Use regular for reading, medium for controls,
 semibold for titles. Section names use sentence-case `SectionHeading`, not tracked uppercase.
 
-Phosphor outline is the current symbol baseline. `bold` is the small-size step (≤12px);
-`fill` marks a local exception only when position/background/ink are not already saying it.
-Never `duotone`. No icon-set migration is implied by this spec.
+Hugeicons free Stroke Rounded (MIT) is the symbol baseline, behind the semantic
+`components/ui/icon.tsx` seam. Import a concept (`SearchIcon`, `BoardIcon`) or use
+`<Icon name="search" />`; vendor imports belong only in the seam. Its 24-unit drawing uses
+stroke 1.5, stepping to 2.25 for ≤12px symbols and deliberate heavier strokes. Existing
+sizes stay unchanged. Mark a local active/error exception through accent/destructive ink
+or its existing selected background, never a fake fill. No Pro, bulk, solid or `duotone`.
 
-- Every **context-menu action** carries its neighbouring Phosphor icon through the shared
+- Every **context-menu action** carries its neighbouring icon from the shared set through the shared
   primitive. Plain menus need not add decorative icons to every row.
 - Prefer a familiar icon over redundant text in cramped chrome, but keep its accessible name,
   tooltip, keyboard shortcut and focus treatment.
@@ -219,7 +222,7 @@ choose principles and a proven reference, then design. Verify in the live app wi
 
 CI's **Check design system** step runs token, copy and Glass checks, with their focused tests.
 `check:design-tokens` enforces the existing utility ladder; `check:ui-copy` parses screen copy
-and markup; `check:glass-design` covers literal colours, geometry, materials and motion in
+and markup; `check:glass-design` covers icon-set imports, literal colours, geometry, materials and motion in
 renderer TS/TSX/CSS. Tests, fixtures and browser-only lab experiments are excluded.
 The clearly named shrinking allowlist records one file/rule pair with an occurrence ceiling:
 new pairs or increased counts fail, and fixed pairs must be removed. It is migration debt,

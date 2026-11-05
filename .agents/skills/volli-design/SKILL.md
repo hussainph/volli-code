@@ -39,11 +39,21 @@ Read [docs/DESIGN.md](../../../docs/DESIGN.md) first. Read the relevant producti
 | Commands / context actions | Shared menu; context-menu action icons | Native `<select>` or custom menu focus logic |
 | Confirmation / modal work | Shared dialog / sheet | A second modal and scrim implementation |
 | Reading / wide form | `ContentColumn` / `WorkbenchColumn`, `PageHeader` | A reading measure around a board or terminal |
+| UI symbol | Semantic icons from `components/ui/icon.tsx` | Direct vendor imports, Pro/bulk/solid/duotone |
 | Progress / app identity | `Progress` / `IdentityTile` | Another gradient meter or logo tile |
 
 Primitives have no app/domain/host imports and take their theme from CSS variables. Keep
 app stores and mutations in the composition layer. Use `CONTROL_SIZE`, radius and ink tokens;
 never invent numeric text sizes, transition durations, easings or colour literals.
+
+## Symbols
+
+Use only the MIT Hugeicons free Stroke Rounded set through the semantic icon seam.
+Keep caller sizes and accessible names/hidden semantics. Stroke 1.5 is the baseline on
+its 24-unit drawing; ≤12px symbols and deliberate heavier strokes use 2.25. Active/error
+exceptions use accent/destructive ink or the existing selected background, not fake fill.
+Never Pro, bulk, solid or duotone. Context-menu actions always carry a neighbouring shared
+symbol. Provider/brand marks and identity tiles retain their own drawings.
 
 ## Tint decision
 
