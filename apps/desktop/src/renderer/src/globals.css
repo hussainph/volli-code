@@ -3712,3 +3712,12 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
     inset 0 0 0 0.5px var(--glass-edge),
     var(--shadow-card);
 }
+
+[data-slot="popover-body"] {
+  display: inherit;
+  flex-direction: inherit;
+  align-items: inherit;
+  justify-content: inherit;
+  grid-template-columns: inherit;
+  gap: inherit;
+}

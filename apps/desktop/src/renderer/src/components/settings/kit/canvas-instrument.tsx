@@ -472,7 +472,7 @@ export function CanvasInstrument({
           onCommit={settle}
           onCancel={abandon}
         >
-          <div className="flex items-center justify-between gap-2 text-ui">
+          <div className="flex flex-col items-start gap-2 text-ui">
             <span>Harmony</span>
             <Segmented
               ariaLabel="Colour harmony"
