@@ -23,6 +23,8 @@ import { useAddProject } from "@renderer/hooks/use-add-project";
 
 let lastPage = "general";
 const PROJECT_PREFIX = "project:";
+// Configure requests name a project's pane; the app's Appearance route is separate.
+const configurePaneKey = (key: string) => (key === "appearance" ? "project:appearance" : key);
 /** Legacy pane requests keep their spelling; machine inventories have one destination. */
 function settingsPaneKey(key: string, cloud: boolean): string {
   const pane = key.replace(/^project:/, "");
@@ -73,7 +75,7 @@ export function SettingsPage({
         initialCategoryKey === undefined ? undefined : settingsPaneKey(initialCategoryKey, runners),
       ) ??
       (requestedPane !== null
-        ? settingsPaneKey(requestedPane, runners)
+        ? settingsPaneKey(configurePaneKey(requestedPane), runners)
         : initialScope === "project"
           ? "project:overview"
           : settingsPaneKey(lastPage, runners)),
@@ -144,11 +146,12 @@ export function SettingsPage({
   React.useEffect(() => {
     if (requestedPane === null) return;
     setProjectId(selectedId);
-    select(settingsPaneKey(requestedPane, runners));
+    select(settingsPaneKey(configurePaneKey(requestedPane), runners));
     useUiStore.getState().consumeConfigureCategory();
   }, [requestedPane, select, runners, selectedId]);
   const navigation = React.useMemo(
     () => ({
+      selectPolicyProject: (id: string) => setProjectId(id),
       openProject: (id: string, page: string) => {
         setProjectId(id);
         select(`project:${page}`);

@@ -1,5 +1,7 @@
 import * as React from "react";
 import { Button } from "@renderer/components/ui/button";
+import { InfoIcon } from "@renderer/components/ui/icon";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { toastError } from "@renderer/lib/toast";
 import { Input } from "@renderer/components/ui/input";
 import {
@@ -125,19 +127,37 @@ export function LinkRunnerSheet({
                 if (!busy && code.trim()) void check();
               }}
             >
-              <label className="flex flex-col gap-2 text-ui">
-                Runner code
-                <Input
-                  autoFocus
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="ABCD-EFGH"
-                  maxLength={32}
-                  value={code}
-                  disabled={busy}
-                  onChange={(event) => setCode(event.target.value)}
-                />
-              </label>
+              <div className="flex items-center gap-2">
+                <label htmlFor="runner-link-code" className="text-ui">
+                  Runner code
+                </label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Runner code command"
+                    >
+                      <InfoIcon />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent>
+                    <code>volli-runner link</code>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <Input
+                id="runner-link-code"
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="ABCD-EFGH"
+                maxLength={32}
+                value={code}
+                disabled={busy}
+                onChange={(event) => setCode(event.target.value)}
+              />
               <Button type="submit" disabled={busy || !code.trim()}>
                 {busy ? <LoadingLabel>Checking</LoadingLabel> : "Check code"}
               </Button>

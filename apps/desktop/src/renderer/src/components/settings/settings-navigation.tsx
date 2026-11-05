@@ -4,6 +4,7 @@ import { Button } from "@renderer/components/ui/button";
 
 export const SettingsNavigation = React.createContext<{
   openProject(projectId: string, page: string): void;
+  selectPolicyProject?(projectId: string): void;
 } | null>(null);
 export function OverrideLinks({ projects, page }: { projects: readonly Project[]; page: string }) {
   const navigation = React.useContext(SettingsNavigation);

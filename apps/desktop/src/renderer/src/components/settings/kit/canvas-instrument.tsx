@@ -1,6 +1,14 @@
 /** Settings canvas instrument. Uses the existing store preview and commit contract. */
 import * as React from "react";
-import { HalfCircleIcon, GroupIcon, MinusIcon, AddIcon } from "@renderer/components/ui/icon";
+import {
+  HalfCircleIcon,
+  GroupIcon,
+  MinusIcon,
+  AddIcon,
+  PaletteIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from "@renderer/components/ui/icon";
 
 import {
   addStop,
@@ -14,7 +22,15 @@ import {
   type CanvasStop,
   type ResolvedAppearance,
 } from "@volli/shared";
-import { padAnchor } from "@renderer/components/theme/canvas-editor-model";
+import {
+  padAnchor,
+  CANVAS_SWATCH_PAGES,
+  swatchPageOf,
+  normalizeStopHex,
+  droppedStopIndex,
+} from "@renderer/components/theme/canvas-editor-model";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
@@ -398,9 +414,24 @@ export function CanvasInstrument({
   const [harmony, setHarmony] = React.useState<"complementary" | "analogous">("complementary");
   const primary = live.stops[live.primaryIndex].hex;
   const [hex, setHex] = React.useState(primary);
-  React.useEffect(() => setHex(primary), [primary]);
+  const editingHex = React.useRef(false);
+  React.useEffect(() => {
+    if (!editingHex.current) setHex(primary);
+  }, [primary]);
   const hsl = toHsl(primary);
   const colour = (next: string) => edit((current) => harmonize(current, next, harmony));
+  const settleHex = () => {
+    const parsed = normalizeStopHex(hex);
+    if (parsed === null) {
+      setHex(primary);
+      return;
+    }
+    colour(parsed);
+    settle();
+    setHex(parsed);
+  };
+  const dropped = droppedStopIndex(live);
+  const atMaximum = live.stops.length >= MAX_STOPS;
   return (
     <div className="flex w-full flex-col gap-4 p-4">
       <div className="flex flex-wrap items-start gap-6">
@@ -414,29 +445,59 @@ export function CanvasInstrument({
           />
           {mode && <div className="absolute top-2 left-2">{mode}</div>}
           <div className="absolute right-2 bottom-2 flex gap-1 rounded-control bg-card p-1">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Remove a colour"
-              disabled={live.stops.length <= 1}
-              onClick={() => commit(removeStop)}
-            >
-              <MinusIcon />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Add a colour"
-              disabled={live.stops.length >= MAX_STOPS}
-              onClick={() =>
-                commit((current) => {
-                  const next = addStop(current);
-                  return harmonize(next, next.stops[next.primaryIndex].hex, harmony);
-                })
-              }
-            >
-              <AddIcon />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  tabIndex={dropped === null ? 0 : undefined}
+                  className="inline-flex rounded-control outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={dropped === null ? "You need at least one colour" : undefined}
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={
+                      dropped === null ? "Remove a colour" : `Remove colour ${dropped + 1}`
+                    }
+                    disabled={dropped === null}
+                    onClick={() => commit(removeStop)}
+                  >
+                    <MinusIcon />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {dropped === null ? "You need at least one colour" : `Remove colour ${dropped + 1}`}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  tabIndex={atMaximum ? 0 : undefined}
+                  className="inline-flex rounded-control outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={
+                    atMaximum ? `A canvas can have at most ${MAX_STOPS} colours` : undefined
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Add a colour"
+                    disabled={atMaximum}
+                    onClick={() =>
+                      commit((current) => {
+                        const next = addStop(current);
+                        return harmonize(next, next.stops[next.primaryIndex].hex, harmony);
+                      })
+                    }
+                  >
+                    <AddIcon />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {atMaximum ? `A canvas can have at most ${MAX_STOPS} colours` : "Add a colour"}
+              </TooltipContent>
+            </Tooltip>
           </div>
         </div>
         <div className="flex flex-wrap gap-6">
@@ -459,6 +520,13 @@ export function CanvasInstrument({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <span className="text-ui font-medium">Primary colour</span>
         <div className="flex items-center gap-2">
+          <PrimaryPresets
+            value={primary}
+            onPick={(next) => {
+              editingHex.current = false;
+              commit((current) => harmonize(current, next, harmony));
+            }}
+          />
           {(["complementary", "analogous"] as const).map((kind) => {
             const Icon = kind === "complementary" ? HalfCircleIcon : GroupIcon;
             const label = kind === "complementary" ? "Complementary harmony" : "Analogous harmony";
@@ -484,17 +552,26 @@ export function CanvasInstrument({
             value={hex}
             spellCheck={false}
             className="w-24 font-mono"
+            onFocus={() => {
+              editingHex.current = true;
+            }}
             onChange={(e) => {
               setHex(e.target.value);
-              if (/^#[\da-f]{6}$/i.test(e.target.value)) colour(e.target.value);
+              const parsed = normalizeStopHex(e.target.value);
+              if (parsed !== null) colour(parsed);
             }}
             onBlur={() => {
-              settle();
-              setHex(primary);
+              editingHex.current = false;
+              settleHex();
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter") settle();
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                settleHex();
+              }
               if (e.key === "Escape") {
+                editingHex.current = false;
                 abandon();
                 setHex(canvas.stops[canvas.primaryIndex].hex);
               }
@@ -616,5 +693,54 @@ function Rotary({
       </div>
       <output className="font-mono text-ui tabular-nums">{Math.round(value * 100)}%</output>
     </div>
+  );
+}
+
+function PrimaryPresets({ value, onPick }: { value: string; onPick(hex: string): void }) {
+  const [page, setPage] = React.useState(() => Math.max(0, swatchPageOf(value)));
+  React.useEffect(() => {
+    const match = swatchPageOf(value);
+    if (match >= 0) setPage(match);
+  }, [value]);
+  const turn = (step: number) =>
+    setPage(
+      (current) => (current + step + CANVAS_SWATCH_PAGES.length) % CANVAS_SWATCH_PAGES.length,
+    );
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="Primary colour presets">
+          <PaletteIcon />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto max-w-full p-2">
+        <div className="flex items-center gap-2">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Previous swatches"
+            onClick={() => turn(-1)}
+          >
+            <ChevronLeftIcon />
+          </Button>
+          <div role="group" aria-label="Primary colour presets" className="grid grid-cols-3 gap-2">
+            {CANVAS_SWATCH_PAGES[page].map((swatch) => (
+              <button
+                key={swatch}
+                type="button"
+                aria-label={swatch}
+                aria-pressed={swatch === value}
+                onClick={() => onPick(swatch)}
+                style={{ background: swatch }}
+                className="size-7 rounded-full outline-none ring-offset-2 ring-offset-background hover:ring-2 hover:ring-ring focus-visible:ring-2 focus-visible:ring-ring aria-pressed:ring-2 aria-pressed:ring-ring"
+              />
+            ))}
+          </div>
+          <Button size="icon-sm" variant="ghost" aria-label="More swatches" onClick={() => turn(1)}>
+            <ChevronRightIcon />
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

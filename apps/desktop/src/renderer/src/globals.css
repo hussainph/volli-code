@@ -2636,6 +2636,11 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-control="button"]:focus-visible:active {
   transform: none;
 }
+/* Docked glass samples only the static canvas, never live content behind it. */
+.glass[data-glass-static="true"] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 .glass-control {
   background: color-mix(in srgb, var(--glass-fill) 90%, transparent);
   border: 0.5px solid var(--glass-edge);

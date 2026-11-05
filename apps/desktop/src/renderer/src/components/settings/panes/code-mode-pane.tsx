@@ -1,8 +1,9 @@
-import { ChevronDownIcon, CodeIcon, CloseIcon } from "@renderer/components/ui/icon";
+import { ChevronDownIcon, CodeIcon, CloseIcon, InfoIcon } from "@renderer/components/ui/icon";
 
 import * as React from "react";
 import {
   CODE_MODE_MODES,
+  CODE_MODE_MODEL_DEFAULTS,
   CODE_MODE_POLICY_MODELS_MAX,
   codeModeModelKey,
   DEFAULT_CODE_MODE_POLICY,
@@ -24,6 +25,7 @@ import {
   RowAction,
 } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import {
   Collapsible,
   CollapsibleContent,
@@ -185,24 +187,60 @@ export function CodeModeSettings({
       </PrefRow>
       <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <div className="border-t border-border/50 pt-4">
-          <CollapsibleTrigger asChild>
-            <Button
-              size="xs"
-              variant="ghost"
-              className="-ml-2"
-              aria-label={`${advancedOpen ? "Hide" : "Show"} advanced Code Mode settings`}
-              data-testid="code-mode-advanced"
-            >
-              <ChevronDownIcon
-                aria-hidden
-                className={cn("transition-transform", advancedOpen && "rotate-180")}
-              />
-              Model exceptions
-              {pins.length > 0 ? (
-                <span className="text-muted-foreground">{pins.length} exceptions</span>
-              ) : null}
-            </Button>
-          </CollapsibleTrigger>
+          <div className="flex items-center gap-2">
+            <CollapsibleTrigger asChild>
+              <Button
+                size="xs"
+                variant="ghost"
+                className="-ml-2"
+                aria-label={`${advancedOpen ? "Hide" : "Show"} advanced Code Mode settings`}
+                data-testid="code-mode-advanced"
+              >
+                <ChevronDownIcon
+                  aria-hidden
+                  className={cn("transition-transform", advancedOpen && "rotate-180")}
+                />
+                Model exceptions
+                {pins.length > 0 ? (
+                  <span className="text-muted-foreground">{pins.length} exceptions</span>
+                ) : null}
+              </Button>
+            </CollapsibleTrigger>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Code Mode meanings and defaults">
+                  <InfoIcon />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="flex max-w-sm flex-col gap-2 text-ui" align="start">
+                <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-2">
+                  <dt className="font-medium">{CODE_MODE_MODE_LABELS.off}</dt>
+                  <dd>No Code Mode, except to defer a very large MCP server.</dd>
+                  <dt className="font-medium">{CODE_MODE_MODE_LABELS.both}</dt>
+                  <dd>Code Mode beside every tool; the model chooses.</dd>
+                  <dt className="font-medium">{CODE_MODE_MODE_LABELS.only}</dt>
+                  <dd>
+                    Program-callable tools are reached only through Code Mode. Smallest prompt.
+                  </dd>
+                </dl>
+                <div>
+                  <strong>Defaults</strong>
+                  <ul>
+                    {CODE_MODE_MODEL_DEFAULTS.map((row) => (
+                      <li key={row.family}>
+                        {row.family}: {CODE_MODE_MODE_LABELS[row.mode]}
+                      </li>
+                    ))}
+                    <li>Every other model: {CODE_MODE_MODE_LABELS.off}</li>
+                  </ul>
+                </div>
+                <span>
+                  Turning Code Mode off also declares every large-server tool again. Changes apply
+                  to new Sessions.
+                </span>
+              </PopoverContent>
+            </Popover>
+          </div>
           <CollapsibleContent>
             <div className="flex flex-col gap-4 pt-4">
               {loaded && !current.enabled ? (

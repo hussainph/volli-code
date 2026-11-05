@@ -67,6 +67,7 @@ import {
   DescriptionCell,
   RowAction,
   SectionAction,
+  PrefRow,
 } from "@renderer/components/settings/kit";
 import { actionsColumnWidth } from "@renderer/components/settings/kit/data-table";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
@@ -83,6 +84,7 @@ import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { boardApi } from "@renderer/lib/board-api";
+import { SettingsNavigation } from "../settings-navigation";
 import { Button } from "@renderer/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 
@@ -117,7 +119,15 @@ function skillScope(skill: SkillReference): "project" | "personal" {
   return skill.root.startsWith(".") ? "project" : "personal";
 }
 
-export function SkillsPane({ project }: { project: Project }) {
+export function SkillsPane({
+  project,
+  policyProjectPicker = false,
+}: {
+  project: Project;
+  policyProjectPicker?: boolean;
+}) {
+  const projects = useProjectsStore((store) => store.projects);
+  const navigation = React.useContext(SettingsNavigation);
   const { state, reload } = useAgentIndex(project.id);
   const [filter, setFilter] = React.useState("all");
   // Inspection is its own state, apart from the Mode column: opening a skill
@@ -171,6 +181,32 @@ export function SkillsPane({ project }: { project: Project }) {
             )}
             <SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />
           </div>
+        }
+        before={
+          policyProjectPicker ? (
+            <PrefRow label="Activation project">
+              <Select
+                value={project.id}
+                onValueChange={(id) => navigation?.selectPolicyProject?.(id)}
+                disabled={!navigation?.selectPolicyProject}
+              >
+                <SelectTrigger
+                  aria-label="Skill activation project"
+                  size="sm"
+                  className="w-56 max-w-full"
+                >
+                  <SelectValue>{project.name}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {(projects.length ? projects : [project]).map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </PrefRow>
+          ) : undefined
         }
         fill
         state={state}

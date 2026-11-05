@@ -2,12 +2,13 @@
 import * as React from "react";
 import { CodeFileIcon, TerminalIcon, TreeIcon } from "@renderer/components/ui/icon";
 
-import type { Project, WorktreeBranchListing } from "@volli/shared";
+import { isValidBranchName, type Project, type WorktreeBranchListing } from "@volli/shared";
 import {
   PrefRow,
   PrefSection,
   ItemRow,
   SectionIconAction,
+  CommitField,
 } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { Textarea } from "@renderer/components/ui/textarea";
@@ -31,9 +32,36 @@ export function WorktreesPane({ project }: { project: Project }) {
   const [revision, reload] = React.useReducer((n) => n + 1, 0);
   const [draft, setDraft] = React.useState(project.setupCommand ?? "");
   const [saving, setSaving] = React.useState(false);
+  const [customBranch, setCustomBranch] = React.useState(false);
+  const draftRef = React.useRef(draft);
+  const accepted = React.useRef(project.setupCommand ?? "");
+  const committingSetup = React.useRef(false);
+  const saveSetup = React.useCallback(async () => {
+    const next = draftRef.current.trim();
+    if (committingSetup.current || next === accepted.current.trim()) return;
+    committingSetup.current = true;
+    setSaving(true);
+    try {
+      if (await updateSetupCommand(project.id, next || null)) accepted.current = next;
+    } finally {
+      committingSetup.current = false;
+      setSaving(false);
+    }
+  }, [project.id, updateSetupCommand]);
   React.useEffect(() => {
-    setDraft(project.setupCommand ?? "");
-  }, [project.id, project.setupCommand]);
+    if (draftRef.current === accepted.current) {
+      draftRef.current = project.setupCommand ?? "";
+      setDraft(draftRef.current);
+    }
+    accepted.current = project.setupCommand ?? "";
+  }, [project.setupCommand]);
+  // Blur handles pointer navigation; teardown also covers keyboard/deep-link navigation.
+  React.useEffect(
+    () => () => {
+      void saveSetup();
+    },
+    [saveSetup],
+  );
   React.useEffect(() => {
     let current = true;
     setStatus("loading");
@@ -73,8 +101,13 @@ export function WorktreesPane({ project }: { project: Project }) {
         <PrefRow label="Branch from" icon={TreeIcon} htmlFor="project-base-branch">
           <Select
             value={project.baseBranch ?? "__default"}
-            disabled={status !== "ready" || saving}
+            disabled={saving}
             onValueChange={(next) => {
+              if (next === "__custom") {
+                setCustomBranch(true);
+                return;
+              }
+              setCustomBranch(false);
               setSaving(true);
               void updateBaseBranch(project.id, next === "__default" ? null : next).finally(() =>
                 setSaving(false),
@@ -95,8 +128,28 @@ export function WorktreesPane({ project }: { project: Project }) {
                   {branch}
                 </SelectItem>
               ))}
+              <SelectItem value="__custom">Other branch</SelectItem>
             </SelectContent>
           </Select>
+          {customBranch ? (
+            <CommitField
+              ariaLabel="Custom branch"
+              value={project.baseBranch ?? ""}
+              placeholder="Branch name"
+              disabled={saving}
+              validate={(next) =>
+                !next.trim() || isValidBranchName(next.trim()) ? null : "Not a valid branch name."
+              }
+              onCommit={async (next) => {
+                const trimmed = next.trim();
+                const ok = await updateBaseBranch(project.id, trimmed || null);
+                if (ok) setCustomBranch(false);
+                return ok
+                  ? { ok: true, value: trimmed }
+                  : { ok: false, error: "Couldn't save branch." };
+              }}
+            />
+          ) : null}
           {status === "loading" ? <LoadingLabel>Reading branches</LoadingLabel> : null}
         </PrefRow>
         {status === "error" ? (
@@ -124,7 +177,22 @@ export function WorktreesPane({ project }: { project: Project }) {
           <Textarea
             id="project-setup-command"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              draftRef.current = e.target.value;
+              setDraft(e.target.value);
+            }}
+            onBlur={() => void saveSetup()}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void saveSetup();
+              }
+              if (e.key === "Escape") {
+                draftRef.current = accepted.current;
+                setDraft(accepted.current);
+              }
+            }}
             placeholder="pnpm install"
             spellCheck={false}
             className="min-h-24 font-mono text-ui"
@@ -136,12 +204,8 @@ export function WorktreesPane({ project }: { project: Project }) {
               size="sm"
               variant="outline"
               disabled={!dirty || saving}
-              onClick={() => {
-                setSaving(true);
-                void updateSetupCommand(project.id, draft.trim() || null).finally(() =>
-                  setSaving(false),
-                );
-              }}
+              title="Save command (⌘Enter)"
+              onClick={() => void saveSetup()}
             >
               {saving ? <LoadingLabel>Saving</LoadingLabel> : "Save command"}
             </Button>

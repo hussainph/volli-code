@@ -24,7 +24,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const button = (text: string) => {
-  const result = [...document.querySelectorAll("button")].find((item) => item.textContent === text);
+  const result = [...document.querySelectorAll("button")].find(
+    (item) => item.textContent === text || item.getAttribute("aria-label") === text,
+  );
   if (!result) throw new Error(`Missing button: ${text}`);
   return result;
 };
@@ -36,9 +38,10 @@ const command = () => document.querySelector("pre")!.textContent!;
 const announced = () =>
   [...document.querySelectorAll("[aria-live]")].map((node) => node.textContent ?? "");
 const type = async (label: string, text: string) => {
-  const input = [...document.querySelectorAll("label")]
-    .find((item) => item.textContent?.includes(label))!
-    .querySelector("input")!;
+  const fieldLabel = [...document.querySelectorAll("label")].find((item) =>
+    item.textContent?.includes(label),
+  )!;
+  const input = fieldLabel.querySelector("input") ?? document.getElementById(fieldLabel.htmlFor)!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -368,4 +371,15 @@ describe("Runner setup sheets", () => {
     await click("Another code");
     expect(button("Check code")).toBeTruthy();
   });
+});
+
+it("keeps the exact runner-code source reachable without standing instructions", async () => {
+  const f = fixture();
+  act(() => root.render(<LinkRunnerSheet {...f.props} />));
+  expect(document.body.textContent).not.toContain("volli-runner link");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Runner code command"]')!.click(),
+  );
+  expect(document.querySelector("code")?.textContent).toBe("volli-runner link");
+  expect(document.querySelector("input")?.getAttribute("placeholder")).toBe("ABCD-EFGH");
 });

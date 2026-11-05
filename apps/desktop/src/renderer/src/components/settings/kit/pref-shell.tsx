@@ -97,10 +97,14 @@ export function PrefShell({
   }, [activeKey, highlight]);
   return (
     <TooltipProvider>
-      <div className="flex h-full min-h-0 w-full flex-1 gap-(--glass-gap) bg-transparent p-(--glass-gap)">
+      <div
+        className="flex h-full min-h-0 w-full flex-1 gap-(--glass-gap) p-(--glass-gap)"
+        style={{ background: "var(--canvas)", backgroundAttachment: "fixed" }}
+      >
         <nav
           aria-label={`${surfaceLabel} categories`}
           data-tint="true"
+          data-glass-static="true"
           className="glass flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto rounded-floating p-4 shadow-glass"
         >
           {header}
@@ -117,11 +121,19 @@ export function PrefShell({
             />
           </InputGroup>
           <div className="min-h-0 flex-1 overflow-y-auto">
+            <p
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className={cn(
+                "px-2 pb-2 text-label text-muted-foreground",
+                !query.trim() && "sr-only",
+              )}
+            >
+              {query.trim() ? `${results.length} settings found` : ""}
+            </p>
             {query.trim() ? (
               <>
-                <p className="px-2 pb-2 text-label text-muted-foreground">
-                  {results.length} settings found
-                </p>
                 {results.map(({ category, label }) => (
                   <button
                     type="button"

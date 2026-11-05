@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { CANVAS_SWATCH_PAGES } from "@renderer/components/theme/canvas-editor-model";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 
 import { CanvasInstrument as CanvasEditor } from "./canvas-instrument";
@@ -21,7 +23,13 @@ async function mountEditor(props: React.ComponentProps<typeof CanvasEditor>) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => root?.render(<CanvasEditor {...props} />));
+  await act(async () =>
+    root?.render(
+      <TooltipProvider>
+        <CanvasEditor {...props} />
+      </TooltipProvider>,
+    ),
+  );
   return document;
 }
 
@@ -145,4 +153,71 @@ describe("CanvasEditor", () => {
     );
     expect(commitPreview).toHaveBeenCalledWith(GLOBAL);
   });
+});
+
+it.each([
+  ["#abc", "#aabbcc"],
+  ["ABCDEF", "#abcdef"],
+  ["  #123456  ", "#123456"],
+])("accepts the existing %s hex format and settles canonically", async (entry, normalized) => {
+  const onCanvasChange = vi.fn();
+  const doc = await mountEditor({ canvas: SINGLE_CANVAS, resolved: "light", onCanvasChange });
+  const field = doc.querySelector<HTMLInputElement>('[aria-label="Primary colour hex"]')!;
+  await act(async () => field.focus());
+  await typeInto(field, entry);
+  expect(field.value).toBe(entry);
+  await act(async () =>
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  expect(onCanvasChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ stops: [expect.objectContaining({ hex: normalized })] }),
+  );
+  expect(field.value).toBe(normalized);
+});
+
+it("restores preset browsing, paging, current indication and stop-limit details", async () => {
+  const onCanvasChange = vi.fn();
+  const canvas = {
+    ...SINGLE_CANVAS,
+    stops: [{ ...SINGLE_CANVAS.stops[0], hex: CANVAS_SWATCH_PAGES[0][0] }],
+  };
+  const doc = await mountEditor({ canvas, resolved: "dark", onCanvasChange });
+  const limit = doc.querySelector<HTMLElement>('[aria-label="You need at least one colour"]')!;
+  expect(limit.tabIndex).toBe(0);
+  await act(async () => limit.focus());
+  await vi.waitFor(() =>
+    expect(doc.querySelector('[role="tooltip"]')?.textContent).toContain("at least one colour"),
+  );
+  await act(async () =>
+    doc.querySelector<HTMLButtonElement>('button[aria-label="Primary colour presets"]')!.click(),
+  );
+  expect(
+    doc
+      .querySelector(`button[aria-label="${CANVAS_SWATCH_PAGES[0][0]}"]`)
+      ?.getAttribute("aria-pressed"),
+  ).toBe("true");
+  await act(async () =>
+    doc.querySelector<HTMLButtonElement>('[aria-label="More swatches"]')!.click(),
+  );
+  const next = CANVAS_SWATCH_PAGES[1][0];
+  await act(async () =>
+    doc.querySelector<HTMLButtonElement>(`button[aria-label="${next}"]`)!.click(),
+  );
+  expect(onCanvasChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ stops: [expect.objectContaining({ hex: next })] }),
+  );
+  expect(doc.querySelector('[aria-label="Previous swatches"]')).not.toBeNull();
+});
+
+it("names the non-primary removal target and explains the maximum at a keyboard stop", async () => {
+  const doc = await mountEditor({ scope: GLOBAL, canvas: DEFAULT_CANVAS, resolved: "dark" });
+  expect(doc.querySelector('[aria-label="Remove colour 3"]')).not.toBeNull();
+  const limit = doc.querySelector<HTMLElement>(
+    '[aria-label="A canvas can have at most 3 colours"]',
+  )!;
+  expect(limit.tabIndex).toBe(0);
+  await act(async () => limit.focus());
+  await vi.waitFor(() =>
+    expect(doc.querySelector('[role="tooltip"]')?.textContent).toContain("at most 3 colours"),
+  );
 });
