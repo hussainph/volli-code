@@ -758,6 +758,8 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   onClose?(): void;
   /** Rich member rows for a group tab; ordinary tabs use their action list. */
   actionsContent?: React.ReactNode;
+  /** A group's hover inspection steps aside while its command menu is open. */
+  onActionsOpenChange?(open: boolean): void;
 }
 
 /**
@@ -892,6 +894,7 @@ function TabShell({
   onActivate,
   onClose,
   actionsContent,
+  onActionsOpenChange,
   className,
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
@@ -1102,7 +1105,11 @@ function TabShell({
             </span>
           )}
           {!renamingNow && (menuActions.length > 0 || actionsContent) ? (
-            <TabActionDropdown label={label} actions={menuActions}>
+            <TabActionDropdown
+              label={label}
+              actions={menuActions}
+              onOpenChange={onActionsOpenChange}
+            >
               {actionsContent}
             </TabActionDropdown>
           ) : null}

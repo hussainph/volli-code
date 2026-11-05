@@ -15,6 +15,8 @@ export interface TabAction {
   destructive?: boolean;
 }
 export const TabActionsContext = React.createContext<readonly TabAction[]>([]);
+/** Rich member controls dismiss only after their own activation has run. */
+export const TabDropdownDismissContext = React.createContext<() => void>(() => {});
 
 /** Shared extra actions in the tab's existing context menu. */
 export function TabContextActions() {
@@ -35,15 +37,21 @@ export function TabActionDropdown({
   label,
   actions,
   children,
+  onOpenChange,
 }: {
   label: string;
   actions: readonly TabAction[];
   children?: React.ReactNode;
+  onOpenChange?(open: boolean): void;
 }) {
   const [open, setOpen] = React.useState(false);
   const pointer = React.useRef(false);
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    onOpenChange?.(next);
+  };
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu open={open} onOpenChange={changeOpen}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -61,7 +69,6 @@ export function TabActionDropdown({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        onClickCapture={() => setOpen(false)}
         onPointerDownCapture={() => {
           pointer.current = true;
         }}
@@ -71,7 +78,9 @@ export function TabActionDropdown({
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
-        {children}
+        <TabDropdownDismissContext.Provider value={() => changeOpen(false)}>
+          {children}
+        </TabDropdownDismissContext.Provider>
         {actions.map((action) => (
           <DropdownMenuItem
             key={action.label}

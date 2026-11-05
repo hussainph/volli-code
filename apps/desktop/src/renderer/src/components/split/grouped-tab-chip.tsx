@@ -12,7 +12,11 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@renderer/components/ui/hover-card";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Tab, tabStopIndex } from "@renderer/components/ui/tab-strip";
-import { TabActionScope, type TabAction } from "@renderer/components/ui/tab-actions";
+import {
+  TabActionScope,
+  TabDropdownDismissContext,
+  type TabAction,
+} from "@renderer/components/ui/tab-actions";
 import { Button } from "@renderer/components/ui/button";
 
 /** One pane of a group, as the strip draws it: its live stack and its front. */
@@ -104,6 +108,7 @@ function GroupMemberRows<T extends { id: string }>({
   onSelect(tab: T): void;
   actionsFor(tab: T): readonly TabAction[];
 }) {
+  const dismiss = React.useContext(TabDropdownDismissContext);
   return tabs.map((tab) => {
     const { label, icon: Mark, detail, status } = describe(tab);
     return (
@@ -118,7 +123,10 @@ function GroupMemberRows<T extends { id: string }>({
             <span className="text-label text-muted-foreground capitalize">{status}</span>
           ) : undefined
         }
-        onActivate={() => onSelect(tab)}
+        onActivate={() => {
+          onSelect(tab);
+          dismiss();
+        }}
         actions={actionsFor(tab).map((action) => (
           <Button
             key={action.label}
@@ -130,6 +138,7 @@ function GroupMemberRows<T extends { id: string }>({
             onClick={(event) => {
               event.stopPropagation();
               action.run();
+              dismiss();
             }}
           >
             <action.icon className="size-3.5" />
@@ -161,6 +170,8 @@ function GroupedTabChip<T extends { id: string }>({
   onClose?(tab: T): void;
   actionsFor(tab: T): readonly TabAction[];
 }) {
+  const [hoverOpen, setHoverOpen] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
   const tabs = item.stacks.flatMap((stack) => stack.tabs);
   const front = item.segments.find((tab) => tab.id === activeTabId) ?? item.segments[0]!;
   const title = item.group.title ?? describe(item.segments[0]!).label;
@@ -185,8 +196,18 @@ function GroupedTabChip<T extends { id: string }>({
     </>
   );
   return (
-    <HoverCard openDelay={250} closeDelay={100}>
-      <ContextMenu>
+    <HoverCard
+      open={menuOpen ? false : hoverOpen}
+      onOpenChange={(open) => setHoverOpen(!menuOpen && open)}
+      openDelay={250}
+      closeDelay={100}
+    >
+      <ContextMenu
+        onOpenChange={(open) => {
+          setMenuOpen(open);
+          if (open) setHoverOpen(false);
+        }}
+      >
         <HoverCardTrigger asChild>
           <ContextMenuTrigger asChild>
             <div
@@ -219,6 +240,10 @@ function GroupedTabChip<T extends { id: string }>({
                     </span>
                   }
                   actionsContent={rows}
+                  onActionsOpenChange={(open) => {
+                    setMenuOpen(open);
+                    if (open) setHoverOpen(false);
+                  }}
                 />
               </TabActionScope>
             </div>

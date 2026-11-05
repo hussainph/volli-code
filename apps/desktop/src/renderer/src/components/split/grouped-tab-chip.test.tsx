@@ -232,6 +232,7 @@ describe("one capsule per group", () => {
     expect(action).toBeDefined();
     click(action);
     expect(takeOut).toHaveBeenCalledExactlyOnceWith(chat.id);
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
     await act(async () =>
       tab("Chat").dispatchEvent(
         new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
@@ -240,6 +241,27 @@ describe("one capsule per group", () => {
     expect(document.querySelector('[data-slot="context-menu-content"]')?.textContent).toContain(
       "Take out of group",
     );
+  });
+  it("lets the dropdown own the pointer and runs a member action before dismissing", async () => {
+    const callbacks = home(chat.id);
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    const trigger = chip.querySelector('[aria-label="Actions for Chat"]')!;
+    await act(async () =>
+      trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    expect(
+      document.querySelector('[data-slot="hover-card-content"][data-state="open"]'),
+    ).toBeNull();
+    const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    const close = menu.querySelector('[aria-label="Close: Page"]')!;
+    expect(close).not.toBeNull();
+    click(close);
+    expect(callbacks.close).toHaveBeenCalledExactlyOnceWith(browser);
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
   });
   it("uses a +N after three icons without expanding into member capsules", () => {
     const four = {
