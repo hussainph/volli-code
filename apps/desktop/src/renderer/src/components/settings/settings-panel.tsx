@@ -39,6 +39,7 @@ export function SettingsPanel() {
   return (
     <Dialog modal={false} open={open} onOpenChange={setOpen}>
       <DialogContent
+        material="none"
         showCloseButton={false}
         className="settings-window"
         aria-describedby={undefined}
