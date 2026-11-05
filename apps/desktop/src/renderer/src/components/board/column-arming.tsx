@@ -1,3 +1,6 @@
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { SearchableCommand } from "@renderer/components/ui/searchable-command";
+import { CheckIcon } from "@renderer/components/ui/icon";
 /**
  * The column-header bolt (VC-112, "Surfaces"): arm this column, or disarm it.
  *
@@ -110,16 +113,121 @@ function LocalColumnArmingButton({
         ? `${TICKET_STATUS_LABELS[status]} runs ${armed.name}`
         : `${TICKET_STATUS_LABELS[status]} is armed with ${armed.name} — automatic triggers off`;
 
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const opening = (next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      setQuery("");
+      return;
+    }
+    void refresh(projectId);
+    void refreshArming(projectId);
+    void refreshOrder(projectId);
+    void refreshEnablement();
+  };
+  const choose = (value: string) => {
+    if (!guardWrite(projectId)) return;
+    void arm({ projectId, status, automationId: value === DISARMED ? null : value }).then(
+      (refusal) => {
+        if (refusal !== null) toastError(`Couldn't arm this column: ${refusal}`);
+      },
+    );
+  };
+  if (offered.length > 12) {
+    const choices = [
+      { id: DISARMED, name: "No automation" },
+      ...offered.filter(
+        (automation) =>
+          automation.id === armed?.id ||
+          automation.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+      ),
+    ];
+    return (
+      <Popover open={open} onOpenChange={opening}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                {...readOnlyControl(canWrite)}
+                aria-label={label}
+                data-column-arming={status}
+                data-armed={armed?.id}
+                data-arming-state={armingState}
+                className={cn(
+                  "shrink-0",
+                  armed !== null && armingState !== "ready" && "bg-accent",
+                  armingState === "ready" ? "text-primary-text" : "text-muted-foreground",
+                )}
+              >
+                <AutomationIcon data-arming-mark={armed === null ? "unarmed" : "armed"} />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
+        <PopoverContent align="start" className="w-80 gap-0 p-0">
+          <SearchableCommand
+            items={choices}
+            keyOf={(automation) => automation.id}
+            query={query}
+            onQueryChange={setQuery}
+            placeholder="Search automations"
+            onSelect={(automation) => {
+              choose(automation.id);
+              setOpen(false);
+              setQuery("");
+            }}
+            renderItem={(automation) => (
+              <>
+                {automation.id === DISARMED ? (
+                  <RemoveCircleIcon />
+                ) : enabledIds.includes(automation.id) ? (
+                  <AutomationIcon />
+                ) : (
+                  <AutomationOffIcon />
+                )}
+                <span className="min-w-0 flex-1 truncate" title={automation.name}>
+                  {automation.name}
+                </span>
+                {(armed?.id ?? DISARMED) === automation.id ? <CheckIcon /> : null}
+              </>
+            )}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-2">
+            {armed === null ? null : (
+              <Button
+                variant="ghost"
+                size="sm"
+                role="switch"
+                aria-checked={enabledIds.includes(armed.id)}
+                onClick={() => void setEnabled(armed.id, !enabledIds.includes(armed.id))}
+              >
+                <AutomationIcon />
+                Automatic triggers
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setOpen(false);
+                useProjectUiStore.getState().setNav(projectId, "automations");
+              }}
+            >
+              <AutomationIcon />
+              Automations
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
   return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (!open) return;
-        void refresh(projectId);
-        void refreshArming(projectId);
-        void refreshOrder(projectId);
-        void refreshEnablement();
-      }}
-    >
+    <DropdownMenu open={open} onOpenChange={opening}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
@@ -148,23 +256,7 @@ function LocalColumnArmingButton({
         {offered.length === 0 ? (
           <div className="sr-only">No automations in this column</div>
         ) : (
-          <DropdownMenuRadioGroup
-            value={armed?.id ?? DISARMED}
-            onValueChange={(value) => {
-              // A menu opened before the host went away cannot arm through it.
-              if (!guardWrite(projectId)) return;
-              void arm({
-                projectId,
-                status,
-                automationId: value === DISARMED ? null : value,
-              }).then((refusal) => {
-                // A refusal here is not a correction to something still on
-                // screen — the menu closed on select — so it toasts, like every
-                // other failed mutation.
-                if (refusal !== null) toastError(`Couldn't arm this column: ${refusal}`);
-              });
-            }}
-          >
+          <DropdownMenuRadioGroup value={armed?.id ?? DISARMED} onValueChange={choose}>
             <DropdownMenuRadioItem value={DISARMED}>
               <RemoveCircleIcon />
               No automation

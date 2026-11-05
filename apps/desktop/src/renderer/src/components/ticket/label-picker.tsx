@@ -32,7 +32,7 @@ import {
   newLabelFromQuery,
   withLabelToggled,
 } from "@renderer/components/ticket/label-picker-model";
-import { Command, CommandInput, CommandItem, CommandList } from "@renderer/components/ui/command";
+import { SearchableCommand } from "@renderer/components/ui/searchable-command";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { useBoardStore } from "@renderer/stores/board";
@@ -95,50 +95,41 @@ export function LabelPickerContent({
   const options = labelPickerOptions(vocabulary, value, query);
   const creatable = readOnly ? null : newLabelFromQuery(vocabulary, value, query);
 
+  const choices = [
+    ...options.map((option) => ({ name: option.name, selected: option.selected, create: false })),
+    ...(creatable === null ? [] : [{ name: creatable, selected: false, create: true }]),
+  ];
   return (
-    // Our own filter, so the rows stay in the vocabulary's alphabetical order
-    // rather than cmdk's match ranking — a label list is a vocabulary, and one
-    // that reorders itself as you type is one you cannot learn.
-    <Command shouldFilter={false} className="bg-transparent">
-      <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Search labels…" />
-      <CommandList className="max-h-64 p-1">
-        {options.length === 0 && creatable === null ? (
-          // The list's 4px inset plus a row's 8px: the empty line starts where
-          // a label row's text would.
-          <div className="sr-only">No labels</div>
-        ) : null}
-        {options.map((option) => (
-          <CommandItem
-            key={option.name}
-            value={option.name}
-            // The closure, never cmdk's callback argument: it hands the value
-            // back LOWERCASED, and `bug` is not the label `Bug`.
-            disabled={readOnly}
-            onSelect={() => onChange(withLabelToggled(value, option.name))}
-          >
-            <LabelDot color={resolveLabelColor(projectLabels, option.name)} />
-            <span className="wrap-anywhere">{option.name}</span>
-            {option.selected ? (
-              <CheckIcon strokeWidth={2.25} className="ml-auto size-3.5 shrink-0 text-foreground" />
-            ) : null}
-          </CommandItem>
-        ))}
-        {creatable === null ? null : (
-          <CommandItem
-            // Namespaced so a project that literally has a label called
-            // `new label` cannot collide with this row's cmdk value.
-            value={`new-label:${creatable}`}
-            onSelect={() => {
-              onChange([...value, creatable]);
-              setQuery("");
-            }}
-          >
+    <SearchableCommand
+      items={choices}
+      query={query}
+      onQueryChange={setQuery}
+      placeholder="Search labels…"
+      disabled={readOnly}
+      empty="No labels"
+      keyOf={(option) => (option.create ? `new-label:${option.name}` : option.name)}
+      onSelect={(option) => {
+        if (option.create) {
+          onChange([...value, option.name]);
+          setQuery("");
+        } else onChange(withLabelToggled(value, option.name));
+      }}
+      renderItem={(option) => (
+        <>
+          {option.create ? (
             <AddIcon />
-            <span className="wrap-anywhere">Create “{creatable}”</span>
-          </CommandItem>
-        )}
-      </CommandList>
-    </Command>
+          ) : (
+            <LabelDot color={resolveLabelColor(projectLabels, option.name)} />
+          )}
+          <span className="min-w-0 flex-1 truncate" dir="auto" title={option.name}>
+            {option.create ? `Create “${option.name}”` : option.name}
+          </span>
+          {option.selected ? (
+            <CheckIcon strokeWidth={2.25} className="ml-auto size-3.5 shrink-0 text-foreground" />
+          ) : null}
+        </>
+      )}
+    />
   );
 }
 

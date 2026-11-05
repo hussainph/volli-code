@@ -128,7 +128,8 @@ describe("board create controls", () => {
     expectUntouched(control);
     expect(container.querySelectorAll("button")).toHaveLength(1);
     expect(container.querySelector("[data-next-action]")).toBeNull();
-    expect(control.querySelector("kbd")?.className).toContain("text-primary-text");
+    expect(control.querySelector("kbd")?.textContent).toBe("C");
+    expect(control.querySelector("kbd")?.className).not.toContain("bg-(--accent-tint)");
     act(() => control.click());
     expect(useUiStore.getState().newTicketOpen).toBe(true);
   });
@@ -232,6 +233,52 @@ describe("column arming", () => {
     const control = container.querySelector<HTMLButtonElement>("[data-column-arming]");
     expect(control?.getAttribute("aria-label")).toBe("Arm Todo");
     expect(control?.getAttribute("data-arming-state")).toBe("unarmed");
+  });
+
+  it("searches a long offered list through the windowed combobox and arms its last row", async () => {
+    world = hostWorld();
+    const arm = vi.fn(async () => null);
+    useAutomationsStore.setState({
+      byProject: {
+        remote: Array.from({ length: 1000 }, (_, i) => ({
+          id: `a${i}`,
+          projectId: "remote",
+          name: `Automation ${String(i).padStart(4, "0")}`,
+          instructions: "/implement",
+          trigger: { kind: "columns", columns: ["todo"] },
+          runtime: null,
+          createdAt: 1,
+          updatedAt: 1,
+        })),
+      },
+      armingByProject: { remote: [] },
+      orderByProject: {},
+      enabledIds: [],
+      arm,
+      refresh: vi.fn(async () => {}),
+      refreshArming: vi.fn(async () => {}),
+      refreshOrder: vi.fn(async () => {}),
+      refreshEnablement: vi.fn(async () => {}),
+    } as never);
+    const { ColumnArmingButton } = await import("./column-arming");
+    const container = await world.render(
+      <TooltipProvider>
+        <ColumnArmingButton projectId="remote" status="todo" />
+      </TooltipProvider>,
+    );
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-column-arming]")!.click(),
+    );
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Search automations"]')!;
+    expect(input).not.toBeNull();
+    expect(document.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(21);
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
+    );
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(arm).toHaveBeenCalledWith({ projectId: "remote", status: "todo", automationId: "a999" });
   });
 
   it("an arming menu open before the host went away cannot arm through it", async () => {
