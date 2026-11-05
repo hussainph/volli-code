@@ -94,6 +94,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   projectLabels,
   selected,
   dragHidden,
+  instantSort = false,
   dragTicketIds,
   sessionActivity,
   onSelect,
@@ -105,6 +106,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   projectLabels: readonly Label[];
   selected: boolean;
   dragHidden: boolean;
+  instantSort?: boolean;
   dragTicketIds?: readonly string[];
   sessionActivity: TicketSessionActivity | null;
   onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
@@ -122,6 +124,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
       projectId={projectId}
       selected={selected}
       dragHidden={dragHidden}
+      instantSort={instantSort}
       dragTicketIds={dragTicketIds ?? ownDragIds}
       onSelect={onSelect}
       onOpen={onOpen}
@@ -157,6 +160,7 @@ function ListSection({
   onSelect,
   onOpen,
   dragActive,
+  instantSort = false,
   aimed,
 }: {
   status: TicketStatus;
@@ -171,6 +175,7 @@ function ListSection({
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
   dragActive: boolean;
+  instantSort?: boolean;
   aimed: boolean;
 }) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
@@ -207,6 +212,7 @@ function ListSection({
               projectLabels={projectLabels}
               selected={selectedSet.has(ticket.id)}
               dragHidden={draggingSet.has(ticket.id)}
+              instantSort={instantSort}
               dragTicketIds={selectedSet.has(ticket.id) ? groupDragIds : undefined}
               sessionActivity={sessionActivity[ticket.id] ?? null}
               onSelect={onSelect}
@@ -300,6 +306,7 @@ interface BoardListViewProps {
   /** The project has no tickets at all — a different nothing from "no tickets match". */
   boardEmpty: boolean;
   dragActive: boolean;
+  instantSort?: boolean;
   /** Status resolved from the board's frozen drag snapshot. */
   aimedStatus: TicketStatus | null;
   selectedIds: readonly string[];
@@ -326,6 +333,7 @@ export function BoardListView({
   emptyDropStatuses,
   boardEmpty,
   dragActive,
+  instantSort = false,
   aimedStatus,
   selectedIds,
   draggingIds,
@@ -364,6 +372,7 @@ export function BoardListView({
               onSelect={onSelect}
               onOpen={onOpen}
               dragActive={dragActive}
+              instantSort={instantSort}
               aimed={aimedStatus === status}
             />
           );

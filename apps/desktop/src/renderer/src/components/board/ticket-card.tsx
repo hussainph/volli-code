@@ -2,7 +2,6 @@ import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
 import { ArchiveIcon } from "@renderer/components/ui/icon";
 
-import { useDndMonitor } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cardTicketKey, type Label, type Ticket } from "@volli/shared";
@@ -13,7 +12,6 @@ import type { TicketSessionActivity } from "@renderer/components/board/board-ses
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TicketCardLabels } from "@renderer/components/board/ticket-card-labels";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
-import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import {
   rememberTicketFocusOrigin,
   TICKET_FOCUS_ATTRIBUTE,
@@ -127,7 +125,7 @@ export const SORT_TRANSITION = { duration: GLASS_MOTION.menuIn, easing: "var(--e
 
 /**
  * Sortable + context-menu wrapper shared by the board card and the list row:
- * one useSortable wiring, one reduced-motion gate, one dimmed-while-dragging
+ * one useSortable wiring, one Board-owned motion gate, one dimmed-while-dragging
  * treatment. Consumers supply only the presentational body (and, for the list
  * row, its data-* e2e hooks via `dataAttributes`).
  */
@@ -136,6 +134,7 @@ export function SortableTicketShell({
   projectId,
   selected,
   dragHidden,
+  instantSort = false,
   dragTicketIds,
   onSelect,
   onOpen,
@@ -147,6 +146,8 @@ export function SortableTicketShell({
   selected: boolean;
   /** Every selected source stays mounted as a layout placeholder during a group drag. */
   dragHidden: boolean;
+  /** Board-owned motion policy, stable throughout pointer movement. */
+  instantSort?: boolean;
   /** The complete payload a drop target receives if this card starts a drag. */
   dragTicketIds: readonly string[];
   onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
@@ -161,13 +162,6 @@ export function SortableTicketShell({
   dataAttributes?: Record<string, string>;
   children: React.ReactNode;
 }) {
-  const reducedMotion = useReducedMotion();
-  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
-  useDndMonitor({
-    onDragStart: ({ activatorEvent }) => setKeyboardDrag(activatorEvent.type === "keydown"),
-    onDragEnd: () => setKeyboardDrag(false),
-    onDragCancel: () => setKeyboardDrag(false),
-  });
   const dragData = React.useMemo<TicketDragData>(
     () => ({ kind: "tickets", projectId, ticketIds: dragTicketIds }),
     [projectId, dragTicketIds],
@@ -175,7 +169,7 @@ export function SortableTicketShell({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
     data: dragData,
-    transition: reducedMotion || keyboardDrag ? null : SORT_TRANSITION,
+    transition: instantSort ? null : SORT_TRANSITION,
   });
 
   // Keyboard-open path (a11y): dnd-kit already makes the card focusable
@@ -243,6 +237,8 @@ interface TicketCardProps {
   projectLabels: readonly Label[];
   selected: boolean;
   dragHidden: boolean;
+  /** Board-owned motion policy, stable throughout pointer movement. */
+  instantSort?: boolean;
   /** Omitted for an unselected card, whose payload is just its own id. */
   dragTicketIds?: readonly string[];
   /** What is running on this ticket, or `null` for nothing (VC-100). */
@@ -267,6 +263,7 @@ export const TicketCard = React.memo(function TicketCard({
   projectLabels,
   selected,
   dragHidden,
+  instantSort = false,
   dragTicketIds,
   sessionActivity,
   onSelect,
@@ -279,6 +276,7 @@ export const TicketCard = React.memo(function TicketCard({
       projectId={projectId}
       selected={selected}
       dragHidden={dragHidden}
+      instantSort={instantSort}
       dragTicketIds={dragTicketIds ?? ownDragIds}
       onSelect={onSelect}
       onOpen={onOpen}

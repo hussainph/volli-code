@@ -75,6 +75,7 @@ interface BoardColumnProps {
    * not allowed to do.
    */
   dragActive?: boolean;
+  instantSort?: boolean;
 }
 
 /** The column list's `gap-2`, in px — the spacers have to account for it. */
@@ -312,6 +313,7 @@ export const BoardColumn = React.memo(function BoardColumn({
   dimmed = false,
   aimed = false,
   dragActive = false,
+  instantSort = false,
   revealTicketId = null,
 }: BoardColumnProps) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
@@ -495,6 +497,7 @@ export const BoardColumn = React.memo(function BoardColumn({
                   projectLabels={projectLabels}
                   selected={selectedSet.has(ticket.id)}
                   dragHidden={draggingSet.has(ticket.id)}
+                  instantSort={instantSort}
                   dragTicketIds={selectedSet.has(ticket.id) ? groupDragIds : undefined}
                   sessionActivity={sessionActivity[ticket.id] ?? null}
                   onSelect={onSelect}

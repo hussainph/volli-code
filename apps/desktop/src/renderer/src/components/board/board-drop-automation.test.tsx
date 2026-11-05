@@ -74,13 +74,18 @@ import { BoardBoundary } from "./board-boundary";
  * entry catches the board's own calls; dnd-kit's internals import these
  * directly and are unaffected.
  */
-const renders = vi.hoisted(() => ({ sortable: 0, droppable: 0 }));
+const renders = vi.hoisted(() => ({
+  sortable: 0,
+  droppable: 0,
+  policies: new Map<string, unknown>(),
+}));
 vi.mock("@dnd-kit/sortable", async (importActual) => {
   const actual = await importActual<typeof import("@dnd-kit/sortable")>();
   return {
     ...actual,
     useSortable: (...args: Parameters<typeof actual.useSortable>) => {
       renders.sortable += 1;
+      renders.policies.set(String(args[0].id), args[0].transition);
       return actual.useSortable(...args);
     },
   };
@@ -927,6 +932,45 @@ function slotNamed(ticketId: string): Element {
  * shared Bouncy landing spring.
  */
 describe("a group of cards released into another column", () => {
+  it.each(["board", "list"] as const)(
+    "shares the live motion policy in %s view",
+    async (boardView) => {
+      await mountBoard();
+      await act(async () =>
+        useProjectUiStore.setState({ byProject: { p1: { ...DEFAULT_PROJECT_UI, boardView } } }),
+      );
+      expect([...renders.policies.values()].every((policy) => policy !== null)).toBe(true);
+      await act(async () => {
+        document.documentElement.dataset.motion = "off";
+        window.dispatchEvent(new Event("volli-motion-change"));
+      });
+      expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
+      await act(async () => {
+        delete document.documentElement.dataset.motion;
+        window.dispatchEvent(new Event("volli-motion-change"));
+      });
+      expect([...renders.policies.values()].every((policy) => policy !== null)).toBe(true);
+      if (boardView === "list") {
+        const grip = document.querySelector<HTMLElement>("[data-ticket-row]")!;
+        await act(async () =>
+          grip.dispatchEvent(
+            new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }),
+          ),
+        );
+        expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        await act(async () =>
+          document.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+          ),
+        );
+        expect([...renders.policies.values()].every((policy) => policy !== null)).toBe(true);
+      }
+    },
+  );
+
   it(
     "lands keyboard drags immediately without a spring or sortable transition",
     async () => {

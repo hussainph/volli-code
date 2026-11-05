@@ -1683,12 +1683,7 @@ table {
   [data-volli-surface],
   [role="log"].bg-background,
   [data-diff-fit],
-  .prompt-surface textarea,
-  [data-terminal-renderer],
-  [data-monaco-status],
-  [data-monaco-fallback],
-  [data-testid="markdown-preview"],
-  table
+  .prompt-surface textarea
 ) {
   --material-tint: color-mix(
     in oklab,
@@ -1697,6 +1692,13 @@ table {
   );
   background: linear-gradient(var(--material-tint), var(--material-tint)), var(--canvas);
   background-attachment: fixed;
+}
+[data-terminal-renderer],
+[data-monaco-status],
+[data-monaco-fallback],
+[data-testid="markdown-preview"],
+table {
+  background: var(--background);
 }
 .material-solid {
   background: var(--material-solid-fill);
@@ -1828,6 +1830,14 @@ article.bg-card {
 :is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *,
 :is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::before,
 :is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::after {
+  animation-play-state: paused !important;
+}
+/* Keep the state mark, but spend no timeline work outside the visible window.
+ * Slot intersection is shared by the Board; no per-glyph React subscriptions. */
+[data-board-ticket-slot][data-viewport-hidden="true"] .session-ring::before,
+:root[data-document-hidden="true"] *,
+:root[data-document-hidden="true"] *::before,
+:root[data-document-hidden="true"] *::after {
   animation-play-state: paused !important;
 }
 /* Hard blur budget: no nested passes, and no pass during a pour/morph. */

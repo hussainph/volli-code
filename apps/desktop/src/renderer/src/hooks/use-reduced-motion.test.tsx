@@ -44,3 +44,33 @@ it("observes both the system and the app preference, and detaches both listeners
   await act(async () => root.unmount());
   expect(query.removeEventListener).toHaveBeenCalledWith("change", expect.any(Function));
 });
+
+it("multiplexes owners, detaches after the last owner and can resubscribe", async () => {
+  vi.resetModules();
+  const { subscribeMotionPreference } = await import("./use-reduced-motion");
+  const query = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => query),
+  );
+  const add = vi.spyOn(window, "addEventListener");
+  const remove = vi.spyOn(window, "removeEventListener");
+  const notify = vi.fn();
+  const first = subscribeMotionPreference(notify);
+  const second = subscribeMotionPreference(notify);
+  expect(query.addEventListener).toHaveBeenCalledOnce();
+  expect(add.mock.calls.filter(([type]) => type === "volli-motion-change")).toHaveLength(1);
+  window.dispatchEvent(new Event("volli-motion-change"));
+  expect(notify).toHaveBeenCalledTimes(2);
+  first();
+  first();
+  expect(query.removeEventListener).not.toHaveBeenCalled();
+  second();
+  expect(query.removeEventListener).toHaveBeenCalledOnce();
+  expect(remove.mock.calls.filter(([type]) => type === "volli-motion-change")).toHaveLength(1);
+  const third = subscribeMotionPreference(notify);
+  expect(query.addEventListener).toHaveBeenCalledTimes(2);
+  third();
+  add.mockRestore();
+  remove.mockRestore();
+});

@@ -3,7 +3,7 @@ import * as React from "react";
 const QUERY = "(prefers-reduced-motion: reduce)";
 
 // One MediaQueryList shared by every caller — the flag is global to the
-// window, and this hook mounts once per ticket card, so per-instance
+// window, and hot lists may mount many callers, so per-instance
 // `matchMedia` objects would multiply with board size and churn on remount.
 // Lazily created so importing the module never touches `window`.
 let mediaQuery: MediaQueryList | undefined;
@@ -14,15 +14,26 @@ function getMediaQuery(): MediaQueryList | undefined {
   return mediaQuery;
 }
 
-/** Shared live subscription for imperative animation owners as well as React. */
+const subscribers = new Set<() => void>();
+function notifyMotionPreference(): void {
+  for (const subscriber of subscribers) subscriber();
+}
+
+/** One OS/app listener pair, installed only while an animation owner subscribes. */
 export function subscribeMotionPreference(onChange: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   const query = getMediaQuery();
-  query?.addEventListener("change", onChange);
-  window.addEventListener("volli-motion-change", onChange);
+  // A distinct entry allows two owners to subscribe the same callback safely.
+  const notify = () => onChange();
+  if (subscribers.size === 0) {
+    query?.addEventListener("change", notifyMotionPreference);
+    window.addEventListener("volli-motion-change", notifyMotionPreference);
+  }
+  subscribers.add(notify);
   return () => {
-    query?.removeEventListener("change", onChange);
-    window.removeEventListener("volli-motion-change", onChange);
+    if (!subscribers.delete(notify) || subscribers.size !== 0) return;
+    query?.removeEventListener("change", notifyMotionPreference);
+    window.removeEventListener("volli-motion-change", notifyMotionPreference);
   };
 }
 

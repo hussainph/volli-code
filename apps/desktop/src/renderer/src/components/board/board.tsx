@@ -1,3 +1,4 @@
+import { useBoardMotionVisibility } from "@renderer/hooks/use-motion-visibility";
 import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
 import {
@@ -460,6 +461,8 @@ export const Board = React.memo(function Board({
     (state) =>
       frozen.current?.sort ?? state.byProject[projectId]?.boardSort ?? DEFAULT_PROJECT_UI.boardSort,
   );
+  const boardRef = React.useRef<HTMLDivElement>(null);
+  useBoardMotionVisibility(boardRef);
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const pendingSlotAnimation = React.useRef<Map<string, DOMRect> | null>(null);
   const landingAnimations = React.useRef(new Set<Animation>());
@@ -475,6 +478,8 @@ export const Board = React.memo(function Board({
   }, [selectedIds]);
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
+  // One policy for both views, not a monitor and preference subscription per card.
+  const instantSort = reducedMotion || drag?.keyboard === true;
   React.useEffect(() => {
     if (!reducedMotion) return;
     for (const animation of landingAnimations.current) animation.cancel();
@@ -1133,7 +1138,7 @@ export const Board = React.memo(function Board({
           instead of one per card. The whole board is its `children` prop, which
           is what lets an open dialog re-render the host alone. */}
       <TicketDialogHost projectId={projectId}>
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div ref={boardRef} className="flex min-h-0 flex-1 flex-col">
           <BoardHeader
             projectId={projectId}
             ticketCount={visible.length}
@@ -1173,6 +1178,7 @@ export const Board = React.memo(function Board({
                 emptyDropStatuses={emptyDropStatuses}
                 boardEmpty={boardEmpty}
                 dragActive={drag !== null}
+                instantSort={instantSort}
                 aimedStatus={aimedStatus}
                 selectedIds={selectedIds}
                 draggingIds={draggingIds}
@@ -1241,6 +1247,7 @@ export const Board = React.memo(function Board({
                     // A column's window may only GROW while a card is in the
                     // air: see `column-window.ts`.
                     dragActive={drag !== null}
+                    instantSort={instantSort}
                   />
                 ))}
                 {boardBare ? null : (
