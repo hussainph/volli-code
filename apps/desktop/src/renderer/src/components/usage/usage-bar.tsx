@@ -151,9 +151,9 @@ export function UsageClassRows({ summary }: { summary: SessionUsageSummary }) {
   if (segments.length === 0) return null;
   const total = totalUsageTokens(summary);
   return (
-    <dl className="flex flex-col gap-2">
+    <dl className="shrink-0">
       {segments.map((segment) => (
-        <div key={segment.id} className="flex items-center gap-2">
+        <div key={segment.id} className="flex min-h-7 items-center gap-2">
           <span
             aria-hidden
             style={{ background: `var(--usage-ink)`, ...CLASS_STYLE[segment.id] }}
@@ -165,7 +165,7 @@ export function UsageClassRows({ summary }: { summary: SessionUsageSummary }) {
           >
             {segment.label}
           </dt>
-          <dd className="flex shrink-0 items-baseline gap-2 text-ui text-foreground">
+          <dd className="flex shrink-0 items-baseline gap-2 text-right text-ui tabular-nums text-foreground">
             <UsageTokenCount tokens={segment.tokens} />
             <span className="w-12 text-right text-label tabular-nums text-muted-foreground">
               {((segment.tokens / total) * 100).toFixed(1)}%

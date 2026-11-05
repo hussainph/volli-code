@@ -1,6 +1,6 @@
 /** A single pinned spend reading. Class counts and attribution unfold above it,
  * within the rail's existing bounded scroller. Unmetered Tickets stay silent. */
-import { ReceiptIcon } from "@renderer/components/ui/icon";
+import { CostIcon } from "@renderer/components/ui/icon";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
@@ -69,10 +69,13 @@ export function TicketUsageBlock({
         <RailFoldBody>
           <div
             data-testid="ticket-usage-body"
+            role="region"
+            aria-label="Ticket usage breakdown"
+            tabIndex={0}
             className={cn(
               // `overscroll-contain` so reaching the end of this list does not
               // hand the wheel to the Now scroller behind it.
-              "flex max-h-40 flex-col gap-3 overflow-y-auto overscroll-contain border-b border-sidebar-border/70 pt-3 pb-4",
+              "usage-breakdown-scroll flex max-h-40 flex-col gap-2 overflow-y-auto overscroll-contain border-b border-sidebar-border/70 py-2 [scroll-padding-block:8px]",
               RAIL_PANEL_INSET,
             )}
           >
@@ -105,7 +108,7 @@ export function TicketUsageBlock({
             aria-label={`Ticket usage ${tokenCountLabel(tokens)}, ${cost} — ${open ? "hide" : "show"} breakdown`}
             className={cn(RAIL_FOOTER_ROW, "py-2")}
           >
-            <ReceiptIcon className="size-4 shrink-0 text-muted-foreground" />
+            <CostIcon className="size-4 shrink-0 text-muted-foreground" />
             <UsageSummaryFigure summary={summary} />
             <RailFoldCaret open={open} placement="footer" />
           </button>

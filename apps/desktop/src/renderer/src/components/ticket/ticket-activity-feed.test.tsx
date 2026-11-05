@@ -169,6 +169,7 @@ it("attributes current and departed people, keeps You personal, and hides edits 
     version: 1,
   });
   await mount();
+  expect(container?.querySelector("h2")?.textContent).toBe("Activity");
   expect(container?.textContent).toContain("Ben Jones created the ticket");
   expect(container?.textContent).toContain("You edited the description");
   const otherComment = [...container!.querySelectorAll("li")].find((row) =>

@@ -225,7 +225,7 @@ describe("the rail roster on the push path", () => {
   });
 
   it("says what is missing, once, only after the listing has answered with nothing", async () => {
-    // An empty roster is one sentence in a dashed frame: the heading's own
+    // An empty roster is one inline sentence: the heading's own
     // control sits 20px above it, so a second copy inside the frame would be
     // the same offer twice in one glance. "Empty" is a listing that has
     // ANSWERED with no rows — an unread one holds its box instead.
@@ -240,6 +240,11 @@ describe("the rail roster on the push path", () => {
 
     expect(container?.querySelector('[data-testid="ticket-sessions-loading"]')).toBeNull();
     expect(currentSectionText()).toContain("No active sessions");
+    const empty = [...(container?.querySelectorAll("p") ?? [])].find(
+      (node) => node.textContent === "No active sessions",
+    );
+    expect(empty?.className).not.toContain("border");
+    expect(empty?.className).toContain("text-ui");
     expect(container?.querySelectorAll('[aria-label="New chat"]').length).toBe(1);
   });
 

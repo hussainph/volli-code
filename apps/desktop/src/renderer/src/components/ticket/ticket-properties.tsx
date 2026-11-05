@@ -2,7 +2,6 @@
  * with the board store; the row and pop-up geometry are shared with forms. */
 import * as React from "react";
 import {
-  FlagIcon,
   InboxIcon,
   ChecklistIcon,
   PlayCircleIcon,
@@ -29,6 +28,7 @@ import {
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useLabelVocabulary } from "@renderer/components/ticket/label-picker";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { InspectorPopup, InspectorRow } from "@renderer/components/ui/inspector";
 import { Command, CommandInput, CommandItem, CommandList } from "@renderer/components/ui/command";
 import {
@@ -399,7 +399,9 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
               value={ticket.priority}
               canWrite={canWrite}
             >
-              <FlagIcon aria-hidden className="size-3.5 text-muted-foreground" />
+              <span aria-hidden className="flex size-3.5 shrink-0 items-center justify-center">
+                <PriorityIndicator priority={ticket.priority} />
+              </span>
             </ValueTrigger>
             <DropdownMenuContent align="start">
               <DropdownMenuRadioGroup
@@ -413,6 +415,12 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
               >
                 {TICKET_PRIORITIES.map((priority) => (
                   <DropdownMenuRadioItem key={priority} value={priority}>
+                    <span
+                      aria-hidden
+                      className="flex size-3.5 shrink-0 items-center justify-center"
+                    >
+                      <PriorityIndicator priority={priority} />
+                    </span>
                     {TICKET_PRIORITY_LABELS[priority]}
                   </DropdownMenuRadioItem>
                 ))}

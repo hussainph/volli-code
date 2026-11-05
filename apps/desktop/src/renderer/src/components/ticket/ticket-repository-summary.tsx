@@ -1418,38 +1418,45 @@ export function TicketRepositorySummary({
             checkout footer so the two scopes draw one row. */}
         <div className={RAIL_CHECKOUT_ROW}>
           <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                data-testid="ticket-repository-branch"
-                aria-label={
-                  ticket.branch === null
-                    ? "Worktree identity"
-                    : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
-                }
-                className={RAIL_CHECKOUT_IDENTITY}
-              >
-                <BranchIcon className="size-4 shrink-0 text-muted-foreground" />
-                <span
-                  className="flex min-w-0 flex-1 items-center gap-1 font-mono text-ui text-sidebar-foreground"
-                  title={`${ticket.baseBranch ?? "Base unset"} → ${ticket.branch ?? "No branch yet"}`}
-                >
-                  {ticket.branch && (
-                    <>
-                      <span className="max-w-16 shrink-0 truncate">
-                        {ticket.baseBranch ?? "Base unset"}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-testid="ticket-repository-branch"
+                    aria-label={
+                      ticket.branch === null
+                        ? "Worktree identity"
+                        : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
+                    }
+                    className={RAIL_CHECKOUT_IDENTITY}
+                  >
+                    <BranchIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <span
+                      className="flex min-w-0 flex-1 items-center gap-1 font-mono text-label text-sidebar-foreground"
+                      title={`${ticket.baseBranch ?? "Base unset"} → ${ticket.branch ?? "No branch yet"}`}
+                    >
+                      {ticket.branch && (
+                        <>
+                          <span className="max-w-16 shrink-0 truncate">
+                            {ticket.baseBranch ?? "Base unset"}
+                          </span>
+                          <span aria-hidden className="shrink-0 text-muted-foreground">
+                            →
+                          </span>
+                        </>
+                      )}
+                      <span dir="rtl" className="min-w-0 truncate text-left">
+                        <bdi dir="ltr">{ticket.branch ?? ticket.baseBranch ?? "No branch yet"}</bdi>
                       </span>
-                      <span aria-hidden className="shrink-0 text-muted-foreground">
-                        →
-                      </span>
-                    </>
-                  )}
-                  <span className="min-w-0 truncate">
-                    {ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
-                  </span>
-                </span>
-              </button>
-            </PopoverTrigger>
+                    </span>
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-96 break-all font-mono">
+                {ticket.baseBranch ?? "Base unset"} → {ticket.branch ?? "No branch yet"}
+              </TooltipContent>
+            </Tooltip>
             <RepositoryPopoverContent projectId={projectId} ticket={ticket} />
           </Popover>
           {hasWorktree ? (

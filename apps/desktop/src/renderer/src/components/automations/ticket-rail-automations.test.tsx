@@ -485,7 +485,8 @@ describe("the offer list", () => {
     expect(text()).toContain("No automations");
 
     const panel = document.querySelector('[data-testid="ticket-rail-automations"]');
-    const heading = panel?.querySelector("h2");
+    const heading = panel?.querySelector("h3");
+    expect(heading?.className).toContain("text-ui");
     const door = control("Open Automations");
     expect(heading?.textContent).toBe("Automations");
     // VC-257 is a layout change: the heading and the door must share the
