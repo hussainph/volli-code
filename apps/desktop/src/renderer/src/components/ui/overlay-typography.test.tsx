@@ -231,7 +231,7 @@ describe("overlay layout contracts", () => {
     expect(parent.contains(sub)).toBe(false);
     expect(sub.classList.contains("material-floating")).toBe(true);
     expect(styles).toMatch(
-      /\.material-floating,[^{]*\{[^}]*backdrop-filter:\s*blur\(20px\)\s+saturate\(1\.5\)/,
+      /\.material-floating,[^{]*\{[^}]*backdrop-filter:\s*blur\(var\(--glass-blur\)\)/,
     );
     const nested = styles.match(/([^{}]*)\{[^}]*backdrop-filter:\s*none !important/)?.[1] ?? "";
     expect(nested).not.toContain('[data-slot$="menu-sub-content"].material-floating');

@@ -1,3 +1,4 @@
+import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import * as React from "react";
 
 import { ComposerForm } from "@renderer/components/board/new-ticket/composer-form";
@@ -27,6 +28,18 @@ export function NewTicketDialog() {
   const newTicketOpen = useUiStore((state) => state.newTicketOpen);
   const open = newTicketOpen && project !== null;
   const [expanded, setExpanded] = React.useState(false);
+  const hasProject = project !== null;
+  React.useEffect(() => {
+    if (!hasProject || typeof requestIdleCallback !== "function") return;
+    // Warm code, not an editor/model/worker view. The final title input remains
+    // independently usable while the description runtime initializes.
+    const idle = requestIdleCallback(() => {
+      void loadMonacoRuntime().catch((error: unknown) =>
+        console.warn("Editor prefetch unavailable", error),
+      );
+    });
+    return () => cancelIdleCallback(idle);
+  }, [hasProject]);
 
   return (
     <Dialog

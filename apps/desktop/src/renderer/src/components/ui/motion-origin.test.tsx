@@ -202,3 +202,30 @@ describe("activation-local primitive motion", () => {
     expect(node.dataset.motionOrigin).toBe("instant");
   });
 });
+
+function RetainedSurface() {
+  return <MotionOriginRoot scope="sample">{(state) => <Sample {...state} />}</MotionOriginRoot>;
+}
+function Sample({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
+  const motion = useMotionOriginProps("sample", {}, false, true);
+  return (
+    <button {...motion} data-state={open ? "open" : "closed"} onClick={() => onOpenChange(!open)}>
+      Toggle
+    </button>
+  );
+}
+
+it("samples the displayed frame before closing Presence or reversing an entrance", async () => {
+  await act(async () => root.render(<RetainedSurface />));
+  const node = trigger();
+  node.style.opacity = "0.4";
+  node.style.transform = "matrix(0.98, 0, 0, 0.98, 0, -2)";
+  await click(node, 1);
+  expect(node.style.getPropertyValue("--overlay-from-opacity")).toBe("0.4");
+  expect(node.style.getPropertyValue("--overlay-from-transform")).toBe(
+    "matrix(0.98, 0, 0, 0.98, 0, -2)",
+  );
+  node.style.opacity = "0.7";
+  await click(node, 1);
+  expect(node.style.getPropertyValue("--overlay-from-opacity")).toBe("0.7");
+});

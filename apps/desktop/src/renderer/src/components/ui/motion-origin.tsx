@@ -4,7 +4,7 @@ import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 
 type Origin = "keyboard" | "pointer";
 type OpenProps = { open?: boolean; defaultOpen?: boolean; onOpenChange?(open: boolean): void };
-type MotionState = { origin: Origin | "instant"; record(origin: Origin): void };
+type MotionState = { origin: Origin | "instant"; owner?: string; record(origin: Origin): void };
 const UNKNOWN: MotionState = { origin: "keyboard", record: () => {} };
 const MotionOrigin = React.createContext<Record<string, MotionState>>({});
 
@@ -22,6 +22,7 @@ export function MotionOriginRoot({
   children(props: Required<Pick<OpenProps, "open" | "onOpenChange">>): React.ReactNode;
 }) {
   const parent = React.useContext(MotionOrigin);
+  const owner = React.useId();
   const reduced = useReducedMotion();
   const [internal, setInternal] = React.useState(defaultOpen);
   const open = controlled ?? internal;
@@ -58,14 +59,25 @@ export function MotionOriginRoot({
     requestedOpen.current = null;
   }, [open, externalChange, reduced]);
   const value = React.useMemo(
-    () => ({ ...parent, [scope]: { origin: effectiveOrigin, record } }),
-    [parent, scope, effectiveOrigin, record],
+    () => ({ ...parent, [scope]: { origin: effectiveOrigin, owner, record } }),
+    [parent, scope, effectiveOrigin, owner, record],
   );
   return (
     <MotionOrigin.Provider value={value}>
       {children({
         open,
         onOpenChange(next) {
+          // Sample the presented frame before Radix changes state. Closing
+          // Presence retains the node, so a reversal starts here, not at the
+          // entrance endpoint. CSS owns timing and Radix owns unmount/focus.
+          if (typeof document !== "undefined") {
+            const node = document.querySelector<HTMLElement>(`[data-motion-owner="${owner}"]`);
+            if (node) {
+              const presented = getComputedStyle(node);
+              node.style.setProperty("--overlay-from-opacity", presented.opacity || "1");
+              node.style.setProperty("--overlay-from-transform", presented.transform || "none");
+            }
+          }
           // Radix hover intent resolves after the triggering pointer event.
           requestedOpen.current = next;
           setOrigin(reduced ? "keyboard" : (activation.current ?? (hover ? origin : "keyboard")));
@@ -87,10 +99,11 @@ export function useMotionOriginProps<T extends HTMLElement>(
   hover = false,
   surface = false,
 ) {
-  const { origin, record } = React.useContext(MotionOrigin)[scope] ?? UNKNOWN;
+  const { origin, owner, record } = React.useContext(MotionOrigin)[scope] ?? UNKNOWN;
   return {
     ...(surface
       ? {
+          "data-motion-owner": owner,
           onEscapeKeyDown(event: KeyboardEvent) {
             record("keyboard");
             props.onEscapeKeyDown?.(event);

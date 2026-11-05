@@ -74,7 +74,7 @@ export const MENU_SURFACE_MOTION = `${MENU_SURFACE_FADE} ${MENU_SURFACE_ANCHORED
  * dense 28px row height.
  */
 const MENU_ROW_LAYOUT =
-  "relative flex cursor-default items-center gap-2 min-w-0 rounded-menu-item px-2 py-1 text-ui font-medium wrap-anywhere outline-hidden select-none [&>span:not([data-slot])]:min-w-0";
+  "relative flex cursor-default items-center gap-2 min-w-0 rounded-menu-item pr-2 pl-6 py-1 text-ui font-medium wrap-anywhere outline-hidden select-none [&>span:not([data-slot])]:min-w-0";
 
 export const MENU_ROW = `${MENU_ROW_LAYOUT} [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground`;
 
@@ -93,7 +93,7 @@ export const MENU_ROW_STATE_CMDK =
  */
 // Result rows own their glyphs (including nested provenance marks): inheriting
 // MENU_ROW's descendant ink rule would mute a bolt colored by its parent span.
-export const COMMAND_RESULT_ROW = cn(MENU_ROW_LAYOUT, MENU_ROW_STATE_CMDK, "outline-none");
+export const COMMAND_RESULT_ROW = cn(MENU_ROW_LAYOUT, MENU_ROW_STATE_CMDK, "pl-2 outline-none");
 
 /** A sub-menu trigger stays lit for as long as the surface it opened is up. */
 export const MENU_ROW_OPEN =
@@ -103,20 +103,12 @@ export const MENU_ROW_OPEN =
 export const MENU_ROW_DESTRUCTIVE =
   "data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/30 data-[variant=destructive]:*:[svg]:text-destructive!";
 
-/**
- * Rows that can carry a selection mark reserve the column on the RIGHT rather
- * than stock shadcn's leading `pl-8`: these menus put their own icons up front,
- * and an empty check column ahead of them read as dead space. 24px is the
- * spacing ladder's rung above the mark's own extent — {@link MENU_INDICATOR} is
- * 14px at an 8px inset, so it reaches 22px in from the edge and the label stops
- * 2px clear of it. Anything that widens the mark or moves its inset has to
- * re-check this number; there is no rung between 24 and 16 to fall back to.
- */
-export const MENU_ROW_INDICATED = "pr-6";
+/** Native checked-state gutter precedes the icon/title axis. */
+export const MENU_ROW_INDICATED = "pl-6";
 
-/** The box the selection mark is centred in, at the row's trailing edge. */
+/** The box the selection mark is centred in, in the leading checked-state gutter. */
 export const MENU_INDICATOR =
-  "pointer-events-none absolute right-2 flex size-3.5 items-center justify-center";
+  "pointer-events-none absolute left-1.5 flex size-3.5 items-center justify-center";
 
 /**
  * The mark itself. `text-current` is not decoration — it is how the glyph opts
@@ -130,7 +122,7 @@ export const MENU_INDICATOR_MARK = "text-current";
  * Sentence-case group header on the section-heading rung.
  * The shared heading recipe owns type; menus add their row inset.
  */
-export const MENU_LABEL = cn("px-2 py-1", SECTION_HEADING, "font-semibold");
+export const MENU_LABEL = cn("pr-2 pl-6 py-1", SECTION_HEADING, "font-semibold");
 
 /**
  * {@link MENU_LABEL} again, as the variant cmdk needs — it renders the group
@@ -150,7 +142,7 @@ export const MENU_LABEL_CMDK = cn(
  * glyph runs this app actually ships (⌘D, ⇧⌘D, ⌘T, ⌥⌘T) do not.
  */
 export const MENU_SHORTCUT =
-  "ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-keycap border border-border bg-muted/50 px-1 text-ui font-normal font-sans whitespace-nowrap text-muted-foreground";
+  "ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center px-1 text-ui font-normal font-sans whitespace-nowrap text-muted-foreground";
 
 /** Shared separated search field and hint strip for cmdk and its two dialogs. */
 export const COMMAND_SEARCH_FIELD =
@@ -161,7 +153,7 @@ export const COMMAND_FOOTER =
   "flex min-h-9 shrink-0 flex-wrap items-center justify-end gap-4 bg-muted/30 px-2 py-2 relative before:absolute before:top-0 before:left-1/2 before:h-px before:w-4/5 before:-translate-x-1/2 before:bg-border text-ui font-normal text-muted-foreground";
 
 /** Centered inset hairline, leaving the frame edges uninterrupted. */
-export const MENU_SEPARATOR = "mx-auto my-1 h-px w-4/5 bg-border";
+export const MENU_SEPARATOR = "mx-2 my-1 h-px bg-border";
 
 /**
  * No-results copy: one row's worth of air above and below, at the row's size.

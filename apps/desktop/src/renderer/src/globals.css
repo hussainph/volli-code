@@ -2332,7 +2332,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
  * it inherit this from `:root`. */
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --theme-scope-crossfade: 120ms;
+    --theme-scope-crossfade: 0ms;
   }
 }
 
@@ -3021,7 +3021,15 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-motion-origin="keyboard"],
 [data-motion-origin="instant"],
 [data-motion-origin="keyboard"] *,
-[data-motion-origin="instant"] * {
+[data-motion-origin="instant"] *,
+[data-motion-origin="keyboard"]::before,
+[data-motion-origin="keyboard"]::after,
+[data-motion-origin="instant"]::before,
+[data-motion-origin="instant"]::after,
+[data-motion-origin="keyboard"] *::before,
+[data-motion-origin="keyboard"] *::after,
+[data-motion-origin="instant"] *::before,
+[data-motion-origin="instant"] *::after {
   animation: none !important;
   transition: none !important;
 }
@@ -3631,4 +3639,68 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
   background: transparent;
   border: 2px solid var(--background);
   box-shadow: 0 0 0 0.5px var(--foreground);
+}
+
+/* Reduced preference also settles residual CSS and pseudo-element effects. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+/* Repeated focus and ordinary row hover never travel. */
+:is(
+  input,
+  textarea,
+  [data-slot="sidebar-menu-button"],
+  [data-slot="dropdown-menu-item"],
+  [data-slot="context-menu-item"]
+) {
+  transition: none;
+}
+
+/* The arrow belongs to the bounded popover, outside its scrolling body. */
+[data-slot="popover-content"] {
+  contain: layout;
+}
+
+/* Presentation-aware anchored entrances. Presence remains Radix-owned: no
+ * completion event gates focus, input, selection or the command itself. */
+[data-motion-owner] {
+  --overlay-enter-transform: translateY(-3px) scale(0.97);
+  animation-timing-function: var(--ease-out);
+}
+:is([data-slot="dialog-content"], [data-slot="alert-dialog-content"])[data-motion-owner] {
+  --overlay-enter-transform: translateY(6px) scale(0.98);
+}
+[data-slot="tooltip-content"][data-motion-owner] {
+  --overlay-enter-transform: none;
+}
+[data-motion-owner][data-state="open"] {
+  animation-name: overlay-present-in;
+}
+[data-motion-owner][data-state="closed"] {
+  animation-name: overlay-present-out;
+}
+@keyframes overlay-present-in {
+  from {
+    opacity: var(--overlay-from-opacity, 0);
+    transform: var(--overlay-from-transform, var(--overlay-enter-transform));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes overlay-present-out {
+  from {
+    opacity: var(--overlay-from-opacity, 1);
+    transform: var(--overlay-from-transform, none);
+  }
+  to {
+    opacity: 0;
+    transform: var(--overlay-from-transform, none);
+  }
 }

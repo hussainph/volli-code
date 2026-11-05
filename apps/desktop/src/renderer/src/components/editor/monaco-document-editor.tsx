@@ -383,6 +383,7 @@ export const MonacoDocumentEditor = React.forwardRef<
           ariaLabel: liveRef.current.ariaLabel,
           model: lease.model,
           automaticLayout: false,
+          dimension: { width: host.clientWidth, height: host.clientHeight },
         });
         editorRef.current = view;
 

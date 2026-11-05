@@ -100,10 +100,7 @@ function DropdownMenuItem({
   );
 }
 
-// Checkbox/radio items put the selection indicator TRAILING (right edge)
-// rather than stock shadcn's leading pl-8 gutter: these menus
-// reserve the leading axis for labels; an empty check column would add
-// dead space to every unselected item.
+// Checkbox/radio items share the native leading checked-state gutter.
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -133,7 +130,7 @@ function DropdownMenuRadioGroup({
   return <DropdownMenuPrimitive.RadioGroup data-slot="dropdown-menu-radio-group" {...props} />;
 }
 
-// Same trailing indicator as the checkbox item — a check, not a radio dot,
+// Same leading indicator as the checkbox item — a check, not a radio dot,
 // so single-select (ordering, dialog pickers) and multi-select (facet chips)
 // menus read as one visual language.
 function DropdownMenuRadioItem({

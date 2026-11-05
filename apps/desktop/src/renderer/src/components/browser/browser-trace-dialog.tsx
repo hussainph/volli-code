@@ -409,7 +409,7 @@ function ScrubTrack({
         <span
           key={`${frame.traceId}:${frame.step.seq}`}
           className={cn(
-            "min-w-0 flex-1 rounded-control-mini transition-[height] duration-(--duration-menu-out) motion-reduce:transition-none",
+            "min-w-0 flex-1 rounded-control-mini duration-(--duration-menu-out) motion-reduce:transition-none",
             position === index
               ? "h-4 bg-primary"
               : frame.step.outcome === "ok" && frame.step.error === null

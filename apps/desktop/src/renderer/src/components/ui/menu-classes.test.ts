@@ -16,7 +16,15 @@ import {
 describe("destination-result row composition", () => {
   it("inherits the shared row type, cursor, insets and selection mechanics", () => {
     const tokens = COMMAND_RESULT_ROW.split(" ");
-    for (const token of ["text-ui", "cursor-default", "select-none", "gap-2", "px-2", "py-1"])
+    for (const token of [
+      "text-ui",
+      "cursor-default",
+      "select-none",
+      "gap-2",
+      "pr-2",
+      "pl-2",
+      "py-1",
+    ])
       expect(tokens).toContain(token);
     for (const token of MENU_ROW_STATE_CMDK.split(" ").filter(
       (stateClass) => !stateClass.includes(":bg-"),
@@ -62,12 +70,12 @@ describe("overlay hierarchy", () => {
       expect(recipe).not.toContain("text-label");
     }
   });
-  it("centers dividers and gives hints an intentional non-shrinking keycap", () => {
-    expect(MENU_SEPARATOR).toContain("w-4/5");
-    expect(MENU_SEPARATOR).toContain("mx-auto");
-    expect(MENU_SHORTCUT).toContain("rounded-keycap");
+  it("insets native dividers and shows unboxed, non-shrinking key equivalents", () => {
+    expect(MENU_SEPARATOR).toContain("mx-2");
+    expect(MENU_SEPARATOR).not.toContain("w-4/5");
+    expect(MENU_SHORTCUT).not.toContain("rounded-keycap");
     expect(MENU_SURFACE).toContain("rounded-menu");
-    expect(MENU_SHORTCUT).toContain("border-border");
+    expect(MENU_SHORTCUT).not.toContain("border-border");
     expect(MENU_SHORTCUT).toContain("shrink-0");
     expect(MENU_SHORTCUT).toContain("font-normal");
     expect(COMMAND_FOOTER).toContain("before:w-4/5");

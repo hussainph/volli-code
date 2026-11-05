@@ -107,9 +107,14 @@ function PopoverContent({
   sideOffset = 6,
   tint = false,
   blur = true,
+  showArrow = true,
   children,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content> & { tint?: boolean; blur?: boolean }) {
+}: React.ComponentProps<typeof PopoverPrimitive.Content> & {
+  tint?: boolean;
+  blur?: boolean;
+  showArrow?: boolean;
+}) {
   const claimWheel = usePopoverWheelClaim();
   const motion = useMotionOriginProps("popover", props, false, true);
   return (
@@ -128,7 +133,7 @@ function PopoverContent({
             // loses the specificity fight with `data-[state=open]:animate-in`
             // without it. The full argument is on MENU_SURFACE_FADE in
             // `ui/menu-classes.ts`, which every overlay in this folder follows.
-            "material-floating z-50 max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-4 text-ui text-foreground shadow-overlay ease-out outline-hidden [&>div:has(>[data-slot=popover-header])]:gap-2 motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+            "material-floating z-50 max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-visible origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-4 text-ui text-foreground shadow-overlay ease-out outline-hidden [&>div:has(>[data-slot=popover-header])]:gap-2 motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
             className,
           )}
           {...props}
@@ -146,7 +151,22 @@ function PopoverContent({
             else if (forwarded) forwarded.current = node;
           }}
         >
-          <ControlShapeProvider context="popover">{children}</ControlShapeProvider>
+          <ControlShapeProvider context="popover">
+            <div
+              data-slot="popover-body"
+              className="min-h-0 max-h-[calc(var(--radix-popover-content-available-height)-2rem)] overflow-y-auto overscroll-contain"
+            >
+              {children}
+            </div>
+          </ControlShapeProvider>
+          {showArrow ? (
+            <PopoverPrimitive.Arrow
+              data-slot="popover-arrow"
+              width={12}
+              height={6}
+              className="fill-popover stroke-border [stroke-width:0.5]"
+            />
+          ) : null}
         </PopoverPrimitive.Content>
       </GlassSurface>
     </PopoverPrimitive.Portal>

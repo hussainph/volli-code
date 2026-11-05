@@ -37,7 +37,7 @@ export function subscribeMotionPreference(onChange: () => void): () => void {
   };
 }
 
-/** Theme brightness may ease under OS reduce, but app Motion off means instant. */
+/** OS reduce and app Motion off both settle all motion immediately. */
 export function motionPreferenceSnapshot(): { appOff: boolean; systemReduce: boolean } {
   return {
     appOff: typeof document !== "undefined" && document.documentElement?.dataset?.motion === "off",

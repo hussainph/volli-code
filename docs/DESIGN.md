@@ -252,13 +252,15 @@ Both `prefers-reduced-motion` and the app's **Motion** switch disable foundation
 The switch stamps `html[data-motion="off"]`; duration tokens become zero and press scale one.
 The shared `hooks/use-reduced-motion` hook and `prefersReducedMotion()` read **both** preferences.
 Never import that hook from `motion/react`, which only knows the system preference. Existing
-activity indicators have separate lifetimes; audit them rather than assuming every legacy
-animation has migrated to the foundation tokens.
+activity indicators keep readable static state under reduced motion. Unknown/programmatic,
+keyboard and frequent input settle immediately, including scope repaint and pseudo-elements.
+Only sidebar ticket-group disclosure owns measured height: 200ms open / 160ms close for a
+pointer. Other RailFold bodies and carets settle instantly.
 
 ## Performance is part of the design
 
 - Prefer `transform`, `opacity` and, when necessary, `clip-path`. Continuous pane push,
-  actual tab-width cascades and tree/disclosure height are explicit layout exceptions,
+  actual tab-width cascades and sidebar ticket-group height are explicit layout exceptions,
   not permission for general layout animation. Both pane divider edges read one live
   width; expensive xterm/Monaco/native Browser resize is deferred until it settles.
 - Keep backdrop-filter surfaces few and **never nested**. Take materials from primitives,
@@ -289,6 +291,12 @@ skeletons, never “Loading…” / “Saving…” or a bare ellipsis as progre
 “Open file…” still means another decision follows. Busy controls retain their accessible
 name and disabled semantics. Empty, first-read, refreshing, failed and read-only states
 remain distinct.
+
+`EmptyState` supplies static, canvas-tinted compositions for Page and Panel placement,
+with a short reason heading and at most one real action. Empty chats remain quiet;
+inline lists and pickers show no empty caption or illustration. Sidebar reuse takes
+`EmptyStateScope tier="inline"`; failed reads remain visible and recoverable. Loading
+never flashes a successful empty state, and retained rows survive a failed refresh.
 
 ## Compose, preserve, verify
 

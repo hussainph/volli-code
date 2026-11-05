@@ -155,7 +155,7 @@ describe("floating material as shipped", () => {
     expect(backdrop(peek)).toBe(BLUR);
   });
 
-  it("pauses hidden pane descendants without pausing its own dismissal", async () => {
+  it("keeps hidden pane material stable while pausing descendant animation", async () => {
     await act(async () =>
       root.render(
         <div data-inspector-panel="" aria-hidden="true">
@@ -166,7 +166,7 @@ describe("floating material as shipped", () => {
       ),
     );
     const panel = host.querySelector("[data-inspector-panel]")!;
-    expect(backdrop(panel.firstElementChild!)).toBe("none");
+    expect(backdrop(panel.firstElementChild!)).toBe(BLUR);
     expect(getComputedStyle(host.querySelector(".working")!).animationPlayState).toBe("paused");
     expect(getComputedStyle(panel).animationPlayState).not.toBe("paused");
   });

@@ -337,7 +337,7 @@ function PadOrb({
         marginTop: -size / 2,
         background: stop.hex,
       }}
-      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-(--duration-sheet) ease-out focus-visible:ring-4 focus-visible:outline-2"
+      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 focus-visible:ring-4 focus-visible:outline-2"
     />
   );
 }
@@ -737,7 +737,7 @@ function WaveSlider({
           <span
             aria-hidden
             style={{ left: seam }}
-            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-(--duration-menu-in) ease-out motion-reduce:transition-none!"
+            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised"
           />
           {/* Last, so it takes the pointer: the platform's own control with its
             paint suppressed, which keeps click-to-jump, the keyboard, and the
