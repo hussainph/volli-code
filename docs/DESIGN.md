@@ -49,7 +49,7 @@ The canvas retains authored hues in both appearances: default pools are 62% /
 changes opacity, not authored lightness. Grain belongs only to the canvas.
 
 Pinned navigation and stationary peeks use the same optical recipe. Reveal, pin
-and pour disable blur synchronously, as do nested glass and hidden resident panes.
+and pour keep that material unchanged; nested glass and hidden resident panes disable blur.
 No blur covers a live terminal or native browser work plane. Reduced-transparency,
 stronger-contrast and unsupported-filter fallbacks remain opaque. `--shadow-glass`
 and `--shadow-glass-small` provide quiet lift.
@@ -151,8 +151,11 @@ Sidebar header, rows, section names and footer share an 18px leading ink inset.
 The project name is a measured 15/20px display title, not a new general-purpose type rung.
 Two-line primary rows are 46px, with a 20px identity tile and 2px row gaps.
 Selected navigation is a neutral ink fill, not an accent outline. The Sessions/Files
-choice shares the inspector's `ViewSwitcher` pill, trailing-aligned in the fixed
-project header. It falls back to icon-only in a header narrower than 220px.
+choice uses `ViewSwitcher size="small"`, a quiet 24px pill with 14px glyphs,
+trailing-aligned in the fixed project header. It falls back to icon-only in a
+header narrower than 220px. The inspector keeps its regular pill; Automations
+uses its text variant. Other choices, including Board/List, keep compact native
+icon segments rather than adopting the inspector's pill.
 Home and Automations stay fixed; Active/Previous headings scroll with their list.
 Bands, ticket disclosures (32px) and Session rows (46px Active / 32px Previous)
 share one flat presentation model with stable keys and offsets. Expanded ticket

@@ -136,7 +136,13 @@ describe("Glass board", () => {
     expect(priority?.getAttribute("data-variant")).toBe("toolbar");
     expect(priority?.parentElement?.className).toContain("flex-wrap");
     expect(priority?.parentElement?.parentElement?.className).toContain("ml-auto");
-    expect(full.querySelector('[aria-label="Board layout"]')).not.toBeNull();
+    const layout = full.querySelector('[aria-label="Board layout"]');
+    expect(layout?.getAttribute("data-slot")).toBe("segmented");
+    expect(layout?.getAttribute("data-icon-only")).toBe("true");
+    expect(layout?.querySelector('[aria-label="Board view"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(full.querySelector('[data-slot="view-switcher"]')).toBeNull();
     expect(full.querySelector('[aria-label="Archive"]')).not.toBeNull();
     expect(full.querySelector(".sr-only [data-slot=badge]")?.textContent).toBe("2");
     expect(render(1).textContent).toContain("1 of 2");

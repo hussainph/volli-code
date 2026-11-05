@@ -111,6 +111,7 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
                 </div>
                 <ViewSwitcher
                   label="Sidebar content"
+                  size="small"
                   className="sidebar-view-switcher"
                   active={content}
                   modes={[

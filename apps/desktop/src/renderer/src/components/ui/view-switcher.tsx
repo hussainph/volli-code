@@ -59,6 +59,8 @@ export interface ViewSwitcherProps<K extends string> {
    */
   idPrefix?: string;
   variant?: "selected-label" | "text" | "icon-only";
+  /** Quiet source-list header control; the inspector keeps its regular drawing. */
+  size?: "regular" | "small";
   className?: string;
   onSelect(next: K): void;
 }
@@ -70,6 +72,7 @@ export function ViewSwitcher<K extends string>({
   idPrefix,
   onSelect,
   variant = "selected-label",
+  size = "regular",
   className,
 }: ViewSwitcherProps<K>) {
   const generatedId = React.useId();
@@ -101,16 +104,17 @@ export function ViewSwitcher<K extends string>({
       <div
         data-slot="view-switcher"
         data-variant={variant}
+        data-size={size}
         role="tablist"
         aria-label={label}
         // The gate's one answer, on the DOM: which activation path a selection
         // came through is otherwise only visible in Motion's props, and the
         // defect here was the path, not the plan.
         data-animated={animated}
-        // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
-        // height (40px), so the track can never disagree with what it holds.
+        // The track follows its tabs: regular is 32 + 8px, small is 20 + 4px.
         className={cn(
-          "glass mx-auto flex w-max max-w-full items-center gap-1 rounded-full p-1",
+          "glass mx-auto flex w-max max-w-full items-center rounded-full",
+          size === "small" ? "gap-0.5 p-0.5" : "gap-1 p-1",
           className,
         )}
       >
@@ -141,14 +145,19 @@ export function ViewSwitcher<K extends string>({
               }}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={cn(
-                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-full text-ui outline-none",
+                "relative flex items-center justify-center gap-1 overflow-hidden rounded-full outline-none",
+                size === "small" ? "h-5 text-label" : "h-8 text-ui",
                 variant === "text"
-                  ? "w-auto px-3"
-                  : variant === "icon-only"
-                    ? "w-8"
-                    : selected
-                      ? "w-[84px]"
-                      : "w-8",
+                  ? size === "small"
+                    ? "w-auto px-2"
+                    : "w-auto px-3"
+                  : variant === "icon-only" || !selected
+                    ? size === "small"
+                      ? "w-5"
+                      : "w-8"
+                    : size === "small"
+                      ? "w-[72px]"
+                      : "w-[84px]",
                 // `scale-100!` is the press's reduced-motion cancel: dropping
                 // the transition below only made the depress instant, it never
                 // removed it, and `transform-none` could not have — see the

@@ -8,7 +8,10 @@ const modes = [
   { key: "first", label: "First" },
   { key: "second", label: "Second" },
 ] as const;
-function drawing(variant: "text" | "selected-label" | "icon-only") {
+function drawing(
+  variant: "text" | "selected-label" | "icon-only",
+  size: "regular" | "small" = "regular",
+) {
   const root = document.createElement("div");
   root.innerHTML = renderToStaticMarkup(
     <ViewSwitcher
@@ -20,6 +23,7 @@ function drawing(variant: "text" | "selected-label" | "icon-only") {
       active="first"
       label="Pages"
       variant={variant}
+      size={size}
       onSelect={() => {}}
     />,
   );
@@ -31,6 +35,20 @@ it("retains the inspector's selected-label drawing for in-page icon choices", ()
   expect(root.querySelectorAll('[data-slot="view-switcher-label"]')).toHaveLength(1);
   expect(root.querySelector('[aria-selected="true"]')?.className).toContain("w-[84px]");
   expect(root.querySelector('[role="tablist"]')?.className).toContain("glass");
+});
+it("offers a quiet 24px source-header size without changing the inspector geometry", () => {
+  const small = drawing("selected-label", "small");
+  expect(small.querySelector('[role="tablist"]')?.getAttribute("data-size")).toBe("small");
+  expect(small.querySelector('[role="tablist"]')?.className).toContain("p-0.5");
+  for (const tab of small.querySelectorAll('[role="tab"]')) {
+    expect(tab.className).toContain("h-5");
+    expect(tab.className).toContain("text-label");
+    expect(tab.querySelector("svg")?.classList.contains("size-3.5")).toBe(true);
+  }
+  expect(small.querySelector('[aria-selected="true"]')?.className).toContain("w-[72px]");
+  const regular = drawing("selected-label");
+  expect(regular.querySelector('[role="tablist"]')?.getAttribute("data-size")).toBe("regular");
+  expect(regular.querySelector('[aria-selected="true"]')?.className).toContain("h-8");
 });
 it("offers the receiving Automations task a text-only pill without empty icon spacing", () => {
   const root = drawing("text");

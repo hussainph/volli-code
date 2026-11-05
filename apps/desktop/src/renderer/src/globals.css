@@ -3526,10 +3526,10 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
   transition: none;
 }
 
-/* Narrow source headers use the approved icon-only fallback: 76px, no clipped word. */
+/* Narrow source headers keep the small pill icon-only, never a clipped label. */
 @container project-header (max-width:220px) {
   .sidebar-view-switcher [role="tab"] {
-    width: 32px;
+    width: 20px;
   }
   .sidebar-view-switcher [data-slot="view-switcher-label"] {
     display: none;

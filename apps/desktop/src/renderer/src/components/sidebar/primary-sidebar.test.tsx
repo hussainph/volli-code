@@ -49,6 +49,7 @@ describe("primary sidebar content choice", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -80,6 +81,19 @@ describe("primary sidebar content choice", () => {
       ),
     );
   }
+  it("uses the small header pill with instant roving keyboard selection", async () => {
+    await show();
+    const switcher = container.querySelector('[aria-label="Sidebar content"]')!;
+    expect(switcher.getAttribute("data-size")).toBe("small");
+    const sessions = switcher.querySelector<HTMLButtonElement>('[data-choice="sessions"]')!;
+    await act(async () =>
+      sessions.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+    );
+    const files = switcher.querySelector<HTMLButtonElement>('[data-choice="files"]')!;
+    expect(files.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(files);
+    expect(switcher.getAttribute("data-animated")).toBe("false");
+  });
   it("remembers Files in this window and suspends hidden session activity", async () => {
     await show();
     const files = container.querySelector<HTMLButtonElement>('[data-choice="files"]')!;
