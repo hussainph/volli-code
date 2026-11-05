@@ -1205,7 +1205,11 @@ function RunRow({
             <ResolvedModelName
               selection={run.model}
               className="max-w-full"
-              trailing={`${effortLabel(run.model.reasoningLevel)} effort`}
+              trailing={
+                run.model.reasoningLevel === "off"
+                  ? undefined
+                  : `${effortLabel(run.model.reasoningLevel)} effort`
+              }
             />
           </span>
           <span aria-hidden className="text-muted-foreground">

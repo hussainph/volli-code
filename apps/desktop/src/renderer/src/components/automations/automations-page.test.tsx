@@ -759,6 +759,24 @@ describe("run history", () => {
  * model the catalogue does not list.
  */
 describe("the model's display name", () => {
+  it("omits the effort suffix when a pin and a recorded Run have effort off", async () => {
+    const model: ModelSelection = {
+      providerId: "anthropic",
+      modelId: "claude-opus",
+      reasoningLevel: "off",
+    };
+    await mount({
+      automations: [automation({ runtime: model })],
+      runs: [run({ model })],
+      catalogue: { modelLabel: "Claude Opus 4.5" },
+    });
+    const captions = [...document.querySelectorAll('[data-slot="model-name"]')].filter((node) =>
+      node.textContent?.includes("Claude Opus 4.5"),
+    );
+    expect(captions.length).toBeGreaterThanOrEqual(2);
+    for (const caption of captions) expect(caption.textContent).not.toMatch(/off|effort/i);
+    expect(text()).not.toContain("Off effort");
+  });
   it("resolves a pin and a Run row through the catalogue's label", async () => {
     await mount({
       automations: [

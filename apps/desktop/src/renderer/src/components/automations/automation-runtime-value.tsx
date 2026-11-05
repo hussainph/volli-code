@@ -62,7 +62,11 @@ export function AutomationRuntimeValue({
         >
           <ResolvedModelName
             selection={resolved}
-            trailing={`${effortLabel(resolved.reasoningLevel)} effort`}
+            trailing={
+              resolved.reasoningLevel === "off"
+                ? undefined
+                : `${effortLabel(resolved.reasoningLevel)} effort`
+            }
             className="max-w-full"
           />
         </div>
