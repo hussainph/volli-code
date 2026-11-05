@@ -24,15 +24,20 @@ Tint is a design-time material choice, not a user preference or a new theme axis
 
 | Surface | Tint | Implementation |
 |---|---|---|
-| Sidebar, inspector | On | `.glass[data-tint="true"]` or `.material-regular` |
+| Docked sidebar, inspector | On | `.glass[data-tint="true"][data-glass-static="true"]` |
+| Stationary pane peek | On | `.glass[data-tint="true"]`, live overlay |
 | Ordinary menu, popover | Off by default | Shared floating primitive; `PopoverContent tint` opts in |
 | Usage popover | On | Existing `PopoverContent tint` caller |
 | Buttons, small controls | Off | `.glass-control`, no backdrop pass |
 | Content paper | Never | `.material-thick` / `.material-solid` |
 
-`.glass` and `.material-floating` use a 90% neutral veil and one backdrop pass.
-Tinted glass adds viewport-aligned canvas sampling. `.material-regular` samples without a
-permanent backdrop pass; thick/solid materials are opaque. Nested glass filters are disabled;
+`.glass` and `.material-floating` use a 90% neutral veil. Tinted glass adds
+viewport-aligned canvas sampling. Docked navigation uses `data-glass-static="true"`
+on its glass surface or immediate parent: identical tint/mesh/edge/shadow, no live
+backdrop pass, and local paint containment. Toolbar chrome is not paint-contained.
+Only transient floats and stationary pane peeks blur; reveal, pin and pour disable
+blur synchronously. `.material-regular` also samples without a permanent backdrop
+pass; thick/solid materials are opaque. Nested glass filters are disabled;
 reduced-transparency, stronger-contrast and unsupported-filter fallbacks are opaque.
 Glass faces are flat, not bevelled. `--shadow-glass` and `--shadow-glass-small` provide quiet
 lift (light large shadow begins `0 4px 16px` at 5.5% black; dark has its own strength).

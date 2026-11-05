@@ -1809,6 +1809,25 @@ article.bg-card {
   background-position: var(--bx, 0px) var(--by, 0px);
   background-attachment: fixed;
 }
+/* Docked navigation samples only the static canvas. Its tint, viewport mesh,
+ * edge and shadow are unchanged; only transient overlays need a live pass.
+ * Containment stays on the inset card, never on toolbar chrome or resize grips. */
+.glass[data-glass-static="true"],
+[data-glass-static="true"] > .glass {
+  backdrop-filter: none;
+  contain: paint;
+}
+/* Withdrawn resident panes keep identity but spend no descendant animation or
+ * blur budget. Do not pause the panel's own reveal/pour. */
+:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"]
+  :is(.glass, .material-floating) {
+  backdrop-filter: none !important;
+}
+:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *,
+:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::before,
+:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::after {
+  animation-play-state: paused !important;
+}
 /* Hard blur budget: no nested passes, and no pass during a pour/morph. */
 :is(.glass, .material-floating) :is(.glass, .material-floating),
 [data-glass-blur="off"],
@@ -1942,57 +1961,28 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
  * once and reusing them in every correction below makes that drift impossible
  * rather than just fixed for today. */
 :root {
-  --shell-inset: 0.5rem;
+  --shell-inset: var(--glass-gap);
   --shell-edge: 1px;
 }
 
-[data-volli-shell="framed"] [data-volli-sidebar] {
-  margin: var(--shell-inset) 0 var(--shell-inset) var(--shell-inset);
-  border: var(--shell-edge) solid var(--border);
-  border-right-width: 0;
-  /* The container rung, raw rather than through a utility — this is the
-   * outermost container on screen, and a shell rounded tighter than the
-   * dialogs and menus that open over it reads as the wrong way round. */
-  border-radius: var(--radius-container) 0 0 var(--radius-container);
-  box-shadow: var(--shadow-card);
-  clip-path: inset(-60px 0 -60px -60px);
+/* Each navigation pane is an island. Pinning reserves space, never joins
+ * its perimeter to the reading card. Both modes use the same box and material. */
+[data-volli-sidebar] {
+  border: var(--shell-edge) solid var(--glass-edge);
+  border-radius: var(--radius-floating);
+  box-shadow: var(--shadow-glass);
   overflow: hidden;
-  /* `h-full` is `height: 100%`, which measures the row and ignores the margins
-   * — so the unit would hang 16px past the bottom of the window with its lower
-   * corners cut off by the shell's clip. `auto` hands the sizing back to the
-   * flex row's own stretch, which subtracts them. Measured before/after: bottom
-   * 808 in an 800px window, then 792. */
-  height: auto;
 }
-
-/* The framed content card, floating on the canvas — the other half of the unit,
- * keyed to the surface's own endpoint marker rather than to the shell. See the
- * seam block above for why the two halves are allowed to disagree while a pin
- * is travelling. */
-[data-slot="sidebar-inset"][data-sidebar-layout="framed"] {
-  /* 0, not −1px.
-   *
-   * The lab carried a 1px overlap justified by a `--sidebar-width` rounding tax
-   * ("the gap ends at 318, the sidebar at 317"). That tax was real only while
-   * `sidebar-container` still drew its own `border-r`; with that border zeroed
-   * below, the two halves are laid out from the same width token and meet
-   * exactly.
-   *
-   * Fractional widths, contrary to the migration note, ARE reachable — but not
-   * from the resize handle, which divides the pointer delta by `uiScale` and
-   * then hands it to `clampSidebarWidth`, where `Math.round` makes the stored
-   * width an integer every time. They come from `zoom: uiScale` on the content
-   * row: an integer CSS px inside a 0.9 or 1.25 zoom is a fractional used
-   * value, and both halves get the same fraction from the same token. Chromium
-   * lays them out against one another, so they still abut; a −1px overlap under
-   * zoom would instead paint a 1px column of the sidebar's fill over the card,
-   * scaled, which is the artifact rather than the fix. Verified by measurement
-   * at every zoom rung — see the note on this change. */
-  margin: var(--shell-inset) var(--shell-inset) var(--shell-inset) 0;
-  border-left-width: 0;
-  border-radius: 0 var(--radius-container) var(--radius-container) 0;
-  clip-path: inset(-60px -60px -60px 0);
+[data-slot="sidebar-inset"][data-volli-surface] {
+  margin: var(--shell-inset);
+  border: var(--shell-edge) solid var(--border);
+  border-radius: var(--radius-container);
   box-shadow: var(--shadow-card);
+}
+[data-volli-shell="focused"] [data-slot="sidebar-inset"][data-volli-surface] {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 /* Written for the collapsible wrapper that used to sit around both panes: it
@@ -2008,24 +1998,6 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
  * only opacity takes the tile away. */
 [data-volli-shell="framed"] [data-slot="sidebar"].overflow-hidden {
   overflow: visible;
-}
-
-/* `primary-sidebar.tsx`'s presentation pane is sized in TSX from
- * `--sidebar-width` minus `--rail-width` and `--sidebar-edge` — a fixed width,
- * deliberately, because the SAME pane serves both arrangements and their parent
- * boxes differ by exactly the borders `--sidebar-edge` names (one when docked
- * into this seam, two when floating inside its own card). That calc has no idea
- * this seam then insets the sidebar's own box by `--shell-inset`, so the pane
- * ran exactly that far past the right wall.
- *
- * The formula below re-derives the pane's true content box for THIS seam rather
- * than patching the app's, so it names the seam's own borders, not the app's.
- * `--sidebar-edge` is handed BACK here and the same pixel is immediately spent
- * again on `--shell-edge`, the sidebar half's own left border, which the pane
- * lives inside. Identical width, different border; subtracting it under its own
- * name is what keeps the two independent if either moves. */
-[data-volli-shell="framed"] [data-sidebar-presentation="expanded"] {
-  width: calc(var(--sidebar-width) - var(--rail-width) - var(--shell-inset) - var(--shell-edge));
 }
 
 /* Air against the fold, and deliberately almost none — outside the framed scope,
@@ -2050,17 +2022,6 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
  * reads differently from the soft canvas edge opposite it. */
 [data-sidebar-presentation="expanded"] {
   padding-right: 2px;
-}
-
-/* The grip is `absolute inset-y-0 right-0` against the panel's box, which docked
- * spans the full contain-layout row (y 40→800 in an 800px window) — 8px taller
- * at each end than the wall this seam actually draws (y 48→792, from the
- * sidebar's own `--shell-inset` margin). `right` is already correct since the
- * sidebar half has no right margin; only the two ends need pulling in. Floating,
- * the panel's box is already inset at both ends and this rule doesn't match. */
-[data-volli-shell="framed"] [data-slot="sidebar-resize-handle"] {
-  top: var(--shell-inset);
-  bottom: var(--shell-inset);
 }
 
 /* `project-rail.tsx`
@@ -2806,10 +2767,56 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background: color-mix(in srgb, var(--canvas-accent) 3.5%, transparent);
 }
 /* The inspector is a glass sibling of paper, never another paper column. */
-aside:has(> [data-volli-rail]) {
-  background: transparent;
-  border-left: 0;
-  padding: var(--shell-inset);
+[data-inspector-dock][data-pinned] {
+  background: var(--canvas);
+  background-attachment: fixed;
+  background-size: 100vw 100vh;
+}
+[data-inspector-panel] {
+  --panel-hidden-shift: 16px;
+  position: absolute;
+  z-index: 30;
+  inset-block: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 2 * var(--glass-gap));
+  padding: var(--glass-gap);
+  border-radius: var(--radius-floating);
+  translate: calc(100% + var(--panel-hidden-shift)) 0;
+  visibility: hidden;
+  transition: translate var(--reveal-duration, 200ms) var(--ease-swift);
+}
+[data-inspector-panel][data-shown],
+[data-inspector-panel][data-pane-pouring="true"] {
+  visibility: visible;
+}
+[data-inspector-panel][data-shown] {
+  translate: 0 0;
+}
+[data-inspector-panel][data-pane-pouring="true"],
+[data-pane-pouring="true"][data-inspector-trigger] {
+  pointer-events: none;
+}
+[data-pane-pouring="true"] .glass,
+[data-pane-pouring="true"].glass {
+  backdrop-filter: none !important;
+}
+/* Controls on canvas share a neutral face; selected navigator rows share the
+ * exact 18% tint used by Session ListRow, independently of focus. */
+[data-slot="chrome-bar"] .search-capsule.glass-control {
+  background: color-mix(in srgb, var(--glass-fill) 90%, transparent);
+  border-color: var(--glass-edge);
+  color: var(--material-muted-foreground);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"][data-active="true"] {
+  background: var(--accent-selected);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"]:hover:not([data-active="true"]) {
+  background: var(--accent-tint);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"][data-active="true"] > svg {
+  color: var(--primary-text);
 }
 [data-volli-rail].glass {
   border: var(--shell-edge) solid var(--glass-edge);
@@ -2949,4 +2956,22 @@ aside:has(> [data-volli-rail]) {
 .automation-workbench {
   background: var(--canvas);
   background-attachment: fixed;
+}
+
+/* Arrow-key disclosure is navigation, not choreography. */
+.session-envelope[data-motion-origin="keyboard"] svg {
+  transition: none;
+}
+
+[data-volli-sidebar] [data-slot="sidebar-menu-button"] {
+  transition-property: transform, scale;
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"]:focus-visible:active {
+  scale: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-inspector-panel] {
+    transition: none;
+  }
 }

@@ -49,7 +49,7 @@ import { useUiStore } from "@renderer/stores/ui";
 
 const PROJECT_RAIL_WIDTH = 60;
 /** globals.css `--shell-inset`, in the one place TS has to agree with it. */
-const SHELL_INSET = 8;
+const SHELL_INSET = 6;
 /** The standing hint, in the canvas gutter the framed card already leaves bare. */
 const SLIVER_WIDTH = 6;
 /**
@@ -174,13 +174,9 @@ function useSidebarContentMotion({
       // Called at most once, and only on a pass that is going to move
       // something — see `MeasureContentMotion` for why that matters.
       () => ({
-        // `offsetWidth` is one deliberate endpoint read, not a frame-loop read.
-        // In floating mode the panel box has the shell inset taken off; add it
-        // back to recover the exact `--panel-w` that the spacer reserves. The
-        // unpinned card already starts one shell inset inside the row and the
-        // pinned seam starts flush after the spacer, so the visible left edges
-        // are `--panel-w - --shell-inset` apart, not a whole panel width.
-        travel: panel.offsetWidth + (pinned ? 0 : SHELL_INSET) - SHELL_INSET,
+        // Both card endpoints have the same 6px inset. Recover the spacer's
+        // full share from the pane's inset box; never interpolate that width.
+        travel: panel.offsetWidth + SHELL_INSET,
         at: record === null ? 0 : liveTranslateX(content, record),
       }),
     );
@@ -216,7 +212,9 @@ function useSidebarContentMotion({
           [{ translate: `${plan.from}px 0px` }, { translate: `${plan.to}px 0px` }],
           {
             duration: pinned ? OPEN_MS : CLOSE_MS,
-            easing: getComputedStyle(content).getPropertyValue("--ease-swift").trim(),
+            easing: getComputedStyle(content)
+              .getPropertyValue(pinned ? "--ease-swift" : "--ease-out")
+              .trim(),
             fill: "forwards",
           },
         );
@@ -262,87 +260,10 @@ function useSidebarContentMotion({
   return { contentRef, layoutPinned, moving: isContentMoving({ animating, layoutPinned, pinned }) };
 }
 
-/**
- * Window shell: the chrome band, the project rail, the sidebar panel and the
- * content card.
- *
- * THE PANEL IS SUMMONED, NOT DOCKED. The collapsed sidebar used to be a 57px
- * icon strip, and that strip charged the viewport for a list of PAGES forever
- * while the thing you came back for — which sessions are running — was only ever
- * inside the expanded pane. A strip that is neither the content nor free is the
- * worst of the three options, so collapsed is now genuinely zero: the panel is
- * an overlay summoned by the pointer at the window's left edge (see
- * `edge-reveal.ts` for when a pointer there MEANS that) and pinned into the
- * layout by ⌘B or the chrome-band trigger.
- *
- * THE PROJECT RAIL IS CHROME, NOT SIDEBAR. It is a flow sibling of the panel
- * rather than a tier inside it, owned solely by `projectRailHidden`, and it
- * never rides in the panel's tow. That is one toggle governing one thing: an
- * earlier arrangement had `ProjectRailToggle` say "show the switcher" while
- * the switcher only STOOD when the panel happened to be pinned, which is two
- * controls, four states and only two of them coherent. All four combinations now
- * mean exactly what they say:
- *
- *   rail on  + pinned    rail 0–60, panel docked 60–318, content from 318
- *   rail on  + unpinned  rail 0–60, panel floating, content from 68
- *   rail off + pinned    panel docked 0–258, content from 258
- *   rail off + unpinned  panel floating, content from 8
- *
- * The panel is one width in all four — `sidebarWidth` is the two-tier width and
- * the rail's 60 comes off it — so hiding the rail returns its width to the
- * canvas rather than widening the panel, and a panel you sized while it floated
- * is the panel you get when you pin it.
- *
- * THE TWO RECTANGLES COINCIDE, which is what makes pinning a content animation
- * rather than a sidebar one. Docked, the panel's box is full-bleed and
- * globals.css insets `[data-volli-sidebar]` by 8px to draw the seam. Floating,
- * the box is itself inset by 8px and the pane sits flush inside it. Both land
- * the visible card on the same rectangle, so nothing about the sidebar's RESTING
- * place moves on ⌘B — the reveal and the content presentation slide in concert.
- *
- * TWO REVEALS, ONE SLIDE, AND A CLIP THAT SEPARATES THEM. A pin and a hover peek
- * are different gestures and read differently — a pin PUSHES (the spacer takes
- * the panel's width and the content card walks right in step with it), a peek
- * FLOATS (the spacer never moves and the panel passes over the card). What they
- * are not allowed to differ on is where the panel may paint, and the first
- * version let both of them travel the whole way back to the window edge, which
- * meant the panel crossed the project rail — 60px of somebody else's chrome —
- * on every open and every close. That is what read as "clipping through the
- * workspace picker", and it was worst on a pin, where the panel is supposed to
- * be arriving into a dock rather than flying over the room.
- *
- * The fix is a clip, not a second animation. The panel travels inside a wrapper
- * that does not move, clipped flush at `panelLeft` — the rail's right edge, or
- * the window's when the rail is down — and let out by {@link CLIP_SPILL} on the
- * other three sides so its shadow still behaves. The wrapper is the whole point,
- * and two plausible ways of writing it are wrong for reasons only a browser will
- * tell you: a `clip-path` on the panel itself rides the panel's own transform
- * and clips nothing, and a tight wrapper clips the pane's shadow. The oversized
- * overflow clip below preserves that shadow. The panel parks just past the wall
- * rather than past the whole window, so
- * "hidden" costs its own width plus {@link SHADOW_ALLOWANCE} instead of the
- * journey back to zero. The panel now emerges FROM the rail's edge and withdraws
- * into it, in both modes and both directions, and its left edge is never a thing
- * the eye can catch crossing something else. The transform is still the only
- * property that animates, which is what keeps a clip affordable: `clip-path` is
- * static here, so it costs one raster property on an already-promoted layer and
- * nothing per frame.
- *
- * PINNING IS ONE JOURNEY WITH TWO HALVES, so the halves share a clock — but no
- * longer a layout property. The panel was already compositor-only; the hidden
- * cost was its flow spacer animating `width`, which resized every terminal and
- * editor on every frame. The content half now travels on a WAAPI `translate`
- * while its inline geometry stays at one endpoint, then the spacer snaps where
- * that transform leaves it. Opening keeps the wide unpinned surface until the
- * journey lands and clips its translated overflow at the window edge; closing
- * expands it before the journey starts, under an equal inverse translate. The
- * visible left and right edges follow the same path, but expensive descendants
- * see one settled resize instead of ten. See `useSidebarContentMotion` below.
- *
- * ChromeBar owns the top 40px of window chrome and sits above the rail + panel +
- * content row, so SidebarProvider lays out as a column (h-svh, not the stock
- * min-h-svh row) with ChromeBar first.
- */
+/** Window canvas, resident navigation islands and the neutral reading card.
+ * Pinning reserves space once at the compositor endpoint; peeking overlays the
+ * same subtree. The permanent rail and native-scale traffic lights never move.
+ * A stationary clip stops the left pane crossing the workspace rail. */
 export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}) {
   useProjectShortcuts();
   useNewTicketShortcut();
@@ -393,7 +314,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   // but that subtraction now happens once, in CSS, as `--panel-w` below, so a
   // drag can move every box that depends on it without re-rendering anything.
   const panelLeft = railWidth;
-  const floatingInset = pinned ? 0 : SHELL_INSET;
+  const floatingInset = SHELL_INSET;
   const panelShown = !terminalFocused && (pinned || reveal.visible);
   // Native child views composite above every renderer z-index. Keep the marker
   // through the floating panel's exit transition as well as its open state, or
@@ -618,8 +539,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           // meaning the same thing.
           "--sidebar-total": `${sidebarWidth}px`,
           "--panel-w": `calc(var(${LIVE_WIDTH_PROPERTY}, var(--sidebar-total)) - ${PROJECT_RAIL_WIDTH}px)`,
-          // The panel's own box. Floating, it insets itself by the shell's 8px,
-          // so the pane inside has that much less to fill.
+          // The panel's own box, less the shared 6px canvas inset.
           "--sidebar-width": `calc(var(--panel-w) - ${floatingInset}px)`,
           // Zero at THIS level, and that is the decoupling in one line: the rail
           // is no longer inside the pane's box, so the pane's calc must stop
@@ -627,11 +547,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           // purely so globals.css's rail-padding rule keeps reading 60.
           "--rail-width": "0px",
           // What the pane has to give back to whatever draws an edge around it.
-          // Docked, the seam draws one border (globals.css uses --shell-edge
-          // directly and ignores this). Floating, the card draws two, one on
-          // each side, plus its own 8px inset which is already off the width
-          // above.
-          "--sidebar-edge": pinned ? "var(--shell-edge)" : "calc(2 * var(--shell-edge))",
+          // Both floating arrangements draw two glass edges.
+          "--sidebar-edge": "calc(2 * var(--shell-edge))",
         } as React.CSSProperties
       }
     >
@@ -713,18 +630,15 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           // Names the app's principal surface for probes that need to anchor on
           // the card rather than guess at it.
           data-volli-surface=""
+          data-glass-blur={contentMotion.moving ? "off" : undefined}
           className={cn(
             "overflow-hidden",
             terminalFocused
               ? "m-0 rounded-none border-0"
               : cn(
-                  // Docked, margin/radius/seam-facing border are the seam's
-                  // (globals.css) and what stays here is the hairline the card
-                  // draws on its own outer edges. Floating, the surface's layout
-                  // marker does not match and the card becomes whole again —
-                  // four corners, its own left border, standing on the canvas.
+                  // The paper card keeps its whole perimeter in both pin states.
                   "border border-border",
-                  !contentMotion.layoutPinned && "m-2 rounded-xl shadow-card",
+                  !contentMotion.layoutPinned && "rounded-xl shadow-card",
                 ),
           )}
         >
@@ -792,7 +706,13 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             aria-hidden={!panelShown || undefined}
             inert={!panelShown || pouring}
             data-glass-blur={pouring || contentMotion.moving ? "off" : undefined}
+            onTransitionRun={(event) => {
+              if (event.target === event.currentTarget)
+                event.currentTarget.dataset.glassBlur = "off";
+            }}
             onTransitionEnd={(event) => {
+              if (event.target === event.currentTarget)
+                event.currentTarget.removeAttribute("data-glass-blur");
               if (event.target === event.currentTarget && !panelShown) {
                 setFloatingOverlayExiting(false);
               }
@@ -809,18 +729,14 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               // changing, and the panel teleports at full opacity instead of
               // sliding. `transform` stays because `transform-gpu` writes it,
               // and neither costs anything.
-              "transition-[translate,transform,opacity] ease-swift [transition-duration:var(--reveal-duration,200ms)] group-data-[pin-motion=instant]/sidebar-wrapper:transition-none group-data-[motion=instant]/sidebar-wrapper:transition-none",
+              "transition-[translate,transform,opacity] motion-reduce:transition-none ease-swift [transition-duration:var(--reveal-duration,200ms)] group-data-[pin-motion=instant]/sidebar-wrapper:transition-none group-data-[motion=instant]/sidebar-wrapper:transition-none",
               // No `will-change` here, and that is not an omission.
               // `transform-gpu` above writes `transform: translateZ(0)`, which
               // already gives this element its own compositor layer for as long
               // as it exists — so the hint had nothing left to promote, and it
               // named `transform` while the property that actually moves is
               // `translate` (see below).
-              !pinned &&
-                // The wrapper owns the floating edge and shadow. The inner
-                // Sidebar paints regular fake frost in both arrangements:
-                // no large backdrop filter follows this reveal over live work.
-                "overflow-hidden rounded-xl border border-border shadow-overlay",
+              "rounded-floating",
               panelShown
                 ? "translate-x-0"
                 : // Reduced motion: the surface arrives where it will rest
@@ -851,8 +767,9 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             <Sidebar
               collapsible="none"
               data-volli-sidebar
+              data-glass-static={pinned ? "true" : undefined}
               data-tint="true"
-              className="glass min-w-0 flex-1"
+              className="glass min-w-0 flex-1 rounded-floating"
             >
               {paneContent}
             </Sidebar>

@@ -601,6 +601,7 @@ export function TicketTabStrip({
             size="icon-xs"
             variant="ghost"
             className="ml-1 h-full rounded-none"
+            data-inspector-trigger="ticket"
             onClick={onToggleRail}
             // No `aria-pressed`: the label below already carries the state, and
             // the button has no pressed appearance for it to describe — the same

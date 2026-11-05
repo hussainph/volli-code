@@ -116,7 +116,7 @@ import {
   topStripTabIds,
 } from "@renderer/components/split/split-tab-groups";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
-import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
+import { InspectorShell } from "@renderer/components/sidebar/inspector-shell";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
@@ -495,10 +495,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // has none: a repository navigator or Session facts over the board would be
   // about an object that is not in front.
   const railCollapsed = useUiStore((state) => state.railCollapsed);
-  const railWidth = useUiStore((state) => state.railWidth);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-  const railVisible =
-    stripVisible && !boardTabActive && activeBrowserTab === undefined && !railCollapsed;
+  const railVisible = stripVisible && !boardTabActive && activeBrowserTab === undefined;
 
   // ── Starting a Session ───────────────────────────────────────────────────
   const startingTerminal = useSessionsStore((state) =>
@@ -973,14 +971,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   };
 
   const rail =
-    railVisible && selected !== null ? (
-      <aside
-        className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
-        style={{ width: railWidth }}
-      >
-        <RailResizeHandle />
+    selected !== null ? (
+      <InspectorShell enabled={railVisible} owner="home">
         <HomeRail project={selected} activeTabId={activeTabId} />
-      </aside>
+      </InspectorShell>
     ) : null;
 
   return (

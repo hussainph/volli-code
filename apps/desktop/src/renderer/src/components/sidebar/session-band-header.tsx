@@ -38,7 +38,7 @@ import { cn } from "@renderer/lib/utils";
 
 /** The sidebar's small-glyph tier, and the hit box this header draws around it. */
 const GLYPH_PX = 12;
-const TRIGGER_BOX_PX = 20;
+const TRIGGER_BOX_PX = 24;
 
 /**
  * Half the difference between the trigger's box and its glyph — exactly how far
@@ -61,11 +61,9 @@ const FILTER_GLYPH_NUDGE = (TRIGGER_BOX_PX - GLYPH_PX) / 2;
  * The band label, in sentence case at the label tier, and the band's count
  * where it says something the rows do not.
  *
- * Active draws every one of its rows, so a count there only repeats them and
- * it passes none. Previous folds Sessions under their ticket and behind Show
- * more, so its count is the one number on screen for how much is back there —
- * and it is drawn only when there is something back there: a zero beside the
- * band's own empty state says the same thing twice.
+ * Both bands expose their total next to the label. Previous counts Sessions,
+ * not ticket envelopes; its filters never change Active. Zero is quiet because
+ * the band's own empty state already says it.
  */
 export function SessionBandHeader({
   label,
@@ -78,9 +76,7 @@ export function SessionBandHeader({
 }) {
   return (
     <div className="flex min-h-control-default items-center gap-2 px-2">
-      <SectionHeading as="span" className="text-sm font-semibold text-foreground">
-        {label}
-      </SectionHeading>
+      <SectionHeading as="h3">{label}</SectionHeading>
       {count === undefined || count === 0 ? null : (
         <span data-band-count="" className="text-label tabular-nums text-muted-foreground">
           {count}
@@ -129,7 +125,7 @@ export function SessionBandFilterMenu({
           // The tint is the sighted half of the same fact.
           style={{ marginRight: -FILTER_GLYPH_NUDGE }}
           className={cn(
-            "flex size-5 items-center justify-center rounded-sm ring-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2",
+            "flex size-6 items-center justify-center rounded-sm ring-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2",
             narrowed ? "bg-(--accent-selected) text-primary-text" : "text-muted-foreground",
           )}
         >

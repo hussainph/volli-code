@@ -42,7 +42,7 @@ import {
 } from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { DiffView } from "@renderer/components/ticket/diff-view";
-import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
+import { InspectorShell } from "@renderer/components/sidebar/inspector-shell";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import {
   chatTabId,
@@ -371,7 +371,6 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   const durableChatIds = useChatSessionRecordIds(ticket.id);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-  const railWidth = useUiStore((state) => state.railWidth);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const setTerminalFocusTarget = useUiStore((state) => state.setTerminalFocusTarget);
   const clearTerminalFocusUnlessTicket = useUiStore(
@@ -1723,57 +1722,49 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               }
             />
           )}
-          {railCollapsed || terminalFocused ? null : (
-            // Resizable details rail: a grip on its inner (left) edge widens it
-            // leftward, mirroring the left sidebar's outer-edge handle. `relative`
-            // makes the aside the grip's positioning context; the width persists
-            // app-wide via the ui store. The rail draws its own header and pages
-            // (TicketRail) — this only sizes and frames the column.
-            <aside className="relative flex shrink-0 flex-col" style={{ width: railWidth }}>
-              <RailResizeHandle />
-              <TicketRail
-                projectId={projectId}
-                ticket={ticket}
-                creating={creating || creatingChat}
-                onNewSession={() => void createSession()}
-                onNewChat={() => void createChat()}
-                onNewBrowser={() => void createBrowser()}
-                onActivateSession={setActiveTab}
-                onActivateChat={activateChat}
-                activeTabId={activeTabId}
-                changesContent={
-                  <TicketChangesPanel
-                    ticket={ticket}
-                    activeTabId={activeTabId}
-                    recency={recencyOwner.recency}
-                    onOpenDiff={openDiff}
-                  />
-                }
-                filesContent={
-                  <TicketFilesPanel
-                    ticket={ticket}
-                    {...(launchStore() === "cloud"
-                      ? { attachments: materializedAttachments }
-                      : { handle: ticketAttachments })}
-                    onPreviewFile={previewFileFromRail}
-                    onPinFile={pinFileFromRail}
-                    onOpenCreatedFile={openCreatedFileFromRail}
-                    onRenameFile={renameFileFromRail}
-                  />
-                }
-                searchContent={
-                  // Scoped to THIS ticket, so the search runs in its worktree
-                  // through the same seam a read does — and a match opens in
-                  // the same preview slot a navigator row opens (VC-193).
-                  <FileSearchPanel
-                    scope={{ kind: "ticket", projectId, ticketId: ticket.id }}
-                    root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
-                    onOpenMatch={previewFileFromRail}
-                  />
-                }
-              />
-            </aside>
-          )}
+          <InspectorShell enabled={!terminalFocused} owner="ticket">
+            <TicketRail
+              projectId={projectId}
+              ticket={ticket}
+              creating={creating || creatingChat}
+              onNewSession={() => void createSession()}
+              onNewChat={() => void createChat()}
+              onNewBrowser={() => void createBrowser()}
+              onActivateSession={setActiveTab}
+              onActivateChat={activateChat}
+              activeTabId={activeTabId}
+              changesContent={
+                <TicketChangesPanel
+                  ticket={ticket}
+                  activeTabId={activeTabId}
+                  recency={recencyOwner.recency}
+                  onOpenDiff={openDiff}
+                />
+              }
+              filesContent={
+                <TicketFilesPanel
+                  ticket={ticket}
+                  {...(launchStore() === "cloud"
+                    ? { attachments: materializedAttachments }
+                    : { handle: ticketAttachments })}
+                  onPreviewFile={previewFileFromRail}
+                  onPinFile={pinFileFromRail}
+                  onOpenCreatedFile={openCreatedFileFromRail}
+                  onRenameFile={renameFileFromRail}
+                />
+              }
+              searchContent={
+                // Scoped to THIS ticket, so the search runs in its worktree
+                // through the same seam a read does — and a match opens in
+                // the same preview slot a navigator row opens (VC-193).
+                <FileSearchPanel
+                  scope={{ kind: "ticket", projectId, ticketId: ticket.id }}
+                  root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
+                  onOpenMatch={previewFileFromRail}
+                />
+              }
+            />
+          </InspectorShell>
         </div>
       </div>
       <ConfirmCloseDialog

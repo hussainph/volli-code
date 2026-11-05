@@ -18,12 +18,7 @@ import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SessionListEmpty } from "./session-list-empty";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
-import {
-  SidebarGroup,
-  SidebarMenu,
-  SidebarMenuItem,
-  SidebarMenuSub,
-} from "@renderer/components/ui/sidebar";
+import { SidebarGroup, SidebarMenu, SidebarMenuItem } from "@renderer/components/ui/sidebar";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import {
@@ -49,6 +44,7 @@ import {
   SessionBandFilterMenu,
   SessionBandHeader,
 } from "@renderer/components/sidebar/session-band-header";
+import { TicketGroupDisclosure } from "./ticket-group-disclosure";
 import {
   ActiveBandRow,
   PreviousBandRow,
@@ -316,12 +312,14 @@ export function ActiveSessions({
   project,
   visible,
   activeHeader = true,
+  onActiveCountChange,
   onProfile,
 }: {
   project: Project;
   visible: boolean;
   /** The primary sidebar shares this header with its content switcher. */
   activeHeader?: boolean;
+  onActiveCountChange?(count: number): void;
   /**
    * Optional benchmark instrumentation. Production callers leave this absent,
    * so the Profiler boundaries add no work to the shipped sidebar; the lab's
@@ -1359,9 +1357,13 @@ export function ActiveSessions({
     });
   }, [band, registerRowKeys, toggleGroup]);
 
+  React.useEffect(() => {
+    onActiveCountChange?.(activeRows.length);
+  }, [activeRows.length, onActiveCountChange]);
+
   const activeBand = (
     <SidebarGroup data-session-band="active" className="gap-1">
-      {activeHeader ? <SessionBandHeader label="Active" /> : null}
+      {activeHeader ? <SessionBandHeader label="Active" count={activeRows.length} /> : null}
       {activeRows.length === 0 && listingPending ? (
         // The rows' box, held while the listing is read. Live tabs this window
         // already holds are rows regardless (they come from the sessions store,
@@ -1449,39 +1451,42 @@ export function ActiveSessions({
                 onToggleRead={entry.row.kind === "chat" ? toggleRead : null}
               />
             ) : (
-              <SidebarMenuItem key={entry.id} className="session-envelope rounded-card">
-                <TicketGroupRow
-                  ticket={entry.ticket}
-                  ticketPrefix={project.ticketPrefix}
-                  count={entry.rows.length}
-                  newestAt={entry.newestAt}
-                  now={ageNow}
-                  open={expandedGroups.includes(entry.id)}
-                  selected={entry.id === selectedGroupId}
-                  onToggle={toggleGroup}
-                />
-                {expandedGroups.includes(entry.id) ? (
-                  <SidebarMenuSub id={sessionGroupPanelId(entry.id)} className={SESSION_GROUP_NEST}>
-                    {entry.rows.map((row) => (
-                      <PreviousBandRow
-                        key={row.id}
-                        row={row}
-                        projectId={project.id}
-                        ticketPrefix={project.ticketPrefix}
-                        now={ageNow}
-                        selected={isSelected(row)}
-                        unread={unreadRow(row.id, unread)}
-                        vendor={vendorOf(row)}
-                        onSelect={openRow}
-                        onToggleRead={row.kind === "chat" ? toggleRead : null}
-                        // The id is what the reader just expanded; repeating
-                        // it on every child costs ink and ~45px of title.
-                        showIdentity={false}
-                      />
-                    ))}
-                  </SidebarMenuSub>
-                ) : null}
-              </SidebarMenuItem>
+              <TicketGroupDisclosure
+                key={entry.id}
+                id={sessionGroupPanelId(entry.id)}
+                open={expandedGroups.includes(entry.id)}
+                className={SESSION_GROUP_NEST}
+                header={
+                  <TicketGroupRow
+                    ticket={entry.ticket}
+                    ticketPrefix={project.ticketPrefix}
+                    count={entry.rows.length}
+                    newestAt={entry.newestAt}
+                    now={ageNow}
+                    open={expandedGroups.includes(entry.id)}
+                    selected={entry.id === selectedGroupId}
+                    onToggle={toggleGroup}
+                  />
+                }
+              >
+                {entry.rows.map((row) => (
+                  <PreviousBandRow
+                    key={row.id}
+                    row={row}
+                    projectId={project.id}
+                    ticketPrefix={project.ticketPrefix}
+                    now={ageNow}
+                    selected={isSelected(row)}
+                    unread={unreadRow(row.id, unread)}
+                    vendor={vendorOf(row)}
+                    onSelect={openRow}
+                    onToggleRead={row.kind === "chat" ? toggleRead : null}
+                    // The id is what the reader just expanded; repeating
+                    // it on every child costs ink and ~45px of title.
+                    showIdentity={false}
+                  />
+                ))}
+              </TicketGroupDisclosure>
             ),
           )}
           <PreviousBandReach

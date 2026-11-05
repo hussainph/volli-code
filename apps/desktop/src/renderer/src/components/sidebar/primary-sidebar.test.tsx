@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useState } from "react";
+import { act, useState, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vite-plus/test";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
@@ -15,9 +15,19 @@ vi.mock("@renderer/components/sidebar/update-button", () => ({ UpdateButton: () 
 vi.mock("./sidebar-files", () => ({
   SidebarFiles: () => <div data-testid="sidebar-files">Files tree</div>,
 }));
-const { mounts } = vi.hoisted(() => ({ mounts: vi.fn() }));
+const { mounts, listing } = vi.hoisted(() => ({ mounts: vi.fn(), listing: { count: 0 } }));
 vi.mock("@renderer/components/sidebar/active-sessions", () => ({
-  ActiveSessions: ({ visible }: { visible: boolean }) => {
+  ActiveSessions: ({
+    visible,
+    onActiveCountChange,
+  }: {
+    visible: boolean;
+    onActiveCountChange?(count: number): void;
+  }) => {
+    const count = listing.count;
+    useEffect(() => {
+      onActiveCountChange?.(count);
+    }, [onActiveCountChange, count]);
     useState(() => mounts());
     return (
       <div data-testid="sidebar-sessions" data-visible={visible}>
@@ -48,6 +58,7 @@ describe("primary sidebar content choice", () => {
       removeEventListener() {},
     }));
     mounts.mockClear();
+    listing.count = 0;
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -100,5 +111,22 @@ describe("primary sidebar content choice", () => {
       expect(container.querySelector('[data-testid="sidebar-sessions"]')).toBe(roster);
     }
     expect(mounts).toHaveBeenCalledTimes(1);
+  });
+  it("restores the Active total inline without duplicating the header or counting Files", async () => {
+    await show();
+    expect(container.querySelector("[data-band-count]")).toBeNull();
+    listing.count = 4;
+    await show();
+    const header = container.querySelector("h3")!.parentElement!;
+    expect(header.textContent).toContain("Active4");
+    expect(header.querySelector('[aria-label="Sidebar content"]')).not.toBeNull();
+    expect(container.querySelectorAll("h3")).toHaveLength(1);
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[data-choice="files"]')!.click(),
+    );
+    expect(header.querySelector("[data-band-count]")?.textContent).toBe("4");
+    listing.count = 0;
+    await show();
+    expect(container.querySelector("[data-band-count]")).toBeNull();
   });
 });

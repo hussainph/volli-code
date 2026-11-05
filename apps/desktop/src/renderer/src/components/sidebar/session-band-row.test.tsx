@@ -593,13 +593,15 @@ describe("TicketGroupRow", () => {
     );
   }
 
-  it("keeps its face: the ticket, how many sessions, and the newest one's age", () => {
+  it("keeps ticket/count visible and exposes the newest date without a duplicate age column", () => {
     const markup = renderGroup(5, false);
 
     expect(markup).toContain("VC-7");
     expect(markup).toContain("Nav sidebar");
     expect(markup).toContain(">5<");
-    expect(markup).toContain("1h");
+    expect(markup).toContain(`title="${new Date(HOUR_AGO).toLocaleString()}"`);
+    expect(markup).toContain('aria-description="Latest session:');
+    expect(markup).not.toContain(">1h<");
   });
 
   it("draws the count even at one, and spells its unit out of band", () => {
