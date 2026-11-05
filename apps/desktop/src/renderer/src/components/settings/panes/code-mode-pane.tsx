@@ -1,10 +1,8 @@
-import { PanelEmptyState } from "@renderer/components/ui/empty-state";
-import { CodeIcon, CloseIcon, InfoIcon } from "@renderer/components/ui/icon";
+import { CodeIcon, CloseIcon } from "@renderer/components/ui/icon";
 
 import * as React from "react";
 import {
   CODE_MODE_MODES,
-  CODE_MODE_MODEL_DEFAULTS,
   CODE_MODE_POLICY_MODELS_MAX,
   codeModeModelKey,
   DEFAULT_CODE_MODE_POLICY,
@@ -19,7 +17,6 @@ import { ModelName } from "@renderer/components/models/model-identity";
 import type { ProviderModelGroup } from "@renderer/components/pages/model-access-settings";
 import { PrefRow, PrefSection, RowAction } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -27,10 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
-import { Switch } from "@renderer/components/ui/switch";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Notice } from "@renderer/components/ui/notice";
 import { ModelControl } from "../kit/model-control";
 
@@ -118,14 +113,7 @@ export function CodeModeSettings({
         />
       </PrefSection>
     );
-  if (policy === null)
-    return (
-      <PrefSection title="Code Mode" icon={CodeIcon}>
-        <div className="p-4" aria-label="Loading Code Mode">
-          <Skeleton className="h-8 w-full" />
-        </div>
-      </PrefSection>
-    );
+  if (policy === null) return null;
 
   async function save(next: CodeModePolicy): Promise<void> {
     const write = ++writeGeneration.current;
@@ -147,61 +135,48 @@ export function CodeModeSettings({
   const loaded = policy !== null;
   const current = policy ?? DEFAULT_CODE_MODE_POLICY;
   const pins = pinsOf(current, models);
-  // Off means no new Session gets Code Mode at all, whatever a pin says.
-  const pinsEditable = loaded && current.enabled;
+  // Editing a legacy kill-switch policy preserves its default as Direct tools.
+  const pinsEditable = loaded;
 
   const setPin = (key: string, mode: CodeModeMode | null): void => {
     const nextModels: Record<string, CodeModeMode> = { ...current.models };
     if (mode === null) delete nextModels[key];
     else nextModels[key] = mode;
-    void save({ ...current, models: nextModels });
+    void save({
+      ...current,
+      enabled: true,
+      ...(!current.enabled ? { defaultMode: "off" as const } : {}),
+      models: nextModels,
+    });
   };
 
   return (
     <div role="group" aria-label="Code Mode" className="flex flex-col gap-5">
-      <PrefSection
-        title="Default"
-        icon={CodeIcon}
-        action={
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Code Mode meanings and defaults">
-                <InfoIcon />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="flex max-w-sm flex-col gap-2 text-ui" align="start">
-              <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-2">
-                <dt className="font-medium">{CODE_MODE_MODE_LABELS.off}</dt>
-                <dd>No Code Mode, except to defer a very large MCP server.</dd>
-                <dt className="font-medium">{CODE_MODE_MODE_LABELS.both}</dt>
-                <dd>Code Mode beside every tool; the model chooses.</dd>
-                <dt className="font-medium">{CODE_MODE_MODE_LABELS.only}</dt>
-                <dd>Program-callable tools are reached only through Code Mode.</dd>
-              </dl>
-              <ul>
-                {CODE_MODE_MODEL_DEFAULTS.map((row) => (
-                  <li key={row.family}>
-                    {row.family}: {CODE_MODE_MODE_LABELS[row.mode]}
-                  </li>
-                ))}
-                <li>Every other model: {CODE_MODE_MODE_LABELS.off}</li>
-              </ul>
-              <span>
-                Turning Code Mode off also declares every large-server tool again. Changes apply to
-                new Sessions.
-              </span>
-            </PopoverContent>
-          </Popover>
-        }
-      >
+      <PrefSection title="Default" icon={CodeIcon}>
         <PrefRow label="Code Mode" testId="code-mode">
-          <Switch
-            aria-label="Code Mode for new Sessions"
-            data-testid="code-mode-switch"
-            checked={current.enabled}
+          <Select
+            value={!current.enabled ? "off" : current.defaultMode}
             disabled={!loaded}
-            onCheckedChange={(enabled) => void save({ ...current, enabled })}
-          />
+            onValueChange={(mode) =>
+              void save({ ...current, enabled: true, defaultMode: mode as CodeModeMode })
+            }
+          >
+            <SelectTrigger
+              size="sm"
+              className="w-auto max-w-full"
+              aria-label="Code Mode for new Sessions"
+              data-testid="code-mode-default"
+            >
+              <SelectValue placeholder="Model defaults" />
+            </SelectTrigger>
+            <SelectContent>
+              {CODE_MODE_MODES.map((mode) => (
+                <SelectItem key={mode} value={mode}>
+                  {CODE_MODE_MODE_LABELS[mode]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </PrefRow>
       </PrefSection>
       <PrefSection title="Exceptions">
@@ -214,11 +189,6 @@ export function CodeModeSettings({
             onPin={(model) => setPin(codeModeModelKey(model), defaultCodeModeMode(model.modelId))}
           />
         </PrefRow>
-        {!current.enabled ? (
-          <div data-testid="code-mode-off-note" className="px-3 py-2 text-ui text-muted-foreground">
-            Inactive while Code Mode is off
-          </div>
-        ) : null}
         {pins.map((pin) => (
           <div
             key={pin.key}
@@ -261,9 +231,6 @@ export function CodeModeSettings({
             />
           </div>
         ))}
-        {pins.length === 0 ? (
-          <PanelEmptyState illustration="mcp" title="No model exceptions" />
-        ) : null}
       </PrefSection>
     </div>
   );

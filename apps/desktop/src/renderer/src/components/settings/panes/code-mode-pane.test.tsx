@@ -19,6 +19,7 @@ const policy = {
 };
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   mocks.read.mockResolvedValue(policy);
   mocks.save.mockImplementation(async (next) => next);
   mocks.error.mockClear();
@@ -49,15 +50,36 @@ it("uses Default and Exceptions row groups without a collapsed or horizontally c
     host.querySelector('[aria-label="Code Mode for a-very-long-model-identifier"]'),
   ).not.toBeNull();
 });
-it("keeps stored exceptions but disables editing when the default is switched off", async () => {
-  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
-  expect(mocks.save).toHaveBeenLastCalledWith({ ...policy, enabled: false });
-  expect(
-    host.querySelector<HTMLButtonElement>(
-      '[aria-label="Remove exception for a-very-long-model-identifier"]',
-    )?.disabled,
-  ).toBe(true);
-  expect(host.textContent).toContain("Inactive while Code Mode is off");
+it("offers all three default modes without an info icon or a switch", async () => {
+  expect(host.querySelector('[role="switch"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Code Mode meanings and defaults"]')).toBeNull();
+  const trigger = host.querySelector<HTMLElement>('[data-testid="code-mode-default"]')!;
+  await act(async () =>
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+  );
+  const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+  expect(options.map((e) => e.textContent)).toEqual([
+    "Direct tools",
+    "Code and direct tools",
+    "Code only",
+  ]);
+  await act(async () =>
+    options[2].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  expect(mocks.save).toHaveBeenLastCalledWith({ ...policy, enabled: true, defaultMode: "only" });
+});
+it("keeps empty Exceptions inline and silent around its add row", async () => {
+  mocks.read.mockResolvedValueOnce(DEFAULT_CODE_MODE_POLICY);
+  await act(async () =>
+    root.render(
+      <TooltipProvider>
+        <CodeModeSettings key="empty" models={[]} providers={[]} pickable={[]} />
+      </TooltipProvider>,
+    ),
+  );
+  expect(host.textContent).toContain("Add model exception");
+  expect(host.querySelector(".empty-state")).toBeNull();
+  expect(host.textContent).not.toContain("No model exceptions");
 });
 it("rolls a failed requested save back to the accepted policy and surfaces the error", async () => {
   mocks.save.mockRejectedValueOnce(new Error("offline"));
