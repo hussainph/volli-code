@@ -1386,3 +1386,18 @@ describe("overlapping and out-of-scope writes", () => {
     expect(effectiveAppearance(store.getState())).toBe("dark");
   });
 });
+
+it("carries keyboard scope provenance across the asynchronous host read, not in its payload", async () => {
+  const gateway = fakeGateway({
+    state: vi.fn(async ({ projectId }) => ({
+      ok: true as const,
+      value: statePayload({ projectId: projectId ?? null }),
+    })),
+  });
+  const begin = vi.fn((paint: () => void) => paint());
+  const store = createThemeStore({ deps: { gateway, ...recorder(), beginScopeRepaint: begin } });
+  await store.getState().hydrate();
+  await store.getState().hydrate(projectScope({ canvas: TEAL }), "keyboard");
+  expect(begin).toHaveBeenLastCalledWith(expect.any(Function), "keyboard");
+  expect(gateway.state).toHaveBeenLastCalledWith({ projectId: "p1" });
+});

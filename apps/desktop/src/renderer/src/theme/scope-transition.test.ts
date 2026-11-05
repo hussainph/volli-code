@@ -367,3 +367,50 @@ describe("disarmScopeRepaint", () => {
     expect(engine.transitions[1]?.skipped).toBe(true);
   });
 });
+
+describe("scope repaint Motion gates", () => {
+  it("hard-cuts a keyboard scope change, skipping any earlier pointer transition", () => {
+    const engine = fakeViewTransitions();
+    beginScopeRepaint(vi.fn(), "pointer");
+    const apply = vi.fn();
+    beginScopeRepaint(apply, "keyboard");
+    expect(engine.startViewTransition).toHaveBeenCalledTimes(1);
+    expect(engine.current()?.skipped).toBe(true);
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("never captures while app Motion is off", () => {
+    const engine = fakeViewTransitions();
+    Object.assign(document, { documentElement: { dataset: { motion: "off" } } });
+    const apply = vi.fn();
+    beginScopeRepaint(apply);
+    expect(engine.startViewTransition).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains OS brightness easing, but skips a running capture when app Motion turns off", async () => {
+    const engine = fakeViewTransitions();
+    const events = new EventTarget();
+    vi.stubGlobal("window", events);
+    Object.assign(events, {
+      matchMedia: () => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+    const dataset = { motion: "on" };
+    Object.assign(document, { documentElement: { dataset } });
+    const apply = vi.fn();
+    beginScopeRepaint(apply, "system");
+    expect(engine.startViewTransition).toHaveBeenCalledTimes(1);
+    events.dispatchEvent(new Event("volli-motion-change"));
+    expect(engine.current()?.skipped).toBe(false);
+    dataset.motion = "off";
+    events.dispatchEvent(new Event("volli-motion-change"));
+    expect(engine.current()?.skipped).toBe(true);
+    expect(apply).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(engine.listeners).toEqual([]);
+  });
+});

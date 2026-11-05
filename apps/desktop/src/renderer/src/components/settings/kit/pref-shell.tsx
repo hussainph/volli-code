@@ -5,6 +5,8 @@ import { type IconComponent, SearchIcon } from "@renderer/components/ui/icon";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { Badge } from "@renderer/components/ui/badge";
 import { IdentityTile } from "@renderer/components/ui/identity-tile";
+import { PageHeader } from "@renderer/components/layout/page-header";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
@@ -95,11 +97,15 @@ export function PrefShell({
   }, [activeKey, highlight]);
   return (
     <TooltipProvider>
-      <div className="flex h-full min-h-0 w-full flex-1">
+      <div
+        className="flex h-full min-h-0 w-full flex-1 gap-(--glass-gap) p-(--glass-gap)"
+        style={{ background: "var(--canvas)", backgroundAttachment: "fixed" }}
+      >
         <nav
           aria-label={`${surfaceLabel} categories`}
           data-tint="true"
-          className="glass flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto border-r border-border p-4"
+          data-glass-static="true"
+          className="glass flex w-60 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto rounded-floating p-4 shadow-glass"
         >
           {header}
           <InputGroup className="search-capsule">
@@ -115,11 +121,19 @@ export function PrefShell({
             />
           </InputGroup>
           <div className="min-h-0 flex-1 overflow-y-auto">
+            <p
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className={cn(
+                "px-2 pb-2 text-label text-muted-foreground",
+                !query.trim() && "sr-only",
+              )}
+            >
+              {query.trim() ? `${results.length} settings found` : ""}
+            </p>
             {query.trim() ? (
               <>
-                <p className="px-2 pb-2 text-label text-muted-foreground">
-                  {results.length} settings found
-                </p>
                 {results.map(({ category, label }) => (
                   <button
                     type="button"
@@ -129,7 +143,7 @@ export function PrefShell({
                       setHighlight(label);
                       setQuery("");
                     }}
-                    className="flex w-full items-center gap-2 rounded-row px-2 py-2 text-left text-ui hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    className="flex w-full items-center gap-2 rounded-row px-2 py-2 text-left text-ui hover:bg-(--accent-tint) focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                   >
                     <IdentityTile size="sm" aria-hidden>
                       <category.icon className="size-3.5" />
@@ -150,9 +164,9 @@ export function PrefShell({
             ) : (
               groups.map((group) => (
                 <div key={group.key} className="pb-4">
-                  <h3 className="px-2 pb-2 text-ui font-medium text-muted-foreground">
+                  <SectionHeading as="h3" className="flex min-h-7 items-center px-2">
                     {group.label}
-                  </h3>
+                  </SectionHeading>
                   {group.categories.map((category) => (
                     <button
                       key={category.key}
@@ -166,7 +180,7 @@ export function PrefShell({
                         "flex w-full items-center gap-2 rounded-row px-2 py-2 text-left text-ui text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                         category.key === current?.key
                           ? "bg-(--accent-selected)"
-                          : "hover:bg-accent",
+                          : "hover:bg-(--accent-tint)",
                       )}
                     >
                       <IdentityTile size="sm" aria-hidden>
@@ -189,7 +203,10 @@ export function PrefShell({
             )}
           </div>
         </nav>
-        <div ref={scroller} className="material-solid min-w-0 flex-1 overflow-y-auto">
+        <div
+          ref={scroller}
+          className="material-solid min-w-0 flex-1 overflow-y-auto rounded-floating"
+        >
           <div className={cn("px-12 pt-8 pb-16", current?.fill && "flex h-full flex-col")}>
             <div
               className={cn(
@@ -197,9 +214,7 @@ export function PrefShell({
                 current?.fill ? "flex min-h-0 flex-1 flex-col" : "max-w-[720px]",
               )}
             >
-              <header className="mb-8">
-                <h1 className="text-title font-semibold">{current?.label}</h1>
-              </header>
+              <PageHeader title={current?.label} variant="reading" className="mb-8 py-0" />
               <div className={cn("flex flex-col gap-8", current?.fill && "min-h-0 flex-1")}>
                 {current?.content}
               </div>

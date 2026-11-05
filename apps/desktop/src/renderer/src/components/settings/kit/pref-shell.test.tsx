@@ -49,6 +49,7 @@ it("keeps rail identities centred, selection, counts and attention on tinted gla
   const nav = host.querySelector("nav")!;
   expect(nav.classList.contains("glass")).toBe(true);
   expect(nav.dataset.tint).toBe("true");
+  expect(nav.dataset.glassStatic).toBe("true");
   expect(nav.querySelector('[data-slot="identity-tile"][data-size="sm"] svg')).not.toBeNull();
   const selected = nav.querySelector<HTMLButtonElement>('[aria-current="page"]')!;
   expect(selected.textContent).toContain("3");
@@ -92,6 +93,29 @@ it("preserves result routing, empty results and native search clearing", () => {
   expect(input.value).toBe("");
   type("no-such-preference");
   expect(host.textContent).toContain("No matching settings");
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("0 settings found");
+  expect(host.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
   type("");
   expect(host.querySelector('[aria-current="page"]')).not.toBeNull();
+});
+
+it("uses sibling floating glass and paper planes with the shared heading ladder", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  Element.prototype.scrollTo = vi.fn();
+  host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  act(() =>
+    root?.render(
+      <PrefShell
+        surfaceLabel="Settings"
+        groups={groups}
+        activeKey="appearance"
+        onSelect={() => {}}
+      />,
+    ),
+  );
+  expect(host.querySelector("nav")?.className).toContain("rounded-floating");
+  expect(host.querySelector("nav")?.className).not.toContain("border-r");
+  expect(host.querySelector("h1")?.className).toContain("text-title");
+  expect(host.querySelector("h3")?.className).toContain("text-ui font-semibold");
 });

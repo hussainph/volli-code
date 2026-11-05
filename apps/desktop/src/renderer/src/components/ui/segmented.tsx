@@ -99,7 +99,7 @@ export function Segmented<Key extends string>({
         return (
           <Button
             key={option.key}
-            size={iconOnly ? (size === "sm" ? "icon" : "icon-lg") : size}
+            size={iconOnly ? (size === "sm" ? "icon-sm" : "icon") : size}
             variant="ghost"
             role={tabIdPrefix === undefined ? undefined : "tab"}
             id={tabIdPrefix === undefined ? undefined : `${tabIdPrefix}-tab-${option.key}`}

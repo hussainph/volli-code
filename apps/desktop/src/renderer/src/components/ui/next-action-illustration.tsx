@@ -9,8 +9,9 @@ import {
   AddIcon,
 } from "@renderer/components/ui/icon";
 
-import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { prefersReducedMotion, useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 
 export type NextActionKind =
   | "board"
@@ -45,17 +46,20 @@ export function NextActionIllustration({
   className?: string;
 }) {
   const ref = React.useRef<HTMLDivElement>(null);
+  const instant = useReducedMotion();
   React.useEffect(() => {
     const element = ref.current;
+    if (instant) {
+      played.add(kind);
+      return;
+    }
     if (
       !element ||
       played.has(kind) ||
-      prefersReducedMotion() ||
       !element.animate ||
       typeof IntersectionObserver === "undefined"
     )
       return;
-    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
     let animations: Animation[] = [];
     let stopped = false;
     const stop = () => {
@@ -78,32 +82,29 @@ export function NextActionIllustration({
         )
           return;
         played.add(kind);
-        const style = getComputedStyle(element);
-        const entrance = style.getPropertyValue("--ease-out").trim();
-        const travel = style.getPropertyValue("--ease-swift").trim();
-        animations = Array.from(
-          element.querySelectorAll<HTMLElement>("[data-explanation-step]"),
-        ).map((leaf, index) => {
-          const moving = leaf.dataset.explanationTravel === "true";
-          return leaf.animate(
-            moving
-              ? [
-                  { transform: "translateX(-100%)", opacity: 0.5 },
-                  { transform: "translateX(0)", opacity: 1 },
-                ]
-              : [
-                  { transform: "translateY(8px)", opacity: 0 },
-                  { transform: "translateY(0)", opacity: 1 },
-                ],
-            {
-              duration: moving ? 240 : 200,
-              delay: index * 200,
-              easing: moving ? travel : entrance,
-              fill: "backwards",
-              iterations: 1,
-            },
-          );
-        });
+        animations = Array.from(element.querySelectorAll<HTMLElement>("[data-explanation-step]"))
+          .slice(0, 4)
+          .map((leaf, index) => {
+            const moving = leaf.dataset.explanationTravel === "true";
+            return leaf.animate(
+              moving
+                ? [
+                    { transform: "translateX(-100%)", opacity: 0.5 },
+                    { transform: "translateX(0)", opacity: 1 },
+                  ]
+                : [
+                    { transform: "translateY(8px)", opacity: 0 },
+                    { transform: "translateY(0)", opacity: 1 },
+                  ],
+              {
+                duration: GLASS_MOTION.menuIn,
+                delay: index * 35,
+                easing: GLASS_MOTION.easeOutCss,
+                fill: "backwards",
+                iterations: 1,
+              },
+            );
+          });
       },
       { threshold: 0.5 },
     );
@@ -115,16 +116,14 @@ export function NextActionIllustration({
     document.addEventListener("pointerdown", stop, true);
     document.addEventListener("keydown", stop, true);
     document.addEventListener("visibilitychange", visibility);
-    preference.addEventListener("change", stop);
     return () => {
       observer.disconnect();
       animations.forEach((animation) => animation.cancel());
       document.removeEventListener("pointerdown", stop, true);
       document.removeEventListener("keydown", stop, true);
       document.removeEventListener("visibilitychange", visibility);
-      preference.removeEventListener("change", stop);
     };
-  }, [kind]);
+  }, [kind, instant]);
 
   return (
     <div

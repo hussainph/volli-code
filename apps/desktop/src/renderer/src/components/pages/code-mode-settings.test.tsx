@@ -348,3 +348,32 @@ describe("Code Mode in the Models pane", () => {
     expect(pinMode("openai-codex/gpt-5.5").textContent).toBe("Both");
   });
 });
+
+it("exposes mode meanings and built-in defaults from the production Agents pane", async () => {
+  const { CodeModeSettings } = await import("../settings/panes/code-mode-pane");
+  const { client } = clientWith(DEFAULT_CODE_MODE_POLICY);
+  container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <ModelAccessProvider client={client}>
+        <TooltipProvider>
+          <CodeModeSettings models={SNAPSHOT.models} providers={SNAPSHOT.providers} pickable={[]} />
+        </TooltipProvider>
+      </ModelAccessProvider>,
+    ),
+  );
+  expect(document.body.textContent).not.toContain("Smallest prompt");
+  await click(the('[aria-label="Code Mode meanings and defaults"]'));
+  for (const detail of [
+    "Direct tools",
+    "Code and direct tools",
+    "Code only",
+    "Smallest prompt",
+    "Claude Haiku",
+    "Claude Sonnet",
+    "Every other model",
+    "new Sessions",
+  ])
+    expect(document.body.textContent).toContain(detail);
+});

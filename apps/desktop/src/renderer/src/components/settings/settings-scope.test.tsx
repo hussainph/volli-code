@@ -36,6 +36,10 @@ it("switches App and project scopes and picks a project without retargeting the 
   try {
     act(() => root.render(<SettingsPage initialCategoryKey="general" />));
     expect(host.querySelector('[aria-current="page"]')!.textContent).toBe("General");
+    const scopeTarget = host.querySelector('button[aria-label="All projects"]')!;
+    expect(scopeTarget.parentElement?.className).toContain("bg-(--accent-selected)");
+    expect(scopeTarget.className).not.toContain("shadow-control");
+    expect(scopeTarget.querySelector('[data-slot="identity-tile"]')).not.toBeNull();
     act(() =>
       Array.from(host.querySelectorAll("button"))
         .find((b) => b.textContent?.includes("First project"))!

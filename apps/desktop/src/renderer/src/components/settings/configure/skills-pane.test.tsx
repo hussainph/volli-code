@@ -245,3 +245,84 @@ describe("Configure → Skills", () => {
     });
   });
 });
+
+it("wraps scope controls and exposes Auto's token estimate on keyboard focus", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <SkillsPane project={project} />
+        </TooltipProvider>,
+      ),
+    );
+    const summary = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Auto token estimate"]',
+    )!;
+    expect(summary.textContent).toBe("Auto");
+    expect(summary.parentElement?.className).toContain("flex-wrap");
+    expect(container.textContent).not.toContain("tokens per turn");
+    expect(
+      container.querySelector('[data-slot="pref-section-title"]')?.parentElement?.className,
+    ).toContain("sr-only");
+    await act(async () => summary.focus());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("tokens per turn"),
+    );
+    expect(container.querySelector('[aria-label="Skill scope"]')?.textContent).toContain(
+      "This workspace",
+    );
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+const policyNavigation = { openProject: vi.fn(), selectPolicyProject: vi.fn() };
+it("names and selects the project whose activation policy the shared inventory edits", async () => {
+  const { SettingsNavigation } = await import("../settings-navigation");
+  const { useProjectsStore } = await import("@renderer/stores/projects");
+  const previous = useProjectsStore.getState().projects;
+  const second = { ...project, id: "p2", name: "Second project" };
+  useProjectsStore.setState({ projects: [project, second] });
+  policyNavigation.selectPolicyProject.mockClear();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <SettingsNavigation.Provider value={policyNavigation}>
+          <TooltipProvider>
+            <SkillsPane project={project} policyProjectPicker />
+          </TooltipProvider>
+        </SettingsNavigation.Provider>,
+      ),
+    );
+    expect(container.textContent).toContain("Activation project");
+    const picker = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Skill activation project"]',
+    )!;
+    expect(picker.textContent).toBe(project.name);
+    await act(async () =>
+      picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (node) => node.textContent === second.name,
+    )!;
+    await act(async () => {
+      option.focus();
+      option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(policyNavigation.selectPolicyProject).toHaveBeenCalledWith(second.id);
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    useProjectsStore.setState({ projects: previous });
+    vi.unstubAllGlobals();
+  }
+});

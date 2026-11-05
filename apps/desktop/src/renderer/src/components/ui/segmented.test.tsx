@@ -34,7 +34,7 @@ describe("Segmented", () => {
   });
 
   it.each(["sm", "default"] as const)(
-    "gives %s icon-only choices larger targets and names",
+    "gives %s icon-only choices the matching 24/28px targets and names",
     (size) => {
       const html = renderToStaticMarkup(
         <Segmented
@@ -46,7 +46,7 @@ describe("Segmented", () => {
           onChange={() => {}}
         />,
       );
-      expect(html).toContain(`data-size="${size === "sm" ? "icon" : "icon-lg"}"`);
+      expect(html).toContain(`data-size="${size === "sm" ? "icon-sm" : "icon"}"`);
       expect(html).toContain('title="Board"');
       expect(html).toContain('class="sr-only">Board');
       expect(html).toContain('title="List"');

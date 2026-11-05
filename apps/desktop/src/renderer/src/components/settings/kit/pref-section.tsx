@@ -1,13 +1,15 @@
 /** Shared settings section: an outside heading and one grouped body. */
-import type * as React from "react";
+import * as React from "react";
 import { type IconComponent, RefreshIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
 export function PrefSection({
   title,
+  titleHidden = false,
   icon: Icon,
   hint,
   action,
@@ -15,6 +17,8 @@ export function PrefSection({
   children,
 }: {
   title: string;
+  /** The pane already names this group; retain its accessible heading. */
+  titleHidden?: boolean;
   icon?: IconComponent;
   /**
    * The one-line trust boundary AGENTS.md allows ("Volli writes an overlay
@@ -32,15 +36,24 @@ export function PrefSection({
   fill?: boolean;
   children: React.ReactNode;
 }) {
+  const titleId = React.useId();
   return (
-    <section className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}>
+    <section
+      aria-labelledby={titleId}
+      className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}
+    >
       {/* A heading and its actions share an axis outside the framed row group. */}
-      <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-2",
+          titleHidden && !action ? "sr-only" : "min-h-7",
+        )}
+      >
+        <div className={cn("flex min-w-0 items-center gap-2", titleHidden && "sr-only")}>
           {Icon ? <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : null}
-          <h2 data-slot="pref-section-title" className="min-w-0 text-ui font-medium">
+          <SectionHeading as="h2" id={titleId} data-slot="pref-section-title" className="min-w-0">
             {title}
-          </h2>
+          </SectionHeading>
         </div>
         {action}
       </div>

@@ -29,6 +29,12 @@ vi.mock("@renderer/components/settings/configure-groups", () => ({
       categories: [
         { key: "skills", label: "Skills", icon: GuideIcon, content: <p>skills pane</p> },
         { key: "secrets", label: "Secrets", icon: GuideIcon, content: <p>secrets pane</p> },
+        {
+          key: "appearance",
+          label: "Appearance",
+          icon: GuideIcon,
+          content: <p>project appearance pane</p>,
+        },
       ],
     },
   ],
@@ -102,4 +108,18 @@ describe("Settings pane requests (VC-303)", () => {
     expect(useUiStore.getState().configureCategory).toBeNull();
     expect(useUiStore.getState().settingsOpen).toBe(true);
   });
+});
+
+it("keeps palette Configure Appearance distinct from app Appearance", async () => {
+  useUiStore.getState().requestConfigureCategory("appearance");
+  await act(async () => root.render(<SettingsPage initialCategoryKey="general" />));
+  expect(current()).toBe("Appearance");
+  expect(host.textContent).toContain("project appearance pane");
+  expect(host.querySelector('[aria-label="All projects"]')?.getAttribute("aria-pressed")).toBe(
+    "false",
+  );
+  await act(async () => root.render(<SettingsPage initialCategoryKey="appearance" />));
+  expect(host.querySelector('[aria-label="All projects"]')?.getAttribute("aria-pressed")).toBe(
+    "true",
+  );
 });

@@ -44,9 +44,14 @@ export function globalAgentGroups(project: Project | null): readonly PrefGroup[]
           .flatMap((group) => group.categories)
           .filter((category) => category.key === "skills" || category.key === "mcp")
           .map((category) =>
-            category.key === "mcp"
-              ? Object.assign({}, category, { content: <McpPane project={{ id: "" }} /> })
-              : category,
+            Object.assign({}, category, {
+              content:
+                category.key === "mcp" ? (
+                  <McpPane project={{ id: "" }} />
+                ) : (
+                  local(project, <SkillsPane project={project} policyProjectPicker />)
+                ),
+            }),
           ),
       },
     ];
@@ -243,7 +248,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "branch from",
             "new worktrees",
           ],
-          content: local(project, <WorktreesPane project={project} />),
+          content: local(project, <WorktreesPane key={project.id} project={project} />),
         },
       ],
     },

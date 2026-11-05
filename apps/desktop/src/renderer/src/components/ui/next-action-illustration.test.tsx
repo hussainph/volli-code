@@ -7,9 +7,6 @@ import type { NextActionKind } from "./next-action-illustration";
 let NextActionIllustration: typeof import("./next-action-illustration").NextActionIllustration;
 
 const preference = vi.hoisted(() => ({ reduce: false }));
-vi.mock("@renderer/hooks/use-reduced-motion", () => ({
-  prefersReducedMotion: () => preference.reduce,
-}));
 let root: Root;
 let host: HTMLElement;
 let intersect: IntersectionObserverCallback;
@@ -22,6 +19,7 @@ beforeEach(async () => {
   vi.resetModules();
   ({ NextActionIllustration } = await import("./next-action-illustration"));
   preference.reduce = false;
+  delete document.documentElement.dataset.motion;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "IntersectionObserver",
@@ -34,7 +32,9 @@ beforeEach(async () => {
     },
   );
   vi.stubGlobal("matchMedia", () => ({
-    matches: preference.reduce,
+    get matches() {
+      return preference.reduce;
+    },
     addEventListener: (_name: string, listener: () => void) => {
       change = listener;
     },
@@ -79,9 +79,8 @@ it("waits until in view, uses finite compositor-only steps, and does not replay 
     KeyframeAnimationOptions,
   ][]) {
     expect(timing.iterations).toBe(1);
-    expect(Number(timing.duration)).toBeGreaterThanOrEqual(150);
-    expect(Number(timing.duration)).toBeLessThanOrEqual(300);
-    expect(Number(timing.delay) + Number(timing.duration)).toBeLessThanOrEqual(1200);
+    expect(timing.duration).toBe(160);
+    expect(Number(timing.delay) + Number(timing.duration)).toBeLessThanOrEqual(265);
     expect(
       frames.every((frame) =>
         Object.keys(frame).every((key) => ["transform", "opacity", "offset"].includes(key)),
@@ -118,8 +117,10 @@ it("suppresses an explanation if keyboard input arrives before visibility", () =
 it("cancels when reduced motion is enabled during travel", () => {
   mount("files");
   visible();
-  preference.reduce = true;
-  change();
+  act(() => {
+    preference.reduce = true;
+    change();
+  });
   expect(cancel).toHaveBeenCalledTimes(2);
 });
 it("cleans up animation effects on unmount", () => {
@@ -153,4 +154,33 @@ it("falls back to the static drawing without animation or visibility support", (
   mount("project");
   expect(animate).not.toHaveBeenCalled();
   expect(host.querySelector('[role="img"]')?.textContent).toContain("Open a project");
+});
+it("app Motion off cancels running leaves and cannot replay the same explanation", () => {
+  mount("chat");
+  visible();
+  expect(animate).toHaveBeenCalledTimes(4);
+  act(() => {
+    document.documentElement.dataset.motion = "off";
+    window.dispatchEvent(new Event("volli-motion-change"));
+  });
+  expect(cancel).toHaveBeenCalledTimes(4);
+  act(() => {
+    document.documentElement.dataset.motion = "on";
+    window.dispatchEvent(new Event("volli-motion-change"));
+  });
+  visible();
+  expect(animate).toHaveBeenCalledTimes(4);
+});
+it("app Motion off before visibility leaves the explanation static on re-enable", () => {
+  mount("selection");
+  act(() => {
+    document.documentElement.dataset.motion = "off";
+    window.dispatchEvent(new Event("volli-motion-change"));
+  });
+  act(() => {
+    document.documentElement.dataset.motion = "on";
+    window.dispatchEvent(new Event("volli-motion-change"));
+  });
+  visible();
+  expect(animate).not.toHaveBeenCalled();
 });
