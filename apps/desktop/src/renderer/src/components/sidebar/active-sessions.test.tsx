@@ -900,3 +900,62 @@ it("selects without navigation, ranges, selects all and clears, with existing re
     ),
   ).toBe(true);
 });
+
+it("mounts only the source-list viewport and moves keyboard focus across its window boundary", async () => {
+  const now = Date.now();
+  seedSessions(
+    Array.from({ length: 1000 }, (_, i) =>
+      listingRow(
+        chatRecord({
+          sessionId: `c${i}`,
+          ticketId: null,
+          role: "home",
+          createdAt: now - i,
+          lastActivityAt: now - i,
+        }),
+      ),
+    ),
+  );
+  const h = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+  const rect = HTMLElement.prototype.getBoundingClientRect;
+  const bounds = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-session-bands"))
+        return new DOMRect(
+          0,
+          -(this.closest<HTMLElement>('[data-slot="sidebar-content"]')?.scrollTop ?? 0),
+          240,
+          48000,
+        );
+      return rect.call(this);
+    });
+  try {
+    container = document.body.appendChild(document.createElement("div"));
+    root = createRoot(container);
+    await act(async () =>
+      root!.render(
+        <SidebarProvider>
+          <div data-slot="sidebar-content">
+            <ActiveSessions project={PROJECT} visible />
+          </div>
+        </SidebarProvider>,
+      ),
+    );
+    const ids = activeRowIds();
+    expect(ids.length).toBeLessThan(25);
+    expect(ids.length).toBeGreaterThan(10);
+    const last = ids.at(-1)!;
+    await press(last, "ArrowDown");
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    const focused = document.activeElement?.closest<HTMLElement>("[data-peek-row]");
+    expect(focused).not.toBeNull();
+    expect(focused?.dataset.peekRow).not.toBe(last);
+    expect(activeRowIds().length).toBeLessThan(30);
+  } finally {
+    h.mockRestore();
+    bounds.mockRestore();
+  }
+});

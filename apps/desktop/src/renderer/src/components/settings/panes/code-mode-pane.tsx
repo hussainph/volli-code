@@ -155,7 +155,7 @@ export function CodeModeSettings({
       <PrefSection title="Default" icon={CodeIcon}>
         <PrefRow label="Code Mode" testId="code-mode">
           <Select
-            value={!current.enabled ? "off" : current.defaultMode}
+            value={!current.enabled ? "off" : (current.defaultMode ?? "")}
             disabled={!loaded}
             onValueChange={(mode) =>
               void save({ ...current, enabled: true, defaultMode: mode as CodeModeMode })
@@ -186,7 +186,12 @@ export function CodeModeSettings({
             providers={providers}
             pinned={current.models}
             disabled={!pinsEditable || pins.length >= CODE_MODE_POLICY_MODELS_MAX}
-            onPin={(model) => setPin(codeModeModelKey(model), defaultCodeModeMode(model.modelId))}
+            onPin={(model) =>
+              setPin(
+                codeModeModelKey(model),
+                current.defaultMode ?? defaultCodeModeMode(model.modelId),
+              )
+            }
           />
         </PrefRow>
         {pins.map((pin) => (
@@ -198,7 +203,12 @@ export function CodeModeSettings({
             <div className="min-w-0 flex-1 break-words">
               <ModelName model={pin.model} models={models} providers={providers} alwaysProvider />
               <div className="text-label text-muted-foreground">
-                Default: {CODE_MODE_MODE_LABELS[defaultCodeModeMode(pin.model.modelId)]}
+                Default:{" "}
+                {
+                  CODE_MODE_MODE_LABELS[
+                    current.defaultMode ?? defaultCodeModeMode(pin.model.modelId)
+                  ]
+                }
               </div>
             </div>
             <Select
