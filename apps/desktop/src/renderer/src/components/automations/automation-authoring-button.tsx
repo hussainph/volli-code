@@ -20,7 +20,7 @@ export function AutomationAuthoringButton({
   const starting = useChatSessionsStore((state) => state.starting[projectId] === true);
   const [pending, setPending] = React.useState(false);
   const pendingRef = React.useRef(false);
-  const empty = context.name.trim() === "" && context.instructions.trim() === "";
+  const empty = context.instructions.trim() === "";
 
   async function start(): Promise<void> {
     if (pendingRef.current || starting || empty) return;
@@ -56,7 +56,7 @@ export function AutomationAuthoringButton({
       <TooltipTrigger asChild>
         <span>{button}</span>
       </TooltipTrigger>
-      <TooltipContent>Add an idea in Instructions first</TooltipContent>
+      <TooltipContent>Add instructions first</TooltipContent>
     </Tooltip>
   );
 }
