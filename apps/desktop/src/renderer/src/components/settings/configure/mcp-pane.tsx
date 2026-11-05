@@ -326,6 +326,8 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
                 label="MCP servers"
                 items={servers}
                 keyOf={(server) => server.id}
+                search={(server) => server.name}
+                placeholder="Search MCP servers"
                 rows={12}
                 empty="No MCP servers"
                 emptyIllustration="mcp"

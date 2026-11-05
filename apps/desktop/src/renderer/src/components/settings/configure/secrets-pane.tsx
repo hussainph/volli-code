@@ -113,6 +113,8 @@ export function SecretsPane({ project }: { project: Project }) {
               label="Saved credentials"
               items={items}
               keyOf={(s) => s.id}
+              search={(s) => `${s.name} ${scopeLabel(s)}`}
+              placeholder="Search secrets"
               minWidth={600}
               empty="No secrets"
               emptyIllustration="secret"

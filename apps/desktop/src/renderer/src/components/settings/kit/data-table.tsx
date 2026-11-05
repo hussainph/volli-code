@@ -19,15 +19,12 @@
  * The sticky header is `position: sticky` on the `<th>`s, which works inside
  * an `overflow-auto` ancestor with no JS.
  *
- * NOT VIRTUALIZED, on purpose. `MAX_SKILLS_PER_DIR` is 200 per directory and a
- * project merges two of them, so ~400 rows is reachable today. `maxItems` caps
- * what RENDERS and says what it withheld; search runs BEFORE the cap, so a
- * withheld row is always still reachable by typing its name — which is what
- * makes truncation safe rather than lossy. Past ~1,000 the answer is Virtuoso
- * (not installed, deliberately), not a bigger cap and not pagination.
+ * Page boundaries bound mounted rows; search spans the COMPLETE collection.
+ * Every record remains reachable even when its name is unknown.
  */
 import type { EmptyIllustration } from "@renderer/components/ui/empty-state";
 import * as React from "react";
+import { Button } from "@renderer/components/ui/button";
 import { SearchIcon } from "@renderer/components/ui/icon";
 
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
@@ -162,7 +159,7 @@ export function DataTable<T>({
    * — see the two laws in `configure/mcp-pane.tsx` (VC-397).
    */
   rows?: number | "fill";
-  /** How many rows may render at once. The rest are withheld, and said so. */
+  /** Page size: bounds mounted rows without withholding records. */
   maxItems?: number;
   empty: string;
   noResults?: string;
@@ -189,9 +186,13 @@ export function DataTable<T>({
     return items.filter((item) => search(item).toLowerCase().includes(needle));
   }, [items, effectiveQuery, search]);
 
-  // Cap AFTER filtering, so narrowing the search always reaches a withheld row.
-  const shown = matched.length > maxItems ? matched.slice(0, maxItems) : matched;
-  const withheld = matched.length - shown.length;
+  const [page, setPage] = React.useState(0);
+  React.useEffect(() => setPage(0), [effectiveQuery, filter?.value]);
+  const pageSize = Math.max(1, maxItems);
+  const pages = Math.max(1, Math.ceil(matched.length / pageSize));
+  const currentPage = Math.min(page, pages - 1);
+  const start = currentPage * pageSize;
+  const shown = matched.slice(start, start + pageSize);
   const roving = useRovingRows(shown.length);
 
   const selected = selection ? shown.filter((item) => selection.keys.has(keyOf(item))) : matched;
@@ -384,10 +385,28 @@ export function DataTable<T>({
           </Empty>
         ) : null}
       </div>
-      {withheld > 0 ? (
-        <p className="text-ui text-muted-foreground">
-          {shown.length} of {matched.length} shown
-        </p>
+      {pages > 1 ? (
+        <nav aria-label={`${label} pages`} className="flex items-center justify-between gap-2 px-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={currentPage === 0}
+            onClick={() => setPage(currentPage - 1)}
+          >
+            Previous page
+          </Button>
+          <span className="text-ui text-muted-foreground">
+            {start + 1}–{start + shown.length} of {matched.length}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={currentPage + 1 === pages}
+            onClick={() => setPage(currentPage + 1)}
+          >
+            Next page
+          </Button>
+        </nav>
       ) : null}
       <p aria-live="polite" className="sr-only">
         {effectiveQuery.trim() ? `${shown.length} of ${matched.length} shown` : ""}

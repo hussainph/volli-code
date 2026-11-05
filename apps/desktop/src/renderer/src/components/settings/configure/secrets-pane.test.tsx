@@ -103,7 +103,7 @@ describe("Configure Secrets", () => {
     expect(host.querySelectorAll("th")).toHaveLength(5);
     for (const input of host.querySelectorAll<HTMLInputElement>("input")) {
       expect(input.value).toBe("");
-      expect(input.getAttribute("value")).toBeNull();
+      expect([null, ""]).toContain(input.getAttribute("value"));
       expect(input.defaultValue).toBe("");
     }
   });

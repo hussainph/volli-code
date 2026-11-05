@@ -1414,7 +1414,11 @@ describe("recent activity (VC-380)", () => {
 
   it("says when the list itself could not be read", async () => {
     await render({ list: vi.fn(async () => ({ ok: false as const, error: "No database." })) });
-    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("No database.");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toBe(
+      "Couldn't read MCP servers",
+    );
+    expect(document.body.querySelector("details")?.textContent).toContain("No database.");
+    expect(document.body.querySelector("details")?.open).toBe(false);
     expect(text()).not.toContain("No MCP servers");
     expect(button("Retry")).toBeDefined();
   });
