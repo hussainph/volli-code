@@ -99,6 +99,15 @@ export function QuickOpen({
   const scopeKind = scope?.kind ?? null;
   const scopeProjectId = scope?.projectId ?? null;
   const scopeTicketId = scope?.kind === "ticket" ? scope.ticketId : null;
+  const destination = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    const ui =
+      scopeProjectId === null ? undefined : useProjectUiStore.getState().byProject[scopeProjectId];
+    destination.current = !open
+      ? undefined
+      : (scopeTicketId === null ? ui?.homeSplitView : ui?.ticketTabs[scopeTicketId]?.splitView)
+          ?.focusedPaneId;
+  }, [open, scopeProjectId, scopeTicketId]);
   React.useEffect(() => {
     // A remote project's files are on its host (VC-711): nothing to open here.
     if (
@@ -150,6 +159,11 @@ export function QuickOpen({
       pinIntent.current = false;
       if (scope === null) return;
       const projectUi = useProjectUiStore.getState();
+      if (destination.current !== undefined) {
+        if (scope.kind === "ticket")
+          projectUi.focusTicketPane(scope.projectId, scope.ticketId, destination.current);
+        else projectUi.focusHomePane(scope.projectId, destination.current);
+      }
       const surface = quickOpenSurfaceFiles(
         scope,
         projectUi.byProject[scope.projectId] ?? DEFAULT_PROJECT_UI,

@@ -818,9 +818,11 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
    * or Browser Tab: while a group is shown it joins the focused pane's stack.
    */
   const openTab = React.useCallback(
-    (tabId: string) => {
+    (tabId: string, destination?: string) => {
+      if (destination !== undefined)
+        useProjectUiStore.getState().focusTicketPane(projectId, ticket.id, destination);
       releaseActive();
-      useProjectUiStore.getState().openTicketTab(projectId, ticket.id, tabId);
+      useProjectUiStore.getState().openTicketTab(projectId, ticket.id, tabId, destination);
     },
     [releaseActive, projectId, ticket.id],
   );
@@ -1155,7 +1157,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
       chat.openChatTab(ticket.id, relaunch.sessionId);
       return;
     }
-    recordResolvedTicketTab(projectId, ticket.id, BODY_TAB_ID);
+    recordResolvedTicketTab(projectId, ticket.id, BODY_TAB_ID, activeTabId);
   }, [
     activeTabId,
     activeTabIsRenderable,
@@ -1221,8 +1223,11 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   // tab selection is stored here. Shared by the tab strip's "+" and the rail's
   // New-session button so both take the exact same path.
   const createSession = React.useCallback(async () => {
+    const destination =
+      useProjectUiStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView
+        ?.focusedPaneId;
     const sessionId = await createTerminalSession(ticketScope(projectId, ticket.id));
-    if (sessionId !== null) openTab(sessionId);
+    if (sessionId !== null) openTab(sessionId, destination);
   }, [projectId, ticket.id, openTab]);
 
   // Opens the tab first and asks where to go second — see the note on Home's
@@ -1230,7 +1235,14 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   // and threw from outside the try, so the press was swallowed whole.
   const createBrowser = React.useCallback(
     // The shared door refuses a remote project's (VC-711).
-    () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, openTab),
+    () => {
+      const destination =
+        useProjectUiStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView
+          ?.focusedPaneId;
+      return openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, (tabId) =>
+        openTab(tabId, destination),
+      );
+    },
     [browserApi, projectId, openTab, ticket.id],
   );
 

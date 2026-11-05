@@ -14,7 +14,6 @@ import { StreakVisual } from "@renderer/components/chat/empty/streak-visual";
 import { WorkingCopyVisual } from "@renderer/components/chat/empty/working-copy-visual";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import {
@@ -68,14 +67,13 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
     void refreshWorkingCopy(projectId, ticketId);
   }, [projectId, ticketId, refreshWorkingCopy]);
 
-  const ready = scope === "project" ? historyRead : workingCopy?.status === "ready";
+  const ready = historyRead && (scope === "project" || workingCopy?.status === "ready");
   return (
     <div
       data-slot="chat-empty-state"
       className={cn(EMPTY_PAGE, "chat-quiet-center max-w-full py-0")}
     >
-      <SectionHeading>New chat</SectionHeading>
-      {scope === "project" ? <StreakVisual /> : null}
+      <StreakVisual />
       {ready ? (
         <Popover>
           <PopoverTrigger asChild>

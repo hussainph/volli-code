@@ -1,10 +1,8 @@
 /**
  * STREAK — every Session ever run in Volli, one cell per day (VC-55).
  *
- * A Home chat opens on a field of many, because that is what a Project
- * Session's scope is: the whole board, every project, all the work. A ticket
- * chat cannot draw this, and that asymmetry is what tells the two kinds apart
- * without a word naming either.
+ * Every empty chat shares this practice history. Scope-specific working-copy
+ * facts stay in Session overview and the inspector, not the quiet center.
  *
  * ONE TOOLTIP FOR 182 CELLS, driven by event delegation off the grid. A Radix
  * tooltip per cell mounts 182 portal roots for a hint nobody reads twice, and a
@@ -103,12 +101,10 @@ export function StreakVisual() {
           <strong className="text-title font-medium tabular-nums">{grid.activeDays}</strong>
           <span className="text-label text-muted-foreground">active days</span>
         </div>
-        {grid.currentStreak > 0 ? (
-          <div>
-            <strong className="text-title font-medium tabular-nums">{grid.currentStreak}</strong>
-            <span className="text-label text-muted-foreground">day streak</span>
-          </div>
-        ) : null}
+        <div>
+          <strong className="text-title font-medium tabular-nums">{grid.currentStreak}</strong>
+          <span className="text-label text-muted-foreground">day streak</span>
+        </div>
       </div>
     </div>
   );

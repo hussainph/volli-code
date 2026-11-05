@@ -455,7 +455,53 @@ describe("setBoardSort", () => {
   });
 });
 
+describe.each([false, true])("captured pane destination (Ticket %s)", (ticket) => {
+  it.each(["left", "right"] as const)(
+    "lands a later open in its original %s empty pane after focus moved",
+    (edge) => {
+      const store = createProjectUiStore(createMemoryStorage(), paneMinter());
+      const ui = store.getState();
+      if (ticket) {
+        ui.setTicketActiveTab("project-a", "ticket-1", "chat:neighbour");
+        ui.splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, edge);
+      } else {
+        ui.setHomeActiveTab("project-a", "chat:neighbour");
+        ui.splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, edge);
+      }
+      const read = () =>
+        ticket
+          ? store.getState().byProject["project-a"]!.ticketTabs["ticket-1"]!.splitView!
+          : store.getState().byProject["project-a"]!.homeSplitView!;
+      const destination = read().focusedPaneId;
+      const neighbour = splitViewPanes(read()).find((leaf) => leaf.id !== destination)!;
+      if (ticket) ui.focusTicketPane("project-a", "ticket-1", neighbour.id);
+      else ui.focusHomePane("project-a", neighbour.id);
+      for (const id of ["chat:new", "terminal-new", "browser:new"]) {
+        if (ticket) ui.openTicketTab("project-a", "ticket-1", id, destination);
+        else ui.openHomeTab("project-a", id, destination);
+        const view = projectSplitView(read(), ["chat:neighbour", id], id, ticket ? "doc" : "board");
+        expect(view.focusedPaneId).toBe(destination);
+        expect(view.activeTabId).toBe(id);
+        expect(view.panes.find((leaf) => leaf.id === neighbour.id)?.activeTabId).toBe(
+          "chat:neighbour",
+        );
+      }
+    },
+  );
+});
+
 describe("recordResolvedHomeTab", () => {
+  it("cannot let a stale render receipt overwrite a newer open or hide handoff", () => {
+    const store = createProjectUiStore(createMemoryStorage());
+    store.getState().setHomeActiveTab("project-a", "browser:departed");
+    store.getState().openHomeTab("project-a", "browser:new");
+    const opened = store.getState();
+    store.getState().recordResolvedHomeTab("project-a", "chat:unrelated", "browser:departed");
+    expect(store.getState()).toBe(opened);
+    store.getState().recordResolvedHomeTab("project-a", "chat:next", "browser:new");
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:next");
+  });
+
   it("records a fallback without selecting its pane or changing front tabs", () => {
     const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "chat:old");
@@ -481,6 +527,17 @@ describe("recordResolvedHomeTab", () => {
 });
 
 describe("recordResolvedTicketTab", () => {
+  it("cannot let a stale render receipt overwrite a newer pane selection", () => {
+    const store = createProjectUiStore(createMemoryStorage());
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "browser:departed");
+    store.getState().openTicketTab("project-a", "ticket-1", "browser:new");
+    const opened = store.getState();
+    store.getState().recordResolvedTicketTab("project-a", "ticket-1", "doc", "browser:departed");
+    expect(store.getState()).toBe(opened);
+    store.getState().recordResolvedTicketTab("project-a", "ticket-1", "doc", "browser:new");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe("doc");
+  });
+
   it("records an automatic fallback without selecting a pane or announcing intent", () => {
     const store = createProjectUiStore(createMemoryStorage(), paneMinter());
     store.getState().setTicketActiveTab("project-a", "ticket-1", "missing-terminal");

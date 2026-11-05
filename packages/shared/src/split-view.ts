@@ -1141,8 +1141,19 @@ export function projectSplitView(
   permanentTabId: string,
 ): ResolvedSplitView {
   const base = state ?? emptySplitView(selectedTabId);
-  const next = base.selectedTabId === selectedTabId ? base : selectTab(base, selectedTabId);
   const live = new Set([permanentTabId, ...orderedTabIds]);
+  // A surface's stale-tab fallback is not a selection of another pane. The
+  // registry can stop listing a browser before the close/hide continuation
+  // removes its assignment; relaunch can leave the same empty pane. Keep that
+  // pane focused so its launcher remains the command's destination. Explicit
+  // selections update the split state too; renderer-only Draft selections are
+  // applied by their overlay before reaching this projection.
+  const missingGroupFront =
+    base.root.kind === "split" && base.selectedTabId !== null && !live.has(base.selectedTabId);
+  const next =
+    base.selectedTabId === selectedTabId || missingGroupFront
+      ? base
+      : selectTab(base, selectedTabId);
   if (next.root.kind === "split") {
     const resolved = new Map<string, ResolvedSplitViewPane>();
     panesOf(next.root).forEach((pane, index) => {

@@ -516,10 +516,14 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // nothing at all, silently.
   const createBrowser = React.useCallback(async () => {
     if (selectedId === null) return;
+    const destination =
+      useProjectUiStore.getState().byProject[selectedId]?.homeSplitView?.focusedPaneId;
     await openBrowserTab(browserApi, { projectId: selectedId }, (tabId) => {
+      if (destination !== undefined)
+        useProjectUiStore.getState().focusHomePane(selectedId, destination);
       releaseActive();
       // A new Browser Tab OPENS into the shown group's focused pane.
-      useProjectUiStore.getState().openHomeTab(selectedId, tabId);
+      useProjectUiStore.getState().openHomeTab(selectedId, tabId, destination);
     });
   }, [browserApi, releaseActive, selectedId]);
 

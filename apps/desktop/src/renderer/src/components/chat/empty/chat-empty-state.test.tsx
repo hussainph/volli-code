@@ -155,9 +155,42 @@ describe("WorkingCopyChips", () => {
 
 /** The quiet entry preserves the existing charts behind a named disclosure. */
 describe("ChatEmptyState", () => {
-  it("shows only New chat before the practice-history read, never a false zero or skeleton", () => {
+  it("keeps even a ready ticket's center empty while its stats are loading", async () => {
+    let finish!: (value: { ok: true; startedAt: readonly number[] }) => void;
+    const history = new Promise<{ ok: true; startedAt: readonly number[] }>((resolve) => {
+      finish = resolve;
+    });
+    Object.assign(window, {
+      api: {
+        workingCopy: {
+          snapshot: vi.fn().mockResolvedValue({
+            ok: true,
+            reading: { state: "measured", workingCopy: workingCopy() },
+          }),
+        },
+        sessions: { starts: vi.fn(() => history) },
+      },
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { root, host };
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <ChatEmptyState projectId="p1" ticketId="t1" />
+        </TooltipProvider>,
+      ),
+    );
+    expect(host.textContent).toBe("");
+    expect(host.querySelector("button,[data-day],[data-working-copy-state]")).toBeNull();
+    await act(async () => finish({ ok: true, startedAt: [] }));
+    expect(host.textContent).not.toContain("New chat");
+    expect(host.querySelectorAll(".streak-stats > div")).toHaveLength(3);
+  });
+  it("shows no title, chart, or placeholder before the practice-history read", () => {
     const markup = draw(<ChatEmptyState projectId="p1" ticketId={null} />);
-    expect(markup).toContain("New chat");
+    expect(markup).not.toContain("New chat");
     expect(markup).not.toContain("data-day");
     expect(markup).not.toContain("sessions");
     expect(markup).not.toContain("Session overview");
@@ -166,7 +199,9 @@ describe("ChatEmptyState", () => {
   it("draws successful practice history inline and keeps alternate charts in overview", async () => {
     await mount(<ChatEmptyState projectId="p1" ticketId={null} />, { state: "pending" });
     expect(document.body.querySelectorAll("[data-day]")).toHaveLength(182);
-    expect(document.body.querySelector(".streak-stats")?.textContent).toBe("0sessions0active days");
+    expect(document.body.querySelector(".streak-stats")?.textContent).toBe(
+      "0sessions0active days0day streak",
+    );
     openOverview();
     expect(document.body.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
     expect(document.body.querySelector('[aria-label="Empty chat visual"]')).not.toBeNull();
@@ -189,14 +224,14 @@ describe("ChatEmptyState", () => {
     expect(document.body.querySelector('[data-empty-visual="board"]')).not.toBeNull();
   });
 
-  it("offers a Ticket Session no visual picker and none of Home's charts", async () => {
+  it("shares the quiet matrix with Ticket Sessions, keeping their overview scope-specific", async () => {
     await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
       state: "measured",
       workingCopy: workingCopy(),
     });
     openOverview();
     expect(document.body.querySelector('[aria-label="Empty chat visual"]')).toBeNull();
-    expect(document.body.querySelector('[data-empty-visual="streak"]')).toBeNull();
+    expect(document.body.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
     expect(document.body.querySelector('[data-empty-visual="board"]')).toBeNull();
   });
 
@@ -224,7 +259,7 @@ describe("ChatEmptyState", () => {
       state: "pending",
     });
 
-    expect(document.body.querySelector("[data-empty-visual]")).toBeNull();
+    expect(document.body.querySelector('[data-empty-visual="venue"]')).toBeNull();
     expect(document.body.querySelector("[data-working-copy-state]")).toBeNull();
     expect(markup).not.toContain("Main checkout");
     expect(markup).not.toContain("Worktree");

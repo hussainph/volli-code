@@ -139,6 +139,7 @@ function SplitViewCell({
       // not "pane 1 of 1", it is the plane.
       aria-label={split ? paneCellLabel(pane, paneCount) : undefined}
       onPointerDownCapture={() => onFocusPane(pane.id)}
+      onFocusCapture={() => onFocusPane(pane.id)}
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
         split &&

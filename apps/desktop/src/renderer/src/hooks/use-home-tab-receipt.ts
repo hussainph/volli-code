@@ -8,7 +8,7 @@ interface HomeTabReceipt {
   restoreKind: HomeTabRestore["kind"];
   activeTabId: string;
   recordedTab: string;
-  recordResolvedTab(projectId: string, tabId: string): void;
+  recordResolvedTab(projectId: string, tabId: string, expected: string): void;
 }
 
 /** A fallback receipt may neither persist an empty Draft nor select its pane. */
@@ -30,7 +30,7 @@ export function useHomeTabReceipt({
       activeTabId === recordedTab
     )
       return;
-    recordResolvedTab(projectId, activeTabId);
+    recordResolvedTab(projectId, activeTabId, recordedTab);
   }, [
     projectId,
     provisionalActive,

@@ -139,26 +139,31 @@ Tabs follow Rex: wide capsules on a neutral glass track, a lighter filled select
 capsule, leading identity, title alone and close; Board is icon-only. A grouped
 chip's hover card shows its existing items as two-line rows, with existing liveness
 at the trailing edge. Its context menu, pane selection, dragging, rename, close and
-ungroup behaviour are unchanged. Tab selection has no transition. One `+` inside
-the trough opens the anchored Chat / Terminal / Browser chooser; the inspector
+ungroup behaviour are unchanged. Tab selection has no transition. Pointer opens
+and closes cascade actual widths on the shared critical spring, never scale text.
+After a pointer close the remaining widths hold until exit or one second idle;
+window/pane resizing, keyboard operations and reduced motion are immediate. One `+`
+inside the trough opens the anchored Chat / Terminal / Browser chooser; the inspector
 uses the same chooser. Direct ⌘T / ⌥⌘T keep existing project/ticket/pane scope,
 cloud keeps Chat only, and the Runner picker stays with the control.
 
 Sidebar header, rows, section names and footer share an 18px leading ink inset.
 The project name is a measured 15/20px display title, not a new general-purpose type rung.
-Two-line rows are 42px (18px name, 14px metadata, 5px vertical inset), with a 20px
-identity tile. Selected navigation is a neutral 9% ink fill, not an accent outline.
-The Sessions/Files choice stays inline with Active; Active contains Sessions only.
-Bands (28px), ticket disclosures (32px) and Session rows (42px Active / 32px Previous)
+Two-line primary rows are 46px, with a 20px identity tile and 2px row gaps.
+Selected navigation is a neutral ink fill, not an accent outline. The Sessions/Files
+choice shares the inspector's `ViewSwitcher` pill, trailing-aligned in the fixed
+project header. It falls back to icon-only in a header narrower than 220px.
+Home and Automations stay fixed; Active/Previous headings scroll with their list.
+Bands, ticket disclosures (32px) and Session rows (46px Active / 32px Previous)
 share one flat presentation model with stable keys and offsets. Expanded ticket
 children are plain rows, not inset cards. This model is viewport-ready; windowing
 and off-window focus routing are separate work.
 
-The empty project chat is a quiet centered title, real working-copy chips and a
-26×7 day matrix with equal-column Sessions / active days / nonzero streak metrics.
-The object caps at 640px; Session overview retains Streak / Board / Venue, while
-Tickets retain Venue only. Before a successful read, show only New chat and the
-anchored composer: no placeholder chart, skeleton or false zero.
+The empty chat has no title or working-copy chips: a 26×7 practice-history matrix,
+three equal-column Sessions / active days / day streak metrics, Session overview
+and the anchored composer. The object caps at 640px; the project overview retains
+Streak / Board / Venue, while a ticket's overview retains Venue only. Before a
+successful history read, show only the composer: no placeholder, skeleton or false zero.
 
 A draft's attachments use one count token opening a bounded manager; the composer
 never grows with attachment count. Inspector labels show two bounded pills and a
@@ -228,8 +233,8 @@ Do not add entrances to them because a pointer path happens to animate.
 | Job / frequency | Shared tokens | Current value |
 |---|---|---|
 | Occasional pointer selection / default spring | `--duration-snappy`, `--spring-snappy` | 225ms; snappy model .24 / .1 |
-| Pane edge continuity | `--duration-smooth`, `--spring-smooth` | 270ms; smooth model .2 / 0 |
-| Drag/drop landing only | `--duration-bouncy`, `--spring-bouncy` | 380ms; bouncy model .3 / .22 |
+| Pane edge / tab width continuity | `--duration-smooth`, `--spring-smooth` | ≤270ms; .20s response, critical damping |
+| Drag/drop landing only | `--duration-bouncy`, `--spring-bouncy` | 240ms; .20s response, damping .8 |
 | Menu / popover entrance | `--duration-menu-in`, `--ease-out` | 160ms; cubic-bezier(.23,1,.32,1) |
 | Menu / popover exit | `--duration-menu-out`, `--ease-out` | 110ms, fade only |
 | Sheet entrance / exit | `--duration-sheet` / `--duration-menu-out` | 220 / 110ms |
@@ -249,13 +254,14 @@ animation has migrated to the foundation tokens.
 
 ## Performance is part of the design
 
-- Animate only `transform`, `opacity` and, when necessary, `clip-path`. These avoid layout;
-  `clip-path` is not a guarantee of free compositing. The existing tree/disclosure height
-  transition is the deliberate layout exception, not permission for general layout animation.
+- Prefer `transform`, `opacity` and, when necessary, `clip-path`. Continuous pane push,
+  actual tab-width cascades and tree/disclosure height are explicit layout exceptions,
+  not permission for general layout animation. Both pane divider edges read one live
+  width; expensive xterm/Monaco/native Browser resize is deferred until it settles.
 - Keep backdrop-filter surfaces few and **never nested**. Take materials from primitives,
-  not `backdrop-blur-*` at a call site. No blur over live terminal/browser work planes.
-- During a pour/morph, set `data-glass-blur="off"` on the surface or ancestor, or
-  `PopoverContent blur={false}`. Chrome does not clip backdrop filtering with `clip-path`.
+  not `backdrop-blur-*` at a call site. Native Browser pixels use a still while panes move.
+- Material stays fully formed throughout every animation: never toggle backdrop filtering
+  off during a pour or reveal. A pour is decorative, never a scaled live content subtree.
   Suppress pointer re-entry while morphing; a closing pane must not immediately peek again.
 - Preserve virtualisation, memoisation, containment, bounded lists and stable component
   identity. Navigation must not incidentally unmount live terminals or Browser Tabs.
