@@ -87,11 +87,11 @@ export function PrimarySidebar() {
       >
         {/* ChromeBar above owns the traffic lights and the drag region — this
             is now a plain panel header. */}
-        <SidebarHeader className="px-4 py-4">
+        <SidebarHeader className="px-4 pt-3 pb-2">
           {selected ? (
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{selected.name}</div>
-              <div className="text-ui text-muted-foreground">{selected.ticketPrefix}</div>
+              <div className="truncate text-ui font-semibold font-display">{selected.name}</div>
+              <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
             </div>
           ) : (
             <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
@@ -101,7 +101,7 @@ export function PrimarySidebar() {
         {selected ? (
           <>
             <NavList />
-            <div className="shrink-0 px-2 py-2">
+            <div className="sidebar-section-header shrink-0 py-2">
               <SessionBandHeader
                 label="Active"
                 count={activeCount?.projectId === selected.id ? activeCount.count : undefined}

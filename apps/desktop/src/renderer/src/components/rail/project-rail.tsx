@@ -84,7 +84,7 @@ export const ProjectRail = React.memo(function ProjectRail() {
         onDragCancel={handleDragEnd}
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          <div className="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto px-2 pt-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-0.5 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {cloudLaunch ? <CloudWorkspaceHead /> : null}
             {projects.map((project, index) => (
               <ProjectTile

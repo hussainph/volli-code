@@ -14,8 +14,8 @@ export const COMPOSER_CONFIG_CHIP = "prompt-config border border-border/70 bg-ca
 export const COMPOSER_CONTROL_SIZE = "sm" as const;
 export const COMPOSER_CONTROL_ICON_SIZE = "icon-sm" as const;
 
-/** A 32px send key, distinct from the 24px settings and their pill shape. */
-export const COMPOSER_PRIMARY_SIZE = "icon-lg" as const;
+/** A 28px send key, distinct from the 24px settings and their pill shape. */
+export const COMPOSER_PRIMARY_SIZE = "icon" as const;
 
 /** Small glyphs need the weight step to stand beside the 13px labels. */
 export const COMPOSER_GLYPH_STROKE = 2.25 as const;

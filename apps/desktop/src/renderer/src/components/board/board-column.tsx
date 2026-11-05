@@ -28,7 +28,6 @@ import { useBoardSessionActivityMap } from "@renderer/components/board/session-a
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
-import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 
@@ -78,8 +77,8 @@ interface BoardColumnProps {
   instantSort?: boolean;
 }
 
-/** The column list's `gap-2`, in px — the spacers have to account for it. */
-const COLUMN_ROW_GAP = 8;
+/** The column list's `gap-1.5`, in px — the spacers have to account for it. */
+const COLUMN_ROW_GAP = 6;
 
 /**
  * The DOM half of `scrollOffsetInRows` (column-window.ts, VC-451): the
@@ -371,7 +370,7 @@ export const BoardColumn = React.memo(function BoardColumn({
   });
   const mounted = tickets.slice(mountedRange.first, mountedRange.last);
   // A spacer stands for the rows above or below the window so the scroller's
-  // range describes the whole column. `- gap` because the flex `gap-2` between
+  // range describes the whole column. `- gap` because the flex `gap-1.5` between
   // the spacer and the card beside it already supplies the last row's gap.
   const spacerHeight = (rows: number) => Math.max(0, rows * rowStride - COLUMN_ROW_GAP);
   const leadingRows = mountedRange.first;
@@ -396,7 +395,7 @@ export const BoardColumn = React.memo(function BoardColumn({
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
-        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-column bg-muted",
+        "board-column flex min-h-0 max-h-[85%] flex-none cursor-default flex-col rounded-column",
         // Targets and navigation update immediately, including keyboard drops.
         // Quieted while another column holds the ⌥ picker: one column is being
         // aimed at, and the rest are not the question.
@@ -407,9 +406,11 @@ export const BoardColumn = React.memo(function BoardColumn({
         aimed && "bg-(--accent-tint) ring-1 ring-inset ring-primary-text",
       )}
     >
-      <div className="group/column-header flex items-center gap-2 px-4 pt-2 pb-2">
-        <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
-        <Badge variant="count">{tickets.length}</Badge>
+      <div className="group/column-header flex h-8 shrink-0 items-center gap-1.5 px-2">
+        <span className="font-display text-ui font-semibold text-foreground">
+          {TICKET_STATUS_LABELS[status]}
+        </span>
+        <span className="text-ui text-muted-foreground">{tickets.length}</span>
         <div className="flex-1" />
         {/* Arming lives on the column because that is what it is a property of
             (VC-112). Always visible so an unarmed column still offers an
@@ -478,7 +479,7 @@ export const BoardColumn = React.memo(function BoardColumn({
               // Content must keep its intrinsic height. A flex-1/min-h-0 list
               // shrinks to the viewport and crushes virtual spacers to zero,
               // changing the scroll range every time the window moves.
-              className="flex min-h-full shrink-0 flex-col gap-2 px-2 pb-2"
+              className="flex min-h-full shrink-0 flex-col gap-1.5"
             >
               {leadingRows > 0 ? (
                 <div

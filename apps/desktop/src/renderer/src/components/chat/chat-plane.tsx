@@ -2131,11 +2131,11 @@ function ChatPlaneContent({
         ref={composerHeight.ref}
         data-slot="chat-composer-dock"
         className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4",
+          "pointer-events-none absolute inset-x-0 bottom-0 pb-4",
           constrainComposer && "pointer-events-auto max-h-[70%] overflow-y-auto overscroll-contain",
         )}
       >
-        <ContentColumn>
+        <ContentColumn className="max-w-(--container-composer)">
           {/* Above whatever the slot holds, card included. A card answers the
               question it was asked; it does not answer a failure — and the
               failure most worth seeing here is the decision that never reached
@@ -2578,7 +2578,7 @@ const SEGMENT_GAP = "space-y-4";
  * speakers is what gives the feed its paragraph structure: a turn holds
  * together, and the hand-off to the other voice reads as a break.
  */
-export const MESSAGE_GAP = "flex flex-col gap-6";
+export const MESSAGE_GAP = "flex flex-col gap-4";
 
 export interface TurnContext {
   onOpenFile(path: string): void;
@@ -2957,7 +2957,7 @@ function ChatTranscript({
   }, [control, sessionId]);
 
   return (
-    <ContentColumn className={MESSAGE_GAP}>
+    <ContentColumn className={cn("max-w-(--container-transcript)", MESSAGE_GAP)}>
       {hasEarlier ? (
         <div ref={sentinel} className="flex justify-center">
           <Button

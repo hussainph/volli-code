@@ -137,6 +137,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
   return (
     <PageHeader
       title="Board"
+      className="min-h-13 px-3 py-2"
       // Named by the permanent tab directly above this row (VC-54), so the word
       // stays in the outline and leaves the screen — the two are one object at
       // one scope, and it only has one name.

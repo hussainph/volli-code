@@ -494,6 +494,7 @@ export const SessionComposer = React.memo(function SessionComposer({
     >
       <PromptInput
         data-composer-container=""
+        data-tint="true"
         className={cn(
           // `group/composer` names the box for anything inside that reads
           // its state; the picker card and the queued rows are groups' worth
@@ -502,7 +503,7 @@ export const SessionComposer = React.memo(function SessionComposer({
           // pane is 265px and a split can be narrower, and a control that
           // drops a word must drop it for the BOX's width, not the window's —
           // the tab strip's own rule.
-          "session-prompt group/composer @container/composer pointer-events-auto overflow-hidden",
+          "glass session-prompt group/composer @container/composer pointer-events-auto overflow-hidden",
           PROMPT_SURFACE,
           className,
         )}

@@ -536,7 +536,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           // so one line reads at two contrasts down the band and neither of
           // them is the measured one (`globals.css`, the section-heading note).
           secondary={
-            <span className="session-row-meta block truncate text-ui text-muted-foreground transition-colors">
+            <span className="session-row-meta block truncate text-label text-muted-foreground transition-colors">
               {team?.ended ?? activeSubtitle(row, ticketPrefix, now, away)}
             </span>
           }

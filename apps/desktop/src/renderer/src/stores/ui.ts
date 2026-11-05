@@ -139,11 +139,11 @@ import { appStateStorage } from "@renderer/lib/app-state-storage";
 
 export const UI_APP_STATE_KEY = "volli:ui";
 
-export const SIDEBAR_DEFAULT_WIDTH = 318;
+export const SIDEBAR_DEFAULT_WIDTH = 296;
 export const SIDEBAR_MIN_WIDTH = 280;
 export const SIDEBAR_MAX_WIDTH = 640;
 
-export const RAIL_DEFAULT_WIDTH = 300;
+export const RAIL_DEFAULT_WIDTH = 278;
 // The rail's session rows / properties all wrap in min-w-0 + truncate, so they
 // reflow gracefully; 240 is the floor where the "Sessions" header + status chip
 // and the History search stay legible without crowding.

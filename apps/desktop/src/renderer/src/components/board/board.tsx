@@ -1206,7 +1206,7 @@ export const Board = React.memo(function Board({
                   // Columns cap below full height so a strip of canvas stays
                   // grab-able under them (mouse pan). Scrollbar is
                   // hidden — drag / shift-wheel / trackpad replace it.
-                  "flex min-h-0 flex-1 items-start gap-4 overflow-x-auto px-gutter pb-4",
+                  "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-3 pb-4",
                   "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}

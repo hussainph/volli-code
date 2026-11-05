@@ -31,21 +31,28 @@ describe("chrome band copy", () => {
       expect(toggle).toContain('data-variant="toolbar"');
     }
     expect(html).toContain("search-capsule");
-    expect(html).toContain("[&amp;_svg:not([class*=&#x27;size-&#x27;])]:size-4");
+    expect(html).toContain("size-4");
   });
-  it("keeps the two toggles immediately beside search in the centered cluster", () => {
+  it("groups sidebar toggles with history, leaves search centred and puts inspection last", () => {
     const html = renderToStaticMarkup(
       <SidebarProvider>
         <ChromeBar />
       </SidebarProvider>,
     );
-    const cluster = html.slice(html.indexOf("absolute left-1/2 top-[19px]"));
-    expect(cluster.indexOf('aria-label="Hide project switcher"')).toBeLessThan(
-      cluster.indexOf('aria-label="Toggle navigation sidebar"'),
-    );
-    expect(cluster.indexOf('aria-label="Toggle navigation sidebar"')).toBeLessThan(
-      cluster.indexOf('aria-label="Search tickets, sessions, and commands"'),
-    );
+    const names = [
+      "Back",
+      "Forward",
+      "Hide project switcher",
+      "Toggle navigation sidebar",
+      "Search tickets, sessions, and commands",
+      "Hide details rail",
+    ];
+    const offsets = names.map((name) => html.indexOf(`aria-label="${name}"`));
+    expect(offsets.every((at) => at >= 0)).toBe(true);
+    expect(offsets).toEqual(offsets.toSorted((a, b) => a - b));
+    const cluster = html.slice(html.indexOf("absolute left-1/2 top-1/2"));
+    expect(cluster).not.toContain('aria-label="Toggle navigation sidebar"');
+    expect(html).toContain('data-inspector-trigger="shell"');
   });
   it("labels the rail toggle with the ruled word — project switcher, never workspace", () => {
     const html = renderToStaticMarkup(

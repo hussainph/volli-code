@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { InspectorShell } from "./inspector-shell";
+import { InspectorHostContext } from "./inspector-host";
 import { EXIT_GRACE_MS } from "./edge-reveal";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -174,5 +175,38 @@ describe("resident inspector", () => {
     await act(async () => finish?.());
     expect(panel.parentElement!.style.width).toBe("300px");
     expect(contentCancel).toHaveBeenCalled();
+  });
+});
+
+describe("inspector shell placement", () => {
+  it("portals outside paper while retaining the resident page through pin and enable changes", async () => {
+    const outlet = document.createElement("div");
+    const paper = document.createElement("main");
+    paper.dataset.slot = "sidebar-inset";
+    paper.dataset.volliSurface = "";
+    document.body.append(paper, outlet);
+    function Workspace({ enabled }: { enabled: boolean }) {
+      return (
+        <InspectorHostContext.Provider value={outlet}>
+          <InspectorShell enabled={enabled} owner="ticket">
+            <input aria-label="Resident draft" defaultValue="Preserved" />
+          </InspectorShell>
+        </InspectorHostContext.Provider>
+      );
+    }
+    await act(async () => root.render(<Workspace enabled />));
+    const draft = outlet.querySelector("input")!;
+    expect(paper.contains(draft)).toBe(false);
+    expect(outlet.querySelector("aside")!.style.width).toBe("300px");
+    await act(async () => useUiStore.setState({ railCollapsed: true }));
+    expect(outlet.querySelector("input")).toBe(draft);
+    await act(async () => root.render(<Workspace enabled={false} />));
+    expect(outlet.querySelector("input")).toBe(draft);
+    expect(outlet.querySelector("aside")!.style.width).toBe("0px");
+    expect(outlet.querySelector("aside")!.style.display).toBe("none");
+    await act(async () => root.unmount());
+    // afterEach still unmounts the already-empty root.
+    paper.remove();
+    outlet.remove();
   });
 });

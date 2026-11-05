@@ -602,7 +602,7 @@ describe("the effort control's place in the footer", () => {
     expect(html).toMatch(
       /data-variant="ghost" data-size="sm"[^>]*aria-label="Reasoning effort: Medium"/,
     );
-    expect(html).toMatch(/data-variant="default" data-size="icon-lg"[^>]*aria-label="Send"/);
+    expect(html).toMatch(/data-variant="default" data-size="icon"[^>]*aria-label="Send"/);
     expect(html).not.toContain('data-size="xs"');
     expect(html).not.toContain('data-size="icon-xs"');
   });

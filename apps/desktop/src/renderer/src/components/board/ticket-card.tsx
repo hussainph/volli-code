@@ -78,12 +78,12 @@ export function TicketCardContent({
         // A quiet contact shadow lifts paper off the neutral column. The
         // detached drag preview keeps its deeper `shadow-card` halo.
         // px-3 preserves the dense card's title measure.
-        "flex flex-col gap-1 rounded-card border bg-card px-3 py-2 shadow-(--shadow-glass-small) cursor-default select-none",
+        "board-card flex flex-col rounded-card border border-transparent cursor-default select-none",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
         selected
           ? "border-primary-text bg-(--accent-tint)"
-          : "border-border hover:border-border-strong",
+          : "border-transparent hover:border-border-strong",
       )}
     >
       {/* An agent is running on this ticket. Always rendered, never conditionally
@@ -98,13 +98,15 @@ export function TicketCardContent({
         data-activity={sessionActivity ?? undefined}
       />
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-label text-muted-foreground">{displayId}</span>
+        <span className="board-card-key font-mono text-label text-muted-foreground">
+          {displayId}
+        </span>
         <div className="flex items-center gap-1">
           <ArchiveReadyBadge ticket={ticket} />
           <PriorityIndicator priority={ticket.priority} />
         </div>
       </div>
-      <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
+      <p className="board-card-title text-ui font-normal text-foreground line-clamp-2">
         {ticket.title}
       </p>
       {/* Capped at one line, with a `+n` chip for the rest — a card's height is

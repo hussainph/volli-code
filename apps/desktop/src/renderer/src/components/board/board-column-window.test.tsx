@@ -307,11 +307,11 @@ describe("a column that does not fit", () => {
 
     expect(first).toBeGreaterThan(0);
     expect(Number.parseFloat(leading?.style.height ?? "")).toBeCloseTo(
-      first * COLUMN_ROW_STRIDE_FALLBACK - 8,
+      first * COLUMN_ROW_STRIDE_FALLBACK - 6,
       0,
     );
     expect(Number.parseFloat(trailing?.style.height ?? "")).toBeCloseTo(
-      (500 - last) * COLUMN_ROW_STRIDE_FALLBACK - 8,
+      (500 - last) * COLUMN_ROW_STRIDE_FALLBACK - 6,
       0,
     );
   });

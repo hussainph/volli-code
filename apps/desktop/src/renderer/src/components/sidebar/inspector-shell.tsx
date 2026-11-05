@@ -1,4 +1,6 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
+import { useInspectorHost } from "./inspector-host";
 
 import { hasVisibleNativePlane } from "@renderer/components/browser/browser-plane-freeze";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
@@ -19,6 +21,7 @@ export function InspectorShell({
   owner: "home" | "ticket";
   children: React.ReactNode;
 }) {
+  const host = useInspectorHost();
   const collapsed = useUiStore((state) => state.railCollapsed);
   const width = useUiStore((state) => state.railWidth);
   const reduced = useReducedMotion();
@@ -40,7 +43,9 @@ export function InspectorShell({
   } | null>(null);
   React.useLayoutEffect(() => {
     bandRef.current = document.querySelector('[data-slot="chrome-bar"]');
-    const trigger = document.querySelector<HTMLElement>(`[data-inspector-trigger="${owner}"]`);
+    const trigger = document.querySelector<HTMLElement>(
+      `[data-inspector-trigger="shell"], [data-inspector-trigger="${owner}"]`,
+    );
     triggerRef.current = trigger;
     if (trigger === null) return;
     const activate = (event: MouseEvent) => {
@@ -71,7 +76,9 @@ export function InspectorShell({
     previousPin.current = pinned;
     previousWidth.current = width;
     const record = contentMotion.current;
-    const content = panelRef.current?.parentElement?.previousElementSibling;
+    const content =
+      host?.parentElement?.querySelector('[data-slot="sidebar-inset"][data-volli-surface]') ??
+      panelRef.current?.parentElement?.previousElementSibling;
     const settle = () => {
       record?.animation.cancel();
       record?.content.removeAttribute("data-glass-blur");
@@ -129,7 +136,7 @@ export function InspectorShell({
         contentMotion.current = null;
       }
     };
-  }, [pinned, enabled, reduced, layoutPinned, width]);
+  }, [pinned, enabled, reduced, layoutPinned, width, host]);
   React.useEffect(
     () => () => {
       contentMotion.current?.animation.cancel();
@@ -154,18 +161,17 @@ export function InspectorShell({
     panelRef,
     triggerRef,
   });
-  return (
+  const dock = (
     <aside
       data-inspector-dock=""
       data-enabled={enabled || undefined}
       data-pinned={layoutPinned || undefined}
       className="relative shrink-0"
-      style={{ width: layoutPinned ? width : 0 }}
+      style={{ width: layoutPinned && enabled ? width : 0, display: enabled ? undefined : "none" }}
     >
       <div
         ref={panelRef}
         data-inspector-panel=""
-        data-glass-static={!collapsed || !enabled ? "true" : undefined}
         data-native-plane-overlay={collapsed && (shown || pouring) ? "" : undefined}
         data-shown={shown || undefined}
         data-glass-blur={pouring ? "off" : undefined}
@@ -194,4 +200,5 @@ export function InspectorShell({
       />
     </aside>
   );
+  return host === undefined ? dock : host === null ? null : createPortal(dock, host);
 }

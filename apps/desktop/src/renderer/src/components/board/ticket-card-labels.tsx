@@ -151,7 +151,10 @@ export function TicketCardLabels({
   // browser has laid out.
   if (split === null) {
     return (
-      <div ref={rowRef} className="flex min-w-0 flex-nowrap gap-1 overflow-hidden pt-1">
+      <div
+        ref={rowRef}
+        className="board-card-labels flex min-w-0 flex-nowrap gap-1 overflow-hidden"
+      >
         {labels.map((name) => (
           <span key={name} data-measure-key={name} className="invisible shrink-0">
             {chip(name)}
@@ -168,7 +171,10 @@ export function TicketCardLabels({
   const hidden = labels.slice(split.visible);
 
   return (
-    <div ref={rowRef} className="flex min-w-0 flex-nowrap items-center gap-1 overflow-hidden pt-1">
+    <div
+      ref={rowRef}
+      className="board-card-labels flex min-w-0 flex-nowrap items-center gap-1 overflow-hidden"
+    >
       {visible.map((name) => (
         <span key={name} className="shrink-0">
           {chip(name)}
