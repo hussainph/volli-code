@@ -84,6 +84,17 @@ afterEach(async () => {
 });
 
 describe("floating navigation native-plane exit", () => {
+  it("routes push geometry only through the reservation and pane ancestry", async () => {
+    await render();
+    const row = host.querySelector("[data-pane-row]")!;
+    const reservation = row.querySelector<HTMLElement>('[data-pane-reservation="left"]')!;
+    const clip = row.querySelector("[data-pane-clip]")!;
+    expect(reservation.parentElement).toBe(row);
+    expect(reservation.style.width).toBe("var(--left-pane-push, var(--panel-w))");
+    expect(clip.parentElement).toBe(row);
+    expect(clip.querySelector('[data-pane-side="left"]')?.parentElement).toBe(clip);
+    expect(row.querySelector("[data-inspector-host]")?.parentElement).toBe(row);
+  });
   it("keeps the Browser frozen until a moving panel's exit ends", async () => {
     await render();
     const panel = overlay()!;

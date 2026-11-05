@@ -3502,13 +3502,29 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
  * sides of each divider. Heavy descendants defer their resize until settled. */
 @property --left-pane-push {
   syntax: "<length>";
-  inherits: true;
+  inherits: false;
   initial-value: 0px;
 }
 @property --right-pane-push {
   syntax: "<length>";
-  inherits: true;
+  inherits: false;
   initial-value: 0px;
+}
+/* Only the geometry path inherits the animated values. Inheriting them through
+ * every transcript/board descendant invalidates that entire tree each frame,
+ * even though its content never consumes either value. The two edges still
+ * read the same shell-owned spring, without a second animation or FLIP. */
+[data-pane-row],
+[data-pane-reservation="left"],
+[data-pane-clip],
+[data-pane-side="left"] {
+  --left-pane-push: inherit;
+}
+[data-pane-row],
+[data-inspector-host],
+[data-inspector-dock],
+[data-pane-side="right"] {
+  --right-pane-push: inherit;
 }
 [data-volli-surface] {
   contain: layout paint;

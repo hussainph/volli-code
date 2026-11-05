@@ -355,6 +355,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
         {/* No fill of its own: the canvas on `<html>` IS the backdrop, and a fill
           here would simply cover it. */}
         <div
+          data-pane-row=""
           className="relative flex min-h-0 flex-1 contain-layout"
           style={{ zoom: uiScale } as React.CSSProperties}
         >
@@ -395,7 +396,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             width. It deliberately has no transition: `useSidebarContentMotion`
             moves the content presentation on the compositor, then changes this
             inline geometry once where the two renderings coincide. */}
-          <div aria-hidden className="shrink-0" style={{ width: gapWidth }} />
+          <div
+            data-pane-reservation="left"
+            aria-hidden
+            className="shrink-0"
+            style={{ width: gapWidth }}
+          />
 
           {/* The framed content surface (docs/DESIGN.md): every page — sessions
             layer included — renders inside this one card. overflow-hidden clips
@@ -471,6 +477,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             expressing: withdrawn is hidden, shown is not. A wrapper that exists
             only to clip paint must stay silent about semantics. */}
           <div
+            data-pane-clip=""
             className="pointer-events-none absolute z-20 overflow-hidden"
             style={{
               top: -CLIP_SPILL,
