@@ -1,7 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDownIcon, ChevronUpIcon, CheckIcon } from "@renderer/components/ui/icon";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CheckIcon,
+  UnfoldIcon,
+} from "@renderer/components/ui/icon";
 
 import { Select as SelectPrimitive } from "radix-ui";
 
@@ -67,7 +72,7 @@ function SelectTrigger({
     >
       {children}
       <SelectPrimitive.Icon asChild>
-        <ChevronDownIcon className="size-3.5 opacity-50" />
+        <UnfoldIcon className="size-3.5 text-muted-foreground" />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );

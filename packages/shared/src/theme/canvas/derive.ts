@@ -26,7 +26,7 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
     "--accent": tint(seed, paper, dark ? 0.16 : 0.09),
     "--sidebar": dark ? "#282828" : "#f6f6f6",
     "--foreground": dark ? "#ededed" : "#272727",
-    // These opaque tiers also clear 4.5:1 on the worst 90%-veiled glass pool.
+    // Paper's opaque secondary tier. Navigation glass solves its own ink pair.
     "--muted-foreground": dark ? "#bdbdbd" : "#555555",
     "--sidebar-foreground": dark ? "#ededed" : "#272727",
     "--border": dark ? "#424242" : "#dfdfdf",

@@ -31,14 +31,9 @@
  * those pass through to the activation target, which is the thing a test
  * clicks.
  *
- * TWO DENSITIES, AND ONE HEIGHT PER DENSITY. `two-line` is 52px: two `text-ui`
- * line boxes and 12. It was 52 in the Diffs page and 56 in the Files page for
- * no reason either page could state — `docs/DESIGN.md` recorded the 52 as a
- * measured exception belonging to `ticket-changes-panel.tsx`, and it turned out
- * to belong to the object rather than to the page. `min-h-13` is that same 52
- * as a floor, and it binds for one case: a repository-root file has no parent
- * path, so its second line draws no box and the row would otherwise sit 20px
- * shorter than its neighbours.
+ * Two-line navigation is 42px: an 18px name, 14px metadata and 10px
+ * vertical inset. The geometry lives in the shared CSS recipe and also
+ * applies to skeletons, so hydration does not move the neighbours.
  */
 import type * as React from "react";
 
@@ -62,7 +57,7 @@ export type LoadingBarWidth = "w-1/2" | "w-2/5" | "w-3/5" | "w-2/3" | "w-3/4" | 
 
 const DENSITY: Record<ListRowDensity, string> = {
   row: "py-2",
-  "two-line": "min-h-13 py-1.5",
+  "two-line": "min-h-10 py-1",
 };
 
 export function ListRow({
@@ -150,7 +145,9 @@ export function ListRow({
           {primaryTrailing}
         </span>
         {secondary === undefined ? null : typeof secondary === "string" ? (
-          <span className="block truncate text-ui text-muted-foreground">{secondary}</span>
+          <span className="list-row-secondary block truncate text-label text-muted-foreground">
+            {secondary}
+          </span>
         ) : (
           secondary
         )}
@@ -167,9 +164,10 @@ export function ListRow({
 
   return (
     <div
+      data-density={density}
       data-selected={selected || undefined}
       className={cn(
-        "group relative flex w-full items-center gap-2 rounded-row border border-transparent px-2",
+        "list-row group relative flex w-full items-center gap-2 rounded-row px-2",
         DENSITY[density],
         variant === "source"
           ? activatable && SOURCE_LIST_ROW
@@ -242,8 +240,9 @@ export function ListRowSkeleton({
   return (
     <div
       aria-hidden
+      data-density={density}
       className={cn(
-        "flex w-full items-center gap-2 rounded-row border border-transparent px-2",
+        "list-row flex w-full items-center gap-2 rounded-row px-2",
         DENSITY[density],
         className,
       )}

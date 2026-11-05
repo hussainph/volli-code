@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_CANVAS,
+  effectiveStopHexes,
+  compositeHex,
   wcagContrast,
   THEME_TOKEN_NAMES,
   canvasBackground,
@@ -66,6 +68,35 @@ describe("deriveCanvasPaint", () => {
 
     expect(Object.keys(canvasTokens).toSorted()).toEqual([...CANVAS_TOKEN_NAMES].toSorted());
   });
+
+  it.each(["light", "dark"] as const)(
+    "%s derives the optical layers and legible pane ink",
+    (mode) => {
+      for (const canvas of [
+        DEFAULT_CANVAS,
+        TEAL,
+        { ...DEFAULT_CANVAS, stops: [{ hex: "#ffffff", x: 0.5, y: 0.5 }] },
+      ]) {
+        const { canvasTokens } = deriveCanvasPaint(canvas, mode);
+        expect(canvasTokens["--glass-pane-veil"]).toBe(
+          mode === "light" ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
+        );
+        expect(canvasTokens["--glass-rim"]).toContain("150deg");
+        expect(canvasTokens["--glass-spec"]).toContain("180deg");
+        expect(canvasTokens["--canvas-mesh"]).not.toContain("data:image");
+        for (const peak of effectiveStopHexes(canvas, mode)) {
+          const surface = compositeHex(
+            mode === "light" ? "#ffffff" : "#1a1a1c",
+            mode === "light" ? 0.46 : 0.52,
+            peak,
+          );
+          expect(wcagContrast(canvasTokens["--glass-secondary"], surface)).toBeGreaterThanOrEqual(
+            4.5,
+          );
+        }
+      }
+    },
+  );
 
   it("gives every property a value, even where the dial is at zero", () => {
     // The seam's rules in globals.css are unconditional, so an unset property

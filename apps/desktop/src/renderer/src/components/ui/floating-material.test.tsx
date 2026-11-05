@@ -64,7 +64,7 @@ function tailwindOptimize(): (
   return fromPlugin("@tailwindcss/node").optimize;
 }
 
-const BLUR = "blur(20px) saturate(1.5)";
+const BLUR = "blur(24px) saturate(1.8)";
 const backdrop = (el: Element) =>
   getComputedStyle(el)
     .getPropertyValue("backdrop-filter")
@@ -112,7 +112,7 @@ afterEach(async () => {
 
 describe("floating material as shipped", () => {
   it("keeps the standard backdrop-filter spelling through the build's optimizer", () => {
-    expect(shipped).toMatch(/[;{]backdrop-filter:\s*blur\(20px\)\s*saturate\(1\.5\)/);
+    expect(shipped).toMatch(/[;{]backdrop-filter:\s*blur\(24px\)\s*saturate\(1\.8\)/);
     // The tint stays 90%: jsdom cannot resolve `color-mix` over a variable, so
     // the shipped rule is read as text.
     expect(shipped).toContain("var(--material-solid-fill) 90%, transparent)");
@@ -122,7 +122,7 @@ describe("floating material as shipped", () => {
     expect(declarations).not.toMatch(/-webkit-backdrop-filter\s*:/);
   });
 
-  it("computes static navigation without blur while stationary peek keeps the live material", async () => {
+  it("keeps pinned and peek navigation on the same live material", async () => {
     await act(async () =>
       root.render(
         <>
@@ -142,8 +142,7 @@ describe("floating material as shipped", () => {
     );
     for (const name of ["sidebar", "inspector"]) {
       const panel = host.querySelector(`[data-test="${name}"]`)!;
-      expect(backdrop(panel)).toBe("none");
-      expect(getComputedStyle(panel).contain).toBe("paint");
+      expect(backdrop(panel)).toBe(BLUR);
     }
     const peek = host.querySelector('[data-test="peek"]')!;
     expect(backdrop(peek)).toBe(BLUR);
@@ -217,7 +216,7 @@ describe("floating material as shipped", () => {
     ],
   ];
 
-  it.each(floats)("%s computes the 20px backdrop blur", async (_name, slot, ui) => {
+  it.each(floats)("%s computes the 24px backdrop blur", async (_name, slot, ui) => {
     await act(async () => root.render(ui()));
     const surface = document.querySelector(`[data-slot="${slot}"]`)!;
     expect(surface).not.toBeNull();

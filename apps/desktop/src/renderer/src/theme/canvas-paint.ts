@@ -25,6 +25,9 @@
 
 import {
   canvasBackground,
+  compositeHex,
+  effectiveStopHexes,
+  wcagContrast,
   canvasElevation,
   canvasInk,
   deriveCanvasTokens,
@@ -117,6 +120,23 @@ export const CANVAS_TOKEN_NAMES = [
   "--tertiary-foreground",
   "--glass-fill",
   "--glass-edge",
+  "--canvas-mesh",
+  "--glass-veil",
+  "--glass-pane-veil",
+  "--glass-rim",
+  "--glass-spec",
+  "--glass-ink",
+  "--glass-secondary",
+  "--fill-row-selected",
+  "--fill-row-hover",
+  "--fill-quaternary",
+  "--fill-secondary",
+  "--card-face",
+  "--card-shadow",
+  "--paper-shadow",
+  "--tab-selected-face",
+  "--control-face",
+  "--control-bezel-shadow",
   "--diff-added",
   "--diff-removed",
 ] as const;
@@ -183,6 +203,26 @@ export function deriveCanvasPaint(
     const { C, h } = hexToOklch(status);
     return oklchToHex(solveLightnessOrCeiling(75, C, h, diffSurface), C, h);
   };
+  const light = resolved === "light";
+  const paneFill = light ? "#ffffff" : "#1a1a1c";
+  const paneAlpha = light ? 0.46 : 0.52;
+  // Solve meaningful glass text against every peak, not against neutral paper.
+  // Very pale authored dark canvases may need dark ink on their glass.
+  const glassPools = effectiveStopHexes(canvas, resolved).map((hex) =>
+    compositeHex(paneFill, paneAlpha, hex),
+  );
+  const contrast = (hex: string) =>
+    Math.min(...glassPools.map((surface) => wcagContrast(hex, surface)));
+  const darkInk = contrast("#171717") >= contrast("#f5f5f5");
+  const glassInk = darkInk ? "#171717" : "#f5f5f5";
+  let glassSecondary = glassInk;
+  for (let byte = darkInk ? 90 : 185; darkInk ? byte >= 0 : byte <= 255; byte += darkInk ? -1 : 1) {
+    const hex = `#${byte.toString(16).padStart(2, "0").repeat(3)}`;
+    if (contrast(hex) >= 4.5) {
+      glassSecondary = hex;
+      break;
+    }
+  }
   return {
     tokens,
     canvasTokens: {
@@ -206,7 +246,32 @@ export function deriveCanvasPaint(
       "--accent-selected": `color-mix(in srgb, ${canvas.stops[0].hex} 18%, ${tokens["--card"]})`,
       "--tertiary-foreground": resolved === "light" ? "#666666" : "#aaaaaa",
       "--glass-fill": resolved === "light" ? "#fafafa" : "#282828",
-      "--glass-edge": resolved === "light" ? "rgb(0 0 0 / .11)" : "rgb(0 0 0 / .6)",
+      "--glass-edge": light ? "rgb(0 0 0 / .11)" : "rgb(0 0 0 / .6)",
+      "--canvas-mesh": canvasBackground(canvas, resolved, false),
+      "--glass-veil": light ? "rgb(255 255 255 / .58)" : "rgb(40 40 42 / .56)",
+      "--glass-pane-veil": light ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
+      "--glass-rim": light
+        ? "linear-gradient(150deg, #fff 0%, rgb(255 255 255 / .55) 30%, rgb(255 255 255 / .25) 62%, rgb(255 255 255 / .7) 100%)"
+        : "linear-gradient(150deg, rgb(255 255 255 / .34) 0%, rgb(255 255 255 / .12) 30%, rgb(255 255 255 / .04) 62%, rgb(255 255 255 / .16) 100%)",
+      "--glass-spec": light
+        ? "linear-gradient(180deg, rgb(255 255 255 / .75), transparent 38%)"
+        : "linear-gradient(180deg, rgb(255 255 255 / .10), transparent 40%)",
+      "--glass-ink": glassInk,
+      "--glass-secondary": glassSecondary,
+      "--fill-row-selected": `color-mix(in oklab, ${glassInk} 9%, transparent)`,
+      "--fill-row-hover": `color-mix(in oklab, ${glassInk} 4.7%, transparent)`,
+      "--fill-quaternary": light ? "rgb(0 0 0 / .027)" : "rgb(255 255 255 / .027)",
+      "--fill-secondary": light ? "rgb(0 0 0 / .078)" : "rgb(255 255 255 / .078)",
+      "--card-face": light ? "#ffffff" : "#2a2a2a",
+      "--card-shadow": light
+        ? "0 1px 2px rgb(0 0 0 / .05), 0 0 0 .5px rgb(0 0 0 / .07)"
+        : "0 1px 2px rgb(0 0 0 / .35), 0 0 0 .5px rgb(255 255 255 / .06)",
+      "--control-face": light ? "#ffffff" : "rgb(255 255 255 / .14)",
+      "--control-bezel-shadow": light
+        ? "0 .5px 1.5px rgb(0 0 0 / .16), 0 0 0 .5px rgb(0 0 0 / .09), inset 0 .5px 0 rgb(255 255 255 / 1)"
+        : "0 .5px 1.5px rgb(0 0 0 / .5), 0 0 0 .5px rgb(0 0 0 / .35), inset 0 .5px 0 rgb(255 255 255 / .14)",
+      "--tab-selected-face": light ? "#ffffff" : "rgb(255 255 255 / .14)",
+      "--paper-shadow": "0 1px 3px rgb(0 0 0 / .06), 0 0 0 .5px var(--glass-edge)",
       "--diff-added": diffInk(tokens["--positive"]),
       "--diff-removed": diffInk(tokens["--destructive"]),
     },

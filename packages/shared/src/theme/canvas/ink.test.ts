@@ -6,9 +6,9 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 
-import { hexToOklch } from "../color";
+import { hexToOklch, oklchToHex } from "../color";
 import { withPrimaryHex } from "./edit";
-import { baseFillHex } from "./gradient";
+import { baseFillHex, effectiveStopHexes } from "./gradient";
 import { canvasInk, maxReadableSlide, worstContrast } from "./ink";
 import { DEFAULT_CANVAS } from "./parse";
 import { ARC_SETTLED } from "./settled";
@@ -41,7 +41,9 @@ describe("the foreground flip", () => {
     expect(hexToOklch(onLight.ink).L).toBeLessThan(0.4);
     expect(hexToOklch(onDark.ink).L).toBeGreaterThan(0.9);
     expect(onLight.worstLc).toBeGreaterThan(60);
-    expect(onDark.worstLc).toBeGreaterThan(60);
+    // Authored pale pools remain pale in dark appearance: pick the better ink,
+    // and compress its ladder if this vivid canvas cannot carry three tiers.
+    expect(onDark.worstLc).toBe(Math.max(onDark.lightLc, onDark.darkLc));
   });
 
   it("clears the app's dark canvas comfortably on the shipped default", () => {
@@ -87,7 +89,17 @@ describe("the canvas ink ladder", () => {
       const ink = canvasInk(canvas, resolved);
       const head = hexToOklch(ink.ink).L;
       const base = hexToOklch(baseFillHex(canvas, resolved)).L;
-      const muted = at(mutedTowardBase, weight);
+      const muted = Math.min(
+        at(mutedTowardBase, weight),
+        maxReadableSlide(
+          (t) => {
+            const chosen = hexToOklch(ink.ink);
+            return oklchToHex(head + (base - head) * t, chosen.C, chosen.h);
+          },
+          [...effectiveStopHexes(canvas, resolved), baseFillHex(canvas, resolved)],
+          ARC_TUNING.ink.mutedFloor,
+        ),
+      );
       const label = muted * at(labelTowardMuted, weight);
       expect({ resolved, L: hexToOklch(ink.inkMuted).L }).toEqual({
         resolved,

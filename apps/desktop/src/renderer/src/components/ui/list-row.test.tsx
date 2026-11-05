@@ -59,7 +59,8 @@ describe("ListRow", () => {
     const oneLine = renderToStaticMarkup(<ListRow primary="Chat" onActivate={null} />);
 
     expect(twoLine).toContain("font-medium");
-    expect(twoLine).toContain("min-h-13");
+    expect(twoLine).toContain('data-density="two-line"');
+    expect(twoLine).toContain("text-label");
     expect(twoLine).toContain("text-muted-foreground");
     expect(oneLine).not.toContain("font-medium");
   });

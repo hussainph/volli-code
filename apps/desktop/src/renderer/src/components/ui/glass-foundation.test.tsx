@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import { Button } from "./button";
+import { GlassSurface, PaperSurface } from "./surface";
 import { IdentityTile } from "./identity-tile";
 import { Input } from "./input";
 import { Progress } from "./progress";
@@ -13,6 +14,23 @@ import { Segmented } from "./segmented";
 const css = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
 
 describe("Glass primitives", () => {
+  it("preserves a composed surface's transport hooks", () => {
+    for (const Surface of [GlassSurface, PaperSurface]) {
+      const html = renderToStaticMarkup(
+        <Surface asChild>
+          <main data-slot="sidebar-inset" aria-label="Workspace">
+            Content
+          </main>
+        </Surface>,
+      );
+      expect(html).toContain('data-slot="sidebar-inset"');
+      expect(html).toContain('aria-label="Workspace"');
+      expect(html).toContain("data-material=");
+    }
+    expect(css).toContain("backdrop-filter: blur(24px) saturate(1.8)");
+    expect(css).toContain("background: var(--glass-rim)");
+    expect(css).not.toContain('.glass[data-glass-static="true"]');
+  });
   it("keeps JS compositor clocks aligned with the shared CSS recipes", () => {
     for (const [token, value] of [
       ["menu-in", GLASS_MOTION.menuIn],
@@ -61,9 +79,9 @@ describe("Glass primitives", () => {
       css.indexOf(".segmented::before"),
       css.indexOf(".segmented[data-pointer-motion"),
     );
-    expect(track).toContain("background: var(--glass-fill)");
-    expect(thumb).toContain("background: var(--accent-selected)");
-    expect(thumb).toContain("box-shadow: none");
+    expect(track).toContain("background: var(--fill-secondary)");
+    expect(thumb).toContain("background: var(--control-face)");
+    expect(thumb).toContain("box-shadow: var(--control-bezel-shadow)");
   });
   it("keeps material defaults below hover/selected utilities and composes focus rings", () => {
     expect(css).toMatch(/@layer components \{\s*\.glass-control/);

@@ -19,7 +19,7 @@ function SwitchControl({ className, ...props }: React.ComponentProps<typeof Swit
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        "control-material [--control-fill:var(--border)] data-[state=checked]:[--control-fill:var(--primary)] peer inline-flex h-4 w-7 shrink-0 items-center rounded-full border border-border-strong shadow-control-pressed duration-(--duration-press) ease-out motion-reduce:transition-none outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-border",
+        "control-material [--control-fill:var(--border)] data-[state=checked]:[--control-fill:var(--primary)] native-switch peer inline-flex h-control-sm w-(--switch-width) shrink-0 items-center rounded-full border-0 shadow-control-pressed duration-(--duration-press) ease-out motion-reduce:transition-none outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-border",
         className,
       )}
       {...props}
@@ -28,7 +28,7 @@ function SwitchControl({ className, ...props }: React.ComponentProps<typeof Swit
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "control-material [--control-fill:var(--control-light-paper)] pointer-events-none block size-3 rounded-full [background-color:var(--control-light-paper)] shadow-control ring-0 transition-transform duration-(--duration-press) ease-out motion-reduce:transition-none data-[state=checked]:translate-x-[calc(100%+1px)] data-[state=unchecked]:translate-x-px",
+          "control-material [--control-fill:var(--control-light-paper)] native-switch-thumb pointer-events-none block h-(--switch-thumb-height) w-(--switch-thumb-width) rounded-full [background-color:var(--control-light-paper)] shadow-control ring-0 transition-transform duration-(--duration-press) ease-out motion-reduce:transition-none data-[state=checked]:translate-x-(--switch-travel) data-[state=unchecked]:translate-x-0.5",
         )}
       />
     </SwitchPrimitive.Root>
