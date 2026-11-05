@@ -5,19 +5,19 @@
       "path": "apps/desktop/src/renderer/src/components/automations/automation-editor.tsx",
       "rule": "copy-loading-ellipsis",
       "maxCount": 3,
-      "reason": "The owner-approved Automations copy contract explicitly requires these pending captions, including the ellipsis. Scoped to this surface rather than weakening the shared copy rule."
+      "reason": "Automation operation states intentionally use ellipsis captions, distinct from their resting actions; retain these exact labels across local and cloud views."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/automations/automations-page.tsx",
       "rule": "copy-loading-ellipsis",
       "maxCount": 5,
-      "reason": "The owner-approved Automations copy contract explicitly requires these pending captions, including the ellipsis. Scoped to this surface rather than weakening the shared copy rule."
+      "reason": "Automation operation states intentionally use ellipsis captions, distinct from their resting actions; retain these exact labels across local and cloud views."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/automations/cloud-run-history.tsx",
       "rule": "copy-loading-ellipsis",
       "maxCount": 2,
-      "reason": "The owner-approved Automations copy contract explicitly requires these pending captions, including the ellipsis. Scoped to this surface rather than weakening the shared copy rule."
+      "reason": "Automation operation states intentionally use ellipsis captions, distinct from their resting actions; retain these exact labels across local and cloud views."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/board/new-ticket/project-monogram.tsx",

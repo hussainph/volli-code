@@ -196,7 +196,62 @@ export function AutomationLanes({
   return (
     <section className="flex flex-col gap-2">
       <SectionHeading className="h-6 leading-6">Columns</SectionHeading>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+        accessibility={{
+          announcements: {
+            onDragStart({ active }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              return lane && row
+                ? `Picked up ${row.name} in ${TICKET_STATUS_LABELS[lane.status]}`
+                : undefined;
+            },
+            onDragOver({ active, over }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              const rank = lane?.rows.findIndex(
+                (a) => laneRowId(lane.status, a.id) === String(over?.id),
+              );
+              return lane && row && rank !== undefined && rank >= 0
+                ? `${row.name}, ${TICKET_STATUS_LABELS[lane.status]}, rank ${rank + 1}`
+                : undefined;
+            },
+            onDragEnd({ active }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              return lane && row
+                ? `Dropped ${row.name} in ${TICKET_STATUS_LABELS[lane.status]}`
+                : undefined;
+            },
+            onDragCancel({ active }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              return lane && row
+                ? `Cancelled reordering ${row.name} in ${TICKET_STATUS_LABELS[lane.status]}`
+                : undefined;
+            },
+          },
+        }}
+      >
         <div className="max-w-full overflow-x-auto pb-4">
           <ViewSwitcher<TicketStatus | "other">
             variant="text"

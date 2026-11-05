@@ -1004,115 +1004,128 @@ export function AutomationEditorPanel({
                       onChange={setTriggerChoice}
                     />
                   </PrefRow>
-                  {triggerChoice === "columns" && (
-                    <div className="flex flex-wrap gap-x-5 gap-y-3 border-t border-border p-3">
-                      {TICKET_STATUSES.map((status) => (
-                        <label key={status} className="flex items-center gap-2 text-ui">
-                          <Checkbox
-                            checked={columns.includes(status)}
-                            aria-label={TICKET_STATUS_LABELS[status]}
-                            onCheckedChange={() =>
-                              setColumns(
-                                TICKET_STATUSES.filter((s) =>
-                                  s === status ? !columns.includes(s) : columns.includes(s),
-                                ),
-                              )
-                            }
-                          />
-                          {TICKET_STATUS_LABELS[status]}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  {triggerChoice === "schedule" && (
-                    <>
-                      <PrefRow label="Frequency">
-                        <Select
-                          value={preset}
-                          onValueChange={(v) => setPreset(v as AutomationSchedulePreset)}
-                        >
-                          <SelectTrigger
-                            variant="inspector"
-                            className="w-auto"
-                            aria-label="Frequency"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
-                              <SelectItem key={value} value={value}>
-                                <ClockIcon />
-                                {
-                                  {
-                                    hourly: "Hourly",
-                                    daily: "Daily",
-                                    weekdays: "Weekdays",
-                                    weekly: "Weekly",
-                                  }[value]
-                                }
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </PrefRow>
-                      {preset === "weekly" && (
-                        <PrefRow label="Day">
+                  <div
+                    role="tabpanel"
+                    className={
+                      triggerChoice === "schedule" ? "border-t border-border/50" : undefined
+                    }
+                    id={`automation-trigger-page-${triggerChoice}`}
+                    aria-labelledby={`automation-trigger-tab-${triggerChoice}`}
+                  >
+                    {triggerChoice === "columns" && (
+                      <div className="flex flex-wrap gap-x-5 gap-y-3 border-t border-border p-3">
+                        {TICKET_STATUSES.map((status) => (
+                          <label key={status} className="flex items-center gap-2 text-ui">
+                            <Checkbox
+                              checked={columns.includes(status)}
+                              aria-label={TICKET_STATUS_LABELS[status]}
+                              onCheckedChange={() =>
+                                setColumns(
+                                  TICKET_STATUSES.filter((s) =>
+                                    s === status ? !columns.includes(s) : columns.includes(s),
+                                  ),
+                                )
+                              }
+                            />
+                            {TICKET_STATUS_LABELS[status]}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {triggerChoice === "schedule" && (
+                      <>
+                        <PrefRow label="Frequency">
                           <Select
-                            value={weekday}
-                            onValueChange={(v) => setWeekday(v as ScheduleWeekday)}
+                            value={preset}
+                            onValueChange={(v) => setPreset(v as AutomationSchedulePreset)}
                           >
-                            <SelectTrigger variant="inspector" className="w-auto" aria-label="Day">
+                            <SelectTrigger
+                              variant="inspector"
+                              className="w-auto"
+                              aria-label="Frequency"
+                            >
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {SCHEDULE_WEEKDAYS.map((value) => (
+                              {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
                                 <SelectItem key={value} value={value}>
                                   <ClockIcon />
-                                  {SCHEDULE_WEEKDAY_LABELS[value]}
+                                  {
+                                    {
+                                      hourly: "Hourly",
+                                      daily: "Daily",
+                                      weekdays: "Weekdays",
+                                      weekly: "Weekly",
+                                    }[value]
+                                  }
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
                         </PrefRow>
-                      )}
-                      {preset === "hourly" ? (
-                        <PrefRow label="Minute">
-                          <ScheduleNumberInput
-                            value={minute}
-                            max={59}
-                            ariaLabel="Minute"
-                            onChange={setMinute}
+                        {preset === "weekly" && (
+                          <PrefRow label="Day">
+                            <Select
+                              value={weekday}
+                              onValueChange={(v) => setWeekday(v as ScheduleWeekday)}
+                            >
+                              <SelectTrigger
+                                variant="inspector"
+                                className="w-auto"
+                                aria-label="Day"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {SCHEDULE_WEEKDAYS.map((value) => (
+                                  <SelectItem key={value} value={value}>
+                                    <ClockIcon />
+                                    {SCHEDULE_WEEKDAY_LABELS[value]}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </PrefRow>
+                        )}
+                        {preset === "hourly" ? (
+                          <PrefRow label="Minute">
+                            <ScheduleNumberInput
+                              value={minute}
+                              max={59}
+                              ariaLabel="Minute"
+                              onChange={setMinute}
+                            />
+                          </PrefRow>
+                        ) : (
+                          <PrefRow label="Time">
+                            <TimeField
+                              hour={hour}
+                              minute={minute}
+                              onHourChange={setHour}
+                              onMinuteChange={setMinute}
+                            />
+                          </PrefRow>
+                        )}
+                        <PrefRow label="Time zone">
+                          <TimeZonePicker
+                            value={timeZone}
+                            onChange={setTimeZone}
+                            className="max-w-full"
                           />
                         </PrefRow>
-                      ) : (
-                        <PrefRow label="Time">
-                          <TimeField
-                            hour={hour}
-                            minute={minute}
-                            onHourChange={setHour}
-                            onMinuteChange={setMinute}
-                          />
-                        </PrefRow>
-                      )}
-                      <PrefRow label="Time zone">
-                        <TimeZonePicker
-                          value={timeZone}
-                          onChange={setTimeZone}
-                          className="max-w-full"
-                        />
-                      </PrefRow>
-                      {!creating && scheduleProblem === null && (
-                        <PrefRow label="Next runs">
-                          <SchedulePreview schedule={schedule} automationId={automation.id} />
-                        </PrefRow>
-                      )}
-                    </>
-                  )}
-                  {scheduleProblem && (
-                    <p role="alert" className="p-3 text-ui text-destructive">
-                      {scheduleProblem}
-                    </p>
-                  )}
+                        {!creating && scheduleProblem === null && (
+                          <PrefRow label="Next runs">
+                            <SchedulePreview schedule={schedule} automationId={automation.id} />
+                          </PrefRow>
+                        )}
+                      </>
+                    )}
+                    {scheduleProblem && (
+                      <p role="alert" className="p-3 text-ui text-destructive">
+                        {scheduleProblem}
+                      </p>
+                    )}
+                  </div>
                 </>
               ) : savedSchedule ? (
                 <>

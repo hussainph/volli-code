@@ -972,3 +972,14 @@ it("Cancel reverts only its group, not an unrelated restored draft", async () =>
     "Other unsaved words",
   );
 });
+
+it("associates the selected Trigger segment with its real conditional panel", async () => {
+  await mountEditor();
+  const selected = document.querySelector('[role="tab"][aria-selected="true"]')!;
+  expect(document.getElementById(selected.getAttribute("aria-controls")!)).not.toBeNull();
+  await act(async () => buttonContaining("Schedule").click());
+  const scheduled = document.querySelector('[role="tab"][aria-selected="true"]')!;
+  const panel = document.getElementById(scheduled.getAttribute("aria-controls")!)!;
+  expect(panel.querySelector('[aria-label="Frequency"]')).not.toBeNull();
+  expect(panel.getAttribute("aria-labelledby")).toBe(scheduled.id);
+});
