@@ -1,5 +1,6 @@
 /** Pointer inspection, without an entrance on a high-frequency navigation path. */
 import type * as React from "react";
+import { ControlShapeProvider } from "./control-shape";
 import { HoverCard as Primitive } from "radix-ui";
 import { cn } from "@renderer/lib/utils";
 
@@ -8,6 +9,7 @@ export const HoverCardTrigger = Primitive.Trigger;
 export function HoverCardContent({
   className,
   sideOffset = 4,
+  children,
   ...props
 }: React.ComponentProps<typeof Primitive.Content>) {
   return (
@@ -20,7 +22,9 @@ export function HoverCardContent({
           className,
         )}
         {...props}
-      />
+      >
+        <ControlShapeProvider context="popover">{children}</ControlShapeProvider>
+      </Primitive.Content>
     </Primitive.Portal>
   );
 }

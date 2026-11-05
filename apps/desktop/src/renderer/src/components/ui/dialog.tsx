@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ControlShapeProvider } from "./control-shape";
 import { CloseIcon } from "@renderer/components/ui/icon";
 
 import { Dialog as DialogPrimitive } from "radix-ui";
@@ -72,19 +73,21 @@ function DialogContent({
         {...props}
         {...motion}
       >
-        {children}
-        {showCloseButton && (
-          <DialogPrimitive.Close asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="absolute top-3 right-3 text-muted-foreground"
-              aria-label="Close"
-            >
-              <CloseIcon className="size-3.5" />
-            </Button>
-          </DialogPrimitive.Close>
-        )}
+        <ControlShapeProvider context="sheet">
+          {children}
+          {showCloseButton && (
+            <DialogPrimitive.Close asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="absolute top-3 right-3 text-muted-foreground"
+                aria-label="Close"
+              >
+                <CloseIcon className="size-3.5" />
+              </Button>
+            </DialogPrimitive.Close>
+          )}
+        </ControlShapeProvider>
       </DialogPrimitive.Content>
     </DialogPortal>
   );

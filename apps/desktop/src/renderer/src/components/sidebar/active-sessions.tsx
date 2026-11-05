@@ -16,7 +16,6 @@ import {
 
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { SessionListEmpty } from "./session-list-empty";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SidebarGroup, SidebarMenu, SidebarMenuItem } from "@renderer/components/ui/sidebar";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
@@ -36,7 +35,6 @@ import {
 } from "@renderer/components/sidebar/active-session-listing";
 import {
   DEFAULT_SESSION_BAND_FILTER,
-  isSessionBandFilterNarrowed,
   sessionListingFilter,
   type SessionBandFilter,
 } from "@renderer/components/sidebar/session-band-filter";
@@ -1381,13 +1379,7 @@ export function ActiveSessions({
         // this terse — the toast owns the bridge detail — but never let an
         // unread roster become the false empty VC-383 removed.
         <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
-      ) : activeRows.length === 0 ? (
-        isSessionBandFilterNarrowed(filter) ? (
-          <p className={EMPTY_INLINE}>No active sessions</p>
-        ) : (
-          <SessionListEmpty band="active" />
-        )
-      ) : (
+      ) : activeRows.length === 0 ? null : (
         <SidebarMenu>
           {activeRows.map((row) => (
             <ActiveBandRow
@@ -1428,13 +1420,7 @@ export function ActiveSessions({
       ) : previousEntries.length === 0 &&
         sessionsUnavailable !== null ? null : previousEntries.length === 0 && listingFailed ? (
         <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
-      ) : previousEntries.length === 0 ? (
-        isSessionBandFilterNarrowed(filter) ? (
-          <p className={EMPTY_INLINE}>Nothing yet</p>
-        ) : (
-          <SessionListEmpty band="previous" />
-        )
-      ) : (
+      ) : previousEntries.length === 0 ? null : (
         <SidebarMenu>
           {previousSlice.entries.map((entry) =>
             entry.kind === "session" ? (

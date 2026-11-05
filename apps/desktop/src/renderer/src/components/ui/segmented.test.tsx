@@ -1,9 +1,10 @@
+// @vitest-environment jsdom
 import * as React from "react";
 import { BoardIcon, RowsIcon } from "@renderer/components/ui/icon";
 
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
-import { Button } from "./button";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { Segmented } from "./segmented";
 
 const options = [
@@ -12,25 +13,35 @@ const options = [
 ] as const;
 
 describe("Segmented", () => {
-  it("uses a shared thumb and preserves selected and disabled controls, without rewriting on reselect", () => {
+  it("uses a shared thumb and preserves selected and disabled controls, without rewriting on reselect", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const writes: string[] = [];
-    const tree = Segmented({
-      ariaLabel: "View",
-      value: "board",
-      options,
-      onChange: (key) => writes.push(key),
-    });
-    const buttons = React.Children.toArray(tree.props.children) as React.ReactElement<
-      React.ComponentProps<typeof Button>
-    >[];
-    expect(buttons.map((button) => button.props.variant)).toEqual(["ghost", "ghost"]);
-    expect(buttons.map((button) => button.props["aria-pressed"])).toEqual([true, false]);
-    expect(buttons[1].props.disabled).toBe(true);
-    buttons[0].props.onClick?.({
-      currentTarget: { parentElement: null },
-      detail: 0,
-    } as React.MouseEvent<HTMLButtonElement>);
-    expect(writes).toEqual([]);
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      await React.act(async () =>
+        root.render(
+          <Segmented
+            ariaLabel="View"
+            value="board"
+            options={options}
+            onChange={(key) => writes.push(key)}
+          />,
+        ),
+      );
+      const buttons = Array.from(host.querySelectorAll("button"));
+      expect(buttons.map((button) => button.dataset.variant)).toEqual(["ghost", "ghost"]);
+      expect(buttons.map((button) => button.getAttribute("aria-pressed"))).toEqual([
+        "true",
+        "false",
+      ]);
+      expect(buttons[1].disabled).toBe(true);
+      await React.act(async () => buttons[0].click());
+      expect(writes).toEqual([]);
+    } finally {
+      await React.act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each(["sm", "default"] as const)(

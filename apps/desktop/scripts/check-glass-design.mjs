@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseAst } from "vite";
 
+import { semanticShapeLiterals } from "./ui-class-context.mjs";
 import { reportFindings } from "./design-guardrail-allowlist.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,7 +42,7 @@ const RAW_TIME = /(?:^|[^\w.-])((?:\d*\.)?\d+)(?:ms|s)\b/g;
 const RAW_EASE =
   /\b(?:cubic-bezier|linear)\(|\b(?:ease-in-out|ease-in|ease-out|ease|linear|step-start|step-end)\b/;
 const RADIUS_NAMES =
-  "none|full|sm|md|lg|xl|control-mini|control-small|control|container|row|menu-item|menu|keycap|sheet|floating|card|column";
+  "none|full|sm|md|lg|xl|control-mini|control-small|control|container|row|menu-item|menu|keycap|sheet|floating|card|column|native-control";
 const RADIUS_UTILITY = new RegExp(
   `^rounded(?:-(?:t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?-(?:${RADIUS_NAMES})$`,
 );
@@ -93,6 +94,7 @@ function radiusLiteral(value) {
 
 export function inspectGlass(path, source) {
   const found = [];
+  const shapeValues = path.endsWith(".css") ? new Set() : semanticShapeLiterals(source, path);
   const seen = new Set();
   const add = (rule, offset, text) => {
     const line = source.slice(0, offset).split("\n").length;
@@ -186,7 +188,7 @@ export function inspectGlass(path, source) {
   } else {
     const ast = parseAst(source, { lang: path.endsWith("tsx") ? "tsx" : "ts" }, path);
     walk(ast, (node) => {
-      if (node.type === "Literal" && typeof node.value === "string")
+      if (node.type === "Literal" && typeof node.value === "string" && !shapeValues.has(node.start))
         checkString(node.value, node.start);
       if (node.type === "TemplateElement")
         checkString(node.value.cooked ?? node.value.raw, node.start);

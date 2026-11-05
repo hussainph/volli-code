@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useControlShape, type ControlShape } from "./control-shape";
 import {
   ChevronDownIcon,
   ChevronUpIcon,
@@ -46,19 +47,23 @@ function SelectTrigger({
   className,
   size = "default",
   variant = "regular",
+  shape = "auto",
   children,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Trigger> & {
   size?: "sm" | "default";
   variant?: "regular" | "inspector";
+  shape?: ControlShape;
 }) {
   const motion = useMotionOriginProps("select", props);
+  const shapeProps = useControlShape(shape, size, "popup");
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       data-size={size}
+      {...shapeProps}
       className={cn(
-        "flex w-fit items-center justify-between gap-1 rounded-control border border-border-strong control-material bg-card px-control-pad-default pr-2 text-ui whitespace-nowrap shadow-control hover:shadow-control-hover active:shadow-control-pressed transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-control-default data-[size=sm]:h-control-sm data-[size=sm]:px-1 data-[size=sm]:leading-4 [[data-slot=button-group][data-orientation=horizontal]_&]:h-auto [[data-slot=button-group][data-orientation=horizontal]_&]:self-stretch *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 hover:bg-accent hover:[--control-fill:var(--accent)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "flex w-fit items-center justify-between gap-1 rounded-native-control border border-border-strong control-material bg-card px-control-pad-default pr-2 text-ui whitespace-nowrap shadow-control hover:shadow-control-hover active:shadow-control-pressed transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-control-default data-[size=sm]:h-control-sm data-[size=sm]:px-1 data-[size=sm]:leading-4 [[data-slot=button-group][data-orientation=horizontal]_&]:h-auto [[data-slot=button-group][data-orientation=horizontal]_&]:self-stretch *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 hover:bg-accent hover:[--control-fill:var(--accent)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
         // No caret speaks for a closed trigger, so unlike the text fields it
         // keeps the keyboard ring — button.tsx's quiet recipe, not a field one.
         "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring",

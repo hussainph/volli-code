@@ -312,16 +312,16 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
       answer?.();
     });
     expect(loading().length).toBe(0);
-    expect(bandText("active")).toContain("No active sessions");
-    expect(bandText("previous")).toContain("Nothing yet");
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
   });
 
   it("says the bands are empty only once the listing has said so", async () => {
     await mount();
 
     expect(loading().length).toBe(0);
-    expect(bandText("active")).toContain("No active sessions");
-    expect(bandText("previous")).toContain("Nothing yet");
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
     expect(container?.querySelector('[data-next-action="active"]')).toBeNull();
     expect(container?.querySelector('[data-next-action="previous"]')).toBeNull();
     // A quiet noun, not dashed placeholder rows or an explainer; no zero

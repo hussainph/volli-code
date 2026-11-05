@@ -19,3 +19,13 @@
 .workspace-capsule-tab:not(:has([data-slot="tab-close"])) {
   min-width: 72px;
 }
+
+.workspace-capsule-tab[data-icon-only="true"] {
+  flex: 0 0 36px;
+  width: 36px;
+  padding-inline: 0;
+  justify-content: center;
+}
+.workspace-capsule-tab[data-icon-only="true"]:not(:has([data-slot="tab-close"])) {
+  min-width: 36px;
+}

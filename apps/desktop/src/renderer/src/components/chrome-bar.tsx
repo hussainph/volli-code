@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ControlShapeProvider } from "./ui/control-shape";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -49,7 +50,7 @@ export function ChromeBar() {
   }, [terminalFocusTarget, setCommandPaletteOpen, setQuickOpenOpen]);
 
   return (
-    <>
+    <ControlShapeProvider context="toolbar">
       {/* relative: the command trigger centers itself against the band, not the
           flex row, so it stays put when the traffic-light spacer collapses. */}
       {/* No fill (#74): the band was already painted in the backdrop's own
@@ -103,7 +104,7 @@ export function ChromeBar() {
           window-level surface summoned from anywhere (VC-126) — which is a
           second authoring surface by another name. VC-112 rules that only the
           Automations page authors, so the page mounts its own form. */}
-    </>
+    </ControlShapeProvider>
   );
 }
 

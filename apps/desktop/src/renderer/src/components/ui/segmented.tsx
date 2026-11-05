@@ -1,5 +1,6 @@
 /** A closed choice with one shared sliding thumb; keyboard changes are instant. */
 import type { CSSProperties } from "react";
+import { useControlShape, type ControlShape } from "./control-shape";
 import { type IconComponent } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
@@ -12,6 +13,7 @@ export function Segmented<Key extends string>({
   options,
   size = "sm",
   iconOnly = false,
+  shape = "auto",
   disabled,
   className,
   tabIdPrefix,
@@ -42,18 +44,22 @@ export function Segmented<Key extends string>({
    * be an unlabeled blank — so this is not the default and never will be.
    */
   iconOnly?: boolean;
+  shape?: ControlShape;
   disabled?: boolean;
   className?: string;
   /** Page navigation retains tab/tabpanel associations and roving keyboard focus. */
   tabIdPrefix?: string;
   onChange(key: Key): void;
 }) {
+  const shapeProps = useControlShape(shape, size, "segmented");
   return (
     <div
       role={tabIdPrefix === undefined ? "group" : "tablist"}
       aria-label={ariaLabel}
       data-testid={testId}
       data-slot="segmented"
+      data-size={size}
+      {...shapeProps}
       onPointerDown={(event) => {
         event.currentTarget.dataset.pointerMotion = "true";
       }}
@@ -99,6 +105,7 @@ export function Segmented<Key extends string>({
         return (
           <Button
             key={option.key}
+            shape={shapeProps["data-shape"]}
             size={iconOnly ? (size === "sm" ? "icon-sm" : "icon") : size}
             variant="ghost"
             role={tabIdPrefix === undefined ? undefined : "tab"}

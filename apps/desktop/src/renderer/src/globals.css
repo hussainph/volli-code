@@ -623,6 +623,7 @@
   --font-display: "Mona Sans Variable", var(--font-sans);
   --font-mono: "Space Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   /* Native geometry: 6px controls, 12px containers and menus, 5px menu items. */
+  --radius-native-control: var(--radius-native-control);
   --radius-control-mini: 4px;
   --radius-control-small: 5px;
   --radius-control: 6px;
@@ -792,7 +793,7 @@
     > * > [data-control="button"].control-material
   ) {
   box-shadow: var(--shadow-control-drop);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-native-control);
 
   & > [data-control="button"],
   & > :not([data-slot="button-group"]) > [data-control="button"],
@@ -2394,6 +2395,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 /* Volli Glass geometry and motion are shared, not canvas-authored. */
 :root {
   --glass-gap: 6px;
+  --radius-native-control: 6px;
+  --radius-control-large: 7px;
+  --radius-control-extra-large: 9px;
   --project-title-size: 15px;
   --switch-width: 54px;
   --switch-thumb-width: 32px;
@@ -2627,7 +2631,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   }
 }
 .segmented {
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-native-control);
   background: var(--fill-secondary);
 }
 .segmented::before {
@@ -2638,7 +2642,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   top: 1px;
   bottom: 1px;
   width: calc((100% - 2px) / var(--segment-count));
-  border-radius: var(--radius-control-small);
+  border-radius: calc(var(--radius-native-control) - 1px);
   background: var(--control-face);
   box-shadow: var(--control-bezel-shadow);
   transform: translateX(calc(var(--segment-index) * 100%));
@@ -2649,7 +2653,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 .segmented > [data-control="button"] {
   position: relative;
   border: 0;
-  border-radius: var(--radius-control-small);
+  border-radius: var(--radius-native-control);
   background: transparent;
   box-shadow: var(--tw-ring-offset-shadow, 0 0 transparent), var(--tw-ring-shadow, 0 0 transparent);
   transform: none;
@@ -3127,7 +3131,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border-color: transparent;
 }
 .inspector-popup {
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-native-control);
   background: var(--fill-secondary);
   padding-inline: 8px;
 }
@@ -3160,4 +3164,125 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 }
 .message-content {
   line-height: 18px;
+}
+
+/* Border-shape is one contextual primitive decision. Per-corner seam resets
+ * remain utilities, so a fused group does not grow rounded inner edges. */
+[data-shape="rounded"] {
+  --radius-native-control: var(--radius-control);
+}
+[data-shape="capsule"],
+[data-shape="circle"] {
+  --radius-native-control: 999px;
+}
+[data-shape="rounded"][data-size="xs"] {
+  --radius-native-control: var(--radius-control-small);
+}
+[data-shape="rounded"][data-size="sm"] {
+  --radius-native-control: var(--radius-control);
+}
+
+[data-shape] {
+  --control-shape-size: var(--spacing-control-default);
+}
+[data-shape][data-size="xs"],
+[data-shape][data-size="icon-xs"] {
+  --control-shape-size: var(--spacing-control-xs);
+}
+[data-shape][data-size="sm"],
+[data-shape][data-size="icon-sm"] {
+  --control-shape-size: var(--spacing-control-sm);
+}
+[data-shape][data-size="lg"],
+[data-shape][data-size="icon-lg"] {
+  --control-shape-size: var(--spacing-control-lg);
+}
+:is(
+  [data-control="button"],
+  [data-slot="select-trigger"],
+  [data-slot="input"]
+)[data-shape="circle"] {
+  width: var(--control-shape-size);
+  height: var(--control-shape-size);
+  padding-inline: 0;
+}
+.segmented {
+  --segmented-height: var(--spacing-control-sm);
+  height: var(--segmented-height);
+  padding: 1px;
+}
+.segmented[data-size="default"] {
+  --segmented-height: var(--spacing-control-default);
+}
+.segmented > [data-control="button"] {
+  height: 100%;
+  min-height: 0;
+  padding-block: 0;
+}
+.segmented > [data-control="button"][data-shape="circle"] {
+  width: calc(var(--segmented-height) - 2px);
+  height: 100%;
+}
+.session-prompt .prompt-config {
+  --radius-native-control: 999px;
+}
+
+[data-shape="rounded"][data-size="mini"] {
+  --radius-native-control: var(--radius-control-mini);
+}
+[data-shape="rounded"][data-size="default"],
+[data-shape="rounded"][data-size="icon"] {
+  --radius-native-control: var(--radius-control-large);
+}
+[data-shape="rounded"][data-size="lg"],
+[data-shape="rounded"][data-size="icon-lg"] {
+  --radius-native-control: var(--radius-control-extra-large);
+}
+[data-shape="rounded"][data-size="icon-xs"] {
+  --radius-native-control: var(--radius-control-small);
+}
+[data-shape="rounded"][data-size="icon-sm"] {
+  --radius-native-control: var(--radius-control);
+}
+/* Natural toolbar layout and alert presentation normalize effective height.
+ * Sheet fields/choices are not alert buttons and keep their requested size. */
+[data-control-context="toolbar"][data-shape],
+[data-control-context="sheet"][data-control="button"] {
+  --control-shape-size: var(--spacing-control-default);
+}
+[data-control-context="toolbar"][data-shape],
+[data-control-context="sheet"][data-control="button"] {
+  height: var(--spacing-control-default);
+  min-height: var(--spacing-control-default);
+}
+[data-control-context="toolbar"][data-size^="icon"],
+[data-control-context="sheet"][data-control="button"][data-size^="icon"] {
+  width: var(--spacing-control-default);
+}
+.segmented[data-control-context="toolbar"] {
+  --segmented-height: var(--spacing-control-default);
+}
+.segmented > [data-control="button"][data-control-context] {
+  height: 100%;
+  min-height: 0;
+}
+/* Preserve the approved mock's 30px title-bar pills; native toolbar is 28pt. */
+[data-slot="chrome-bar"] [data-variant="toolbar"] {
+  width: var(--spacing-chrome-control);
+  height: var(--spacing-chrome-control);
+}
+.sidebar-band-count {
+  margin-left: 5px;
+  color: var(--tertiary-foreground);
+}
+[data-volli-sidebar] .sidebar-band-header h3 {
+  font-size: var(--text-label);
+  line-height: 14px;
+  font-weight: 600;
+}
+/* The form already clips to its 24px perimeter. A second rounded clip inside
+ * the writing inset cuts the first empty-state glyph and caret. */
+.session-prompt > [data-slot="input-group"] {
+  overflow: visible;
+  border-radius: 0;
 }

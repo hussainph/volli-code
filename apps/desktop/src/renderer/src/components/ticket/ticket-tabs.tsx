@@ -74,12 +74,10 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Tab, TabPath, TabStrip } from "@renderer/components/ui/tab-strip";
+import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import { cn } from "@renderer/lib/utils";
-import { useProjectsStore } from "@renderer/stores/projects";
-import { useBoardStore } from "@renderer/stores/board";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
 export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat" | "browser";
@@ -677,58 +675,45 @@ function TicketTabList({
   onRenameSessionTab,
 }: TicketTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const projectPath = useProjectsStore(
-    (state) => state.projects.find((project) => project.id === projectId)?.path,
-  );
-  const worktreePath = useBoardStore(
-    (state) =>
-      state.ticketsByProject[projectId]?.find((ticket) => ticket.id === ticketId)?.worktreePath,
-  );
-  const path = worktreePath ?? projectPath;
   return (
-    <TabPath path={path}>
-      <GroupedTabList
-        tabs={tabs}
-        groups={groups}
-        activeTabId={activeTabId}
-        shownGroupId={shownGroupId}
-        edgeTargets={groups !== undefined}
-        describe={(tab) => {
-          const info = ticketTabMenuLabel(tab);
-          return { ...info, detail: info.detail ?? path };
-        }}
-        onSelect={(tab) => onSelectTab(tab.id)}
-        onUngroup={onUngroup}
-      >
-        {(tab, { active, tabStop, grouped }) => (
-          <TicketTab
-            key={tab.id}
-            projectId={projectId}
-            ticketId={ticketId}
-            tab={tab}
-            active={active}
-            tabStop={tabStop}
-            // The top strip's Body stays permanent, and a chip segment is the
-            // chip's; in a pane strip every tab drags, so it can leave the group.
-            dragId={grouped || (groups !== undefined && tab.kind === "body") ? undefined : tab.id}
-            menu={!grouped}
-            editing={editingId === tab.id}
-            onSelect={() => onSelectTab(tab.id)}
-            onClose={() => onCloseTab(tab)}
-            onPin={
-              tab.kind === "file" && tab.relPath !== undefined && onPinFileTab !== undefined
-                ? () => onPinFileTab(tab.relPath!)
-                : undefined
-            }
-            onStartRename={() => setEditingId(tab.id)}
-            onCommitRename={(next) => {
-              setEditingId(null);
-              onRenameSessionTab(tab.id, next);
-            }}
-            onCancelRename={() => setEditingId(null)}
-          />
-        )}
-      </GroupedTabList>
-    </TabPath>
+    <GroupedTabList
+      tabs={tabs}
+      groups={groups}
+      activeTabId={activeTabId}
+      shownGroupId={shownGroupId}
+      edgeTargets={groups !== undefined}
+      describe={ticketTabMenuLabel}
+      onSelect={(tab) => onSelectTab(tab.id)}
+      onUngroup={onUngroup}
+    >
+      {(tab, { active, tabStop, grouped }) => (
+        <TicketTab
+          key={tab.id}
+          projectId={projectId}
+          ticketId={ticketId}
+          tab={tab}
+          active={active}
+          tabStop={tabStop}
+          // The top strip's Body stays permanent, and a chip segment is the
+          // chip's; in a pane strip every tab drags, so it can leave the group.
+          dragId={grouped || (groups !== undefined && tab.kind === "body") ? undefined : tab.id}
+          menu={!grouped}
+          editing={editingId === tab.id}
+          onSelect={() => onSelectTab(tab.id)}
+          onClose={() => onCloseTab(tab)}
+          onPin={
+            tab.kind === "file" && tab.relPath !== undefined && onPinFileTab !== undefined
+              ? () => onPinFileTab(tab.relPath!)
+              : undefined
+          }
+          onStartRename={() => setEditingId(tab.id)}
+          onCommitRename={(next) => {
+            setEditingId(null);
+            onRenameSessionTab(tab.id, next);
+          }}
+          onCancelRename={() => setEditingId(null)}
+        />
+      )}
+    </GroupedTabList>
   );
 }

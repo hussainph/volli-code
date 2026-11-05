@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ControlShapeProvider } from "../ui/control-shape";
 import { createPortal } from "react-dom";
 import { useInspectorHost } from "./inspector-host";
 
@@ -190,7 +191,7 @@ export function InspectorShell({
         style={{ width }}
       >
         <RailResizeHandle />
-        {children}
+        <ControlShapeProvider context="sidebar">{children}</ControlShapeProvider>
       </div>
       <div
         ref={zoneRef}

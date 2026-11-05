@@ -744,10 +744,7 @@ describe("TabStrip overflow", () => {
     expect(tab?.querySelector("span")?.className).toContain("truncate");
   });
 
-  it("keeps a hint that a narrow strip stops drawing in the tab's own name", () => {
-    // The hint is what tells `src/app.ts` from `docs/app.ts`. It gives way by
-    // the STRIP's width rather than the window's (`@container/tab-strip`), so
-    // the word it collapses has to survive somewhere: the accessible name.
+  it("keeps directory details out of the tab caption and accessible name", () => {
     act(() => {
       root?.render(
         <TabStrip label="Home tabs">
@@ -756,8 +753,25 @@ describe("TabStrip overflow", () => {
       );
     });
     const [tab] = tabsInStrip();
-    expect(tab?.getAttribute("aria-label")).toBe("app.ts · src");
-    expect(container?.querySelector('[data-testid="tab-hint"]')?.className).toContain("@min-[");
+    expect(tab?.getAttribute("aria-label")).toBe("app.ts");
+    expect(tab?.textContent).toBe("app.ts");
+    expect(container?.querySelector('[data-testid="tab-hint"]')).toBeNull();
+  });
+
+  it("keeps the permanent icon-only Board tab named and keyboard reachable", () => {
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab label="Board" iconOnly active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+    expect(tab?.getAttribute("aria-label")).toBe("Board");
+    expect(tab?.tabIndex).toBe(0);
+    expect(tab?.dataset.iconOnly).toBe("true");
+    expect(tab?.querySelector("span")?.className).toContain("sr-only");
+    expect(tab?.querySelector('[data-slot="tab-close"]')).toBeNull();
   });
 });
 

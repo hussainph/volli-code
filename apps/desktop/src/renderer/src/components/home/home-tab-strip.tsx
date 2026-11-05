@@ -54,8 +54,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Tab, TabPath, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
-import { useProjectsStore } from "@renderer/stores/projects";
+import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
@@ -317,120 +316,112 @@ function HomeTabList({
   onCloseOtherFiles,
 }: HomeTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const path = useProjectsStore(
-    (state) => state.projects.find((project) => project.id === projectId)?.path,
-  );
   return (
-    <TabPath path={path}>
-      <GroupedTabList
-        tabs={tabs}
-        groups={groups}
-        activeTabId={activeTabId}
-        shownGroupId={shownGroupId}
-        edgeTargets={groups !== undefined}
-        describe={(tab) => {
-          const info = homeTabMenuLabel(tab);
-          return { ...info, detail: info.detail ?? path };
-        }}
-        onSelect={onSelect}
-        onUngroup={onUngroup}
-      >
-        {(descriptor, { active, tabStop, grouped }) => {
-          // A chip segment is the chip's: no drag of its own, no menu of its own.
-          // On a pane strip (no `groups`) every tab drags, the Board included.
-          const dragId =
-            grouped || (groups !== undefined && descriptor.kind === "board")
-              ? undefined
-              : descriptor.id;
-          if (descriptor.kind === "board") {
-            return (
-              <BoardTab
-                key={descriptor.id}
-                active={active}
-                tabStop={tabStop}
-                dragId={dragId}
-                onSelect={() => onSelect(descriptor)}
-              />
-            );
-          }
-          if (descriptor.kind === "browser") {
-            return (
-              <Tab
-                key={descriptor.id}
-                data-testid="home-browser-tab"
-                label={descriptor.title}
-                title={descriptor.title}
-                active={active}
-                tabStop={tabStop}
-                dragId={dragId}
-                status={descriptor.loading ? "working" : undefined}
-                // Two marks, two facts: the glyph says whose tab this IS
-                // (VC-238), the dot says who may write to it right now (VC-239).
-                leading={<BrowserTabMark driven={descriptor.driven} />}
-                badge={<BrowserHolderDot holder={descriptor.heldBy} />}
-                onActivate={() => onSelect(descriptor)}
-                onClose={() => onClose(descriptor)}
-              />
-            );
-          }
-          if (descriptor.kind === "file") {
-            return (
-              <HomeFileTab
-                key={descriptor.id}
-                projectId={projectId}
-                tab={descriptor}
-                active={active}
-                tabStop={tabStop}
-                dragId={dragId}
-                menu={!grouped}
-                onSelect={() => onSelect(descriptor)}
-                onPin={() => onPinFile(descriptor.relPath)}
-                onClose={() => onClose(descriptor)}
-                onCloseOthers={() => onCloseOtherFiles(descriptor.relPath)}
-              />
-            );
-          }
-          // One set of callbacks for both Session kinds — what differs between
-          // them is what each tab DRAWS and what its menu offers, never how the
-          // strip reports a selection, a close, or a rename.
-          const shared = {
-            // Home's Sessions are the project's own, and provenance is read per
-            // project — the same store, and the same answer, the ticket strip and
-            // the sidebar read (VC-131).
-            projectId,
-            active,
-            tabStop,
-            dragId,
-            menu: !grouped,
-            editing: editingId === descriptor.id,
-            onClose: () => onClose(descriptor),
-            onStartRename: () => setEditingId(descriptor.id),
-            onCommitRename: (next: string) => {
-              setEditingId(null);
-              onRename(descriptor, next);
-            },
-            onCancelRename: () => setEditingId(null),
-          };
-          return descriptor.kind === "terminal" ? (
-            <TerminalTab
+    <GroupedTabList
+      tabs={tabs}
+      groups={groups}
+      activeTabId={activeTabId}
+      shownGroupId={shownGroupId}
+      edgeTargets={groups !== undefined}
+      describe={homeTabMenuLabel}
+      onSelect={onSelect}
+      onUngroup={onUngroup}
+    >
+      {(descriptor, { active, tabStop, grouped }) => {
+        // A chip segment is the chip's: no drag of its own, no menu of its own.
+        // On a pane strip (no `groups`) every tab drags, the Board included.
+        const dragId =
+          grouped || (groups !== undefined && descriptor.kind === "board")
+            ? undefined
+            : descriptor.id;
+        if (descriptor.kind === "board") {
+          return (
+            <BoardTab
               key={descriptor.id}
-              {...shared}
-              tab={descriptor.tab}
-              onSelect={() => onSelect(descriptor)}
-            />
-          ) : (
-            <ChatTab
-              key={descriptor.id}
-              {...shared}
-              sessionId={descriptor.sessionId}
-              title={descriptor.title}
-              status={descriptor.status}
+              active={active}
+              tabStop={tabStop}
+              dragId={dragId}
               onSelect={() => onSelect(descriptor)}
             />
           );
-        }}
-      </GroupedTabList>
-    </TabPath>
+        }
+        if (descriptor.kind === "browser") {
+          return (
+            <Tab
+              key={descriptor.id}
+              data-testid="home-browser-tab"
+              label={descriptor.title}
+              title={descriptor.title}
+              active={active}
+              tabStop={tabStop}
+              dragId={dragId}
+              status={descriptor.loading ? "working" : undefined}
+              // Two marks, two facts: the glyph says whose tab this IS
+              // (VC-238), the dot says who may write to it right now (VC-239).
+              leading={<BrowserTabMark driven={descriptor.driven} />}
+              badge={<BrowserHolderDot holder={descriptor.heldBy} />}
+              onActivate={() => onSelect(descriptor)}
+              onClose={() => onClose(descriptor)}
+            />
+          );
+        }
+        if (descriptor.kind === "file") {
+          return (
+            <HomeFileTab
+              key={descriptor.id}
+              projectId={projectId}
+              tab={descriptor}
+              active={active}
+              tabStop={tabStop}
+              dragId={dragId}
+              menu={!grouped}
+              onSelect={() => onSelect(descriptor)}
+              onPin={() => onPinFile(descriptor.relPath)}
+              onClose={() => onClose(descriptor)}
+              onCloseOthers={() => onCloseOtherFiles(descriptor.relPath)}
+            />
+          );
+        }
+        // One set of callbacks for both Session kinds — what differs between
+        // them is what each tab DRAWS and what its menu offers, never how the
+        // strip reports a selection, a close, or a rename.
+        const shared = {
+          // Home's Sessions are the project's own, and provenance is read per
+          // project — the same store, and the same answer, the ticket strip and
+          // the sidebar read (VC-131).
+          projectId,
+          active,
+          tabStop,
+          dragId,
+          menu: !grouped,
+          editing: editingId === descriptor.id,
+          onClose: () => onClose(descriptor),
+          onStartRename: () => setEditingId(descriptor.id),
+          onCommitRename: (next: string) => {
+            setEditingId(null);
+            onRename(descriptor, next);
+          },
+          onCancelRename: () => setEditingId(null),
+        };
+        return descriptor.kind === "terminal" ? (
+          <TerminalTab
+            key={descriptor.id}
+            {...shared}
+            tab={descriptor.tab}
+            onSelect={() => onSelect(descriptor)}
+          />
+        ) : (
+          <ChatTab
+            key={descriptor.id}
+            {...shared}
+            sessionId={descriptor.sessionId}
+            title={descriptor.title}
+            status={descriptor.status}
+            onSelect={() => onSelect(descriptor)}
+          />
+        );
+      }}
+    </GroupedTabList>
   );
 }
 
@@ -460,6 +451,7 @@ function BoardTab({
   return (
     <Tab
       label="Board"
+      iconOnly
       dragId={dragId}
       active={active}
       tabStop={tabStop}

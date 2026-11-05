@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ControlShapeProvider } from "./control-shape";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -105,6 +106,7 @@ function PopoverContent({
   sideOffset = 6,
   tint = false,
   blur = true,
+  children,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content> & { tint?: boolean; blur?: boolean }) {
   const claimWheel = usePopoverWheelClaim();
@@ -139,7 +141,9 @@ function PopoverContent({
           if (typeof forwarded === "function") forwarded(node);
           else if (forwarded) forwarded.current = node;
         }}
-      />
+      >
+        <ControlShapeProvider context="popover">{children}</ControlShapeProvider>
+      </PopoverPrimitive.Content>
     </PopoverPrimitive.Portal>
   );
 }

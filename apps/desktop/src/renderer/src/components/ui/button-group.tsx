@@ -1,3 +1,4 @@
+import { useControlShape } from "./control-shape";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 
@@ -75,10 +76,12 @@ function ButtonGroup({
   orientation,
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof buttonGroupVariants>) {
+  const shape = useControlShape("auto", "sm");
   return (
     <div
       role="group"
       data-slot="button-group"
+      {...shape}
       data-orientation={orientation ?? "horizontal"}
       className={cn(buttonGroupVariants({ orientation }), className)}
       {...props}

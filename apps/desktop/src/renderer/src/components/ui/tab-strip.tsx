@@ -113,11 +113,6 @@ export type TabVariant = "folder" | "pill";
  * drawings in it.
  */
 const TabVariantContext = React.createContext<TabVariant>("folder");
-const TabPathContext = React.createContext<string | undefined>(undefined);
-/** A strip's shared location, when individual tabs have no more specific path. */
-export function TabPath({ path, children }: { path?: string; children: React.ReactNode }) {
-  return <TabPathContext.Provider value={path}>{children}</TabPathContext.Provider>;
-}
 
 /**
  * Whether this strip arranges. Travels by context for the same reason the
@@ -714,9 +709,8 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
    */
   label: string;
   /**
-   * A quieter line after the label, IN the tab — the Project Files strip's
-   * parent-directory disambiguator for two tabs that share a basename. Not a
-   * tooltip: `title` (a plain div prop) is the tooltip.
+   * Details for the clipped-title reveal — the Project Files strip's
+   * parent-directory disambiguator for two tabs that share a basename. Never shown in the tab name; its caption stays the pane name alone.
    */
   hint?: string;
   active: boolean;
@@ -734,6 +728,8 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   badge?: React.ReactNode;
   /** Whether this tab shows a close affordance at all. */
   closable?: boolean;
+  /** A permanent minimal tab keeps its accessible name but shows its icon only. */
+  iconOnly?: boolean;
   /**
    * Unsaved work. The close control becomes the dot — always visible, because
    * a draft has to be findable from across the strip — and turns back into an ×
@@ -879,13 +875,14 @@ function useComposedTabRef(
 
 function TabShell({
   label,
-  hint: ownHint,
+  hint,
   active,
   tabStop,
   status,
   leading,
   badge,
   closable = true,
+  iconOnly = false,
   dirty = false,
   labelClassName,
   revealLabel = false,
@@ -897,8 +894,6 @@ function TabShell({
   className,
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
-  const location = React.useContext(TabPathContext);
-  const hint = ownHint ?? (closable ? location : undefined);
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
@@ -938,7 +933,8 @@ function TabShell({
   // over a strip of short names it would be noise.
   const labelRef = React.useRef<HTMLSpanElement>(null);
   const reveal = useClippedReveal(labelRef);
-  const name = hint === undefined ? label : `${label} · ${hint}`;
+  const name = label;
+  const detail = hint === undefined ? label : `${label} · ${hint}`;
 
   return (
     <Tooltip {...reveal}>
@@ -947,11 +943,10 @@ function TabShell({
           {...props}
           ref={setShell}
           data-slot="tab"
+          data-icon-only={iconOnly || undefined}
           role="tab"
-          // The hint rides the NAME as well as the row (VC-288). It is the
-          // disambiguator between two tabs called `app.ts`, and a narrow strip
-          // stops drawing it — so a name that was the basename alone would leave
-          // both the screen reader and the collapsed strip with two identical tabs.
+          // The caption is the pane title alone. Optional file-location detail
+          // belongs only in the clipped-title reveal, not the tab's identity.
           aria-label={name}
           aria-selected={active}
           tabIndex={tabStop ? 0 : -1}
@@ -1061,28 +1056,11 @@ function TabShell({
             <span
               ref={labelRef}
               data-slot="tab-label"
-              className={cn("min-w-0 flex-1 truncate", labelClassName)}
+              className={cn("min-w-0 flex-1 truncate", iconOnly && "sr-only", labelClassName)}
             >
               {revealLabel ? <TitleReveal text={label} automatic={automaticLabelChange} /> : label}
             </span>
           )}
-          {hint !== undefined && !renamingNow ? (
-            // Dimmer than the tab's own muted ink so it stays subordinate on an
-            // ACTIVE tab too, where the label is at full strength. It used to be a
-            // step smaller instead; at one type size for the whole tab, weight of
-            // colour is what is left to say it with.
-            // AND IT GIVES WAY BY THE STRIP'S WIDTH, not the window's (VC-288):
-            // `@container/tab-strip` is on the strip itself, so a pane narrow
-            // enough to be clipping tabs spends its room on the labels rather than
-            // on the qualifier after them. The word survives in the tab's own
-            // accessible name, which is the whole reason it may be dropped here.
-            <span
-              data-testid="tab-hint"
-              className="hidden max-w-28 shrink truncate text-label text-muted-foreground @min-[420px]/tab-strip:inline"
-            >
-              {hint}
-            </span>
-          ) : null}
           {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}
         </div>
       </TooltipTrigger>
@@ -1090,7 +1068,7 @@ function TabShell({
           label, the qualifier that tells two `app.ts` apart has already been
           collapsed by the container query below, so a reveal without it would
           answer half the question. */}
-      <TooltipContent side="bottom">{name}</TooltipContent>
+      <TooltipContent side="bottom">{detail}</TooltipContent>
     </Tooltip>
   );
 }

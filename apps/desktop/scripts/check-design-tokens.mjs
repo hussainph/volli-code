@@ -32,6 +32,7 @@
  * later. That is the property that keeps the file from becoming a graveyard.
  */
 
+import { semanticShapeLiterals } from "./ui-class-context.mjs";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -310,7 +311,7 @@ function classLists(source) {
       }
       if (closed) {
         advance(cursor + 1);
-        found.push({ line: startLine, text });
+        found.push({ line: startLine, text, offset: startIndex });
       } else {
         advance(startIndex + 1);
       }
@@ -326,7 +327,9 @@ function classLists(source) {
 function violations(path, source) {
   const found = [];
   const lines = source.split("\n");
-  for (const { line, text } of classLists(source)) {
+  const shapeValues = semanticShapeLiterals(source, path);
+  for (const { line, text, offset } of classLists(source)) {
+    if (shapeValues.has(offset)) continue;
     const tokens = text.split(/\s+/).filter(Boolean);
     if (!isClassList(tokens)) continue;
     for (const token of tokens) {
@@ -427,6 +430,10 @@ function selfTest() {
     ['"rounded-tl-[3px] p-2"', ["radius-arbitrary"]],
     ['"shrink-0 rounded border"', ["radius-bare"]],
     ['"rounded"', ["radius-bare"]],
+    ['type ControlShape = "rounded" | "capsule";', []],
+    ['<Button shape="rounded" />', []],
+    ['<Button className="rounded" />', ["radius-bare"]],
+    ['resolveControlShape("rounded", "sm", "content")', []],
     ['"hover:rounded bg-card"', ["radius-bare"]],
     ['"text-base md:text-sm"', ["type-text-base"]],
     ['"truncate text-ui-sm text-muted-foreground"', ["type-unknown-ui-sm"]],

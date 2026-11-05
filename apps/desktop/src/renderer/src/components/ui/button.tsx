@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useControlShape, type ControlShape } from "./control-shape";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 
@@ -12,7 +13,7 @@ const buttonVariants = cva(
   // Text fields carry their caret instead (`ui/field-classes.ts`).
   //
   // Pointer presses scale the drawing without moving its layout target.
-  "inline-flex min-w-0 max-w-full shrink-0 items-center justify-center gap-2 rounded-control text-sm font-medium whitespace-normal break-words transition-[transform,opacity] duration-(--duration-menu-in) ease-out outline-none motion-reduce:transition-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex min-w-0 max-w-full shrink-0 items-center justify-center gap-2 rounded-native-control text-sm font-medium whitespace-normal break-words transition-[transform,opacity] duration-(--duration-menu-in) ease-out outline-none motion-reduce:transition-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
@@ -28,7 +29,7 @@ const buttonVariants = cva(
           "control-material [--control-fill:var(--color-control-secondary)] border border-border-strong bg-control-secondary text-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed",
         ghost: "hover:bg-accent hover:text-foreground",
         toolbar:
-          "glass-control rounded-full text-foreground hover:bg-accent aria-pressed:bg-(--accent-selected) aria-pressed:text-primary-text",
+          "glass-control text-foreground hover:bg-accent aria-pressed:bg-(--accent-selected) aria-pressed:text-primary-text",
         inspector:
           "inspector-popup justify-start border-0 bg-transparent px-0 text-foreground shadow-none hover:bg-accent aria-pressed:bg-(--accent-selected) aria-pressed:text-primary-text",
         // --primary-text, not --primary: a link variant is read, not clicked
@@ -41,9 +42,9 @@ const buttonVariants = cva(
       // a bordered button outgrows the icon button fused beside it.
       size: {
         default: `${CONTROL_SIZE.default} h-auto min-h-control-default py-0.5 text-ui`,
-        xs: `${CONTROL_SIZE.xs} h-auto min-h-control-xs rounded-control-mini px-control-pad-default py-0 gap-1 text-ui leading-4 [&_svg:not([class*='size-'])]:size-3`,
-        sm: `${CONTROL_SIZE.sm} h-auto min-h-control-sm rounded-control-small py-px gap-1 text-ui [&_svg:not([class*='size-'])]:size-3.5`,
-        lg: `${CONTROL_SIZE.lg} h-auto min-h-control-lg rounded-full py-1`,
+        xs: `${CONTROL_SIZE.xs} h-auto min-h-control-xs px-control-pad-default py-0 gap-1 text-ui leading-4 [&_svg:not([class*='size-'])]:size-3`,
+        sm: `${CONTROL_SIZE.sm} h-auto min-h-control-sm py-px gap-1 text-ui [&_svg:not([class*='size-'])]:size-3.5`,
+        lg: `${CONTROL_SIZE.lg} h-auto min-h-control-lg py-1`,
         icon: "size-control-default",
         "icon-xs": "size-control-xs [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-control-sm [&_svg:not([class*='size-'])]:size-3.5",
@@ -62,12 +63,15 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  shape = "auto",
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
+    shape?: ControlShape;
   }) {
   const Comp = asChild ? Slot.Root : "button";
+  const shapeProps = useControlShape(shape, size);
 
   // Radix triggers replace data-slot through asChild. A stable marker lets
   // joined controls recognize the actual action underneath.
@@ -76,6 +80,7 @@ function Button({
       data-slot="button"
       data-variant={variant}
       data-size={size}
+      {...shapeProps}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
       data-control="button"

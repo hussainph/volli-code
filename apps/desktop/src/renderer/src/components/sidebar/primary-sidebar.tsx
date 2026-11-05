@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ControlShapeProvider } from "../ui/control-shape";
 import {
   ConversationsIcon as Chats,
   TreeIcon as TreeStructure,
@@ -80,84 +81,86 @@ export function PrimarySidebar() {
   const sessionsVisible = !settingsOpen && activeNav === "home" && content === "sessions";
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
-      <div
-        data-sidebar-presentation="expanded"
-        className="absolute inset-y-0 left-0 flex min-h-0 w-[calc(var(--sidebar-width)-var(--rail-width)-var(--sidebar-edge))] flex-col overflow-hidden"
-      >
-        {/* ChromeBar above owns the traffic lights and the drag region — this
+    <ControlShapeProvider context="sidebar">
+      <div className="relative h-full w-full overflow-hidden">
+        <div
+          data-sidebar-presentation="expanded"
+          className="absolute inset-y-0 left-0 flex min-h-0 w-[calc(var(--sidebar-width)-var(--rail-width)-var(--sidebar-edge))] flex-col overflow-hidden"
+        >
+          {/* ChromeBar above owns the traffic lights and the drag region — this
             is now a plain panel header. */}
-        <SidebarHeader className="px-4 pt-3 pb-2">
-          {selected ? (
-            <div className="min-w-0">
-              <div className="truncate text-ui font-semibold font-display">{selected.name}</div>
-              <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
-            </div>
-          ) : (
-            <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
-          )}
-        </SidebarHeader>
+          <SidebarHeader className="px-4 pt-3 pb-2">
+            {selected ? (
+              <div className="min-w-0">
+                <div className="truncate text-ui font-semibold font-display">{selected.name}</div>
+                <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
+              </div>
+            ) : (
+              <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
+            )}
+          </SidebarHeader>
 
-        {selected ? (
-          <>
-            <NavList />
-            <div className="sidebar-section-header shrink-0 py-2">
-              <SessionBandHeader
-                label="Active"
-                count={activeCount?.projectId === selected.id ? activeCount.count : undefined}
-              >
-                <Segmented
-                  ariaLabel="Sidebar content"
-                  iconOnly
-                  value={content}
-                  options={[
-                    { key: "sessions", label: "Sessions", icon: Chats },
-                    { key: "files", label: "Files", icon: TreeStructure },
-                  ]}
-                  onChange={(next) => {
-                    rememberedContent = next;
-                    setContent(next);
-                  }}
-                />
-              </SessionBandHeader>
-            </div>
-            {filesVisible && <SidebarFiles project={selected} />}
-            <div className={cn("flex min-h-0 flex-1 flex-col", content === "files" && "hidden")}>
-              <SidebarScrollArea>
-                <div className={cn(!sessionsVisible && "hidden")}>
-                  {/* Render-hidden, not unmounted — so the section cannot tell it
+          {selected ? (
+            <>
+              <NavList />
+              <div className="sidebar-section-header shrink-0 py-2">
+                <SessionBandHeader
+                  label="Active"
+                  count={activeCount?.projectId === selected.id ? activeCount.count : undefined}
+                >
+                  <Segmented
+                    ariaLabel="Sidebar content"
+                    iconOnly
+                    value={content}
+                    options={[
+                      { key: "sessions", label: "Sessions", icon: Chats },
+                      { key: "files", label: "Files", icon: TreeStructure },
+                    ]}
+                    onChange={(next) => {
+                      rememberedContent = next;
+                      setContent(next);
+                    }}
+                  />
+                </SessionBandHeader>
+              </div>
+              {filesVisible && <SidebarFiles project={selected} />}
+              <div className={cn("flex min-h-0 flex-1 flex-col", content === "files" && "hidden")}>
+                <SidebarScrollArea>
+                  <div className={cn(!sessionsVisible && "hidden")}>
+                    {/* Render-hidden, not unmounted — so the section cannot tell it
                     is off screen, and the coarse chat-activity poll it runs
                     would keep firing behind Configure or Settings. `visible`
                     is that fact, handed down from the one place that has it. */}
-                  <ActiveSessions
-                    project={selected}
-                    visible={sessionsVisible}
-                    activeHeader={false}
-                    onActiveCountChange={reportActiveCount}
-                  />
-                </div>
-              </SidebarScrollArea>
-            </div>
-          </>
-        ) : (
-          <SidebarContent />
-        )}
+                    <ActiveSessions
+                      project={selected}
+                      visible={sessionsVisible}
+                      activeHeader={false}
+                      onActiveCountChange={reportActiveCount}
+                    />
+                  </div>
+                </SidebarScrollArea>
+              </div>
+            </>
+          ) : (
+            <SidebarContent />
+          )}
 
-        <SidebarFooter>
-          <CloudMoveRailRow />
-          {/* Settings keeps the wide row; the updater (VC-59) is the square
+          <SidebarFooter>
+            <CloudMoveRailRow />
+            {/* Settings keeps the wide row; the updater (VC-59) is the square
               beside it — a rare, occasionally-important control that must not
               compete with a daily one. UpdateButton renders null in dev and
               until main's first snapshot, leaving the row exactly as it was. */}
-          <div className="flex items-center gap-1">
-            <div className="min-w-0 flex-1">
-              <SettingsMenuButton active={settingsOpen} onSelect={() => setSettingsOpen(true)} />
+            <div className="flex items-center gap-1">
+              <div className="min-w-0 flex-1">
+                <SettingsMenuButton active={settingsOpen} onSelect={() => setSettingsOpen(true)} />
+              </div>
+              <UpdateButton />
             </div>
-            <UpdateButton />
-          </div>
-        </SidebarFooter>
+          </SidebarFooter>
+        </div>
       </div>
-    </div>
+    </ControlShapeProvider>
   );
 }
 

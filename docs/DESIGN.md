@@ -78,7 +78,8 @@ Use tokens and primitives, not a locally measured lookalike.
 |---|---|
 | Control heights | `control-mini/xs/sm/default/lg`: 16 / 20 / 24 / 28 / 36px |
 | Small control corners | `control-mini/small/control`: 4 / 5 / 6px |
-| Push button | Regular 28px, r6; small 24px, r5; xs 20px, r4; large 36px capsule |
+| Push button | xs 20px r5; small 24px r6; default 28px and large 36px capsules |
+| Forced rounded / text field | 16/20/24/28/36px: r4/5/6/7/9 |
 | Toolbar button | Circle with an icon, capsule with text |
 | Menu / popover | `radius-menu` / `radius-container`: 12px |
 | Menu item | `radius-menu-item`: 5px, 28px row, 4px menu inset |
@@ -96,6 +97,22 @@ grow for wrapped labels; icon controls keep their square target. Radius aliases 
 resolve to menu-item/control/control/container, not stock Tailwind sizes. Circles and capsules
 use `rounded-full`; zero-radius seams are legitimate resets.
 
+### Border shape follows context
+
+`Button`, `Segmented`, `SelectTrigger` and `Input` take `shape="auto | capsule |
+rounded | circle"`. `ControlShapeProvider` supplies toolbar, content, sheet,
+popover or sidebar context, including across portals. Explicit shape wins the
+auto decision. Search is a capsule at every size; text fields elsewhere stay
+rounded. Content, glass, sidebar and popover controls use rounded rectangles at
+16/20/24px and capsules at 28/36px. Native toolbar material normalizes items to
+28px capsules (square image-only actions are circles); natural alert/sheet
+presentation normalizes buttons to 28px capsules, not fields or choices. The
+approved title bar keeps its 30px mock pills and the composer keeps its pills.
+Explicit shapes remain caller overrides, unlike AppKit's toolbar material which
+can override a requested border shape. Shape is separate from tint/material.
+A segmented thumb is always filled and follows its track's shape. Fused groups
+retain square internal seams.
+
 ### Navigation anatomy
 
 The canvas owns the title bar, project rail and 6px gutters. Navigation, paper and
@@ -105,7 +122,7 @@ inspector toggle stays at the far right. Pinning changes reserved space, never
 ownership or lifetime of the inspector's live subtree.
 
 Tabs follow Rex: wide capsules on a neutral glass track, a lighter filled selected
-capsule, leading identity, title, available secondary path and close. A grouped
+capsule, leading identity, title alone and close; Board is icon-only. A grouped
 chip's hover card shows its existing items as two-line rows, with existing liveness
 at the trailing edge. Its context menu, pane selection, dragging, rename, close and
 ungroup behaviour are unchanged. Tab selection has no transition.

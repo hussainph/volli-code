@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ControlShapeProvider } from "./control-shape";
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -48,6 +49,7 @@ function AlertDialogOverlay({
 function AlertDialogContent({
   className,
   size = "default",
+  children,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: "default" | "sm";
@@ -65,7 +67,9 @@ function AlertDialogContent({
         )}
         {...props}
         {...motion}
-      />
+      >
+        <ControlShapeProvider context="sheet">{children}</ControlShapeProvider>
+      </AlertDialogPrimitive.Content>
     </AlertDialogPortal>
   );
 }

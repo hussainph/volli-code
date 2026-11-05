@@ -44,7 +44,8 @@ Read [docs/DESIGN.md](../../../docs/DESIGN.md) first. Read the relevant producti
 | Progress / app identity | `Progress` / `IdentityTile` | Another gradient meter or logo tile |
 
 Primitives have no app/domain/host imports and take their theme from CSS variables. Keep
-app stores and mutations in the composition layer. Use `CONTROL_SIZE`, radius and ink tokens;
+app stores and mutations in the composition layer. Use `ControlShapeProvider` for toolbar/content/sheet/popover/sidebar context and `shape` for an explicit capsule, rounded rectangle or circle. Dense regular controls are not a mandate to square off toolbar or sheet actions.
+Use `CONTROL_SIZE`, radius and ink tokens;
 never invent numeric text sizes, transition durations, easings or colour literals.
 
 ## Symbols

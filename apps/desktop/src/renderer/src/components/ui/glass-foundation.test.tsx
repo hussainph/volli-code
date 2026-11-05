@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import { Button } from "./button";
 import { GlassSurface, PaperSurface } from "./surface";
@@ -57,22 +59,37 @@ describe("Glass primitives", () => {
       expect(html).toContain("focus-visible:ring-ring");
     }
   });
-  it("has one thumb, no keyboard transition, and unchanged accessible choices", () => {
-    const tree = Segmented({
-      ariaLabel: "Style",
-      value: "modern",
-      options: [
-        { key: "macos", label: "macOS" },
-        { key: "modern", label: "Modern" },
-      ],
-      onChange: () => {},
-    });
-    const target = { dataset: {} };
-    tree.props.onPointerDown({ currentTarget: target });
-    expect(target.dataset).toEqual({ pointerMotion: "true" });
-    tree.props.onKeyDown({ currentTarget: target });
-    expect(target.dataset).toEqual({ pointerMotion: "false" });
-    expect(renderToStaticMarkup(tree)).toContain("--segment-index:1");
+  it("has one thumb, no keyboard transition, and unchanged accessible choices", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () =>
+      root.render(
+        <Segmented
+          ariaLabel="Style"
+          value="modern"
+          options={[
+            { key: "macos", label: "macOS" },
+            { key: "modern", label: "Modern" },
+          ]}
+          onChange={() => {}}
+        />,
+      ),
+    );
+    const trackNode = host.firstElementChild as HTMLElement;
+    await act(async () =>
+      trackNode.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })),
+    );
+    expect(trackNode.dataset.pointerMotion).toBe("true");
+    await act(async () =>
+      trackNode.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+    );
+    expect(trackNode.dataset.pointerMotion).toBe("false");
+    expect(host.innerHTML).toContain("--segment-index: 1");
+    await act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
     expect(css).toContain('.segmented[data-pointer-motion="true"]::before');
     const track = css.slice(css.indexOf(".segmented {"), css.indexOf(".segmented::before"));
     const thumb = css.slice(

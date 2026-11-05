@@ -62,8 +62,8 @@ const FILTER_GLYPH_NUDGE = (TRIGGER_BOX_PX - GLYPH_PX) / 2;
  * where it says something the rows do not.
  *
  * Both bands expose their total next to the label. Previous counts Sessions,
- * not ticket envelopes; its filters never change Active. Zero is quiet because
- * the band's own empty state already says it.
+ * not ticket envelopes; its filters never change Active. Zero is quiet and
+ * an empty section keeps its heading without placeholder rows.
  */
 export function SessionBandHeader({
   label,
@@ -75,10 +75,13 @@ export function SessionBandHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-control-default items-center gap-2 px-2">
+    <div className="sidebar-band-header flex min-h-control-default items-center px-2">
       <SectionHeading as="h3">{label}</SectionHeading>
       {count === undefined || count === 0 ? null : (
-        <span data-band-count="" className="text-label tabular-nums text-muted-foreground">
+        <span
+          data-band-count=""
+          className="sidebar-band-count text-label font-medium tabular-nums text-muted-foreground"
+        >
           {count}
         </span>
       )}

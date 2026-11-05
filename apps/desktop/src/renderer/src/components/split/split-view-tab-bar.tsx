@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { ControlShapeProvider } from "../ui/control-shape";
 import { useDroppable } from "@dnd-kit/core";
 
 import { useSplitDnd } from "./split-dnd";
@@ -18,10 +19,12 @@ import { TOP_STRIP_DROP_ID } from "./split-drop";
 export function SplitViewTabBar({ children }: { children: React.ReactNode }) {
   return useSplitDnd() === null ? (
     <div data-slot="split-view-tab-bar" className={BAR}>
-      {children}
+      <ControlShapeProvider context="toolbar">{children}</ControlShapeProvider>
     </div>
   ) : (
-    <DroppableTabBar>{children}</DroppableTabBar>
+    <DroppableTabBar>
+      <ControlShapeProvider context="toolbar">{children}</ControlShapeProvider>
+    </DroppableTabBar>
   );
 }
 
@@ -31,7 +34,7 @@ function DroppableTabBar({ children }: { children: React.ReactNode }) {
   const { setNodeRef } = useDroppable({ id: TOP_STRIP_DROP_ID });
   return (
     <div ref={setNodeRef} data-slot="split-view-tab-bar" className={BAR}>
-      {children}
+      <ControlShapeProvider context="toolbar">{children}</ControlShapeProvider>
     </div>
   );
 }

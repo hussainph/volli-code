@@ -129,7 +129,7 @@ describe("HomeTabStrip file tabs", () => {
     expect(html).not.toContain("italic");
   });
 
-  it("disambiguates two tabs that share a basename with the parent hint", () => {
+  it("keeps same-basename captions title-only, without directory labels", () => {
     const other: HomeTabDescriptor = {
       ...file,
       id: "file:docs/app.ts",
@@ -138,7 +138,8 @@ describe("HomeTabStrip file tabs", () => {
     };
     const html = draw([HOME_BOARD_TAB, { ...file, hint: "src" }, other], file.id);
 
-    expect(html).toContain(">src<");
-    expect(html).toContain(">docs<");
+    expect(html).not.toContain(">src<");
+    expect(html).not.toContain(">docs<");
+    expect(html.match(/aria-label="app.ts"/g)).toHaveLength(2);
   });
 });
