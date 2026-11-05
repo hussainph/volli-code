@@ -9,6 +9,8 @@ import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { CanvasInstrument as CanvasEditor } from "./canvas-instrument";
 
 const GLOBAL: ThemeScope = { kind: "global" };
+// Adding a stop needs spare capacity; the shipped mesh already fills its slots.
+const SINGLE_CANVAS = { ...DEFAULT_CANVAS, stops: [DEFAULT_CANVAS.stops[0]] };
 const ORIGINAL_COMMIT_PREVIEW = useThemeStore.getState().commitPreview;
 
 let root: Root | null = null;
@@ -52,9 +54,9 @@ describe("CanvasEditor", () => {
   it("hands a finished edit to a memory-only host without committing it", async () => {
     const onCanvasChange = vi.fn();
     const commitPreview = vi.fn(async () => true);
-    useThemeStore.setState({ preview: DEFAULT_CANVAS, commitPreview });
+    useThemeStore.setState({ preview: SINGLE_CANVAS, commitPreview });
     const document = await mountEditor({
-      canvas: DEFAULT_CANVAS,
+      canvas: SINGLE_CANVAS,
       resolved: "dark",
       onCanvasChange,
     });
@@ -74,8 +76,8 @@ describe("CanvasEditor", () => {
 
   it("keeps Settings' scoped save behavior when no memory-only host is passed", async () => {
     const commitPreview = vi.fn(async () => true);
-    useThemeStore.setState({ preview: DEFAULT_CANVAS, commitPreview });
-    const document = await mountEditor({ scope: GLOBAL, canvas: DEFAULT_CANVAS, resolved: "dark" });
+    useThemeStore.setState({ preview: SINGLE_CANVAS, commitPreview });
+    const document = await mountEditor({ scope: GLOBAL, canvas: SINGLE_CANVAS, resolved: "dark" });
 
     const add = document.querySelector<HTMLButtonElement>('button[aria-label="Add a colour"]');
     if (add === null) throw new Error("missing add colour button");
@@ -129,6 +131,10 @@ describe("CanvasEditor", () => {
     useThemeStore.setState({ preview: null, commitPreview });
     const document = await mountEditor({ scope: GLOBAL, canvas: DEFAULT_CANVAS, resolved: "dark" });
     const knob = document.querySelector<HTMLElement>('[role="slider"][aria-label="Vibrancy"]')!;
+    expect(knob.className).toContain("glass-control");
+    expect(knob.className).toContain("border-(--glass-edge)");
+    expect(knob.querySelector("[aria-hidden]")?.className).not.toContain("border");
+    expect(knob.querySelector("[aria-hidden]")?.className).not.toContain("shadow");
     await act(async () =>
       knob.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })),
     );

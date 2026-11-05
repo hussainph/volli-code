@@ -245,3 +245,38 @@ describe("Configure → Skills", () => {
     });
   });
 });
+
+it("wraps scope controls and exposes Auto's token estimate on keyboard focus", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <SkillsPane project={project} />
+        </TooltipProvider>,
+      ),
+    );
+    const summary = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Auto token estimate"]',
+    )!;
+    expect(summary.textContent).toBe("Auto");
+    expect(summary.parentElement?.className).toContain("flex-wrap");
+    expect(container.textContent).not.toContain("tokens per turn");
+    expect(
+      container.querySelector('[data-slot="pref-section-title"]')?.parentElement?.className,
+    ).toContain("sr-only");
+    await act(async () => summary.focus());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("tokens per turn"),
+    );
+    expect(container.querySelector('[aria-label="Skill scope"]')?.textContent).toContain(
+      "This workspace",
+    );
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});

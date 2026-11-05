@@ -42,6 +42,7 @@ import {
   PreviewIcon,
   FolderOpenIcon,
   WarningIcon,
+  InfoIcon,
 } from "@renderer/components/ui/icon";
 
 import {
@@ -82,6 +83,8 @@ import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { boardApi } from "@renderer/lib/board-api";
+import { Button } from "@renderer/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 
 /** What each mode is called, and the one line explaining what it costs. */
 const MODE_LABEL: Record<SkillMode, string> = {
@@ -135,9 +138,10 @@ export function SkillsPane({ project }: { project: Project }) {
     <>
       <AsyncSection
         title="Skills"
+        titleHidden
         icon={GuideIcon}
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Segmented
               ariaLabel="Skill scope"
               value={filter}
@@ -150,9 +154,20 @@ export function SkillsPane({ project }: { project: Project }) {
             />
             {/* What Auto costs every turn: the one number the mode column hides. */}
             {indexTokens === null ? null : (
-              <span className="text-ui text-muted-foreground tabular-nums">
-                Auto · ~{formatTokens(indexTokens)} tokens per turn
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    aria-label="Auto token estimate"
+                  >
+                    Auto
+                    <InfoIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>~{formatTokens(indexTokens)} tokens per turn</TooltipContent>
+              </Tooltip>
             )}
             <SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />
           </div>

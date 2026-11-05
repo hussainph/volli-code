@@ -53,13 +53,7 @@ import {
 import { Switch } from "@renderer/components/ui/switch";
 import { Notice } from "@renderer/components/ui/notice";
 import { errorMessage } from "@volli/shared";
-import {
-  DataTable,
-  Empty,
-  Health,
-  PrefSection,
-  SectionAction,
-} from "@renderer/components/settings/kit";
+import { DataTable, Empty, Health, PrefSection } from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { useAgeNow } from "@renderer/lib/use-age-now";
 import { cn } from "@renderer/lib/utils";
@@ -270,14 +264,16 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
           </>
         }
         action={
-          <SectionAction
-            label="Add server"
-            icon={AddIcon}
-            onAct={() => {
+          <Button
+            size="sm"
+            onClick={() => {
               setError(null);
               setDialog({ kind: "add" });
             }}
-          />
+          >
+            <AddIcon />
+            Add server
+          </Button>
         }
       >
         {error === null ? null : (

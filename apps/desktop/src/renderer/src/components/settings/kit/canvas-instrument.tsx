@@ -563,7 +563,7 @@ function Rotary({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(value * 100)}
-        className="glass-control grid size-20 touch-none place-items-center rounded-full border border-border-strong outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="glass-control grid size-20 touch-none place-items-center rounded-full border border-(--glass-edge) shadow-glass-small outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onPointerDown={(e) => {
           e.currentTarget.focus();
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -608,7 +608,7 @@ function Rotary({
       >
         <span
           aria-hidden
-          className="relative block size-16 rounded-full border border-border bg-card shadow-glass-small"
+          className="relative block size-16 rounded-full"
           style={{ transform: `rotate(${-135 + value * 270}deg)` }}
         >
           <span className="absolute top-2 left-1/2 h-4 w-1 -translate-x-1/2 rounded-full bg-primary" />

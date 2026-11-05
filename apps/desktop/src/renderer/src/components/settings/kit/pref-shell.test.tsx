@@ -95,3 +95,24 @@ it("preserves result routing, empty results and native search clearing", () => {
   type("");
   expect(host.querySelector('[aria-current="page"]')).not.toBeNull();
 });
+
+it("uses sibling floating glass and paper planes with the shared heading ladder", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  Element.prototype.scrollTo = vi.fn();
+  host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  act(() =>
+    root?.render(
+      <PrefShell
+        surfaceLabel="Settings"
+        groups={groups}
+        activeKey="appearance"
+        onSelect={() => {}}
+      />,
+    ),
+  );
+  expect(host.querySelector("nav")?.className).toContain("rounded-floating");
+  expect(host.querySelector("nav")?.className).not.toContain("border-r");
+  expect(host.querySelector("h1")?.className).toContain("text-title");
+  expect(host.querySelector("h3")?.className).toContain("text-ui font-semibold");
+});

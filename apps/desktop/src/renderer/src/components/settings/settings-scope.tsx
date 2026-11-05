@@ -9,6 +9,8 @@ import {
 
 import { monogram, projectColor, type Project } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
+import { IdentityTile } from "@renderer/components/ui/identity-tile";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
@@ -45,72 +47,70 @@ export function SettingsScope({
   const [open, setOpen] = React.useState(false);
   return (
     <div className="space-y-2" aria-label="Settings scope">
-      <Button
-        variant={scope === "app" ? "secondary" : "ghost"}
-        className="h-auto w-full justify-start py-2"
+      <ListRow
+        leading={
+          <span className="grid size-7 shrink-0 place-items-center">
+            <IdentityTile size="sm" aria-hidden>
+              <SettingsIcon className="size-3.5" />
+            </IdentityTile>
+          </span>
+        }
+        primary="All projects"
         aria-label="All projects"
         aria-pressed={scope === "app"}
-        onClick={() => onScope("app")}
-      >
-        <span className="grid size-7 place-items-center">
-          <SettingsIcon aria-hidden />
-        </span>
-        All projects
-      </Button>
-      <div className="relative">
-        <Button
-          variant={scope === "project" ? "secondary" : "ghost"}
-          className="h-auto w-full justify-start py-2 pr-8"
-          aria-pressed={scope === "project"}
-          onClick={() => onScope("project")}
-        >
-          <ProjectTile project={project} />
-          <span className="truncate">{project?.name ?? "Your project"}</span>
-        </Button>
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              aria-label="Switch project"
-              size="icon-xs"
-              variant="ghost"
-              className="absolute top-1/2 right-1 -translate-y-1/2"
-            >
-              <ChevronDownIcon />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-64 p-2">
-            <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
-              {projects.map((p) => (
-                <button
-                  type="button"
-                  key={p.id}
-                  aria-label={p.name}
-                  aria-current={project?.id === p.id ? "true" : undefined}
-                  onClick={() => {
-                    onProject(p.id);
-                    setOpen(false);
-                  }}
-                  className="flex min-w-0 items-center gap-4 rounded-control p-2 text-left text-ui outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <ProjectTile project={p} />
-                  <span className="truncate">{p.name}</span>
-                </button>
-              ))}
-              <Button
-                variant="ghost"
-                className="justify-start"
-                onClick={() => {
-                  setOpen(false);
-                  onAdd();
-                }}
-              >
-                <AddIcon />
-                Open a project
+        selected={scope === "app"}
+        onActivate={() => onScope("app")}
+      />
+      <ListRow
+        leading={<ProjectTile project={project} />}
+        primary={project?.name ?? "Your project"}
+        aria-pressed={scope === "project"}
+        selected={scope === "project"}
+        onActivate={() => onScope("project")}
+        actions={
+          <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+              <Button aria-label="Switch project" size="icon-sm" variant="ghost">
+                <ChevronDownIcon />
               </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-64 p-2">
+              <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+                {projects.map((p) => (
+                  <button
+                    type="button"
+                    key={p.id}
+                    aria-label={p.name}
+                    aria-current={project?.id === p.id ? "true" : undefined}
+                    onClick={() => {
+                      onProject(p.id);
+                      setOpen(false);
+                    }}
+                    className={cn(
+                      "flex min-w-0 items-center gap-2 rounded-row p-2 text-left text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      project?.id === p.id ? "bg-(--accent-selected)" : "hover:bg-(--accent-tint)",
+                    )}
+                  >
+                    <ProjectTile project={p} />
+                    <span className="truncate">{p.name}</span>
+                  </button>
+                ))}
+                <Button
+                  variant="ghost"
+                  className="justify-start"
+                  onClick={() => {
+                    setOpen(false);
+                    onAdd();
+                  }}
+                >
+                  <AddIcon />
+                  Open a project
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        }
+      />
     </div>
   );
 }
@@ -128,7 +128,7 @@ export function SettingsProjectWelcome({
       <h2 className="text-title font-semibold">
         {hasProjects ? "No project selected" : "No projects"}
       </h2>
-      <Button variant="outline" className="w-fit" onClick={onOpen}>
+      <Button className="w-fit" onClick={onOpen}>
         <FolderOpenIcon />
         Open a project
       </Button>

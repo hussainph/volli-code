@@ -126,7 +126,7 @@ export function NotificationsPane() {
         />
       ) : null}
 
-      <PrefSection title="Notifications" icon={NotificationIcon}>
+      <PrefSection title="Notifications" titleHidden icon={NotificationIcon}>
         <PrefRow label="Notify me" htmlFor="notify-me">
           <Switch
             id="notify-me"

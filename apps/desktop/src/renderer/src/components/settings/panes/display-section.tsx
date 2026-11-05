@@ -10,7 +10,7 @@ import {
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
 import { UI_SCALE_STEPS, useUiStore } from "@renderer/stores/ui";
 
@@ -50,29 +50,16 @@ export function DisplaySection() {
         </ButtonGroup>
       </PrefRow>
       <PrefRow label="Diff layout" icon={ColumnsIcon}>
-        <ButtonGroup aria-label="Diff layout">
-          {(
-            [
-              { key: "inline", label: "Inline", icon: CodeIcon },
-              { key: "side-by-side", label: "Side by side", icon: ColumnsIcon },
-            ] as const
-          ).map(({ key, label, icon: Icon }) => (
-            <Tooltip key={key}>
-              <TooltipTrigger asChild>
-                <Button
-                  size="icon-sm"
-                  variant={diffPresentation === key ? "secondary" : "outline"}
-                  aria-label={label}
-                  aria-pressed={diffPresentation === key}
-                  onClick={() => setDiffPresentation(key)}
-                >
-                  <Icon />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{label}</TooltipContent>
-            </Tooltip>
-          ))}
-        </ButtonGroup>
+        <Segmented
+          ariaLabel="Diff layout"
+          iconOnly
+          value={diffPresentation}
+          onChange={setDiffPresentation}
+          options={[
+            { key: "inline", label: "Inline", icon: CodeIcon },
+            { key: "side-by-side", label: "Side by side", icon: ColumnsIcon },
+          ]}
+        />
       </PrefRow>
       <PrefRow label="Show cost and token usage" icon={CostIcon} htmlFor="cost-visible">
         <Switch id="cost-visible" checked={costVisible} onCheckedChange={setCostVisible} />

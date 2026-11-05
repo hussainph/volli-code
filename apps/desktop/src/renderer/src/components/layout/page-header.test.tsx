@@ -26,15 +26,15 @@ describe("PageHeader", () => {
     expect(html).toContain("ml-auto");
   });
 
-  it("takes its inset from the reading column and its title one step above the sections below", () => {
+  it("uses one page-title step across reading and workbench tiers", () => {
     const workbench = renderToStaticMarkup(<PageHeader title="Board" />);
     const reading = renderToStaticMarkup(<PageHeader variant="reading" title="Appearance" />);
 
     // Tier B pays its own gutter; Tier A is already inside <ContentColumn>'s.
     expect(workbench).toContain("px-gutter");
     expect(reading).not.toContain("px-gutter");
-    expect(workbench).toContain("text-sm font-semibold");
-    expect(reading).toContain("text-heading font-semibold");
+    expect(workbench).toContain("text-title font-semibold");
+    expect(reading).toContain("text-title font-semibold");
     expect(reading).not.toContain("<p");
   });
 });

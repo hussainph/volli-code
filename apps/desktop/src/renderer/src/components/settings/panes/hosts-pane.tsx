@@ -13,7 +13,6 @@
  * Shown only with `cloud` on: the category does not exist otherwise.
  */
 import * as React from "react";
-import { AnimatePresence, motion } from "motion/react";
 import {
   ChevronLeftIcon,
   CheckIcon,
@@ -37,7 +36,7 @@ import { toast } from "sonner";
 import { openAddHostSheet } from "@renderer/components/hosts/host-entry";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
-import { EASE_OUT, HostGlyph, SwapText } from "@renderer/components/hosts/host-parts";
+import { HostGlyph, SwapText } from "@renderer/components/hosts/host-parts";
 import {
   AsyncSection,
   CONTROL_W,
@@ -125,23 +124,17 @@ type View =
   | { readonly kind: "list" }
   | { readonly kind: "host"; readonly id: string; readonly rename: boolean };
 
-const SLIDE = 12;
-
 export function HostsPane() {
   const hosts = usePaneHosts();
   const [view, setView] = React.useState<View>({ kind: "list" });
-  // +1 drills in, -1 comes back: the incoming page arrives from its side.
-  const [direction, setDirection] = React.useState(1);
   const [forgetting, setForgetting] = React.useState<RemoteHost | null>(null);
   const forgettingShown = useLastPresent(forgetting);
 
   const writable = useHostsWritable();
   const open = (id: string, rename = false) => {
-    setDirection(1);
     setView({ kind: "host", id, rename: rename && writable });
   };
   const back = () => {
-    setDirection(-1);
     setView({ kind: "list" });
   };
 
@@ -162,38 +155,23 @@ export function HostsPane() {
 
   return (
     <div className="relative">
-      <AnimatePresence initial={false} mode="popLayout" custom={direction}>
-        <motion.div
-          key={pageKey}
-          custom={direction}
-          variants={{
-            enter: (dir: number) => ({ opacity: 0, x: dir * SLIDE }),
-            center: { opacity: 1, x: 0 },
-            exit: (dir: number) => ({ opacity: 0, x: dir * -SLIDE }),
-          }}
-          initial="enter"
-          animate="center"
-          exit="exit"
-          transition={{ duration: 0.22, ease: EASE_OUT }}
-          className="flex flex-col gap-6"
-        >
-          {current !== undefined && view.kind === "host" ? (
-            <HostPage
-              host={current}
-              startRename={view.rename}
-              onBack={back}
-              onForget={() => setForgetting(current.remote)}
-            />
-          ) : (
-            <HostList
-              hosts={hosts}
-              onOpen={(host) => open(host.id)}
-              onRename={(host) => open(host.id, true)}
-              onForget={setForgetting}
-            />
-          )}
-        </motion.div>
-      </AnimatePresence>
+      <div key={pageKey} className="flex flex-col gap-6">
+        {current !== undefined && view.kind === "host" ? (
+          <HostPage
+            host={current}
+            startRename={view.rename}
+            onBack={back}
+            onForget={() => setForgetting(current.remote)}
+          />
+        ) : (
+          <HostList
+            hosts={hosts}
+            onOpen={(host) => open(host.id)}
+            onRename={(host) => open(host.id, true)}
+            onForget={setForgetting}
+          />
+        )}
+      </div>
 
       <AlertDialog
         open={forgetting !== null && writable}
@@ -265,52 +243,33 @@ function HostList({
           secondary={<span className="block truncate text-ui text-muted-foreground">Local</span>}
           onActivate={null}
         />
-        <AnimatePresence initial={false}>
-          {hosts.map((host) => (
-            <Collapse key={host.remote.id}>
-              <HostRow
-                host={host}
-                onOpen={() => onOpen(host.remote)}
-                onRename={() => onRename(host.remote)}
-                onForget={() => onForget(host.remote)}
-              />
-            </Collapse>
-          ))}
-          {hosts.length === 0 && readOnly === null ? (
-            <Collapse key="empty">
-              <ListRow
-                data-host-row=""
-                density="two-line"
-                leading={
-                  <span className="grid size-6 shrink-0 place-items-center rounded-sm border border-dashed border-border text-muted-foreground">
-                    <AddIcon aria-hidden className="size-3.5" />
-                  </span>
-                }
-                primary={
-                  <span className="truncate text-ui text-muted-foreground">Add a host…</span>
-                }
-                onActivate={openAddHostSheet}
-              />
-            </Collapse>
-          ) : null}
-        </AnimatePresence>
+        {hosts.map((host) => (
+          <div key={host.remote.id}>
+            <HostRow
+              host={host}
+              onOpen={() => onOpen(host.remote)}
+              onRename={() => onRename(host.remote)}
+              onForget={() => onForget(host.remote)}
+            />
+          </div>
+        ))}
+        {hosts.length === 0 && readOnly === null ? (
+          <div key="empty">
+            <ListRow
+              data-host-row=""
+              density="two-line"
+              leading={
+                <span className="grid size-6 shrink-0 place-items-center rounded-sm border border-dashed border-border text-muted-foreground">
+                  <AddIcon aria-hidden className="size-3.5" />
+                </span>
+              }
+              primary={<span className="truncate text-ui text-muted-foreground">Add a host…</span>}
+              onActivate={openAddHostSheet}
+            />
+          </div>
+        ) : null}
       </div>
     </PrefSection>
-  );
-}
-
-/** A row that leaves by closing up, so the rows below slide into the gap. */
-function Collapse({ children }: { children: React.ReactNode }) {
-  return (
-    <motion.div
-      className="overflow-hidden"
-      initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 1, height: "auto" }}
-      exit={{ opacity: 0, height: 0 }}
-      transition={{ duration: 0.22, ease: EASE_OUT }}
-    >
-      {children}
-    </motion.div>
   );
 }
 
