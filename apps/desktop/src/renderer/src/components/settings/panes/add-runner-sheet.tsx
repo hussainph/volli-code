@@ -253,7 +253,9 @@ export function RunnerInstallSheet({
               ) : null}
             </>
           )}
-          {error === null ? null : <Notice tone="error" title={error} announce />}
+          {error === null ? null : (
+            <Notice tone="error" title="Couldn't add runner" detail={error} announce />
+          )}
         </DialogBody>
         {grant === null ? null : (
           <DialogFooter>

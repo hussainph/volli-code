@@ -189,7 +189,9 @@ export function LinkRunnerSheet({
               ) : null}
             </>
           )}
-          {error === null ? null : <Notice tone="error" title={error} announce />}
+          {error === null ? null : (
+            <Notice tone="error" title="Couldn't link runner" detail={error} announce />
+          )}
         </DialogBody>
         {done !== null ? (
           <DialogFooter>

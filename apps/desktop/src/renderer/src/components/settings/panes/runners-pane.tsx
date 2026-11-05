@@ -155,7 +155,8 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
           thisMac.kind === "failed" && runners.kind !== "failed" ? (
             <Notice
               tone="error"
-              title={thisMac.message}
+              title="Couldn't load this Mac"
+              detail={thisMac.message}
               className="m-4"
               announce
               actions={
@@ -283,7 +284,8 @@ function ThisMacBlocked({
       <Notice
         data-testid="this-mac-blocked"
         tone={recovery.failed ? "error" : "neutral"}
-        title={snapshot.message ?? (recovery.failed ? "This Mac couldn’t be added." : "Removed.")}
+        title={recovery.failed ? "This Mac couldn’t be added." : (snapshot.message ?? "Removed.")}
+        detail={recovery.failed ? (snapshot.message ?? undefined) : undefined}
         className="m-4"
         announce
         actions={

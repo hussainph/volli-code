@@ -381,7 +381,8 @@ function SignInPanel({
         <Notice
           tone="error"
           announce
-          title={failure}
+          title="Couldn't connect account"
+          detail={failure}
           actions={
             <Button size="sm" variant="ghost" onClick={onDismissFailure}>
               Dismiss

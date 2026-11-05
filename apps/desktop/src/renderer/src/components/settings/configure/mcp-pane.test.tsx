@@ -207,7 +207,7 @@ async function setValue(selector: string, value: string): Promise<void> {
  * A failure the pane or dialog reports: the error Notice's announced message,
  * which carries the text alone (its Copy control sits outside the live region).
  */
-const FAILURE = '[data-testid="mcp-error"] [role="status"]';
+const FAILURE = '[data-testid="mcp-error"] details > div';
 
 /** Opens a shared Select from the keyboard and picks one option by its text. */
 async function choose(trigger: HTMLElement, label: string): Promise<readonly string[]> {
@@ -394,6 +394,12 @@ describe("the server table", () => {
     await click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(document.body.querySelector(FAILURE)?.textContent).toBe("Could not save the change.");
+    expect(
+      document.body.querySelector('[data-testid="mcp-error"] [role="status"]')?.textContent,
+    ).toBe("Couldn't update MCP servers");
+    expect(
+      document.body.querySelector('[data-testid="mcp-error"] details')?.hasAttribute("open"),
+    ).toBe(false);
   });
 
   it("refreshes from the menu, and removes only after a confirmation that says what goes", async () => {

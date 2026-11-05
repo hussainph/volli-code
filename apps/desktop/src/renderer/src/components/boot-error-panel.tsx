@@ -374,7 +374,9 @@ function NewerVersionActions({ gateway }: { gateway: RecoveryGateway }) {
           announce
         />
       ) : null}
-      {failure === null ? null : <Notice tone="error" title={failure} announce />}
+      {failure === null ? null : (
+        <Notice tone="error" title="Couldn't recover the app" detail={failure} announce />
+      )}
     </section>
   );
 }

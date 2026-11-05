@@ -372,9 +372,11 @@ describe("Settings → Runners", () => {
       message: "This Mac's runner credential couldn't be read.",
     });
     const blocked = container.querySelector<HTMLElement>('[data-testid="this-mac-blocked"]')!;
-    expect(blocked.querySelector("[role=status]")?.textContent).toBe(
+    expect(blocked.querySelector("[role=status]")?.textContent).toBe("This Mac couldn’t be added.");
+    expect(blocked.querySelector("details")?.textContent).toContain(
       "This Mac's runner credential couldn't be read.",
     );
+    expect(blocked.querySelector("details")?.open).toBe(false);
     await act(async () => button("Try again", blocked).click());
     expect(tier.rpc.runners.addThisMac.mutate).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith(
@@ -475,7 +477,10 @@ describe("Settings → Runners", () => {
     tier.fail(new Error("The subscription's source failed"));
     expect(
       [...container.querySelectorAll("[aria-live]")].map((node) => node.textContent),
-    ).toContain("The subscription's source failed");
+    ).toContain("Couldn't load this Mac");
+    expect(container.querySelector("details")?.textContent).toContain(
+      "The subscription's source failed",
+    );
     expect(runnerRow("runner-box")).not.toBeNull();
     act(() => button("Try again").click());
     expect(tier.rpc.runners.subscribeThisMac.subscribe).toHaveBeenCalledTimes(3);

@@ -86,7 +86,7 @@ export function MarkdownCommandDialog({
           placeholder="review"
           disabled={busy}
         />
-        {error && <Notice tone="error" announce title={error} />}
+        {error && <Notice tone="error" announce title="Couldn't create command" detail={error} />}
         <DialogFooter>
           <Button variant="outline" disabled={busy || !valid} onClick={() => void create()}>
             {busy ? <LoadingLabel>Creating</LoadingLabel> : "Create and open"}

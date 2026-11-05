@@ -82,7 +82,8 @@ function ReadFailed({ message, onRetry }: { message: string; onRetry: () => void
     <Notice
       tone="error"
       icon={WarningIcon}
-      title={message}
+      title="Couldn't load workspace"
+      detail={message}
       className="m-4"
       announce
       actions={

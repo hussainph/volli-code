@@ -671,7 +671,13 @@ export function McpServerDialog({
                   : null}
               </span>
             ) : (
-              <Notice tone="error" announce data-testid="mcp-error" title={error} />
+              <Notice
+                tone="error"
+                announce
+                data-testid="mcp-error"
+                title="Couldn't update MCP server"
+                detail={error}
+              />
             )}
           </div>
           <div className="flex shrink-0 justify-end gap-2">

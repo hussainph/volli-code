@@ -279,7 +279,14 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
         }
       >
         {error === null ? null : (
-          <Notice tone="error" announce data-testid="mcp-error" className="mb-2" title={error} />
+          <Notice
+            tone="error"
+            announce
+            data-testid="mcp-error"
+            className="mb-2"
+            title="Couldn't update MCP servers"
+            detail={error}
+          />
         )}
         {readError !== null ? (
           <Notice
