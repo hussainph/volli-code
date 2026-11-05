@@ -95,7 +95,7 @@ it("keeps failures visible even in an inline scope, neutral and recoverable", as
   expect(host.querySelectorAll(".es-piece")).toHaveLength(1);
   expect(host.querySelector(".es-accent")).toBeNull();
   await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
-  expect(retry).toHaveBeenCalledOnce();
+  expect(retry).toHaveBeenCalledExactlyOnceWith();
 });
 it("retains one real action, busy/read-only state, shortcut and accessible name", async () => {
   const run = vi.fn();

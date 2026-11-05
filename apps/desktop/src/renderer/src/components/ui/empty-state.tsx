@@ -93,7 +93,7 @@ export function EmptyState(props: { tier: "inline" } | IllustratedProps) {
           aria-keyshortcuts={props.action.keyshortcuts}
           data-slot={props.action.slot}
           data-host-read-only={props.action.readOnly ? "" : undefined}
-          onClick={props.action.onAction}
+          onClick={() => props.action?.onAction()}
         >
           {props.action.icon}
           {props.action.label}
