@@ -237,7 +237,7 @@ function GroupedTabChip<T extends { id: string }>({
                     key={action.label}
                     icon={action.icon}
                     aria-label={`${action.label}: ${label}`}
-                    onSelect={action.run}
+                    onSelect={() => action.run()}
                   >
                     {action.label}: {label}
                   </ContextMenuItem>

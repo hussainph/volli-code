@@ -24,7 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { Segmented } from "@renderer/components/ui/segmented";
+import { ViewSwitcher } from "@renderer/components/ui/view-switcher";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
@@ -100,17 +100,14 @@ function ViewToggle({ projectId }: { projectId: string }) {
   const setBoardView = useProjectUiStore((state) => state.setBoardView);
 
   return (
-    <Segmented
-      ariaLabel="Board layout"
-      className="h-control-default [&>[data-control=button]]:size-control-sm"
-      value={view}
-      size="sm"
-      iconOnly
-      options={[
-        { key: "board", label: "Board view", icon: BoardIcon },
-        { key: "list", label: "List view", icon: ListIcon },
+    <ViewSwitcher
+      label="Board layout"
+      active={view}
+      modes={[
+        { key: "board", label: "Board", icon: BoardIcon },
+        { key: "list", label: "List", icon: ListIcon },
       ]}
-      onChange={(next) => setBoardView(projectId, next)}
+      onSelect={(next) => setBoardView(projectId, next)}
     />
   );
 }

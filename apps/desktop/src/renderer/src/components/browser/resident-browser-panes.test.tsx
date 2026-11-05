@@ -360,29 +360,31 @@ describe("Hide to Island (VC-1118)", () => {
   const hideButton = () =>
     host.querySelector<HTMLButtonElement>('button[aria-label="Hide to Island"]');
 
-  it("routes a Session tab's chrome control through the surface lending it bounds", () => {
+  it("keeps the current surface's hide handoff without restoring a duplicate chrome control", () => {
     receive(tab({ createdBy: "session", ownerSessionId: "ses-a" }));
     const staleHide = vi.fn();
     const latestHide = vi.fn();
     renderAnchor("home", true, "home-pane", vi.fn(), staleHide);
     renderAnchor("ticket", true, "ticket-pane", vi.fn(), latestHide);
 
-    act(() => hideButton()!.click());
+    expect(hideButton()).toBeNull();
+    act(() => browserViewportSnapshot().get("opaque-tab-a")!.hide());
 
     expect(latestHide).toHaveBeenCalledOnce();
     expect(staleHide).not.toHaveBeenCalled();
     expect(mounted).toHaveBeenCalledTimes(1);
   });
 
-  it("offers nothing on a person's tab, and nothing once no surface draws the tab", () => {
+  it("leaves Hide to Island in the tab controls, never in either actor's browser toolbar", () => {
     receive(tab());
     renderAnchor("home");
     expect(address()).not.toBeNull();
     expect(hideButton()).toBeNull();
 
     receive(tab({ createdBy: "session", ownerSessionId: "ses-a" }));
-    expect(hideButton()).not.toBeNull();
+    expect(hideButton()).toBeNull();
     renderAnchor(null);
+    expect(browserViewportSnapshot().get("opaque-tab-a")).toBeUndefined();
     expect(hideButton()).toBeNull();
   });
 });

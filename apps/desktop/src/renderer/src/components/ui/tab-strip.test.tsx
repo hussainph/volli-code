@@ -507,7 +507,7 @@ describe("TabStrip overflow", () => {
   it("draws no affordance at all for a strip that fits", () => {
     renderTabs(2, 0);
     measureScroller(2);
-    act(() => observers[0]?.notify());
+    resized();
 
     expect(affordance("Earlier")).toBeNull();
     expect(affordance("Later")).toBeNull();
@@ -624,7 +624,7 @@ describe("TabStrip overflow", () => {
     // would join the roving tabindex and be counted by every arrow key.
     renderTabs(9, 0);
     measureScroller(9);
-    act(() => observers[0]?.notify());
+    resized();
 
     const tablist = container?.querySelector('[role="tablist"]');
     const all = container?.querySelector<HTMLButtonElement>('[aria-label="All tabs"]');

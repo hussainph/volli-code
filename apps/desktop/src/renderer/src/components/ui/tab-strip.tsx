@@ -1,3 +1,4 @@
+import { TabCascadeContext, useTabCascade } from "./tab-cascade";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from "./dropdown-menu";
 import { ListRow } from "./list-row";
 import { TabActionDropdown, TabActionsContext } from "./tab-actions";
@@ -20,8 +21,8 @@ import { TabActionDropdown, TabActionsContext } from "./tab-actions";
  *
  * Both legacy variant names now use Rex-style capsule anatomy. The variant
  * remains a compatible caller contract; it owns no tab or group semantics.
- * Selection, hover and keyboard navigation are immediate; only a pointer drag
- * may move neighbouring tabs with the shared sorting clock.
+ * Selection, hover and keyboard navigation are immediate. Explicit pointer
+ * opens/closes cascade real widths; pointer dragging keeps its sorting clock.
  *
  * WHAT STAYS WITH THE CALLER: which tabs exist, their order, what a selection
  * means, what a close guards, and every context menu. This file owns the
@@ -343,6 +344,7 @@ export function TabStrip({
   // the scroller because the scroller's width is something the chevrons change
   // — see {@link TabOverflowMeasure}.
   const areaRef = React.useRef<HTMLDivElement>(null);
+  const cascade = useTabCascade(areaRef, scrollerRef, inventory.current);
 
   React.useEffect(() => {
     const scroller = scrollerRef.current;
@@ -461,6 +463,14 @@ export function TabStrip({
           className,
         )}
         {...props}
+        onPointerLeave={(event) => {
+          props.onPointerLeave?.(event);
+          cascade.release();
+        }}
+        onPointerMove={(event) => {
+          props.onPointerMove?.(event);
+          cascade.activity();
+        }}
       >
         {/* THE ROOM THE TABS HAVE, and the one box in here whose width does not
           answer to what is drawn inside it. `flex-1 min-w-0` against the actions
@@ -471,7 +481,7 @@ export function TabStrip({
         <div
           ref={areaRef}
           data-slot="tab-scroll-area"
-          className="tab-track flex h-8 min-w-0 flex-1 items-center self-center overflow-hidden rounded-full p-0.5"
+          className="tab-track relative flex h-8 min-w-0 flex-1 items-center self-center overflow-hidden rounded-full p-0.5"
         >
           {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
             gesture was Shift+wheel and nothing else: a convention a mouse user
@@ -498,18 +508,20 @@ export function TabStrip({
               aria-orientation="horizontal"
               className="tab-items flex min-w-full items-center gap-0.5"
             >
-              <TabInventoryContext.Provider value={inventory.current}>
-                <TabVariantContext.Provider value={variant}>
-                  {reorder === undefined ? (
-                    children
-                  ) : (
-                    // Inside the tablist, where the tabs are; the sensors and the
-                    // DndContext sit outside it (below) so dnd-kit's two hidden
-                    // announcement nodes are not children of a `role="tablist"`.
-                    <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
-                  )}
-                </TabVariantContext.Provider>
-              </TabInventoryContext.Provider>
+              <TabCascadeContext.Provider value={cascade.api}>
+                <TabInventoryContext.Provider value={inventory.current}>
+                  <TabVariantContext.Provider value={variant}>
+                    {reorder === undefined ? (
+                      children
+                    ) : (
+                      // Inside the tablist, where the tabs are; the sensors and the
+                      // DndContext sit outside it (below) so dnd-kit's two hidden
+                      // announcement nodes are not children of a `role="tablist"`.
+                      <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
+                    )}
+                  </TabVariantContext.Provider>
+                </TabInventoryContext.Provider>
+              </TabCascadeContext.Provider>
             </div>
           </div>
           {overflow.overflowing ? (
@@ -564,7 +576,7 @@ export function TabStrip({
               data-slot="tab-actions"
               className="flex shrink-0 items-center pl-1"
             >
-              {actions}
+              <TabCascadeContext.Provider value={cascade.api}>{actions}</TabCascadeContext.Provider>
             </div>
           ) : null}
         </div>
@@ -884,6 +896,7 @@ function TabShell({
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
   const extraActions = React.useContext(TabActionsContext);
+  const cascade = React.useContext(TabCascadeContext);
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
@@ -915,7 +928,19 @@ function TabShell({
   const showClose = closable && onClose !== undefined && !renamingNow;
   const menuActions = [
     ...extraActions,
-    ...(showClose ? [{ label: "Close", icon: CloseIcon, run: onClose!, destructive: true }] : []),
+    ...(showClose
+      ? [
+          {
+            label: "Close",
+            icon: CloseIcon,
+            run: (pointer?: boolean) => {
+              cascade?.close(shellRef.current, pointer === true);
+              onClose!();
+            },
+            destructive: true,
+          },
+        ]
+      : []),
   ];
   const hide = extraActions.find((action) => action.label === "Hide to Island");
   // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288 review). The name below is
@@ -1097,7 +1122,16 @@ function TabShell({
               <MinusIcon className="size-3" strokeWidth={2.25} />
             </button>
           ) : null}
-          {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}
+          {showClose ? (
+            <TabClose
+              label={label}
+              dirty={dirty}
+              onClose={(pointer) => {
+                cascade?.close(shellRef.current, pointer);
+                onClose();
+              }}
+            />
+          ) : null}
         </div>
       </TooltipTrigger>
       {/* The hint travels with it: on a strip narrow enough to be clipping the
@@ -1200,7 +1234,15 @@ function noop(): void {}
  * so there was never a call site that wanted to position it itself. `onClose`
  * on {@link Tab} is the whole surface area.
  */
-function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; onClose(): void }) {
+function TabClose({
+  label,
+  dirty,
+  onClose,
+}: {
+  label: string;
+  dirty: boolean;
+  onClose(pointer: boolean): void;
+}) {
   return (
     <button
       type="button"
@@ -1213,7 +1255,7 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
       onClick={(event) => {
         event.stopPropagation();
         focusSuccessorTab(event.currentTarget);
-        onClose();
+        onClose(event.detail > 0);
       }}
       className={cn(
         // The house hover-reveal contract in full (`ticket/rail-panel-parts.tsx`

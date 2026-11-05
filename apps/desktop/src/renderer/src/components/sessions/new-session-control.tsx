@@ -1,3 +1,4 @@
+import { TabCascadeContext } from "@renderer/components/ui/tab-cascade";
 /** One anchored tab chooser; direct Session shortcuts keep their existing scope.
  * The context menu is the same offer. A Browser is a tab, not a Session, and a
  * cloud launch offers only Chat plus the existing Runner picker.
@@ -169,6 +170,8 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
+  const cascade = React.useContext(TabCascadeContext);
+  const pointer = React.useRef(false);
   const runners = useRunnerPicker(projectId);
   // A new chat is a send (VC-895): in a cloud launch this Mac's runner starts
   // it, so the cloud link decides. Terminals and Browser Tabs are this Mac's
@@ -209,9 +212,22 @@ export function NewSessionControl({
 
   const items = newSessionMenuRows("dropdown", {
     shortcuts,
-    onNewChat,
-    onNewBrowser: handleNewBrowser,
-    onNewTerminal: newTerminal,
+    onNewChat: () => {
+      cascade?.open(pointer.current);
+      onNewChat();
+    },
+    onNewBrowser: handleNewBrowser
+      ? () => {
+          cascade?.open(pointer.current);
+          handleNewBrowser();
+        }
+      : undefined,
+    onNewTerminal: newTerminal
+      ? () => {
+          cascade?.open(pointer.current);
+          newTerminal();
+        }
+      : undefined,
   });
 
   return (
@@ -234,6 +250,12 @@ export function NewSessionControl({
             </DropdownMenuTrigger>
           </ContextMenuTrigger>
           <DropdownMenuContent
+            onPointerDownCapture={() => {
+              pointer.current = true;
+            }}
+            onKeyDownCapture={() => {
+              pointer.current = false;
+            }}
             className="min-w-52"
             align={align}
             onCloseAutoFocus={handleCloseAutoFocus}

@@ -11,7 +11,7 @@ import { ContextMenuItem } from "./context-menu";
 export interface TabAction {
   label: string;
   icon: IconComponent;
-  run(): void;
+  run(pointer?: boolean): void;
   destructive?: boolean;
 }
 export const TabActionsContext = React.createContext<readonly TabAction[]>([]);
@@ -23,7 +23,7 @@ export function TabContextActions() {
       key={action.label}
       icon={action.icon}
       variant={action.destructive ? "destructive" : "default"}
-      onSelect={action.run}
+      onSelect={() => action.run()}
     >
       {action.label}
     </ContextMenuItem>
@@ -41,6 +41,7 @@ export function TabActionDropdown({
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = React.useState(false);
+  const pointer = React.useRef(false);
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
@@ -61,6 +62,12 @@ export function TabActionDropdown({
       <DropdownMenuContent
         align="start"
         onClickCapture={() => setOpen(false)}
+        onPointerDownCapture={() => {
+          pointer.current = true;
+        }}
+        onKeyDownCapture={() => {
+          pointer.current = false;
+        }}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
@@ -69,7 +76,7 @@ export function TabActionDropdown({
           <DropdownMenuItem
             key={action.label}
             variant={action.destructive ? "destructive" : "default"}
-            onSelect={action.run}
+            onSelect={() => action.run(pointer.current)}
           >
             <action.icon className="size-4" />
             {action.label}

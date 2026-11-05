@@ -11,7 +11,7 @@ import {
   SettingsIcon,
 } from "@renderer/components/ui/icon";
 
-import { Segmented } from "@renderer/components/ui/segmented";
+import { ViewSwitcher } from "@renderer/components/ui/view-switcher";
 import { SidebarFiles } from "./sidebar-files";
 import { SessionBandHeader } from "./session-band-header";
 
@@ -102,22 +102,22 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
         >
           {/* ChromeBar above owns the traffic lights and the drag region — this
             is now a plain panel header. */}
-          <SidebarHeader className="px-4 pt-3 pb-2">
+          <SidebarHeader className="@container/project-header px-4 pt-3 pb-2">
             {selected ? (
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="truncate text-ui font-semibold font-display">{selected.name}</div>
                   <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
                 </div>
-                <Segmented
-                  ariaLabel="Sidebar content"
-                  iconOnly
-                  value={content}
-                  options={[
+                <ViewSwitcher
+                  label="Sidebar content"
+                  className="sidebar-view-switcher"
+                  active={content}
+                  modes={[
                     { key: "sessions", label: "Sessions", icon: Chats },
                     { key: "files", label: "Files", icon: TreeStructure },
                   ]}
-                  onChange={(next) => {
+                  onSelect={(next) => {
                     rememberedContent.set(selected.id, next);
                     setContents((previous) => new Map(previous).set(selected.id, next));
                   }}

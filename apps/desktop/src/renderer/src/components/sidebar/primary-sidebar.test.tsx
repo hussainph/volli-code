@@ -83,7 +83,7 @@ describe("primary sidebar content choice", () => {
   it("remembers Files in this window and suspends hidden session activity", async () => {
     await show();
     const files = container.querySelector<HTMLButtonElement>('[data-choice="files"]')!;
-    expect(files.getAttribute("aria-pressed")).toBe("false");
+    expect(files.getAttribute("aria-selected")).toBe("false");
     await act(async () => files.click());
     expect(container.querySelector('[data-testid="sidebar-files"]')).not.toBeNull();
     expect(
@@ -91,7 +91,7 @@ describe("primary sidebar content choice", () => {
     ).toBe("false");
     await act(async () => root.render(null));
     await show();
-    expect(container.querySelector('[data-choice="files"]')?.getAttribute("aria-pressed")).toBe(
+    expect(container.querySelector('[data-choice="files"]')?.getAttribute("aria-selected")).toBe(
       "true",
     );
     const sessions = container.querySelector<HTMLButtonElement>('[data-choice="sessions"]')!;
@@ -130,7 +130,7 @@ describe("primary sidebar content choice", () => {
       container.querySelector<HTMLButtonElement>('[data-choice="files"]')!.click(),
     );
     expect(header.querySelector("[data-band-count]")).toBeNull();
-    expect(container.querySelector('[data-choice="files"]')?.getAttribute("aria-pressed")).toBe(
+    expect(container.querySelector('[data-choice="files"]')?.getAttribute("aria-selected")).toBe(
       "true",
     );
     listing.count = 0;
