@@ -3,6 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { cn } from "./utils";
 
 describe("cn", () => {
+  it("lets a measured surface override the default reading measure", () => {
+    expect(cn("max-w-content", "max-w-(--container-composer)")).toBe(
+      "max-w-(--container-composer)",
+    );
+    expect(cn("max-w-workbench", "max-w-full")).toBe("max-w-full");
+  });
   it("keeps a type-scale token beside a text color", () => {
     // The bug this file exists for: tailwind-merge does not know the design
     // language's custom font-size tokens, so before they were registered as a

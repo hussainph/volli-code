@@ -35,7 +35,6 @@ import {
   EditIcon,
   PinIcon,
   UnpinIcon,
-  SidebarIcon,
   SunIcon,
   TerminalIcon,
   CloseIcon,
@@ -68,7 +67,6 @@ import {
   terminalTabState,
   type TerminalTabState,
 } from "@renderer/components/sessions/terminal-tab-state";
-import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -76,10 +74,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
+import { Tab, TabPath, TabStrip } from "@renderer/components/ui/tab-strip";
 import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import { cn } from "@renderer/lib/utils";
+import { useProjectsStore } from "@renderer/stores/projects";
+import { useBoardStore } from "@renderer/stores/board";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
 export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat" | "browser";
@@ -562,8 +562,8 @@ export function TicketTabStrip({
   onNewSession,
   onNewChat,
   onNewBrowser,
-  railCollapsed,
-  onToggleRail,
+  railCollapsed: _railCollapsed,
+  onToggleRail: _onToggleRail,
   ...list
 }: TicketTabStripProps) {
   return (
@@ -590,32 +590,6 @@ export function TicketTabStrip({
               onNewTerminal={onNewSession}
             />
           </div>
-          {/* The details rail's collapse control, and the reason this corner has
-              no `disabled` state, no reserved slot and no fade: the strip spans
-              both columns, so its right corner sits directly on top of the pane
-              this button collapses, and that pane is always there to collapse. It
-              keeps its full-height rectangular hover (h-full over size-5's height,
-              rounded-none) so it reads as a corner REGION rather than a tall pill —
-              which is also what tells it apart from the pill beside it.
-              (Terminal focus, which WAS conditional on the active tab's kind and
-              then briefly lived on the chrome band, is now drawn on the terminal
-              pane itself — see `session-split-layout.tsx`.) */}
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="ml-1 h-full rounded-none"
-            data-inspector-trigger="ticket"
-            onClick={onToggleRail}
-            // No `aria-pressed`: the label below already carries the state, and
-            // the button has no pressed appearance for it to describe — the same
-            // call the band's own panel toggles make.
-            aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
-            title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
-          >
-            {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
-                RIGHT panel; each caret points toward the rail it toggles. */}
-            <SidebarIcon className="size-3.5 scale-x-[-1]" />
-          </Button>
         </>
       }
     >
@@ -685,7 +659,7 @@ function ticketTabMenuLabel(tab: TicketTabDescriptor): TabMenuLabel {
     const slash = tab.relPath.lastIndexOf("/");
     return { label: tab.label, icon, detail: slash <= 0 ? null : tab.relPath.slice(0, slash) };
   }
-  return { label: tab.label, icon };
+  return { label: tab.label, icon, status: tab.status };
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */
@@ -703,45 +677,58 @@ function TicketTabList({
   onRenameSessionTab,
 }: TicketTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const projectPath = useProjectsStore(
+    (state) => state.projects.find((project) => project.id === projectId)?.path,
+  );
+  const worktreePath = useBoardStore(
+    (state) =>
+      state.ticketsByProject[projectId]?.find((ticket) => ticket.id === ticketId)?.worktreePath,
+  );
+  const path = worktreePath ?? projectPath;
   return (
-    <GroupedTabList
-      tabs={tabs}
-      groups={groups}
-      activeTabId={activeTabId}
-      shownGroupId={shownGroupId}
-      edgeTargets={groups !== undefined}
-      describe={ticketTabMenuLabel}
-      onSelect={(tab) => onSelectTab(tab.id)}
-      onUngroup={onUngroup}
-    >
-      {(tab, { active, tabStop, grouped }) => (
-        <TicketTab
-          key={tab.id}
-          projectId={projectId}
-          ticketId={ticketId}
-          tab={tab}
-          active={active}
-          tabStop={tabStop}
-          // The top strip's Body stays permanent, and a chip segment is the
-          // chip's; in a pane strip every tab drags, so it can leave the group.
-          dragId={grouped || (groups !== undefined && tab.kind === "body") ? undefined : tab.id}
-          menu={!grouped}
-          editing={editingId === tab.id}
-          onSelect={() => onSelectTab(tab.id)}
-          onClose={() => onCloseTab(tab)}
-          onPin={
-            tab.kind === "file" && tab.relPath !== undefined && onPinFileTab !== undefined
-              ? () => onPinFileTab(tab.relPath!)
-              : undefined
-          }
-          onStartRename={() => setEditingId(tab.id)}
-          onCommitRename={(next) => {
-            setEditingId(null);
-            onRenameSessionTab(tab.id, next);
-          }}
-          onCancelRename={() => setEditingId(null)}
-        />
-      )}
-    </GroupedTabList>
+    <TabPath path={path}>
+      <GroupedTabList
+        tabs={tabs}
+        groups={groups}
+        activeTabId={activeTabId}
+        shownGroupId={shownGroupId}
+        edgeTargets={groups !== undefined}
+        describe={(tab) => {
+          const info = ticketTabMenuLabel(tab);
+          return { ...info, detail: info.detail ?? path };
+        }}
+        onSelect={(tab) => onSelectTab(tab.id)}
+        onUngroup={onUngroup}
+      >
+        {(tab, { active, tabStop, grouped }) => (
+          <TicketTab
+            key={tab.id}
+            projectId={projectId}
+            ticketId={ticketId}
+            tab={tab}
+            active={active}
+            tabStop={tabStop}
+            // The top strip's Body stays permanent, and a chip segment is the
+            // chip's; in a pane strip every tab drags, so it can leave the group.
+            dragId={grouped || (groups !== undefined && tab.kind === "body") ? undefined : tab.id}
+            menu={!grouped}
+            editing={editingId === tab.id}
+            onSelect={() => onSelectTab(tab.id)}
+            onClose={() => onCloseTab(tab)}
+            onPin={
+              tab.kind === "file" && tab.relPath !== undefined && onPinFileTab !== undefined
+                ? () => onPinFileTab(tab.relPath!)
+                : undefined
+            }
+            onStartRename={() => setEditingId(tab.id)}
+            onCommitRename={(next) => {
+              setEditingId(null);
+              onRenameSessionTab(tab.id, next);
+            }}
+            onCancelRename={() => setEditingId(null)}
+          />
+        )}
+      </GroupedTabList>
+    </TabPath>
   );
 }

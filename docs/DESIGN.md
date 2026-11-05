@@ -24,23 +24,26 @@ Tint is a design-time material choice, not a user preference or a new theme axis
 
 | Surface | Tint | Implementation |
 |---|---|---|
-| Docked sidebar, inspector | On | `.glass[data-tint="true"][data-glass-static="true"]` |
+| Docked sidebar, inspector | On | `GlassSurface tint` / `.glass[data-tint="true"]` |
 | Stationary pane peek | On | `.glass[data-tint="true"]`, live overlay |
 | Ordinary menu, popover | Off by default | Shared floating primitive; `PopoverContent tint` opts in |
 | Usage popover | On | Existing `PopoverContent tint` caller |
 | Buttons, small controls | Off | `.glass-control`, no backdrop pass |
 | Content paper | Never | `.material-thick` / `.material-solid` |
 
-`.glass` and `.material-floating` use a 90% neutral veil. Tinted glass adds
-viewport-aligned canvas sampling. Docked navigation uses `data-glass-static="true"`
-on its glass surface or immediate parent: identical tint/mesh/edge/shadow, no live
-backdrop pass, and local paint containment. Toolbar chrome is not paint-contained.
-Only transient floats and stationary pane peeks blur; reveal, pin and pour disable
-blur synchronously. `.material-regular` also samples without a permanent backdrop
-pass; thick/solid materials are opaque. Nested glass filters are disabled;
-reduced-transparency, stronger-contrast and unsupported-filter fallbacks are opaque.
-Glass faces are flat, not bevelled. `--shadow-glass` and `--shadow-glass-small` provide quiet
-lift (light large shadow begins `0 4px 16px` at 5.5% black; dark has its own strength).
+Navigation glass uses a 46% white / 52% dark neutral veil; ordinary glass uses
+58% / 56%. A viewport-aligned mesh, 24px blur with 1.8 saturation, a top specular
+wash and a directional masked rim make one continuous material across the window.
+The canvas retains authored hues in both appearances: the default pools are
+62% / 58% opaque over a neutral floor mixed with the primary at 22% / 26%.
+Vibrancy changes pool opacity rather than lightness-banding the authored colours.
+Grain belongs to the canvas, not a second stretched texture on each glass pane.
+
+Pinned navigation and stationary peeks use the same optical recipe. Reveal, pin
+and pour disable blur synchronously, as do nested glass and hidden resident panes.
+No blur covers a live terminal or native browser work plane. Reduced-transparency,
+stronger-contrast and unsupported-filter fallbacks remain opaque. `--shadow-glass`
+and `--shadow-glass-small` provide quiet lift.
 
 ### Accent, ink and contrast
 
@@ -52,12 +55,12 @@ lift (light large shadow begins `0 4px 16px` at 5.5% black; dark has its own str
   sheen. `--accent-tint` is 10%, `--accent-selected` 18%. The legacy `--primary` opaque pair
   still exists; it is not the tonal label token.
 - Colour earns its place on identity/state icons, selected and hover fills, prominent text,
-  the person's chat bubble and the board Session ring. Reading paper remains neutral.
+  the person's chat bubble and the board Session ring. Reading paper and user message bubbles remain neutral.
 - `--foreground` is body ink; `--muted-foreground` is opaque secondary;
   `--tertiary-foreground` is the third tier; `--label-ink` sits between body and secondary.
   Do not dilute reading ink with `/50`, `/70` or inherited opacity.
 - Token tests hold secondary at **4.5:1** and tertiary at **3:1** on paper, under-page and
-  bounding glass pools across multiple canvases and both appearances. Small meaningful text
+  neutral material pools across multiple canvases and both appearances. Navigation glass has a separate opaque ink pair solved against its canvas peaks. Small meaningful text
   still needs AA 4.5:1: use secondary, not tertiary, for it. Tonal labels are tested against
   their stronger selected tint. Consumer opacity and arbitrary underlying content are not
   covered by a token guarantee.
@@ -82,12 +85,36 @@ Use tokens and primitives, not a locally measured lookalike.
 | Sheet | `radius-sheet`: 14px |
 | Floating content card | `radius-floating`: 20px; `--glass-gap`: 6px |
 | Sidebar row | `radius-row`: 8px |
-| Board card / column | `radius-card` / `radius-column`: 10 / 16px |
+| Board card / column | `radius-card` / `radius-column`: 10 / 16px; 236px columns |
+| Session composer / user bubble | 24 / 18px corners; 560 / 420px maximum widths |
+| Window toolbar | 46px band; 30px glass controls and search |
+| Sidebar | 236px default; symmetric 10px row-fill inset, then 8px to ink |
+| Inspector | Independent 272px glass card, sibling of the paper perimeter |
 
 Control height and horizontal inset travel together through `CONTROL_SIZE`. Text buttons can
 grow for wrapped labels; icon controls keep their square target. Radius aliases `sm/md/lg/xl`
 resolve to menu-item/control/control/container, not stock Tailwind sizes. Circles and capsules
 use `rounded-full`; zero-radius seams are legitimate resets.
+
+### Navigation anatomy
+
+The canvas owns the title bar, project rail and 6px gutters. Navigation, paper and
+inspector are independent rounded cards. Back/forward and the sidebar toggles form
+one leading toolbar group; search is window-centred, usage sits beside it and the
+inspector toggle stays at the far right. Pinning changes reserved space, never
+ownership or lifetime of the inspector's live subtree.
+
+Tabs follow Rex: wide capsules on a neutral glass track, a lighter filled selected
+capsule, leading identity, title, available secondary path and close. A grouped
+chip's hover card shows its existing items as two-line rows, with existing liveness
+at the trailing edge. Its context menu, pane selection, dragging, rename, close and
+ungroup behaviour are unchanged. Tab selection has no transition.
+
+Sidebar header, rows, section names and footer share an 18px leading ink inset.
+The project name is a measured 15/20px display title, not a new general-purpose type rung.
+Two-line rows are 42px (18px name, 14px metadata, 5px vertical inset), with a 20px
+identity tile. Selected navigation is a neutral 9% ink fill, not an accent outline.
+The Sessions/Files choice stays inline with Active; Active contains Sessions only.
 
 ### Measure and rhythm
 
@@ -206,7 +233,7 @@ remain distinct.
 
 **Simplify through primitives.** If a shared primitive fits, adopt it and delete the custom
 implementation. Extend one primitive when a real capability is missing; never fork a local
-lookalike. `Button`, `Input`, `Select`, `Segmented`, `ListRow`, `SectionHeading`, `Popover`,
+lookalike. `GlassSurface`, `PaperSurface`, `Button`, `Input`, `Select`, `Segmented`, `ListRow`, `SectionHeading`, `Popover`, `HoverCard`,
 menus, sheets, `Progress` and `IdentityTile` carry the family resemblance.
 
 Primitives are **open-source-ready**: no app state, domain or host imports; React/Radix, UI

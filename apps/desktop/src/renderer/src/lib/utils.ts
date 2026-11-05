@@ -39,6 +39,7 @@ const twMerge = extendTailwindMerge({
       ],
     },
     classGroups: {
+      "max-w": ["max-w-content", "max-w-workbench"],
       "font-size": ["text-label", "text-ui", "text-heading", "text-title"],
       rounded: ["rounded-control", "rounded-container", "rounded-row"],
       shadow: [

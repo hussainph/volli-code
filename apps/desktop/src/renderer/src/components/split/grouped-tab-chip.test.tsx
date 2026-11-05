@@ -226,6 +226,24 @@ describe("a Home tab group's chip", () => {
     expect(container.querySelector('input[aria-label="Rename Chat"]')).not.toBeNull();
   });
 
+  it("shows the existing group items on hover with two-line detail and live status", async () => {
+    const callbacks = home(chat.id);
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 300));
+    });
+    const card = document.querySelector('[data-slot="hover-card-content"]');
+    expect(card?.getAttribute("aria-label")).toBe("Tab group items");
+    expect(card?.textContent).toContain("Chat + Page");
+    expect(card?.textContent).toContain("working");
+    const notes = [...card!.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Notes"),
+    )!;
+    click(notes);
+    expect(callbacks.select).toHaveBeenCalledWith(term);
+  });
+
   it("lists the whole group by pane on right-click: one row per tab, its pane and place, then Ungroup", async () => {
     useBrowserTabsStore.setState({
       byId: { one: { url: "http://127.0.0.1:5173/login?next=1" } as never },

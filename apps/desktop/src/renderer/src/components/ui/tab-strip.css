@@ -1,24 +1,21 @@
-/* Classic folder silhouette, shared by every pane strip. No content lifetime
-   or split geometry lives here. Reverse corners join the selected place to
-   its plane; the scroller still owns clipping and overflow travel. */
-.workspace-folder-tab[aria-selected="true"]::before,
-.workspace-folder-tab[aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  bottom: 0;
-  width: var(--radius-control);
-  height: var(--radius-control);
-  pointer-events: none;
-  background: radial-gradient(
-    circle at 0 0,
-    transparent var(--radius-control),
-    var(--background) var(--radius-control)
-  );
+/* Rex-style capsules; tab identity, dragging and content lifetime stay in TS. */
+.tab-track {
+  background: var(--fill-quaternary);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge);
 }
-.workspace-folder-tab[aria-selected="true"]::before {
-  left: calc(-1 * var(--radius-control));
+.workspace-capsule-tab {
+  min-width: 140px;
+  max-width: 240px;
+  border-radius: 999px;
+  flex: 1 0 auto;
 }
-.workspace-folder-tab[aria-selected="true"]::after {
-  right: calc(-1 * var(--radius-control));
-  transform: scaleX(-1);
+.workspace-capsule-tab[aria-selected="true"] {
+  background: var(--tab-selected-face);
+  box-shadow: var(--shadow-glass-small);
+}
+.workspace-capsule-tab:hover:not([aria-selected="true"]) {
+  background: var(--fill-secondary);
+}
+.workspace-capsule-tab:not(:has([data-slot="tab-close"])) {
+  min-width: 72px;
 }

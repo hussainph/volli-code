@@ -15,15 +15,10 @@
  * `h-7 text-ui`, which is what a tab actually is. This file is the third one's
  * size, drawn twice.
  *
- * TWO DRAWINGS, one object:
- *
- *  - **folder** — the Chrome-browser tab. Rounded top corners, and the active
- *    tab bleeds 1px past the strip's bottom border (`-mb-px`) so its fill
- *    covers that seam and the tab reads as physically joined to the plane
- *    below. For a strip that IS the top edge of the thing it switches.
- *  - **pill** — the inline tab. A rounded rectangle floating in a centred band,
- *    active by fill rather than by fusing with anything. For a strip that sits
- *    above a surface it does not own.
+ * Both legacy variant names now use Rex-style capsule anatomy. The variant
+ * remains a compatible caller contract; it owns no tab or group semantics.
+ * Selection, hover and keyboard navigation are immediate; only a pointer drag
+ * may move neighbouring tabs with the shared sorting clock.
  *
  * WHAT STAYS WITH THE CALLER: which tabs exist, their order, what a selection
  * means, what a close guards, and every context menu. This file owns the
@@ -48,6 +43,7 @@
  * its own; a strip with no surface above it is exactly the strip it was.
  */
 import * as React from "react";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import "./tab-strip.css";
 import {
   ChevronLeftIcon,
@@ -117,6 +113,11 @@ export type TabVariant = "folder" | "pill";
  * drawings in it.
  */
 const TabVariantContext = React.createContext<TabVariant>("folder");
+const TabPathContext = React.createContext<string | undefined>(undefined);
+/** A strip's shared location, when individual tabs have no more specific path. */
+export function TabPath({ path, children }: { path?: string; children: React.ReactNode }) {
+  return <TabPathContext.Provider value={path}>{children}</TabPathContext.Provider>;
+}
 
 /**
  * Whether this strip arranges. Travels by context for the same reason the
@@ -459,11 +460,11 @@ export function TabStrip({
           // `@container/tab-strip`: what a tab may stop drawing is decided by the
           // width of THIS strip, never the window's. A split puts two of these in
           // one window, and a media query cannot tell them apart.
-          "@container/tab-strip flex shrink-0 border-b border-border bg-rail",
+          "@container/tab-strip flex min-h-11 shrink-0 items-center gap-2 bg-background",
           // A folder strip is only as tall as its tabs plus the 8px above them,
           // because the tabs ARE its bottom edge. A pill strip centres its tabs
           // in a band of its own.
-          folder ? "items-end pt-2" : "h-9 items-center gap-1 px-2",
+          "py-1",
           className,
         )}
         {...props}
@@ -477,7 +478,7 @@ export function TabStrip({
         <div
           ref={areaRef}
           data-slot="tab-scroll-area"
-          className={cn("flex min-w-0 flex-1 self-stretch", folder ? "items-end" : "items-center")}
+          className="tab-track flex h-8 min-w-0 flex-1 items-center self-center rounded-full p-0.5"
         >
           {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
             gesture was Shift+wheel and nothing else: a convention a mouse user
@@ -501,14 +502,14 @@ export function TabStrip({
             data-slot="tab-scroll"
             className={cn(
               "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-              folder ? "items-end px-2" : "items-center",
+              "items-center",
             )}
           >
             <div
               role="tablist"
               aria-label={label}
               aria-orientation="horizontal"
-              className={cn("flex gap-1", folder ? "items-end" : "items-center")}
+              className="flex min-w-full items-center gap-0.5"
             >
               <TabVariantContext.Provider value={variant}>
                 {reorder === undefined ? (
@@ -780,7 +781,7 @@ interface TabDrag {
  * have it without moving the other. dnd-kit's own 250ms default reads floaty
  * for both.
  */
-const TAB_SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
+const TAB_SORT_TRANSITION = { duration: GLASS_MOTION.menuIn, easing: "var(--ease-out)" };
 
 export function Tab({ dragId, ...props }: TabProps) {
   const arranges = React.useContext(TabReorderContext);
@@ -878,7 +879,7 @@ function useComposedTabRef(
 
 function TabShell({
   label,
-  hint,
+  hint: ownHint,
   active,
   tabStop,
   status,
@@ -896,6 +897,8 @@ function TabShell({
   className,
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
+  const location = React.useContext(TabPathContext);
+  const hint = ownHint ?? (closable ? location : undefined);
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
@@ -1020,19 +1023,10 @@ function TabShell({
             // instead of answering the click. Every other clickable row has
             // said this since `menu-classes.ts` (VC-381); this was the one
             // row that never did.
-            "group relative flex h-7 shrink-0 cursor-default select-none items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out motion-reduce:transition-[color,background-color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring",
-            folder ? "workspace-folder-tab rounded-t-lg" : "rounded-md",
-            // A closable tab pays its right inset in the × instead of in padding.
-            folder ? (closable ? "pr-1 pl-3" : "px-3") : closable ? "pr-1 pl-2" : "px-2.5",
-            active
-              ? folder
-                ? // -mb-px pulls the active tab 1px past the strip's bottom border
-                  // so its content-coloured fill covers that seam. The reverse
-                  // corners in tab-strip.css complete the joined silhouette;
-                  // no lower shadow redraws the seam it is meant to cover.
-                  "-mb-px bg-background text-foreground"
-                : "bg-accent text-foreground shadow-raised"
-              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+            "workspace-capsule-tab group relative flex h-7 min-w-0 shrink-0 cursor-default select-none items-center gap-1 text-ui font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            folder && "workspace-folder-tab",
+            closable ? "pr-1 pl-3" : "px-3",
+            active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
             className,
           )}
         >
@@ -1067,7 +1061,7 @@ function TabShell({
             <span
               ref={labelRef}
               data-slot="tab-label"
-              className={cn("max-w-40 truncate", labelClassName)}
+              className={cn("min-w-0 flex-1 truncate", labelClassName)}
             >
               {revealLabel ? <TitleReveal text={label} automatic={automaticLabelChange} /> : label}
             </span>
@@ -1084,7 +1078,7 @@ function TabShell({
             // accessible name, which is the whole reason it may be dropped here.
             <span
               data-testid="tab-hint"
-              className="hidden max-w-28 shrink-0 truncate text-muted-foreground/70 @min-[420px]/tab-strip:inline"
+              className="hidden max-w-28 shrink truncate text-label text-muted-foreground @min-[420px]/tab-strip:inline"
             >
               {hint}
             </span>
@@ -1210,7 +1204,7 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
         // The house hover-reveal contract in full (`ticket/rail-panel-parts.tsx`
         // is the reference): the duration and the reduced-motion escape are
         // part of it, and every tab copy had dropped both.
-        "group/close flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity duration-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+        "group/close flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
         dirty
           ? "opacity-100"
           : "opacity-0 group-aria-selected:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",

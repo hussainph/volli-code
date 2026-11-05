@@ -27,6 +27,7 @@ Read [docs/DESIGN.md](../../../docs/DESIGN.md) first. Read the relevant producti
 
 | Job | Use | Avoid |
 |---|---|---|
+| Canvas-bearing navigation | `GlassSurface tint`; independent paper via `PaperSurface` | Static opaque imitation of glass |
 | Primary action | `Button` default, tonal | Solid hand-picked accent fill |
 | Regular action | `Button` outline / secondary | Page-local control recipe |
 | Chrome action | `Button variant="toolbar"` | Text-only pseudo-button with no name |
@@ -64,7 +65,9 @@ symbol. Provider/brand marks and identity tiles retain their own drawings.
 | Small controls / buttons | No; no backdrop pass |
 | Reading paper | Never |
 
-Tint is a per-surface boolean, not a new Settings control. Never nest backdrop filters.
+Tint is a per-surface boolean, not a new Settings control. Pinned navigation uses the
+same 24px/1.8 optical glass as stationary peeks, never a 90% opaque substitute.
+Never nest backdrop filters.
 Turn blur off during a morph (`data-glass-blur="off"`, or `blur={false}`). Paper remains neutral;
 accent is the first canvas stop. Use `--flow` for large accent areas and meters, tonal for the
 primary action. Do not reduce secondary ink opacity: its contrast floor belongs to the token.
@@ -84,6 +87,7 @@ primary action. Do not reduce secondary ink opacity: its contrast floor belongs 
 Use the tokens, not these numbers at a call site. Animate transform/opacity (clip-path only
 when needed), not layout; retain the existing disclosure-height exception. Import
 `useReducedMotion` / `prefersReducedMotion` from the shared hook, **not** `motion/react`.
+Tabs follow Rex capsules and grouped-item hover lists; behaviour stays with the existing tab model.
 Verify both the system preference and the app Motion setting. Do not add perpetual decoration.
 Read `docs/performance-signals.md` before changing renderer performance characteristics.
 

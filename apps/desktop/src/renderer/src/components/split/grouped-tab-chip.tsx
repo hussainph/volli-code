@@ -9,6 +9,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@renderer/components/ui/hover-card";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { tabStopIndex } from "@renderer/components/ui/tab-strip";
 import { cn } from "@renderer/lib/utils";
 
@@ -35,6 +37,8 @@ export interface TabMenuLabel {
    * host:port/path, a File tab's folder. `null` when the title is enough.
    */
   detail?: string | null;
+  /** Existing tab liveness, when this kind carries one. */
+  status?: string;
 }
 
 type StripItem<T> =
@@ -124,81 +128,110 @@ function GroupedTabChip<T extends { id: string }>({
   children: React.ReactNode;
 }) {
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          role="group"
-          aria-label="Tab group"
-          data-slot="grouped-tab-chip"
-          data-group-id={item.group.id}
-          data-active={active}
-          data-compact={compact}
-          className={cn(
-            "flex shrink-0 items-center rounded-t-lg border border-b-0 border-border",
-            // The group owns the folder outline; members retain their tab hit targets.
-            "[&_[data-slot=tab]]:mb-0 [&_[data-slot=tab]]:rounded-none [&_[data-slot=tab]]:bg-transparent [&_[data-slot=tab]]:before:hidden [&_[data-slot=tab]]:after:hidden",
-            active ? "-mb-px bg-background" : "bg-rail",
-          )}
-        >
-          {children}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent data-slot="grouped-tab-menu" className="w-72">
-        <div
-          aria-hidden
-          className="flex items-center justify-between px-2 pt-1 pb-1.5 text-label text-muted-foreground"
-        >
-          <span>Tab group</span>
-          <span className="tabular-nums">{`${item.stacks.filter((stack) => stack.tabs.length > 0).length} panes`}</span>
-        </div>
-        {item.stacks.map(({ pane, tabs }, index) =>
-          tabs.map((tab) => {
-            const { label, icon, detail } = describe(tab);
-            const front = tab.id === (pane.activeTabId ?? tabs[0]?.id);
-            const showing = active && tab.id === activeTabId;
-            return (
-              <ContextMenuItem
-                key={tab.id}
-                icon={icon}
-                data-pane={index + 1}
-                data-front={front}
-                data-showing={showing}
-                aria-label={`${label}, pane ${index + 1}${showing ? ", showing" : front ? "" : ", behind"}`}
-                onSelect={() => onSelect(tab)}
-                className={cn(
-                  "py-1.5",
-                  showing && "font-medium [&>svg]:text-foreground",
-                  !front && "text-muted-foreground",
-                )}
-              >
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate">{label}</span>
-                  {detail ? (
-                    <span className="truncate text-label font-normal text-muted-foreground">
-                      {detail}
-                    </span>
-                  ) : null}
-                </span>
-                <span
-                  aria-hidden
-                  className="flex size-4 shrink-0 items-center justify-center rounded-sm border border-border text-label font-normal text-muted-foreground tabular-nums"
+    <HoverCard openDelay={250} closeDelay={100}>
+      <ContextMenu>
+        <HoverCardTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <div
+              role="group"
+              aria-label="Tab group"
+              data-slot="grouped-tab-chip"
+              data-group-id={item.group.id}
+              data-active={active}
+              data-compact={compact}
+              className={cn(
+                "grouped-tab-capsule flex shrink-0 items-center rounded-full",
+                // The group owns the folder outline; members retain their tab hit targets.
+                "[&_[data-slot=tab]]:mb-0 [&_[data-slot=tab]]:rounded-none [&_[data-slot=tab]]:bg-transparent [&_[data-slot=tab]]:before:hidden [&_[data-slot=tab]]:after:hidden",
+                active ? "bg-(--tab-selected-face)" : "bg-transparent",
+              )}
+            >
+              {children}
+            </div>
+          </ContextMenuTrigger>
+        </HoverCardTrigger>
+        <ContextMenuContent data-slot="grouped-tab-menu" className="w-72">
+          <div
+            aria-hidden
+            className="flex items-center justify-between px-2 pt-1 pb-1.5 text-label text-muted-foreground"
+          >
+            <span>Tab group</span>
+            <span className="tabular-nums">{`${item.stacks.filter((stack) => stack.tabs.length > 0).length} panes`}</span>
+          </div>
+          {item.stacks.map(({ pane, tabs }, index) =>
+            tabs.map((tab) => {
+              const { label, icon, detail } = describe(tab);
+              const front = tab.id === (pane.activeTabId ?? tabs[0]?.id);
+              const showing = active && tab.id === activeTabId;
+              return (
+                <ContextMenuItem
+                  key={tab.id}
+                  icon={icon}
+                  data-pane={index + 1}
+                  data-front={front}
+                  data-showing={showing}
+                  aria-label={`${label}, pane ${index + 1}${showing ? ", showing" : front ? "" : ", behind"}`}
+                  onSelect={() => onSelect(tab)}
+                  className={cn(
+                    "py-1.5",
+                    showing && "font-medium [&>svg]:text-foreground",
+                    !front && "text-muted-foreground",
+                  )}
                 >
-                  {index + 1}
-                </span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">{label}</span>
+                    {detail ? (
+                      <span className="truncate text-label font-normal text-muted-foreground">
+                        {detail}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span
+                    aria-hidden
+                    className="flex size-4 shrink-0 items-center justify-center rounded-sm border border-border text-label font-normal text-muted-foreground tabular-nums"
+                  >
+                    {index + 1}
+                  </span>
+                </ContextMenuItem>
+              );
+            }),
+          )}
+          {onUngroup === undefined ? null : (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem icon={UnlinkIcon} onSelect={() => onUngroup(item.group.id)}>
+                Ungroup
               </ContextMenuItem>
+            </>
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
+      <HoverCardContent align="start" aria-label="Tab group items">
+        <div className="truncate px-2 py-1 text-ui font-semibold">
+          {item.segments.map((tab) => describe(tab).label).join(" + ")}
+        </div>
+        {item.stacks
+          .flatMap(({ tabs }) => tabs)
+          .map((tab) => {
+            const { label, icon: Mark, detail, status } = describe(tab);
+            return (
+              <ListRow
+                key={tab.id}
+                density="two-line"
+                leading={<Mark className="size-4 shrink-0" />}
+                primary={label}
+                secondary={detail ?? undefined}
+                trailing={
+                  status ? (
+                    <span className="text-label text-muted-foreground capitalize">{status}</span>
+                  ) : undefined
+                }
+                onActivate={() => onSelect(tab)}
+              />
             );
-          }),
-        )}
-        {onUngroup === undefined ? null : (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem icon={UnlinkIcon} onSelect={() => onUngroup(item.group.id)}>
-              Ungroup
-            </ContextMenuItem>
-          </>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
+          })}
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 

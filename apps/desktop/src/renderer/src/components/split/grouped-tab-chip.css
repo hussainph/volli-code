@@ -32,3 +32,16 @@
   + [data-slot="grouped-tab-member"] {
   display: none;
 }
+
+.grouped-tab-capsule {
+  box-shadow: var(--shadow-glass-small);
+}
+.grouped-tab-capsule [data-slot="tab"] {
+  border-radius: 999px;
+}
+.grouped-tab-capsule [data-slot="grouped-tab-member"] {
+  border: 0;
+}
+.grouped-tab-capsule [data-slot="grouped-tab-member"] + [data-slot="grouped-tab-member"] {
+  box-shadow: inset 0.5px 0 0 var(--glass-edge);
+}

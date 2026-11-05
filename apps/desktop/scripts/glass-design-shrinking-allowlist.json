@@ -158,12 +158,6 @@
       "reason": "Reasoning shimmer is an existing transcript activity indicator; transcript tool/activity rows are excluded."
     },
     {
-      "path": "apps/desktop/src/renderer/src/components/ui/tab-strip.tsx",
-      "rule": "motion-literal",
-      "maxCount": 3,
-      "reason": "Tab/group motion is owned by VC-1052/VC-1017; only keyboard-origin fixes were authorized here."
-    },
-    {
       "path": "apps/desktop/src/renderer/src/globals.css",
       "rule": "colour-literal",
       "maxCount": 7,

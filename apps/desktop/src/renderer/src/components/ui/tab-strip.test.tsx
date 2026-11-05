@@ -227,7 +227,7 @@ describe("TabStrip arrangement", () => {
     ).not.toBeNull();
   });
 
-  it("takes transform out of a tab's transition under reduced motion", () => {
+  it("keeps high-frequency tab selection immediate, including reduced motion", () => {
     // The sortable asks dnd-kit for no transition under the flag, but that only
     // clears the INLINE one: whatever the tab's own class list transitions is
     // what would animate the sibling shift instead. jsdom applies no
@@ -244,8 +244,7 @@ describe("TabStrip arrangement", () => {
       .split(" ")
       .filter((name) => name.includes("transition-["));
 
-    expect(transitions.at(-1)).toBe("motion-reduce:transition-[color,background-color,box-shadow]");
-    expect(transitions.at(-1)).not.toContain("transform");
+    expect(transitions).toEqual([]);
   });
 
   it("leaves Enter as the activation on a tab that drags", () => {

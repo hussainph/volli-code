@@ -12,7 +12,6 @@ import {
   EditIcon,
   PinIcon,
   UnpinIcon,
-  SidebarIcon,
   SunIcon,
   TerminalIcon,
   CloseIcon,
@@ -55,8 +54,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Button } from "@renderer/components/ui/button";
-import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
+import { Tab, TabPath, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
@@ -172,15 +171,8 @@ interface HomeTabStripProps extends HomeTabListProps {
 }
 
 /**
- * Home's tab strip: the FOLDER variant of `ui/tab-strip.tsx`, the same drawing
- * the Ticket view uses and in the same place — the top edge of the content
- * card, with the active tab bleeding one pixel past the strip's border so it
- * fuses with the plane below. That is not a coincidence to be tidied away
- * later: Home and a Ticket view are the same object at two scopes, and
- * drawing them alike is how the app says so without prose.
- *
- * (It was the PILL variant while this strip belonged to the Sessions page,
- * where it floated above a surface it did not own. It owns this one.)
+ * Home's tab strip uses the shared Rex capsule anatomy. It owns no surface
+ * perimeter or inspector placement; those belong to the window shell.
  *
  * The permanent Board tab leads, then both kinds of Session a project can run
  * without a ticket, Main-checkout File tabs, and live Browser Tabs. That
@@ -206,9 +198,9 @@ export function HomeTabStrip({
   onNewChat,
   onNewBrowser,
   creating,
-  railCollapsed,
-  railTogglable,
-  onToggleRail,
+  railCollapsed: _railCollapsed,
+  railTogglable: _railTogglable,
+  onToggleRail: _onToggleRail,
   ...list
 }: HomeTabStripProps) {
   return (
@@ -238,27 +230,6 @@ export function HomeTabStrip({
               onNewTerminal={onNewSession}
             />
           </div>
-          {/* The rail's collapse control, in the same corner the ticket strip
-              puts it — same glyph, same chord, same full-height rectangular
-              hover, because it is the same control one scope up. It is ABSENT
-              on the Board tab rather than disabled: the strip's right corner
-              sits over the box the rail would occupy, and on the board there is
-              no such box. */}
-          {railTogglable ? (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="ml-1 h-full rounded-none"
-              data-inspector-trigger="home"
-              onClick={onToggleRail}
-              aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
-              title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
-            >
-              {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
-                  RIGHT panel; each caret points toward the rail it toggles. */}
-              <SidebarIcon className="size-3.5 scale-x-[-1]" />
-            </Button>
-          ) : null}
         </>
       }
     >
@@ -311,7 +282,7 @@ function reorderFor({ tabs, groups, onReorder }: HomeTabListProps) {
 function homeTabMenuLabel(tab: HomeTabDescriptor): TabMenuLabel {
   if (tab.kind === "board") return { label: "Board", icon: BoardIcon };
   if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalIcon };
-  if (tab.kind === "chat") return { label: tab.title, icon: ChatIcon };
+  if (tab.kind === "chat") return { label: tab.title, icon: ChatIcon, status: tab.status };
   if (tab.kind === "browser") {
     // Read when the menu opens: the address is the line that tells fifteen
     // localhost tabs apart, and the strip's descriptor does not carry it.
@@ -346,112 +317,120 @@ function HomeTabList({
   onCloseOtherFiles,
 }: HomeTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const path = useProjectsStore(
+    (state) => state.projects.find((project) => project.id === projectId)?.path,
+  );
   return (
-    <GroupedTabList
-      tabs={tabs}
-      groups={groups}
-      activeTabId={activeTabId}
-      shownGroupId={shownGroupId}
-      edgeTargets={groups !== undefined}
-      describe={homeTabMenuLabel}
-      onSelect={onSelect}
-      onUngroup={onUngroup}
-    >
-      {(descriptor, { active, tabStop, grouped }) => {
-        // A chip segment is the chip's: no drag of its own, no menu of its own.
-        // On a pane strip (no `groups`) every tab drags, the Board included.
-        const dragId =
-          grouped || (groups !== undefined && descriptor.kind === "board")
-            ? undefined
-            : descriptor.id;
-        if (descriptor.kind === "board") {
-          return (
-            <BoardTab
+    <TabPath path={path}>
+      <GroupedTabList
+        tabs={tabs}
+        groups={groups}
+        activeTabId={activeTabId}
+        shownGroupId={shownGroupId}
+        edgeTargets={groups !== undefined}
+        describe={(tab) => {
+          const info = homeTabMenuLabel(tab);
+          return { ...info, detail: info.detail ?? path };
+        }}
+        onSelect={onSelect}
+        onUngroup={onUngroup}
+      >
+        {(descriptor, { active, tabStop, grouped }) => {
+          // A chip segment is the chip's: no drag of its own, no menu of its own.
+          // On a pane strip (no `groups`) every tab drags, the Board included.
+          const dragId =
+            grouped || (groups !== undefined && descriptor.kind === "board")
+              ? undefined
+              : descriptor.id;
+          if (descriptor.kind === "board") {
+            return (
+              <BoardTab
+                key={descriptor.id}
+                active={active}
+                tabStop={tabStop}
+                dragId={dragId}
+                onSelect={() => onSelect(descriptor)}
+              />
+            );
+          }
+          if (descriptor.kind === "browser") {
+            return (
+              <Tab
+                key={descriptor.id}
+                data-testid="home-browser-tab"
+                label={descriptor.title}
+                title={descriptor.title}
+                active={active}
+                tabStop={tabStop}
+                dragId={dragId}
+                status={descriptor.loading ? "working" : undefined}
+                // Two marks, two facts: the glyph says whose tab this IS
+                // (VC-238), the dot says who may write to it right now (VC-239).
+                leading={<BrowserTabMark driven={descriptor.driven} />}
+                badge={<BrowserHolderDot holder={descriptor.heldBy} />}
+                onActivate={() => onSelect(descriptor)}
+                onClose={() => onClose(descriptor)}
+              />
+            );
+          }
+          if (descriptor.kind === "file") {
+            return (
+              <HomeFileTab
+                key={descriptor.id}
+                projectId={projectId}
+                tab={descriptor}
+                active={active}
+                tabStop={tabStop}
+                dragId={dragId}
+                menu={!grouped}
+                onSelect={() => onSelect(descriptor)}
+                onPin={() => onPinFile(descriptor.relPath)}
+                onClose={() => onClose(descriptor)}
+                onCloseOthers={() => onCloseOtherFiles(descriptor.relPath)}
+              />
+            );
+          }
+          // One set of callbacks for both Session kinds — what differs between
+          // them is what each tab DRAWS and what its menu offers, never how the
+          // strip reports a selection, a close, or a rename.
+          const shared = {
+            // Home's Sessions are the project's own, and provenance is read per
+            // project — the same store, and the same answer, the ticket strip and
+            // the sidebar read (VC-131).
+            projectId,
+            active,
+            tabStop,
+            dragId,
+            menu: !grouped,
+            editing: editingId === descriptor.id,
+            onClose: () => onClose(descriptor),
+            onStartRename: () => setEditingId(descriptor.id),
+            onCommitRename: (next: string) => {
+              setEditingId(null);
+              onRename(descriptor, next);
+            },
+            onCancelRename: () => setEditingId(null),
+          };
+          return descriptor.kind === "terminal" ? (
+            <TerminalTab
               key={descriptor.id}
-              active={active}
-              tabStop={tabStop}
-              dragId={dragId}
+              {...shared}
+              tab={descriptor.tab}
               onSelect={() => onSelect(descriptor)}
             />
-          );
-        }
-        if (descriptor.kind === "browser") {
-          return (
-            <Tab
+          ) : (
+            <ChatTab
               key={descriptor.id}
-              data-testid="home-browser-tab"
-              label={descriptor.title}
+              {...shared}
+              sessionId={descriptor.sessionId}
               title={descriptor.title}
-              active={active}
-              tabStop={tabStop}
-              dragId={dragId}
-              status={descriptor.loading ? "working" : undefined}
-              // Two marks, two facts: the glyph says whose tab this IS
-              // (VC-238), the dot says who may write to it right now (VC-239).
-              leading={<BrowserTabMark driven={descriptor.driven} />}
-              badge={<BrowserHolderDot holder={descriptor.heldBy} />}
-              onActivate={() => onSelect(descriptor)}
-              onClose={() => onClose(descriptor)}
-            />
-          );
-        }
-        if (descriptor.kind === "file") {
-          return (
-            <HomeFileTab
-              key={descriptor.id}
-              projectId={projectId}
-              tab={descriptor}
-              active={active}
-              tabStop={tabStop}
-              dragId={dragId}
-              menu={!grouped}
+              status={descriptor.status}
               onSelect={() => onSelect(descriptor)}
-              onPin={() => onPinFile(descriptor.relPath)}
-              onClose={() => onClose(descriptor)}
-              onCloseOthers={() => onCloseOtherFiles(descriptor.relPath)}
             />
           );
-        }
-        // One set of callbacks for both Session kinds — what differs between
-        // them is what each tab DRAWS and what its menu offers, never how the
-        // strip reports a selection, a close, or a rename.
-        const shared = {
-          // Home's Sessions are the project's own, and provenance is read per
-          // project — the same store, and the same answer, the ticket strip and
-          // the sidebar read (VC-131).
-          projectId,
-          active,
-          tabStop,
-          dragId,
-          menu: !grouped,
-          editing: editingId === descriptor.id,
-          onClose: () => onClose(descriptor),
-          onStartRename: () => setEditingId(descriptor.id),
-          onCommitRename: (next: string) => {
-            setEditingId(null);
-            onRename(descriptor, next);
-          },
-          onCancelRename: () => setEditingId(null),
-        };
-        return descriptor.kind === "terminal" ? (
-          <TerminalTab
-            key={descriptor.id}
-            {...shared}
-            tab={descriptor.tab}
-            onSelect={() => onSelect(descriptor)}
-          />
-        ) : (
-          <ChatTab
-            key={descriptor.id}
-            {...shared}
-            sessionId={descriptor.sessionId}
-            title={descriptor.title}
-            status={descriptor.status}
-            onSelect={() => onSelect(descriptor)}
-          />
-        );
-      }}
-    </GroupedTabList>
+        }}
+      </GroupedTabList>
+    </TabPath>
   );
 }
 
