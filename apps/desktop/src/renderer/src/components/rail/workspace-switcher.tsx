@@ -1,9 +1,12 @@
 import * as React from "react";
-import { BuildingsIcon } from "@phosphor-icons/react/dist/csr/Buildings";
-import { GearIcon } from "@phosphor-icons/react/dist/csr/Gear";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
+import {
+  WorkspaceIcon,
+  SettingsIcon,
+  AddIcon,
+  RefreshIcon,
+  SignInIcon,
+} from "@renderer/components/ui/icon";
+
 import { newId } from "@volli/shared/cloud";
 import { monogram } from "@volli/shared";
 
@@ -80,7 +83,7 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
             aria-label={workspace?.name ?? "Workspaces"}
             className="workspace-tile app-region-no-drag flex size-9 shrink-0 items-center justify-center rounded-card text-ui font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {workspace === null ? <BuildingsIcon className="size-4" /> : monogram(workspace.name)}
+            {workspace === null ? <WorkspaceIcon className="size-4" /> : monogram(workspace.name)}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="right" align="start" className="w-64">
@@ -95,7 +98,7 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
                   value={row.workspaceId}
                   disabled={locked}
                 >
-                  <BuildingsIcon />
+                  <WorkspaceIcon />
                   {row.name}
                 </DropdownMenuRadioItem>
               ))}
@@ -112,13 +115,13 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
           {state.mine.kind === "failed" && <Empty>{state.mine.message}</Empty>}
           {(state.workspaces.kind === "failed" || state.mine.kind === "failed") && (
             <DropdownMenuItem onSelect={state.retry}>
-              <ArrowClockwiseIcon />
+              <RefreshIcon />
               Retry
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={locked} onSelect={() => setDialog("new")}>
-            <PlusIcon />
+            <AddIcon />
             New workspace…
           </DropdownMenuItem>
           <DropdownMenuItem disabled={locked} onSelect={() => setDialog("join")}>
@@ -130,7 +133,7 @@ export function WorkspaceSwitcher(props: Parameters<typeof useWorkspaceSwitcher>
             disabled={workspace === null}
             onSelect={() => useUiStore.getState().setSettingsOpen(true, "workspace")}
           >
-            <GearIcon />
+            <SettingsIcon />
             Workspace settings…
           </DropdownMenuItem>
         </DropdownMenuContent>

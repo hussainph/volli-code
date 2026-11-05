@@ -1,9 +1,11 @@
 import type * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowLeft";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { ArrowSquareInIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareIn";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
+import {
+  RefreshIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  OpenInsideIcon,
+  CodeIcon,
+} from "@renderer/components/ui/icon";
 
 import type { BrowserTabHolder } from "@volli/shared";
 
@@ -130,7 +132,7 @@ export function BrowserChrome({
           aria-label="Reload"
           onClick={onReload}
         >
-          {tab.loading ? <Spinner className="size-3.5" /> : <ArrowClockwiseIcon />}
+          {tab.loading ? <Spinner className="size-3.5" /> : <RefreshIcon />}
         </Button>
         <form
           className="min-w-12 flex-1"
@@ -182,7 +184,7 @@ export function BrowserChrome({
                   aria-label={HIDE_TO_ISLAND_LABEL}
                   onClick={onHide}
                 >
-                  <ArrowSquareInIcon />
+                  <OpenInsideIcon />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">{HIDE_TO_ISLAND_LABEL}</TooltipContent>

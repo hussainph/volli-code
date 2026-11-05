@@ -1,12 +1,15 @@
 /** Shared attachment cards for drafts, transcripts and queued messages. */
 import * as React from "react";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
-import { FileZipIcon } from "@phosphor-icons/react/dist/csr/FileZip";
-import { ImageIcon } from "@phosphor-icons/react/dist/csr/Image";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  ClockIcon,
+  FileIcon,
+  DocumentIcon,
+  ArchiveFileIcon,
+  ImageIcon,
+  WarningIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import type { BlobLinkView } from "@volli/shared";
 import { AttachmentImage } from "./blob-read";
 
@@ -30,10 +33,10 @@ function AttachmentGlyph({
     thumbKind(attachment.mime) === "image"
       ? ImageIcon
       : /\.(zip|tar|gz|tgz|7z|rar)$/i.test(attachment.originalName)
-        ? FileZipIcon
+        ? ArchiveFileIcon
         : /\.(pdf|md|txt|csv|json)$/i.test(attachment.originalName) ||
             attachment.mime.startsWith("text/")
-          ? FileTextIcon
+          ? DocumentIcon
           : FileIcon;
   return <Glyph aria-hidden="true" className={className} />;
 }
@@ -76,7 +79,7 @@ function Filename({ name, fit }: { name: string; fit?: number }) {
 }
 
 function StateLabel({ state, name }: { state: AttachmentState; name: string }) {
-  const Glyph = state === "failed" ? WarningCircleIcon : ClockIcon;
+  const Glyph = state === "failed" ? WarningIcon : ClockIcon;
   return (
     <span
       role={state === "failed" ? "alert" : "status"}
@@ -94,7 +97,7 @@ function StateLabel({ state, name }: { state: AttachmentState; name: string }) {
           className="size-3 shrink-0 motion-reduce:animate-none"
         />
       ) : (
-        <Glyph aria-hidden="true" weight="bold" className="size-3 shrink-0" />
+        <Glyph aria-hidden="true" strokeWidth={2.25} className="size-3 shrink-0" />
       )}
       {stateLabels[state]}
     </span>
@@ -152,7 +155,7 @@ export function AttachmentThumb({
           onClick={() => onRemove(attachment)}
           className="absolute right-1 top-1 rounded-full border border-border bg-background opacity-0 shadow-(--shadow-glass-small) focus-visible:opacity-100 group-hover:opacity-100"
         >
-          <XIcon aria-hidden="true" weight="bold" className="size-3" />
+          <CloseIcon aria-hidden="true" strokeWidth={2.25} className="size-3" />
         </Button>
       )}
     </div>

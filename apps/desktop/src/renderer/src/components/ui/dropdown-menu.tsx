@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { ChevronRightIcon, CheckIcon } from "@renderer/components/ui/icon";
+
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -103,7 +103,7 @@ function DropdownMenuCheckboxItem({
       {children}
       <span className={MENU_INDICATOR}>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
     </DropdownMenuPrimitive.CheckboxItem>
@@ -133,7 +133,7 @@ function DropdownMenuRadioItem({
       {children}
       <span className={MENU_INDICATOR}>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
     </DropdownMenuPrimitive.RadioItem>
@@ -188,7 +188,7 @@ function DropdownMenuSubTrigger({
       {...props}
     >
       {children}
-      <CaretRightIcon data-slot="menu-submenu-caret" weight="bold" className="ml-auto" />
+      <ChevronRightIcon data-slot="menu-submenu-caret" strokeWidth={2.25} className="ml-auto" />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }

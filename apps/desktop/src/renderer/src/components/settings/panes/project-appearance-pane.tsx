@@ -2,9 +2,8 @@ import { StyleChoice } from "../kit/style-choice";
 import { CanvasInstrument } from "../kit/canvas-instrument";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
-import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
-import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { DocumentIcon, PaletteIcon, TerminalIcon } from "@renderer/components/ui/icon";
+
 import { resolveAppearance, type Project } from "@volli/shared";
 
 import { fallbackTerminalThemeLabel, revealPath } from "@renderer/components/theme/appearance-rows";
@@ -186,7 +185,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
   return (
     <PrefSection
       title="Terminal"
-      icon={TerminalWindowIcon}
+      icon={TerminalIcon}
       // The one-line trust boundary: whose file Volli writes.
       hint={<>Volli writes an overlay file and never edits your Ghostty config.</>}
     >
@@ -211,7 +210,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
           disabled={(terminal?.overlayPaths.project ?? null) === null}
           onClick={() => void revealPath(terminal?.overlayPaths.project ?? null)}
         >
-          <FileTextIcon />
+          <DocumentIcon />
           This project&rsquo;s overlay
         </Button>
       </PrefRow>

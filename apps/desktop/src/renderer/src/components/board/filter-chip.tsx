@@ -1,5 +1,4 @@
-import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { FilterIcon, ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -42,9 +41,9 @@ export function FilterChip({ label, icon, options, selected, onToggle }: FilterC
             active && "bg-(--accent-selected) text-primary-text",
           )}
         >
-          {icon ?? <FunnelIcon aria-hidden />}
+          {icon ?? <FilterIcon aria-hidden />}
           {active ? `${label} · ${selected.length}` : label}
-          <CaretDownIcon className="size-3" />
+          <ChevronDownIcon className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">

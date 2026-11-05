@@ -10,7 +10,8 @@
  */
 import type * as React from "react";
 
-import { CloudSlashIcon } from "@phosphor-icons/react/dist/csr/CloudSlash";
+import { CloudOffIcon } from "@renderer/components/ui/icon";
+
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
 
@@ -57,7 +58,7 @@ export function LocalOnly({
   if (fallback !== undefined) return fallback;
   return (
     <div className={cn("h-full min-h-0", EMPTY_PAGE, className)}>
-      <CloudSlashIcon aria-hidden className="size-6 text-muted-foreground" />
+      <CloudOffIcon aria-hidden className="size-6 text-muted-foreground" />
       <NotAvailableOnHost hostName={host.name} />
     </div>
   );

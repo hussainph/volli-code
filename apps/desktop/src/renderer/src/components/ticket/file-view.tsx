@@ -1,6 +1,7 @@
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
+import { FileIcon } from "@renderer/components/ui/icon";
+
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";

@@ -85,11 +85,13 @@ import { Spinner } from "@renderer/components/ui/spinner";
  *    hover title.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { LightningSlashIcon } from "@phosphor-icons/react/dist/csr/LightningSlash";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
+import {
+  ExternalIcon,
+  ChevronDownIcon,
+  AutomationIcon,
+  AutomationOffIcon,
+  PlayIcon,
+} from "@renderer/components/ui/icon";
 
 import { displayTicketId, type ModelSelection, type Ticket } from "@volli/shared";
 
@@ -401,7 +403,7 @@ function AutomationsPageDoor({ projectId }: { projectId: string }) {
           data-testid="ticket-rail-automations-page"
           onClick={() => useProjectUiStore.getState().setNav(projectId, "automations")}
         >
-          <ArrowSquareOutIcon weight="bold" />
+          <ExternalIcon strokeWidth={2.25} />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">Open Automations</TooltipContent>
@@ -476,9 +478,8 @@ function AutomationOfferList({
  * One offered Automation: a row that INSPECTS, and an inspection that runs.
  *
  * THE BOLT SAYS THREE THINGS and the right edge says one (VC-406). The bolt
- * is `fill` on the armed row and outline on the rest — the weight pair the
- * app already uses to mark one item among its peers — and it wears a SLASH
- * (`LightningSlash`) on a record whose automatic triggers are off: nothing
+ * uses accent ink on the armed row and muted ink on the rest, always outline,
+ * and it wears a SLASH (`AutomationOffIcon`) on a record whose automatic triggers are off: nothing
  * fires this one by itself. The right edge then says only which column offers
  * the row, or `Armed` — or `Starting…` for as long as a launch this row
  * started is in flight, which is the one thing about the row that is happening
@@ -519,7 +520,7 @@ function AutomationOfferRow({
   const [open, setOpen] = React.useState(false);
   const switchedOff = !enabledIds.includes(row.automation.id);
   const qualifier = railRowQualifier(row, launch === "pending");
-  const Bolt = switchedOff ? LightningSlashIcon : LightningIcon;
+  const Bolt = switchedOff ? AutomationOffIcon : AutomationIcon;
   return (
     <li>
       <Popover open={open} onOpenChange={setOpen}>
@@ -547,7 +548,6 @@ function AutomationOfferRow({
                 <Spinner aria-label="Starting" />
               ) : (
                 <Bolt
-                  weight={row.armed ? "fill" : undefined}
                   className={cn(
                     "size-4 shrink-0",
                     row.armed ? "text-primary" : "text-muted-foreground",
@@ -697,7 +697,10 @@ function AutomationInspectContent({
                 data-testid="ticket-rail-automation-model"
               >
                 <span className="min-w-0 truncate">{chosen?.label}</span>
-                <CaretDownIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+                <ChevronDownIcon
+                  strokeWidth={2.25}
+                  className="size-3 shrink-0 text-muted-foreground"
+                />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -743,7 +746,7 @@ function AutomationInspectContent({
           {launch === "pending" ? (
             <Spinner aria-label="Starting" />
           ) : (
-            <PlayIcon weight="fill" className="size-3" />
+            <PlayIcon className="size-3" />
           )}
           {runLaunchLabel(launch)}
         </Button>

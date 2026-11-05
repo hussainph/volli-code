@@ -1,8 +1,6 @@
 import * as React from "react";
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { UndoIcon, CheckIcon, AddIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import { TAG_COLORS } from "@volli/shared";
 
 import { TagChip } from "@renderer/components/board/tag-chip";
@@ -56,15 +54,17 @@ function LabelColorMenu({
               style={{ backgroundColor: color }}
             >
               {color === effectiveColor ? (
-                <CheckIcon weight="bold" className="size-3 text-white mix-blend-difference" />
+                <CheckIcon strokeWidth={2.25} className="size-3 text-white mix-blend-difference" />
               ) : null}
             </button>
           ))}
         </div>
         <ContextMenuSeparator />
-        <ContextMenuItem icon={ArrowCounterClockwiseIcon} onSelect={() => onPick(labelId, null)}>
+        <ContextMenuItem icon={UndoIcon} onSelect={() => onPick(labelId, null)}>
           Default color
-          {storedColor === null ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
+          {storedColor === null ? (
+            <CheckIcon strokeWidth={2.25} className="ml-auto size-3.5" />
+          ) : null}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -131,7 +131,7 @@ export function LabelEditorCore({
           onClick={() => remove(label)}
           className="-ml-1 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity duration-(--duration-menu-in) ease-out group-hover/chip:opacity-100 hover:text-foreground"
         >
-          <XIcon className="size-2.5" />
+          <CloseIcon className="size-2.5" />
         </button>
       </span>
     );
@@ -142,7 +142,7 @@ export function LabelEditorCore({
       {chips}
       <LabelPickerPopover projectId={projectId} value={value} onChange={onChange}>
         <Button variant="ghost" size="icon-xs" aria-label="Add label">
-          <PlusIcon />
+          <AddIcon />
         </Button>
       </LabelPickerPopover>
     </div>

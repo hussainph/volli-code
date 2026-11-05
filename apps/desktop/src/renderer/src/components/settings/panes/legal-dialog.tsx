@@ -1,6 +1,7 @@
 /** Display the actual shipped licence and generated notices, never a hand-authored dependency list. */
 import * as React from "react";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
+import { GuideIcon } from "@renderer/components/ui/icon";
+
 import { Button } from "@renderer/components/ui/button";
 import {
   Dialog,
@@ -39,7 +40,7 @@ export function LegalDialog({ kind }: { kind: "licence" | "acknowledgements" }) 
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button size="sm" variant="ghost">
-          <BookOpenIcon />
+          <GuideIcon />
           {title}
         </Button>
       </DialogTrigger>

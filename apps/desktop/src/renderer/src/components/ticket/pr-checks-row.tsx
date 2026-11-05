@@ -43,12 +43,14 @@
  * people the row is for, which is the right way round.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { CircleDashedIcon } from "@phosphor-icons/react/dist/csr/CircleDashed";
-import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  ExternalIcon,
+  ChevronDownIcon,
+  SuccessIcon,
+  PendingIcon,
+  RemoveCircleIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
 
 import type { PrCheck, PrCheckState, TicketRetentionState } from "../../../../ipc/contract";
 
@@ -70,22 +72,18 @@ import { cn } from "@renderer/lib/utils";
  * earned, and amber is what asks for attention here. The dashed ring says
  * "unsettled" without pretending to animate the build.
  *
- * Outline throughout, per the icon convention; `fill` is reserved for the one
- * exceptional item and a check row is a list of peers.
+ * Outline throughout; each check's semantic ink carries its state.
  *
  * `word` is ONE check's state and is deliberately in a different tense from the
  * row's aggregate label: a single finished job "failed", while a suite with an
  * unresolved failure in it "is failing". The label counts an ongoing condition;
  * this names a settled outcome.
  */
-const STATE_STYLE: Record<
-  PrCheckState,
-  { Icon: typeof CheckCircleIcon; ink: string; word: string }
-> = {
-  passing: { Icon: CheckCircleIcon, ink: "text-positive", word: "passed" },
-  failing: { Icon: XCircleIcon, ink: "text-destructive", word: "failed" },
-  pending: { Icon: CircleDashedIcon, ink: "text-attention", word: "running" },
-  skipped: { Icon: MinusCircleIcon, ink: "text-muted-foreground", word: "skipped" },
+const STATE_STYLE: Record<PrCheckState, { Icon: typeof SuccessIcon; ink: string; word: string }> = {
+  passing: { Icon: SuccessIcon, ink: "text-positive", word: "passed" },
+  failing: { Icon: ErrorIcon, ink: "text-destructive", word: "failed" },
+  pending: { Icon: PendingIcon, ink: "text-attention", word: "running" },
+  skipped: { Icon: RemoveCircleIcon, ink: "text-muted-foreground", word: "skipped" },
 };
 
 function StateIcon({ state, className }: { state: PrCheckState; className?: string }) {
@@ -152,7 +150,7 @@ function CheckLine({ check }: { check: PrCheck }) {
       className="group/check flex w-full cursor-default select-none items-start gap-2 rounded-menu-item px-2 py-2 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
       {body}
-      <ArrowSquareOutIcon
+      <ExternalIcon
         aria-hidden
         className="size-3 shrink-0 text-muted-foreground opacity-0 group-focus-visible/check:opacity-100 group-hover/check:opacity-100"
       />
@@ -205,7 +203,7 @@ export function ChecksDetail({ view }: { view: PrChecksView }) {
           onClick={() => openExternal(view.checksUrl)}
           className="flex w-full cursor-default select-none items-center gap-2 rounded-menu-item px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <ArrowSquareOutIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <ExternalIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           All checks on GitHub
         </button>
       </div>
@@ -252,7 +250,7 @@ export function PrChecksRow({ retention }: { retention: TicketRetentionState | n
         >
           <StateIcon state={view.verdict} />
           <span className="min-w-0 flex-1 truncate text-ui font-medium">{view.label}</span>
-          <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+          <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <ChecksPopoverContent view={view} />

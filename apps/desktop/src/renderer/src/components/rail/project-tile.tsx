@@ -1,11 +1,14 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
-import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
-import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
+import {
+  SwapIcon,
+  FolderOpenIcon,
+  StorageIcon,
+  RemoveCircleIcon,
+  CloudUploadIcon,
+} from "@renderer/components/ui/icon";
+
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 
 import { RelinkProjectDialog } from "@renderer/components/rail/relink-project-dialog";
@@ -115,7 +118,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                       data-slot="project-tile-host"
                       className="pointer-events-none absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full border border-border bg-card text-foreground"
                     >
-                      <HardDrivesIcon weight="bold" className="size-2.5" />
+                      <StorageIcon strokeWidth={2.25} className="size-2.5" />
                     </span>
                   )}
                   <span
@@ -159,7 +162,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                 }
               />
             ) : (
-              <ContextMenuItem icon={HardDrivesIcon} disabled>
+              <ContextMenuItem icon={StorageIcon} disabled>
                 {notAvailableOn(remoteHost)}
               </ContextMenuItem>
             )}
@@ -195,15 +198,15 @@ function LocalProjectActions({
       <ContextMenuItem icon={FolderOpenIcon} onSelect={onReveal}>
         Reveal in Finder
       </ContextMenuItem>
-      <ContextMenuItem icon={ArrowsLeftRightIcon} onSelect={onRelink}>
+      <ContextMenuItem icon={SwapIcon} onSelect={onRelink}>
         Relink folder
       </ContextMenuItem>
       {onMove === undefined ? null : (
-        <ContextMenuItem icon={CloudArrowUpIcon} onSelect={onMove}>
+        <ContextMenuItem icon={CloudUploadIcon} onSelect={onMove}>
           Move to Volli Cloud…
         </ContextMenuItem>
       )}
-      <ContextMenuItem icon={MinusCircleIcon} variant="destructive" onSelect={onRemove}>
+      <ContextMenuItem icon={RemoveCircleIcon} variant="destructive" onSelect={onRemove}>
         Remove from Volli
       </ContextMenuItem>
     </>

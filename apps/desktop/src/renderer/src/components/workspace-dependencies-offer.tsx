@@ -1,8 +1,7 @@
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { SettingsIcon, PackageIcon, PlayIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import { Spinner } from "@renderer/components/ui/spinner";
-import { PackageIcon } from "@phosphor-icons/react/dist/csr/Package";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+
 import { errorMessage } from "@volli/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -168,11 +167,11 @@ export function WorkspaceDependenciesNotice({
             Run {installCommand}
           </Button>
           <Button size="xs" variant="outline" disabled={running} onClick={onConfigureSetup}>
-            <GearSixIcon />
+            <SettingsIcon />
             Set a setup command
           </Button>
           <Button size="xs" variant="ghost" disabled={running} onClick={onIgnore}>
-            <XIcon />
+            <CloseIcon />
             Ignore
           </Button>
         </>

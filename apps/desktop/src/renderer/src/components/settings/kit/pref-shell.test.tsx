@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { SettingsIcon } from "@renderer/components/ui/icon";
+
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { PrefShell, type PrefGroup } from "./pref-shell";
 
@@ -13,7 +14,7 @@ const groups: readonly PrefGroup[] = [
       {
         key: "appearance",
         label: "Appearance",
-        icon: GearSixIcon,
+        icon: SettingsIcon,
         count: 3,
         attention: { state: "waiting", label: "Needs attention" },
         content: <p>Appearance controls</p>,

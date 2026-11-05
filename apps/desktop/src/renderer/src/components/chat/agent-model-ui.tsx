@@ -22,12 +22,12 @@
  * and not an adjective. It is the same Gauge the composer's effort pill and the
  * transcript's reasoning row wear: reasoning has one vocabulary in this app.
  *
- * `bold`, per the house rule for glyphs at 12px and smaller, and for the reason
+ * A heavier stroke, per the house rule for glyphs at 12px and smaller, and for the reason
  * the effort pill gives: a gauge is arcs and a needle, and at this size the
  * outline draws lighter than the word beside it.
  */
 import type * as React from "react";
-import { GaugeIcon } from "@phosphor-icons/react";
+import { GaugeIcon } from "@renderer/components/ui/icon";
 
 import { agentModelFacts, type IslandAgent } from "@volli/session-presentation";
 
@@ -65,7 +65,7 @@ export function AgentModelLine({
           wrap; the effort remains a distinct setting beside its gauge. */}
       <ResolvedModelName selection={agent.model} className="max-w-full" />
       <span className="inline-flex shrink-0 items-center gap-1">
-        <GaugeIcon aria-hidden weight="bold" className="size-3 shrink-0" />
+        <GaugeIcon aria-hidden strokeWidth={2.25} className="size-3 shrink-0" />
         {/* WHAT THE GAUGE SAYS, SAID. The glyph is what stops `High` reading as
           an adjective on the model beside it, and a glyph says nothing to a
           screen reader — read aloud, the line would be "sonnet-4.5 High", the

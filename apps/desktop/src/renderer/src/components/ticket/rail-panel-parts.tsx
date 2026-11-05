@@ -10,14 +10,17 @@
  * surface silently keeps an old minus glyph after the other is fixed.
  */
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { FilePlusIcon } from "@phosphor-icons/react/dist/csr/FilePlus";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  RefreshIcon,
+  ExternalIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  SuccessIcon,
+  CopyIcon,
+  AddFileIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+
 import { Slot } from "radix-ui";
 
 import { errorMessage, type DiffStat } from "@volli/shared";
@@ -391,12 +394,12 @@ export function RailFoldCaret({
   open: boolean;
   placement: "eyebrow" | "footer";
 }) {
-  const Caret = placement === "eyebrow" ? CaretRightIcon : CaretUpIcon;
+  const Caret = placement === "eyebrow" ? ChevronRightIcon : ChevronUpIcon;
   const instant = React.useContext(RailFoldContext)?.instant ?? false;
   return (
     <Caret
       aria-hidden
-      weight={placement === "eyebrow" ? "bold" : undefined}
+      strokeWidth={placement === "eyebrow" ? 2.25 : undefined}
       className={cn(
         "shrink-0 text-muted-foreground transition-transform duration-(--duration-menu-in) ease-out motion-reduce:transition-none",
         instant && "transition-none",
@@ -508,7 +511,7 @@ export function RailHeadingReadStatus({
 }) {
   if (feedback === null || feedback.place !== "heading") return null;
   const failed = feedback.kind === "refresh-failed";
-  const Mark = failed ? WarningIcon : ArrowClockwiseIcon;
+  const Mark = failed ? WarningIcon : RefreshIcon;
   return (
     <span
       role={failed ? "alert" : "status"}
@@ -522,7 +525,7 @@ export function RailHeadingReadStatus({
     >
       <Mark
         aria-hidden
-        weight="bold"
+        strokeWidth={2.25}
         className={cn(
           "size-3 shrink-0",
           !failed && "animate-spin [animation-duration:1.2s] motion-reduce:animate-none",
@@ -543,7 +546,7 @@ export function RailHeadingReadStatus({
           aria-label={`Retry — ${feedback.detail}`}
           onClick={onRetry}
         >
-          <ArrowClockwiseIcon />
+          <RefreshIcon />
         </Button>
       ) : null}
     </span>
@@ -586,10 +589,10 @@ export function RailReadFaultBody({
         className,
       )}
     >
-      <WarningIcon aria-hidden weight="bold" className="size-3.5 shrink-0 text-destructive" />
+      <WarningIcon aria-hidden strokeWidth={2.25} className="size-3.5 shrink-0 text-destructive" />
       <span className="min-w-0 flex-1 truncate">{feedback.face}</span>
       <Button size="xs" variant="outline" onClick={onRetry}>
-        <ArrowClockwiseIcon />
+        <RefreshIcon />
         Retry
       </Button>
     </div>
@@ -788,7 +791,7 @@ export function RailRowActions({
               void copy();
             }}
           >
-            {copied ? <CheckCircleIcon /> : <CopyIcon />}
+            {copied ? <SuccessIcon /> : <CopyIcon />}
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top">{copied ? "Path copied" : "Copy path"}</TooltipContent>
@@ -804,7 +807,7 @@ export function RailRowActions({
               onOpen(path);
             }}
           >
-            <ArrowSquareOutIcon />
+            <ExternalIcon />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top">Open in tab</TooltipContent>
@@ -870,7 +873,7 @@ export function RailFaultBanner({
       className={cn(RAIL_PANEL_INSET, inset && cn("mb-2 shrink-0", RAIL_PANEL_MARGIN), className)}
       actions={
         <Button size="xs" variant="outline" onClick={onRetry}>
-          <ArrowClockwiseIcon />
+          <RefreshIcon />
           Retry
         </Button>
       }
@@ -923,7 +926,7 @@ export function NewFileRailAction({
           disabled={disabled}
           onClick={onNewFile}
         >
-          <FilePlusIcon />
+          <AddFileIcon />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">New file</TooltipContent>

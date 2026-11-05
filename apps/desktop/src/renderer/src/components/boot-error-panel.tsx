@@ -1,7 +1,8 @@
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Spinner } from "@renderer/components/ui/spinner";
 import { useEffect, useRef, useState } from "react";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import { WarningIcon } from "@renderer/components/ui/icon";
+
 import type {
   DatabaseOpenFault,
   DatabaseRecoveryFaultResult,
@@ -156,7 +157,7 @@ export function BootErrorPanel({
     <div className="flex min-h-svh w-full items-center bg-background py-8">
       <ContentColumn className="flex flex-col gap-4">
         <div className="flex flex-col items-start gap-2 text-left">
-          <WarningCircleIcon aria-hidden className="size-8 text-muted-foreground" />
+          <WarningIcon aria-hidden className="size-8 text-muted-foreground" />
           {fault === null ? null : fault === "newer-version" ? (
             <>
               <h1 className="text-heading font-semibold text-foreground">{NEWER_VERSION_TITLE}</h1>

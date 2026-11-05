@@ -20,16 +20,18 @@
  * is closed, decided one level up in `SessionComposer`.
  */
 import * as React from "react";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { MagicWandIcon } from "@phosphor-icons/react/dist/csr/MagicWand";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { GearIcon } from "@phosphor-icons/react/dist/csr/Gear";
-import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
-import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  SyncIcon,
+  CollapseVerticalIcon,
+  WandIcon,
+  ProcessorIcon,
+  CopyIcon,
+  FileIcon,
+  SettingsIcon,
+  ComposeIcon,
+  SignInIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
 
 import {
   PromptInputCommand,
@@ -178,11 +180,11 @@ const VERB_ICONS: Record<
   ComposerVerbName,
   React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>
 > = {
-  compact: ArrowsInLineVerticalIcon,
+  compact: CollapseVerticalIcon,
   copy: CopyIcon,
-  model: CpuIcon,
-  reload: ArrowsClockwiseIcon,
-  settings: GearIcon,
+  model: ProcessorIcon,
+  reload: SyncIcon,
+  settings: SettingsIcon,
   login: SignInIcon,
 };
 
@@ -198,11 +200,11 @@ function RowIcon({ row }: { row: ComposerPickerRow }) {
     return <VerbIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
   }
   if (row.kind === "command")
-    return <TerminalWindowIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
+    return <TerminalIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
   if (row.kind === "skill")
-    return <MagicWandIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
+    return <WandIcon aria-hidden className="size-4 shrink-0 text-foreground" />;
   return row.artifact ? (
-    <NotePencilIcon aria-hidden className="size-4 shrink-0 text-foreground" />
+    <ComposeIcon aria-hidden className="size-4 shrink-0 text-foreground" />
   ) : (
     <FileIcon aria-hidden className="size-4 shrink-0 text-foreground" />
   );

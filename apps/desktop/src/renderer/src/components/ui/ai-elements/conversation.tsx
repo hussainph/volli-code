@@ -12,7 +12,7 @@
  * clean-room either: the component skeleton — `ConversationContent`,
  * `ConversationScrollButton`, `ConversationEmptyState`, their
  * `use-stick-to-bottom` wiring and their literal class strings — is copied
- * expression, which is why the notice is here. Changed: Phosphor icons,
+ * expression, which is why the notice is here. Changed: shared semantic icons,
  * `@renderer/*` imports, the scroll-chaining bridge below, both
  * `StickToBottom` props forced to `instant` where upstream animates, and
  * `ConversationEmptyState` reduced to its shell (no default title or copy).
@@ -20,7 +20,8 @@
  * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
  */
 
-import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
+import { ArrowDownIcon } from "@renderer/components/ui/icon";
+
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import type { ComponentProps, ReactNode } from "react";

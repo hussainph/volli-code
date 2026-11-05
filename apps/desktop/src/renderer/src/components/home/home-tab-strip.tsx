@@ -2,19 +2,21 @@ import * as React from "react";
 import { launchStore } from "@renderer/stores/launch";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
+import {
+  BrowserIcon,
+  ChatIcon,
+  FileIcon,
+  BoardIcon,
+  MoonIcon,
+  EditIcon,
+  PinIcon,
+  UnpinIcon,
+  SidebarIcon,
+  SunIcon,
+  TerminalIcon,
+  CloseIcon,
+  CloseSquareIcon,
+} from "@renderer/components/ui/icon";
 
 import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
@@ -252,7 +254,7 @@ export function HomeTabStrip({
             >
               {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
                   RIGHT panel; each caret points toward the rail it toggles. */}
-              <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
+              <SidebarIcon className="size-3.5 scale-x-[-1]" />
             </Button>
           ) : null}
         </>
@@ -305,9 +307,9 @@ function reorderFor({ tabs, groups, onReorder }: HomeTabListProps) {
 
 /** What a group chip's menu says about a Home tab. */
 function homeTabMenuLabel(tab: HomeTabDescriptor): TabMenuLabel {
-  if (tab.kind === "board") return { label: "Board", icon: KanbanIcon };
-  if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalWindowIcon };
-  if (tab.kind === "chat") return { label: tab.title, icon: ChatCircleIcon };
+  if (tab.kind === "board") return { label: "Board", icon: BoardIcon };
+  if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalIcon };
+  if (tab.kind === "chat") return { label: tab.title, icon: ChatIcon };
   if (tab.kind === "browser") {
     // Read when the menu opens: the address is the line that tells fifteen
     // localhost tabs apart, and the strip's descriptor does not carry it.
@@ -482,10 +484,14 @@ function BoardTab({
       tabStop={tabStop}
       closable={false}
       onActivate={onSelect}
-      // size-3 and `bold`, the leading-glyph tier the chat bubble and the moon
+      // size-3 and the heavier stroke, the leading-glyph tier the chat bubble and the moon
       // beside it already take: at 12px regular draws lighter than the label.
       leading={
-        <KanbanIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+        <BoardIcon
+          aria-hidden
+          strokeWidth={2.25}
+          className="size-3 shrink-0 text-muted-foreground"
+        />
       }
     />
   );
@@ -555,13 +561,13 @@ function HomeFileTab({
         <ContextMenuSeparator />
         <WordWrapContextMenuItem />
         <ContextMenuSeparator />
-        <ContextMenuItem icon={PushPinIcon} disabled={!tab.preview} onSelect={onPin}>
+        <ContextMenuItem icon={PinIcon} disabled={!tab.preview} onSelect={onPin}>
           Keep Open
         </ContextMenuItem>
-        <ContextMenuItem icon={XIcon} onSelect={onClose}>
+        <ContextMenuItem icon={CloseIcon} onSelect={onClose}>
           Close
         </ContextMenuItem>
-        <ContextMenuItem icon={XSquareIcon} onSelect={onCloseOthers}>
+        <ContextMenuItem icon={CloseSquareIcon} onSelect={onCloseOthers}>
           Close others
         </ContextMenuItem>
       </ContextMenuContent>
@@ -664,7 +670,11 @@ function TerminalTab({
         // same as the ticket strip's moon — one leading glyph size now that
         // the two strips are one tab.
         dot === null ? (
-          <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+          <MoonIcon
+            aria-hidden
+            strokeWidth={2.25}
+            className="size-3 shrink-0 text-muted-foreground"
+          />
         ) : null
       }
       onActivate={activate}
@@ -676,7 +686,7 @@ function TerminalTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
+        <ContextMenuItem icon={EditIcon} onSelect={shell.onStartRename}>
           Rename
         </ContextMenuItem>
         {showParkControls && (
@@ -703,7 +713,7 @@ function TerminalTab({
               </ContextMenuItem>
             )}
             <ContextMenuItem
-              icon={keptAwake ? PushPinSlashIcon : PushPinIcon}
+              icon={keptAwake ? UnpinIcon : PinIcon}
               onSelect={() =>
                 runOnLivePanes(
                   livePaneIds,
@@ -717,7 +727,7 @@ function TerminalTab({
           </>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem icon={XIcon} variant="destructive" onSelect={shell.onClose}>
+        <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={shell.onClose}>
           Close
         </ContextMenuItem>
       </ContextMenuContent>
@@ -795,13 +805,13 @@ function ChatTab({
         <SessionShare sessionId={sessionId} projectId={projectId} />
         {canRename ? (
           <>
-            <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
+            <ContextMenuItem icon={EditIcon} onSelect={shell.onStartRename}>
               Rename
             </ContextMenuItem>
             <ContextMenuSeparator />
           </>
         ) : null}
-        <ContextMenuItem icon={XIcon} variant="destructive" onSelect={shell.onClose}>
+        <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={shell.onClose}>
           Close
         </ContextMenuItem>
       </ContextMenuContent>

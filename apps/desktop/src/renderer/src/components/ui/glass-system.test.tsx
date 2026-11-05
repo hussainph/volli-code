@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import { DeleteIcon } from "@renderer/components/ui/icon";
 
 import { FileSaveGuardDialog } from "../files/save-guard-dialog";
 import { ConfirmCloseDialog } from "../sessions/confirm-close-dialog";
@@ -120,7 +120,7 @@ describe("Glass system surfaces", () => {
           <DropdownMenuTrigger>Actions</DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem variant="destructive" disabled>
-              <TrashIcon />
+              <DeleteIcon />
               Remove
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -132,9 +132,9 @@ describe("Glass system surfaces", () => {
     expect(row.getAttribute("data-disabled")).not.toBeNull();
     expect(row.getAttribute("data-variant")).toBe("destructive");
     expect(css).toContain('.plain-menu-row > svg:not([data-slot="menu-submenu-caret"])');
-    const context = ContextMenuItem({ icon: TrashIcon, children: "Remove" });
+    const context = ContextMenuItem({ icon: DeleteIcon, children: "Remove" });
     expect(context.props.className).not.toContain("plain-menu-row");
-    expect(context.props.children[0].type).toBe(TrashIcon);
+    expect(context.props.children[0].type).toBe(DeleteIcon);
   });
 
   it("shares sheet timing with its scrim and retargets toast transforms, never layout height", () => {

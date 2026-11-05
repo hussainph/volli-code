@@ -125,6 +125,14 @@
       "spdx": "MIT",
       "evidence": "The five path strings in model-identity.tsx marked `lobe-icons, MIT` are copied verbatim from the upstream static SVGs (VC-617). The other marks there come from simple-icons, CC0-1.0, which needs no notice.",
       "text": "texts/lobe-icons.LICENSE.txt"
+    },
+    {
+      "title": "Phosphor brand identity marks (Apple, Linux, GitHub, Google)",
+      "paths": ["apps/desktop/src/renderer/src/components/ui/brand-marks.tsx"],
+      "upstream": "@phosphor-icons/react@2.1.10, dist/defs/{AppleLogo,LinuxLogo,GithubLogo,GoogleLogo}.es.js",
+      "spdx": "MIT",
+      "evidence": "The identity paths in brand-marks.tsx are retained verbatim from the previously installed package, independently of the UI symbol set.",
+      "text": "texts/phosphor-icons.LICENSE.txt"
     }
   ],
   "nestedLicences": [

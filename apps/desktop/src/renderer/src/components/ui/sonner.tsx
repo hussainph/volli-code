@@ -1,9 +1,12 @@
 import * as React from "react";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { SpinnerGapIcon } from "@phosphor-icons/react/dist/csr/SpinnerGap";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  SuccessIcon,
+  InfoIcon,
+  SpinnerIcon,
+  WarningIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 import { cn } from "@renderer/lib/utils";
@@ -25,13 +28,13 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
       gap={6}
       // The error is the exception; routine confirmations keep outline glyphs.
       icons={{
-        success: <CheckCircleIcon className="size-4" />,
+        success: <SuccessIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,
-        warning: <WarningCircleIcon className="size-4" />,
-        error: <XCircleIcon weight="fill" className="size-4" />,
+        warning: <WarningIcon className="size-4" />,
+        error: <ErrorIcon className="size-4 text-destructive" />,
         loading: (
-          <SpinnerGapIcon
-            weight="bold"
+          <SpinnerIcon
+            strokeWidth={2.25}
             className="size-4 animate-spin motion-reduce:animate-none"
           />
         ),

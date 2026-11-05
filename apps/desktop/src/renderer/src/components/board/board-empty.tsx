@@ -1,5 +1,5 @@
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
 
 import {
   ModelAccessFirstRun,
@@ -67,7 +67,7 @@ export function BoardEmpty({ projectId, className }: { projectId: string; classN
             {...readOnlyControl(canWrite)}
             onClick={() => useUiStore.getState().setNewTicketOpen(true)}
           >
-            <PlusIcon className="size-3.5" />
+            <AddIcon className="size-3.5" />
             New ticket
             {/* The shortcut-chip treatment the primary buttons already use
                 (ticket-activity-feed.tsx, project-tile.tsx). */}

@@ -31,9 +31,7 @@
  * floor those pixels are the difference between seeing three rows and four.
  */
 import type * as React from "react";
-import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { UndoIcon, FolderOpenIcon, SearchIcon } from "@renderer/components/ui/icon";
 
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
@@ -102,7 +100,7 @@ export function FilesNavigatorHeader({
             aria-label={`Leave ${cwd}`}
             className="flex min-w-0 flex-1 items-center gap-1 rounded-sm font-mono text-ui text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <ArrowUUpLeftIcon aria-hidden className="size-3 shrink-0" />
+            <UndoIcon aria-hidden className="size-3 shrink-0" />
             <span className="truncate">{cwd}</span>
           </button>
         )}
@@ -117,7 +115,7 @@ export function FilesNavigatorHeader({
               aria-pressed={filtering}
               onClick={onToggleFilter}
             >
-              <MagnifyingGlassIcon />
+              <SearchIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Filter files</TooltipContent>

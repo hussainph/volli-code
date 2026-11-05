@@ -11,7 +11,7 @@
  * Most of this file is still upstream's: the attachment state machine, the
  * accept/size/count validation and its error codes, the drop handlers, and the
  * blob→data-URL submit path. Changed here: imports repointed at `@renderer/*`,
- * lucide icons replaced with Phosphor, the unused surface deleted (provider and
+ * lucide icons replaced with shared semantic symbols, the unused surface deleted (provider and
  * controller hooks, attachment chips, menu actions, action-menu/select/
  * hover-card families), and the shell reshaped around Volli's composer.
  *
@@ -20,9 +20,8 @@
  * was established, what else changed, and where §4(a) and §4(d) are discharged.
  */
 
-import { ArrowElbowDownLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowElbowDownLeft";
-import { SquareIcon } from "@phosphor-icons/react/dist/csr/Square";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { ReturnIcon, SquareIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import {
   Command,
   CommandEmpty,
@@ -712,18 +711,16 @@ export const PromptInputSubmit = ({
 }: PromptInputSubmitProps) => {
   const isGenerating = status === "submitted" || status === "streaming";
 
-  let Icon = <ArrowElbowDownLeftIcon className="size-4" />;
+  let Icon = <ReturnIcon className="size-4" />;
 
   if (status === "submitted") {
     Icon = <Spinner />;
   } else if (status === "streaming") {
-    // The one glyph here that keeps its fill, matching the composer's own stop
-    // button: a stop square MEANS solid the way a play triangle does, and
-    // hollow it reads as a checkbox. It is also the exception rather than the
-    // category — it exists only while a turn is running.
-    Icon = <SquareIcon className="size-4" weight="fill" />;
+    // The stop is present only during generation; it stays in the shared
+    // outline family rather than borrowing a filled drawing.
+    Icon = <SquareIcon className="size-4" />;
   } else if (status === "error") {
-    Icon = <XIcon className="size-4" />;
+    Icon = <CloseIcon className="size-4" />;
   }
 
   const handleClick = useCallback(

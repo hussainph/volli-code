@@ -21,12 +21,15 @@ import { useStore } from "zustand";
 import { holdInteraction, markInteraction } from "@renderer/lib/renderer-stalls";
 import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  GuideIcon,
+  SuccessIcon,
+  ClockIcon,
+  CopyIcon,
+  WarningIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import type {
   HiddenModelRef,
   ModelAccessDefaults,
@@ -3249,7 +3252,7 @@ export const ChatTurn = React.memo(function ChatTurn({
             role="group"
             aria-label="Skills delivered with this message"
           >
-            <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
+            <GuideIcon aria-hidden className="size-3.5 shrink-0" />
             {skillChips.map((name) => (
               <Badge key={name} variant="outline" className="font-mono">
                 {name}
@@ -3296,9 +3299,7 @@ function MessageDelivery({ label }: { label: string }) {
         // the mark carry the alarm, so it reads as the message's state rather
         // than a second failure report beside the timeline's.
         <Badge variant="outline">
-          {failed ? (
-            <WarningIcon aria-hidden className="size-3 text-destructive" weight="fill" />
-          ) : null}
+          {failed ? <WarningIcon aria-hidden className="size-3 text-destructive" /> : null}
           {label}
         </Badge>
       )}
@@ -3318,7 +3319,7 @@ function MessageCopyAction({ text }: { text: string }) {
     return () => window.clearTimeout(timer);
   }, [copyState]);
   const CopyStateIcon =
-    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
+    copyState === "copied" ? SuccessIcon : copyState === "failed" ? ErrorIcon : CopyIcon;
 
   return (
     <Button

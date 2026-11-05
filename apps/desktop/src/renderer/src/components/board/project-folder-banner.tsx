@@ -14,8 +14,7 @@
  * because it is the clue, not because it is a measurement.
  */
 import * as React from "react";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { FolderOpenIcon, WarningIcon } from "@renderer/components/ui/icon";
 
 import { RelinkProjectDialog } from "@renderer/components/rail/relink-project-dialog";
 import { Button } from "@renderer/components/ui/button";

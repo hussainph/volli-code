@@ -10,9 +10,8 @@
  * stored. There is no plain-value kind: configuration never holds a value.
  */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { ChevronDownIcon, AddIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import {
   MCP_OAUTH_CLIENT_SECRET_SLOT,
   mcpCredentialSlot,
@@ -302,7 +301,7 @@ function CredentialRows({
           variant="ghost"
           aria-label={`${open ? "Hide" : "Show"} ${title.toLowerCase()}`}
         >
-          <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />
+          <ChevronDownIcon aria-hidden className={cn(open && "rotate-180")} />
           {title}
           {rows.length > 0 ? (
             <span className="text-muted-foreground tabular-nums">{rows.length}</span>
@@ -322,7 +321,7 @@ function CredentialRows({
               ])
             }
           >
-            <PlusIcon />
+            <AddIcon />
             {`Add ${noun}`}
           </Button>
           {rows.map((row, index) => {
@@ -364,7 +363,7 @@ function CredentialRows({
                   aria-label={`Remove ${label}`}
                   onClick={() => onChange(rows.filter((_row, at) => at !== index))}
                 >
-                  <XIcon />
+                  <CloseIcon />
                 </Button>
               </div>
             );
@@ -400,7 +399,7 @@ function OAuthClientFields({
           variant="ghost"
           aria-label={`${open ? "Hide" : "Show"} custom OAuth client`}
         >
-          <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />
+          <ChevronDownIcon aria-hidden className={cn(open && "rotate-180")} />
           Custom OAuth client
         </Button>
       </CollapsibleTrigger>

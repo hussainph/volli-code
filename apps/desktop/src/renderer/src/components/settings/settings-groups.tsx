@@ -10,19 +10,22 @@
  * every row label on both surfaces and fails if one cannot be reached from rail
  * search. Keep it green when you add rows.
  */
-import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
-import { ChartLineIcon } from "@phosphor-icons/react/dist/csr/ChartLine";
-import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
-import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { ListMagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/ListMagnifyingGlass";
-import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
-import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
-import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import {
+  NotificationIcon,
+  PrivacyIcon,
+  AgentIcon,
+  ProcessorIcon,
+  DownloadIcon,
+  ExperimentalIcon,
+  SettingsIcon,
+  GlobeIcon,
+  InfoIcon,
+  SearchListIcon,
+  PaletteIcon,
+  IntegrationIcon,
+  StorageIcon,
+} from "@renderer/components/ui/icon";
+
 import { EXPERIMENTS, MODEL_TIER_ROWS, type ExperimentSnapshot } from "@volli/shared";
 
 import { LogViewer } from "@renderer/components/logs/log-viewer";
@@ -108,7 +111,7 @@ export function settingsGroups(
         {
           key: "general",
           label: "General",
-          icon: GearSixIcon,
+          icon: SettingsIcon,
           keywords: [
             "window",
             "zoom",
@@ -176,7 +179,7 @@ export function settingsGroups(
         {
           key: "notifications",
           label: "Notifications",
-          icon: BellIcon,
+          icon: NotificationIcon,
           keywords: [
             "notify me",
             "alert",
@@ -201,7 +204,7 @@ export function settingsGroups(
         {
           key: MODELS_CATEGORY_KEY,
           label: "Models",
-          icon: CpuIcon,
+          icon: ProcessorIcon,
           keywords: [
             "model",
             "provider",
@@ -227,7 +230,7 @@ export function settingsGroups(
         {
           key: "agents",
           label: "Agents",
-          icon: RobotIcon,
+          icon: AgentIcon,
           keywords: [
             "code mode",
             "codemode",
@@ -264,7 +267,7 @@ export function settingsGroups(
         {
           key: "integrations",
           label: "Integrations",
-          icon: PlugsIcon,
+          icon: IntegrationIcon,
           keywords: [
             "editor",
             "vscode",
@@ -287,7 +290,7 @@ export function settingsGroups(
         {
           key: "storage",
           label: "Storage",
-          icon: TreeStructureIcon,
+          icon: StorageIcon,
           keywords: [
             "retention",
             "worktree",
@@ -354,7 +357,7 @@ export function settingsGroups(
           // be able to find by looking rather than by scrolling.
           key: "telemetry",
           label: "Privacy & data",
-          icon: ChartLineIcon,
+          icon: PrivacyIcon,
           keywords: [
             "database",
             "size",
@@ -390,7 +393,7 @@ export function settingsGroups(
               {
                 key: "logs",
                 label: "Logs",
-                icon: ListMagnifyingGlassIcon,
+                icon: SearchListIcon,
                 // One stream wants the whole width.
                 fill: true,
                 keywords: [
@@ -413,7 +416,7 @@ export function settingsGroups(
               {
                 key: "experimental",
                 label: "Experimental",
-                icon: FlaskIcon,
+                icon: ExperimentalIcon,
                 keywords: [
                   "experiment",
                   "experiments",
@@ -430,7 +433,7 @@ export function settingsGroups(
         {
           key: "updates",
           label: "Updates",
-          icon: DownloadSimpleIcon,
+          icon: DownloadIcon,
           keywords: [
             "update",
             "version",

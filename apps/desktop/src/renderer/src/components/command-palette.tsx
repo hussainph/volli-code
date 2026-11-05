@@ -1,21 +1,24 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { Icon } from "@phosphor-icons/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { HouseIcon } from "@phosphor-icons/react/dist/csr/House";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import {
+  type IconComponent as Icon,
+  ChevronDownIcon,
+  AutomationIcon,
+  FolderIcon,
+  SettingsIcon,
+  HomeIcon,
+  BoardIcon,
+  KeyIcon,
+  ListIcon,
+  OrderedListIcon,
+  AddIcon,
+  ConfigureIcon,
+  SearchIcon,
+  ChatIcon,
+  TerminalIcon,
+  TicketIcon,
+} from "@renderer/components/ui/icon";
+
 import { Command } from "cmdk";
 import { sessionProvenanceHoverLine } from "@volli/shared";
 
@@ -98,8 +101,8 @@ const NOTHING_EXPANDED: ReadonlySet<PaletteSectionId> = new Set();
 /** Each scope suggestion row wears its section's own glyph. */
 const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
   tickets: TicketIcon,
-  sessions: ChatCircleIcon,
-  automations: LightningIcon,
+  sessions: ChatIcon,
+  automations: AutomationIcon,
 };
 
 /**
@@ -127,11 +130,11 @@ const NAVIGATION_ICONS: Record<
   Exclude<CommandPaletteNavigationItem["id"], "configure-pane">,
   Icon
 > = {
-  home: HouseIcon,
-  board: KanbanIcon,
-  list: ListBulletsIcon,
-  configure: SlidersHorizontalIcon,
-  settings: GearSixIcon,
+  home: HomeIcon,
+  board: BoardIcon,
+  list: ListIcon,
+  configure: ConfigureIcon,
+  settings: SettingsIcon,
 };
 
 interface ShowAllRowProps {
@@ -159,7 +162,7 @@ function ShowAllRow({ sectionId, total, noun, onExpand }: ShowAllRowProps) {
       onSelect={() => onExpand(sectionId)}
       className={PALETTE_ROW}
     >
-      <CaretDownIcon aria-hidden className={PALETTE_ROW_ICON} />
+      <ChevronDownIcon aria-hidden className={PALETTE_ROW_ICON} />
       <span className="min-w-0 flex-1 truncate text-ui font-medium">
         Show all {total} {noun}
       </span>
@@ -425,7 +428,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   key: `navigation:pane:${item.paneKey}`,
                   RowIcon:
                     configureCategories.find((category) => category.key === item.paneKey)?.icon ??
-                    SlidersHorizontalIcon,
+                    ConfigureIcon,
                 }
               : { key: `navigation:${item.id}`, RowIcon: NAVIGATION_ICONS[item.id] };
           return (
@@ -474,7 +477,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     >
       {/* Same separated search field and keycap treatment as Quick Open. */}
       <div className={COMMAND_SEARCH_FIELD}>
-        <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         {scopeDef !== null ? (
           <span className="inline-flex h-7 shrink-0 items-center rounded-control border border-border bg-accent px-2 text-ui font-medium text-foreground">
             {scopeDef.label}
@@ -627,9 +630,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   className={PALETTE_ROW}
                 >
                   {item.sessionKind === "chat" ? (
-                    <ChatCircleIcon aria-hidden className={PALETTE_ROW_ICON} />
+                    <ChatIcon aria-hidden className={PALETTE_ROW_ICON} />
                   ) : (
-                    <TerminalWindowIcon aria-hidden className={PALETTE_ROW_ICON} />
+                    <TerminalIcon aria-hidden className={PALETTE_ROW_ICON} />
                   )}
                   <span
                     className="flex min-w-0 flex-1 flex-col"
@@ -691,7 +694,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 }}
                 className={PALETTE_ROW}
               >
-                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <AutomationIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-ui font-medium">{item.name}</span>
                   <span className="truncate text-label font-normal text-muted-foreground">
@@ -727,7 +730,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 }}
                 className={PALETTE_ROW}
               >
-                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <AutomationIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-ui font-medium">Automations</span>
                   <span className="truncate text-label font-normal text-muted-foreground">
@@ -759,7 +762,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 }}
                 className={PALETTE_ROW}
               >
-                <ListNumbersIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <OrderedListIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="min-w-0 flex-1 truncate text-ui font-medium">{item.title}</span>
                 <span className="shrink-0 text-label font-normal text-muted-foreground">⌃G</span>
               </Command.Item>
@@ -771,12 +774,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             {hostCommands.map((item) => {
               const RowIcon =
                 item.id === "add-host"
-                  ? PlusIcon
+                  ? AddIcon
                   : item.id === "open-project"
-                    ? FolderSimpleIcon
+                    ? FolderIcon
                     : item.id === "sign-ins"
                       ? KeyIcon
-                      : GearSixIcon;
+                      : SettingsIcon;
               const key = "hostId" in item ? `host:${item.id}:${item.hostId}` : `host:${item.id}`;
               return (
                 <Command.Item

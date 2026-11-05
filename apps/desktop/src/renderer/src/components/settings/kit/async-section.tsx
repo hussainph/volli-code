@@ -9,8 +9,7 @@
  * was also what a broken read said.
  */
 import type * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { type IconComponent, WarningIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -84,7 +83,7 @@ export function AsyncSection<T>({
   children,
 }: {
   title: string;
-  icon?: PhosphorIcon;
+  icon?: IconComponent;
   action?: React.ReactNode;
   /** Content that stays useful while this fetched collection changes state. */
   before?: React.ReactNode;

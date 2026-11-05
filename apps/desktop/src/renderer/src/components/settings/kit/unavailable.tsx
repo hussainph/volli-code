@@ -39,7 +39,7 @@
  * fixture. The next one must too.
  */
 import type * as React from "react";
-import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
+import { ToolsIcon } from "@renderer/components/ui/icon";
 
 import { Notice } from "@renderer/components/ui/notice";
 import { cn } from "@renderer/lib/utils";
@@ -61,7 +61,7 @@ export function UnavailableNotice({
   meanwhile?: React.ReactNode;
 }) {
   return (
-    <Notice icon={WrenchIcon} tone="neutral" title={`${what} cannot be used.`} detail={meanwhile} />
+    <Notice icon={ToolsIcon} tone="neutral" title={`${what} cannot be used.`} detail={meanwhile} />
   );
 }
 

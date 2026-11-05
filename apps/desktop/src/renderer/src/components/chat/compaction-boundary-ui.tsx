@@ -19,8 +19,7 @@
  * turn; a compaction moves once or twice in a Session.
  */
 import * as React from "react";
-import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { CollapseVerticalIcon, WarningIcon } from "@renderer/components/ui/icon";
 
 import {
   compactionBoundaryCopy,
@@ -71,12 +70,12 @@ export const CompactionBoundary = React.memo(function CompactionBoundary({
     <div className="not-prose flex min-w-0 flex-col gap-1" title={copy.description}>
       <div className="flex min-w-0 items-center gap-2 text-ui">
         {compacted ? (
-          <ArrowsInLineVerticalIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
+          <CollapseVerticalIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
         ) : (
           // A failure that changed nothing is not a broken Session — the message
           // that paid for it was delivered on the context that was already
           // there. Attention, not destructive: something did not happen.
-          <WarningIcon aria-hidden className="size-3.5 shrink-0 text-attention" weight="fill" />
+          <WarningIcon aria-hidden className="size-3.5 shrink-0 text-attention" />
         )}
         <span className="shrink-0 font-medium">{copy.headline}</span>
         {/* The rule runs from the label to the count, so the two ends of the

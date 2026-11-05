@@ -1,7 +1,7 @@
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
-import { SignpostIcon } from "@phosphor-icons/react/dist/csr/Signpost";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { DirectionsIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
   decisionCloudDisclosure,
@@ -294,7 +294,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
 
   if (state.status === "loading") {
     return (
-      <PrefSection title="Decision model" icon={SignpostIcon}>
+      <PrefSection title="Decision model" icon={DirectionsIcon}>
         <div className="space-y-4 p-4" aria-label="Loading decision model">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
@@ -304,7 +304,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   }
   if (state.status === "error") {
     return (
-      <PrefSection title="Decision model" icon={SignpostIcon}>
+      <PrefSection title="Decision model" icon={DirectionsIcon}>
         <Notice
           announce
           tone="error"
@@ -328,7 +328,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   const cloud = global.kind === "cloud" ? cloudStatus(global, view.catalog) : null;
 
   return (
-    <PrefSection title="Decision model" icon={SignpostIcon}>
+    <PrefSection title="Decision model" icon={DirectionsIcon}>
       <PrefRow label="Model" testId="decision-model-mode">
         <Segmented
           ariaLabel="Decision model"

@@ -70,10 +70,8 @@
  *   - Do NOT call those openers from agent/filesystem event handlers.
  */
 import * as React from "react";
-import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
-import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
-import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { ChatPendingIcon, FoldersIcon, DiffIcon, SearchIcon } from "@renderer/components/ui/icon";
+
 import type { Ticket } from "@volli/shared";
 
 import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
@@ -94,10 +92,10 @@ import { AutomationsOnly } from "@renderer/components/automations/automation-ava
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = {
-  now: ChatCircleDotsIcon,
-  changes: GitDiffIcon,
+  now: ChatPendingIcon,
+  changes: DiffIcon,
   files: FoldersIcon,
-  search: MagnifyingGlassIcon,
+  search: SearchIcon,
 };
 
 /** This surface's pages, in pill order, as {@link RailModeTabs} takes them. */

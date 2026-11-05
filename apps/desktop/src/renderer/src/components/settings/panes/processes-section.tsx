@@ -19,9 +19,8 @@
  * the answer to "what is holding this checkout".
  */
 import * as React from "react";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { SkullIcon } from "@phosphor-icons/react/dist/csr/Skull";
+import { SyncIcon, ProcessorIcon, CrashIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, formatProcessAge, type AutoReapPolicy } from "@volli/shared";
 
 import type { OrphanProcessInventory } from "../../../../../ipc/contract";
@@ -135,11 +134,11 @@ export function RunningProcessesSection() {
   return (
     <AsyncSection
       title="Running processes"
-      icon={CpuIcon}
+      icon={ProcessorIcon}
       action={
         <SectionIconAction
           label="Look for processes no Session owns"
-          icon={ArrowsClockwiseIcon}
+          icon={SyncIcon}
           busy={scanning}
           onAct={() => void scan()}
         />
@@ -160,7 +159,7 @@ export function RunningProcessesSection() {
               disabled={reapable.length === 0 || scanning || reaping}
               onClick={() => void reap(reapable)}
             >
-              <SkullIcon />
+              <CrashIcon />
               Reap all
             </Button>
           </PrefRow>
@@ -192,7 +191,7 @@ export function RunningProcessesSection() {
                   <RowAction
                     label={`Reap pid ${candidate.pid}`}
                     hint="Reap"
-                    icon={SkullIcon}
+                    icon={CrashIcon}
                     disabled={scanning || reaping}
                     onAct={() => void reap([candidate.itemId])}
                   />

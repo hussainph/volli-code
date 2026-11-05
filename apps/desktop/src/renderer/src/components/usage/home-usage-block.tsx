@@ -1,8 +1,6 @@
 /** One pinned spend reading for the project/session inspector. Accounting and
  * the time-window control unfold into a bounded scroller, never a dashboard. */
-import { ChartDonutIcon } from "@phosphor-icons/react/dist/csr/ChartDonut";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { ReceiptIcon } from "@phosphor-icons/react/dist/csr/Receipt";
+import { UsageIcon, ChatIcon, ReceiptIcon, FilterIcon } from "@renderer/components/ui/icon";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
@@ -17,7 +15,7 @@ import {
 } from "@renderer/components/ticket/rail-panel-parts";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
-import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
+
 import {
   Select,
   SelectContent,
@@ -138,7 +136,7 @@ export function HomeUsageFooter({
                   aria-label="Usage window"
                   className="w-auto gap-2"
                 >
-                  <FunnelIcon weight="bold" className="size-3" />
+                  <FilterIcon strokeWidth={2.25} className="size-3" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -313,7 +311,7 @@ function HomeUsageCard({
           holding. */}
       {session !== null && sessionCost !== null ? (
         <UsageCardRow
-          icon={ChatCircleIcon}
+          icon={ChatIcon}
           label="This session"
           trailing={<UsageCostFigure summary={session} />}
           ariaLabel={`This session ${sessionCost} — open breakdown`}
@@ -325,7 +323,7 @@ function HomeUsageCard({
 
       {models.length > 0 ? (
         <UsageCardRow
-          icon={ChartDonutIcon}
+          icon={UsageIcon}
           label={`${models.length} ${models.length === 1 ? "model" : "models"}`}
           ariaLabel={`${models.length} ${models.length === 1 ? "model" : "models"} — open the per-model breakdown`}
           testId="home-usage-models"

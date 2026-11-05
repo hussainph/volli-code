@@ -16,11 +16,14 @@
  */
 import * as React from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import {
+  RefreshIcon,
+  ChevronLeftIcon,
+  FolderIcon,
+  KeyIcon,
+  AddIcon,
+} from "@renderer/components/ui/icon";
+
 import type { RemoteHost } from "@volli/shared";
 import { toast } from "sonner";
 
@@ -324,7 +327,7 @@ function ListScreen({
                 data-project-row={row.id}
               >
                 <span className="grid size-6 shrink-0 place-items-center rounded-sm bg-muted text-muted-foreground">
-                  <FolderSimpleIcon aria-hidden className="size-3.5" />
+                  <FolderIcon aria-hidden className="size-3.5" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-ui font-medium">{row.name}</span>
@@ -371,7 +374,7 @@ function ListScreen({
       <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-4 py-4">
         {canCreate(state) && notice?.recovery.kind !== "new" ? (
           <Button size="sm" variant="ghost" onClick={onNew}>
-            <PlusIcon />
+            <AddIcon />
             New project…
           </Button>
         ) : null}
@@ -411,7 +414,7 @@ function Notice({
               recovery.kind === "new" ? onNew : recovery.kind === "re-add" ? onReAdd : onRetry
             }
           >
-            {recovery.kind === "new" ? <PlusIcon /> : <ArrowClockwiseIcon />}
+            {recovery.kind === "new" ? <AddIcon /> : <RefreshIcon />}
             {recovery.label}
           </Button>
         </div>
@@ -613,7 +616,7 @@ function NewProjectScreen({
           disabled={running !== null}
           onClick={onBack}
         >
-          <CaretLeftIcon />
+          <ChevronLeftIcon />
           Back
         </Button>
         <span className="flex-1" />

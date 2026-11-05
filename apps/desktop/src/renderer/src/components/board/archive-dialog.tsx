@@ -1,9 +1,12 @@
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import {
+  ArchiveIcon,
+  UndoIcon,
+  ChevronLeftIcon,
+  PullRequestIcon,
+  DeleteIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   TICKET_STATUS_LABELS,
@@ -145,7 +148,7 @@ export function ArchiveRow({
               <>
                 <span aria-hidden>·</span>
                 <span className="inline-flex shrink-0 items-center gap-1">
-                  <GitPullRequestIcon className="size-3" />
+                  <PullRequestIcon className="size-3" />
                   PR
                 </span>
               </>
@@ -164,7 +167,7 @@ export function ArchiveRow({
                 void useBoardStore.getState().unarchiveTicket(project.id, ticket.id);
               }}
             >
-              <ArrowUUpLeftIcon />
+              <UndoIcon />
               Restore
             </Button>
             {/* A cloud ticket offers Archive only: deletion is retention's (VC-889). */}
@@ -179,7 +182,7 @@ export function ArchiveRow({
                     {...readOnlyControl(canWrite)}
                     onClick={() => onRequestDelete(ticket)}
                   >
-                    <TrashIcon />
+                    <DeleteIcon />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top">Delete permanently</TooltipContent>
@@ -227,7 +230,7 @@ function ArchiveInspect({
             className="-ml-2 text-muted-foreground"
             onClick={onBack}
           >
-            <CaretLeftIcon />
+            <ChevronLeftIcon />
             Archive
           </Button>
           <span className="font-mono text-ui text-muted-foreground">
@@ -256,7 +259,7 @@ function ArchiveInspect({
               className="shrink-0"
               onClick={() => openExternalUrl(prUrl)}
             >
-              <GitPullRequestIcon />
+              <PullRequestIcon />
               PR
             </Button>
           ) : null}

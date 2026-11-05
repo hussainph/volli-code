@@ -1,8 +1,6 @@
 import * as React from "react";
-import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
-import { ArrowUpIcon } from "@phosphor-icons/react/dist/csr/ArrowUp";
-import { StackIcon } from "@phosphor-icons/react/dist/csr/Stack";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { ArrowDownIcon, SendIcon, LayersIcon, AutomationIcon } from "@renderer/components/ui/icon";
+
 import type { SessionUsageSummary } from "@volli/shared";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { UsageTokenCount, tokenCountLabel } from "./usage-token-count";
@@ -33,10 +31,10 @@ const CLASS_STYLE: Record<UsageClassId, React.CSSProperties> = {
   } as React.CSSProperties,
 };
 const ICONS = {
-  cacheRead: StackIcon,
+  cacheRead: LayersIcon,
   input: ArrowDownIcon,
-  cacheWrite: LightningIcon,
-  output: ArrowUpIcon,
+  cacheWrite: AutomationIcon,
+  output: SendIcon,
 };
 
 type Segment = ReturnType<typeof usageBarSegments>[number];

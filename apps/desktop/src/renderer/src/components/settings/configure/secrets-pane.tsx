@@ -1,7 +1,8 @@
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /** Credential inventory is metadata-only; replacement is a write-only IPC. */
 import * as React from "react";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
+import { KeyIcon, MoreIcon, EditIcon, DeleteIcon } from "@renderer/components/ui/icon";
+
 import type { Project } from "@volli/shared";
 import type { CredentialStatus, SecretMetadata } from "../../../../../ipc/secrets";
 
@@ -18,9 +19,7 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import {
   DropdownMenu,
@@ -160,16 +159,16 @@ export function SecretsPane({ project }: { project: Project }) {
                         variant="ghost"
                         aria-label={`More actions for ${s.name}`}
                       >
-                        <DotsThreeIcon />
+                        <MoreIcon />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => setEditing(s)}>
-                        <PencilSimpleIcon />
+                        <EditIcon />
                         Replace
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => setRevoking(s)}>
-                        <TrashIcon />
+                        <DeleteIcon />
                         Revoke…
                       </DropdownMenuItem>
                     </DropdownMenuContent>

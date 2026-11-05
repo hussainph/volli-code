@@ -22,8 +22,7 @@
  * schedule policy can compute with.
  */
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
+import { CheckIcon, GlobeIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -101,7 +100,7 @@ export function TimeZonePicker({
               >
                 <span className="truncate">{zone}</span>
                 {zone === value ? (
-                  <CheckIcon weight="bold" className="size-3.5 text-current" />
+                  <CheckIcon strokeWidth={2.25} className="size-3.5 text-current" />
                 ) : null}
               </CommandItem>
             ))}

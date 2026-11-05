@@ -26,9 +26,8 @@
  * said what it holds: a switch drawn from a default after a failed read would
  * show a value nothing stored.
  */
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { ChevronDownIcon, CodeIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
   CODE_MODE_MODES,
@@ -209,7 +208,7 @@ export function CodeModeSettings({
               aria-label={`${advancedOpen ? "Hide" : "Show"} advanced Code Mode settings`}
               data-testid="code-mode-advanced"
             >
-              <CaretDownIcon
+              <ChevronDownIcon
                 aria-hidden
                 className={cn("transition-transform", advancedOpen && "rotate-180")}
               />
@@ -310,7 +309,7 @@ export function CodeModeSettings({
                         <RowAction
                           label={`Unpin ${pin.model.label}`}
                           hint="Unpin"
-                          icon={XIcon}
+                          icon={CloseIcon}
                           disabled={!pinsEditable}
                           onAct={() => setPin(pin.key, null)}
                         />

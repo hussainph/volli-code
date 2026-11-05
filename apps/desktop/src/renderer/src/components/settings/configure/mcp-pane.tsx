@@ -10,18 +10,21 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * neither it nor the history can bury the other (VC-397).
  */
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
-import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
-import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  RefreshIcon,
+  ChevronDownIcon,
+  HistoryIcon,
+  MoreIcon,
+  SettingsIcon,
+  ChecklistIcon,
+  ConnectedIcon,
+  AddIcon,
+  SignInIcon,
+  SignOutIcon,
+  DeleteIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import type { McpOperationRecord, McpServerAccess, McpServerRecord, Project } from "@volli/shared";
 
 import {
@@ -258,7 +261,7 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
     <div className="flex flex-col gap-6">
       <PrefSection
         title="Servers"
-        icon={PlugsConnectedIcon}
+        icon={ConnectedIcon}
         // The one-line trust boundary: a person cannot see it from the controls.
         hint={
           <>
@@ -269,7 +272,7 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
         action={
           <SectionAction
             label="Add server"
-            icon={PlusIcon}
+            icon={AddIcon}
             onAct={() => {
               setError(null);
               setDialog({ kind: "add" });
@@ -288,7 +291,7 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
             detail={readError}
             actions={
               <Button size="xs" variant="outline" onClick={() => void load()}>
-                <ArrowClockwiseIcon />
+                <RefreshIcon />
                 Retry
               </Button>
             }
@@ -434,7 +437,7 @@ export function McpPane({ project }: { project: Pick<Project, "id"> }) {
       </PrefSection>
 
       {operations.length === 0 ? null : (
-        <PrefSection title="Recent activity" icon={ClockCounterClockwiseIcon}>
+        <PrefSection title="Recent activity" icon={HistoryIcon}>
           {/*
             Where an install an AGENT performed becomes findable by a person.
             The audit row is the only trace of a removal once the server is gone,
@@ -539,7 +542,7 @@ function ServerActions({
         </Button>
       ) : health.fix === "cancel-sign-in" ? (
         <Button size="xs" variant="outline" onClick={onCancelSignIn}>
-          <XIcon />
+          <CloseIcon />
           Cancel
         </Button>
       ) : health.fix === "credentials" ? (
@@ -548,27 +551,27 @@ function ServerActions({
         </Button>
       ) : health.fix === "retry" ? (
         <Button size="xs" variant="outline" disabled={busy} onClick={onRefresh}>
-          <ArrowClockwiseIcon />
+          <RefreshIcon />
           Retry
         </Button>
       ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="icon-sm" variant="ghost" aria-label={`More for ${server.name}`}>
-            <DotsThreeIcon weight="bold" />
+            <MoreIcon strokeWidth={2.25} />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => onOpen("tools")}>
-            <ListChecksIcon />
+            <ChecklistIcon />
             Choose tools
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onOpen("connection")}>
-            <GearSixIcon />
+            <SettingsIcon />
             Edit connection
           </DropdownMenuItem>
           <DropdownMenuItem disabled={busy} onSelect={onRefresh}>
-            <ArrowClockwiseIcon />
+            <RefreshIcon />
             Refresh tools
           </DropdownMenuItem>
           {signsIn(server) && access?.signIn === "signed-in" ? (
@@ -579,7 +582,7 @@ function ServerActions({
           ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" disabled={busy} onSelect={onRemove}>
-            <TrashIcon />
+            <DeleteIcon />
             Remove
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -590,7 +593,7 @@ function ServerActions({
 
 /** The caret every disclosure on this pane turns. */
 function DisclosureCaret({ open }: { open: boolean }) {
-  return <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />;
+  return <ChevronDownIcon aria-hidden className={cn(open && "rotate-180")} />;
 }
 
 /**

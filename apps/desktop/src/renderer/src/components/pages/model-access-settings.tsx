@@ -34,10 +34,13 @@
  * make this pane a form, and a picker whose choice does not hold is a picker
  * lying about what is configured.
  */
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import {
+  RefreshIcon,
+  CollapseVerticalIcon,
+  ProcessorIcon,
+  PreviewIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { toast } from "sonner";
 import {
@@ -336,7 +339,7 @@ export function ModelAccessSettings({
     <>
       <PrefSection
         title="Default models"
-        icon={CpuIcon}
+        icon={ProcessorIcon}
         action={
           <Button
             size="icon-sm"
@@ -345,11 +348,7 @@ export function ModelAccessSettings({
             disabled={loading}
             onClick={() => void load(true)}
           >
-            {loading ? (
-              <Spinner className="size-3.5" />
-            ) : (
-              <ArrowClockwiseIcon className="size-3.5" />
-            )}
+            {loading ? <Spinner className="size-3.5" /> : <RefreshIcon className="size-3.5" />}
           </Button>
         }
       >
@@ -378,7 +377,7 @@ export function ModelAccessSettings({
           }}
         />
       ) : null}
-      <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
+      <PrefSection title="Compaction" icon={CollapseVerticalIcon}>
         <PrefRow label="Automatic compaction" testId="auto-compaction">
           <Switch
             aria-label="Compact a Session automatically before it fills its context window"
@@ -456,7 +455,7 @@ function CatalogSection({
   return (
     <PrefSection
       title="Catalog"
-      icon={EyeIcon}
+      icon={PreviewIcon}
       action={<TableSearch value={query} placeholder="Search models" onChange={setQuery} />}
     >
       <DataTable

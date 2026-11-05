@@ -1,6 +1,6 @@
 /** A single pinned spend reading. Class counts and attribution unfold above it,
  * within the rail's existing bounded scroller. Unmetered Tickets stay silent. */
-import { ReceiptIcon } from "@phosphor-icons/react/dist/csr/Receipt";
+import { ReceiptIcon } from "@renderer/components/ui/icon";
 
 import type { SessionUsageSummary } from "@volli/shared";
 

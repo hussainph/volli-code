@@ -40,7 +40,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "./context-menu";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { ArrowRightIcon } from "@renderer/components/ui/icon";
 
 const source = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
 

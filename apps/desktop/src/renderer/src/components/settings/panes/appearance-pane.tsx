@@ -6,11 +6,14 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { CanvasInstrument } from "../kit/canvas-instrument";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
-import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
-import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  DocumentIcon,
+  MinusIcon,
+  PaletteIcon,
+  AddIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
+
 import { resolveAppearance } from "@volli/shared";
 
 import { OverrideControl, PrefRow, PrefSection } from "@renderer/components/settings/kit";
@@ -56,7 +59,7 @@ export function AppearanceSettings() {
 
       <PrefSection
         title="Terminal"
-        icon={TerminalWindowIcon}
+        icon={TerminalIcon}
         // The one-line trust boundary: whose file Volli writes.
         hint={<>Volli writes an overlay file and never edits your Ghostty config.</>}
       >
@@ -69,7 +72,7 @@ export function AppearanceSettings() {
             size="sm"
             onClick={() => void revealPath(terminal?.ghosttyConfigPath ?? null)}
           >
-            <FileTextIcon />
+            <DocumentIcon />
             Ghostty config
           </Button>
           <Button
@@ -77,7 +80,7 @@ export function AppearanceSettings() {
             size="sm"
             onClick={() => void revealPath(terminal?.overlayPaths.global ?? null)}
           >
-            <FileTextIcon />
+            <DocumentIcon />
             Volli overlay
           </Button>
         </PrefRow>
@@ -264,7 +267,7 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
           disabled={size >= FONT_SIZE_RANGE.max}
           onClick={() => step(1)}
         >
-          <PlusIcon />
+          <AddIcon />
         </Button>
       </div>
     </PrefRow>

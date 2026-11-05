@@ -14,19 +14,23 @@
  * that wants one operation's lines (the "Add a host over SSH" checklist's
  * Details, VC-700).
  */
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
-import { PauseIcon } from "@phosphor-icons/react/dist/csr/Pause";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import {
+  CopyIcon,
+  DownloadIcon,
+  PauseIcon,
+  PlayIcon,
+  CloseIcon,
+  FilterIcon,
+  SearchIcon,
+  RefreshIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { errorMessage, LOG_LEVELS, type HostLogEntry, type LogLevel } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { InputGroup, InputGroupInput, InputGroupAddon } from "@renderer/components/ui/input-group";
@@ -456,14 +460,14 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
             Copy
           </Button>
           <Button size="sm" variant="ghost" onClick={() => exportLines(shown)}>
-            <DownloadSimpleIcon />
+            <DownloadIcon />
             Export
           </Button>
         </span>
       </div>
       <InputGroup>
         <InputGroupAddon>
-          <MagnifyingGlassIcon />
+          <SearchIcon />
         </InputGroupAddon>
         <InputGroupInput
           aria-label="Search logs"
@@ -475,7 +479,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
           <Popover>
             <PopoverTrigger asChild>
               <Button size="sm" variant="ghost" aria-label="Filter logs">
-                <FunnelIcon />
+                <FilterIcon />
                 Filters
               </Button>
             </PopoverTrigger>
@@ -548,7 +552,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
               aria-label="Clear filters"
               onClick={() => setFilter(EMPTY_FILTER)}
             >
-              <XIcon />
+              <CloseIcon />
             </Button>
           )}
         </InputGroupAddon>
@@ -573,7 +577,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
             >
               {key === "minLevel" ? "Level" : key === "text" ? "Search" : key.replace(/Id$/u, "")}:{" "}
               {labels.get(value) ?? value}
-              <XIcon />
+              <CloseIcon />
             </Button>
           ))}
       </div>
@@ -594,7 +598,7 @@ export function LogViewer({ local = defaultLocalSource }: { local?: LogSource } 
             title={`Couldn't read ${source.label} logs`}
             actions={
               <Button size="xs" variant="outline" onClick={() => retry(source.id)}>
-                <ArrowClockwiseIcon />
+                <RefreshIcon />
                 Retry
               </Button>
             }

@@ -40,9 +40,8 @@
  * in the ui store; what it means is `usage-pin.ts`.
  */
 
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { ChevronDownIcon, PinIcon, RefreshIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { remainingPercent, usageTone, type UsageTone, type UsageWindow } from "@volli/shared";
 
@@ -237,7 +236,7 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
             disabled={busy}
             onClick={() => void load(true)}
           >
-            {busy ? <Spinner /> : <ArrowClockwiseIcon />}
+            {busy ? <Spinner /> : <RefreshIcon />}
           </Button>
         </div>
         <div className="max-h-96 overflow-y-auto overscroll-contain px-2">
@@ -317,10 +316,10 @@ function AccountItem({
               button. It is here so a closed list still says which account
               the glyph is showing, when that is not the one on top. */}
           {holdsPin ? (
-            <PushPinIcon
+            <PinIcon
               aria-label="Pinned to the window bar"
               role="img"
-              weight="fill"
+
               className="size-3 shrink-0 text-muted-foreground"
             />
           ) : null}
@@ -332,10 +331,10 @@ function AccountItem({
               Refresh, so without the key it would judge a new snapshot
               against the clock as it stood when the popover first opened. */}
           <BindingReading key={account.limits.checkedAt} window={account.binding} now={now} />
-          <CaretDownIcon
+          <ChevronDownIcon
             aria-hidden
             className="size-3 shrink-0 text-muted-foreground transition-transform duration-(--duration-menu-in) ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-            weight="bold"
+            strokeWidth={2.25}
           />
         </span>
       </AccordionTrigger>

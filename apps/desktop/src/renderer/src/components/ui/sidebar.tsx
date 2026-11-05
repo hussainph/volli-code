@@ -1,5 +1,6 @@
 import * as React from "react";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
+import { SidebarIcon } from "@renderer/components/ui/icon";
+
 import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 
@@ -250,13 +251,8 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       }}
       {...props}
     >
-      {/* Outline, the baseline. `fill` marks the one item that is the EXCEPTION
-          among its neighbours (CLAUDE.md), and a control's own noun is never
-          that — this glyph is the trigger, not the odd one out in a list of
-          them. The audit measures SidebarSimple's fill at 1.34x regular's ink
-          anyway: too weak to carry a state even if there were one to carry, and
-          this control has no visual on-state at all (a separate sweep). */}
-      <SidebarSimpleIcon />
+      {/* A shared outline symbol; the trigger is not a state badge. */}
+      <SidebarIcon />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );

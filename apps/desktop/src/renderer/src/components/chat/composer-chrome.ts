@@ -18,4 +18,4 @@ export const COMPOSER_CONTROL_ICON_SIZE = "icon-sm" as const;
 export const COMPOSER_PRIMARY_SIZE = "icon-lg" as const;
 
 /** Small glyphs need the weight step to stand beside the 13px labels. */
-export const COMPOSER_GLYPH_WEIGHT = "bold" as const;
+export const COMPOSER_GLYPH_STROKE = 2.25 as const;

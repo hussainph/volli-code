@@ -1,6 +1,6 @@
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
+import { CheckIcon, MinusIcon } from "@renderer/components/ui/icon";
+
 import { Checkbox as CheckboxPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -42,9 +42,9 @@ function Checkbox({
     >
       <CheckboxPrimitive.Indicator data-slot="checkbox-indicator" className="flex">
         {props.checked === "indeterminate" ? (
-          <MinusIcon weight="bold" className="size-3" />
+          <MinusIcon strokeWidth={2.25} className="size-3" />
         ) : (
-          <CheckIcon weight="bold" className="size-3" />
+          <CheckIcon strokeWidth={2.25} className="size-3" />
         )}
       </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>

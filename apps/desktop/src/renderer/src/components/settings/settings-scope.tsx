@@ -1,9 +1,12 @@
 /** Scope is navigation, not explanatory copy. Picking a project here never retargets a live workspace. */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import {
+  ChevronDownIcon,
+  FolderOpenIcon,
+  SettingsIcon,
+  AddIcon,
+} from "@renderer/components/ui/icon";
+
 import { monogram, projectColor, type Project } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
@@ -50,7 +53,7 @@ export function SettingsScope({
         onClick={() => onScope("app")}
       >
         <span className="grid size-7 place-items-center">
-          <GearSixIcon aria-hidden />
+          <SettingsIcon aria-hidden />
         </span>
         All projects
       </Button>
@@ -72,7 +75,7 @@ export function SettingsScope({
               variant="ghost"
               className="absolute top-1/2 right-1 -translate-y-1/2"
             >
-              <CaretDownIcon />
+              <ChevronDownIcon />
             </Button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-64 p-2">
@@ -101,7 +104,7 @@ export function SettingsScope({
                   onAdd();
                 }}
               >
-                <PlusIcon />
+                <AddIcon />
                 Open a project
               </Button>
             </div>

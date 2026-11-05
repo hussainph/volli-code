@@ -1,6 +1,9 @@
 import * as React from "react";
-import { ArrowClockwiseIcon as ArrowClockwise } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowsInLineVerticalIcon as ArrowsInLineVertical } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
+import {
+  RefreshIcon as ArrowClockwise,
+  CollapseVerticalIcon as ArrowsInLineVertical,
+} from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 import { FileTree } from "./file-tree";
 import type { FileEntry } from "./file-tree-model";

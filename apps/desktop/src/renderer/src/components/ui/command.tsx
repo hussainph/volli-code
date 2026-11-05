@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { SearchIcon } from "@renderer/components/ui/icon";
 
 import { cn } from "@renderer/lib/utils";
 import {
@@ -36,7 +36,7 @@ function CommandInput({
     // input inside a 36px wrapper — the field was taller than the box clipping
     // it, so its own padding decided where the text sat.
     <div data-slot="command-input-wrapper" className={COMMAND_SEARCH_FIELD}>
-      <MagnifyingGlassIcon className="size-3.5 shrink-0 opacity-50" />
+      <SearchIcon className="size-3.5 shrink-0 opacity-50" />
       <CommandPrimitive.Input
         data-slot="command-input"
         className={cn(

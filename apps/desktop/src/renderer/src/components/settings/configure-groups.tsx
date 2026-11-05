@@ -1,13 +1,17 @@
 import { OverviewPane } from "./configure/overview-pane";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import {
+  SettingsIcon,
+  GuideIcon,
+  CommandIcon,
+  ProcessorIcon,
+  KeyIcon,
+  PaletteIcon,
+  ConnectedIcon,
+  TreeIcon,
+} from "@renderer/components/ui/icon";
+
 /** Project-specific settings and the shared agent pane definitions. */
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
-import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
-import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+
 import type { Project } from "@volli/shared";
 import type * as React from "react";
 
@@ -54,14 +58,14 @@ export function globalAgentGroups(project: Project | null): readonly PrefGroup[]
         {
           key: "skills",
           label: "Skills",
-          icon: BookOpenIcon,
+          icon: GuideIcon,
           keywords: ["global", "workspace", "mode", "source"],
           content: <ChooseProject />,
         },
         {
           key: "mcp",
           label: "MCP Servers",
-          icon: PlugsConnectedIcon,
+          icon: ConnectedIcon,
           keywords: ["server", "tools", "global"],
           content: <McpPane project={{ id: "" }} />,
         },
@@ -89,7 +93,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           key: "skills",
           fill: true,
           label: "Skills",
-          icon: BookOpenIcon,
+          icon: GuideIcon,
           keywords: [
             "skill",
             "agents",
@@ -130,7 +134,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           // and a filling section whose content outgrew the leftover height
           // painted straight through both of them.
           label: "MCP Servers",
-          icon: PlugsConnectedIcon,
+          icon: ConnectedIcon,
           keywords: [
             "mcp",
             "server",
@@ -175,7 +179,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         {
           key: "overview",
           label: "Overview",
-          icon: GearSixIcon,
+          icon: SettingsIcon,
           keywords: [
             "global overrides",
             "reset",
@@ -190,7 +194,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         {
           key: "sessions",
           label: "Sessions",
-          icon: CpuIcon,
+          icon: ProcessorIcon,
           keywords: [
             "chat",
             "model",
@@ -225,7 +229,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         {
           key: "worktrees",
           label: "Worktrees",
-          icon: TreeStructureIcon,
+          icon: TreeIcon,
           keywords: [
             "worktree",
             "branch",

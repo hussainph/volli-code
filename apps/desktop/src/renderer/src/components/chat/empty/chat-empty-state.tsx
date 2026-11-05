@@ -1,6 +1,6 @@
 /** A quiet entry to writing; scope stays visible and charts live one click deeper. */
 import * as React from "react";
-import { ChatCircleDotsIcon, ChartBarIcon } from "@phosphor-icons/react";
+import { ChatPendingIcon, BarChartIcon } from "@renderer/components/ui/icon";
 
 import {
   EMPTY_VISUAL_LABELS,
@@ -66,12 +66,12 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
 
   return (
     <div data-slot="chat-empty-state" className="flex max-w-full flex-col items-center gap-4">
-      <ChatCircleDotsIcon aria-hidden className="size-8 text-primary-text" />
+      <ChatPendingIcon aria-hidden className="size-8 text-primary-text" />
       <WorkingCopyCaption workingCopy={workingCopy} />
       <Popover>
         <PopoverTrigger asChild>
           <Button variant="ghost" size="sm" className="text-muted-foreground">
-            <ChartBarIcon />
+            <BarChartIcon />
             Session overview
           </Button>
         </PopoverTrigger>

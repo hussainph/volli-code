@@ -1,4 +1,4 @@
-import { CodeIcon, TerminalWindowIcon } from "@phosphor-icons/react";
+import { CodeIcon, TerminalIcon } from "@renderer/components/ui/icon";
 
 /** Recognizable glyphs for the supported external applications; no icon IPC or asset bundle. */
 export function AppGlyph({ name }: { name: string }) {
@@ -34,7 +34,7 @@ export function AppGlyph({ name }: { name: string }) {
       </svg>
     );
   if (["terminal", "iterm2", "ghostty", "warp"].includes(normalized))
-    return <TerminalWindowIcon aria-hidden className="size-4 shrink-0" />;
+    return <TerminalIcon aria-hidden className="size-4 shrink-0" />;
   return <CodeIcon aria-hidden className="size-4 shrink-0" />;
 }
 export function isAppName(name: unknown): name is string {

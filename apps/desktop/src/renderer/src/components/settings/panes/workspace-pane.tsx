@@ -1,13 +1,16 @@
 /** The Workspace roster, invitations and sharing policy, only mounted in a cloud launch. */
 import * as React from "react";
-import { BuildingsIcon } from "@phosphor-icons/react/dist/csr/Buildings";
-import { UsersIcon } from "@phosphor-icons/react/dist/csr/Users";
-import { EnvelopeIcon } from "@phosphor-icons/react/dist/csr/Envelope";
-import { ShareNetworkIcon } from "@phosphor-icons/react/dist/csr/ShareNetwork";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  WorkspaceIcon,
+  TeamIcon,
+  MailIcon,
+  ShareIcon,
+  MoreIcon,
+  AccountIcon,
+  DeleteIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   canInviteAs,
   canReissueInvite,
@@ -166,7 +169,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
 
   return (
     <>
-      <PrefSection title="Workspace" icon={BuildingsIcon}>
+      <PrefSection title="Workspace" icon={WorkspaceIcon}>
         {workspaceId === null ? (
           <Empty>No Workspace selected</Empty>
         ) : (
@@ -228,7 +231,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
         <>
           <PrefSection
             title="Members"
-            icon={UsersIcon}
+            icon={TeamIcon}
             action={
               allowedRoles.length > 0 ? (
                 <SectionAction
@@ -289,7 +292,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                                   aria-label={`More for ${member.displayName}`}
                                   disabled={locked}
                                 >
-                                  <DotsThreeIcon weight="bold" />
+                                  <MoreIcon strokeWidth={2.25} />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
@@ -300,7 +303,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                                       void perform(() => commands.setRole(member.userId, role))
                                     }
                                   >
-                                    <UserCircleIcon />
+                                    <AccountIcon />
                                     {roleLabel(role)}
                                   </DropdownMenuItem>
                                 ))}
@@ -309,7 +312,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                                     variant="destructive"
                                     onSelect={() => setConfirm(member)}
                                   >
-                                    <TrashIcon />
+                                    <DeleteIcon />
                                     Remove…
                                   </DropdownMenuItem>
                                 ) : null}
@@ -325,7 +328,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
             </ReadState>
           </PrefSection>
           {invites.kind !== "ready" || invites.value.length > 0 ? (
-            <PrefSection title="Invites" icon={EnvelopeIcon}>
+            <PrefSection title="Invites" icon={MailIcon}>
               <ReadState
                 view={invites}
                 loading="Loading invites"
@@ -385,7 +388,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
               </ReadState>
             </PrefSection>
           ) : null}
-          <PrefSection title="Sharing" icon={ShareNetworkIcon}>
+          <PrefSection title="Sharing" icon={ShareIcon}>
             <ReadState
               view={policy}
               loading="Loading sharing"
@@ -426,7 +429,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
         </>
       ) : null}
       {mine.kind !== "ready" || mine.value.length > 0 ? (
-        <PrefSection title="Invitations to you" icon={EnvelopeIcon}>
+        <PrefSection title="Invitations to you" icon={MailIcon}>
           <ReadState
             view={mine}
             loading="Loading invitations"

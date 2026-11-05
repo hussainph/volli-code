@@ -1,7 +1,8 @@
 /** One Settings surface for machine configuration and project overrides. */
 import { SettingsNavigation } from "@renderer/components/settings/settings-navigation";
 import * as React from "react";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { FolderOpenIcon } from "@renderer/components/ui/icon";
+
 import { hasAccountEnrollment, useExperimentsStore } from "@renderer/stores/experiments";
 import { launchStore } from "@renderer/stores/launch";
 import { useUiStore } from "@renderer/stores/ui";

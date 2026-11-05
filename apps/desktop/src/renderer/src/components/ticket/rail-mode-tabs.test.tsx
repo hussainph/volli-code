@@ -3,7 +3,8 @@
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
+import { CircleIcon } from "@renderer/components/ui/icon";
+
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 

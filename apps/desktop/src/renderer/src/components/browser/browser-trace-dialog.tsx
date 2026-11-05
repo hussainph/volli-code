@@ -29,11 +29,13 @@
  * nothing and holds no frames.
  */
 import * as React from "react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { FilmStripIcon } from "@phosphor-icons/react/dist/csr/FilmStrip";
-import { CursorClickIcon } from "@phosphor-icons/react/dist/csr/CursorClick";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  VideoIcon,
+  ClickIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
 
 import {
   type BrowserTrace,
@@ -213,7 +215,7 @@ function TraceReplay({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Tall enough that the content's close button (top-4 right-4) lands in it. */}
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-12 pl-4">
-        <FilmStripIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <VideoIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <DialogTitle className="min-w-0 truncate text-ui font-semibold">Browser replay</DialogTitle>
         {timeline.length > 0 ? (
           <span className="shrink-0 text-ui text-muted-foreground tabular-nums" data-trace-position>
@@ -230,8 +232,8 @@ function TraceReplay({
           data-trace-empty
         >
           <div className="relative flex size-16 items-center justify-center rounded-container border border-border bg-card shadow-raised">
-            <FilmStripIcon aria-hidden className="size-8" />
-            <CursorClickIcon
+            <VideoIcon aria-hidden className="size-8" />
+            <ClickIcon
               aria-hidden
               className="absolute -right-2 -bottom-2 size-6 text-primary-text"
             />
@@ -257,7 +259,7 @@ function TraceReplay({
                   title={facts.trouble}
                   data-trace-trouble
                 >
-                  <WarningCircleIcon aria-hidden weight="fill" className="size-3.5 shrink-0" />
+                  <WarningIcon aria-hidden className="size-3.5 shrink-0" />
                   <span className="truncate font-mono">{facts.trouble}</span>
                 </span>
               )}
@@ -288,7 +290,7 @@ function TraceReplay({
               disabled={at === 0}
               onClick={() => setIndex(at - 1)}
             >
-              <CaretLeftIcon weight="bold" />
+              <ChevronLeftIcon strokeWidth={2.25} />
             </Button>
             <ScrubTrack timeline={timeline} index={at} onScrub={setIndex} label={facts.verb} />
             <Button
@@ -299,7 +301,7 @@ function TraceReplay({
               disabled={at >= timeline.length - 1}
               onClick={() => setIndex(at + 1)}
             >
-              <CaretRightIcon weight="bold" />
+              <ChevronRightIcon strokeWidth={2.25} />
             </Button>
           </div>
         </>

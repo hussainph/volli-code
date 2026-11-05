@@ -1,6 +1,7 @@
 /** Settings canvas instrument. Uses the existing store preview and commit contract. */
 import * as React from "react";
-import { CircleHalfIcon, CirclesThreeIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react";
+import { HalfCircleIcon, GroupIcon, MinusIcon, AddIcon } from "@renderer/components/ui/icon";
+
 import {
   addStop,
   canvasBackground,
@@ -434,7 +435,7 @@ export function CanvasInstrument({
                 })
               }
             >
-              <PlusIcon />
+              <AddIcon />
             </Button>
           </div>
         </div>
@@ -459,7 +460,7 @@ export function CanvasInstrument({
         <span className="text-ui font-medium">Primary colour</span>
         <div className="flex items-center gap-2">
           {(["complementary", "analogous"] as const).map((kind) => {
-            const Icon = kind === "complementary" ? CircleHalfIcon : CirclesThreeIcon;
+            const Icon = kind === "complementary" ? HalfCircleIcon : GroupIcon;
             const label = kind === "complementary" ? "Complementary harmony" : "Analogous harmony";
             return (
               <Button

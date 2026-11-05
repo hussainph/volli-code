@@ -37,15 +37,15 @@
  */
 import * as React from "react";
 import {
-  ArrowBendUpLeftIcon,
-  ArrowUpIcon,
-  CaretUpDownIcon,
+  ReplyIcon,
+  SendIcon,
+  UnfoldIcon,
   CheckIcon,
-  PencilSimpleIcon,
+  EditIcon,
   QueueIcon,
   StopIcon,
-  TrashIcon,
-} from "@phosphor-icons/react";
+  DeleteIcon,
+} from "@renderer/components/ui/icon";
 
 import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import {
@@ -126,7 +126,7 @@ import {
   COMPOSER_CONFIG_CHIP,
   COMPOSER_CONTROL_SIZE,
   PROMPT_SURFACE,
-  COMPOSER_GLYPH_WEIGHT,
+  COMPOSER_GLYPH_STROKE,
   COMPOSER_PRIMARY_SIZE,
 } from "@renderer/components/chat/composer-chrome";
 import { EffortPill, EffortSlider } from "@renderer/components/chat/composer-effort-ui";
@@ -610,7 +610,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                               onComposerFocusRequest?.();
                             }}
                           >
-                            <ArrowBendUpLeftIcon className="size-3" />
+                            <ReplyIcon className="size-3" />
                             <span className="composer-steer-label">Steer</span>
                           </Button>
                         ) : null}
@@ -632,7 +632,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                             onComposerFocusRequest?.();
                           }}
                         >
-                          <TrashIcon className="size-3" />
+                          <DeleteIcon className="size-3" />
                         </Button>
                         <Button
                           type="button"
@@ -642,7 +642,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                           title="Edit message"
                           onClick={() => void editQueued(entry.id)}
                         >
-                          <PencilSimpleIcon className="size-3" />
+                          <EditIcon className="size-3" />
                         </Button>
                       </span>
                     }
@@ -784,11 +784,9 @@ export const SessionComposer = React.memo(function SessionComposer({
                   className="rounded-full"
                   onClick={onStop}
                 >
-                  {/* One of the few glyphs that keeps its fill: a stop square
-                      MEANS solid the way a play triangle does, and hollow it
-                      reads as a checkbox. It is also the exception rather than
-                      the category — it only exists while a turn is running. */}
-                  <StopIcon weight="fill" />
+                  {/* The stop exists only while a turn is running and keeps
+                      the shared outline drawing. */}
+                  <StopIcon />
                 </Button>
               </ComposerHint>
             ) : null}
@@ -815,13 +813,11 @@ export const SessionComposer = React.memo(function SessionComposer({
                 aria-label={working ? "Queue" : "Send"}
                 aria-keyshortcuts="Enter"
               >
-                {/* `bold`, both: at 16px a regular arrow is a hairline on a
-                    filled disc, and coverage is scale-invariant, so the weight
-                    step is the only thing that fixes it. */}
+                {/* A stronger stroke keeps both symbols legible on the send control. */}
                 {working ? (
-                  <QueueIcon weight={COMPOSER_GLYPH_WEIGHT} />
+                  <QueueIcon strokeWidth={COMPOSER_GLYPH_STROKE} />
                 ) : (
-                  <ArrowUpIcon weight={COMPOSER_GLYPH_WEIGHT} />
+                  <SendIcon strokeWidth={COMPOSER_GLYPH_STROKE} />
                 )}
               </PromptInputSubmit>
             </ComposerHint>
@@ -1734,7 +1730,7 @@ function ModelPillFace({
           · {effortLabel(compactEffortValue)}
         </span>
       )}
-      <CaretUpDownIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
+      <UnfoldIcon className="shrink-0" strokeWidth={COMPOSER_GLYPH_STROKE} />
     </>
   );
 }
@@ -2118,7 +2114,7 @@ export function ModelPill({
                           >
                             <CheckIcon
                               className={cn("size-3.5 shrink-0", !selected && "invisible")}
-                              weight="bold"
+                              strokeWidth={2.25}
                             />
                             <ModelMark model={model} providerLabel={model.providerLabel} />
                             <span className="min-w-0 flex-1 truncate tabular-nums">
@@ -2213,7 +2209,7 @@ function TierRow({
       data-testid={`model-picker-tier-${row.tier}`}
       data-tier-state={row.state}
     >
-      <CheckIcon className={cn("size-3.5 shrink-0", !selected && "invisible")} weight="bold" />
+      <CheckIcon className={cn("size-3.5 shrink-0", !selected && "invisible")} strokeWidth={2.25} />
       {/* Three columns: the tier name at a fixed width (five short words), the
           model taking what is left and truncating, and the level — or the
           state word in its place — pinned to the right edge where truncation

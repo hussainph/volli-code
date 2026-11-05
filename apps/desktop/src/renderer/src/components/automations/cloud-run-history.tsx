@@ -1,5 +1,6 @@
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
+
 import { displayTicketId } from "@volli/shared";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -155,7 +156,7 @@ function CloudRunRow({ run, now }: { run: CloudRun; now: number }) {
               })
           : null
       }
-      leading={<LightningIcon className="size-4 text-muted-foreground" />}
+      leading={<AutomationIcon className="size-4 text-muted-foreground" />}
       primary={
         <span className="flex min-w-0 flex-wrap items-center gap-1 text-ui">
           <span>{run.automationName ?? "Unbound Run"}</span>

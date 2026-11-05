@@ -1,5 +1,6 @@
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
+
 import {
   automationTriggerColumns,
   automationTriggerSchedule,
@@ -137,8 +138,13 @@ export function CloudColumnArming({
             data-column-arming={status}
             data-armed={arming?.automationId}
             data-arming-state={paused ? "paused" : arming === undefined ? "unarmed" : "ready"}
+            className={arming !== undefined && paused ? "bg-accent" : undefined}
           >
-            <LightningIcon weight={arming === undefined ? "regular" : "fill"} />
+            <AutomationIcon
+              className={
+                arming !== undefined && !paused ? "text-primary-text" : "text-muted-foreground"
+              }
+            />
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" className="flex w-64 flex-col gap-2">
@@ -183,7 +189,7 @@ export function CloudColumnArming({
             size="sm"
             onClick={() => useProjectUiStore.getState().setNav(projectId, "automations")}
           >
-            <LightningIcon />
+            <AutomationIcon />
             Automations
           </Button>
         </PopoverContent>

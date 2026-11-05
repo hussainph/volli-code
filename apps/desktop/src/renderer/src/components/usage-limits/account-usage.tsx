@@ -1,7 +1,8 @@
 /** Subscription allowances as Instrument rings. Each ring measures quota left;
  * the notch measures time left against the same anchored snapshot. Tone carries
  * pace as well as amount. Pins remain explicit host-owned controls. */
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
+import { PinIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
   elapsedShare,
@@ -204,8 +205,8 @@ function PinButton({
       onClick={onPress}
       className="-my-1 self-center"
     >
-      <PushPinIcon
-        weight={pinned ? "fill" : "bold"}
+      <PinIcon
+        strokeWidth={2.25}
         className={pinned ? "text-foreground" : "text-muted-foreground"}
       />
     </Button>

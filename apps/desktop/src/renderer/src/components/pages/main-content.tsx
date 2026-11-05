@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
+import { AddFolderIcon } from "@renderer/components/ui/icon";
 
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
@@ -106,7 +106,7 @@ function EmptyProjectsState() {
     >
       <div className="material-thick relative z-10 flex max-w-sm flex-col items-center rounded-sheet border border-border p-6 shadow-glass">
         <IdentityTile aria-hidden className="mb-4">
-          <FolderPlusIcon className="size-5" />
+          <AddFolderIcon className="size-5" />
         </IdentityTile>
         <h1 className="text-title font-semibold">Add your first project</h1>
         <Button className="mt-6 app-region-no-drag" onClick={() => void pickAndAdd()}>

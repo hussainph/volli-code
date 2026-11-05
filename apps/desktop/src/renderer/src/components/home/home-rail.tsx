@@ -61,11 +61,14 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { useShallow } from "zustand/react/shallow";
-import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  ChatPendingIcon,
+  ChatIcon,
+  FoldersIcon,
+  SearchIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
+
 import { sessionProvenanceHoverLine, type Project } from "@volli/shared";
 
 import { FileSearchPanel } from "@renderer/components/files/search-panel";
@@ -262,9 +265,9 @@ const HOME_MODE_TABS: readonly RailModeTab<HomeRailMode>[] = HOME_RAIL_MODES.map
   key,
   label: HOME_RAIL_MODE_LABELS[key],
   icon: {
-    now: ChatCircleDotsIcon,
+    now: ChatPendingIcon,
     files: FoldersIcon,
-    search: MagnifyingGlassIcon,
+    search: SearchIcon,
   }[key],
 }));
 
@@ -542,7 +545,7 @@ function BoardSessionRow({
 }) {
   const provenance = useSessionProvenance(projectId, row.id);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
-  const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
+  const Glyph = row.kind === "chat" ? ChatIcon : TerminalIcon;
   const sessionId = row.kind === "chat" ? row.id : null;
   const team = useSessionTeam(sessionId);
   const content = (

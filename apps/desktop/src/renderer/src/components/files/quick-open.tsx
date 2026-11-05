@@ -23,8 +23,8 @@
  * in the same tick) and could be read stale.
  */
 import * as React from "react";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { FileIcon, SearchIcon } from "@renderer/components/ui/icon";
+
 import { Command } from "cmdk";
 import { errorMessage, type IndexedFile } from "@volli/shared";
 
@@ -192,7 +192,7 @@ export function QuickOpen({
       contentClassName={COMMAND_OVERLAY_FRAME}
     >
       <div className={COMMAND_SEARCH_FIELD}>
-        <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <Command.Input
           autoFocus
           value={query}

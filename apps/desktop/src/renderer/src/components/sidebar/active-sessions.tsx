@@ -1,6 +1,6 @@
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
+import { ChevronDownIcon, ChevronUpIcon } from "@renderer/components/ui/icon";
+
 import {
   applyHeldOrder,
   errorMessage,
@@ -1588,7 +1588,7 @@ function PreviousBandReach({
           onClick={press(onShowMore)}
           className="text-muted-foreground"
         >
-          <CaretDownIcon weight="bold" aria-hidden className="size-3" />
+          <ChevronDownIcon strokeWidth={2.25} aria-hidden className="size-3" />
           <span>Show more</span>
         </Button>
       ) : null}
@@ -1600,7 +1600,7 @@ function PreviousBandReach({
           onClick={press(onShowLess)}
           className="text-muted-foreground"
         >
-          <CaretUpIcon weight="bold" aria-hidden className="size-3" />
+          <ChevronUpIcon strokeWidth={2.25} aria-hidden className="size-3" />
           <span>Show less</span>
         </Button>
       ) : null}

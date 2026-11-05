@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
+
 import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
@@ -544,7 +545,7 @@ export const BoardColumn = React.memo(function BoardColumn({
           onClick={composer.openComposer}
           className="mx-2 mb-2 justify-start gap-1 text-ui text-muted-foreground"
         >
-          <PlusIcon className="size-3.5" />
+          <AddIcon className="size-3.5" />
           New
         </Button>
       )}

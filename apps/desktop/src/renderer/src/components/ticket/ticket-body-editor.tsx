@@ -1,6 +1,6 @@
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { RefreshIcon, ChevronDownIcon } from "@renderer/components/ui/icon";
+
 import type { NamedBlobLink, Ticket } from "@volli/shared";
 
 import {
@@ -245,7 +245,7 @@ export function TicketBodyEditor({
           title="Changed elsewhere. Autosave paused."
           actions={
             <Button size="sm" variant="secondary" onClick={reload}>
-              <ArrowClockwiseIcon />
+              <RefreshIcon />
               Reload
             </Button>
           }
@@ -282,7 +282,7 @@ export function TicketBodyEditor({
             className="mt-1 flex items-center gap-1 rounded-sm px-1 text-ui text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           >
             {expanded ? "Collapse" : "Expand"}
-            <CaretDownIcon
+            <ChevronDownIcon
               className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
             />
           </button>

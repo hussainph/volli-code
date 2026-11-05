@@ -1,8 +1,7 @@
 /** Creation defaults keep real project writes; branch options come from the host, never fixtures. */
 import * as React from "react";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import { CodeFileIcon, TerminalIcon, TreeIcon } from "@renderer/components/ui/icon";
+
 import type { Project, WorktreeBranchListing } from "@volli/shared";
 import {
   PrefRow,
@@ -66,12 +65,12 @@ export function WorktreesPane({ project }: { project: Project }) {
     <>
       <PrefSection
         title="New worktrees"
-        icon={TreeStructureIcon}
+        icon={TreeIcon}
         action={
           <SectionIconAction label="Refresh branches" busy={status === "loading"} onAct={reload} />
         }
       >
-        <PrefRow label="Branch from" icon={TreeStructureIcon} htmlFor="project-base-branch">
+        <PrefRow label="Branch from" icon={TreeIcon} htmlFor="project-base-branch">
           <Select
             value={project.baseBranch ?? "__default"}
             disabled={status !== "ready" || saving}
@@ -119,7 +118,7 @@ export function WorktreesPane({ project }: { project: Project }) {
             htmlFor="project-setup-command"
             className="flex items-center gap-2 text-ui font-medium"
           >
-            <TerminalWindowIcon aria-hidden className="size-4 text-muted-foreground" />
+            <TerminalIcon aria-hidden className="size-4 text-muted-foreground" />
             Setup command
           </label>
           <Textarea
@@ -151,22 +150,22 @@ export function WorktreesPane({ project }: { project: Project }) {
       </PrefSection>
       <PrefSection
         title="Copied files"
-        icon={FileCodeIcon}
+        icon={CodeFileIcon}
         action={
           <Button
             variant="ghost"
             size="sm"
             onClick={() => openProjectSettingFile(project.id, ".worktreeinclude")}
           >
-            <FileCodeIcon />
+            <CodeFileIcon />
             Edit .worktreeinclude
           </Button>
         }
       >
-        <ItemRow name=".env*" leading={<FileCodeIcon className="size-4" />} meta="Default" />
+        <ItemRow name=".env*" leading={<CodeFileIcon className="size-4" />} meta="Default" />
         <ItemRow
           name=".claude/settings.local.json"
-          leading={<FileCodeIcon className="size-4" />}
+          leading={<CodeFileIcon className="size-4" />}
           meta="Default"
         />
       </PrefSection>

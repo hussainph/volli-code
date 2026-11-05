@@ -63,7 +63,7 @@
  * than shortening it.
  */
 import * as React from "react";
-import { CaretUpDownIcon, GaugeIcon } from "@phosphor-icons/react";
+import { UnfoldIcon, GaugeIcon } from "@renderer/components/ui/icon";
 
 import {
   EFFORT_DEAD_ZONE,
@@ -79,7 +79,7 @@ import {
 import {
   COMPOSER_CONFIG_CHIP,
   COMPOSER_CONTROL_SIZE,
-  COMPOSER_GLYPH_WEIGHT,
+  COMPOSER_GLYPH_STROKE,
 } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -139,9 +139,9 @@ export function EffortPill({
               and a bigger `size-*` could not fix it. `fill` would be wrong for
               the other reason: this chip is one of two peers in a control row,
               not the exception among them. */}
-          <GaugeIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
+          <GaugeIcon className="shrink-0" strokeWidth={COMPOSER_GLYPH_STROKE} />
           <span className="min-w-0 truncate">{effortLabel(value)}</span>
-          <CaretUpDownIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
+          <UnfoldIcon className="shrink-0" strokeWidth={COMPOSER_GLYPH_STROKE} />
         </Button>
       </PopoverTrigger>
       <PopoverContent

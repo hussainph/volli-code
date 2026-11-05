@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
+
 import {
   cardTicketKey,
   displayTicketId,
@@ -237,7 +238,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
         onClick={composer.openComposer}
         className="flex h-8 w-full items-center gap-1 px-gutter text-ui text-muted-foreground transition-colors duration-(--duration-menu-in) ease-out hover:text-foreground"
       >
-        <PlusIcon className="size-3.5" />
+        <AddIcon className="size-3.5" />
         New
       </button>
     );

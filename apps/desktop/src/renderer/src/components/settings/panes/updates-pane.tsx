@@ -25,7 +25,8 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * is never downgraded, so the pane says both the moment it happens.
  */
 import * as React from "react";
-import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
+import { DownloadIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import type { UpdateChannel } from "../../../../../ipc/contract";
@@ -116,7 +117,7 @@ export function UpdatesPane() {
         <Notice
           tone="positive"
           dismissalKey={`settings:updates:ready:${state?.targetVersion}`}
-          icon={DownloadSimpleIcon}
+          icon={DownloadIcon}
           title={`Volli ${state?.targetVersion} is ready`}
           actions={
             <Button size="xs" variant="outline" onClick={openDialog}>
@@ -126,10 +127,10 @@ export function UpdatesPane() {
         />
       ) : null}
       {leftCanary ? (
-        <Notice icon={DownloadSimpleIcon} title="Stable takes effect the next time Volli opens" />
+        <Notice icon={DownloadIcon} title="Stable takes effect the next time Volli opens" />
       ) : null}
 
-      <PrefSection title="Updates" icon={DownloadSimpleIcon}>
+      <PrefSection title="Updates" icon={DownloadIcon}>
         <PrefRow label="Channel" htmlFor="update-channel">
           {channelError ? (
             <Notice

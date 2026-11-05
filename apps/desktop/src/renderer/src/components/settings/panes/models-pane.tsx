@@ -6,10 +6,13 @@ import {
 } from "@renderer/components/pages/model-access-settings";
 import { OverrideLinks } from "../settings-navigation";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import {
+  RefreshIcon,
+  CollapseVerticalIcon,
+  ProcessorIcon,
+  PreviewIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { toast } from "sonner";
 import {
@@ -271,7 +274,7 @@ export function ModelAccessSettings({
         />
       ) : null}
       {hostName === undefined && !agents && loading && providers.length === 0 ? (
-        <PrefSection title="Accounts" icon={CpuIcon}>
+        <PrefSection title="Accounts" icon={ProcessorIcon}>
           <div className="space-y-4 p-4" aria-label="Loading model accounts">
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
@@ -290,7 +293,7 @@ export function ModelAccessSettings({
       {!agents && (
         <PrefSection
           title="Default models"
-          icon={CpuIcon}
+          icon={ProcessorIcon}
           action={
             <div className="flex flex-wrap items-center gap-2">
               {hostName === undefined ? (
@@ -306,11 +309,7 @@ export function ModelAccessSettings({
                 disabled={loading}
                 onClick={() => void load(true)}
               >
-                {loading ? (
-                  <Spinner className="size-3.5" />
-                ) : (
-                  <ArrowClockwiseIcon className="size-3.5" />
-                )}
+                {loading ? <Spinner className="size-3.5" /> : <RefreshIcon className="size-3.5" />}
               </Button>
             </div>
           }
@@ -357,7 +356,7 @@ export function ModelAccessSettings({
         />
       ) : null}
       {agents && (
-        <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
+        <PrefSection title="Compaction" icon={CollapseVerticalIcon}>
           {loading ? (
             <div className="p-4" aria-label="Loading compaction">
               <Skeleton className="h-8 w-full" />
@@ -418,7 +417,7 @@ function CatalogSection({
   return (
     <PrefSection
       title="Catalog"
-      icon={EyeIcon}
+      icon={PreviewIcon}
       action={<TableSearch value={query} placeholder="Search models" onChange={setQuery} />}
     >
       <DataTable

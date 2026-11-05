@@ -10,7 +10,8 @@
  * appears once. Which tier won it is what Source says.
  */
 import * as React from "react";
-import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
+import { CommandIcon } from "@renderer/components/ui/icon";
+
 import type { Project, PromptTemplate } from "@volli/shared";
 
 import { AsyncSection, Cell, DataTable, DescriptionCell } from "@renderer/components/settings/kit";

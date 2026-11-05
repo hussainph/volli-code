@@ -7,14 +7,16 @@
  * metadata or repeat host/client protocol vocabulary.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { UsersThreeIcon } from "@phosphor-icons/react/dist/csr/UsersThree";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { StopCircleIcon } from "@phosphor-icons/react/dist/csr/StopCircle";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  ExternalIcon,
+  BrowserIcon,
+  PreviewIcon,
+  TerminalIcon,
+  TeamIcon,
+  WarningIcon,
+  StopCircleIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
 
 import {
   browserHoldNoticeCopy,
@@ -39,24 +41,14 @@ const GLYPH_CLASS = "size-3.5 shrink-0";
 function SubagentNoticeGlyph({ state }: { state: SubagentNotice["state"] }) {
   switch (state) {
     case "completed":
-      return <UsersThreeIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />;
+      return <TeamIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />;
     case "stopped":
-      return (
-        <StopCircleIcon
-          aria-hidden
-          className={cn(GLYPH_CLASS, "text-muted-foreground")}
-          weight="fill"
-        />
-      );
+      return <StopCircleIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />;
     case "interrupted":
     case "timed-out":
-      return (
-        <WarningIcon aria-hidden className={cn(GLYPH_CLASS, "text-attention")} weight="fill" />
-      );
+      return <WarningIcon aria-hidden className={cn(GLYPH_CLASS, "text-attention")} />;
     case "failed":
-      return (
-        <XCircleIcon aria-hidden className={cn(GLYPH_CLASS, "text-destructive")} weight="fill" />
-      );
+      return <ErrorIcon aria-hidden className={cn(GLYPH_CLASS, "text-destructive")} />;
   }
 }
 
@@ -93,7 +85,7 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
             title="Open the Subagent Session"
             onClick={() => onOpenSession(childSessionId)}
           >
-            <ArrowSquareOutIcon aria-hidden className="size-3.5" />
+            <ExternalIcon aria-hidden className="size-3.5" />
             Open
           </Button>
         )}
@@ -130,7 +122,7 @@ export const WatchNoticeRow = React.memo(function WatchNoticeRow({
   return (
     <div className="not-prose flex min-w-0 flex-col gap-1" title={copy.lines.join("\n")}>
       <div className="flex min-w-0 items-center gap-2 text-ui">
-        <EyeIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />
+        <PreviewIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />
         <span className="min-w-0 truncate font-medium">{copy.headline}</span>
         <Separator aria-hidden className="min-w-4 flex-1" />
       </div>
@@ -142,7 +134,7 @@ export const WatchNoticeRow = React.memo(function WatchNoticeRow({
 /**
  * A background shell the Session started exited, or printed the line it asked
  * to be told about (VC-495). Quiet on purpose, like the other host rows: the
- * glyph carries the outcome; only a stop or failure uses a filled exception.
+ * glyph carries the outcome, with semantic ink on attention and failure.
  * The state remains in the accessible receipt and hover text.
  */
 export const ShellNoticeRow = React.memo(function ShellNoticeRow({
@@ -157,12 +149,12 @@ export const ShellNoticeRow = React.memo(function ShellNoticeRow({
       title={`${copy.headline} — ${copy.state}. ${copy.note}`}
     >
       {notice.event === "exited" && notice.byPerson ? (
-        <StopCircleIcon aria-hidden className={GLYPH_CLASS} weight="fill" />
+        <StopCircleIcon aria-hidden className={GLYPH_CLASS} />
       ) : notice.event === "exited" &&
         ((notice.code !== null && notice.code !== 0) || notice.signal !== null) ? (
-        <XCircleIcon aria-hidden className={cn(GLYPH_CLASS, "text-destructive")} weight="fill" />
+        <ErrorIcon aria-hidden className={cn(GLYPH_CLASS, "text-destructive")} />
       ) : (
-        <TerminalWindowIcon aria-hidden className={GLYPH_CLASS} />
+        <TerminalIcon aria-hidden className={GLYPH_CLASS} />
       )}
       <span className="min-w-0 truncate font-medium text-foreground">{copy.headline}</span>
       <span className="sr-only">{copy.state}</span>
@@ -182,7 +174,7 @@ export const UnknownHostNoticeRow = React.memo(function UnknownHostNoticeRow({
       className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground"
       title={notice.text}
     >
-      <WarningIcon aria-hidden className={cn(GLYPH_CLASS, "text-attention")} weight="fill" />
+      <WarningIcon aria-hidden className={cn(GLYPH_CLASS, "text-attention")} />
       <span className="shrink-0 font-medium text-foreground">Volli</span>
       <Separator aria-hidden className="min-w-4 flex-1" />
       <span className="min-w-0 truncate">{notice.text}</span>

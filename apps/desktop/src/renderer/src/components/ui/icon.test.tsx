@@ -17,11 +17,12 @@ describe("shared symbols", () => {
 
   it("keeps caller sizing, hidden semantics and SVG attributes", () => {
     const html = renderToStaticMarkup(
-      <Icon name="close" size={14} aria-hidden="true" data-slot="close" />,
+      <Icon name="close" size={14} aria-hidden="true" data-slot="close" alt="Dismiss" />,
     );
     expect(html).toContain('width="14" height="14"');
     expect(html).toContain('aria-hidden="true"');
     expect(html).toContain('data-slot="close"');
+    expect(html).toMatch(/<title[^>]*>Dismiss<\/title>/);
   });
 
   it("steps up the small-size stroke and permits the deliberate heavier stroke", () => {

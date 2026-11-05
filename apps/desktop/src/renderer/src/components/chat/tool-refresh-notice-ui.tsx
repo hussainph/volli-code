@@ -1,5 +1,6 @@
 import * as React from "react";
-import { CaretRightIcon } from "@phosphor-icons/react";
+import { ChevronRightIcon } from "@renderer/components/ui/icon";
+
 import type { TranscriptToolRefresh } from "@volli/session-presentation";
 
 import {
@@ -39,7 +40,7 @@ export const ToolRefreshNotice = React.memo(function ToolRefreshNotice({
       className="not-prose min-w-0 text-ui text-muted-foreground"
     >
       <CollapsibleTrigger className="group/refresh flex w-full min-w-0 cursor-default items-center gap-1 rounded-row py-1 text-left font-medium outline-none select-none transition-colors duration-(--duration-menu-in) ease-swift hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring motion-reduce:transition-none">
-        <CaretRightIcon
+        <ChevronRightIcon
           aria-hidden
           className="size-3 shrink-0 transition-transform duration-(--duration-menu-in) ease-swift group-data-[state=open]/refresh:rotate-90 motion-reduce:transition-none"
         />

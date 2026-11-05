@@ -1,5 +1,6 @@
 /** Effective values stay visible; reset is an explicit action in a small popover. */
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
+import { UndoIcon } from "@renderer/components/ui/icon";
+
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Button } from "@renderer/components/ui/button";
 
@@ -30,7 +31,7 @@ export function OverrideControl({
               disabled={disabled}
               aria-label={`Reset ${label} to the global value, ${inheritedValue}`}
             >
-              <ArrowCounterClockwiseIcon />
+              <UndoIcon />
             </Button>
           </PopoverTrigger>
           <PopoverContent align="end" className="w-64 p-2">
@@ -38,7 +39,7 @@ export function OverrideControl({
               Global default: {inheritedValue}
             </p>
             <Button variant="ghost" size="sm" className="w-full justify-start" onClick={onRevert}>
-              <ArrowCounterClockwiseIcon />
+              <UndoIcon />
               Revert to global default
             </Button>
           </PopoverContent>

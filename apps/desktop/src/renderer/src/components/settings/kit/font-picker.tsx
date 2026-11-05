@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Command } from "cmdk";
-import { CheckIcon } from "@phosphor-icons/react";
+import { CheckIcon } from "@renderer/components/ui/icon";
+
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 

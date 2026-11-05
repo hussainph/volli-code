@@ -8,7 +8,7 @@
  * entries, list entries drawn as settings, and no way to scan either.
  */
 import type * as React from "react";
-import type { Icon } from "@phosphor-icons/react";
+import { type IconComponent as Icon } from "@renderer/components/ui/icon";
 
 import { IdentityTile } from "@renderer/components/ui/identity-tile";
 import { ListRow } from "@renderer/components/ui/list-row";

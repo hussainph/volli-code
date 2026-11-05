@@ -33,15 +33,17 @@
  *    rather than an omission: for a Skill, git is already the archive.
  */
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import {
+  AutomationIcon,
+  CopyIcon,
+  MoreIcon,
+  BoardIcon,
+  ListIcon,
+  PlayIcon,
+  AddIcon,
+  HistoryIcon,
+  DeleteIcon,
+} from "@renderer/components/ui/icon";
 
 import { effortLabel } from "@volli/session-presentation";
 import {
@@ -124,7 +126,7 @@ export function AutomationsPage() {
       <div className={cn("flex-1", EMPTY_PAGE)}>
         <div className="flex max-w-sm flex-col items-center">
           <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2">
-            <LightningIcon className="size-5 text-muted-foreground" />
+            <AutomationIcon className="size-5 text-muted-foreground" />
           </div>
           <h1 className="text-heading font-semibold">No project selected</h1>
         </div>
@@ -335,7 +337,7 @@ function AutomationsSurface({
               size="icon-sm"
               aria-label={`More for ${selectedAutomation.name}`}
             >
-              <DotsThreeIcon />
+              <MoreIcon />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -348,7 +350,7 @@ function AutomationsSurface({
               variant="destructive"
               onSelect={() => setConfirmingDelete(selectedAutomation)}
             >
-              <TrashIcon />
+              <DeleteIcon />
               Delete
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -360,20 +362,20 @@ function AutomationsSurface({
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <header className="flex shrink-0 flex-wrap items-center gap-4 border-b border-border px-6 py-4">
         <div className="flex items-center gap-2">
-          <LightningIcon className="size-4 text-primary-text" />
+          <AutomationIcon className="size-4 text-primary-text" />
           <h1 className="text-sm font-semibold">Automations</h1>
         </div>
         <Segmented<AutomationPageView>
           ariaLabel="Automation layout"
           value={view}
           options={[
-            { key: "details", label: "Automations", icon: ListBulletsIcon },
-            { key: "lanes", label: "Lanes", icon: KanbanIcon },
+            { key: "details", label: "Automations", icon: ListIcon },
+            { key: "lanes", label: "Lanes", icon: BoardIcon },
           ]}
           onChange={setView}
         />
         <Button size="sm" onClick={createAutomation}>
-          <PlusIcon />
+          <AddIcon />
           {target?.automation !== null && loadEditorDraft(projectId) !== null
             ? "Resume draft"
             : "New Automation"}
@@ -547,7 +549,7 @@ function AutomationRail({
                 onClick={onCreate}
                 className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <PlusIcon weight="bold" className="size-3" />
+                <AddIcon strokeWidth={2.25} className="size-3" />
               </button>
             </div>
             {group.automations.length === 0 ? (
@@ -622,7 +624,7 @@ function AutomationRail({
             : "text-muted-foreground hover:bg-accent/50",
         )}
       >
-        <ClockCounterClockwiseIcon className="size-4 shrink-0" />
+        <HistoryIcon className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-ui font-medium">Project activity</span>
       </button>
     </aside>
@@ -670,10 +672,10 @@ function EmptyAutomations({ onCreate, history }: { onCreate(): void; history?: R
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="grid min-h-64 flex-1 place-items-center p-6">
         <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-          <LightningIcon className="size-5 text-muted-foreground" />
+          <AutomationIcon className="size-5 text-muted-foreground" />
           <h2 className="text-heading font-semibold">Nothing saved yet</h2>
           <Button size="sm" onClick={onCreate}>
-            <PlusIcon />
+            <AddIcon />
             New Automation
           </Button>
         </div>
@@ -900,7 +902,7 @@ function SkippedRow({ skip, now }: { skip: AutomationSkippedOccurrence; now: num
       // row itself to go. Its one act is the control, which is why the control
       // is on it rather than a click nothing would answer.
       onActivate={null}
-      leading={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}
+      leading={<HistoryIcon className="size-4 text-muted-foreground" />}
       primary={
         <span className="flex min-w-0 items-center gap-1 text-ui">
           <span className="shrink-0 text-foreground">{skip.automationName}</span>
@@ -971,7 +973,7 @@ function RunRow({
       onActivate={() =>
         openRunSession({ sessionId: run.sessionId, projectId, ticketId: run.ticketId })
       }
-      leading={<LightningIcon className="size-4 text-muted-foreground" />}
+      leading={<AutomationIcon className="size-4 text-muted-foreground" />}
       primary={
         <span className="flex min-w-0 items-center gap-1 text-ui">
           <span className="shrink-0 text-foreground">{runAutomationLabel(run)}</span>

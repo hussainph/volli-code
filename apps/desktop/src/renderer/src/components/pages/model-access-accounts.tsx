@@ -35,11 +35,14 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * page is where an account is CHANGED; that one is where it is watched.
  */
 
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
+import {
+  ExternalIcon,
+  SuccessIcon,
+  CopyIcon,
+  SearchIcon,
+  IntegrationIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import type {
   ModelAccessProvider,
@@ -131,7 +134,7 @@ export function ModelAccessAccounts({
        * vocabulary, which is why the rail search does not index them and this
        * half carries its own.
        */}
-      <PrefSection title="Signed in" icon={CheckCircleIcon}>
+      <PrefSection title="Signed in" icon={SuccessIcon}>
         <div data-slot="model-access-accounts">
           {connected.length === 0 ? (
             <Empty>Not signed in to any provider yet.</Empty>
@@ -170,7 +173,7 @@ function FilteredAccounts({
   return (
     <PrefSection
       title="Available to connect"
-      icon={PlugsIcon}
+      icon={IntegrationIcon}
       // The field belongs on the header rail, not under it. Full-width below
       // the rule it read as the first ROW of the list — a text input where the
       // eye expects the first provider — and the section then owned two
@@ -179,7 +182,7 @@ function FilteredAccounts({
         providers.length > 8 ? (
           <InputGroup className="w-56">
             <InputGroupAddon>
-              <MagnifyingGlassIcon />
+              <SearchIcon />
             </InputGroupAddon>
             <InputGroupInput
               type="search"
@@ -602,7 +605,7 @@ function DeviceCode({ code }: { code: string }) {
         aria-label={copied ? "Code copied" : "Copy code"}
         onClick={() => void copyDeviceCode(code).then((state) => setCopied(state === "copied"))}
       >
-        {copied ? <CheckCircleIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+        {copied ? <SuccessIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
       </Button>
     </div>
   );
@@ -635,7 +638,7 @@ function ExternalLinkButton({ url, label }: { url: string; label: string }) {
       className="self-start"
       onClick={() => window.open(url, "_blank", "noopener")}
     >
-      <ArrowSquareOutIcon className="size-3.5" />
+      <ExternalIcon className="size-3.5" />
       {label}
     </Button>
   );

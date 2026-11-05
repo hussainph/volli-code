@@ -35,11 +35,13 @@
  * nowhere — none of these presses carries momentum.
  */
 import * as React from "react";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  BrowserIcon,
+  ChevronDownIcon,
+  ChatIcon,
+  AddIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
 
 import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import { useCanSendSession } from "@renderer/lib/cloud-session-read-only";
@@ -118,12 +120,12 @@ export function newSessionMenuRows(
   if (menu === "context") {
     return (
       <>
-        <ContextMenuItem icon={ChatCircleIcon} onSelect={onNewChat}>
+        <ContextMenuItem icon={ChatIcon} onSelect={onNewChat}>
           Chat
           {shortcuts ? <ContextMenuShortcut>{CHORD.chat}</ContextMenuShortcut> : null}
         </ContextMenuItem>
         {onNewTerminal === undefined ? null : (
-          <ContextMenuItem icon={TerminalWindowIcon} onSelect={onNewTerminal}>
+          <ContextMenuItem icon={TerminalIcon} onSelect={onNewTerminal}>
             Terminal
             {shortcuts ? <ContextMenuShortcut>{CHORD.terminal}</ContextMenuShortcut> : null}
           </ContextMenuItem>
@@ -142,13 +144,13 @@ export function newSessionMenuRows(
   return (
     <>
       <DropdownMenuItem onSelect={onNewChat}>
-        <ChatCircleIcon />
+        <ChatIcon />
         Chat
         {shortcuts ? <DropdownMenuShortcut>{CHORD.chat}</DropdownMenuShortcut> : null}
       </DropdownMenuItem>
       {onNewTerminal === undefined ? null : (
         <DropdownMenuItem onSelect={onNewTerminal}>
-          <TerminalWindowIcon />
+          <TerminalIcon />
           Terminal
           {shortcuts ? <DropdownMenuShortcut>{CHORD.terminal}</DropdownMenuShortcut> : null}
         </DropdownMenuItem>
@@ -285,7 +287,7 @@ export function NewSessionControl({
                 14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier
                 — and a weight step that only half its rooms earn is not a step.
                 The caret below is `size-3` in every room, so it keeps bold. */}
-              <PlusIcon />
+              <AddIcon />
               {drawing.label}
             </Button>
             <DropdownMenu>
@@ -301,8 +303,8 @@ export function NewSessionControl({
                   // Keep an icon-sized target; the shared group owns the seam.
                   className="group px-0 disabled:opacity-100"
                 >
-                  <CaretDownIcon
-                    weight="bold"
+                  <ChevronDownIcon
+                    strokeWidth={2.25}
                     // The flip is STATE, not decoration, so reduced motion drops
                     // the travel and keeps the end position — `transition-none`,
                     // not a cancelled rotation. (`transform-none` was neither:

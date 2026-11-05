@@ -25,17 +25,20 @@
  * `Summary unavailable` when neither is readable, and flags unreadable messages.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  ExternalIcon,
+  ChevronLeftIcon,
+  ChatIcon,
+  SuccessIcon,
+  HistoryIcon,
+  InfoIcon,
+  DispatchIcon,
+  HelpIcon,
+  TicketIcon,
+  WarningIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   peekSummaryOf,
@@ -149,7 +152,7 @@ export function FolderStrip({ ticketLabel, onBack }: { ticketLabel: string; onBa
           className={crumb}
           onClick={onBack}
         >
-          <CaretLeftIcon />
+          <ChevronLeftIcon />
           <span className="font-mono text-label tracking-normal">{ticketLabel}</span>
         </Button>
       )}
@@ -207,11 +210,11 @@ function Identity({
         </span>
       </div>
       <Button size="icon-sm" variant="ghost" aria-label="Open session" onClick={onOpen}>
-        <ArrowSquareOutIcon />
+        <ExternalIcon />
       </Button>
       {pinned ? (
         <Button size="icon-sm" variant="ghost" aria-label="Close reply" onClick={onClose}>
-          <XIcon />
+          <CloseIcon />
         </Button>
       ) : null}
     </header>
@@ -278,7 +281,7 @@ function Summary({
   const summary = content === null ? null : (content.summary ?? peekSummaryOf(content.entries));
   const state = loading ? "loading" : summary === null || failed ? "unavailable" : "ready";
   return (
-    <CardBlock icon={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}>
+    <CardBlock icon={<HistoryIcon className="size-4 text-muted-foreground" />}>
       <div className="text-muted-foreground" data-summary-state={state} aria-busy={loading}>
         {state === "loading" ? (
           <div role="status" aria-label="Reading the session" className="flex flex-col gap-2">
@@ -462,7 +465,7 @@ export function SessionPeekCard({
           </CardBlock>
         ) : null}
         {question !== null && !pinned ? (
-          <CardBlock icon={<QuestionIcon className="size-4 text-attention" />}>
+          <CardBlock icon={<HelpIcon className="size-4 text-attention" />}>
             <p
               data-peek-question=""
               className="font-medium text-foreground [overflow-wrap:anywhere]"
@@ -522,7 +525,7 @@ export function SessionPeekCard({
       {send.kind === "sent" ? (
         <CardBlock
           role="status"
-          icon={<CheckCircleIcon className="size-4" />}
+          icon={<SuccessIcon className="size-4" />}
           className="shrink-0 border-t border-border py-2 text-positive"
         >
           Sent
@@ -539,7 +542,7 @@ export function SessionPeekCard({
               className={GHOST_ON_LEAD}
               onClick={onViewConversation}
             >
-              <ChatCircleIcon />
+              <ChatIcon />
               View conversation
             </Button>
           ) : (
@@ -555,11 +558,7 @@ export function SessionPeekCard({
                 size="sm"
                 disabled={message.trim() === "" || send.kind === "sending" || send.kind === "sent"}
               >
-                {send.kind === "sending" ? (
-                  <Spinner aria-label="Sending" />
-                ) : (
-                  <PaperPlaneTiltIcon />
-                )}
+                {send.kind === "sending" ? <Spinner aria-label="Sending" /> : <DispatchIcon />}
                 {send.kind === "sending"
                   ? "Sending"
                   : send.kind === "failed"
@@ -569,7 +568,7 @@ export function SessionPeekCard({
             )
           ) : (
             <Button type="button" size="sm" variant="secondary" onClick={onPin}>
-              {question === null ? <PaperPlaneTiltIcon /> : <QuestionIcon />}
+              {question === null ? <DispatchIcon /> : <HelpIcon />}
               {question === null ? "Send" : "Answer"}
             </Button>
           )}

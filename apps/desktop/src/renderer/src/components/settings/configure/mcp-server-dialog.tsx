@@ -24,12 +24,15 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * one, and *Select all* or a group's checkbox makes that one click.
  */
 import * as React from "react";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
-import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  GlobeIcon,
+  EditIcon,
+  SignInIcon,
+  SignOutIcon,
+  TerminalIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   MCP_OAUTH_CLIENT_SECRET_SLOT,
   mcpCredentialSlot,
@@ -191,7 +194,7 @@ function credentialNames(transport: McpTransportConfig): string | null {
 
 /** The transport's glyph: a globe for a remote server, a terminal for a local command. */
 export function TransportIcon({ type }: { type: McpTransportConfig["type"] }) {
-  return type === "stdio" ? <TerminalWindowIcon aria-hidden /> : <GlobeIcon aria-hidden />;
+  return type === "stdio" ? <TerminalIcon aria-hidden /> : <GlobeIcon aria-hidden />;
 }
 
 export function McpServerDialog({
@@ -590,7 +593,7 @@ export function McpServerDialog({
                   disabled={busy !== null}
                   onClick={() => editConnection("endpoint")}
                 >
-                  <PencilSimpleIcon />
+                  <EditIcon />
                   Edit
                 </Button>
               )}
@@ -642,7 +645,7 @@ export function McpServerDialog({
           {showTools ? (
             <section aria-label="Tools" className="flex min-h-72 flex-1 flex-col gap-2">
               <h3 className="flex items-center gap-2 text-ui font-medium">
-                <TerminalWindowIcon aria-hidden className="size-4 text-muted-foreground" />
+                <TerminalIcon aria-hidden className="size-4 text-muted-foreground" />
                 Tools for new Sessions
               </h3>
               <McpToolPicker
@@ -687,7 +690,7 @@ export function McpServerDialog({
                   variant="outline"
                   onClick={() => void cancelDraftSignIn().then(setError)}
                 >
-                  <XIcon />
+                  <CloseIcon />
                   Cancel sign-in
                 </Button>
               ) : (
@@ -763,7 +766,7 @@ function ConnectionSummary({
           </span>
           {waiting ? (
             <Button size="xs" variant="outline" onClick={onCancel}>
-              <XIcon />
+              <CloseIcon />
               Cancel sign-in
             </Button>
           ) : access.signIn === "signed-in" ? (

@@ -9,7 +9,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage } from "@volli/shared";
 import { toast } from "sonner";
-import { PauseCircleIcon, PlayCircleIcon } from "@phosphor-icons/react";
+import { PauseCircleIcon, PlayCircleIcon } from "@renderer/components/ui/icon";
 
 import App from "./App";
 import { BootErrorPanel } from "./components/boot-error-panel";

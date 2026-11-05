@@ -1,9 +1,12 @@
 import { Spinner } from "@renderer/components/ui/spinner";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CloudArrowDownIcon } from "@phosphor-icons/react/dist/csr/CloudArrowDown";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
+import {
+  ChevronDownIcon,
+  CheckIcon,
+  CloudDownloadIcon,
+  BranchIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
 
@@ -106,7 +109,7 @@ function BranchRows({
               // item's value LOWERCASED, and a branch name is case-sensitive.
               onSelect={() => onPick(option.name)}
             >
-              <GitBranchIcon
+              <BranchIcon
                 className={cn(
                   "size-3.5 shrink-0",
                   option.remote ? "text-muted-foreground" : "text-foreground",
@@ -114,7 +117,10 @@ function BranchRows({
               />
               <span className="truncate font-mono text-ui text-foreground">{option.name}</span>
               {option.name === value ? (
-                <CheckIcon weight="bold" className="ml-auto size-3.5 shrink-0 text-foreground" />
+                <CheckIcon
+                  strokeWidth={2.25}
+                  className="ml-auto size-3.5 shrink-0 text-foreground"
+                />
               ) : null}
             </CommandItem>
           ))}
@@ -143,7 +149,7 @@ function BranchListBody({
     // cannot say why it has nothing to offer.
     return (
       <div className="flex items-start gap-2 px-2 py-2 text-ui text-muted-foreground">
-        <CloudArrowDownIcon className="mt-px size-3.5 shrink-0" />
+        <CloudDownloadIcon className="mt-px size-3.5 shrink-0" />
         {state.error}
       </div>
     );
@@ -211,12 +217,12 @@ export function BaseBranchChip({
           {state.status === "loading" && value === null ? (
             <Spinner aria-hidden role="presentation" />
           ) : (
-            <GitBranchIcon />
+            <BranchIcon />
           )}
           <span className="min-w-0 truncate" title={label.text}>
             {label.text}
           </span>
-          <CaretDownIcon weight="bold" className="size-3" />
+          <ChevronDownIcon strokeWidth={2.25} className="size-3" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-0">

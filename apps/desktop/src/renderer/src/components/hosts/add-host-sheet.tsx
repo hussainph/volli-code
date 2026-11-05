@@ -16,10 +16,8 @@
  */
 import * as React from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { ChevronDownIcon, CheckIcon, CopyIcon, TerminalIcon } from "@renderer/components/ui/icon";
+
 import type { AddHostLogLine, RemoteHost } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -184,7 +182,7 @@ function EntryScreen({
       </div>
       <div className="flex flex-col gap-2 px-6 pb-4">
         <div className="relative">
-          <TerminalWindowIcon
+          <TerminalIcon
             aria-hidden
             className="pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground"
           />
@@ -205,7 +203,7 @@ function EntryScreen({
       </div>
       <div className="flex items-center justify-end relative px-4 py-4 before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border/60">
         <Button type="submit" disabled={!valid || starting}>
-          {starting ? <Spinner aria-label="Connecting" /> : <TerminalWindowIcon />}
+          {starting ? <Spinner aria-label="Connecting" /> : <TerminalIcon />}
           Connect
         </Button>
       </div>
@@ -333,7 +331,7 @@ function FlowScreen({
               onClick={() => setDetails((value) => !value)}
             >
               Details
-              <CaretDownIcon
+              <ChevronDownIcon
                 className={cn(
                   "size-3 transition-transform duration-(--duration-sheet) ease-out motion-reduce:transition-none",
                   details && "rotate-180",
@@ -802,7 +800,7 @@ export function CommandLine({ command }: { command: string }) {
         className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
         {copied ? (
-          <CheckIcon weight="bold" className="size-3.5 text-positive" />
+          <CheckIcon strokeWidth={2.25} className="size-3.5 text-positive" />
         ) : (
           <CopyIcon className="size-3.5" />
         )}

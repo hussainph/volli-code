@@ -1,9 +1,17 @@
 import { useId } from "react";
-import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
-import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
-import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import {
+  InboxIcon,
+  ChecklistIcon,
+  PlayCircleIcon,
+  PreviewIcon,
+  SuccessIcon,
+  CheckIcon,
+  FolderOpenIcon,
+  BranchIcon,
+  RepeatIcon,
+  ConfigureIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -20,12 +28,9 @@ import {
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { ComposerLabels } from "@renderer/components/board/new-ticket/composer-labels";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { RepeatIcon } from "@phosphor-icons/react/dist/csr/Repeat";
+
 import { MENU_SEPARATOR } from "@renderer/components/ui/menu-classes";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
+
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Switch } from "@renderer/components/ui/switch";
 import { Button } from "@renderer/components/ui/button";
@@ -39,11 +44,11 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 
 const STATUS_ICON = {
-  backlog: TrayIcon,
-  todo: ListChecksIcon,
+  backlog: InboxIcon,
+  todo: ChecklistIcon,
   doing: PlayCircleIcon,
-  needs_review: EyeIcon,
-  done: CheckCircleIcon,
+  needs_review: PreviewIcon,
+  done: SuccessIcon,
 };
 
 function StatusChip({
@@ -168,7 +173,7 @@ export function ComposerChips({
             aria-label="Ticket options"
             className="ml-auto text-muted-foreground"
           >
-            <SlidersHorizontalIcon />
+            <ConfigureIcon />
             {branch.usesWorktree ? "Options" : "Project checkout"}
             {createMore ? " · Create more" : ""}
           </Button>
@@ -177,7 +182,7 @@ export function ComposerChips({
           <fieldset className="min-w-0">
             <legend className="px-2 py-1 text-ui font-semibold">Working copy</legend>
             {[true, false].map((worktree) => {
-              const Icon = worktree ? GitBranchIcon : FolderOpenIcon;
+              const Icon = worktree ? BranchIcon : FolderOpenIcon;
               return (
                 <label
                   key={String(worktree)}
@@ -197,7 +202,7 @@ export function ComposerChips({
                     </span>
                   </span>
                   {branch.usesWorktree === worktree ? (
-                    <CheckIcon aria-hidden weight="bold" className="size-3.5 shrink-0" />
+                    <CheckIcon aria-hidden strokeWidth={2.25} className="size-3.5 shrink-0" />
                   ) : null}
                 </label>
               );

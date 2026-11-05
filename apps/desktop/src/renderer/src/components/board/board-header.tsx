@@ -1,9 +1,6 @@
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowsDownUpIcon } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { ArchiveIcon, SortIcon, BoardIcon, ListIcon, AddIcon } from "@renderer/components/ui/icon";
+
 import {
   DEFAULT_SORT_DIRECTION,
   TICKET_SORT_KEYS,
@@ -59,7 +56,7 @@ function OrderingMenu({ projectId }: { projectId: string }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="toolbar" className="gap-1 px-2 text-ui text-muted-foreground">
-          <ArrowsDownUpIcon className="size-3.5" />
+          <SortIcon className="size-3.5" />
           {TICKET_SORT_LABELS[sort.key]}
         </Button>
       </DropdownMenuTrigger>
@@ -113,8 +110,8 @@ function ViewToggle({ projectId }: { projectId: string }) {
       size="sm"
       iconOnly
       options={[
-        { key: "board", label: "Board view", icon: KanbanIcon },
-        { key: "list", label: "List view", icon: ListBulletsIcon },
+        { key: "board", label: "Board view", icon: BoardIcon },
+        { key: "list", label: "List view", icon: ListIcon },
       ]}
       onChange={(next) => setBoardView(projectId, next)}
     />
@@ -174,7 +171,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
             {...readOnlyControl(canWrite)}
             onClick={() => useUiStore.getState().setNewTicketOpen(true)}
           >
-            <PlusIcon className="size-3.5" />
+            <AddIcon className="size-3.5" />
             New ticket
           </Button>
         </>

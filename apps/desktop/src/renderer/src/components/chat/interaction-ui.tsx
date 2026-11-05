@@ -61,15 +61,16 @@ import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
 import {
   ArrowRightIcon,
-  CaretDownIcon,
-  CaretLeftIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
   CheckIcon,
-  CaretRightIcon,
-  CaretUpIcon,
-  HandPalmIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  HandIcon,
   WarningIcon,
-  XCircleIcon,
-} from "@phosphor-icons/react";
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   type RendererSessionInteraction,
   type SessionInteractionOption,
@@ -203,7 +204,7 @@ function AnswerArrow({ focus }: { focus: string }) {
         focus,
       )}
     >
-      <ArrowRightIcon className="size-3" weight="bold" />
+      <ArrowRightIcon className="size-3" strokeWidth={2.25} />
     </span>
   );
 }
@@ -418,10 +419,9 @@ function DecisionCard({
       )}
     >
       <div className="flex items-start gap-2 px-4 pt-4">
-        {/* The card's palm and the footer's Warning are the
-            only filled glyphs the chat surface has left: an interaction is the
-            exception in a transcript that is otherwise outline throughout. */}
-        <HandPalmIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" weight="fill" />
+        {/* Accent ink marks the interaction among ordinary transcript rows;
+            the palm keeps the same outline family. */}
+        <HandIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           {/* The ask, at the size the ask-user card asks at. What is being
               authorized leads the card in both places — the two are one family
@@ -511,7 +511,7 @@ function DecisionCard({
             disabled={resolving}
             onClick={withdraw}
           >
-            <XCircleIcon className="size-3.5" />
+            <ErrorIcon className="size-3.5" />
             {withdrawLabel(interaction)}
           </Button>
         ) : null}
@@ -522,7 +522,7 @@ function DecisionCard({
             nothing else on screen that would. */}
         {failed ? (
           <span role="alert" className="flex min-w-0 items-center gap-1 text-ui text-destructive">
-            <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
+            <WarningIcon aria-hidden className="size-3.5 shrink-0" />
             <span className="min-w-0 truncate">Not delivered</span>
           </span>
         ) : null}
@@ -887,7 +887,7 @@ function QuestionCard({
             aria-label={collapsed ? "Expand question" : "Minimize question"}
             onClick={() => setCollapsed((standing) => !standing)}
           >
-            {collapsed ? <CaretUpIcon /> : <CaretDownIcon />}
+            {collapsed ? <ChevronUpIcon /> : <ChevronDownIcon />}
           </Button>
         ) : null}
         {/* One notice slot, left-aligned, for the two things that stop a press
@@ -899,7 +899,7 @@ function QuestionCard({
             rejected silently to anyone not looking at the footer. */}
         {failed || blocked ? (
           <span role="alert" className="flex min-w-0 items-center gap-1 text-ui text-destructive">
-            <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
+            <WarningIcon aria-hidden className="size-3.5 shrink-0" />
             <span className="min-w-0 truncate">{failed ? "Not delivered" : blocked}</span>
           </span>
         ) : null}
@@ -995,9 +995,13 @@ export function QuestionSentReceipt({
             is asking. Declining and stopping the turn are ordinary outcomes,
             not failures, so neither one is destructive. */}
         {receipt.kind === "answered" ? (
-          <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="bold" />
+          <CheckIcon
+            aria-hidden
+            className="mt-0.5 size-3.5 shrink-0 text-primary"
+            strokeWidth={2.25}
+          />
         ) : (
-          <XCircleIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          <ErrorIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
         )}
         <span className="min-w-0 break-words">{receipt.line}</span>
       </p>
@@ -1560,7 +1564,7 @@ function InteractionQuestionFields({
                   polarity === "standing" && "opacity-70",
                 )}
               >
-                {checked ? <CheckIcon className="size-3" weight="bold" /> : null}
+                {checked ? <CheckIcon className="size-3" strokeWidth={2.25} /> : null}
               </span>
               <span
                 className={cn(
@@ -1664,7 +1668,7 @@ function InteractionSteps({
         disabled={disabled || !carousel.hasPrevious}
         onClick={() => onStep(carousel.index - 1)}
       >
-        <CaretLeftIcon className="size-3" />
+        <ChevronLeftIcon className="size-3" />
       </Button>
       <span
         className={cn(
@@ -1682,7 +1686,7 @@ function InteractionSteps({
         disabled={disabled || !carousel.hasNext}
         onClick={() => onStep(carousel.index + 1)}
       >
-        <CaretRightIcon className="size-3" />
+        <ChevronRightIcon className="size-3" />
       </Button>
     </div>
   );
@@ -1709,7 +1713,7 @@ export function InteractionReceiptLine({
       {/* Outline: the card that asked wore the filled palm, and this is the
           line it leaves behind once the decision is made. Ink still separates
           the two verdicts; weight is not asked to say it a second time. */}
-      <HandPalmIcon
+      <HandIcon
         aria-hidden
         className={cn(
           "size-3.5 shrink-0",

@@ -3,17 +3,20 @@
 /**
  * The context-menu primitives, and one policy that binds every item in them:
  * `icon` is REQUIRED — on {@link ContextMenuItem} and {@link ContextMenuSubTrigger}
- * alike — and is drawn at Phosphor's default outline weight. `iconWeight="fill"`
- * is the deliberate exception for a surface whose visual requirement names it;
- * a normal menu never gets fill as generic emphasis.
+ * alike — and is drawn with the shared set's outline stroke. Selected and
+ * destructive rows communicate their exception through ink or background,
+ * never through a second, filled icon family.
  *
  * Geometry comes from `menu-classes.ts` — this file states no menu size of its
  * own, so it cannot drift from the dropdown it is the right-click twin of.
  */
 import * as React from "react";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import type { Icon } from "@phosphor-icons/react";
+import {
+  ChevronRightIcon,
+  CheckIcon,
+  type IconComponent as Icon,
+} from "@renderer/components/ui/icon";
+
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -61,16 +64,14 @@ function ContextMenuRadioGroup({
   return <ContextMenuPrimitive.RadioGroup data-slot="context-menu-radio-group" {...props} />;
 }
 
-/** Required `icon`, outline by default; `fill` is an explicit visual exception. */
+/** Every action has a neighbouring shared symbol. */
 function ContextMenuSubTrigger({
   className,
   icon: ItemIcon,
-  iconWeight,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger> & {
   icon: Icon;
-  iconWeight?: "fill";
 }) {
   return (
     <ContextMenuPrimitive.SubTrigger
@@ -78,9 +79,9 @@ function ContextMenuSubTrigger({
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
       {...props}
     >
-      <ItemIcon aria-hidden weight={iconWeight} />
+      <ItemIcon aria-hidden />
       {children}
-      <CaretRightIcon weight="bold" className="ml-auto" />
+      <ChevronRightIcon strokeWidth={2.25} className="ml-auto" />
     </ContextMenuPrimitive.SubTrigger>
   );
 }
@@ -134,18 +135,16 @@ function ContextMenuContent({
   );
 }
 
-/** Required `icon`, outline by default; `fill` is an explicit visual exception. */
+/** Every action has a neighbouring shared symbol. */
 function ContextMenuItem({
   className,
   variant = "default",
   icon: ItemIcon,
-  iconWeight,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item> & {
   variant?: "default" | "destructive";
   icon: Icon;
-  iconWeight?: "fill";
 }) {
   return (
     <ContextMenuPrimitive.Item
@@ -154,7 +153,7 @@ function ContextMenuItem({
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, className)}
       {...props}
     >
-      <ItemIcon aria-hidden weight={iconWeight} />
+      <ItemIcon aria-hidden />
       {children}
     </ContextMenuPrimitive.Item>
   );
@@ -176,7 +175,7 @@ function ContextMenuCheckboxItem({
       {children}
       <span className={MENU_INDICATOR}>
         <ContextMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
     </ContextMenuPrimitive.CheckboxItem>
@@ -200,7 +199,7 @@ function ContextMenuRadioItem({
       {children}
       <span className={MENU_INDICATOR}>
         <ContextMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
     </ContextMenuPrimitive.RadioItem>

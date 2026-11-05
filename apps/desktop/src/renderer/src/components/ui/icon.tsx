@@ -37,7 +37,7 @@ import {
   CleanIcon as CleanGlyph,
   Clock01Icon as Clock01Glyph,
   CloudIcon as CloudGlyph,
-  CloudAngledRainIcon as CloudAngledRainGlyph,
+  CloudOffIcon as CloudOffGlyph,
   CloudDownloadIcon as CloudDownloadGlyph,
   CloudUploadIcon as CloudUploadGlyph,
   CodeIcon as CodeGlyph,
@@ -99,7 +99,7 @@ import {
   LayoutTwoColumnIcon as LayoutTwoColumnGlyph,
   LeftToRightListBulletIcon as LeftToRightListBulletGlyph,
   LeftToRightListNumberIcon as LeftToRightListNumberGlyph,
-  LinkBackwardIcon as LinkBackwardGlyph,
+  Unlink01Icon as Unlink01Glyph,
   LinkSquare02Icon as LinkSquare02Glyph,
   Loading03Icon as Loading03Glyph,
   LockKeyIcon as LockKeyGlyph,
@@ -145,6 +145,7 @@ import {
   SentIcon as SentGlyph,
   Settings02Icon as Settings02Glyph,
   Share08Icon as Share08Glyph,
+  Shield01Icon as Shield01Glyph,
   SidebarLeftIcon as SidebarLeftGlyph,
   SignalFull01Icon as SignalFull01Glyph,
   SignalLow01Icon as SignalLow01Glyph,
@@ -216,7 +217,7 @@ const glyphs = {
   closeSquare: CancelSquareGlyph,
   cloud: CloudGlyph,
   cloudDownload: CloudDownloadGlyph,
-  cloudOff: CloudAngledRainGlyph,
+  cloudOff: CloudOffGlyph,
   cloudUpload: CloudUploadGlyph,
   code: CodeGlyph,
   codeFile: FileScriptGlyph,
@@ -308,6 +309,7 @@ const glyphs = {
   priorityHigh: SignalFull01Glyph,
   priorityLow: SignalLow01Glyph,
   priorityMedium: SignalMedium01Glyph,
+  privacy: Shield01Glyph,
   processor: CpuGlyph,
   pullRequest: GitPullRequestGlyph,
   queue: Queue01Glyph,
@@ -348,7 +350,7 @@ const glyphs = {
   trend: ChartLineData01Glyph,
   undo: UndoGlyph,
   unfold: UnfoldMoreGlyph,
-  unlink: LinkBackwardGlyph,
+  unlink: Unlink01Glyph,
   unpin: PinOffGlyph,
   usage: ChartRingGlyph,
   verified: CheckmarkBadge01Glyph,
@@ -363,8 +365,9 @@ export type IconName = keyof typeof glyphs;
 export type IconProps = Omit<React.SVGProps<SVGSVGElement>, "name" | "strokeWidth" | "children"> & {
   size?: number | string;
   strokeWidth?: number;
+  alt?: string;
 };
-export type IconComponent = React.ComponentType<IconProps>;
+export type IconComponent = React.FunctionComponent<IconProps>;
 
 /** A colour-inheriting drawing. The caller retains all labelling and visibility decisions. */
 export function Icon({
@@ -373,13 +376,14 @@ export function Icon({
   strokeWidth,
   className = "",
   style,
+  alt,
   ...props
 }: IconProps & { name: IconName }) {
   const small = Number(size) > 0 && Number(size) <= 12;
   const stroke = strokeWidth ?? (small ? 2.25 : undefined);
   return (
     <HugeiconsIcon
-      icon={glyphs[name]}
+      icon={alt ? [["title", { children: alt, key: "icon-title" }], ...glyphs[name]] : glyphs[name]}
       size={size}
       strokeWidth={1.5}
       className={"ui-icon " + className}
@@ -532,6 +536,7 @@ export const PreviewIcon = symbol("preview");
 export const PriorityHighIcon = symbol("priorityHigh");
 export const PriorityLowIcon = symbol("priorityLow");
 export const PriorityMediumIcon = symbol("priorityMedium");
+export const PrivacyIcon = symbol("privacy");
 export const ProcessorIcon = symbol("processor");
 export const PullRequestIcon = symbol("pullRequest");
 export const QueueIcon = symbol("queue");

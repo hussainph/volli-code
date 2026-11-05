@@ -14,8 +14,8 @@
  */
 import * as React from "react";
 
-import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ChevronUpIcon, ChevronDownIcon } from "@renderer/components/ui/icon";
+
 import { Input } from "@renderer/components/ui/input";
 import { cn } from "@renderer/lib/utils";
 
@@ -203,7 +203,7 @@ export function CommitField({
           {quantity ? (
             <div className="absolute inset-y-0 right-0 flex w-6 flex-col border-l border-border-strong">
               {([1, -1] as const).map((direction) => {
-                const Icon = direction === 1 ? CaretUpIcon : CaretDownIcon;
+                const Icon = direction === 1 ? ChevronUpIcon : ChevronDownIcon;
                 const atLimit =
                   draft.trim() !== "" &&
                   (direction === 1
@@ -231,7 +231,7 @@ export function CommitField({
                       void commit(next);
                     }}
                   >
-                    <Icon aria-hidden weight="bold" className="size-3" />
+                    <Icon aria-hidden strokeWidth={2.25} className="size-3" />
                   </button>
                 );
               })}

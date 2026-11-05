@@ -37,8 +37,8 @@
  * push that lands between the two is not lost.
  */
 import * as React from "react";
-import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import { NotificationIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, NOTIFICATION_EVENTS, type NotificationEvent } from "@volli/shared";
 
 import type { NotificationSettingsView } from "../../../../../ipc/contract";
@@ -115,22 +115,18 @@ export function NotificationsPane() {
   return (
     <>
       {view !== null && !view.supported ? (
-        <Notice
-          tone="error"
-          icon={WarningCircleIcon}
-          title="This system can't show notifications"
-        />
+        <Notice tone="error" icon={WarningIcon} title="This system can't show notifications" />
       ) : null}
       {failure !== null ? (
         <Notice
           tone="error"
-          icon={WarningCircleIcon}
+          icon={WarningIcon}
           title="The system didn't deliver the last notification"
           detail={`${failure.message} Check that Volli Code is allowed to notify in ${SYSTEM_SETTINGS_ROUTE}.`}
         />
       ) : null}
 
-      <PrefSection title="Notifications" icon={BellIcon}>
+      <PrefSection title="Notifications" icon={NotificationIcon}>
         <PrefRow label="Notify me" htmlFor="notify-me">
           <Switch
             id="notify-me"

@@ -62,19 +62,22 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  *    the staging breadth are the user's to choose.
  */
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BellSlashIcon } from "@phosphor-icons/react/dist/csr/BellSlash";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
-import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
-import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  ArchiveIcon,
+  ExternalIcon,
+  NotificationOffIcon,
+  ChevronDownIcon,
+  MoreIcon,
+  FolderOpenIcon,
+  BranchIcon,
+  CommitIcon,
+  DiffIcon,
+  PullRequestIcon,
+  PinIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+import { GithubMark } from "@renderer/components/ui/brand-marks";
+
 import { toast } from "sonner";
 import {
   changeSetToDiffStat,
@@ -234,13 +237,13 @@ function CommitGateDialog({
       <DialogContent className="max-w-md gap-4" data-testid="ticket-commit-gate">
         <DialogHeader>
           <DialogTitle className="flex min-w-0 items-center gap-2">
-            <GitBranchIcon className="shrink-0" />
+            <BranchIcon className="shrink-0" />
             <span className="truncate font-mono text-sm">{branch}</span>
           </DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2 rounded-lg border border-border p-4">
-            <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
+            <DiffIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-ui font-medium">{changesLabel}</span>
             {diff === null ? null : <DiffTotals diff={diff} />}
           </div>
@@ -365,9 +368,9 @@ export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
           aria-label={`Working destination: ${label}`}
           className="w-fit gap-1 px-2 text-ui text-foreground"
         >
-          {ticket.usesWorktree ? <GitBranchIcon /> : <FolderOpenIcon />}
+          {ticket.usesWorktree ? <BranchIcon /> : <FolderOpenIcon />}
           {label}
-          <CaretDownIcon className="size-3 text-muted-foreground" />
+          <ChevronDownIcon className="size-3 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
@@ -628,9 +631,9 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
 
 /** The action keeps the same outline mark on the button and in its menu. */
 function PrimaryActionIcon({ kind }: { kind: PrimaryActionKind }) {
-  if (kind === "commit-pr" || kind === "commit-push-updates") return <GitCommitIcon />;
-  if (kind === "view-pr") return <ArrowSquareOutIcon />;
-  return <GitPullRequestIcon />;
+  if (kind === "commit-pr" || kind === "commit-push-updates") return <CommitIcon />;
+  if (kind === "view-pr") return <ExternalIcon />;
+  return <PullRequestIcon />;
 }
 
 /**
@@ -747,11 +750,11 @@ export function WorktreeStateStrip({ status }: { status: WorktreeStatusSnapshot 
       {items.map((item) => (
         <span key={item.label} className="flex min-w-0 items-center gap-2">
           {item.label === "Working" ? (
-            <GitDiffIcon className="size-4 text-muted-foreground" />
+            <DiffIcon className="size-4 text-muted-foreground" />
           ) : item.label === "Local" ? (
-            <GitCommitIcon className="size-4 text-muted-foreground" />
+            <CommitIcon className="size-4 text-muted-foreground" />
           ) : (
-            <GitPullRequestIcon className="size-4 text-muted-foreground" />
+            <PullRequestIcon className="size-4 text-muted-foreground" />
           )}
           <span className="text-ui font-medium">{item.label}</span>
           <span className={cn("ml-auto truncate text-ui", item.ink)} title={item.value}>
@@ -1170,7 +1173,7 @@ export function TicketRepositorySummary({
             aria-label="Open pull request in GitHub"
             onClick={openPr}
           >
-            <GithubLogoIcon weight="fill" />
+            <GithubMark solid />
             PR
           </Button>
         </TooltipTrigger>
@@ -1295,7 +1298,7 @@ export function TicketRepositorySummary({
                               <TooltipTrigger asChild>
                                 <DropdownMenuTrigger asChild>
                                   <Button size="icon-sm" aria-label="More repository actions">
-                                    <DotsThreeIcon weight="bold" />
+                                    <MoreIcon strokeWidth={2.25} />
                                   </Button>
                                 </DropdownMenuTrigger>
                               </TooltipTrigger>
@@ -1339,21 +1342,21 @@ export function TicketRepositorySummary({
                           inside it, so there is no focus to hand back. */}
                               <DoneFlowMenuItem
                                 action={view.menu.commit}
-                                icon={<GitCommitIcon />}
+                                icon={<CommitIcon />}
                                 onRun={() =>
                                   askToCommit({ kind: "commit-only" }, view.menu.commit.label)
                                 }
                               />
                               <DoneFlowMenuItem
                                 action={view.menu.push}
-                                icon={<GitPullRequestIcon />}
+                                icon={<PullRequestIcon />}
                                 onRun={() =>
                                   void runPushOnly(view.menu.push.kind === "push-updates")
                                 }
                               />
                               <DoneFlowMenuItem
                                 action={view.menu.openPr}
-                                icon={<ArrowSquareOutIcon />}
+                                icon={<ExternalIcon />}
                                 onRun={openPr}
                               />
                               {retentionView.archiveReady ? (
@@ -1363,14 +1366,14 @@ export function TicketRepositorySummary({
                                     disabled={retentionBusy}
                                     onSelect={() => void runSetKeep(true)}
                                   >
-                                    <PushPinIcon />
+                                    <PinIcon />
                                     {KEEP_WORKTREE_LABEL}
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
                                     disabled={retentionBusy}
                                     onSelect={() => void runDismiss()}
                                   >
-                                    <BellSlashIcon />
+                                    <NotificationOffIcon />
                                     {DISMISS_LABEL}
                                   </DropdownMenuItem>
                                 </>
@@ -1383,7 +1386,7 @@ export function TicketRepositorySummary({
                       {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
                       {retentionView.kept ? (
                         <span className="flex items-center gap-1 text-ui text-muted-foreground">
-                          <PushPinIcon />
+                          <PinIcon />
                           Worktree kept
                           <button
                             type="button"
@@ -1426,7 +1429,7 @@ export function TicketRepositorySummary({
                 }
                 className={RAIL_CHECKOUT_IDENTITY}
               >
-                <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
+                <BranchIcon className="size-4 shrink-0 text-muted-foreground" />
                 <span
                   className="flex min-w-0 flex-1 items-center gap-1 font-mono text-ui text-sidebar-foreground"
                   title={`${ticket.baseBranch ?? "Base unset"} → ${ticket.branch ?? "No branch yet"}`}

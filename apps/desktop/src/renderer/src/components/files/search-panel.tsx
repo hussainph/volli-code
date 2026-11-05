@@ -39,7 +39,8 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  *    but the words, so no unmounted page keeps a search alive.
  */
 import * as React from "react";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { SearchIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import {
@@ -300,7 +301,7 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
               {root}
             </p>
           </div>
-          <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         </div>
         <Input
           variant="search"

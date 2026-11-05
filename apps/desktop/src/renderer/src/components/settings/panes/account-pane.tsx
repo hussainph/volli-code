@@ -20,15 +20,17 @@
  * launch, Sign out confirms, then signs out and restarts.
  */
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BuildingsIcon } from "@phosphor-icons/react/dist/csr/Buildings";
-import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
-import { GoogleLogoIcon } from "@phosphor-icons/react/dist/csr/GoogleLogo";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
+import {
+  type IconComponent,
+  ExternalIcon,
+  WorkspaceIcon,
+  AddIcon,
+  SignOutIcon,
+  DeleteIcon,
+  AccountIcon,
+} from "@renderer/components/ui/icon";
+import { GithubMark, GoogleMark } from "@renderer/components/ui/brand-marks";
+
 import {
   PREVIEW_AGREEMENT_VERSION,
   PREVIEW_AGREEMENT_URL,
@@ -85,10 +87,10 @@ import {
 const BUTTONS: readonly {
   connection: AccountConnection;
   label: string;
-  icon: typeof GithubLogoIcon;
+  icon: typeof GithubMark;
 }[] = [
-  { connection: "github", label: "Continue with GitHub", icon: GithubLogoIcon },
-  { connection: "google", label: "Continue with Google", icon: GoogleLogoIcon },
+  { connection: "github", label: "Continue with GitHub", icon: GithubMark },
+  { connection: "google", label: "Continue with Google", icon: GoogleMark },
 ];
 
 /** Runs a command; a failure is a toast with what main said. */
@@ -111,7 +113,7 @@ function ReadFailed({
   onRetry,
 }: {
   title: string;
-  icon: PhosphorIcon;
+  icon: IconComponent;
   message: string;
   onRetry: () => void;
 }) {
@@ -131,7 +133,7 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
   return (
     <PrefSection
       title="Sign in"
-      icon={UserCircleIcon}
+      icon={AccountIcon}
       action={
         waiting ? (
           <SectionAction label="Cancel" onAct={() => act(commands.cancelSignIn, "Cancel")} />
@@ -235,7 +237,7 @@ function GithubConnection({
   return (
     <PrefSection
       title="GitHub"
-      icon={GithubLogoIcon}
+      icon={GithubMark}
       action={
         connecting ? (
           <SectionAction label="Cancel" onAct={() => act(commands.cancel, "Cancel")} />
@@ -261,7 +263,7 @@ function GithubConnection({
             disabled={connecting}
             onClick={() => act(commands.connect, "Connect")}
           >
-            <GithubLogoIcon />
+            <GithubMark />
             {connecting
               ? WAITING_FOR_BROWSER
               : connection?.status === "needs_reconnect"
@@ -293,7 +295,7 @@ function GithubAccounts({
   return (
     <PrefSection
       title="GitHub accounts"
-      icon={BuildingsIcon}
+      icon={WorkspaceIcon}
       action={
         <div className="flex items-center gap-1">
           {installing ? (
@@ -306,7 +308,7 @@ function GithubAccounts({
           ) : (
             <SectionAction
               label="Install on an account"
-              icon={PlusIcon}
+              icon={AddIcon}
               onAct={() => act(commands.install, "Install")}
             />
           )}
@@ -333,7 +335,7 @@ function GithubAccounts({
                 onClick={() => openConfigure(installation.configureUrl)}
               >
                 Configure on GitHub
-                <ArrowSquareOutIcon />
+                <ExternalIcon />
               </Button>
             </ItemRow>
           ))}
@@ -355,7 +357,7 @@ function Github({ rpc }: { rpc: AccountRpc | undefined }) {
     return (
       <ReadFailed
         title="GitHub"
-        icon={GithubLogoIcon}
+        icon={GithubMark}
         message={
           view.kind === "failed"
             ? view.message
@@ -397,7 +399,7 @@ function SignedIn({
     <>
       <PrefSection
         title="Account"
-        icon={UserCircleIcon}
+        icon={AccountIcon}
         action={
           <SectionAction
             label="Sign out"
@@ -439,7 +441,7 @@ function SignedIn({
         <Github key={account.userId} rpc={rpc} />
       ) : null}
       {account.backend !== "none" ? (
-        <PrefSection title="Deletion" icon={TrashIcon}>
+        <PrefSection title="Deletion" icon={DeleteIcon}>
           {account.deletionPurgeAfter !== null ? (
             account.deletionPurgeAfter > now ? (
               <PrefRow label="Cancel by">
@@ -528,7 +530,7 @@ export function AccountPane({ rpc }: { rpc?: AccountRpc } = {}) {
   useRestartOffer(view.kind === "ready" ? view.snapshot : null, commands);
   if (view.kind === "loading") {
     return (
-      <PrefSection title="Account" icon={UserCircleIcon}>
+      <PrefSection title="Account" icon={AccountIcon}>
         <Empty>
           <LoadingLabel>Checking your sign-in</LoadingLabel>
         </Empty>
@@ -536,14 +538,12 @@ export function AccountPane({ rpc }: { rpc?: AccountRpc } = {}) {
     );
   }
   if (view.kind === "failed") {
-    return (
-      <ReadFailed title="Account" icon={UserCircleIcon} message={view.message} onRetry={retry} />
-    );
+    return <ReadFailed title="Account" icon={AccountIcon} message={view.message} onRetry={retry} />;
   }
   const { snapshot } = view;
   if (snapshot.state === "unconfigured") {
     return (
-      <PrefSection title="Account" icon={UserCircleIcon}>
+      <PrefSection title="Account" icon={AccountIcon}>
         <Empty>No Volli Cloud sign-in in this build</Empty>
       </PrefSection>
     );

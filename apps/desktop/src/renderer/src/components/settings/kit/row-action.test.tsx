@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { FolderOpenIcon } from "@renderer/components/ui/icon";
+
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { RowAction } from "./row-action";
 

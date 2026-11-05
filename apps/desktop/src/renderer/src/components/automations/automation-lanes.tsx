@@ -53,8 +53,8 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { DotsSixVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsSixVertical";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { DragIcon, AutomationIcon } from "@renderer/components/ui/icon";
+
 import {
   armedAutomationFor,
   MAX_OFFERED_DIGITS,
@@ -300,9 +300,9 @@ function LaneRow({
         // The bolt stands in for the grip on the one row that does not move:
         // it is armed and switched on here, so it IS digit 1 — and its stored
         // rank is waiting underneath for the day the effective pin lets go.
-        <LightningIcon weight="fill" className="size-3 shrink-0 text-foreground" />
+        <AutomationIcon className="size-3 shrink-0 text-foreground" />
       ) : (
-        <DotsSixVerticalIcon className="size-3 shrink-0 text-muted-foreground" />
+        <DragIcon className="size-3 shrink-0 text-muted-foreground" />
       )}
       {/* Past the ninth the key cap keeps its width but not its ink, so the
           name stays in the column of names above it while no digit is claimed. */}
@@ -318,7 +318,7 @@ function LaneRow({
       <span className="min-w-0 flex-1 truncate text-ui text-foreground">{automation.name}</span>
       {switchedOff ? (
         <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-          <LightningIcon weight="bold" className="size-3" />
+          <AutomationIcon strokeWidth={2.25} className="size-3" />
           Armed · {SWITCHED_OFF_NOTE}
         </span>
       ) : null}

@@ -11,7 +11,8 @@
  */
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { LightningSlashIcon } from "@phosphor-icons/react/dist/csr/LightningSlash";
+import { AutomationOffIcon } from "@renderer/components/ui/icon";
+
 import { act, type ComponentProps } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -1221,7 +1222,7 @@ describe("the lane view", () => {
     ).toBe("1");
   });
 
-  it("pins the armed row to 1 and fills its bolt while it is switched on here", async () => {
+  it("pins the armed row to 1 and accents its bolt while it is switched on here", async () => {
     await mount({
       automations: [doingAndReview, doingOnly],
       armings: [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }],
@@ -1239,7 +1240,8 @@ describe("the lane view", () => {
 
     const bolt = button("Doing runs Standards sweep");
     expect(bolt.getAttribute("data-arming-state")).toBe("ready");
-    expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
+    expect(bolt.className).toContain("text-primary-text");
+    expect(bolt.querySelector('[data-arming-mark="armed"]')).not.toBeNull();
     const row = document.querySelector('[data-lane-row="doing:shared"]');
     expect(row?.getAttribute("data-lane-digit")).toBe("1");
     expect(row?.getAttribute("data-lane-arming")).toBe("ready");
@@ -1352,10 +1354,10 @@ describe("the lane view", () => {
     const label = "Doing is armed with Standards sweep — automatic triggers off";
     const bolt = button(label);
     expect(bolt.getAttribute("data-arming-state")).toBe("switched-off");
-    // VC-329 item 1: the bolt is filled whenever the column is ARMED — the
-    // machine-local switch is a separate fact, carried by the muted ink and
-    // the tooltip's own words.
-    expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
+    // Armed remains distinct with triggers off: selected background, muted
+    // outline, and the tooltip's own words. No filled icon family is needed.
+    expect(bolt.className).toContain("bg-accent");
+    expect(bolt.querySelector('[data-arming-mark="armed"]')).not.toBeNull();
     expect((await showTooltip(bolt)).textContent).toBe(label);
 
     // No effective arming means no pin: the authored digit remains, and the
@@ -1373,7 +1375,7 @@ describe("the lane view", () => {
     expect(menuRow?.getAttribute("aria-label")).toBe("Standards sweep · Manual only");
     expect(menuRow?.getAttribute("title")).toBe("Standards sweep · Manual only");
     const expectedIcon = document.createElement("div");
-    expectedIcon.innerHTML = renderToStaticMarkup(<LightningSlashIcon />);
+    expectedIcon.innerHTML = renderToStaticMarkup(<AutomationOffIcon />);
     expect(menuRow?.querySelector("svg")?.innerHTML).toBe(
       expectedIcon.querySelector("svg")!.innerHTML,
     );

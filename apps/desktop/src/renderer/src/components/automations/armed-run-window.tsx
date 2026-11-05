@@ -29,7 +29,7 @@
  * failure, not the accessible choice.
  */
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
 
 import { armedRunProgress, armedRunSecondsLeft, type PendingArmedRun } from "./armed-move-model";
 import { cancelArmedRun, useArmedRunStore } from "./armed-run";
@@ -115,7 +115,7 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
       )}
     >
       <div className="flex items-center gap-2 px-4 py-2">
-        <LightningIcon className="size-4 shrink-0 text-muted-foreground" />
+        <AutomationIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-ui text-foreground">
           {window.automationName}
           <span className="text-muted-foreground">

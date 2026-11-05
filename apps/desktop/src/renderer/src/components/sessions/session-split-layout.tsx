@@ -1,15 +1,18 @@
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { ColumnsPlusRightIcon } from "@phosphor-icons/react/dist/csr/ColumnsPlusRight";
-import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
-import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
-import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
-import { RowsPlusBottomIcon } from "@phosphor-icons/react/dist/csr/RowsPlusBottom";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  RefreshIcon,
+  UndoIcon,
+  AddColumnIcon,
+  MaximizeIcon,
+  RemoveCircleIcon,
+  AddCircleIcon,
+  AddRowIcon,
+  MoreIcon,
+  TerminalIcon,
+  CloseIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import type { SessionListingRow, SessionRecord } from "@volli/shared";
 
 import { TerminalView } from "@renderer/components/sessions/terminal-view";
@@ -131,7 +134,7 @@ function PaneFocusControl({ sessionId }: { sessionId: string }) {
       title="Enter terminal focus (⌥⌘⏎)"
       aria-keyshortcuts="Alt+Meta+Enter"
     >
-      <CornersOutIcon />
+      <MaximizeIcon />
     </Button>
   );
 }
@@ -185,7 +188,7 @@ function SplitNode(props: SplitNodeProps) {
             onContextMenu={() => props.onActivate(layout.sessionId)}
           >
             <PaneHeader
-              identity={<TerminalWindowIcon className="size-3.5" />}
+              identity={<TerminalIcon className="size-3.5" />}
               title={record?.title || props.title}
               actions={
                 <div
@@ -201,7 +204,7 @@ function SplitNode(props: SplitNodeProps) {
                         aria-label="Terminal actions"
                         title="Terminal actions"
                       >
-                        <DotsThreeIcon weight="bold" />
+                        <MoreIcon strokeWidth={2.25} />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
@@ -215,7 +218,7 @@ function SplitNode(props: SplitNodeProps) {
                     title="Close pane"
                     onClick={() => props.onClose(layout.sessionId)}
                   >
-                    <XIcon weight="bold" />
+                    <CloseIcon strokeWidth={2.25} />
                   </Button>
                 </div>
               }
@@ -244,7 +247,7 @@ function SplitNode(props: SplitNodeProps) {
                       props.onResume?.(layout.sessionId);
                     }}
                   >
-                    <ArrowClockwiseIcon />
+                    <RefreshIcon />
                     Resume session
                   </Button>
                 </div>
@@ -304,39 +307,39 @@ function TerminalPaneCommands({
   const commands = [
     {
       label: "Split Right",
-      icon: ColumnsPlusRightIcon,
+      icon: AddColumnIcon,
       shortcut: "⌘D",
       run: () => onSplit(sessionId, "vertical"),
     },
     {
       label: "Split Down",
-      icon: RowsPlusBottomIcon,
+      icon: AddRowIcon,
       shortcut: "⇧⌘D",
       run: () => onSplit(sessionId, "horizontal"),
     },
     { separator: "font-size" },
     {
       label: "Increase Font Size",
-      icon: PlusCircleIcon,
+      icon: AddCircleIcon,
       shortcut: "⌘+",
       run: () => getEngine(sessionId)?.adjustFontSize(1),
     },
     {
       label: "Decrease Font Size",
-      icon: MinusCircleIcon,
+      icon: RemoveCircleIcon,
       shortcut: "⌘−",
       run: () => getEngine(sessionId)?.adjustFontSize(-1),
     },
     {
       label: "Reset Font Size",
-      icon: ArrowCounterClockwiseIcon,
+      icon: UndoIcon,
       shortcut: "⌘0",
       run: () => getEngine(sessionId)?.resetFontSize(),
     },
     { separator: "close" },
     {
       label: "Close pane",
-      icon: XCircleIcon,
+      icon: ErrorIcon,
       shortcut: undefined,
       run: () => onClose(sessionId),
       destructive: true,

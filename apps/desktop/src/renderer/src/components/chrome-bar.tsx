@@ -1,10 +1,12 @@
 import * as React from "react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
+import {
+  ChevronLeftIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  RestoreWindowIcon,
+  SearchIcon,
+  SidebarIcon,
+} from "@renderer/components/ui/icon";
 
 import { CommandPalette } from "@renderer/components/command-palette";
 import { HostChip } from "@renderer/components/hosts/host-chip";
@@ -209,7 +211,7 @@ function NavHistoryButtons() {
         aria-label="Back"
         title="Back (⌘[)"
       >
-        <CaretLeftIcon weight="bold" />
+        <ChevronLeftIcon strokeWidth={2.25} />
         <span className="sr-only">Back</span>
       </Button>
       <Button
@@ -220,7 +222,7 @@ function NavHistoryButtons() {
         aria-label="Forward"
         title="Forward (⌘])"
       >
-        <CaretRightIcon weight="bold" />
+        <ChevronRightIcon strokeWidth={2.25} />
         <span className="sr-only">Forward</span>
       </Button>
     </div>
@@ -268,7 +270,7 @@ function TerminalFocusExit() {
       aria-label="Exit terminal focus"
       title="Exit terminal focus (⌥⌘⏎)"
     >
-      <CornersInIcon weight="bold" />
+      <RestoreWindowIcon strokeWidth={2.25} />
       <span className="sr-only">Exit terminal focus</span>
     </Button>
   );
@@ -329,7 +331,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       title="Search tickets, sessions, and commands (⌘K)"
       className="search-capsule app-region-no-drag flex h-control-sm w-[380px] max-w-[40vw] items-center gap-1 px-2 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>
       {/* The keycap reads as cut out of the pill, so it goes the other way:
           toward the canvas floor. `--background` is near-black in dark (what
@@ -338,7 +340,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       <kbd className="shrink-0 rounded-sm border border-border/70 bg-background/10 px-1 py-px font-sans text-label leading-none text-muted-foreground">
         ⌘K
       </kbd>
-      <CaretDownIcon aria-hidden className="size-3 shrink-0" weight="bold" />
+      <ChevronDownIcon aria-hidden className="size-3 shrink-0" strokeWidth={2.25} />
     </button>
   );
 }

@@ -1,5 +1,6 @@
 import * as React from "react";
-import { ArrowCounterClockwiseIcon, GearSixIcon } from "@phosphor-icons/react";
+import { UndoIcon, SettingsIcon } from "@renderer/components/ui/icon";
+
 import type { Project } from "@volli/shared";
 import { ModelName } from "@renderer/components/models/model-identity";
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
@@ -85,7 +86,7 @@ export function OverviewPane({ project }: { project: Project }) {
     );
   };
   return (
-    <PrefSection title="Global overrides" icon={GearSixIcon}>
+    <PrefSection title="Global overrides" icon={SettingsIcon}>
       <DataTable
         label="Project overrides"
         items={projectOverrides(project)}
@@ -120,7 +121,7 @@ export function OverviewPane({ project }: { project: Project }) {
                 title="Reset to global default"
                 onClick={() => void reset(row.key)}
               >
-                <ArrowCounterClockwiseIcon />
+                <UndoIcon />
               </Button>
             ),
           },

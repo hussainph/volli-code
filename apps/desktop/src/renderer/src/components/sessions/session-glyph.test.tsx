@@ -100,7 +100,7 @@ describe("the name and the logo", () => {
       kind: "terminal",
       name: "Terminal",
     });
-    // Phosphor's own glyphs, by their viewBox — no logo, no lettermark.
+    // The shared set's glyphs — no logo, no lettermark.
     expect(chat).toContain("<svg");
     expect(terminal).toContain("<svg");
     expect(chat).not.toBe(terminal);

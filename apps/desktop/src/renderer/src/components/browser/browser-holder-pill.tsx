@@ -6,9 +6,7 @@
  * Session identity is a colour mark and a hover label, not another chrome row.
  * Hook-free like BrowserChrome so tests can inspect the handler wiring.
  */
-import { HandPalmIcon } from "@phosphor-icons/react/dist/csr/HandPalm";
-import { HandWavingIcon } from "@phosphor-icons/react/dist/csr/HandWaving";
-import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
+import { HandIcon, WelcomeIcon, UndoIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -69,7 +67,7 @@ export function BrowserHolderPill({
                   aria-label="Take over"
                   onClick={onTakeOver}
                 >
-                  <HandPalmIcon />
+                  <HandIcon />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">Take over · {holder.name}</TooltipContent>
@@ -83,7 +81,7 @@ export function BrowserHolderPill({
                   aria-label="Ask to leave"
                   onClick={onAskToLeave}
                 >
-                  <HandWavingIcon />
+                  <WelcomeIcon />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">Ask to leave · {holder.name}</TooltipContent>
@@ -99,7 +97,7 @@ export function BrowserHolderPill({
                 aria-label="Hand back"
                 onClick={onHandBack}
               >
-                <ArrowUUpLeftIcon />
+                <UndoIcon />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top">Hand back · Yours</TooltipContent>

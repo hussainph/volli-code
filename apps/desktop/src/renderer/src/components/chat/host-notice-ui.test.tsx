@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { SubagentNotice } from "@volli/session-presentation";
-import { BrowserIcon, EyeIcon, TerminalWindowIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { BrowserIcon, PreviewIcon, TerminalIcon, TeamIcon } from "@renderer/components/ui/icon";
 
 /** Compare the drawing, not SVG attributes unrelated to icon weight. */
 function firstGlyph(html: string): string {
@@ -44,7 +44,7 @@ afterEach(async () => {
 
 describe("a Subagent Session notice row", () => {
   it.each(["stopped", "failed", "interrupted"] as const)(
-    "draws %s with a filled status glyph and no redundant detail paragraph",
+    "draws %s with a status glyph and no redundant detail paragraph",
     (state) => {
       const html = renderToStaticMarkup(<SubagentNoticeRow notice={{ ...completed, state }} />);
       expect(html).not.toContain("<p ");
@@ -59,7 +59,7 @@ describe("a Subagent Session notice row", () => {
     const html = renderToStaticMarkup(<SubagentNoticeRow notice={completed} />);
 
     expect(html).toContain("Find artifact conventions");
-    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<UsersThreeIcon />)));
+    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<TeamIcon />)));
     expect(html).toContain("done");
     expect(html).not.toContain('<p class="truncate text-ui text-muted-foreground/70">');
     expect(html).toContain('data-slot="separator"');
@@ -147,7 +147,7 @@ describe("a background shell notice row (VC-495)", () => {
     const html = renderToStaticMarkup(<ShellNoticeRow notice={matched} />);
 
     expect(html).toContain("dev server");
-    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<TerminalWindowIcon />)));
+    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<TerminalIcon />)));
     expect(html).toContain("matched");
     expect(html).toContain('title="dev server — matched. Printed &quot;listening on&quot;."');
   });
@@ -224,7 +224,7 @@ describe("a watch notice row (VC-457)", () => {
       <WatchNoticeRow notice={{ kind: "watch", events: [moved] }} />,
     );
     expect(html).toContain("VC-12 moved (Done)");
-    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<EyeIcon />)));
+    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<PreviewIcon />)));
     expect(html).not.toContain("<p ");
   });
 

@@ -12,13 +12,16 @@
 import { automationSourceIsCloud } from "@renderer/stores/automation-source";
 import { CloudNextScheduledRun } from "./cloud-automation-controls";
 import * as React from "react";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  ClockIcon,
+  ProcessorIcon,
+  FolderOpenIcon,
+  GlobeIcon,
+  PlayIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   AUTOMATION_SCHEDULE_PRESET_LABELS,
   AUTOMATION_SCHEDULE_PRESETS,
@@ -312,7 +315,7 @@ function ColumnPicker({
               }
               className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:bg-accent"
             >
-              <CheckIcon className={cn("size-3.5", !selected && "invisible")} weight="bold" />
+              <CheckIcon className={cn("size-3.5", !selected && "invisible")} strokeWidth={2.25} />
               {TICKET_STATUS_LABELS[status]}
             </button>
           );
@@ -401,7 +404,7 @@ function RuntimeFields({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="inherit">
-            <CpuIcon />
+            <ProcessorIcon />
             Project default
           </SelectItem>
           {/* The tier's own label, never the model it currently resolves to:
@@ -411,7 +414,7 @@ function RuntimeFields({
             <SelectLabel>Defaults</SelectLabel>
             {AGENT_MODEL_TIERS.map((tier) => (
               <SelectItem key={tier} value={`${TIER_VALUE_PREFIX}${tier}`}>
-                <CpuIcon />
+                <ProcessorIcon />
                 {modelTierRow(tier).label}
               </SelectItem>
             ))}
@@ -445,7 +448,7 @@ function RuntimeFields({
           <SelectContent>
             {levels.map((level) => (
               <SelectItem key={level} value={level}>
-                <CpuIcon />
+                <ProcessorIcon />
                 {level}
               </SelectItem>
             ))}

@@ -1,5 +1,6 @@
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { CheckIcon } from "@renderer/components/ui/icon";
+
 import { Command } from "cmdk";
 
 import { Badge } from "@renderer/components/ui/badge";
@@ -141,7 +142,7 @@ export function ThemeComboBox<Value extends string>({
               >
                 <span className="truncate">{item.label}</span>
                 {item.value === activeValue ? (
-                  <CheckIcon weight="bold" className="size-3.5" />
+                  <CheckIcon strokeWidth={2.25} className="size-3.5" />
                 ) : null}
               </Command.Item>
             ))}

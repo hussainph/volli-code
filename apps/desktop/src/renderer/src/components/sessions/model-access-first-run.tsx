@@ -18,7 +18,8 @@
  * with no default means sign-in already happened and only the choice is
  * missing, so the one act is the pane where it is made.
  */
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+import { ProcessorIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import type { ModelAccessProvider } from "@volli/shared";
 
@@ -105,7 +106,7 @@ export function ModelAccessFirstRun() {
   return (
     <div className="material-thick flex max-w-sm flex-col items-center gap-4 rounded-sheet border border-border p-6 shadow-glass">
       <IdentityTile aria-hidden>
-        <CpuIcon className="size-5" />
+        <ProcessorIcon className="size-5" />
       </IdentityTile>
       <p className="text-heading font-semibold">
         {signedIn ? "No default model" : "No model provider"}

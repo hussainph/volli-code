@@ -1,7 +1,6 @@
 /** Shared settings section: an outside heading and one grouped body. */
 import type * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { type IconComponent, RefreshIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -16,7 +15,7 @@ export function PrefSection({
   children,
 }: {
   title: string;
-  icon?: PhosphorIcon;
+  icon?: IconComponent;
   /**
    * The one-line trust boundary AGENTS.md allows ("Volli writes an overlay
    * file and never edits your Ghostty config"): what Volli will and will not
@@ -67,7 +66,7 @@ export function SectionAction({
   onAct,
 }: {
   label: string;
-  icon?: PhosphorIcon;
+  icon?: IconComponent;
   disabled?: boolean;
   onAct?: () => void;
 }) {
@@ -85,13 +84,13 @@ export function SectionAction({
 /** A section action that is only a glyph. Its name lives in `aria-label`. */
 export function SectionIconAction({
   label,
-  icon: Icon = ArrowClockwiseIcon,
+  icon: Icon = RefreshIcon,
   busy = false,
   disabled,
   onAct,
 }: {
   label: string;
-  icon?: PhosphorIcon;
+  icon?: IconComponent;
   /** Spins the glyph. A refresh that gives no sign of running reads as broken. */
   busy?: boolean;
   disabled?: boolean;

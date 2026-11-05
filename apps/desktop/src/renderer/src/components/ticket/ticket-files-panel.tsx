@@ -5,16 +5,19 @@
  * TicketFilesList remains a compatibility drawing for existing list consumers.
  */
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
-import { FilePlusIcon } from "@phosphor-icons/react/dist/csr/FilePlus";
-import { FilesIcon } from "@phosphor-icons/react/dist/csr/Files";
-import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
-import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import {
+  type IconComponent,
+  ChevronDownIcon,
+  CodeFileIcon,
+  AddFileIcon,
+  FilesIcon,
+  FolderIcon,
+  AddFolderIcon,
+  EditIcon,
+  LabelIcon,
+  DeleteIcon,
+} from "@renderer/components/ui/icon";
+
 import type { Ticket, NamedBlobLink } from "@volli/shared";
 import { AttachmentMenu } from "@renderer/components/files/attachment-menu";
 import { FileTreeNavigator } from "@renderer/components/files/file-tree-navigator";
@@ -55,10 +58,10 @@ import { toastError } from "@renderer/lib/toast";
  * different DRAWINGS — a folder, a page with code marks, a tag — so filling all
  * of them separates nothing and only makes the column heavier to read down.
  */
-const ROW_ICONS: Record<"file" | "directory" | "reference", PhosphorIcon> = {
+const ROW_ICONS: Record<"file" | "directory" | "reference", IconComponent> = {
   directory: FolderIcon,
-  reference: TagIcon,
-  file: FileCodeIcon,
+  reference: LabelIcon,
+  file: CodeFileIcon,
 };
 
 /**
@@ -83,14 +86,14 @@ function FileMutationMenuItems({
   return (
     <>
       <ContextMenuItem
-        icon={FilePlusIcon}
+        icon={AddFileIcon}
         disabled={!controls.canWrite}
         onSelect={() => controls.startDraft("file")}
       >
         New file…
       </ContextMenuItem>
       <ContextMenuItem
-        icon={FolderPlusIcon}
+        icon={AddFolderIcon}
         disabled={!controls.canWrite}
         onSelect={() => controls.startDraft("directory")}
       >
@@ -98,7 +101,7 @@ function FileMutationMenuItems({
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem
-        icon={PencilSimpleIcon}
+        icon={EditIcon}
         disabled={!controls.canWrite}
         onSelect={() => controls.startRename(relPath)}
       >
@@ -116,7 +119,7 @@ function FileMutationMenuItems({
         </ContextMenuItem>
       ) : null}
       <ContextMenuItem
-        icon={TrashIcon}
+        icon={DeleteIcon}
         variant="destructive"
         disabled={!controls.canWrite}
         onSelect={() => controls.remove(relPath, kind)}
@@ -223,7 +226,7 @@ function FileRow({
       // the target; the copy/open pair are their own click targets and cannot.
       trailing={
         kind === "directory" ? (
-          <CaretDownIcon className="-rotate-90 shrink-0 text-muted-foreground" />
+          <ChevronDownIcon className="-rotate-90 shrink-0 text-muted-foreground" />
         ) : undefined
       }
       actions={
@@ -276,7 +279,7 @@ function DraftRow({
   entry: NavigatorEntryKind;
   controls: FileNavigatorControls;
 }) {
-  const Icon = entry === "directory" ? FolderPlusIcon : FilePlusIcon;
+  const Icon = entry === "directory" ? AddFolderIcon : AddFileIcon;
   return (
     <ListRow
       // The rows around it are one line, so this one is too: a draft that stood

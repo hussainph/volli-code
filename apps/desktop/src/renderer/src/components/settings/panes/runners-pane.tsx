@@ -14,16 +14,19 @@
  * Shown only in a Volli Cloud launch: the category does not exist otherwise.
  */
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { CloudIcon } from "@phosphor-icons/react/dist/csr/Cloud";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
-import { LaptopIcon } from "@phosphor-icons/react/dist/csr/Laptop";
-import { LinuxLogoIcon } from "@phosphor-icons/react/dist/csr/LinuxLogo";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import {
+  RefreshIcon,
+  SyncIcon,
+  CloudIcon,
+  MoreIcon,
+  StorageIcon,
+  LaptopIcon,
+  EditIcon,
+  DeleteIcon,
+  type IconComponent,
+} from "@renderer/components/ui/icon";
+import { LinuxMark } from "@renderer/components/ui/brand-marks";
+
 import type { ThisMacRunnerSnapshot } from "@volli/shared";
 import { runnerPlaceAvailability } from "@volli/shared/cloud";
 
@@ -81,9 +84,9 @@ import {
   type StatusWord,
 } from "./use-runners";
 
-const KIND_ICON: Record<string, PhosphorIcon> = {
+const KIND_ICON: Record<string, IconComponent> = {
   mac: LaptopIcon,
-  linux: LinuxLogoIcon,
+  linux: LinuxMark,
   cloud: CloudIcon,
 };
 
@@ -145,7 +148,7 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
       {snapshot === null ? null : <ThisMacBlocked snapshot={snapshot} commands={commands} />}
       <AsyncSection
         title="Runners"
-        icon={HardDrivesIcon}
+        icon={StorageIcon}
         state={list}
         before={
           // A failed list read already offers the retry that reads this Mac again.
@@ -358,7 +361,7 @@ function RunnerList({
 }
 
 function KindGlyph({ kind }: { kind: string }) {
-  const Icon = KIND_ICON[kind] ?? HardDrivesIcon;
+  const Icon = KIND_ICON[kind] ?? StorageIcon;
   return <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />;
 }
 
@@ -429,7 +432,7 @@ function RunnerItem({
               aria-label={`More for ${runner.name}`}
               className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
             >
-              <DotsThreeIcon weight="bold" />
+              <MoreIcon strokeWidth={2.25} />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -441,7 +444,7 @@ function RunnerItem({
                     update(() => commands.updateNow(runner.id), `Couldn’t update ${runner.name}`)
                   }
                 >
-                  <ArrowClockwiseIcon />
+                  <RefreshIcon />
                   Update now
                 </DropdownMenuItem>
                 <DropdownMenuCheckboxItem
@@ -454,19 +457,19 @@ function RunnerItem({
                     )
                   }
                 >
-                  <ArrowsClockwiseIcon />
+                  <SyncIcon />
                   Automatic updates
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuSeparator />
               </>
             ) : null}
             <DropdownMenuItem onSelect={() => setEditing(true)}>
-              <PencilSimpleIcon />
+              <EditIcon />
               Rename
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={onRemove}>
-              <TrashIcon />
+              <DeleteIcon />
               Remove…
             </DropdownMenuItem>
           </DropdownMenuContent>

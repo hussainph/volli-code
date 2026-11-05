@@ -14,20 +14,23 @@
  */
 import * as React from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { DevicesIcon } from "@phosphor-icons/react/dist/csr/Devices";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
-import { LaptopIcon } from "@phosphor-icons/react/dist/csr/Laptop";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import {
+  ChevronLeftIcon,
+  CheckIcon,
+  CopyIcon,
+  ChevronRightIcon,
+  DevicesIcon,
+  KeyIcon,
+  MoreIcon,
+  FolderIcon,
+  StorageIcon,
+  LaptopIcon,
+  EditIcon,
+  AddIcon,
+  DeleteIcon,
+  type IconComponent,
+} from "@renderer/components/ui/icon";
+
 import type { RemoteHost, RemoteHostDevice } from "@volli/shared";
 import { toast } from "sonner";
 
@@ -240,11 +243,11 @@ function HostList({
   return (
     <PrefSection
       title="Hosts"
-      icon={HardDrivesIcon}
+      icon={StorageIcon}
       // With only This Mac, the empty row below is the one way in.
       action={
         hosts.length === 0 || readOnly !== null ? undefined : (
-          <SectionAction label="Add a host…" icon={PlusIcon} onAct={openAddHostSheet} />
+          <SectionAction label="Add a host…" icon={AddIcon} onAct={openAddHostSheet} />
         )
       }
     >
@@ -280,7 +283,7 @@ function HostList({
                 density="two-line"
                 leading={
                   <span className="grid size-6 shrink-0 place-items-center rounded-sm border border-dashed border-border text-muted-foreground">
-                    <PlusIcon aria-hidden className="size-3.5" />
+                    <AddIcon aria-hidden className="size-3.5" />
                   </span>
                 }
                 primary={
@@ -362,23 +365,23 @@ function HostRow({
                   aria-label={`More for ${remote.name}`}
                   className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
                 >
-                  <DotsThreeIcon weight="bold" />
+                  <MoreIcon strokeWidth={2.25} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onSelect={onRename}>
-                  <PencilSimpleIcon />
+                  <EditIcon />
                   Rename
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={onForget}>
-                  <TrashIcon />
+                  <DeleteIcon />
                   Forget…
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          <CaretRightIcon
+          <ChevronRightIcon
             aria-hidden
             onClick={onOpen}
             className="size-3.5 shrink-0 text-muted-foreground"
@@ -413,7 +416,7 @@ function HostPage({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button size="icon-sm" variant="ghost" aria-label="All hosts" onClick={onBack}>
-              <CaretLeftIcon />
+              <ChevronLeftIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">All hosts</TooltipContent>
@@ -442,7 +445,7 @@ function HostPage({
         ) : null}
       </div>
 
-      <PrefSection title="Host" icon={HardDrivesIcon}>
+      <PrefSection title="Host" icon={StorageIcon}>
         <NameRow host={remote} startEditing={startRename} readOnly={readOnly !== null} />
         {hostFacts(remote).map((fact) => (
           <PrefRow key={fact.label} label={fact.label} description={fact.hint}>
@@ -546,7 +549,7 @@ function NameRow({
           onClick={() => setEditing(true)}
           className="group/name -mr-2 flex min-h-7 max-w-40 items-center gap-2 rounded-full px-2 text-ui text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <PencilSimpleIcon
+          <EditIcon
             aria-hidden
             className="size-3.5 opacity-0 transition-opacity group-hover/name:opacity-100 group-focus-visible/name:opacity-100"
           />
@@ -582,11 +585,11 @@ function ProjectsSection({ hostId }: { hostId: string }) {
   return (
     <PrefSection
       title="Projects"
-      icon={FolderSimpleIcon}
+      icon={FolderIcon}
       action={
         <span className="flex items-center gap-1">
-          <SectionAction label="Open…" icon={FolderSimpleIcon} onAct={sheet("list")} />
-          <SectionAction label="New project…" icon={PlusIcon} onAct={sheet("new")} />
+          <SectionAction label="Open…" icon={FolderIcon} onAct={sheet("list")} />
+          <SectionAction label="New project…" icon={AddIcon} onAct={sheet("new")} />
         </span>
       }
     >
@@ -595,17 +598,13 @@ function ProjectsSection({ hostId }: { hostId: string }) {
       ) : (
         <>
           {mine.map((project) => (
-            <ItemRow
-              key={project.id}
-              name={project.name}
-              leading={<Mark icon={FolderSimpleIcon} />}
-            />
+            <ItemRow key={project.id} name={project.name} leading={<Mark icon={FolderIcon} />} />
           ))}
           {refused.map(([projectId, reason]) => (
             <ItemRow
               key={projectId}
               name={reason}
-              leading={<Mark icon={FolderSimpleIcon} />}
+              leading={<Mark icon={FolderIcon} />}
               testId="host-board-unavailable"
             >
               {retry === null ? null : (
@@ -720,14 +719,14 @@ function FullValue({ short, full, label }: { short: string; full: string; label:
           setCopied(true);
         }}
       >
-        {copied ? <CheckIcon weight="bold" className="text-positive" /> : <CopyIcon />}
+        {copied ? <CheckIcon strokeWidth={2.25} className="text-positive" /> : <CopyIcon />}
       </Button>
     </span>
   );
 }
 
 /** A quiet tile for a thing in a list — the host glyph's shape, without its light. */
-function Mark({ icon: Icon }: { icon: PhosphorIcon }) {
+function Mark({ icon: Icon }: { icon: IconComponent }) {
   return (
     <span className="grid size-6 shrink-0 place-items-center rounded-sm bg-muted text-muted-foreground">
       <Icon aria-hidden className="size-3.5" />

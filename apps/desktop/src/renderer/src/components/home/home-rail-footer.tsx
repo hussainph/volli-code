@@ -41,11 +41,14 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * which is the same placement the shared grammar gives them.
  */
 import * as React from "react";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { HardDriveIcon } from "@phosphor-icons/react/dist/csr/HardDrive";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
+import {
+  BranchIcon,
+  FolderOpenIcon,
+  DriveIcon,
+  SuccessIcon,
+  CodeFileIcon,
+} from "@renderer/components/ui/icon";
+
 import { Spinner } from "@renderer/components/ui/spinner";
 
 import { workingCopyLooseCount } from "@volli/shared";
@@ -131,7 +134,7 @@ export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
                 aria-label={branch === null ? "Main checkout" : `Main checkout on ${branch}`}
                 className={RAIL_CHECKOUT_IDENTITY}
               >
-                <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
+                <BranchIcon className="size-4 shrink-0 text-muted-foreground" />
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
@@ -257,7 +260,7 @@ function CheckoutBody({
     <>
       <header className="flex items-center gap-2 pb-2">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-control border border-border bg-card shadow-raised">
-          <HardDriveIcon className="size-4 text-primary-text" />
+          <DriveIcon className="size-4 text-primary-text" />
         </span>
         <div className="min-w-0">
           <h3 className="text-ui font-semibold">Main checkout</h3>
@@ -281,9 +284,9 @@ function CheckoutBody({
       </div>
       <div className="flex items-center justify-between gap-2 text-ui text-muted-foreground">
         {loose === 0 ? (
-          <CheckCircleIcon className="size-4 shrink-0 text-positive" />
+          <SuccessIcon className="size-4 shrink-0 text-positive" />
         ) : (
-          <FileCodeIcon className="size-4 shrink-0" />
+          <CodeFileIcon className="size-4 shrink-0" />
         )}
         <span className="flex-1 font-medium text-foreground tabular-nums">
           {loose === 0

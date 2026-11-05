@@ -1,6 +1,5 @@
 import * as React from "react";
-import { DesktopIcon } from "@phosphor-icons/react/dist/csr/Desktop";
-import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
+import { ComputerIcon, UnfoldIcon } from "@renderer/components/ui/icon";
 
 import { cloudAccountScope, launchStore } from "@renderer/stores/launch";
 import { followCloudSession } from "@renderer/lib/cloud-client";
@@ -175,11 +174,11 @@ export function RunnerPicker({
           aria-label={`Runner: ${label}`}
           title={state.error ?? (state.selected ? composerRunnerStatus(state.selected) : label)}
         >
-          <DesktopIcon />
+          <ComputerIcon />
           <span className="max-w-32 truncate">
             {state.loading ? <LoadingLabel>{label}</LoadingLabel> : label}
           </span>
-          <CaretUpDownIcon className="size-3" weight="bold" />
+          <UnfoldIcon className="size-3" strokeWidth={2.25} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-w-80">

@@ -501,7 +501,7 @@ describe("the Active row's ink tiers", () => {
 /**
  * VC-402 × A3: a companion leads with its HARNESS'S VENDOR, so a Claude Code
  * pane and a Claude chat read as the same maker. Only a harness nobody
- * publishes a mark for keeps the band's Phosphor mnemonic.
+ * publishes a mark for keeps the band's shared symbol.
  */
 describe("a companion's mark", () => {
   it("draws a different mark for every first-class harness, in both bands", () => {

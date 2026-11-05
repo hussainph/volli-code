@@ -1,27 +1,30 @@
 import * as React from "react";
 import { useCloudTeamStore, usePersonLabel } from "@renderer/lib/cloud-team";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
-import { GitMergeIcon } from "@phosphor-icons/react/dist/csr/GitMerge";
-import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
-import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
-import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
-import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
-import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
-import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
-import { SealCheckIcon } from "@phosphor-icons/react/dist/csr/SealCheck";
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { TrashSimpleIcon } from "@phosphor-icons/react/dist/csr/TrashSimple";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import {
+  ArchiveIcon,
+  UndoIcon,
+  ArrowRightIcon,
+  CleanIcon,
+  ChevronDownIcon,
+  ChatIcon,
+  FlagIcon,
+  BranchIcon,
+  CommitIcon,
+  MergeIcon,
+  PullRequestIcon,
+  ComposeIcon,
+  AttachmentIcon,
+  DispatchIcon,
+  EditIcon,
+  PlayCircleIcon,
+  AddCircleIcon,
+  AgentIcon,
+  VerifiedIcon,
+  LabelIcon,
+  DeleteIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   errorMessage,
   isAgentActor,
@@ -72,33 +75,33 @@ import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { boardApi } from "@renderer/lib/board-api";
 
-type PhosphorIcon = typeof ChatCircleIcon;
+type IconComponent = typeof ChatIcon;
 
-/** One muted Phosphor glyph per property-change kind. `commented` never renders (it's dropped). */
-const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
-  created: PlusCircleIcon,
+/** One muted shared glyph per property-change kind. `commented` never renders (it's dropped). */
+const EVENT_ICON: Record<TicketEventKind, IconComponent> = {
+  created: AddCircleIcon,
   status_changed: ArrowRightIcon,
   priority_changed: FlagIcon,
-  harness_changed: RobotIcon,
-  retitled: PencilSimpleIcon,
-  body_edited: NotePencilIcon,
-  labels_changed: TagIcon,
+  harness_changed: AgentIcon,
+  retitled: EditIcon,
+  body_edited: ComposeIcon,
+  labels_changed: LabelIcon,
   archived: ArchiveIcon,
-  unarchived: ArrowCounterClockwiseIcon,
-  commented: ChatCircleIcon,
+  unarchived: UndoIcon,
+  commented: ChatIcon,
   // A verdict is a stamp, not a chat bubble: the glyph says the line was
   // recorded by a signer rather than written by a talker (VC-85).
-  signaled: SealCheckIcon,
-  worktree_changed: GitBranchIcon,
-  worktree_scope_changed: GitBranchIcon,
-  worktree_failed: WarningCircleIcon,
-  worktree_committed: GitCommitIcon,
-  worktree_reclaimed: GitBranchIcon,
-  worktree_trimmed: BroomIcon,
-  pr_opened: GitPullRequestIcon,
-  pr_merged: GitMergeIcon,
-  attachment_added: PaperclipIcon,
-  attachment_removed: TrashSimpleIcon,
+  signaled: VerifiedIcon,
+  worktree_changed: BranchIcon,
+  worktree_scope_changed: BranchIcon,
+  worktree_failed: WarningIcon,
+  worktree_committed: CommitIcon,
+  worktree_reclaimed: BranchIcon,
+  worktree_trimmed: CleanIcon,
+  pr_opened: PullRequestIcon,
+  pr_merged: MergeIcon,
+  attachment_added: AttachmentIcon,
+  attachment_removed: DeleteIcon,
   session_started: PlayCircleIcon,
   session_resumed: PlayCircleIcon,
 };
@@ -191,7 +194,7 @@ function BunchRow({
             className="flex shrink-0 items-center gap-1 rounded-sm text-tertiary-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           >
             {expanded ? "less" : `+${hidden} more`}
-            <CaretDownIcon
+            <ChevronDownIcon
               className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
             />
           </button>
@@ -213,7 +216,7 @@ function AuthorChip({ actor, label }: { actor: string; label: string }) {
       )}
       aria-hidden
     >
-      {isAgentActor(actor) ? <RobotIcon className="size-3" /> : label.charAt(0).toUpperCase()}
+      {isAgentActor(actor) ? <AgentIcon className="size-3" /> : label.charAt(0).toUpperCase()}
     </span>
   );
 }
@@ -301,12 +304,12 @@ function CommentBlock({
                 setEditing(true);
               }}
             >
-              <PencilSimpleIcon />
+              <EditIcon />
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="ghost" size="icon-xs" aria-label="Delete comment">
-                  <TrashSimpleIcon />
+                  <DeleteIcon />
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent size="sm">
@@ -422,7 +425,7 @@ function Composer({
           aria-keyshortcuts="Meta+Enter Control+Enter"
           onClick={() => void submit()}
         >
-          <PaperPlaneTiltIcon />
+          <DispatchIcon />
           Comment
           {/* Keep the shortcut on the same tonal face as the action. */}
           <kbd className="rounded-sm bg-(--accent-tint) px-1 py-1 text-label font-normal text-primary-text">
@@ -615,11 +618,11 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         ),
   );
   const filters = [
-    { label: "All", icon: ChatCircleIcon },
-    { label: "Comments", icon: NotePencilIcon },
-    { label: "Agent", icon: RobotIcon },
+    { label: "All", icon: ChatIcon },
+    { label: "Comments", icon: ComposeIcon },
+    { label: "Agent", icon: AgentIcon },
     { label: "Status changes", icon: ArrowRightIcon },
-    { label: "Commits", icon: GitCommitIcon },
+    { label: "Commits", icon: CommitIcon },
   ];
 
   return (
@@ -629,9 +632,9 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="inspector" size="sm" aria-label={`Filter activity: ${filter}`}>
-              <ChatCircleIcon />
+              <ChatIcon />
               {filter}
-              <CaretDownIcon />
+              <ChevronDownIcon />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">

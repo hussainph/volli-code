@@ -17,9 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { ChevronDownIcon, ChatIcon, AutomationIcon } from "@renderer/components/ui/icon";
 
 /**
  * TWO COMMITS AND A CHOOSER, in that order of prominence.
@@ -109,7 +107,7 @@ export function ComposerFooter({
             {!action.available && !automationOffer.ready ? (
               <Spinner />
             ) : (
-              <LightningIcon className="size-3.5 shrink-0" />
+              <AutomationIcon className="size-3.5 shrink-0" />
             )}
             {action.available
               ? "Saved model"
@@ -171,7 +169,7 @@ export function ComposerFooter({
               data-testid="composer-launch-picker"
               className="shrink-0 rounded-l-none border-l border-primary-foreground/30"
             >
-              <CaretDownIcon weight="bold" className="size-3" />
+              <ChevronDownIcon strokeWidth={2.25} className="size-3" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="top" className="w-80">
@@ -194,7 +192,7 @@ export function ComposerFooter({
                   moment an Automation is chosen. The primary button carries it,
                   because the primary button is what it presses. */}
               <DropdownMenuRadioItem value="kickoff">
-                <ChatCircleIcon />
+                <ChatIcon />
                 Start chat
               </DropdownMenuRadioItem>
               <DropdownMenuSeparator />
@@ -233,7 +231,7 @@ export function CreateRunAutomationItems({
       </DropdownMenuLabel>
       {group.automations.map((automation) => (
         <DropdownMenuRadioItem key={automation.id} value={`automation:${automation.id}`}>
-          <LightningIcon />
+          <AutomationIcon />
           <span className="min-w-0 flex-1 whitespace-normal break-words" title={automation.name}>
             {automation.name}
           </span>

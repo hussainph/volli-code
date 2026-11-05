@@ -1,7 +1,8 @@
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { RefreshIcon } from "@renderer/components/ui/icon";
+
 /**
  * Diff tab content pane (CONCEPT #48/#49/#51, issue #109).
  *
@@ -609,7 +610,7 @@ function LocalDiffView({
               size="sm"
               onClick={() => setLoadAttempt((attempt) => attempt + 1)}
             >
-              <ArrowClockwiseIcon aria-hidden />
+              <RefreshIcon aria-hidden />
               Retry
             </Button>
           }

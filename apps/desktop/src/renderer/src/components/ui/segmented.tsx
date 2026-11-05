@@ -1,6 +1,6 @@
 /** A closed choice with one shared sliding thumb; keyboard changes are instant. */
 import type { CSSProperties } from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { type IconComponent } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
@@ -27,7 +27,7 @@ export function Segmented<Key extends string>({
    * the segment would answer a question the person never got to ask. This is a
    * segment that is not available, not a new axis of the control.
    */
-  options: readonly { key: Key; label: string; icon?: PhosphorIcon; disabled?: boolean }[];
+  options: readonly { key: Key; label: string; icon?: IconComponent; disabled?: boolean }[];
   /**
    * The control scale's two settings rungs (`docs/DESIGN.md`): `sm` where the
    * control trails a section header, `default` where it is the surface's own

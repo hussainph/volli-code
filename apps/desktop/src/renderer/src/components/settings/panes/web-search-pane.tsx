@@ -1,5 +1,6 @@
 import * as React from "react";
-import { GlobeIcon } from "@phosphor-icons/react";
+import { GlobeIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 import type {
   WebAccessProvider,

@@ -1,7 +1,6 @@
 /** Cost leads the glance; exact tokens and attribution stay available on demand. */
 import type * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { type IconComponent, ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
@@ -143,7 +142,7 @@ export function UsageCardHero({
               unit
               className="flex-1 text-label text-muted-foreground"
             />
-            <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+            <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
           </span>
         </button>
       </PopoverTrigger>
@@ -178,7 +177,7 @@ export function UsageCardRow({
   testId,
   children,
 }: {
-  icon: PhosphorIcon;
+  icon: IconComponent;
   label: string;
   /** A figure parked before the caret — a cost (drawn, so its hedge is set right), a count. */
   trailing?: React.ReactNode;
@@ -200,7 +199,7 @@ export function UsageCardRow({
           {trailing === null || trailing === undefined ? null : (
             <span className="shrink-0 text-ui tabular-nums text-muted-foreground">{trailing}</span>
           )}
-          <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+          <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent

@@ -1,13 +1,13 @@
 import * as React from "react";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { RowsIcon } from "@phosphor-icons/react/dist/csr/Rows";
+import { BoardIcon, RowsIcon } from "@renderer/components/ui/icon";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { Button } from "./button";
 import { Segmented } from "./segmented";
 
 const options = [
-  { key: "board", label: "Board", icon: KanbanIcon },
+  { key: "board", label: "Board", icon: BoardIcon },
   { key: "list", label: "List", icon: RowsIcon, disabled: true },
 ] as const;
 

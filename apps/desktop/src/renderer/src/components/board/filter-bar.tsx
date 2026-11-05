@@ -1,7 +1,6 @@
 import * as React from "react";
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { LabelIcon, FlagIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import {
   distinctLabels,
   isFilterActive,
@@ -73,7 +72,7 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
       {labelOptions.length > 0 ? (
         <FilterChip
           label="Labels"
-          icon={<TagIcon aria-hidden />}
+          icon={<LabelIcon aria-hidden />}
           options={labelOptions}
           selected={filter.labels}
           onToggle={(value) => useBoardStore.getState().toggleLabel(projectId, value)}
@@ -85,7 +84,7 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
           className="h-7 px-2 text-ui text-muted-foreground"
           onClick={() => useBoardStore.getState().clearFilter(projectId)}
         >
-          <XIcon className="size-3" />
+          <CloseIcon className="size-3" />
           Clear
         </Button>
       ) : null}

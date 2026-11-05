@@ -1,5 +1,5 @@
 /** Inspector pages share the native segmented control; only its thumb moves. */
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { type IconComponent } from "@renderer/components/ui/icon";
 
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { Segmented } from "@renderer/components/ui/segmented";
@@ -8,7 +8,7 @@ import { cn } from "@renderer/lib/utils";
 export interface RailModeTab<K extends string> {
   key: K;
   label: string;
-  icon: PhosphorIcon;
+  icon: IconComponent;
 }
 
 export interface RailModeTabsProps<K extends string> {

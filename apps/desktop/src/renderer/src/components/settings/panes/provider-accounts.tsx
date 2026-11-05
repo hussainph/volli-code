@@ -1,11 +1,14 @@
 /** Settings account rows use the existing sign-in client and pure auth model. */
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
+import {
+  ExternalIcon,
+  SuccessIcon,
+  CopyIcon,
+  SearchIcon,
+  IntegrationIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import type {
   ModelAccessProvider,
@@ -80,7 +83,7 @@ export function ModelAccessAccounts({
   if (providers.length === 0) return null;
   return (
     <>
-      <PrefSection title="Signed in" icon={CheckCircleIcon}>
+      <PrefSection title="Signed in" icon={SuccessIcon}>
         <div data-slot="model-access-accounts" className="px-4">
           {connected.length === 0 ? <Empty>No connected accounts</Empty> : connected.map(row)}
         </div>
@@ -112,11 +115,11 @@ function FilteredAccounts({
   return (
     <PrefSection
       title="Available to connect"
-      icon={PlugsIcon}
+      icon={IntegrationIcon}
       action={
         <InputGroup className="search-capsule w-56">
           <InputGroupAddon>
-            <MagnifyingGlassIcon />
+            <SearchIcon />
           </InputGroupAddon>
           <InputGroupInput
             type="search"
@@ -508,7 +511,7 @@ function DeviceCode({ code }: { code: string }) {
         aria-label={copied ? "Code copied" : "Copy code"}
         onClick={() => void copyDeviceCode(code).then((state) => setCopied(state === "copied"))}
       >
-        {copied ? <CheckCircleIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+        {copied ? <SuccessIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
       </Button>
     </div>
   );
@@ -535,7 +538,7 @@ function ExternalLinkButton({ url, label }: { url: string; label: string }) {
       className="self-start"
       onClick={() => window.open(url, "_blank", "noopener")}
     >
-      <ArrowSquareOutIcon className="size-3.5" />
+      <ExternalIcon className="size-3.5" />
       {label}
     </Button>
   );

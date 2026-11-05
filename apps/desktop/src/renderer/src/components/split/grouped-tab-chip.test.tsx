@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { ChatIcon } from "@renderer/components/ui/icon";
+
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -354,7 +355,7 @@ it("leaves a chip's segments out of the sortable — the chip is not dragged, it
           shownGroupId={null}
           activeTabId="x"
           edgeTargets
-          describe={(item) => ({ label: item.id, icon: ChatCircleIcon })}
+          describe={(item) => ({ label: item.id, icon: ChatIcon })}
           onSelect={noop}
         >
           {(item, state) => (

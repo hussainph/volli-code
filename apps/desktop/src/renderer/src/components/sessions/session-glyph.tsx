@@ -25,13 +25,16 @@
  * whether it is also printing them). This file never writes a state word.
  */
 import * as React from "react";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
-import { CircleNotchIcon } from "@phosphor-icons/react/dist/csr/CircleNotch";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import {
+  ChatIcon,
+  CircleIcon,
+  SpinnerIcon,
+  HelpIcon,
+  TerminalIcon,
+  WarningIcon,
+  type IconComponent,
+} from "@renderer/components/ui/icon";
+
 import { isFirstClassHarnessId, type FirstClassHarnessId, type HarnessId } from "@volli/shared";
 
 import { ModelMark } from "@renderer/components/models/model-identity";
@@ -56,7 +59,7 @@ export type SessionGlyphSurface = "sidebar" | "popover";
 
 /**
  * A terminal companion's vendor, so its row leads with the logo the harness's
- * MAKER owns rather than with a Phosphor mnemonic (VC-402, amendment A3 —
+ * MAKER owns rather than with a shared symbol (VC-402, amendment A3 —
  * moved here from the lab's `sidebar-corpus.ts`).
  *
  * Partial on purpose: a harness nobody publishes a mark for keeps the glyph its
@@ -75,14 +78,14 @@ export function harnessVendorId(harnessId: HarnessId | null): string | null {
 }
 
 /** v2's four badges, over the dot's wider vocabulary. */
-function badgeFor(state: StatusDotState): { icon: PhosphorIcon; ink: string } {
+function badgeFor(state: StatusDotState): { icon: IconComponent; ink: string } {
   switch (state) {
     case "working":
     case "setup":
     case "starting":
-      return { icon: CircleNotchIcon, ink: "text-positive" };
+      return { icon: SpinnerIcon, ink: "text-positive" };
     case "waiting":
-      return { icon: QuestionIcon, ink: "text-attention" };
+      return { icon: HelpIcon, ink: "text-attention" };
     case "interrupted":
     case "error":
       return { icon: WarningIcon, ink: "text-destructive" };
@@ -112,7 +115,7 @@ export interface SessionGlyphProps {
    * mnemonic (`HARNESS_GLYPHS` in `sidebar/session-band-row.tsx`) for a
    * companion whose vendor publishes no mark.
    */
-  fallback?: PhosphorIcon;
+  fallback?: IconComponent;
   /** The complete accessible name, composed by the caller from SESSION_ACTIVITY_LABEL. */
   name: string;
   size?: SessionGlyphSize;
@@ -132,7 +135,7 @@ export function SessionGlyph({
   const badge = state === null ? null : badgeFor(state);
   const tile = size === "card";
   const tab = size === "tab";
-  const Stand = fallback ?? (kind === "chat" ? ChatCircleIcon : TerminalWindowIcon);
+  const Stand = fallback ?? (kind === "chat" ? ChatIcon : TerminalIcon);
   return (
     <span
       role="img"
@@ -147,7 +150,7 @@ export function SessionGlyph({
       {providerId === null ? (
         <Stand
           aria-hidden
-          weight="bold"
+          strokeWidth={2.25}
           className={cn(tile ? "size-4" : "size-3.5", "text-muted-foreground")}
         />
       ) : (
@@ -168,10 +171,10 @@ export function SessionGlyph({
           )}
         >
           <badge.icon
-            weight="bold"
+            strokeWidth={2.25}
             className={cn(
               tile ? "size-3" : "size-2.5",
-              badge.icon === CircleNotchIcon && "motion-safe:animate-spin",
+              badge.icon === SpinnerIcon && "motion-safe:animate-spin",
             )}
           />
         </span>

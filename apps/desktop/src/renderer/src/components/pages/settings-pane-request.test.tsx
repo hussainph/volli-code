@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
+import { GuideIcon } from "@renderer/components/ui/icon";
+
 import type { Project } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -17,7 +18,7 @@ vi.mock("@renderer/components/settings/configure-groups", () => ({
       key: "agent",
       label: "Agent",
       categories: [
-        { key: "skills", label: "Skills", icon: BookOpenIcon, content: <p>skills pane</p> },
+        { key: "skills", label: "Skills", icon: GuideIcon, content: <p>skills pane</p> },
       ],
     },
   ],
@@ -26,8 +27,8 @@ vi.mock("@renderer/components/settings/configure-groups", () => ({
       key: "agent",
       label: "Agent",
       categories: [
-        { key: "skills", label: "Skills", icon: BookOpenIcon, content: <p>skills pane</p> },
-        { key: "secrets", label: "Secrets", icon: BookOpenIcon, content: <p>secrets pane</p> },
+        { key: "skills", label: "Skills", icon: GuideIcon, content: <p>skills pane</p> },
+        { key: "secrets", label: "Secrets", icon: GuideIcon, content: <p>secrets pane</p> },
       ],
     },
   ],

@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
@@ -32,7 +32,11 @@ export function InspectorPopup({ children, className, ...props }: React.Componen
       className={cn("max-w-full justify-start gap-1.5 px-1.5 font-normal", className)}
     >
       {children}
-      <CaretDownIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+      <ChevronDownIcon
+        aria-hidden
+        strokeWidth={2.25}
+        className="size-3 shrink-0 text-muted-foreground"
+      />
     </Button>
   );
 }

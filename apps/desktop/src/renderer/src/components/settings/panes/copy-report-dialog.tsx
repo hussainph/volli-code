@@ -1,4 +1,5 @@
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { SuccessIcon } from "@renderer/components/ui/icon";
+
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Notice } from "@renderer/components/ui/notice";
 import * as React from "react";
@@ -56,7 +57,7 @@ export function CopyReportPreview({
             "Local paths and runtime details",
           ].map((label) => (
             <li key={label} className="flex items-center gap-2">
-              <CheckCircleIcon aria-hidden className="size-4 text-muted-foreground" />
+              <SuccessIcon aria-hidden className="size-4 text-muted-foreground" />
               {label}
             </li>
           ))}

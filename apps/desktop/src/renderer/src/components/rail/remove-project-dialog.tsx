@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { Project } from "@volli/shared";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { FolderOpenIcon } from "@renderer/components/ui/icon";
+
 import { Spinner } from "@renderer/components/ui/spinner";
 
 import {

@@ -1,9 +1,11 @@
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FileMagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/FileMagnifyingGlass";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import type { Icon } from "@phosphor-icons/react";
+import {
+  BrowserIcon,
+  ChatIcon,
+  FindFileIcon,
+  TerminalIcon,
+  CloseIcon,
+  type IconComponent as Icon,
+} from "@renderer/components/ui/icon";
 
 import { MENU_SHORTCUT } from "@renderer/components/ui/menu-classes";
 import { Button } from "@renderer/components/ui/button";
@@ -54,14 +56,14 @@ export function PaneEmptyState({
     >
       <div className="flex w-full max-w-72 flex-col gap-1">
         <PaneEmptyRow
-          icon={ChatCircleIcon}
+          icon={ChatIcon}
           label="New chat"
           shortcut="⌘T"
           keyshortcuts="Meta+T"
           onSelect={onNewChat}
         />
         <PaneEmptyRow
-          icon={TerminalWindowIcon}
+          icon={TerminalIcon}
           label="New terminal"
           shortcut="⌥⌘T"
           keyshortcuts="Alt+Meta+T"
@@ -69,13 +71,13 @@ export function PaneEmptyState({
         />
         <PaneEmptyRow icon={BrowserIcon} label="New browser" onSelect={onNewBrowser} />
         <PaneEmptyRow
-          icon={FileMagnifyingGlassIcon}
+          icon={FindFileIcon}
           label="Open file…"
           shortcut="⌘P"
           keyshortcuts="Meta+P"
           onSelect={onOpenFile}
         />
-        <PaneEmptyRow icon={XIcon} label="Close pane" onSelect={onClosePane} />
+        <PaneEmptyRow icon={CloseIcon} label="Close pane" onSelect={onClosePane} />
       </div>
     </div>
   );
@@ -111,8 +113,7 @@ function PaneEmptyRow({
       onClick={onSelect}
       className="w-full justify-start rounded-row px-2 text-ui hover:bg-(--accent-tint)"
     >
-      {/* Outline at 14px: these are five peers, and none of them is the
-          exception the fill weight marks (CLAUDE.md). */}
+      {/* Five peers, all in the shared outline family. */}
       <Glyph aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
       {shortcut === undefined ? null : <span className={MENU_SHORTCUT}>{shortcut}</span>}

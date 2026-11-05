@@ -21,8 +21,8 @@
  * says "needs setup" and offers Sign in, which hands over to the Accounts
  * section below, where every provider credential is entered.
  */
-import { SignpostIcon } from "@phosphor-icons/react/dist/csr/Signpost";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { DirectionsIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
   decisionCloudDisclosure,
@@ -341,7 +341,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
 
   if (state.status === "loading") {
     return (
-      <PrefSection title="Decision model" icon={SignpostIcon}>
+      <PrefSection title="Decision model" icon={DirectionsIcon}>
         <p className={EMPTY_INLINE}>
           <LoadingLabel>Loading</LoadingLabel>
         </p>
@@ -350,7 +350,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   }
   if (state.status === "error") {
     return (
-      <PrefSection title="Decision model" icon={SignpostIcon}>
+      <PrefSection title="Decision model" icon={DirectionsIcon}>
         <Notice
           announce
           tone="error"
@@ -374,7 +374,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   const cloud = global.kind === "cloud" ? cloudStatus(global, view.catalog) : null;
 
   return (
-    <PrefSection title="Decision model" icon={SignpostIcon}>
+    <PrefSection title="Decision model" icon={DirectionsIcon}>
       <PrefRow label="Model" testId="decision-model-mode">
         <Segmented
           ariaLabel="Decision model"

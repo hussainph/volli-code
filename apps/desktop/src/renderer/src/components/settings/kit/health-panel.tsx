@@ -9,7 +9,7 @@ import { Spinner } from "@renderer/components/ui/spinner";
  * fault with a remedy next to it.
  */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
@@ -108,7 +108,7 @@ export function HealthPanel({
             onClick={() => setOpen((current) => !current)}
             className="flex w-full items-center gap-1 py-2 text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
-            <CaretDownIcon
+            <ChevronDownIcon
               aria-hidden
               className={cn("size-3.5 transition-transform", open && "rotate-180")}
             />

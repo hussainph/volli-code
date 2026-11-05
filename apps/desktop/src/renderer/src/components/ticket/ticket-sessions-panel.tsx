@@ -1,10 +1,13 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { EnvelopeSimpleIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimple";
-import { EnvelopeSimpleOpenIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimpleOpen";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import {
+  RefreshIcon,
+  MailIcon,
+  MailOpenIcon,
+  SearchIcon,
+  EditIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   errorMessage,
   sessionProvenanceOf,
@@ -395,20 +398,17 @@ function SessionRow({
           <ContextMenuContent>
             <SessionShare sessionId={sessionId} projectId={drag?.projectId ?? null} />
             {canManage && onResume !== undefined ? (
-              <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={onResume}>
+              <ContextMenuItem icon={RefreshIcon} onSelect={onResume}>
                 Resume
               </ContextMenuItem>
             ) : null}
             {canManage ? (
-              <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
+              <ContextMenuItem icon={EditIcon} onSelect={onStartRename}>
                 Rename
               </ContextMenuItem>
             ) : null}
             {onToggleRead === null || !canManage ? null : (
-              <ContextMenuItem
-                icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
-                onSelect={onToggleRead}
-              >
+              <ContextMenuItem icon={unread ? MailOpenIcon : MailIcon} onSelect={onToggleRead}>
                 {unread ? "Mark as read" : "Mark as unread"}
               </ContextMenuItem>
             )}
@@ -1155,7 +1155,7 @@ export function TicketSessionsPanel({
             match for it. */}
         {filterable ? (
           <div className="relative mb-1">
-            <MagnifyingGlassIcon
+            <SearchIcon
               aria-hidden
               className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
             />

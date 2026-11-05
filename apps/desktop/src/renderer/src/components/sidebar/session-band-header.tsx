@@ -9,12 +9,14 @@
  * sessions" is a way of reading the archive, not a way of hiding running work.
  */
 import * as React from "react";
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FunnelSimpleIcon } from "@phosphor-icons/react/dist/csr/FunnelSimple";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import {
+  CleanIcon,
+  ChatIcon,
+  FilterIcon,
+  GlobeIcon,
+  TerminalIcon,
+  TicketIcon,
+} from "@renderer/components/ui/icon";
 
 import type {
   SessionRowKind,
@@ -138,7 +140,7 @@ export function SessionBandFilterMenu({
               regular draws lighter than the label beside it, and coverage is
               scale-invariant so no `size-*` can fix that. Not `fill`, which is
               4.6x here — the widest gap in the app, and a different mark. */}
-          <FunnelSimpleIcon weight="bold" className="size-3" />
+          <FilterIcon strokeWidth={2.25} className="size-3" />
         </button>
       </DropdownMenuTrigger>
       {/* `onSelect` is preventDefault'd on every item so the menu survives a
@@ -149,7 +151,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("chat")}
         >
-          <ChatCircleIcon />
+          <ChatIcon />
           Chats
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
@@ -157,7 +159,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("terminal")}
         >
-          <TerminalWindowIcon />
+          <TerminalIcon />
           Terminals
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
@@ -184,7 +186,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => onChange({ ...filter, showCleaned: !filter.showCleaned })}
         >
-          <BroomIcon />
+          <CleanIcon />
           Cleaned up
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>

@@ -30,8 +30,7 @@
  * button would only tell them the app had given up.
  */
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import { RefreshIcon, WarningIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
@@ -87,7 +86,7 @@ export class BoardBoundary extends React.Component<BoardBoundaryProps, BoardBoun
 
     return (
       <div className={cn("min-h-0 flex-1", EMPTY_PAGE)} data-board-boundary-fallback>
-        <WarningCircleIcon aria-hidden className="size-8 text-destructive" />
+        <WarningIcon aria-hidden className="size-8 text-destructive" />
         <h2 className="text-heading font-semibold text-foreground">Board unavailable</h2>
         <p role="alert" className="text-ui text-muted-foreground">
           The board stopped responding.
@@ -102,7 +101,7 @@ export class BoardBoundary extends React.Component<BoardBoundaryProps, BoardBoun
             }))
           }
         >
-          <ArrowClockwiseIcon aria-hidden />
+          <RefreshIcon aria-hidden />
           Reload the board
         </Button>
       </div>

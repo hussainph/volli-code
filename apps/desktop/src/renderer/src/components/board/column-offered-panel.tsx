@@ -41,7 +41,8 @@
  * signifier — the ring, the digit, the bolt, the dashed Move only row — stays.
  */
 import type * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
+
 import { type Automation } from "@volli/shared";
 
 import { MENU_SEPARATOR } from "@renderer/components/ui/menu-classes";
@@ -109,7 +110,7 @@ export function ColumnOfferedPanel({
           trailing={
             expanded && !inert && armedId === automation.id ? (
               <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-                <LightningIcon aria-hidden weight="fill" className="size-3" />
+                <AutomationIcon aria-hidden className="size-3" />
                 Default
               </span>
             ) : null

@@ -1,7 +1,7 @@
 /** Shared Settings shell: scoped rail, row search, one gutter and one page measure. */
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { type IconComponent, SearchIcon } from "@renderer/components/ui/icon";
+
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { Badge } from "@renderer/components/ui/badge";
 import { IdentityTile } from "@renderer/components/ui/identity-tile";
@@ -13,7 +13,7 @@ import { SETTINGS_ROWS } from "../settings-inventory";
 export interface PrefCategory {
   key: string;
   label: string;
-  icon: PhosphorIcon;
+  icon: IconComponent;
   keywords?: readonly string[];
   count?: number;
   attention?: { state: StatusDotState; label: string };
@@ -104,7 +104,7 @@ export function PrefShell({
           {header}
           <InputGroup className="search-capsule">
             <InputGroupAddon>
-              <MagnifyingGlassIcon />
+              <SearchIcon />
             </InputGroupAddon>
             <InputGroupInput
               type="search"

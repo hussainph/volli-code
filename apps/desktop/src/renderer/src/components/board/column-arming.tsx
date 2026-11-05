@@ -16,19 +16,18 @@
  * in both states for the same reason: the answer to "nothing is offered here"
  * and to "I want a different one" is the same page.
  *
- * The bolt is always visible: outline means unarmed, fill means armed.
- * Automatic triggers are a separate machine-local choice. An armed Automation
- * with those paused keeps its filled mark, but uses muted ink and names the
- * pause explicitly. The menu exposes that switch beside the arming choice.
+ * The bolt is always outline: accent ink means armed and ready. Automatic
+ * triggers are a separate machine-local choice. With those paused, selected
+ * background retains the armed distinction, muted ink and the name say paused.
+ * The menu exposes that switch beside the arming choice.
  *
  * The list is re-read on open. Arming is machine-local and the record is not:
  * an Automation authored anywhere else in the app is a change this menu's own
  * open is the moment to notice, which is the palette's convention too.
  */
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { LightningSlashIcon } from "@phosphor-icons/react/dist/csr/LightningSlash";
-import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
+import { AutomationIcon, AutomationOffIcon, RemoveCircleIcon } from "@renderer/components/ui/icon";
+
 import {
   offeredAutomationsForColumn,
   TICKET_STATUS_LABELS,
@@ -134,13 +133,11 @@ function LocalColumnArmingButton({
               data-arming-state={armingState}
               className={cn(
                 "shrink-0",
-                armingState === "ready" ? "text-foreground" : "text-muted-foreground",
+                armed !== null && armingState !== "ready" && "bg-accent",
+                armingState === "ready" ? "text-primary-text" : "text-muted-foreground",
               )}
             >
-              <LightningIcon
-                weight={armed === null ? "regular" : "fill"}
-                data-arming-mark={armed === null ? "unfilled" : "filled"}
-              />
+              <AutomationIcon data-arming-mark={armed === null ? "unarmed" : "armed"} />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -171,7 +168,7 @@ function LocalColumnArmingButton({
             }}
           >
             <DropdownMenuRadioItem value={DISARMED}>
-              <MinusCircleIcon />
+              <RemoveCircleIcon />
               No automation
             </DropdownMenuRadioItem>
             {offered.map((automation) => (
@@ -189,7 +186,7 @@ function LocalColumnArmingButton({
                     : `${automation.name} · ${SWITCHED_OFF_NOTE}`
                 }
               >
-                {enabledIds.includes(automation.id) ? <LightningIcon /> : <LightningSlashIcon />}
+                {enabledIds.includes(automation.id) ? <AutomationIcon /> : <AutomationOffIcon />}
                 <span className="min-w-0 flex-1 whitespace-normal wrap-anywhere">
                   {automation.name}
                 </span>
@@ -204,7 +201,7 @@ function LocalColumnArmingButton({
               checked={enabledIds.includes(armed.id)}
               onCheckedChange={(enabled) => void setEnabled(armed.id, enabled)}
             >
-              <LightningIcon />
+              <AutomationIcon />
               Automatic triggers
             </DropdownMenuCheckboxItem>
           </>
@@ -216,7 +213,7 @@ function LocalColumnArmingButton({
           data-column-arming-page
           onSelect={() => useProjectUiStore.getState().setNav(projectId, "automations")}
         >
-          <LightningIcon />
+          <AutomationIcon />
           Automations
         </DropdownMenuItem>
       </DropdownMenuContent>

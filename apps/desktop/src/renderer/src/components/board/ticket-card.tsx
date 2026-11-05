@@ -1,6 +1,7 @@
 import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
+import { ArchiveIcon } from "@renderer/components/ui/icon";
+
 import { useDndMonitor } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -37,9 +38,8 @@ function ArchiveReadyBadge({ ticket }: { ticket: Ticket }) {
       title="Ready to archive"
       aria-label="Ready to archive"
     >
-      {/* Filled, and one of the few that is: it marks the single card on a
-          board of peers whose worktree is finished with. */}
-      <ArchiveIcon weight="fill" className="size-3" />
+      {/* Accent ink marks the one card whose worktree is finished with. */}
+      <ArchiveIcon className="size-3" />
     </span>
   );
 }

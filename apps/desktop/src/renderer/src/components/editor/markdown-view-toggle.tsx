@@ -31,16 +31,14 @@
  * person is missing once they are looking at a page they cannot edit. The
  * refusal is a keystroke away in Source, and stays in the control's tooltip.
  */
-import { ArticleIcon } from "@phosphor-icons/react/dist/csr/Article";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import { ArticleIcon, CodeIcon, PreviewIcon } from "@renderer/components/ui/icon";
 
 import { Segmented } from "@renderer/components/ui/segmented";
 import type { DocumentViewRefusal, MarkdownFileView } from "@renderer/editor/document-view-policy";
 
 const SOURCE = { key: "source", label: "Source", icon: CodeIcon } as const;
 const DOCUMENT = { key: "document", label: "Document", icon: ArticleIcon } as const;
-const PREVIEW = { key: "preview", label: "Preview", icon: EyeIcon } as const;
+const PREVIEW = { key: "preview", label: "Preview", icon: PreviewIcon } as const;
 
 /** The editable pair, for a file the projection can honestly show. */
 const EDITABLE_VIEWS = [SOURCE, DOCUMENT] as const;

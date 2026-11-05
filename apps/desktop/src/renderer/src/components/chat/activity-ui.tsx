@@ -16,25 +16,26 @@
  */
 import {
   BrowserIcon,
-  CaretRightIcon,
-  CheckCircleIcon,
-  CircleDashedIcon,
+  ChevronRightIcon,
+  SuccessIcon,
+  PendingIcon,
   CopyIcon,
-  FilePlusIcon,
-  FileTextIcon,
+  AddFileIcon,
+  DocumentIcon,
   FolderIcon,
   GaugeIcon,
-  GlobeSimpleIcon,
-  ListChecksIcon,
-  MagnifyingGlassIcon,
-  PencilSimpleIcon,
-  ProhibitIcon,
-  TerminalWindowIcon,
-  UsersThreeIcon,
-  WrenchIcon,
-  XCircleIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+  GlobeIcon,
+  ChecklistIcon,
+  SearchIcon,
+  EditIcon,
+  BlockedIcon,
+  TerminalIcon,
+  TeamIcon,
+  ToolsIcon,
+  ErrorIcon,
+  type IconComponent as Icon,
+} from "@renderer/components/ui/icon";
+
 import type { ActivityBrowse, ActivityKind } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
@@ -153,7 +154,7 @@ function Caret({
         className,
       )}
     >
-      <CaretRightIcon
+      <ChevronRightIcon
         aria-hidden
         className={cn(
           "size-3 text-muted-foreground transition-transform",
@@ -307,17 +308,17 @@ function RowDisclosure({
 /* -------------------------------------------------------------------- atoms */
 
 const KIND_ICONS: Record<ActivityKind, Icon> = {
-  "run-command": TerminalWindowIcon,
-  "read-file": FileTextIcon,
-  "edit-file": PencilSimpleIcon,
-  "write-file": FilePlusIcon,
-  search: MagnifyingGlassIcon,
+  "run-command": TerminalIcon,
+  "read-file": DocumentIcon,
+  "edit-file": EditIcon,
+  "write-file": AddFileIcon,
+  search: SearchIcon,
   "list-directory": FolderIcon,
-  "fetch-url": GlobeSimpleIcon,
-  plan: ListChecksIcon,
-  delegate: UsersThreeIcon,
+  "fetch-url": GlobeIcon,
+  plan: ChecklistIcon,
+  delegate: TeamIcon,
   browse: BrowserIcon,
-  other: WrenchIcon,
+  other: ToolsIcon,
 };
 
 /**
@@ -329,7 +330,7 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
  * below it carries the mark for its own kind.
  */
 function BundleGlyph() {
-  return <WrenchIcon aria-hidden className={GLYPH_CLASS} />;
+  return <ToolsIcon aria-hidden className={GLYPH_CLASS} />;
 }
 
 const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
@@ -395,19 +396,15 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
     // claims an outcome, and neither is owed an alarm.
     case "pending":
     case "not-run":
-      return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
+      return <PendingIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
       return <ProgressGlyph tracked />;
     case "failed":
-      return (
-        <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
-      );
+      return <ErrorIcon aria-hidden className={cn(className, "text-destructive")} />;
     case "denied":
-      return (
-        <ProhibitIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
-      );
+      return <BlockedIcon aria-hidden className={cn(className, "text-destructive")} />;
     default:
-      return <CheckCircleIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
+      return <SuccessIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
   }
 }
 
@@ -707,7 +704,7 @@ function RowActions({ row }: { row: ActivityRow }) {
   }, [copyState]);
   if (!row.object) return <span className="ml-auto" />;
   const CopyStateIcon =
-    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
+    copyState === "copied" ? SuccessIcon : copyState === "failed" ? ErrorIcon : CopyIcon;
   return (
     <span className="ml-auto flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
       <Button
@@ -1378,9 +1375,9 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
           the receipt is the settled record of what you did about it, and a
           second filled mark on the same fact is the same bit twice. */}
       {approved ? (
-        <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
+        <SuccessIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
       ) : (
-        <ProhibitIcon aria-hidden className={GLYPH_CLASS} />
+        <BlockedIcon aria-hidden className={GLYPH_CLASS} />
       )}
       <span className="shrink-0">You {approved ? "allowed" : "denied"}</span>
       {row.object ? (

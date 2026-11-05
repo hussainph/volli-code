@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { CloseIcon } from "@renderer/components/ui/icon";
+
 import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -70,7 +71,7 @@ function DialogContent({
               className="absolute top-3 right-3 text-muted-foreground"
               aria-label="Close"
             >
-              <XIcon className="size-3.5" />
+              <CloseIcon className="size-3.5" />
             </Button>
           </DialogPrimitive.Close>
         )}

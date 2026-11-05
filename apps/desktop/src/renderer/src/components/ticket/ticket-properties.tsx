@@ -1,14 +1,17 @@
 /** Native label/value properties. Mutations, label order and focus recovery stay
  * with the board store; the row and pop-up geometry are shared with forms. */
 import * as React from "react";
-import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
-import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
-import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
-import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  FlagIcon,
+  InboxIcon,
+  ChecklistIcon,
+  PlayCircleIcon,
+  PreviewIcon,
+  SuccessIcon,
+  AddIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -42,11 +45,11 @@ import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 const STATUS_ICON = {
-  backlog: TrayIcon,
-  todo: ListChecksIcon,
+  backlog: InboxIcon,
+  todo: ChecklistIcon,
   doing: PlayCircleIcon,
-  needs_review: EyeIcon,
-  done: CheckCircleIcon,
+  needs_review: PreviewIcon,
+  done: SuccessIcon,
 } as const;
 
 /** The current value is the only pop-up target; the row itself is inert. */
@@ -116,7 +119,7 @@ function LabelPill({
         className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         onClick={onRemove}
       >
-        <XIcon weight="bold" className="size-2.5" />
+        <CloseIcon strokeWidth={2.25} className="size-2.5" />
       </button>
     </span>
   );
@@ -200,7 +203,7 @@ function AddLabelControl({
           {/* `bold` at 12px: the size tier where regular draws lighter than the
               text it sits among (CLAUDE.md), and this glyph now has no word
               beside it to borrow weight from. */}
-          <PlusIcon weight="bold" className="size-3" />
+          <AddIcon strokeWidth={2.25} className="size-3" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-56 p-0">
@@ -240,7 +243,7 @@ function AddLabelControl({
                   setOpen(false);
                 }}
               >
-                <PlusIcon />
+                <AddIcon />
                 <span className="truncate">Create “{creatable}”</span>
               </CommandItem>
             )}

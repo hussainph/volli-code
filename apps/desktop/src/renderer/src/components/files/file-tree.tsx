@@ -1,17 +1,20 @@
 import * as React from "react";
-import { CaretDownIcon as CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretRightIcon as CaretRight } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { FileCodeIcon as FileCode } from "@phosphor-icons/react/dist/csr/FileCode";
-import { FileTextIcon as FileText } from "@phosphor-icons/react/dist/csr/FileText";
-import { FolderIcon as Folder } from "@phosphor-icons/react/dist/csr/Folder";
-import { FolderOpenIcon as FolderOpen } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { PaperclipIcon as Paperclip } from "@phosphor-icons/react/dist/csr/Paperclip";
-import { PushPinIcon as PushPin } from "@phosphor-icons/react/dist/csr/PushPin";
-import { FilePlusIcon as FilePlus } from "@phosphor-icons/react/dist/csr/FilePlus";
-import { FolderPlusIcon as FolderPlus } from "@phosphor-icons/react/dist/csr/FolderPlus";
-import { PencilSimpleIcon as PencilSimple } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { FilesIcon as Files } from "@phosphor-icons/react/dist/csr/Files";
-import { TrashIcon as Trash } from "@phosphor-icons/react/dist/csr/Trash";
+import {
+  ChevronDownIcon as CaretDown,
+  ChevronRightIcon as CaretRight,
+  CodeFileIcon as FileCode,
+  DocumentIcon as FileText,
+  FolderIcon as Folder,
+  FolderOpenIcon as FolderOpen,
+  AttachmentIcon as Paperclip,
+  PinIcon as PushPin,
+  AddFileIcon as FilePlus,
+  AddFolderIcon as FolderPlus,
+  EditIcon as PencilSimple,
+  FilesIcon as Files,
+  DeleteIcon as Trash,
+} from "@renderer/components/ui/icon";
+
 import {
   buildTree,
   flattenTree,
@@ -345,13 +348,13 @@ export function FileTree({
                     ) : row.expanded ? (
                       <CaretDown
                         aria-hidden
-                        weight="bold"
+                        strokeWidth={2.25}
                         className="size-3 shrink-0 text-muted-foreground"
                       />
                     ) : (
                       <CaretRight
                         aria-hidden
-                        weight="bold"
+                        strokeWidth={2.25}
                         className="size-3 shrink-0 text-muted-foreground"
                       />
                     )}

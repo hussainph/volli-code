@@ -1,9 +1,12 @@
-import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { ColumnsIcon } from "@phosphor-icons/react/dist/csr/Columns";
-import { CurrencyDollarIcon } from "@phosphor-icons/react/dist/csr/CurrencyDollar";
+import {
+  MonitorIcon,
+  MinusIcon,
+  AddIcon,
+  CodeIcon,
+  ColumnsIcon,
+  CostIcon,
+} from "@renderer/components/ui/icon";
+
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
@@ -42,7 +45,7 @@ export function DisplaySection() {
             disabled={index >= UI_SCALE_STEPS.length - 1}
             onClick={() => setUiScale(UI_SCALE_STEPS[index + 1])}
           >
-            <PlusIcon />
+            <AddIcon />
           </Button>
         </ButtonGroup>
       </PrefRow>
@@ -71,7 +74,7 @@ export function DisplaySection() {
           ))}
         </ButtonGroup>
       </PrefRow>
-      <PrefRow label="Show cost and token usage" icon={CurrencyDollarIcon} htmlFor="cost-visible">
+      <PrefRow label="Show cost and token usage" icon={CostIcon} htmlFor="cost-visible">
         <Switch id="cost-visible" checked={costVisible} onCheckedChange={setCostVisible} />
       </PrefRow>
     </PrefSection>

@@ -27,7 +27,7 @@
  * (not installed, deliberately), not a bigger cap and not pagination.
  */
 import * as React from "react";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { SearchIcon } from "@renderer/components/ui/icon";
 
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import {
@@ -387,7 +387,7 @@ export function TableSearch({
   return (
     <InputGroup className="w-56 max-w-full">
       <InputGroupAddon>
-        <MagnifyingGlassIcon />
+        <SearchIcon />
       </InputGroupAddon>
       <InputGroupInput
         type="search"

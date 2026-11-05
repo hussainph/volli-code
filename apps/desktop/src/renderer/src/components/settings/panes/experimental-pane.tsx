@@ -1,7 +1,6 @@
 import { Skeleton } from "@renderer/components/ui/skeleton";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { ExternalIcon, ExperimentalIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
   errorMessage,
@@ -89,7 +88,7 @@ export function ExperimentalSettings() {
 
   if (state.status === "loading")
     return (
-      <PrefSection title="Experimental" icon={FlaskIcon}>
+      <PrefSection title="Experimental" icon={ExperimentalIcon}>
         <div className="space-y-4 p-4" aria-label="Loading experiments">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
@@ -98,7 +97,7 @@ export function ExperimentalSettings() {
     );
   if (state.status === "error")
     return (
-      <PrefSection title="Experimental" icon={FlaskIcon}>
+      <PrefSection title="Experimental" icon={ExperimentalIcon}>
         <Notice
           announce
           tone="error"
@@ -114,7 +113,7 @@ export function ExperimentalSettings() {
       </PrefSection>
     );
   return (
-    <PrefSection title="Experimental" icon={FlaskIcon}>
+    <PrefSection title="Experimental" icon={ExperimentalIcon}>
       {experiments.map((experiment) => {
         const value = snapshot?.[experiment.id];
         const environmentLocked = value?.source === "environment";
@@ -130,7 +129,7 @@ export function ExperimentalSettings() {
               <Button size="sm" variant="link" asChild>
                 <a href={CLOUD_THREAT_MODEL_URL} target="_blank" rel="noreferrer">
                   Security notes
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </a>
               </Button>
             ) : null}

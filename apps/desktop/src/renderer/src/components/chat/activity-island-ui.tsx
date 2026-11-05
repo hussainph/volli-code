@@ -63,20 +63,21 @@
  */
 import * as React from "react";
 import {
-  ArrowSquareOutIcon,
-  CheckCircleIcon,
+  ExternalIcon,
+  SuccessIcon,
   CircleIcon,
-  ProhibitIcon,
-  EyeIcon,
-  GlobeSimpleIcon,
-  type Icon as PhosphorIcon,
-  ListChecksIcon,
-  PushPinSimpleIcon,
+  BlockedIcon,
+  PreviewIcon,
+  GlobeIcon,
+  type IconComponent,
+  ChecklistIcon,
+  PinIcon,
   StopIcon,
-  TerminalWindowIcon,
-  UsersIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+  TerminalIcon,
+  TeamIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   type ActivityIslandActions,
   type ActivityIslandFeel,
@@ -633,7 +634,7 @@ function Card({
   glyph: Glyph,
   heading,
   children,
-}: React.PropsWithChildren<{ glyph: PhosphorIcon; heading: string }>) {
+}: React.PropsWithChildren<{ glyph: IconComponent; heading: string }>) {
   const frame = React.useContext(CardContext);
   return (
     <div className="flex cursor-default flex-col select-none">
@@ -651,7 +652,7 @@ function Card({
               className={cn(frame.pinned && "text-primary hover:text-primary")}
               onClick={frame.togglePin}
             >
-              <PushPinSimpleIcon weight={frame.pinned ? "fill" : "regular"} />
+              <PinIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">{frame.pinned ? "Unpin · Esc" : "Pin open"}</TooltipContent>
@@ -829,7 +830,7 @@ function TabChip({ tab }: { tab: IslandTab }) {
 function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolean }) {
   const actions = useActions();
   return (
-    <Card glyph={GlobeSimpleIcon} heading={tabsHeading(tabs)}>
+    <Card glyph={GlobeIcon} heading={tabsHeading(tabs)}>
       <CardRows>
         {tabs
           .toSorted((a, b) => Number(Boolean(b.needsAttention)) - Number(Boolean(a.needsAttention)))
@@ -856,7 +857,7 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                 actions={
                   <span className="flex shrink-0 items-center">
                     <ActionButton label={showLabel} onPress={() => actions.promoteTab(tab.id)}>
-                      <ArrowSquareOutIcon />
+                      <ExternalIcon />
                     </ActionButton>
                     <ActionButton
                       label="Close tab"
@@ -864,7 +865,7 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                       reversible
                       onPress={() => actions.closeTab(tab.id)}
                     >
-                      <XIcon />
+                      <CloseIcon />
                     </ActionButton>
                   </span>
                 }
@@ -879,7 +880,7 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
 function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce: boolean }) {
   const actions = useActions();
   return (
-    <Card glyph={UsersIcon} heading={agentsHeading(agents)}>
+    <Card glyph={TeamIcon} heading={agentsHeading(agents)}>
       <CardRows>
         {agents.map((agent) => (
           <CardRow
@@ -908,13 +909,13 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
             actions={
               <RowActions>
                 <ActionButton label="Peek in overlay" onPress={() => actions.peekAgent(agent.id)}>
-                  <EyeIcon />
+                  <PreviewIcon />
                 </ActionButton>
                 <ActionButton
                   label={agent.promoted ? "Focus tab" : "Open as tab"}
                   onPress={() => actions.promoteAgent(agent.id)}
                 >
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </ActionButton>
                 {agent.state === "working" ? (
                   <ActionButton
@@ -923,7 +924,7 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
                     destructive
                     onPress={() => actions.stopAgent(agent.id)}
                   >
-                    <StopIcon weight="fill" />
+                    <StopIcon />
                   </ActionButton>
                 ) : null}
               </RowActions>
@@ -946,7 +947,7 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
  */
 function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
   return (
-    <Card glyph={ListChecksIcon} heading={planHeading(plan)}>
+    <Card glyph={ChecklistIcon} heading={planHeading(plan)}>
       {/* Progress as a hairline under the header — the header's number says
           it, the bar lets a glance read it without parsing. */}
       <div className="mx-2 mb-1 h-0.5 overflow-hidden rounded-full bg-border">
@@ -972,19 +973,16 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
               className="py-1"
               leading={
                 state === "done" ? (
-                  <CheckCircleIcon weight="fill" className="size-3.5 shrink-0 text-primary" />
+                  <SuccessIcon className="size-3.5 shrink-0 text-primary" />
                 ) : state === "cancelled" ? (
                   // A step the model decided against (VC-6). Its own glyph,
                   // because the two it could have borrowed both lie: an empty
                   // circle reads as work still to come, and a tick reads as
                   // work that happened.
-                  <ProhibitIcon
-                    weight="regular"
-                    className="size-3.5 shrink-0 text-muted-foreground/50"
-                  />
+                  <BlockedIcon className="size-3.5 shrink-0 text-muted-foreground/50" />
                 ) : (
                   <CircleIcon
-                    weight={state === "current" ? "bold" : "regular"}
+                    strokeWidth={state === "current" ? 2.25 : 1.5}
                     className={cn(
                       "size-3.5 shrink-0",
                       state === "current" ? "text-primary" : "text-muted-foreground/50",
@@ -1024,7 +1022,7 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
 function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce: boolean }) {
   const actions = useActions();
   return (
-    <Card glyph={TerminalWindowIcon} heading={shellsHeading(shells)}>
+    <Card glyph={TerminalIcon} heading={shellsHeading(shells)}>
       <CardRows>
         {shells.map((shell) => (
           <CardRow
@@ -1046,7 +1044,7 @@ function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce
             actions={
               <RowActions>
                 <ActionButton label="Open output" onPress={() => actions.openShell(shell.id)}>
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </ActionButton>
                 {shell.state === "running" ? (
                   <ActionButton
@@ -1055,7 +1053,7 @@ function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce
                     destructive
                     onPress={() => actions.killShell(shell.id)}
                   >
-                    <StopIcon weight="fill" />
+                    <StopIcon />
                   </ActionButton>
                 ) : null}
               </RowActions>
@@ -1100,7 +1098,7 @@ function TabsCluster({
             was loading. The arc overhangs via negative inset instead, which
             costs nothing while absent. */}
         <span className="relative flex shrink-0 items-center justify-center">
-          <GlobeSimpleIcon className="block size-3.5 text-muted-foreground" />
+          <GlobeIcon className="block size-3.5 text-muted-foreground" />
           {tabsLoading(tabs) ? <WorkingArc reduce={reduce} inset={3} /> : null}
         </span>
         {/* The count as an attribute too: the headless smoke asserts it, and
@@ -1214,7 +1212,7 @@ function PlanCluster({ plan, feel, reduce, columnWidth }: ClusterProps & { plan:
       detail={<PlanCard plan={plan} reduce={reduce} />}
     >
       <motion.span layout {...clusterPresence(reduce)} className="flex items-center gap-1">
-        <ListChecksIcon className="size-3.5 text-muted-foreground" />
+        <ChecklistIcon className="size-3.5 text-muted-foreground" />
         <span className="text-label font-medium tabular-nums text-foreground">
           {plan.done}/{plan.steps.length}
         </span>
@@ -1238,13 +1236,10 @@ function ShellsCluster({
       columnWidth={columnWidth}
       detail={<ShellsCard shells={shells} reduce={reduce} />}
     >
-      {/* State lives IN the glyph — fill + primary while running, outline +
-          muted at rest. The corner badge died of geometry: a dot needs a
-          filled shape to sit on, and a line icon's corner gives it nothing.
-          The agent chips keep their badges — they are filled disks. */}
+      {/* State lives in the ink: accent while running, muted at rest.
+          Both keep the same outline drawing, without a corner badge. */}
       <motion.span layout {...clusterPresence(reduce)} className="flex items-center">
-        <TerminalWindowIcon
-          weight={running ? "fill" : "regular"}
+        <TerminalIcon
           data-running={running ? "" : undefined}
           className={cn(
             "size-3.5",

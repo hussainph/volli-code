@@ -27,15 +27,18 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * is a reviewed, confirmed folder removal.
  */
 import * as React from "react";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import {
+  SyncIcon,
+  CleanIcon,
+  CheckIcon,
+  CopyIcon,
+  DatabaseIcon,
+  FolderOpenIcon,
+  TicketIcon,
+  DeleteIcon,
+  TreeIcon,
+} from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import {
@@ -174,7 +177,7 @@ export function StorageOverviewPane() {
       <RetentionSection onDays={setRetentionDays} />
       <PrefSection
         title="Clean up"
-        icon={BroomIcon}
+        icon={CleanIcon}
         action={
           <SectionIconAction label="Scan unused files" busy={scanning} onAct={() => void scan()} />
         }
@@ -192,7 +195,7 @@ export function StorageOverviewPane() {
               setOpen(true);
             }}
           >
-            <BroomIcon />
+            <CleanIcon />
             Review cleanup
           </Button>
         </PrefRow>
@@ -282,7 +285,7 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
   }, [onDays]);
 
   return (
-    <PrefSection title="Retention" icon={TreeStructureIcon}>
+    <PrefSection title="Retention" icon={TreeIcon}>
       <PrefRow
         label="Keep Done worktrees for"
         htmlFor="done-ttl-days"
@@ -448,14 +451,14 @@ function BuildArtifactsSection() {
     <>
       <AsyncSection
         title="Build artifacts"
-        icon={BroomIcon}
+        icon={CleanIcon}
         action={
           <SectionIconAction
             // "Scan", never "Rescan": VC-284 found that word on a button that
             // pruned metadata and deleted directories, and the label a person
             // reads before pressing is part of that fix. This one only reads.
             label="Scan for build artifacts"
-            icon={ArrowsClockwiseIcon}
+            icon={SyncIcon}
             busy={scanning}
             onAct={() => void scan()}
           />
@@ -480,7 +483,7 @@ function BuildArtifactsSection() {
                 disabled={trimmable.length === 0 || scanning || trimming}
                 onClick={() => setConfirmOpen(true)}
               >
-                <BroomIcon />
+                <CleanIcon />
                 Trim…
               </Button>
             </PrefRow>
@@ -716,7 +719,7 @@ function PiSessionLogsSection() {
         action={
           <SectionIconAction
             label="Scan for orphaned Pi logs"
-            icon={ArrowsClockwiseIcon}
+            icon={SyncIcon}
             busy={scanning}
             onAct={() => void scan()}
           />
@@ -744,7 +747,7 @@ function PiSessionLogsSection() {
                 }
                 onClick={() => setConfirmOpen(true)}
               >
-                <TrashIcon />
+                <DeleteIcon />
                 Clean up…
               </Button>
             </PrefRow>
@@ -1143,7 +1146,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
     <>
       <AsyncSection
         title="Orphaned worktrees"
-        icon={TreeStructureIcon}
+        icon={TreeIcon}
         // One header action, per the kit's header grammar — and it is the SAFE
         // one. The destructive act is a row below, attached to the summary of
         // what a scan actually found, so it cannot be pressed by muscle memory
@@ -1151,7 +1154,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
         action={
           <SectionIconAction
             label="Scan for orphaned worktrees"
-            icon={ArrowsClockwiseIcon}
+            icon={SyncIcon}
             busy={busy}
             onAct={() => void load(true)}
           />
@@ -1245,7 +1248,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
                   disabled={busy || cleaning}
                   onClick={() => setConfirmCleanup(true)}
                 >
-                  <TrashIcon />
+                  <DeleteIcon />
                   Clean up…
                 </Button>
               </ItemRow>
@@ -1604,7 +1607,7 @@ function DirtyOrphanItem({
             <RowAction
               label={`Delete ${orphan.path}`}
               hint="Delete worktree"
-              icon={TrashIcon}
+              icon={DeleteIcon}
               destructive
               onAct={onDelete}
             />

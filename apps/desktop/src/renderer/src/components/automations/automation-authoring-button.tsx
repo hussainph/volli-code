@@ -1,5 +1,6 @@
 import * as React from "react";
-import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
+import { SparkleIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";

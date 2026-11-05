@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
+import { ExternalIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
@@ -81,7 +81,7 @@ export function SessionPeekDialog({
                   onOpen();
                 }}
               >
-                <ArrowSquareOutIcon />
+                <ExternalIcon />
                 {openLabel}
               </Button>
             )}

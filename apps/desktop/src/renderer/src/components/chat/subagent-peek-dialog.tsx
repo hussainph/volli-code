@@ -13,12 +13,7 @@
 import * as React from "react";
 import { useStore } from "zustand";
 import { agentStateWord, type IslandAgent } from "@volli/session-presentation";
-import {
-  CheckCircleIcon,
-  HandIcon,
-  PauseCircleIcon,
-  WarningCircleIcon,
-} from "@phosphor-icons/react";
+import { SuccessIcon, HandIcon, PauseCircleIcon, WarningIcon } from "@renderer/components/ui/icon";
 
 import type { ChatSessionsStore } from "@renderer/chat/use-session-controller";
 import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
@@ -91,8 +86,8 @@ function SubagentState({ agent }: { agent: IslandAgent }) {
   const word = agentStateWord({ ...agent, promoted: false });
   const Icon = {
     working: Spinner,
-    done: CheckCircleIcon,
-    failed: WarningCircleIcon,
+    done: SuccessIcon,
+    failed: WarningIcon,
     stopped: PauseCircleIcon,
     waiting: HandIcon,
   }[agent.state];

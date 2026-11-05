@@ -1,6 +1,7 @@
 /** Create a real project command file and hand its contents to the app editor. */
 import * as React from "react";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
+import { CodeFileIcon } from "@renderer/components/ui/icon";
+
 import { isWritablePromptTemplateName } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -67,7 +68,7 @@ export function MarkdownCommandDialog({
     >
       <DialogTrigger asChild>
         <Button variant="ghost" size="xs">
-          <FileCodeIcon />
+          <CodeFileIcon />
           Write a markdown file
         </Button>
       </DialogTrigger>

@@ -22,8 +22,8 @@
  * one shape for "pick from a list you can also search".
  */
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { CheckIcon, AddIcon } from "@renderer/components/ui/icon";
+
 import type { Label, Ticket } from "@volli/shared";
 
 import {
@@ -117,7 +117,7 @@ export function LabelPickerContent({
             <LabelDot color={resolveLabelColor(projectLabels, option.name)} />
             <span className="wrap-anywhere">{option.name}</span>
             {option.selected ? (
-              <CheckIcon weight="bold" className="ml-auto size-3.5 shrink-0 text-foreground" />
+              <CheckIcon strokeWidth={2.25} className="ml-auto size-3.5 shrink-0 text-foreground" />
             ) : null}
           </CommandItem>
         ))}
@@ -131,7 +131,7 @@ export function LabelPickerContent({
               setQuery("");
             }}
           >
-            <PlusIcon />
+            <AddIcon />
             <span className="wrap-anywhere">Create “{creatable}”</span>
           </CommandItem>
         )}

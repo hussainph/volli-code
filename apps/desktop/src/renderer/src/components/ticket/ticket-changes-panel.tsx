@@ -46,15 +46,18 @@
  */
 import * as React from "react";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  type IconComponent,
+  RefreshIcon,
+  ArrowRightIcon,
+  SuccessIcon,
+  DiffIcon,
+  SearchIcon,
+  MinusIcon,
+  AddIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   changeSetToDiffStat,
   errorMessage,
@@ -146,15 +149,13 @@ export function toChangeListRow(file: ChangeSetFile, recency: ChangeRecencyState
  * hand-written Tailwind, saying what the canvas now solves once. The visible
  * status label is gone; the glyph alone carries the ink.
  *
- * `bold`, not `fill`: at 16px this mark is now the only thing on the row
- * saying which kind of change it is, and regular draws lighter than the text
- * it sits among at that tier (CLAUDE.md). Filling them would make five
- * different drawings rather than one heavier set.
+ * The heavier outline stroke lets the 16px mark stand beside text; semantic
+ * ink carries status without changing the drawing to a filled family.
  */
-const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: PhosphorIcon; ink: string }> = {
-  modified: { icon: GitDiffIcon, ink: "text-attention" },
-  added: { icon: PlusIcon, ink: "text-diff-added" },
-  untracked: { icon: PlusIcon, ink: "text-diff-added" },
+const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: IconComponent; ink: string }> = {
+  modified: { icon: DiffIcon, ink: "text-attention" },
+  added: { icon: AddIcon, ink: "text-diff-added" },
+  untracked: { icon: AddIcon, ink: "text-diff-added" },
   renamed: { icon: ArrowRightIcon, ink: "text-info" },
   deleted: { icon: MinusIcon, ink: "text-diff-removed" },
   conflicted: { icon: WarningIcon, ink: "text-diff-removed" },
@@ -248,7 +249,7 @@ function HeaderAction({
   onClick,
 }: {
   label: string;
-  icon: PhosphorIcon;
+  icon: IconComponent;
   pressed?: boolean;
   onClick(): void;
 }) {
@@ -313,7 +314,9 @@ function ChangeRow({
             // was announced by nothing.
             aria-current={current ? "true" : undefined}
             onActivate={() => onSelectRow(row.path)}
-            leading={<StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />}
+            leading={
+              <StatusIcon className={cn("size-4 shrink-0", status.ink)} strokeWidth={2.25} />
+            }
             primary={
               <ChangeRowLine
                 value={row.filename}
@@ -332,7 +335,7 @@ function ChangeRow({
                   title={row.updatedDescription}
                   className="shrink-0 text-primary-text"
                 >
-                  <ArrowClockwiseIcon aria-hidden weight="bold" className="size-3.5" />
+                  <RefreshIcon aria-hidden strokeWidth={2.25} className="size-3.5" />
                   <span className="sr-only">{row.updatedLabel}</span>
                 </span>
               ) : undefined
@@ -470,7 +473,7 @@ export function TicketChangesList({
       <Notice
         tone="positive"
         layout="stack"
-        icon={CheckCircleIcon}
+        icon={SuccessIcon}
         title="No changes vs base"
         data-testid="ticket-changes-empty"
         className={RAIL_PANEL_MARGIN}
@@ -735,14 +738,14 @@ export function TicketChangesPanel({
           />
           {ticket.worktreePath === null ? null : (
             <>
-              <HeaderAction label="Refresh changes" icon={ArrowClockwiseIcon} onClick={refresh} />
+              <HeaderAction label="Refresh changes" icon={RefreshIcon} onClick={refresh} />
               {/* Nothing to refine or total up on a clean branch — but refresh
                   stays, because a clean branch is exactly where a stale read
                   hides, and it is the recovery a failed one needs. */}
               {total === 0 ? null : (
                 <HeaderAction
                   label="Filter changed files"
-                  icon={MagnifyingGlassIcon}
+                  icon={SearchIcon}
                   pressed={filtering}
                   onClick={() =>
                     // Closing the field must also clear it, or the list stays

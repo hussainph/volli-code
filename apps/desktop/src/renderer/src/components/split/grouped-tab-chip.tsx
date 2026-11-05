@@ -1,7 +1,6 @@
 import * as React from "react";
 import "./grouped-tab-chip.css";
-import type { Icon } from "@phosphor-icons/react";
-import { LinkBreakIcon } from "@phosphor-icons/react/dist/csr/LinkBreak";
+import { type IconComponent as Icon, UnlinkIcon } from "@renderer/components/ui/icon";
 
 import {
   ContextMenu,
@@ -193,7 +192,7 @@ function GroupedTabChip<T extends { id: string }>({
         {onUngroup === undefined ? null : (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem icon={LinkBreakIcon} onSelect={() => onUngroup(item.group.id)}>
+            <ContextMenuItem icon={UnlinkIcon} onSelect={() => onUngroup(item.group.id)}>
               Ungroup
             </ContextMenuItem>
           </>

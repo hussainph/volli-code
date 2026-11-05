@@ -24,9 +24,8 @@
  * arming row, a Trigger and a machine-local switch already answer between them.
  */
 import * as React from "react";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
+import { ProcessorIcon, AutomationIcon, AdjustIcon } from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   type Automation,
@@ -322,7 +321,7 @@ export function AutomationRunMenuItems({
           {group.automations.map((automation) => (
             <ContextMenuItem
               key={automation.id}
-              icon={LightningIcon}
+              icon={AutomationIcon}
               disabled={!canWrite}
               onSelect={() => onRun({ kind: "automation", automation }, null)}
             >
@@ -349,7 +348,7 @@ export function AutomationRunMenuItems({
         <>
           <ContextMenuSeparator />
           <ContextMenuSub>
-            <ContextMenuSubTrigger icon={CpuIcon} disabled={!canWrite}>
+            <ContextMenuSubTrigger icon={ProcessorIcon} disabled={!canWrite}>
               Run on model
             </ContextMenuSubTrigger>
             <ContextMenuSubContent>
@@ -357,14 +356,14 @@ export function AutomationRunMenuItems({
                 selections.length === 1 ? (
                   <ContextMenuItem
                     key={model.id}
-                    icon={CpuIcon}
+                    icon={ProcessorIcon}
                     onSelect={() => onRun(rail.primary, selections[0] ?? null)}
                   >
                     <ModelName model={model} models={models} providerLabel={model.providerLabel} />
                   </ContextMenuItem>
                 ) : (
                   <ContextMenuSub key={model.id}>
-                    <ContextMenuSubTrigger icon={CpuIcon}>
+                    <ContextMenuSubTrigger icon={ProcessorIcon}>
                       <ModelName
                         model={model}
                         models={models}
@@ -375,7 +374,7 @@ export function AutomationRunMenuItems({
                       {selections.map((selection) => (
                         <ContextMenuItem
                           key={selection.reasoningLevel}
-                          icon={SlidersIcon}
+                          icon={AdjustIcon}
                           onSelect={() => onRun(rail.primary, selection)}
                         >
                           {selection.reasoningLevel}

@@ -13,7 +13,8 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * column reports back afterwards.
  */
 import * as React from "react";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, isWritablePromptTemplateName } from "@volli/shared";
 
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
@@ -108,7 +109,7 @@ export function NewCommandDialog({
     >
       <DialogTrigger asChild>
         <Button size="xs" variant="ghost">
-          <PlusIcon />
+          <AddIcon />
           New command
         </Button>
       </DialogTrigger>

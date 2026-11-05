@@ -10,10 +10,8 @@
  * not launch one would be inert.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import { ExternalIcon, GuideIcon, ProcessorIcon, PreviewIcon } from "@renderer/components/ui/icon";
+
 import {
   errorMessage,
   type ModelAccessModel,
@@ -133,7 +131,7 @@ export function SessionsPane({ project }: { project: Project }) {
 
   return (
     <>
-      <PrefSection title="Chat" icon={CpuIcon} action={modelCatalogAction}>
+      <PrefSection title="Chat" icon={ProcessorIcon} action={modelCatalogAction}>
         {/*
          * An override no longer named by the offerable catalogue is shown as
          * inherited. The reset button remains the one, honest signal that the
@@ -255,7 +253,7 @@ function InstructionsSection({ project }: { project: Project }) {
     <>
       <AsyncSection
         title="Instructions"
-        icon={BookOpenIcon}
+        icon={GuideIcon}
         action={
           <SectionIconAction
             label="Check the repo again"
@@ -277,7 +275,7 @@ function InstructionsSection({ project }: { project: Project }) {
                 <RowAction
                   label={`Preview ${file.name}`}
                   hint="Preview"
-                  icon={EyeIcon}
+                  icon={PreviewIcon}
                   onAct={() => preview(file.name)}
                 />
               ) : null}
@@ -285,7 +283,7 @@ function InstructionsSection({ project }: { project: Project }) {
                 <RowAction
                   label={`Reveal ${file.name} in Finder`}
                   hint="Reveal in Finder"
-                  icon={ArrowSquareOutIcon}
+                  icon={ExternalIcon}
                   onAct={() => void reveal(`${project.path}/${file.name}`)}
                 />
               )}

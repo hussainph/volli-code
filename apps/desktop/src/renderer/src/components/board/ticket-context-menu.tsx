@@ -1,20 +1,23 @@
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
-import { CellSignalHighIcon } from "@phosphor-icons/react/dist/csr/CellSignalHigh";
-import { CellSignalLowIcon } from "@phosphor-icons/react/dist/csr/CellSignalLow";
-import { CellSignalMediumIcon } from "@phosphor-icons/react/dist/csr/CellSignalMedium";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
-import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
+import {
+  ArchiveIcon,
+  RefreshIcon,
+  SwapIcon,
+  PriorityHighIcon,
+  PriorityLowIcon,
+  PriorityMediumIcon,
+  CheckIcon,
+  SuccessIcon,
+  PreviewIcon,
+  FlagIcon,
+  AutomationIcon,
+  ChecklistIcon,
+  PlayCircleIcon,
+  LabelIcon,
+  DeleteIcon,
+  InboxIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -59,17 +62,17 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 const NO_ROWS: readonly SessionListingRow[] = [];
 
 const STATUS_ICON = {
-  backlog: TrayIcon,
-  todo: ListChecksIcon,
+  backlog: InboxIcon,
+  todo: ChecklistIcon,
   doing: PlayCircleIcon,
-  needs_review: EyeIcon,
-  done: CheckCircleIcon,
+  needs_review: PreviewIcon,
+  done: SuccessIcon,
 } as const;
 
 const PRIORITY_ICON = {
-  low: CellSignalLowIcon,
-  medium: CellSignalMediumIcon,
-  high: CellSignalHighIcon,
+  low: PriorityLowIcon,
+  medium: PriorityMediumIcon,
+  high: PriorityHighIcon,
 } as const;
 
 /**
@@ -210,7 +213,7 @@ export function TicketContextMenu({
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuSub>
-          <ContextMenuSubTrigger icon={ArrowsLeftRightIcon}>Move to</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger icon={SwapIcon}>Move to</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
               <ContextMenuItem
@@ -244,14 +247,14 @@ export function TicketContextMenu({
               >
                 {TICKET_PRIORITY_LABELS[priority]}
                 {priority === ticket.priority ? (
-                  <CheckIcon weight="bold" className="ml-auto size-3.5" />
+                  <CheckIcon strokeWidth={2.25} className="ml-auto size-3.5" />
                 ) : null}
               </ContextMenuItem>
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuSub>
-          <ContextMenuSubTrigger icon={TagIcon}>Labels</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger icon={LabelIcon}>Labels</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <TicketLabelItems ticket={ticket} projectId={projectId} canWrite={canWrite} />
           </ContextMenuSubContent>
@@ -261,24 +264,20 @@ export function TicketContextMenu({
             are the ticket rail's own (`automation-run-menu.tsx`), so a card and
             an open Ticket cannot disagree about what this column offers. */}
         <ContextMenuSub>
-          <ContextMenuSubTrigger icon={LightningIcon}>Automations</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger icon={AutomationIcon}>Automations</ContextMenuSubTrigger>
           <ContextMenuSubContent className="w-72">
             <TicketAutomationMenuItems ticket={ticket} projectId={projectId} />
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuSeparator />
         {resumableSession !== null ? (
-          <ContextMenuItem
-            icon={ArrowClockwiseIcon}
-            disabled={!canWrite}
-            onSelect={resumeLastSession}
-          >
+          <ContextMenuItem icon={RefreshIcon} disabled={!canWrite} onSelect={resumeLastSession}>
             Resume last session
           </ContextMenuItem>
         ) : null}
         {ticket.worktreePath !== null ? (
           <ContextMenuItem
-            icon={TrashIcon}
+            icon={DeleteIcon}
             disabled={hasLiveTerminals || !canWrite}
             onSelect={() => {
               if (guardWrite(projectId)) dialogs.requestRemoveWorktree(ticket.id);

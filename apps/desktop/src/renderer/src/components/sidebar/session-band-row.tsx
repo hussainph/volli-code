@@ -46,16 +46,19 @@ import { launchStore } from "@renderer/stores/launch";
 import { useSessionPlace } from "@renderer/lib/cloud-places";
 import { useSessionTeam } from "@renderer/lib/cloud-team";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { CursorIcon } from "@phosphor-icons/react/dist/csr/Cursor";
-import { EnvelopeSimpleIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimple";
-import { EnvelopeSimpleOpenIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimpleOpen";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { HexagonIcon } from "@phosphor-icons/react/dist/csr/Hexagon";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  type IconComponent,
+  RequiredIcon,
+  ChevronRightIcon,
+  CodeIcon,
+  PointerIcon,
+  MailIcon,
+  MailOpenIcon,
+  GlobeIcon,
+  HexagonIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   harnessLabel,
@@ -94,11 +97,8 @@ import { cn } from "@renderer/lib/utils";
  * Session that has none. The globe is not decoration: a ticketless row has no
  * board card or ticket rail, so this list is its only Session 4 listing surface.
  *
- * `bold` at 12px is the sidebar's small-glyph tier, and it is a statement about
- * the PEN rather than the size: Phosphor draws regular at 16/256 em against
- * bold's 24/256, which at 12px is 0.75px of ink against 1.13px next to a ~1.1px
- * text stem. Coverage is scale-invariant, so growing the glyph could never have
- * fixed the hairline that made it read as a smudge beside its own label.
+ * The 2.25 stroke at 12px is the shared small-symbol tier. Changing the pen
+ * lets the mark stand beside its label without enlarging the drawing.
  *
  * A FACE, NOT A LANE. The id has been `font-mono` from the start and it was not
  * enough: it sits inside `text-label`, which bakes in +0.05em of tracking for
@@ -135,7 +135,7 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
             clause: this glyph stands in the ID lane at 12px, where regular draws
             lighter than the `text-label` ids it alternates with — so the one
             row without a ticket would read as the faintest row in the band. */}
-        <GlobeIcon weight="bold" aria-label="No ticket" className="size-3" />
+        <GlobeIcon strokeWidth={2.25} aria-label="No ticket" className="size-3" />
       </span>
     );
   }
@@ -155,7 +155,7 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
  *
  * MNEMONIC, NOT BRANDING. None of these is a vendor logo — a 12px trace of one
  * would be both worse artwork and a claim we have no licence to make. Each is
- * the Phosphor glyph whose silhouette a reader can already attach to the name:
+ * the shared glyph whose silhouette a reader can already attach to the name:
  * Claude's radial burst, the hexagonal knot Codex's vendor is drawn as, the
  * pointer that IS Cursor's word, and `</>` for OpenCode. What the set is
  * actually chosen for is being four silhouettes nothing else in this band
@@ -169,15 +169,15 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
  * {@link TerminalWindowIcon} already says exactly what is true of it, and it is
  * the mark that row draws today.
  */
-const HARNESS_GLYPHS: Record<FirstClassHarnessId, PhosphorIcon> = {
-  "claude-code": AsteriskIcon,
+const HARNESS_GLYPHS: Record<FirstClassHarnessId, IconComponent> = {
+  "claude-code": RequiredIcon,
   codex: HexagonIcon,
-  cursor: CursorIcon,
+  cursor: PointerIcon,
   opencode: CodeIcon,
 };
 
-export function harnessGlyphOf(harnessId: HarnessId): PhosphorIcon {
-  return isFirstClassHarnessId(harnessId) ? HARNESS_GLYPHS[harnessId] : TerminalWindowIcon;
+export function harnessGlyphOf(harnessId: HarnessId): IconComponent {
+  return isFirstClassHarnessId(harnessId) ? HARNESS_GLYPHS[harnessId] : TerminalIcon;
 }
 
 /**
@@ -193,7 +193,7 @@ export interface SessionRowVendor {
   providerId: string | null;
   providerLabel: string;
   /** The glyph standing in where there is no logo — a mnemonic, or the kind's own. */
-  fallback?: PhosphorIcon;
+  fallback?: IconComponent;
 }
 
 /**
@@ -291,10 +291,7 @@ function SessionRowMenu({
       <ContextMenuContent>
         <SessionShare sessionId={sessionId} projectId={projectId} />
         {toggle === null ? null : (
-          <ContextMenuItem
-            icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
-            onSelect={toggle}
-          >
+          <ContextMenuItem icon={unread ? MailOpenIcon : MailIcon} onSelect={toggle}>
             {unread ? "Mark as read" : "Mark as unread"}
           </ContextMenuItem>
         )}
@@ -796,10 +793,10 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
     >
       <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
       <span className="min-w-0 flex-1 truncate text-muted-foreground">{ticket.title}</span>
-      {/* `bold` for the same reason every other glyph in this band takes it:
+      {/* Heavier stroke, for the same reason every other glyph in this band takes it:
           at 12px regular draws lighter than the label beside it. */}
-      <CaretRightIcon
-        weight="bold"
+      <ChevronRightIcon
+        strokeWidth={2.25}
         aria-hidden
         className={cn(
           "size-3 shrink-0 transition-transform duration-(--duration-menu-in) motion-reduce:transition-none",

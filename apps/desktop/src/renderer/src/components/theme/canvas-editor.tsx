@@ -40,16 +40,19 @@
  */
 
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { DotsNineIcon } from "@phosphor-icons/react/dist/csr/DotsNine";
-import { DropHalfIcon } from "@phosphor-icons/react/dist/csr/DropHalf";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
-import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
-import { MoonStarsIcon } from "@phosphor-icons/react/dist/csr/MoonStars";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
+import {
+  type IconComponent,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  GridIcon,
+  ContrastIcon,
+  MinusIcon,
+  MonitorIcon,
+  NightIcon,
+  AddIcon,
+  SunIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   addStop,
   canvasBackground,
@@ -123,7 +126,7 @@ const CLICK_SLOP = 4;
 /** The three modes, in the order the control lists them. */
 const APPEARANCE_OPTIONS = [
   { key: "light", label: "Light", icon: SunIcon },
-  { key: "dark", label: "Dark", icon: MoonStarsIcon },
+  { key: "dark", label: "Dark", icon: NightIcon },
   { key: "auto", label: "Auto", icon: MonitorIcon },
 ] as const satisfies readonly { key: Appearance; label: string; icon: unknown }[];
 
@@ -468,7 +471,7 @@ function StopCountControls({
             : undefined
         }
       >
-        <PlusIcon />
+        <AddIcon />
       </Button>
     </PadChip>
   );
@@ -560,7 +563,7 @@ function PrimaryColourRow({
           aria-label="Previous swatches"
           className={chevron}
         >
-          <CaretLeftIcon />
+          <ChevronLeftIcon />
         </Button>
         {/* FIXED-SIZE chips, not a stretching grid. `flex-1` with
             `aspect-square w-full` squares meant each swatch was a ninth of
@@ -586,7 +589,7 @@ function PrimaryColourRow({
           aria-label="More swatches"
           className={chevron}
         >
-          <CaretRightIcon />
+          <ChevronRightIcon />
         </Button>
       </div>
       <Input
@@ -703,7 +706,7 @@ function WaveSlider({
    * and a glyph says it without spending a word (the aria-label still names
    * it for the reader; `title` names it for whoever hovers).
    */
-  icon: PhosphorIcon;
+  icon: IconComponent;
   value: number;
   onInput(next: number): void;
   onSettle(): void;
@@ -761,7 +764,7 @@ function WaveSlider({
             beside it was the control narrating itself. The native input still
             reports its value to the reader. */}
       </span>
-      {/* `title` on a wrapping span — Phosphor's icon props carry no title of
+      {/* `title` on a wrapping span — The shared symbol carries no native title attribute of
           their own, and the input above already names the fader for readers. */}
       <span title={label} className="inline-flex">
         <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
@@ -944,7 +947,7 @@ export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: 
           <WaveSlider
             id="canvas-vibrancy"
             label="Vibrancy"
-            icon={DropHalfIcon}
+            icon={ContrastIcon}
             value={live.vibrancy}
             onInput={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
             onSettle={settle}
@@ -979,7 +982,7 @@ export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: 
 
           <WaveSlider
             label="Grain"
-            icon={DotsNineIcon}
+            icon={GridIcon}
             value={live.grain}
             onInput={(grain) => edit((current) => ({ ...current, grain }))}
             onSettle={settle}

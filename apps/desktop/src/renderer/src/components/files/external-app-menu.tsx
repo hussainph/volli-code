@@ -1,9 +1,12 @@
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  ExternalIcon,
+  ChevronDownIcon,
+  CodeIcon,
+  FolderOpenIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 import type { ExternalApp, ExternalAppId } from "../../../../ipc/contract";
 
@@ -124,14 +127,14 @@ export function ExternalAppContextMenu({
     <>
       {defaultApp !== null ? (
         <>
-          <ContextMenuItem icon={ArrowSquareOutIcon} onSelect={() => void open(defaultApp)}>
+          <ContextMenuItem icon={ExternalIcon} onSelect={() => void open(defaultApp)}>
             Open in {defaultApp.label}
           </ContextMenuItem>
           <ContextMenuSeparator />
         </>
       ) : null}
       <ContextMenuSub>
-        <ContextMenuSubTrigger icon={ArrowSquareOutIcon}>
+        <ContextMenuSubTrigger icon={ExternalIcon}>
           {defaultApp === null ? label : "Open in another app…"}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
@@ -146,7 +149,7 @@ export function ExternalAppContextMenu({
                 </React.Fragment>
               );
             }
-            const Icon = entry.app.kind === "editor" ? CodeIcon : TerminalWindowIcon;
+            const Icon = entry.app.kind === "editor" ? CodeIcon : TerminalIcon;
             return (
               <ContextMenuItem key={entry.app.id} icon={Icon} onSelect={() => void open(entry.app)}>
                 {entry.app.label}
@@ -205,7 +208,7 @@ export function ExternalAppDropdownMenu({
           onClick={() => void open(defaultApp)}
           title={defaultLabel}
         >
-          <ArrowSquareOutIcon />
+          <ExternalIcon />
           Open
         </Button>
         <DropdownMenu>
@@ -216,7 +219,7 @@ export function ExternalAppDropdownMenu({
               aria-label="Choose another app"
               title="Choose another app"
             >
-              <CaretDownIcon weight="bold" className="size-3" />
+              <ChevronDownIcon strokeWidth={2.25} className="size-3" />
             </Button>
           </DropdownMenuTrigger>
           {choices}
@@ -229,9 +232,9 @@ export function ExternalAppDropdownMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button size="xs" variant="toolbar" className="shrink-0" aria-label={label} title={label}>
-          <ArrowSquareOutIcon />
+          <ExternalIcon />
           Open
-          <CaretDownIcon weight="bold" className="size-3" />
+          <ChevronDownIcon strokeWidth={2.25} className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       {choices}

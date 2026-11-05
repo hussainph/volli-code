@@ -1,4 +1,4 @@
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
+import { ExternalIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 
@@ -23,7 +23,7 @@ export function PaneTakeOutButton({ onTakeOut }: { onTakeOut(): void }) {
       title="Take out of group"
       onClick={onTakeOut}
     >
-      <ArrowSquareOutIcon weight="bold" className="size-3" />
+      <ExternalIcon strokeWidth={2.25} className="size-3" />
     </Button>
   );
 }

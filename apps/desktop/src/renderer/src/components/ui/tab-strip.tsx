@@ -49,13 +49,16 @@
  */
 import * as React from "react";
 import "./tab-strip.css";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
-import { CircleNotchIcon } from "@phosphor-icons/react/dist/csr/CircleNotch";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CircleIcon,
+  SpinnerIcon,
+  HelpIcon,
+  WarningIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   closestCenter,
   DndContext,
@@ -567,7 +570,7 @@ function TabScrollAffordance({
   disabled: boolean;
   onTravel(): void;
 }) {
-  const Icon = towards === "prev" ? CaretLeftIcon : CaretRightIcon;
+  const Icon = towards === "prev" ? ChevronLeftIcon : ChevronRightIcon;
   return (
     <Button
       type="button"
@@ -1077,9 +1080,9 @@ function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?:
   const busy = state === "working" || state === "setup" || state === "starting";
   const failed = state === "error" || state === "interrupted";
   const Icon = busy
-    ? CircleNotchIcon
+    ? SpinnerIcon
     : state === "waiting"
-      ? QuestionIcon
+      ? HelpIcon
       : failed
         ? WarningIcon
         : CircleIcon;
@@ -1103,7 +1106,7 @@ function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?:
       )}
     >
       <Icon
-        weight="bold"
+        strokeWidth={2.25}
         className={cn(badge ? "size-2.5" : "size-3", busy && "motion-safe:animate-spin")}
       />
     </span>
@@ -1195,9 +1198,11 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
           className="size-2 rounded-full bg-primary group-hover/close:hidden"
         />
       ) : null}
-      {/* `bold` is the ≤12px tier (CLAUDE.md): at 12px regular draws lighter
-          than the label beside it, and coverage is scale-invariant. */}
-      <XIcon weight="bold" className={cn("size-3", dirty && "hidden group-hover/close:block")} />
+      {/* The heavier stroke is the ≤12px tier, not a larger drawing. */}
+      <CloseIcon
+        strokeWidth={2.25}
+        className={cn("size-3", dirty && "hidden group-hover/close:block")}
+      />
     </button>
   );
 }

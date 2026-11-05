@@ -1,9 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { ChevronDownIcon, ChevronUpIcon, CheckIcon } from "@renderer/components/ui/icon";
+
 import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -60,7 +59,7 @@ function SelectTrigger({
     >
       {children}
       <SelectPrimitive.Icon asChild>
-        <CaretDownIcon className="size-3.5 opacity-50" />
+        <ChevronDownIcon className="size-3.5 opacity-50" />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
@@ -147,7 +146,7 @@ function SelectItem({
       {/* The mark occupies only its own width plus the tight row gap. */}
       <span data-slot="select-item-indicator" className={cn(MENU_INDICATOR, "static")}>
         <SelectPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
@@ -178,7 +177,7 @@ function SelectScrollUpButton({
       className={cn("flex cursor-default items-center justify-center py-1", className)}
       {...props}
     >
-      <CaretUpIcon className="size-4" />
+      <ChevronUpIcon className="size-4" />
     </SelectPrimitive.ScrollUpButton>
   );
 }
@@ -193,7 +192,7 @@ function SelectScrollDownButton({
       className={cn("flex cursor-default items-center justify-center py-1", className)}
       {...props}
     >
-      <CaretDownIcon className="size-4" />
+      <ChevronDownIcon className="size-4" />
     </SelectPrimitive.ScrollDownButton>
   );
 }

@@ -24,20 +24,22 @@ import * as React from "react";
 import { launchStore } from "@renderer/stores/launch";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
-import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import {
+  BrowserIcon,
+  ChatIcon,
+  FileIcon,
+  DocumentIcon,
+  DiffIcon,
+  MoonIcon,
+  EditIcon,
+  PinIcon,
+  UnpinIcon,
+  SidebarIcon,
+  SunIcon,
+  TerminalIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
 
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
 import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
@@ -416,7 +418,11 @@ function TicketTab({
         ) : tab.kind === "browser" ? (
           <BrowserTabMark driven={tab.driven === true} />
         ) : terminalDot === null && terminal !== null ? (
-          <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+          <MoonIcon
+            aria-hidden
+            strokeWidth={2.25}
+            className="size-3 shrink-0 text-muted-foreground"
+          />
         ) : null
       }
       badge={
@@ -481,11 +487,11 @@ function TicketTab({
           </>
         ) : null}
         {renamable ? (
-          <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
+          <ContextMenuItem icon={EditIcon} onSelect={onStartRename}>
             Rename
           </ContextMenuItem>
         ) : preview ? (
-          <ContextMenuItem icon={PushPinIcon} onSelect={onPin}>
+          <ContextMenuItem icon={PinIcon} onSelect={onPin}>
             Keep Open
           </ContextMenuItem>
         ) : null}
@@ -517,7 +523,7 @@ function TicketTab({
               </ContextMenuItem>
             )}
             <ContextMenuItem
-              icon={terminal.keptAwake ? PushPinSlashIcon : PushPinIcon}
+              icon={terminal.keptAwake ? UnpinIcon : PinIcon}
               onSelect={() =>
                 runOnLivePanes(
                   terminal.livePaneIds,
@@ -536,7 +542,7 @@ function TicketTab({
         {sessionTab ? (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem icon={XIcon} variant="destructive" onSelect={onClose}>
+            <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={onClose}>
               Close
             </ContextMenuItem>
           </>
@@ -604,7 +610,7 @@ export function TicketTabStrip({
           >
             {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
                 RIGHT panel; each caret points toward the rail it toggles. */}
-            <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
+            <SidebarIcon className="size-3.5 scale-x-[-1]" />
           </Button>
         </>
       }
@@ -655,11 +661,11 @@ function reorderFor({ tabs, groups, onReorderTabs }: TicketTabListProps) {
 }
 
 const TICKET_TAB_ICONS = {
-  body: FileTextIcon,
-  session: TerminalWindowIcon,
+  body: DocumentIcon,
+  session: TerminalIcon,
   file: FileIcon,
-  diff: GitDiffIcon,
-  chat: ChatCircleIcon,
+  diff: DiffIcon,
+  chat: ChatIcon,
   browser: BrowserIcon,
 } as const;
 

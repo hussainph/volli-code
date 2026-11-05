@@ -36,11 +36,14 @@
  * vanish from the only surface able to turn it back on.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  ExternalIcon,
+  GuideIcon,
+  PreviewIcon,
+  FolderOpenIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   AUTHOR_MODEL_ONLY_MODE,
   authorSkillMode,
@@ -132,7 +135,7 @@ export function SkillsPane({ project }: { project: Project }) {
     <>
       <AsyncSection
         title="Skills"
-        icon={BookOpenIcon}
+        icon={GuideIcon}
         action={
           <div className="flex items-center gap-2">
             <Segmented
@@ -297,9 +300,8 @@ function SkillsTable({
                 <WarningIcon
                   className="size-3.5 shrink-0 text-muted-foreground"
                   aria-label={`${skill.name}: ${skill.policyDiagnostic}`}
-                >
-                  <title>{skill.policyDiagnostic}</title>
-                </WarningIcon>
+                  alt={skill.policyDiagnostic}
+                />
               )}
             </span>
           ),
@@ -340,13 +342,13 @@ function SkillsTable({
               <RowAction
                 label={`Preview ${skill.name}`}
                 hint="Preview"
-                icon={EyeIcon}
+                icon={PreviewIcon}
                 onAct={() => onPreview(skill)}
               />
               <RowAction
                 label={`Reveal ${skill.name} in Finder`}
                 hint="Reveal in Finder"
-                icon={ArrowSquareOutIcon}
+                icon={ExternalIcon}
                 onAct={() => void revealSkill(project, skill)}
               />
             </>

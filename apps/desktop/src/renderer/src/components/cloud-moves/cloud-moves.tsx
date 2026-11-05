@@ -1,6 +1,7 @@
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
-import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
+import { CloudUploadIcon } from "@renderer/components/ui/icon";
+
 import { desktopCloudMovesApi, type CloudMovesClient } from "@renderer/lib/cloud-moves";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
@@ -89,7 +90,7 @@ function CloudMoveSheet() {
 /** Quiet Settings entry; no prompts or banners for projects that have not moved. */
 export function CloudMovesSettings() {
   return (
-    <PrefSection title="Move projects to Volli Cloud" icon={CloudArrowUpIcon}>
+    <PrefSection title="Move projects to Volli Cloud" icon={CloudUploadIcon}>
       <PrefRow label="Local projects">
         <Button size="sm" variant="outline" onClick={() => prepareCloudMove()}>
           Move all projects…
@@ -125,7 +126,7 @@ export function CloudMoveRailRow() {
           onClick={() => showCloudMoves(current.queueId)}
           aria-label="Move to Volli Cloud progress"
         >
-          <CloudArrowUpIcon />
+          <CloudUploadIcon />
           <span className="truncate">
             {current.projectName} · {MOVE_STATE_LABELS[current.state]}
             {current.state === "moving" ? ` ${movePercentLabel(current.progress)}` : ""}

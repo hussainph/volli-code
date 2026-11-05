@@ -18,9 +18,8 @@
  * nothing is relinked until one is chosen.
  */
 import * as React from "react";
-import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
-import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { SwapIcon, AddFolderIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import { projectRelinkNotices, projectRelinkNoticeText } from "@volli/shared";
 import type { ProjectRelinkAftermath } from "@volli/shared";
 
@@ -105,7 +104,7 @@ export function FolderClaimDialog() {
                     })
                   }
                 >
-                  <ArrowsLeftRightIcon />
+                  <SwapIcon />
                   <span className="flex min-w-0 flex-col gap-1">
                     <span>Relink {candidate.name}</span>
                     <span className="truncate font-mono text-label text-muted-foreground">
@@ -121,7 +120,7 @@ export function FolderClaimDialog() {
                 Cancel
               </Button>
               <Button disabled={busy} onClick={() => void choose(addAsNew)}>
-                <FolderPlusIcon />
+                <AddFolderIcon />
                 Add as a new project
               </Button>
             </DialogFooter>

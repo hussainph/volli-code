@@ -15,8 +15,8 @@
  * about those in a toast would be a warning nobody reads.
  */
 import * as React from "react";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { FolderOpenIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import {
   errorMessage,
   projectRelinkNotices,

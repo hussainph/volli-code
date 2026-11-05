@@ -1,4 +1,5 @@
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
+import { LabelIcon } from "@renderer/components/ui/icon";
+
 import type { Label } from "@volli/shared";
 
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
@@ -33,7 +34,7 @@ export function ComposerLabels({
   return (
     <LabelPickerPopover projectId={projectId} value={value} onChange={onChange}>
       <InspectorPopup className={composerChipClass()}>
-        <TagIcon />
+        <LabelIcon />
         {value.length === 0 ? (
           "Labels"
         ) : (

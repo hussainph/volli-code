@@ -10,9 +10,9 @@
  * surface reads.
  */
 import * as React from "react";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
+import { CodeFileIcon, IntegrationIcon } from "@renderer/components/ui/icon";
+
 import { AppGlyph } from "../kit/app-glyph";
-import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 
 import type { ExternalApp } from "../../../../../ipc/contract";
 
@@ -80,9 +80,9 @@ export function IntegrationsPane() {
   return (
     <AsyncSection
       title="External apps"
-      icon={PlugsIcon}
+      icon={IntegrationIcon}
       before={
-        <PrefRow label="Open files in" icon={FileCodeIcon} htmlFor="open-files-in">
+        <PrefRow label="Open files in" icon={CodeFileIcon} htmlFor="open-files-in">
           <Select
             value={selectedValue}
             onValueChange={(value) => {

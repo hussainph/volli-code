@@ -1,10 +1,13 @@
 import * as React from "react";
-import { ChatsIcon as Chats } from "@phosphor-icons/react/dist/csr/Chats";
-import { TreeStructureIcon as TreeStructure } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import {
+  ConversationsIcon as Chats,
+  TreeIcon as TreeStructure,
+  SettingsIcon,
+} from "@renderer/components/ui/icon";
+
 import { Segmented } from "@renderer/components/ui/segmented";
 import { SidebarFiles } from "./sidebar-files";
 import { SessionBandHeader } from "./session-band-header";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
 import { CloudMoveRailRow } from "@renderer/components/cloud-moves/cloud-moves";
@@ -149,7 +152,7 @@ function SettingsMenuButton({ active, onSelect }: { active: boolean; onSelect():
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton isActive={active} onClick={onSelect}>
-          <GearSixIcon />
+          <SettingsIcon />
           <span>Settings</span>
         </SidebarMenuButton>
       </SidebarMenuItem>

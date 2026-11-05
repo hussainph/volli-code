@@ -1,7 +1,7 @@
 import * as React from "react";
 import { BackupRestore } from "./backup-restore";
-import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { DatabaseIcon, FolderOpenIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, type ProfileBackupStatus } from "@volli/shared";
 import { PrefRow, PrefSection, SectionAction } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";

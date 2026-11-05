@@ -1,11 +1,14 @@
 import * as React from "react";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import {
+  ArrowRightIcon,
+  ChatIcon,
+  HistoryIcon,
+  DocumentIcon,
+  FolderOpenIcon,
+  SettingsIcon,
+  AddIcon,
+} from "@renderer/components/ui/icon";
+
 import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
@@ -159,14 +162,14 @@ function BoardDrawing() {
         <div data-explanation-step data-explanation-travel="true" className="pr-2">
           <div className={cn(frame, "flex h-16 flex-col justify-center gap-2 p-2 text-foreground")}>
             <span className="flex items-center gap-1">
-              <ChatCircleIcon className="size-3" weight="bold" /> Ticket
+              <ChatIcon className="size-3" strokeWidth={2.25} /> Ticket
             </span>
             <span className="h-1 w-16 rounded-keycap bg-border" />
           </div>
         </div>
       </div>
       <div data-explanation-step className="mt-2 flex items-center justify-center gap-2">
-        <PlusIcon className="size-3" weight="bold" /> Create a ticket
+        <AddIcon className="size-3" strokeWidth={2.25} /> Create a ticket
       </div>
     </div>
   );
@@ -192,7 +195,7 @@ function ChatDrawing() {
   );
 }
 function SessionDrawing({ previous }: { previous: boolean }) {
-  const Glyph = previous ? ClockCounterClockwiseIcon : ChatCircleIcon;
+  const Glyph = previous ? HistoryIcon : ChatIcon;
   return (
     <div className="relative h-8 rounded-control border border-dashed border-border">
       <div data-explanation-step className="absolute inset-0 flex items-center gap-2 px-2">
@@ -204,9 +207,9 @@ function SessionDrawing({ previous }: { previous: boolean }) {
   );
 }
 function DestinationDrawing({ kind }: { kind: "project" | "selection" | "files" }) {
-  const Source = kind === "files" ? FileTextIcon : FolderOpenIcon;
+  const Source = kind === "files" ? DocumentIcon : FolderOpenIcon;
   const Destination =
-    kind === "selection" ? GearSixIcon : kind === "files" ? FileTextIcon : PlusIcon;
+    kind === "selection" ? SettingsIcon : kind === "files" ? DocumentIcon : AddIcon;
   return (
     <div className="flex items-center gap-2">
       <span

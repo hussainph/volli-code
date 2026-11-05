@@ -20,8 +20,8 @@
  * folder's Sessions is gone with the `newest` folder mode it belonged to.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import { ExternalIcon, TicketIcon } from "@renderer/components/ui/icon";
+
 import { displayTicketId, TICKET_STATUS_LABELS, type Ticket } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -118,7 +118,7 @@ export function TicketPeekCard({
           </div>
         </div>
         <Button size="icon-sm" variant="ghost" aria-label={`Open ${id}`} onClick={onOpenTicket}>
-          <ArrowSquareOutIcon />
+          <ExternalIcon />
         </Button>
       </header>
       {/*

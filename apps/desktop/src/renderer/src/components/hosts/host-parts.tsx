@@ -13,13 +13,11 @@ import { Spinner } from "@renderer/components/ui/spinner";
  * stops only transforms.
  */
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { CheckIcon, HostIcon, StorageIcon } from "@renderer/components/ui/icon";
+import { AppleMark, LinuxMark } from "@renderer/components/ui/brand-marks";
+
 import { AnimatePresence, motion, type Transition } from "motion/react";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
-import { AppleLogoIcon } from "@phosphor-icons/react/dist/csr/AppleLogo";
-import { DesktopTowerIcon } from "@phosphor-icons/react/dist/csr/DesktopTower";
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
-import { LinuxLogoIcon } from "@phosphor-icons/react/dist/csr/LinuxLogo";
 
 import { cn } from "@renderer/lib/utils";
 import type { HostOs } from "@renderer/stores/host-connection";
@@ -79,12 +77,12 @@ export function HostGlyph({
   const timed = useMotionTiming();
   const tile = TILE[size];
   const Icon = local
-    ? DesktopTowerIcon
+    ? HostIcon
     : os === "linux"
-      ? LinuxLogoIcon
+      ? LinuxMark
       : os === "macos"
-        ? AppleLogoIcon
-        : HardDrivesIcon;
+        ? AppleMark
+        : StorageIcon;
   return (
     <span
       data-slot="host-glyph"
@@ -105,7 +103,7 @@ export function HostGlyph({
       />
       <Icon
         aria-hidden
-        weight={os === null && !local ? "regular" : "fill"}
+
         className={cn("relative", tile.icon)}
       />
       <AnimatePresence>
@@ -126,7 +124,7 @@ export function HostGlyph({
             exit={{ opacity: 0 }}
             transition={timed({ type: "spring", duration: 0.24, bounce: 0.1 })}
           >
-            {badge === "ready" ? <CheckIcon weight="bold" className="size-[70%]" /> : null}
+            {badge === "ready" ? <CheckIcon strokeWidth={2.25} className="size-[70%]" /> : null}
           </motion.span>
         )}
       </AnimatePresence>

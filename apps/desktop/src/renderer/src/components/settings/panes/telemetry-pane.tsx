@@ -1,5 +1,5 @@
-import { ChartLineIcon } from "@phosphor-icons/react/dist/csr/ChartLine";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { TrendIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import { useCallback, useEffect, useState } from "react";
 import { errorMessage } from "@volli/shared";
 
@@ -103,7 +103,7 @@ export function AgentObservabilitySettings() {
 
   if (state.status === "loading") {
     return (
-      <PrefSection title="Agent telemetry" icon={ChartLineIcon}>
+      <PrefSection title="Agent telemetry" icon={TrendIcon}>
         <div className="space-y-4 p-4" aria-label="Loading telemetry settings">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
@@ -113,7 +113,7 @@ export function AgentObservabilitySettings() {
   }
   if (state.status === "error") {
     return (
-      <PrefSection title="Agent telemetry" icon={ChartLineIcon}>
+      <PrefSection title="Agent telemetry" icon={TrendIcon}>
         <Notice
           announce
           tone="error"
@@ -132,7 +132,7 @@ export function AgentObservabilitySettings() {
 
   const panel = agentObservabilityPanel(state.view);
   return (
-    <PrefSection title="Agent telemetry" icon={ChartLineIcon}>
+    <PrefSection title="Agent telemetry" icon={TrendIcon}>
       <PrefRow label="Export agent telemetry">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 text-ui text-muted-foreground">

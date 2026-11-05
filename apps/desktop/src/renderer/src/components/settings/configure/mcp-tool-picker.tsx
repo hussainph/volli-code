@@ -28,7 +28,8 @@
  * Left comes back. Escape in the filter clears it before it closes anything.
  */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
+
 import type { McpCatalogTool } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -461,7 +462,7 @@ function ToolRow({
           aria-label={`${open ? "Hide" : "Show"} details for ${title}`}
           onClick={onToggleOpen}
         >
-          <CaretDownIcon className={cn(open && "rotate-180")} />
+          <ChevronDownIcon className={cn(open && "rotate-180")} />
         </Button>
       ) : null}
     </div>
