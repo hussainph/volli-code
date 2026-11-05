@@ -1,3 +1,4 @@
+import { folderRowId } from "@renderer/components/session-peek/peek-subject";
 /** Flat presentation model for the navigator's eventual viewport. Durable
  * ordering and grouping still come from active-session-listing. Every visible
  * item, including bands and disclosures, has one stable key and fixed extent;
@@ -50,7 +51,12 @@ export function sessionNavigatorRows(input: {
   const rows: SessionNavigatorRow[] = [];
   let offset = 0;
   function append(row: Row) {
-    const id = row.kind === "active" || row.kind === "previous" ? row.row.id : row.key;
+    const id =
+      row.kind === "active" || row.kind === "previous"
+        ? row.row.id
+        : row.kind === "ticket"
+          ? folderRowId(row.entry.id)
+          : row.key;
     rows.push({
       ...row,
       offset,
@@ -62,6 +68,7 @@ export function sessionNavigatorRows(input: {
   if (input.activeHeader) append({ kind: "band", band: "active", key: "band:active", height: 32 });
   for (const row of input.active)
     append({ kind: "active", band: "active", key: `active:${row.id}`, height: 46, row });
+  offset += 16; // the Previous band's source-list separation, not a sticky header
   append({ kind: "band", band: "previous", key: "band:previous", height: 32 });
   const open = new Set(input.expanded);
   for (const entry of input.previous) {

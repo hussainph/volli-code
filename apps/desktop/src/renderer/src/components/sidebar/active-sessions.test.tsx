@@ -846,3 +846,57 @@ describe("ActiveSessions attention signals (VC-1078)", () => {
     expect(latestSignals).toHaveBeenCalledTimes(3);
   });
 });
+
+it("selects without navigation, ranges, selects all and clears, with existing read commands in bulk", async () => {
+  seedSessions(
+    ["c1", "c2", "c3"].map((sessionId) =>
+      listingRow(
+        chatRecord({
+          sessionId,
+          title: `Session ${sessionId}`,
+          lastActivityAt: Date.now(),
+          createdAt: Date.now(),
+        }),
+      ),
+    ),
+  );
+  await mount();
+  const click = async (id: string, init: MouseEventInit) =>
+    act(async () =>
+      rowButton(id).dispatchEvent(new MouseEvent("click", { bubbles: true, ...init })),
+    );
+  await click("chat:c1", { metaKey: true });
+  await click("chat:c3", { shiftKey: true });
+  expect(setRead).not.toHaveBeenCalled();
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 30, clientY: 30 }),
+    ),
+  );
+  const bulk = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (node) => node.textContent === "Mark 3 sessions as read",
+  );
+  expect(bulk).toBeDefined();
+  await act(async () => bulk!.click());
+  for (const id of ["c1", "c2", "c3"])
+    expect(setRead).toHaveBeenCalledWith({ sessionId: id, unread: false });
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    ),
+  );
+  setRead.mockClear();
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", metaKey: true, bubbles: true }),
+    ),
+  );
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 })),
+  );
+  expect(
+    [...document.querySelectorAll('[role="menuitem"]')].some(
+      (node) => node.textContent === "Mark 3 sessions as unread",
+    ),
+  ).toBe(true);
+});

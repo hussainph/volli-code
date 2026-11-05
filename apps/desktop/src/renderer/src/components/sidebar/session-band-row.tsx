@@ -1,3 +1,4 @@
+import { SessionSelectionContext } from "./session-navigator-selection";
 import { navigatorRowDomId } from "./session-navigator-rows";
 /**
  * The two session-band rows and the small parts they share.
@@ -283,6 +284,11 @@ function SessionRowMenu({
   projectId?: string | null;
 }) {
   const team = useSessionTeam(sessionId);
+  const selection = React.useContext(SessionSelectionContext);
+  const bulk =
+    sessionId !== null && selection?.sessionIds.has(sessionId) && selection.sessionIds.size > 1
+      ? selection
+      : null;
   const toggle = launchStore() === "cloud" ? null : onToggle;
   if (toggle === null && !team?.canShare) return children;
   return (
@@ -290,7 +296,16 @@ function SessionRowMenu({
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
         <SessionShare sessionId={sessionId} projectId={projectId} />
-        {toggle === null ? null : (
+        {toggle === null ? null : bulk ? (
+          <>
+            <ContextMenuItem icon={MailOpenIcon} onSelect={() => bulk.setRead(false)}>
+              Mark {bulk.sessionIds.size} sessions as read
+            </ContextMenuItem>
+            <ContextMenuItem icon={MailIcon} onSelect={() => bulk.setRead(true)}>
+              Mark {bulk.sessionIds.size} sessions as unread
+            </ContextMenuItem>
+          </>
+        ) : (
           <ContextMenuItem icon={unread ? MailOpenIcon : MailIcon} onSelect={toggle}>
             {unread ? "Mark as read" : "Mark as unread"}
           </ContextMenuItem>

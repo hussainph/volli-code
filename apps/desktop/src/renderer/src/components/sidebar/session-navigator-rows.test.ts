@@ -42,6 +42,7 @@ describe("flat fixed-height Session navigator", () => {
     expect(new Set(open.map((row) => row.key)).size).toBe(open.length);
     let offset = 0;
     for (const row of open) {
+      if (row.key === "band:previous") offset += 16;
       expect(row.offset).toBe(offset);
       offset += row.height + 2;
     }
@@ -60,8 +61,8 @@ describe("flat fixed-height Session navigator", () => {
         reach: false,
       }).map(({ kind, offset }) => ({ kind, offset })),
     ).toEqual([
-      { kind: "band", offset: 0 },
-      { kind: "previous", offset: 34 },
+      { kind: "band", offset: 16 },
+      { kind: "previous", offset: 50 },
     ]);
   });
 });

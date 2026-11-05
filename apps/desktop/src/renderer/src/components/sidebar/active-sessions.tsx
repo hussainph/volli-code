@@ -1,3 +1,5 @@
+import { navigatorViewportRows, useSessionNavigatorViewport } from "./session-navigator-viewport";
+import { selectNavigatorRange, SessionSelectionContext } from "./session-navigator-selection";
 import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { ChevronDownIcon, ChevronUpIcon } from "@renderer/components/ui/icon";
@@ -1328,24 +1330,6 @@ export function ActiveSessions({
    * folder is open, so it answers — and consumes — every arrow on one.
    */
   const registerRowKeys = peek.registerRowKeys;
-  React.useEffect(() => {
-    registerRowKeys((event, target) => {
-      if (target.surface !== "nav") return false;
-      const action = sessionBandKeyAction(event.key, target.rowId, band);
-      if (action === null) return false;
-      event.preventDefault();
-      if (action.kind === "toggle-folder") toggleGroup(action.ticketId);
-      if (action.kind === "focus-row") {
-        peekRowButton(peekRowElement({ rowId: action.rowId, surface: "nav" }))?.focus();
-      }
-      if (action.kind === "focus-folder") {
-        peekRowButton(
-          peekRowElement({ rowId: folderRowId(action.ticketId), surface: "nav" }),
-        )?.focus();
-      }
-      return true;
-    });
-  }, [band, registerRowKeys, toggleGroup]);
 
   React.useEffect(() => {
     onActiveCountChange?.(activeRows.length);
@@ -1354,8 +1338,10 @@ export function ActiveSessions({
   const canShowMore = previousSlice.hiddenCount > 0;
   const canShowLess =
     previousLimit > PREVIOUS_BAND_LIMIT && previousEntries.length > PREVIOUS_BAND_LIMIT;
-  // Phase B wires modifier selection into this same row model; focus is already
-  // independent from both route selection and the selected-id set.
+  const viewport = useSessionNavigatorViewport();
+  const revealNavigatorRow = viewport.reveal;
+  const anchor = React.useRef<string | null>(null);
+  // View-only multi-selection never navigates or changes Session lifetime.
   const [navigatorSelection, setNavigatorSelection] = React.useState<{
     focusedId: string | null;
     selectedIds: ReadonlySet<string>;
@@ -1379,6 +1365,73 @@ export function ActiveSessions({
       canShowLess,
       navigatorSelection,
     ],
+  );
+
+  const orderedIds = React.useMemo(
+    () =>
+      navigator.flatMap((item) =>
+        item.kind === "active" || item.kind === "previous" ? [item.row.id] : [],
+      ),
+    [navigator],
+  );
+  React.useEffect(() => {
+    anchor.current = null;
+    setNavigatorSelection({ focusedId: null, selectedIds: new Set() });
+  }, [project.id]);
+  const focusNavigatorRow = React.useCallback(
+    (rowId: string) => {
+      const target = navigator.find((item) =>
+        item.kind === "active" || item.kind === "previous"
+          ? item.row.id === rowId
+          : item.kind === "ticket" && folderRowId(item.entry.id) === rowId,
+      );
+      if (target) revealNavigatorRow(target);
+      const mounted = peekRowButton(peekRowElement({ rowId, surface: "nav" }));
+      if (mounted) mounted.focus();
+      else {
+        setNavigatorSelection((old) => ({ ...old, focusedId: rowId }));
+        requestAnimationFrame(() =>
+          peekRowButton(peekRowElement({ rowId, surface: "nav" }))?.focus(),
+        );
+      }
+    },
+    [navigator, revealNavigatorRow],
+  );
+  React.useEffect(() => {
+    registerRowKeys((event, target) => {
+      if (target.surface !== "nav") return false;
+      const action = sessionBandKeyAction(event.key, target.rowId, band);
+      if (action === null) return false;
+      event.preventDefault();
+      if (action.kind === "toggle-folder") toggleGroup(action.ticketId);
+      if (action.kind === "focus-row") {
+        focusNavigatorRow(action.rowId);
+      }
+      if (action.kind === "focus-folder") {
+        focusNavigatorRow(folderRowId(action.ticketId));
+      }
+      return true;
+    });
+  }, [band, registerRowKeys, toggleGroup, focusNavigatorRow]);
+  const selectedSessionIds = React.useMemo(
+    () =>
+      new Set(
+        [...navigatorSelection.selectedIds].flatMap((id) => {
+          const row = listingRowOf(id);
+          const sessionId = row?.target?.kind === "chat" ? row.target.sessionId : null;
+          return sessionId === null ? [] : [sessionId];
+        }),
+      ),
+    [navigatorSelection.selectedIds, listingRowOf],
+  );
+  const bulkSelection = React.useMemo(
+    () => ({
+      sessionIds: selectedSessionIds,
+      setRead(nowUnread: boolean) {
+        for (const id of selectedSessionIds) void setSessionRead(project.id, id, nowUnread);
+      },
+    }),
+    [selectedSessionIds, project.id, setSessionRead],
   );
 
   const renderNavigatorRow = (item: SessionNavigatorRow) => {
@@ -1480,12 +1533,38 @@ export function ActiveSessions({
         );
     }
   };
+  const renderBandRows = (bandName: "active" | "previous") => {
+    const rows = navigator.filter((row) => row.band === bandName);
+    if (rows.length === 0) return null;
+    const windowed = navigatorViewportRows(rows, viewport.view.top, viewport.view.bottom);
+    const end = rows.at(-1)!.offset + rows.at(-1)!.height + 2;
+    let cursor = rows[0]!.offset;
+    const output: React.ReactNode[] = [];
+    for (const row of windowed) {
+      if (row.offset > cursor)
+        output.push(
+          <li
+            aria-hidden
+            key={`spacer:${row.key}`}
+            style={{ height: row.offset - cursor, flexShrink: 0 }}
+          />,
+        );
+      output.push(renderNavigatorRow(row));
+      cursor = row.offset + row.height + 2;
+    }
+    if (cursor < end)
+      output.push(
+        <li aria-hidden key="spacer:end" style={{ height: end - cursor, flexShrink: 0 }} />,
+      );
+    return output;
+  };
   const activeBand = (
     <SidebarGroup data-session-band="active" className="session-navigator gap-0 py-0">
       <SidebarMenu
+        style={{ gap: 0 }}
         {...(activeRows.length === 0 && listingPending ? loadingRegionProps("sessions") : {})}
       >
-        {navigator.filter((row) => row.band === "active").map(renderNavigatorRow)}
+        {renderBandRows("active")}
         {activeRows.length === 0 && listingPending ? (
           <></>
         ) : activeRows.length === 0 && (sessionsUnavailable !== null || listingFailed) ? (
@@ -1513,9 +1592,10 @@ export function ActiveSessions({
   const previousBand = (
     <SidebarGroup data-session-band="previous" className="session-navigator gap-0 py-0">
       <SidebarMenu
+        style={{ gap: 0 }}
         {...(previousEntries.length === 0 && listingPending ? loadingRegionProps("sessions") : {})}
       >
-        {navigator.filter((row) => row.band === "previous").map(renderNavigatorRow)}
+        {renderBandRows("previous")}
         {previousEntries.length === 0 && listingPending ? null : previousEntries.length === 0 &&
           activeRows.length > 0 &&
           sessionsUnavailable === null &&
@@ -1547,6 +1627,46 @@ export function ActiveSessions({
   const bands = (
     <div
       data-session-bands=""
+      ref={viewport.ref}
+      onClickCapture={(event) => {
+        const target = (event.target as HTMLElement).closest<HTMLElement>("[data-peek-row]");
+        const id = target?.dataset.peekRow;
+        if (
+          !id ||
+          !orderedIds.includes(id) ||
+          (event.target as HTMLElement).closest("[data-row-action],button[data-slot=button]")
+        )
+          return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          const next = selectNavigatorRange({
+            ordered: orderedIds,
+            selected: navigatorSelection.selectedIds,
+            anchor: anchor.current,
+            target: id,
+            range: event.shiftKey,
+            toggle: event.metaKey || event.ctrlKey,
+          });
+          anchor.current = next.anchor;
+          setNavigatorSelection((old) => ({ ...old, selectedIds: next.selected }));
+          peekRowButton(target)?.focus();
+        } else {
+          anchor.current = id;
+          setNavigatorSelection((old) => ({ ...old, selectedIds: new Set() }));
+        }
+      }}
+      onKeyDownCapture={(event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+          event.preventDefault();
+          event.stopPropagation();
+          setNavigatorSelection((old) => ({ ...old, selectedIds: new Set(orderedIds) }));
+        } else if (event.key === "Escape" && navigatorSelection.selectedIds.size) {
+          event.preventDefault();
+          event.stopPropagation();
+          setNavigatorSelection((old) => ({ ...old, selectedIds: new Set() }));
+        }
+      }}
       {...peek.rowProps("nav")}
       {...peek.scrollProps}
       onFocusCapture={(event) => {
@@ -1577,7 +1697,9 @@ export function ActiveSessions({
 
   return (
     <>
-      {bands}
+      <SessionSelectionContext.Provider value={bulkSelection}>
+        {bands}
+      </SessionSelectionContext.Provider>
       {peek.card}
       {/* Viewing a conversation is the one peek action that opens a surface of
           its own — the shared overlay, which adopts the Session and mounts the
