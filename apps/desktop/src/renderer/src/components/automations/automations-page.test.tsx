@@ -1745,3 +1745,31 @@ describe("honest read states", () => {
     expect(historySection().textContent).not.toContain("No runs yet");
   });
 });
+
+it("opens the authored starter as a local draft, including when blank creation is already open", async () => {
+  clearEditorDraft("p1");
+  await mount({});
+  await act(async () =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((b) => b.textContent === "New automation")
+      ?.click(),
+  );
+  await openDropdown(button("New automation menu"));
+  await act(async () =>
+    [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((b) => b.textContent === "Morning review")
+      ?.click(),
+  );
+  expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+    "Morning review",
+  );
+  expect(loadEditorDraft("p1")).toMatchObject({
+    name: "Morning review",
+    instructions: "/code-review\nFind regressions merged since yesterday.",
+    triggerChoice: "schedule",
+    schedule: { preset: "weekdays", timeZone: "Asia/Kuwait" },
+  });
+  expect(doors.create).not.toHaveBeenCalled();
+  expect(doors.setEnabled).not.toHaveBeenCalled();
+  clearEditorDraft("p1");
+});

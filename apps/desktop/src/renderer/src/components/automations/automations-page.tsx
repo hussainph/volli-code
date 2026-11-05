@@ -36,7 +36,12 @@ import {
   nextScheduledRun,
 } from "./automations-page-model";
 import { AutomationEditorPanel } from "./automation-editor";
-import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
+import {
+  clearEditorDraft,
+  loadEditorDraft,
+  saveEditorDraft,
+  type AutomationEditorDraft,
+} from "./editor-draft";
 import { AutomationLanes } from "./automation-lanes";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import {
@@ -90,6 +95,30 @@ const NO_RUNS: readonly AutomationRun[] = [];
 const NO_SKIPS: readonly AutomationSkippedOccurrence[] = [];
 const NO_TICKETS: readonly Ticket[] = [];
 
+const EXAMPLES: readonly Pick<
+  AutomationEditorDraft,
+  "name" | "instructions" | "triggerChoice" | "columns"
+>[] = [
+  {
+    name: "Morning review",
+    instructions: "/code-review\nFind regressions merged since yesterday.",
+    triggerChoice: "schedule",
+    columns: [],
+  },
+  {
+    name: "Implement ticket",
+    instructions: "/implement\nImplement the ticket and verify it with focused checks.",
+    triggerChoice: "columns",
+    columns: ["doing"],
+  },
+  {
+    name: "Triage ticket",
+    instructions: "/triage\nFind the smallest next step.",
+    triggerChoice: "none",
+    columns: [],
+  },
+];
+
 export function AutomationsPage() {
   const project = useSelectedProject();
   if (project === null)
@@ -137,6 +166,7 @@ function AutomationsSurface({
   const [starting, setStarting] = React.useState(false);
   const startLock = React.useRef(false);
   const pendingRef = React.useRef(false);
+  const [newDraftVersion, setNewDraftVersion] = React.useState(0);
   const [renameRequest, setRenameRequest] = React.useState(0);
   const [choosingTicket, setChoosingTicket] = React.useState<Automation | null>(null);
   const [confirmingDelete, setConfirmingDelete] = React.useState<Automation | null>(null);
@@ -217,7 +247,7 @@ function AutomationsSurface({
       setPending(false);
     }
   }
-  function example(name: string, instructions: string) {
+  function example(starter: (typeof EXAMPLES)[number]) {
     if (!writable) return;
     // Examples are create drafts, never accepted records. Do not overwrite a saved draft.
     if (loadEditorDraft(projectId) !== null) {
@@ -225,19 +255,20 @@ function AutomationsSurface({
       return;
     }
     saveEditorDraft(projectId, {
-      name,
-      instructions,
+      ...starter,
       ownership: "project",
-      triggerChoice: "none",
-      columns: [],
-      schedule: {
-        preset: "daily",
-        hour: 9,
-        minute: 0,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
+      schedule:
+        starter.triggerChoice === "schedule"
+          ? { preset: "weekdays", hour: 9, minute: 0, timeZone: "Asia/Kuwait" }
+          : {
+              preset: "daily",
+              hour: 9,
+              minute: 0,
+              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            },
       runtime: null,
     });
+    setNewDraftVersion((revision) => revision + 1);
     create();
   }
   const actions =
@@ -324,14 +355,10 @@ function AutomationsSurface({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuLabel>Examples</DropdownMenuLabel>
-                  {[
-                    ["Morning review", "Review the project and summarize what needs attention"],
-                    ["Implement ticket", "Implement the ticket and verify the change"],
-                    ["Triage ticket", "Review the ticket and identify the next step"],
-                  ].map(([name, instructions]) => (
-                    <DropdownMenuItem key={name} onSelect={() => example(name!, instructions!)}>
+                  {EXAMPLES.map((starter) => (
+                    <DropdownMenuItem key={starter.name} onSelect={() => example(starter)}>
                       <AutomationIcon />
-                      {name}
+                      {starter.name}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -437,7 +464,7 @@ function AutomationsSurface({
               <p className="p-gutter text-ui">Loading automation…</p>
             ) : (
               <AutomationEditorPanel
-                key={selected?.id ?? "new"}
+                key={selected?.id ?? `new:${newDraftVersion}`}
                 projectId={projectId}
                 automation={selected}
                 actions={actions}
