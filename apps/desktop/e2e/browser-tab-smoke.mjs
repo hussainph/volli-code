@@ -1218,12 +1218,16 @@ async function main() {
       // segment closes it: the emptied pane collapses and the group of two
       // dissolves, closing neither original Browser Tab (VC-614).
       await transcriptTab.getByTestId("tab-close").click();
-      await waitUntil(
-        "the original unsplit Browser surface",
-        async () =>
-          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
-          (await remoteViewAttached(app, secondUrl)),
-      );
+      // The group dissolves beneath the pointer. Leave its former close
+      // target so a newly exposed hover affordance/tooltip cannot keep the
+      // native plane correctly frozen while we assert its restoration.
+      await page.mouse.move(700, 70);
+      await waitUntil("the original unsplit Browser surface", async () => {
+        const panes = await page.locator('[data-slot="split-view-pane"][data-pane-id]').count();
+        const attached = await remoteViewAttached(app, secondUrl);
+        if (panes === 1 && attached) return true;
+        throw new Error(`panes=${panes} browserAttached=${attached}`);
+      });
       return {
         ok: promptVisible && targetVisible && pageErrors.length === 0,
         detail: `prompt=${JSON.stringify(receipt)} restored=${JSON.stringify(restored)} promptVisible=${promptVisible} targetVisible=${targetVisible}`,

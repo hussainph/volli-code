@@ -129,10 +129,17 @@ async function attachedViews(app) {
 
 /** Pins the island's tabs card open and hands back the one row it lists. */
 async function pinTabsCard(page, tabId) {
-  await tabsCluster(page).click();
-  const row = tabsCard(page).locator(`[data-island-row="${tabId}"]`);
-  await waitUntil("the tab's row in the pinned card", async () =>
-    (await row.count()) === 1 ? true : null,
+  // A row can remain mounted during the popover's exit. Open the glance,
+  // then use its explicit pin control and observe the pin receipt before
+  // moving off the cluster toward the row's hover-only actions.
+  await tabsCluster(page).hover();
+  const card = page.locator('[data-island-card="tabs"][data-state="open"]');
+  await card.waitFor({ state: "visible" });
+  const pin = card.locator("[data-island-pin]");
+  if ((await pin.getAttribute("aria-pressed")) !== "true") await pin.click();
+  const row = card.locator(`[data-island-row="${tabId}"]`);
+  await waitUntil("the tab's row in the pinned, open card", async () =>
+    (await pin.getAttribute("aria-pressed")) === "true" && (await row.isVisible()) ? true : null,
   );
   return row;
 }
