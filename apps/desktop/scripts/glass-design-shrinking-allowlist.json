@@ -5,211 +5,181 @@
       "path": "apps/desktop/src/renderer/src/components/board/new-ticket/project-monogram.tsx",
       "rule": "colour-literal",
       "maxCount": 1,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "White initials belong to the project identity swatch, not the current canvas foreground."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/browser/session-cursor.css",
       "rule": "colour-literal",
       "maxCount": 4,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Cursor outlines and shadows separate the remote pointer from arbitrary web-page pixels, independent of app appearance."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/browser/session-cursor.css",
       "rule": "motion-literal",
       "maxCount": 12,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Remote cursor presence, click and caret clocks retain their established browser-pointer lifetimes in this pass."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/chat/activity-island-ui.tsx",
       "rule": "colour-literal",
       "maxCount": 8,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Fixed agent identity swatches and white initials distinguish parallel agents independently of canvas accent."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/chat/activity-ui.tsx",
       "rule": "motion-literal",
       "maxCount": 2,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
-    },
-    {
-      "path": "apps/desktop/src/renderer/src/components/chat/secret-card.tsx",
-      "rule": "markup-native-select",
-      "maxCount": 1,
-      "reason": "Migration debt: compose the shared Select while preserving values, disabled states, accessible name and focus."
-    },
-    {
-      "path": "apps/desktop/src/renderer/src/components/cloud-moves/preflight.tsx",
-      "rule": "markup-native-select",
-      "maxCount": 1,
-      "reason": "Migration debt: compose the shared Select while preserving values, disabled states, accessible name and focus."
+      "reason": "Transcript activity rows are owned by VC-1107\u20131109 and explicitly excluded from this redesign."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/cloud-moves/progress.tsx",
       "rule": "copy-banned-word",
       "maxCount": 1,
-      "reason": "Migration debt: replace marketing phrasing with the concrete operation; review literal lock/unlock semantics before changing copy."
+      "reason": "Unlocks describes the actual local read-only lock released by rollback; keep the destructive confirmation precise."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/add-host-sheet.tsx",
       "rule": "motion-literal",
       "maxCount": 8,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Superseded SSH provisioning retains its staged timing; no redesign or extension of the retired surface is authorized."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/host-chip.tsx",
       "rule": "motion-literal",
       "maxCount": 3,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Host reachability pulse is state indication in the superseded operator UI, not ordinary navigation motion."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/host-island.tsx",
       "rule": "motion-literal",
       "maxCount": 2,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Superseded host switcher retains its existing bounded presence timing; its replacement is the outbound runner surface."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/host-parts.tsx",
       "rule": "colour-literal",
       "maxCount": 2,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Anthropic and OpenAI sign-in identity swatches remain provider identity, not canvas accent."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/host-parts.tsx",
       "rule": "motion-literal",
       "maxCount": 8,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Superseded host reachability and provisioning indicators retain their established lifetimes, not new host behavior."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/open-project-sheet.tsx",
       "rule": "motion-literal",
       "maxCount": 3,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Superseded remote-host project opener retains its bounded entrance, outside the approved runner redesign."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/sign-ins/host-sign-in-rows.tsx",
       "rule": "colour-literal",
       "maxCount": 2,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Anthropic and OpenAI sign-in swatches match the host provider marks, independently of canvas accent."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/hosts/sign-ins/host-sign-in-rows.tsx",
       "rule": "motion-literal",
       "maxCount": 1,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Remote host sign-in status retains its bounded presence clock in the superseded operator surface."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/pages/decision-model-settings.tsx",
       "rule": "markup-settings-description",
       "maxCount": 1,
-      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+      "reason": "One-line cloud model disclosure states where a project sends content, a required trust boundary."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/settings/configure/secrets-pane.tsx",
       "rule": "copy-banned-word",
       "maxCount": 1,
-      "reason": "Migration debt: replace marketing phrasing with the concrete operation; review literal lock/unlock semantics before changing copy."
-    },
-    {
-      "path": "apps/desktop/src/renderer/src/components/settings/configure/sessions-pane.tsx",
-      "rule": "markup-settings-description",
-      "maxCount": 1,
-      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+      "reason": "Unlock is the concrete credential-store recovery operation and matches its command, not promotional copy."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/settings/kit/canvas-instrument.tsx",
       "rule": "colour-literal",
       "maxCount": 2,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
-    },
-    {
-      "path": "apps/desktop/src/renderer/src/components/settings/panes/appearance-pane.tsx",
-      "rule": "markup-settings-description",
-      "maxCount": 3,
-      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+      "reason": "Fixed contrasting handle boundaries and neutral sampling dots must remain legible over arbitrary user-authored canvases."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/settings/panes/decision-model-pane.tsx",
       "rule": "markup-settings-description",
       "maxCount": 1,
-      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+      "reason": "One-line cloud model disclosure states where content is sent, a required trust boundary."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/settings/panes/hosts-pane.tsx",
       "rule": "markup-settings-description",
       "maxCount": 2,
-      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
-    },
-    {
-      "path": "apps/desktop/src/renderer/src/components/settings/panes/project-appearance-pane.tsx",
-      "rule": "markup-settings-description",
-      "maxCount": 2,
-      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+      "reason": "Only recovery facts and read-only reasons remain; they describe blocked operations rather than teach controls."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/settings/panes/storage-pane.tsx",
       "rule": "markup-settings-description",
       "maxCount": 1,
-      "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
+      "reason": "Folder removal is destructive; this line states what is removed and retained before the operation."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/settings/settings-scope.tsx",
       "rule": "colour-literal",
       "maxCount": 1,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "White project identity initials stay legible over authored project swatches rather than appearance-dependent body ink."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/sidebar/sidebar-scroll.tsx",
       "rule": "colour-literal",
       "maxCount": 4,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Opaque black is an alpha-mask endpoint for scroll-edge fades, never visible paint."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor-model.ts",
       "rule": "colour-literal",
       "maxCount": 18,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "These are the selectable authored canvas presets themselves, not resolved theme tokens or component paint."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/theme/canvas-editor.tsx",
       "rule": "colour-literal",
       "maxCount": 3,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Fixed contrasting canvas handles and neutral sampling dots stay legible over arbitrary authored canvas samples."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/ticket/label-editor-core.tsx",
       "rule": "colour-literal",
       "maxCount": 1,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "The white difference-blended checkmark reads against arbitrary user-authored label colors."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/ui/ai-elements/reasoning.tsx",
       "rule": "motion-literal",
       "maxCount": 1,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Reasoning shimmer is an existing transcript activity indicator; transcript tool/activity rows are excluded."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/ui/tab-strip.tsx",
       "rule": "motion-literal",
       "maxCount": 3,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Tab/group motion is owned by VC-1052/VC-1017; only keyboard-origin fixes were authorized here."
     },
     {
       "path": "apps/desktop/src/renderer/src/globals.css",
       "rule": "colour-literal",
       "maxCount": 7,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Remaining literals are alpha masks and an emergency pre-token ink fallback, not authored theme colors."
     },
     {
       "path": "apps/desktop/src/renderer/src/globals.css",
       "rule": "motion-literal",
       "maxCount": 12,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
+      "reason": "Remaining clocks serve status/shimmer loops, title reveals and read-only host state, not navigation entrances."
     },
     {
       "path": "apps/desktop/src/renderer/src/hooks/use-chart-palette.ts",
       "rule": "colour-literal",
       "maxCount": 3,
-      "reason": "Migration debt: replace paint literals with semantic CSS variables; move authored palette/identity constants to the token or identity pipeline. Review masks separately from visible paint."
+      "reason": "Pre-hydration chart fallbacks keep charts renderable without DOM tokens; live colors come from generated values."
     }
   ]
 }

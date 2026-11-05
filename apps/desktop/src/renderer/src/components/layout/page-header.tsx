@@ -20,8 +20,8 @@ import { cn } from "@renderer/lib/utils";
  * under it explaining the page is the copy this app does not draw.
  */
 const TIERS = {
-  workbench: { inset: "px-gutter", identity: "shrink-0", title: "text-title" },
-  reading: { inset: "px-0", identity: "min-w-0 flex-1", title: "text-title" },
+  workbench: { inset: "px-gutter", identity: "shrink-0" },
+  reading: { inset: "px-0", identity: "min-w-0 flex-1" },
 } as const;
 
 /**
@@ -78,7 +78,7 @@ export function PageHeader({
       )}
     >
       <div className={titleHidden ? "contents" : tier.identity}>
-        <h1 className={titleHidden ? "sr-only" : cn(tier.title, "font-semibold")}>{title}</h1>
+        <h1 className={titleHidden ? "sr-only" : "text-title font-semibold"}>{title}</h1>
       </div>
       {children}
       {actions ? (

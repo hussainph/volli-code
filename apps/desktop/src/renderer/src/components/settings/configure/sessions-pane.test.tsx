@@ -318,9 +318,11 @@ describe("SessionsPane's instruction files", () => {
     expect(dialog?.querySelector("h2")?.textContent).toBe("AGENTS.md");
     expect(dialog?.querySelector(".typeset h1")?.textContent).toBe("AGENTS.md rules");
     // Read-only: the preview offers no control beyond closing it.
-    expect([...(dialog?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
-      "Close",
-    ]);
+    expect(
+      [...(dialog?.querySelectorAll("button") ?? [])].map(
+        (b) => b.getAttribute("aria-label") ?? b.textContent,
+      ),
+    ).toEqual(["Close"]);
   });
 
   it("says when the repo root could not be read, and checks again on request", async () => {
@@ -424,8 +426,10 @@ describe("SessionsPane's instruction files", () => {
     expect(dialog?.textContent).toContain("AGENTS.md is not a text file.");
     // Not a failure: no error Notice, so nothing announced and no Retry.
     expect(dialog?.querySelector('[role="status"]')).toBeNull();
-    expect([...(dialog?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
-      "Close",
-    ]);
+    expect(
+      [...(dialog?.querySelectorAll("button") ?? [])].map(
+        (b) => b.getAttribute("aria-label") ?? b.textContent,
+      ),
+    ).toEqual(["Close"]);
   });
 });

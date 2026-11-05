@@ -77,22 +77,12 @@ describe("TicketRail header", () => {
     expect(html.match(/tabindex="0"/g)?.length).toBe(1);
   });
 
-  // The design of record shows exactly one word in the pill; the other pages
-  // are bare glyphs until selected. That is what lets four of them fit the
-  // rail's narrowest width, so the unselected labels are genuinely absent from
-  // the DOM — every tab still carries its name for assistive tech through
-  // `aria-label`.
-  it("labels only the selected page, and names the others for screen readers", () => {
+  it("keeps compact icon tabs named for screen readers", () => {
     const html = render();
-
-    expect(html).toContain(">Now<");
-    expect(html).not.toContain(">Diffs<");
-    expect(html).not.toContain(">Files<");
-    expect(html).not.toContain(">Search<");
-    expect(html).toContain('aria-label="Now"');
-    expect(html).toContain('aria-label="Diffs"');
-    expect(html).toContain('aria-label="Files"');
-    expect(html).toContain('aria-label="Search"');
+    for (const label of ["Now", "Diffs", "Files", "Search"]) {
+      expect(html).toContain(`aria-label="${label}"`);
+      expect(html).toContain(`<span class="sr-only">${label}</span>`);
+    }
   });
 
   it("retires the vertical icon-mode strip and its Properties page", () => {
@@ -213,26 +203,23 @@ describe("TicketRail's Now page", () => {
     expect(sessions).toBeLessThan(automations);
   });
 
-  it("draws every block on Now as a section — an eyebrow over rows, no card, no act button", () => {
+  it("draws peer group headings over flat rows without a duplicate properties title", () => {
     const html = render();
     const page = html.slice(
       html.indexOf('id="ticket-rail-page-now"'),
       html.indexOf('data-testid="ticket-repository-summary"'),
     );
 
-    // Three eyebrows, in order.
-    const eyebrows = [
-      ...page.matchAll(/<h2[^>]*>(?:<button[^>]*>)?(Properties|Sessions|Automations)/g),
-    ].map((match) => match[1]);
-    expect(eyebrows).toEqual(["Properties", "Sessions", "Automations"]);
-    // No framed card, and no ACT the page offers: `Run once` is gone. The
-    // `RAIL_CONTROL` recipe survives on Now in exactly one place — the two
-    // Properties dropdowns, which are a row's VALUE rather than something the
-    // page does, and are the app's own pickers rather than a rail-local
-    // control. Counted, so a third raised button cannot appear unnoticed.
+    const headings = [...page.matchAll(/<h3[^>]*>(.*?)<\/h3>/g)].map((match) =>
+      match[1].replace(/<[^>]*>/g, ""),
+    );
+    expect(headings).toEqual(["Sessions", "Automations"]);
+    expect(page).not.toMatch(/<h[1-6][^>]*>Properties/);
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
     expect(page).not.toContain("Run once");
-    expect([...page.matchAll(/shadow-raised/g)]).toHaveLength(2);
+    for (const field of ["Status", "Priority", "Labels"]) {
+      expect(page).toContain(field);
+    }
     // The compact Chat split uses its controls' own lift, not a raised frame
     // around the whole group. Rail geometry must not silently become strip-sized.
     expect(page).toMatch(/data-size="xs"[^>]*aria-label="New chat"/);

@@ -64,7 +64,7 @@ import {
 
 /**
  * The canvas pipeline's output for the SHIPPED DEFAULT canvas
- * (`DEFAULT_CANVAS` — one ember pool at 68%/30%, vibrancy 0.6, grain 0.15), in
+ * (`DEFAULT_CANVAS` — the three-stop Ember mesh, vibrancy 0.6, grain 0.15), in
  * each mode. The THIRD independent pin on these values: `derive.test.ts` pins
  * them against the color math, `globals.css` authors them for first paint, and
  * this table proves the running app actually renders them. All three move
@@ -74,77 +74,77 @@ import {
  * a veil left behind freezes the sidebar on the previous canvas's rung.
  */
 const DARK = {
-  "--rail": "#170f0b",
-  "--background": "#1c1310",
-  "--card": "#211815",
-  "--popover": "#251b18",
-  "--muted": "#271d1a",
-  "--accent": "#2d2220",
-  "--sidebar": "#211815",
-  "--foreground": "#e8e4e2",
-  "--muted-foreground": "#bdbab8",
-  "--sidebar-foreground": "#d0cdcb",
-  "--border": "#312623",
-  "--border-strong": "#423632",
-  "--sidebar-border": "#2d241f",
-  "--primary": "#b85d38",
+  "--rail": "#282828",
+  "--background": "#1e1e1e",
+  "--card": "#1e1e1e",
+  "--popover": "#282828",
+  "--muted": "#282828",
+  "--accent": "#3e2920",
+  "--sidebar": "#282828",
+  "--foreground": "#ededed",
+  "--muted-foreground": "#bdbdbd",
+  "--sidebar-foreground": "#ededed",
+  "--border": "#424242",
+  "--border-strong": "#5c5c5c",
+  "--sidebar-border": "#424242",
+  "--primary": "#cd4d00",
   "--primary-foreground": "#ffffff",
-  "--primary-text": "#fc9a74",
-  "--ring": "#fc9a74",
-  "--destructive": "#ffa49f",
+  "--primary-text": "#ffc8b2",
+  "--ring": "#ffc8b2",
+  "--destructive": "#ffa5a0",
   "--destructive-foreground": "#290b0b",
-  "--positive": "#27d496",
+  "--positive": "#29d597",
   "--positive-foreground": "#001c10",
-  "--attention": "#ffaa2f",
+  "--attention": "#ffab33",
   "--attention-foreground": "#221200",
-  "--info": "#65c6ff",
+  "--info": "#68c7ff",
   "--info-foreground": "#001827",
-  "--sidebar-veil": "rgb(123 105 111 / 0.1)",
-  "--sidebar-accent-veil": "rgb(153 124 131 / 0.1)",
-  "--sidebar-border-veil": "rgb(153 144 121 / 0.1)",
+  "--sidebar-veil": "rgb(40 40 40 / 0.1)",
+  "--sidebar-accent-veil": "rgb(255 50 0 / 0.1)",
+  "--sidebar-border-veil": "rgb(255 255 255 / 0.1)",
   "--canvas-ink": "#fbf1ed",
-  "--canvas-ink-label": "#d2c8c5",
-  "--canvas-ink-muted": "#b6aca9",
+  "--canvas-ink-label": "#d9d0cc",
+  "--canvas-ink-muted": "#c2b9b5",
   "--lift-1": "transparent",
   "--lift-2": "rgb(251 241 237 / 0.03)",
-  "--label-ink": "#d5d1cf",
+  "--label-ink": "#cecece",
 };
 
 const LIGHT = {
-  "--rail": "#edd1c6",
-  "--background": "#fdded2",
-  "--card": "#f4d4c8",
-  "--popover": "#f7d8cc",
-  "--muted": "#eacabd",
-  "--accent": "#dab9ad",
-  "--sidebar": "#e2c3b7",
-  "--foreground": "#120906",
-  "--muted-foreground": "#514541",
-  "--sidebar-foreground": "#080302",
-  "--border": "#d8b6a9",
-  "--border-strong": "#d5b2a5",
-  "--sidebar-border": "#ddbbad",
-  "--primary": "#b85d38",
+  "--rail": "#f6f6f6",
+  "--background": "#ffffff",
+  "--card": "#ffffff",
+  "--popover": "#fafafa",
+  "--muted": "#f6f6f6",
+  "--accent": "#fdf1ec",
+  "--sidebar": "#f6f6f6",
+  "--foreground": "#272727",
+  "--muted-foreground": "#555555",
+  "--sidebar-foreground": "#272727",
+  "--border": "#dfdfdf",
+  "--border-strong": "#bcbcbc",
+  "--sidebar-border": "#dfdfdf",
+  "--primary": "#cd4d00",
   "--primary-foreground": "#ffffff",
-  "--primary-text": "#9c441e",
-  "--ring": "#9c441e",
-  "--destructive": "#9b1e28",
+  "--primary-text": "#862f00",
+  "--ring": "#862f00",
+  "--destructive": "#d85959",
   "--destructive-foreground": "#ffffff",
-  "--positive": "#005f40",
+  "--positive": "#009567",
   "--positive-foreground": "#ffffff",
-  "--attention": "#764900",
+  "--attention": "#b77400",
   "--attention-foreground": "#ffffff",
-  "--info": "#005880",
+  "--info": "#008bc5",
   "--info-foreground": "#ffffff",
-  "--sidebar-veil": "rgb(127 69 48 / 0.1)",
-  "--sidebar-accent-veil": "rgb(146 95 83 / 0.1)",
-  "--sidebar-border-veil": "rgb(176 115 83 / 0.1)",
+  "--sidebar-veil": "rgb(246 246 246 / 0.1)",
+  "--sidebar-accent-veil": "rgb(255 196 146 / 0.1)",
+  "--sidebar-border-veil": "rgb(16 16 16 / 0.1)",
   "--canvas-ink": "#1c110d",
   "--canvas-ink-label": "#392c28",
   "--canvas-ink-muted": "#4c3f3a",
   "--lift-1": "transparent",
-  "--lift-2": "rgb(253 222 210 / 0.175)",
-  "--label-ink": "#2f2521",
+  "--lift-2": "rgb(255 255 255 / 0.175)",
+  "--label-ink": "#444444",
 };
 
 /** The default canvas's base fill per mode — what the WINDOW edge is painted. */
@@ -434,7 +434,10 @@ async function openAppearanceSettings(page) {
 async function openProjectAppearance(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   const nav = settingsRail(page);
-  await nav.locator('[aria-label="Settings scope"] > div > button').click();
+  await nav
+    .locator('[aria-label="Settings scope"] button[aria-pressed]')
+    .filter({ hasNotText: "All projects" })
+    .click();
   await nav.getByRole("button", { name: "All projects", pressed: false }).waitFor();
   await nav.getByRole("button", { name: "Appearance", exact: true }).click();
   // Present in every state of the pane, and only once this project's scope has
@@ -766,21 +769,21 @@ const crossfadeBlendsAdditively = (trace) =>
   trace.resolved.oldBlend === "plus-lighter" && trace.resolved.newBlend === "plus-lighter";
 
 /**
- * Records every value `--background` settles on from now until it is read.
+ * Records every value `--canvas` settles on from now until it is read.
  *
  * `theme/apply.ts` writes the whole token set onto the root's inline style, so a
  * MutationObserver on that attribute sees every repaint — a bounce through
  * another canvas and back cannot slip between two polls, which is exactly what
  * the #123 regression looked like from the outside.
  */
-async function watchBackgroundPaints(page) {
+async function watchCanvasPaints(page) {
   await page.evaluate(() => {
     window.volliPaintObserver?.disconnect();
     const paints = [];
     window.volliPaints = paints;
     const record = () => {
       const value = document.documentElement.style
-        .getPropertyValue("--background")
+        .getPropertyValue("--canvas")
         .trim()
         .toLowerCase();
       // Deduped against the last entry: one repaint writes every token, so the
@@ -794,7 +797,7 @@ async function watchBackgroundPaints(page) {
   });
 }
 
-const readBackgroundPaints = (page) => page.evaluate(() => window.volliPaints ?? []);
+const readCanvasPaints = (page) => page.evaluate(() => window.volliPaints ?? []);
 
 // ---- first paint ------------------------------------------------------------
 
@@ -1114,7 +1117,7 @@ cursor-style = block
         Math.abs(stored.grain - Number(AUTHORED_GRAIN)) < 0.005 &&
         after["--primary"] !== before["--primary"] &&
         after["--canvas"] !== before["--canvas"] &&
-        after["--background"] !== before["--background"],
+        after["--background"] === before["--background"],
       detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]}`,
     };
   });
@@ -1128,32 +1131,32 @@ cursor-style = block
     // have moved. Only reachable from the real app: the renderer's unit tests
     // render to static markup and cannot press a key.
     const field = page.getByRole("textbox", { name: "Primary colour hex" });
-    const before = await readAppliedTokens(page, ["--background"]);
+    const before = await readAppliedTokens(page, ["--canvas"]);
     const storedBefore = await storedGlobalCanvas(page);
     const keptHex = storedBefore.stops[storedBefore.primaryIndex].hex;
 
     await field.click();
     await field.fill(ABANDONED_HEX);
     const previewed = await waitUntil("the typed colour to paint", async () => {
-      const now = await readAppliedTokens(page, ["--background"]);
-      return now["--background"] === before["--background"] ? null : now["--background"];
+      const now = await readAppliedTokens(page, ["--canvas"]);
+      return now["--canvas"] === before["--canvas"] ? null : now["--canvas"];
     });
 
     await page.keyboard.press("Escape");
 
     const restored = await waitUntil("the abandoned preview to come off", async () => {
-      const now = await readAppliedTokens(page, ["--background"]);
-      return now["--background"] === before["--background"] ? now["--background"] : null;
-    }).catch(async () => (await readAppliedTokens(page, ["--background"]))["--background"]);
+      const now = await readAppliedTokens(page, ["--canvas"]);
+      return now["--canvas"] === before["--canvas"] ? now["--canvas"] : null;
+    }).catch(async () => (await readAppliedTokens(page, ["--canvas"]))["--canvas"]);
     const storedAfter = await storedGlobalCanvas(page);
 
     return {
       ok:
-        previewed !== before["--background"] &&
-        restored === before["--background"] &&
+        previewed !== before["--canvas"] &&
+        restored === before["--canvas"] &&
         storedAfter.stops[storedAfter.primaryIndex].hex === keptHex &&
         (await field.inputValue()) === keptHex,
-      detail: `painted ${before["--background"]}→${previewed}→${restored} stored=${storedAfter.stops[storedAfter.primaryIndex].hex}`,
+      detail: `painted ${before["--canvas"]}→${previewed}→${restored} stored=${storedAfter.stops[storedAfter.primaryIndex].hex}`,
     };
   });
 
@@ -1248,23 +1251,23 @@ cursor-style = block
     throw new Error(`seeded projects did not boot: ${JSON.stringify(Object.keys(byName))}`);
   }
 
-  const globalBackground = (await readAppliedTokens(page, ["--background"]))["--background"];
+  const globalCanvasPaint = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
 
   await attempt(16, "two seeded workspaces both start out inheriting", async () => {
-    const applied = await waitForToken(page, "--background", globalBackground);
+    const applied = await waitForToken(page, "--canvas", globalCanvasPaint);
     const stored = await storedTheme(page);
     return {
       ok:
-        applied === globalBackground &&
+        applied === globalCanvasPaint &&
         stored.projects[projectAId]?.canvas === null &&
         stored.projects[projectAId]?.appearance === null &&
         stored.projects[projectBId]?.canvas === null &&
         stored.projects[projectBId]?.appearance === null,
-      detail: `--background=${applied} rows=${JSON.stringify(stored.projects)}`,
+      detail: `--canvas=${applied} rows=${JSON.stringify(stored.projects)}`,
     };
   });
 
-  let projectBackground = null;
+  let projectCanvasPaint = null;
   await attempt(17, "Project → Appearance overrides ONE workspace's canvas", async () => {
     await selectProject(page, PROJECT_A);
     await openProjectAppearance(page);
@@ -1275,11 +1278,11 @@ cursor-style = block
     const untouchedOnOpen = (before.projects[projectAId]?.canvas ?? null) === null;
 
     await commitPrimaryHex(page, WORKSPACE_HEX);
-    projectBackground = await waitUntil(
+    projectCanvasPaint = await waitUntil(
       "the workspace canvas to repaint",
       async () => {
-        const value = (await readAppliedTokens(page, ["--background"]))["--background"];
-        return value === globalBackground ? null : value;
+        const value = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
+        return value === globalCanvasPaint ? null : value;
       },
       { timeout: 6000 },
     );
@@ -1300,18 +1303,18 @@ cursor-style = block
   await attempt(18, "switching to an inheriting workspace reverts, eased", async () => {
     await watchScopeRepaint(page);
     await selectProject(page, PROJECT_B);
-    const applied = await waitForToken(page, "--background", globalBackground, { timeout: 8000 });
+    const applied = await waitForToken(page, "--canvas", globalCanvasPaint, { timeout: 8000 });
     const during = await observedScopeRepaint(page);
     const after = await settledScopeRepaint(page);
     return {
-      ok: applied === globalBackground && crossfaded(during) && after.active === false,
-      detail: `--background=${applied} runs=${JSON.stringify(after.runs)} active=${after.active}`,
+      ok: applied === globalCanvasPaint && crossfaded(during) && after.active === false,
+      detail: `--canvas=${applied} runs=${JSON.stringify(after.runs)} active=${after.active}`,
     };
   });
 
   await attempt(19, "switching back re-applies the overriding workspace's canvas", async () => {
     await selectProject(page, PROJECT_A);
-    const applied = await waitForToken(page, "--background", projectBackground, { timeout: 8000 });
+    const applied = await waitForToken(page, "--canvas", projectCanvasPaint, { timeout: 8000 });
     // Read the row too, so a failure says WHICH of the two is wrong. The scope a
     // selection announces is built from the `projects` row the projects store is
     // holding (stores/projects.ts's selected-project listener reads
@@ -1322,8 +1325,8 @@ cursor-style = block
     // restart the very same override paints.
     const stored = await storedTheme(page);
     return {
-      ok: applied === projectBackground,
-      detail: `--background=${applied} (workspace canvas paints ${projectBackground}) storedRow=${JSON.stringify(stored.projects[projectAId])}`,
+      ok: applied === projectCanvasPaint,
+      detail: `--canvas=${applied} (workspace canvas paints ${projectCanvasPaint}) storedRow=${JSON.stringify(stored.projects[projectAId])}`,
     };
   });
 
@@ -1339,11 +1342,11 @@ cursor-style = block
     // canvas. The regression this pins hydrated the global scope and never
     // re-read it for the restored workspace — correct in the database, invisible
     // in the window.
-    const applied = await waitForToken(page, "--background", projectBackground, { timeout: 10000 });
+    const applied = await waitForToken(page, "--canvas", projectCanvasPaint, { timeout: 10000 });
     const stored = await storedTheme(page);
     return {
-      ok: applied === projectBackground && stored.selectedProjectId === projectAId,
-      detail: `--background=${applied} selected=${stored.selectedProjectId === projectAId ? "Alpha" : JSON.stringify(stored.selectedProjectId)}`,
+      ok: applied === projectCanvasPaint && stored.selectedProjectId === projectAId,
+      detail: `--canvas=${applied} selected=${stored.selectedProjectId === projectAId ? "Alpha" : JSON.stringify(stored.selectedProjectId)}`,
     };
   });
 
@@ -1356,7 +1359,7 @@ cursor-style = block
       // a BOUNCE (main answered a global write with the GLOBAL scope and the
       // store adopts a payload whole), and a final-value check would grade a
       // window that visibly flickered as passing.
-      await watchBackgroundPaints(page);
+      await watchCanvasPaints(page);
       await watchScopeRepaint(page);
 
       await commitPrimaryHex(page, REGLOBAL_HEX);
@@ -1369,7 +1372,7 @@ cursor-style = block
       // This negative assertion needs an observation window, not an expected
       // rising edge. Keep recording through that window and wait for real idle.
       const armed = await settledScopeRepaint(page, { observeMs: NO_SCOPE_CHANGE_OBSERVE_MS });
-      const paints = await readBackgroundPaints(page);
+      const paints = await readCanvasPaints(page);
       const stored = await storedTheme(page);
       // At most ONE excursion is tolerated, and measured runs show zero. The
       // editor's every-edit-previews-first contract (canvas-editor.tsx)
@@ -1380,11 +1383,11 @@ cursor-style = block
       // frame. The bug this pins was a TERMINAL excursion: a departure that
       // never comes back. So the trace must END on the workspace's canvas, and
       // any departure must be one and the same look rather than a bounce.
-      const excursions = [...new Set(paints.filter((value) => value !== projectBackground))];
+      const excursions = [...new Set(paints.filter((value) => value !== projectCanvasPaint))];
       return {
         ok:
           globalCanvas !== null &&
-          paints.at(-1) === projectBackground &&
+          paints.at(-1) === projectCanvasPaint &&
           excursions.length <= 1 &&
           // No scope changed, so the crossfade has no business running.
           !crossfaded(armed) &&
@@ -1404,8 +1407,8 @@ cursor-style = block
     const applied = await waitUntil(
       "the window to repaint to the app-wide canvas",
       async () => {
-        const value = (await readAppliedTokens(page, ["--background"]))["--background"];
-        return value !== projectBackground ? value : null;
+        const value = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
+        return value !== projectCanvasPaint ? value : null;
       },
       { timeout: 8000 },
     );
@@ -1420,18 +1423,18 @@ cursor-style = block
     const onB = await waitUntil(
       "workspace B to settle on the app-wide canvas",
       async () => {
-        const value = (await readAppliedTokens(page, ["--background"]))["--background"];
+        const value = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
         return value === applied ? value : null;
       },
       { timeout: 8000 },
-    ).catch(async () => (await readAppliedTokens(page, ["--background"]))["--background"]);
+    ).catch(async () => (await readAppliedTokens(page, ["--canvas"]))["--canvas"]);
     return {
       ok:
         stored.projects[projectAId]?.canvas === null &&
-        applied !== projectBackground &&
+        applied !== projectCanvasPaint &&
         onB === applied &&
         revertGone,
-      detail: `--background=${applied} (was ${projectBackground}); inheriting Beta paints ${onB}; row=${JSON.stringify(stored.projects[projectAId])} revertGone=${revertGone}`,
+      detail: `--canvas=${applied} (was ${projectCanvasPaint}); inheriting Beta paints ${onB}; row=${JSON.stringify(stored.projects[projectAId])} revertGone=${revertGone}`,
     };
   });
 

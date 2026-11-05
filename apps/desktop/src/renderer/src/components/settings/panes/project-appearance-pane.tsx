@@ -109,10 +109,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
   return (
     <PrefSection title="Theme" icon={PaletteIcon}>
       <StyleChoice projectId={project.id} />
-      <PrefRow
-        label="Mode"
-        description={appearance === null ? "Global default" : "Project override"}
-      >
+      <PrefRow label="Mode">
         <OverrideControl
           label="Mode"
           inheritedValue={inherited}
@@ -189,11 +186,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
       // The one-line trust boundary: whose file Volli writes.
       hint={<>Volli writes an overlay file and never edits your Ghostty config.</>}
     >
-      <PrefRow
-        label={rows.theme.label}
-        description={rows.theme.sourceLabel}
-        testId="project-appearance-terminal-row"
-      >
+      <PrefRow label={rows.theme.label} testId="project-appearance-terminal-row">
         <OverrideControl
           label="Terminal theme"
           inheritedValue={shown}

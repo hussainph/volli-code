@@ -142,7 +142,6 @@ export function SessionsPane({ project }: { project: Project }) {
           htmlFor="project-session-model"
           align="start"
           testId="project-session-model"
-          description={model === null ? "Global default" : "Project override"}
         >
           <OverrideControl
             label="Model"

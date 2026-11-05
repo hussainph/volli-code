@@ -367,7 +367,7 @@ function AutomationsSurface({
             Automations
           </span>
         }
-        className="border-b border-border bg-background [&_h1]:text-title"
+        className="border-b border-border bg-background"
       >
         <Segmented<AutomationPageView>
           ariaLabel="Automation layout"

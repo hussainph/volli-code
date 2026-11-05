@@ -2636,7 +2636,8 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   box-shadow: var(--tw-ring-offset-shadow, 0 0 transparent), var(--tw-ring-shadow, 0 0 transparent);
   transform: none;
 }
-.segmented > [aria-pressed="true"] {
+.segmented > [aria-pressed="true"],
+.segmented > [aria-selected="true"] {
   color: var(--primary-text);
 }
 .identity-tile {
@@ -2918,10 +2919,6 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border-radius: 999px;
   box-shadow: none;
 }
-.segmented > [aria-selected="true"] {
-  color: var(--primary-text);
-}
-
 /* Capture is one paper plane; controls borrow the Session composer family. */
 .new-ticket-sheet .prompt-toolbar {
   border-top-color: var(--border);

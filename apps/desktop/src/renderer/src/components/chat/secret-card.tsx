@@ -9,6 +9,13 @@ import { useOpenSessionPlace } from "@renderer/lib/cloud-places";
 import { launchStore } from "@renderer/stores/launch";
 
 import { Button } from "@renderer/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
 
@@ -168,20 +175,22 @@ function SecretCard({
           />
           <div className="flex flex-wrap items-center gap-2">
             <label htmlFor={scopeId}>Scope</label>
-            <select
-              id={scopeId}
+            <Select
               value={scope}
               disabled={busy}
-              className="h-7 rounded-control border border-border bg-background px-2 text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onChange={(event) => {
-                const next = event.target.value;
+              onValueChange={(next) => {
                 if (next === "session" || next === "project" || next === "always") setScope(next);
               }}
             >
-              <option value="session">Session</option>
-              <option value="project">Project</option>
-              <option value="always">Always</option>
-            </select>
+              <SelectTrigger id={scopeId}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="session">Session</SelectItem>
+                <SelectItem value="project">Project</SelectItem>
+                <SelectItem value="always">Always</SelectItem>
+              </SelectContent>
+            </Select>
             <Button type="submit" disabled={busy}>
               Submit credential
             </Button>

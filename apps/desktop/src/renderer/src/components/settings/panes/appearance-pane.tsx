@@ -159,7 +159,7 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   const resolved = useThemeStore(effectiveAppearance);
 
   return (
-    <PrefRow label={row.label} description={row.sourceLabel}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <span className="text-ui text-muted-foreground">
         {row.value ?? fallbackTerminalThemeLabel(resolved)}
@@ -184,7 +184,7 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   }, [opened, families]);
 
   return (
-    <PrefRow label={row.label} description={row.sourceLabel}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <FontPicker
         ariaLabel="Terminal font family"
@@ -247,7 +247,7 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
   };
 
   return (
-    <PrefRow label={row.label} description={row.sourceLabel}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <div className="flex items-center gap-1">
         <Button

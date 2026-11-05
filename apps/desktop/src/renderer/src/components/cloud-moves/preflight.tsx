@@ -10,6 +10,13 @@ import type {
 import { AccountPane } from "@renderer/components/settings/panes/account-pane";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { Checkbox } from "@renderer/components/ui/checkbox";
 import { DialogFooter } from "@renderer/components/ui/dialog";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
@@ -29,6 +36,7 @@ export function MovePreflight({
   snapshot: CloudMoveSnapshot;
   projectIds?: string[];
 }) {
+  const workspaceSelectId = React.useId();
   const [workspaceId, setWorkspaceId] = React.useState(
     () => snapshot.workspaces.find((item) => item.canMove)?.id ?? "",
   );
@@ -125,23 +133,23 @@ export function MovePreflight({
         ) : (
           <div className="flex items-center justify-between gap-2">
             <span>{snapshot.account.displayName}</span>
-            <label className="flex items-center gap-2">
-              Workspace
-              <select
-                className="rounded-control border border-input bg-background px-2 py-1"
-                value={target ?? ""}
-                disabled={starting}
-                onChange={(event) => setWorkspaceId(event.target.value)}
-              >
-                {snapshot.workspaces
-                  .filter((item) => item.canMove)
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
+            <div className="flex items-center gap-2">
+              <label htmlFor={workspaceSelectId}>Workspace</label>
+              <Select value={target ?? ""} disabled={starting} onValueChange={setWorkspaceId}>
+                <SelectTrigger id={workspaceSelectId}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {snapshot.workspaces
+                    .filter((item) => item.canMove)
+                    .map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         )}
         {snapshot.unavailable !== null ? <p role="status">{snapshot.unavailable}</p> : null}
