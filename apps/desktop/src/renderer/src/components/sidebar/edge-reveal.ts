@@ -555,10 +555,16 @@ export function useEdgeReveal({
       // pane and the menu it just opened in the same frame.
       if (target.closest("[aria-haspopup]") !== null) return;
       if (target.closest('button,a,[role="button"],[role="menuitem"]') === null) return;
+      if (event.detail === 0) {
+        clearTimer();
+        panelRef.current?.setAttribute("data-keyboard-dismiss", "true");
+        enter("closed", true);
+        return;
+      }
       clearTimer();
       timerRef.current = window.setTimeout(closeNow, NAV_CLOSE_MS);
     },
-    [enabled, closeOnNavigation, clearTimer, closeNow],
+    [enabled, closeOnNavigation, clearTimer, closeNow, enter, panelRef],
   );
 
   /**
@@ -602,10 +608,17 @@ export function useEdgeReveal({
       // while staying inside it in every sense the user has — and closing the
       // panel there takes the pane out from under the menu it just opened.
       if (inPortalledOverlay(document.activeElement)) return;
+      const keyboard = focusWithinRef.current;
       focusWithinRef.current = false;
-      if (enabled && !insideRef.current && phaseRef.current !== "closed") closeNow();
+      if (enabled && !insideRef.current && phaseRef.current !== "closed") {
+        if (keyboard) {
+          clearTimer();
+          panelRef.current?.setAttribute("data-keyboard-dismiss", "true");
+          enter("closed", true);
+        } else closeNow();
+      }
     });
-  }, [enabled, panelRef, closeNow]);
+  }, [enabled, panelRef, closeNow, clearTimer, enter]);
 
   return {
     visible: phase === "open" || phase === "closing",
