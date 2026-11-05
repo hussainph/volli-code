@@ -14,7 +14,9 @@ function getMediaQuery(): MediaQueryList | undefined {
   return mediaQuery;
 }
 
-function subscribe(onChange: () => void): () => void {
+/** Shared live subscription for imperative animation owners as well as React. */
+export function subscribeMotionPreference(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
   const query = getMediaQuery();
   query?.addEventListener("change", onChange);
   window.addEventListener("volli-motion-change", onChange);
@@ -24,13 +26,22 @@ function subscribe(onChange: () => void): () => void {
   };
 }
 
+/** Theme brightness may ease under OS reduce, but app Motion off means instant. */
+export function motionPreferenceSnapshot(): { appOff: boolean; systemReduce: boolean } {
+  return {
+    appOff: typeof document !== "undefined" && document.documentElement?.dataset?.motion === "off",
+    systemReduce: typeof window !== "undefined" && getMediaQuery()?.matches === true,
+  };
+}
+
 function getSnapshot(): boolean {
-  return getMediaQuery()?.matches === true || document.documentElement.dataset.motion === "off";
+  const preference = motionPreferenceSnapshot();
+  return preference.appOff || preference.systemReduce;
 }
 
 /** Live system + app Motion preference; drives JS-side animation opt-outs. */
 export function useReducedMotion(): boolean {
-  return React.useSyncExternalStore(subscribe, getSnapshot, () => true);
+  return React.useSyncExternalStore(subscribeMotionPreference, getSnapshot, () => true);
 }
 
 /**

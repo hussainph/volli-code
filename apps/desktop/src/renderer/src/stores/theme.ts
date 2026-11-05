@@ -73,7 +73,11 @@ import {
   systemPrefersDark,
   type PaintCanvasOptions,
 } from "@renderer/theme/canvas-paint";
-import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
+import {
+  beginScopeRepaint,
+  shouldEaseScopeRepaint,
+  type ScopeRepaintOrigin,
+} from "@renderer/theme/scope-transition";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
 import { notAvailableOn, remoteHostNow } from "./remote-project";
@@ -162,7 +166,7 @@ export interface ThemeStoreDeps {
    * flip — never for an authoring edit or a preview, where instant is the
    * correct feedback.
    */
-  beginScopeRepaint(applyTokens: () => void): void;
+  beginScopeRepaint(applyTokens: () => void, origin?: ScopeRepaintOrigin): void;
   /**
    * What the system was asking for when this window was built — main's
    * `nativeTheme` reading, handed over on the process arguments. Called exactly
@@ -236,7 +240,7 @@ interface ThemeState {
   /** Seeds the global canvas + appearance from the bootstrap payload's raw `app_state` rows. */
   hydrateGlobal(appState: Record<string, string>): void;
   /** Reads the terminal chain for a scope, adopting the workspace's canvas columns with it. */
-  hydrate(scope?: ThemeProjectScope | null): Promise<void>;
+  hydrate(scope?: ThemeProjectScope | null, origin?: ScopeRepaintOrigin): Promise<void>;
   /** The system flipped light↔dark: re-resolve and repaint every scope on `auto`. */
   noteSystemAppearance(prefersDark: boolean): void;
   acceptTerminal(payload: GhosttyAppearancePayload): void;
@@ -383,7 +387,9 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      */
     let hydrateGeneration = 0;
 
-    const repaint = (options: { eased?: boolean; transient?: boolean } = {}): void => {
+    const repaint = (
+      options: { eased?: boolean; transient?: boolean; origin?: ScopeRepaintOrigin } = {},
+    ): void => {
       const state = get();
       const active = activeTheme(state);
       // Keyed on the canvas AND the mode, because one canvas paints two
@@ -412,7 +418,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           deps.beginScopeRepaint(() => {
             const current = activeTheme(get());
             deps.paintCanvas(current.canvas.value, current.resolved, { transient });
-          });
+          }, options.origin);
         } else {
           deps.paintCanvas(active.canvas.value, active.resolved, { transient });
         }
@@ -479,7 +485,11 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * canvas change — and the eased repaint (#69) is decided here, before the
      * state moves, while the outgoing scope and mode are still readable.
      */
-    const accept = (value: ThemeStatePayload, scope: ThemeProjectScope | null): void => {
+    const accept = (
+      value: ThemeStatePayload,
+      scope: ThemeProjectScope | null,
+      origin?: ScopeRepaintOrigin,
+    ): void => {
       const previous = get();
       const override = surfaceOverride(scope, value.projectOverride);
       const next: ActiveThemeInput = { ...previous, projectOverride: override };
@@ -496,7 +506,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         terminal: value.terminal,
         hydrated: true,
       });
-      repaint({ eased });
+      repaint({ eased, origin });
     };
 
     /**
@@ -639,7 +649,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         );
       },
 
-      async hydrate(scope) {
+      async hydrate(scope, origin) {
         const generation = ++hydrateGeneration;
         let result: ThemeStateResult;
         try {
@@ -661,7 +671,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           toastError(`Couldn't load the theme: ${result.error}`);
           return;
         }
-        accept(result.value, scope ?? null);
+        accept(result.value, scope ?? null, origin);
       },
 
       noteSystemAppearance(prefersDark) {

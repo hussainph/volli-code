@@ -146,12 +146,6 @@
       "reason": "Migration debt: review this description against the trust-boundary/irreversible/blocked-state exceptions; remove explanatory copy, preserve required warnings and recovery."
     },
     {
-      "path": "apps/desktop/src/renderer/src/components/settings/panes/hosts-pane.tsx",
-      "rule": "motion-literal",
-      "maxCount": 2,
-      "reason": "Migration debt: use shared duration/easing tokens (or remove motion on frequent/keyboard paths); preserve activity lifetimes and reduced-motion semantics."
-    },
-    {
       "path": "apps/desktop/src/renderer/src/components/settings/panes/project-appearance-pane.tsx",
       "rule": "markup-settings-description",
       "maxCount": 2,
