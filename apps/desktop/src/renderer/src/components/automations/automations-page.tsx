@@ -909,21 +909,13 @@ function SkippedRow({ skip, now }: { skip: AutomationSkippedOccurrence; now: num
       // is on it rather than a click nothing would answer.
       onActivate={null}
       leading={<HistoryIcon className="size-4 text-muted-foreground" />}
-      primary={
-        <span className="flex min-w-0 items-center gap-1 text-ui">
-          <span className="shrink-0 text-foreground">{skip.automationName}</span>
-          <span aria-hidden className="text-muted-foreground">
-            ·
-          </span>
-          <span className="truncate text-muted-foreground">{skipReasonLabel(skip)}</span>
-          {count === "" ? null : (
-            <>
-              <span aria-hidden className="text-muted-foreground">
-                ·
-              </span>
-              <span className="shrink-0 text-muted-foreground">{count}</span>
-            </>
-          )}
+      primary={skip.automationName}
+      secondary={
+        // The reason is the record, not optional metadata. Let it wrap below
+        // the name rather than truncate to nothing beside the recovery action.
+        <span className="block text-ui text-muted-foreground">
+          {skipReasonLabel(skip)}
+          {count === "" ? null : ` · ${count}`}
         </span>
       }
       actions={

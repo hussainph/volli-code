@@ -645,6 +645,8 @@ async function main() {
     extraEnv: { HOME: scratchHome, VOLLI_BROWSER_PROBE: "1" },
   });
   await assertProfileIsolated(app, userDataDir);
+  // Match the macOS CI work area, including the overflowing top tab strip.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
 
   const page = await app.firstWindow();
   const pageErrors = [];

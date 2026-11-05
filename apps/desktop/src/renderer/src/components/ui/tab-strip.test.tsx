@@ -445,6 +445,35 @@ describe("TabStrip overflow", () => {
     expect(glide).not.toHaveBeenCalled();
   });
 
+  it("does not scroll a partly clipped tab when its close receives focus", () => {
+    const onClose = vi.fn();
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          {Array.from({ length: 9 }, (_, index) => (
+            <Tab
+              key={index}
+              label={`Tab ${index}`}
+              active={index === 3}
+              tabStop={index === 3}
+              onActivate={() => {}}
+              onClose={onClose}
+            />
+          ))}
+        </TabStrip>,
+      );
+    });
+    const port = measureScroller(9, 320);
+    const close = tabsInStrip()[3]!.querySelector<HTMLButtonElement>('[data-slot="tab-close"]')!;
+    // Pointer focus lands between down/up. The close is already in view;
+    // revealing its parent now would move it out from under the pending click.
+    act(() => close.focus());
+    expect(port.scrollLeft).toBe(320);
+    act(() => close.click());
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(tabsInStrip()[4]);
+  });
+
   it("leaves the strip where it is when the tab is already whole in view", () => {
     renderTabs(9, 0);
     const port = measureScroller(9, 120);

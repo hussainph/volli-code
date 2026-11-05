@@ -210,6 +210,20 @@ afterEach(async () => {
 });
 
 describe("the page editor hierarchy", () => {
+  it("stacks the editor at narrow container widths without shrinking rows over history", async () => {
+    await mountEditor();
+    const editor = document.querySelector('[data-slot="automation-editor"]')!;
+    const main = editor.querySelector("main")!;
+    const grid = main.parentElement!;
+    expect(editor.classList.contains("@container")).toBe(true);
+    expect(grid.classList.contains("grid-cols-1")).toBe(true);
+    expect(grid.classList.contains("auto-rows-max")).toBe(true);
+    expect(grid.classList.contains("overflow-y-auto")).toBe(true);
+    expect(grid.classList.contains("@3xl:grid-cols-[minmax(0,1fr)_20rem]")).toBe(true);
+    expect(main.classList.contains("overflow-y-auto")).toBe(false);
+    expect(main.querySelector('[data-slot="run-history"]')).not.toBeNull();
+  });
+
   it("cloud authoring offers only this project, never All projects", async () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
     await mountEditor();

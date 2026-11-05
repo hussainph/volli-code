@@ -960,7 +960,10 @@ function TabShell({
           // `.focus()`.
           onFocus={(event) => {
             props.onFocus?.(event);
-            revealTab(event.currentTarget, false);
+            // A close button receives pointer focus between down and up. Do
+            // not reveal its whole (partly clipped) tab then: moving the close
+            // out from under the pointer turns that click into tab activation.
+            if (event.target === event.currentTarget) revealTab(event.currentTarget, false);
           }}
           // dnd-kit's pointer activator, composed over whatever the caller already
           // listens for here (Radix's context menu uses this event for its

@@ -1470,7 +1470,13 @@ describe("schedules (VC-130)", () => {
     expect(text()).toContain("Volli wasn’t running");
     // One row per gap, saying how wide the gap was.
     expect(text()).toContain("3 occurrences");
-    expect(document.querySelector('[data-run-history-skip="skip-1"]')).not.toBeNull();
+    const row = document.querySelector('[data-run-history-skip="skip-1"]')!;
+    expect(row).not.toBeNull();
+    const reason = [...row.querySelectorAll("span")].find(
+      (element) => element.textContent === "Skipped — Volli wasn’t running · 3 occurrences",
+    )!;
+    expect(reason.classList.contains("block")).toBe(true);
+    expect(reason.classList.contains("truncate")).toBe(false);
   });
 
   it("offers Run now on a skip, and starts ONE Run at the Project", async () => {

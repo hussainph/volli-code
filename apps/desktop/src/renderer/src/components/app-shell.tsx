@@ -283,6 +283,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const uiScale = useUiStore((state) => state.uiScale);
   const fullScreen = useFullScreen();
+  const reducedMotion = useReducedMotion();
   const [resizing, setResizing] = React.useState(false);
   const [geometryInstant, setGeometryInstant] = React.useState(false);
   const [keyboardInstant, setKeyboardInstant] = React.useState(false);
@@ -324,12 +325,21 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   React.useLayoutEffect(() => {
     const wasShown = previousPanelShown.current;
     previousPanelShown.current = panelShown;
-    if (pinned || terminalFocused || panelShown || nativePlaneInstant) {
+    // Instant exits dispatch no transitionend. Release the Browser freeze in
+    // that same commit, including when Motion is turned off during an exit.
+    if (
+      pinned ||
+      terminalFocused ||
+      panelShown ||
+      nativePlaneInstant ||
+      reducedMotion ||
+      keyboardInstant
+    ) {
       setFloatingOverlayExiting(false);
     } else if (wasShown) {
       setFloatingOverlayExiting(true);
     }
-  }, [nativePlaneInstant, panelShown, pinned, terminalFocused]);
+  }, [nativePlaneInstant, panelShown, pinned, terminalFocused, reducedMotion, keyboardInstant]);
   // How far past `-100%` the panel parks to be gone. Only far enough to clear
   // the clip line, because the clip is what "gone" now means: its own width
   // lands the right edge on the panel box's own left edge, `floatingInset` puts
@@ -396,7 +406,6 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     return () => window.cancelAnimationFrame(frame);
   }, [nativePlaneInstant]);
 
-  const reducedMotion = useReducedMotion();
   const pouring = useSidebarPour({
     shown: panelShown,
     instant: keyboardInstant || reducedMotion || terminalFocused || nativePlaneInstant,

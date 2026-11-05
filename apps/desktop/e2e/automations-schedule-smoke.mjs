@@ -81,6 +81,8 @@ try {
   const repoDir = await makeGitRepo(scratch);
 
   app = await launch({ dbPath, userDataDir });
+  // Match the macOS CI work area instead of inheriting the developer display.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
   let page = await app.firstWindow();
   page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
   assertBuiltRendererLoaded(page);
@@ -242,6 +244,8 @@ try {
   }));
 
   app = await launch({ dbPath, userDataDir });
+  // Match the macOS CI work area instead of inheriting the developer display.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
   page = await app.firstWindow();
   page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
   await page.waitForLoadState("domcontentloaded");

@@ -115,6 +115,13 @@ async function moveViaContextMenu(page, displayId, columnLabel) {
         .every((animation) => animation.playState === "finished"),
     ),
   );
+  // A portaled submenu can flip left on a narrow window. Radix's pointer
+  // grace tracks direction *inside* the parent menu: teleporting from the
+  // trigger into the portal leaves its last direction pointing right and
+  // dismisses the submenu. Cross the edge like a real pointer instead.
+  const box = await target.boundingBox();
+  if (box === null) throw new Error("Move to destination has no pointer target");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 12 });
   await target.click();
 }
 
@@ -126,6 +133,8 @@ let exitCode = 1;
 try {
   const repoDir = await makeGitRepo(scratch);
   app = await launch({ dbPath, userDataDir });
+  // Match the macOS CI work area instead of inheriting the developer display.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
   const page = await app.firstWindow();
   page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
   assertBuiltRendererLoaded(page);

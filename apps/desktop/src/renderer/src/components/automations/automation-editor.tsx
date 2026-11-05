@@ -775,7 +775,7 @@ export function AutomationEditorPanel({
   }
 
   return (
-    <div data-slot="automation-editor" className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div data-slot="automation-editor" className="@container flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-4 border-b border-border bg-background px-6 py-4">
         <input
           autoFocus
@@ -792,8 +792,11 @@ export function AutomationEditorPanel({
         </Button>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem] gap-(--glass-gap) pt-(--glass-gap)">
-        <main className="min-h-0 overflow-y-auto bg-background p-6">
+      {/* The editor can be narrow even in a wide window: navigation and the
+          record rail take their own space. Stack on its available width, not
+          the viewport, before the fixed inspector squeezes history to zero. */}
+      <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-(--glass-gap) overflow-y-auto pt-(--glass-gap) @3xl:grid-cols-[minmax(0,1fr)_20rem] @3xl:grid-rows-[minmax(0,1fr)] @3xl:overflow-hidden">
+        <main className="min-h-0 bg-background p-6 @3xl:overflow-y-auto">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
             <section className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-end gap-2">
@@ -833,7 +836,7 @@ export function AutomationEditorPanel({
 
         <aside
           data-tint="true"
-          className="glass flex min-h-0 flex-col gap-4 overflow-y-auto rounded-floating p-4 shadow-glass"
+          className="glass flex min-h-0 flex-col gap-4 rounded-floating p-4 shadow-glass @3xl:overflow-y-auto"
         >
           <PrefSection title="Ownership">
             <div className="flex flex-col gap-2 p-3">
