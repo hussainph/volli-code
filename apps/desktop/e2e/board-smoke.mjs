@@ -415,7 +415,8 @@ async function main() {
       "Fresh profile: one textured project-start canvas with a compact heading and tonal action",
       async () => {
         const state = page.locator("[data-empty-projects-state]");
-        const primaryAction = page.getByRole("button", { name: "Add project", exact: true });
+        // The rail keeps its compact shortcut; the canvas owns the one primary action.
+        const primaryAction = state.getByRole("button", { name: "Add project", exact: true });
         const heading = page.getByRole("heading", { name: "Add your first project", exact: true });
         const oldSidebarPrompt = page.getByText("Add a project to get started", { exact: true });
         const oldSidebarHeader = page.getByText("No project selected", { exact: true });
@@ -496,7 +497,7 @@ async function main() {
         }
         const cardCount = await page.locator("article").filter({ visible: true }).count();
         const bareState = await page
-          .getByText(/Write the first ticket|model provider to start|default model to start/)
+          .getByText(/^(No tickets yet|No model provider|No default model)$/)
           .count();
         const volliKeys = await volliLocalStorageKeys(page);
         const ok =
@@ -673,7 +674,7 @@ async function main() {
       7,
       'Label chip: toggling "board" narrows to its 1 card, toggling off restores 11',
       async () => {
-        await page.getByRole("button", { name: "Label", exact: true }).click();
+        await page.getByRole("button", { name: "Labels", exact: true }).click();
         await sleep(200);
         const boardLabel = page.getByRole("menuitemcheckbox", { name: "board", exact: true });
         await boardLabel.click();
@@ -1128,10 +1129,9 @@ async function main() {
     // manual order is still the seed order (VC-5, VC-6, VC-7) and VC-6 ("Harden
     // terminal engine reconnect") is its lone High.
 
-    // The Ordering chip lives in the header's right-side cluster (`ml-auto`);
-    // scoping to it disambiguates from the FilterBar's "Priority" facet button,
-    // which shares the chip's label once Priority ordering is picked.
-    const orderingChip = page.locator("div.ml-auto.shrink-0 button").first();
+    // Facets now share the right-side cluster. Ordering is its direct trigger;
+    // the FilterBar's "Priority" trigger is nested inside the facet group.
+    const orderingChip = page.locator('header > div > button[data-slot="dropdown-menu-trigger"]');
 
     // === 12. Ordering: Priority re-sorts a column, Manual restores it =======
     await attempt(

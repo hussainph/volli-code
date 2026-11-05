@@ -598,17 +598,14 @@ async function main() {
     await focusTerminalAt(page, 1);
     await runInTerminal(page, `stty size > ${childGridBeforePath}`);
     const childGridBefore = await waitForFileMatching(childGridBeforePath, GRID_SHAPE, 5000);
-    const chromeBefore = await page.evaluate(() => ({
-      dpr: window.devicePixelRatio,
-      // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the
-      // focused pane alone. "Sessions" was that label until VC-54 retired the
-      // nav item; "Configure" is its surviving neighbour on the same row.
-      navFontSize: getComputedStyle(
-        Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Configure" && element.children.length === 0,
-        ),
-      ).fontSize,
-    }));
+    // Home stays in the sidebar when Configure moves into Settings. Measure
+    // that live chrome control, outside every terminal, on both sides of ⌘+.
+    const chromeMetrics = () =>
+      page.getByRole("button", { name: "Home", exact: true }).evaluate((element) => ({
+        dpr: window.devicePixelRatio,
+        navFontSize: getComputedStyle(element).fontSize,
+      }));
+    const chromeBefore = await chromeMetrics();
 
     await page.keyboard.press("Meta+Equal");
     await sleep(1000);
@@ -617,17 +614,7 @@ async function main() {
     await focusTerminalAt(page, 0);
     await runInTerminal(page, `stty size > ${rootGridAfterPath}`);
     const rootGridAfter = await waitForFileMatching(rootGridAfterPath, GRID_SHAPE, 5000);
-    const chromeAfter = await page.evaluate(() => ({
-      dpr: window.devicePixelRatio,
-      // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the
-      // focused pane alone. "Sessions" was that label until VC-54 retired the
-      // nav item; "Configure" is its surviving neighbour on the same row.
-      navFontSize: getComputedStyle(
-        Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Configure" && element.children.length === 0,
-        ),
-      ).fontSize,
-    }));
+    const chromeAfter = await chromeMetrics();
     const [childRowsBefore, childColsBefore] = terminalGrid(childGridBefore);
     const [childRowsAfter, childColsAfter] = terminalGrid(childGridAfter);
     check(
