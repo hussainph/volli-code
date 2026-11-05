@@ -1,4 +1,5 @@
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { warmDocumentEditorFonts } from "@renderer/editor/warm-document-editor";
 import * as React from "react";
 
 import { ComposerForm } from "@renderer/components/board/new-ticket/composer-form";
@@ -30,16 +31,25 @@ export function NewTicketDialog() {
   const [expanded, setExpanded] = React.useState(false);
   const hasProject = project !== null;
   React.useEffect(() => {
-    if (!hasProject || typeof requestIdleCallback !== "function") return;
-    // Warm code, not an editor/model/worker view. The final title input remains
-    // independently usable while the description runtime initializes.
-    const idle = requestIdleCallback(() => {
-      void loadMonacoRuntime().catch((error: unknown) =>
-        console.warn("Editor prefetch unavailable", error),
-      );
+    if (!hasProject || open || typeof requestIdleCallback !== "function") return;
+    let cancelled = false;
+    let idle = requestIdleCallback(() => {
+      void loadMonacoRuntime()
+        .then((runtime) => {
+          if (cancelled) return;
+          // Imports can settle during an interaction. Re-enter idle before the
+          // font measurement rather than moving a forced DOM read after chrome.
+          idle = requestIdleCallback(() => {
+            if (!cancelled) warmDocumentEditorFonts(runtime.monaco.editor, document);
+          });
+        })
+        .catch((error: unknown) => console.warn("Editor prefetch unavailable", error));
     });
-    return () => cancelIdleCallback(idle);
-  }, [hasProject]);
+    return () => {
+      cancelled = true;
+      cancelIdleCallback(idle);
+    };
+  }, [hasProject, open]);
 
   return (
     <Dialog
