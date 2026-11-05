@@ -49,8 +49,6 @@ interface BoardColumnProps {
   onOpen(ticketId: string): void;
   composerInitiallyOpen: boolean;
   onComposerClose(status: TicketStatus): void;
-  /** Play the enter transition — true for columns appearing on an already-mounted board. */
-  animateEnter: boolean;
   /**
    * A ticket that must be brought into this column's WINDOW so something
    * outside can reach its card (VC-419: keyboard focus returning from the
@@ -310,7 +308,6 @@ export const BoardColumn = React.memo(function BoardColumn({
   onOpen,
   composerInitiallyOpen,
   onComposerClose,
-  animateEnter,
   offered,
   dimmed = false,
   aimed = false,
@@ -398,15 +395,7 @@ export const BoardColumn = React.memo(function BoardColumn({
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
         "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-column bg-muted",
-        // Enter is an opacity fade ONLY, and so is the dim below it. This
-        // column hosts droppables that dnd-kit measures in synchronous layout
-        // effects; a scale mid-flight returns a different rect on every commit
-        // and measureRects loops to React's max update depth (the DndContext
-        // crash). Nothing here may animate anything a rect is read from — the
-        // 0.98 entrance died for that, and the ⌥ picker's own panel floats
-        // over the list rather than growing inside it for the same reason.
-        "transition-[opacity] duration-(--duration-sheet) ease-out motion-reduce:transition-none",
-        animateEnter && "starting:opacity-0",
+        // Targets and navigation update immediately, including keyboard drops.
         // Quieted while another column holds the ⌥ picker: one column is being
         // aimed at, and the rest are not the question.
         dimmed && "opacity-50",

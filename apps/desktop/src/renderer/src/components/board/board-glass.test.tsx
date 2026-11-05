@@ -7,6 +7,7 @@ import { EMPTY_TICKET_FILTER, type Ticket } from "@volli/shared";
 import { BoardHeader } from "./board-header";
 import { TicketCardContent } from "./ticket-card";
 import { TicketRowContent } from "./board-list-view";
+import { ComposerBreadcrumb } from "./new-ticket/composer-breadcrumb";
 
 const ticket: Ticket = {
   id: "t1",
@@ -35,6 +36,33 @@ function markup(html: string): HTMLElement {
 }
 
 describe("Glass board", () => {
+  it("keeps capture on one paper plane with ghost footer controls", () => {
+    const css = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
+    expect(css).toContain(".new-ticket-sheet .prompt-toolbar");
+    expect(css).toContain(".new-ticket-sheet [data-monaco-status]");
+    expect(css).toContain(".new-ticket-sheet .prompt-config");
+    const host = markup(
+      renderToStaticMarkup(
+        <ComposerBreadcrumb
+          projects={[]}
+          target={
+            { id: "p1", name: "Drive Project", ticketPrefix: "DRV" } as Parameters<
+              typeof ComposerBreadcrumb
+            >[0]["target"]
+          }
+          expanded={false}
+          onRetarget={() => {}}
+          onToggleExpand={() => {}}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    for (const name of ["Expand", "Close"]) {
+      const button = host.querySelector(`[aria-label="${name}"]`);
+      expect(button?.getAttribute("data-variant")).toBe("ghost");
+      expect(button?.getAttribute("data-size")).toBe("icon");
+    }
+  });
   it("scopes accent rings to the board and keeps a distinct resting arc with Motion off", () => {
     const css = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
     expect(css).toContain(":root .session-ring.board-session-ring");

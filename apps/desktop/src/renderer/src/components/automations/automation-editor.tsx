@@ -20,9 +20,11 @@ import {
   FolderOpenIcon,
   GlobeIcon,
   PlayIcon,
+  InfoIcon,
 } from "@renderer/components/ui/icon";
 
 import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   AUTOMATION_SCHEDULE_PRESET_LABELS,
   AUTOMATION_SCHEDULE_PRESETS,
   automationScheduleProblem,
@@ -773,8 +775,8 @@ export function AutomationEditorPanel({
   }
 
   return (
-    <div data-slot="automation-editor" className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-4 border-b border-border px-6 py-4">
+    <div data-slot="automation-editor" className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header className="flex shrink-0 items-center gap-4 border-b border-border bg-background px-6 py-4">
         <input
           autoFocus
           value={name}
@@ -790,8 +792,8 @@ export function AutomationEditorPanel({
         </Button>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
-        <main className="min-h-0 overflow-y-auto p-6">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem] gap-(--glass-gap) pt-(--glass-gap)">
+        <main className="min-h-0 overflow-y-auto bg-background p-6">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
             <section className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-end gap-2">
@@ -831,7 +833,7 @@ export function AutomationEditorPanel({
 
         <aside
           data-tint="true"
-          className="glass flex min-h-0 flex-col gap-4 overflow-y-auto border-l border-border p-4"
+          className="glass flex min-h-0 flex-col gap-4 overflow-y-auto rounded-floating p-4 shadow-glass"
         >
           <PrefSection title="Ownership">
             <div className="flex flex-col gap-2 p-3">
@@ -901,22 +903,42 @@ export function AutomationEditorPanel({
 
               {triggerChoice === "schedule" ? (
                 <div className="flex flex-col gap-2 border-t border-border pt-2">
-                  <Select
-                    value={preset}
-                    onValueChange={(value) => setPreset(value as AutomationSchedulePreset)}
-                  >
-                    <SelectTrigger variant="inspector" className="w-full" aria-label="Schedule">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
-                        <SelectItem key={value} value={value}>
-                          <ClockIcon />
-                          {AUTOMATION_SCHEDULE_PRESET_LABELS[value]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center gap-1">
+                    <Select
+                      value={preset}
+                      onValueChange={(value) => setPreset(value as AutomationSchedulePreset)}
+                    >
+                      <SelectTrigger variant="inspector" className="w-full" aria-label="Schedule">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
+                          <SelectItem key={value} value={value}>
+                            <ClockIcon />
+                            {AUTOMATION_SCHEDULE_PRESET_LABELS[value]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {automationSourceIsCloud() ? null : (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Schedule policy"
+                            className="text-muted-foreground"
+                          >
+                            <InfoIcon />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="w-72 text-ui">
+                          Runs up to {AUTOMATION_SCHEDULE_LATE_GRACE_MS / 60_000} min late; skipped
+                          if Volli is closed or the Mac is asleep.
+                        </PopoverContent>
+                      </Popover>
+                    )}
+                  </div>
                   {preset === "weekly" ? (
                     <Select
                       value={weekday}

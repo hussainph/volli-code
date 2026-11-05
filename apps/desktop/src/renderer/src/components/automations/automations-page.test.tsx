@@ -497,6 +497,19 @@ describe("the page", () => {
     expect(text()).toContain("Nothing saved yet");
     expect(text()).toContain("No runs yet");
     expect(text()).not.toContain("Save a way of starting work");
+    const creates = [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
+      (node) => node.textContent?.trim() === "New Automation",
+    );
+    expect(creates).toHaveLength(2);
+    expect(creates.map((node) => node.dataset.variant)).toEqual(["outline", "default"]);
+    expect(document.querySelector("h1")?.textContent).toBe("Automations");
+    const groups = [...document.querySelectorAll("aside h3")];
+    expect(groups.map((node) => node.textContent)).toEqual(["This project", "All projects"]);
+    expect(
+      document
+        .querySelector('aside [aria-label="New automation in This project"]')
+        ?.getAttribute("data-size"),
+    ).toBe("icon-sm");
   });
 
   it("keeps both ownership groups visible in the persistent rail", async () => {
@@ -505,6 +518,10 @@ describe("the page", () => {
     expect(text()).toContain("This project");
     expect(text()).toContain("All projects");
     expect(document.querySelector('[data-automation-rail-row="automation-1"]')).not.toBeNull();
+    expect(document.querySelector('header button[data-variant="default"]')?.textContent).toContain(
+      "New Automation",
+    );
+    expect(document.querySelector("aside")?.className).toContain("rounded-floating");
   });
 });
 

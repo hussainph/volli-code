@@ -462,6 +462,8 @@ export const Board = React.memo(function Board({
   );
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const pendingSlotAnimation = React.useRef<Map<string, DOMRect> | null>(null);
+  const landingAnimations = React.useRef(new Set<Animation>());
+  const dropOverlayRef = React.useRef<HTMLElement>(null);
   // Selection is store-backed (session-only), so sidebar/detail navigation can
   // still collapse it to one card while board gestures may hold several.
   const selectedIds = useBoardStore((state) => state.selectedByProject[projectId]) ?? NO_TICKET_IDS;
@@ -473,6 +475,20 @@ export const Board = React.memo(function Board({
   }, [selectedIds]);
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
+  React.useEffect(() => {
+    if (!reducedMotion) return;
+    for (const animation of landingAnimations.current) animation.cancel();
+    landingAnimations.current.clear();
+    // Finish dnd-kit's own overlay so its completion removes the picture too.
+    for (const animation of dropOverlayRef.current?.getAnimations() ?? []) animation.finish();
+  }, [reducedMotion]);
+  React.useEffect(() => {
+    const animations = landingAnimations.current;
+    return () => {
+      for (const animation of animations) animation.cancel();
+      animations.clear();
+    };
+  }, []);
   // WAAPI does not resolve CSS variables in animation options. Resolve the
   // foundation spring only when the shared Motion preference changes.
   const dropMotion = React.useMemo(() => {
@@ -504,10 +520,14 @@ export const Board = React.memo(function Board({
       if (easing === "" || !(duration > 0)) continue;
       for (const animation of slot.getAnimations()) animation.cancel();
       slot.dataset.boardSlotAnimated = "true";
-      slot.animate(
+      const animation = slot.animate(
         [{ transform: `translate3d(${dx}px, ${dy}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
         { duration, easing },
       );
+      landingAnimations.current.add(animation);
+      const forget = () => landingAnimations.current.delete(animation);
+      animation.addEventListener("finish", forget, { once: true });
+      animation.addEventListener("cancel", forget, { once: true });
     }
   }, [storeTickets, reducedMotion]);
 
@@ -670,14 +690,6 @@ export const Board = React.memo(function Board({
     () => new Set(storeTickets.map((ticket) => ticket.id)),
     [storeTickets],
   );
-
-  // Columns and pills only play their enter transition when they appear on an
-  // ALREADY-mounted board (a drop expanded a column, a filter emptied one).
-  // Opening the board page — a many-times-a-day action — stays instant.
-  const boardMounted = React.useRef(false);
-  React.useEffect(() => {
-    boardMounted.current = true;
-  }, []);
 
   // What this project's columns offer and what they arm (VC-128). Read when the
   // board appears rather than subscribed, for the palette's reason: the record
@@ -1222,7 +1234,6 @@ export const Board = React.memo(function Board({
                     onOpen={handleOpen}
                     composerInitiallyOpen={expandedEmptyStatus === status}
                     onComposerClose={handleComposerClose}
-                    animateEnter={boardMounted.current}
                     // A card keyboard focus is coming home to (VC-419). Only
                     // the column that holds it hears about it; every other one
                     // is handed `null` and does nothing.
@@ -1237,7 +1248,6 @@ export const Board = React.memo(function Board({
                     statuses={hidden}
                     dragActive={drag !== null}
                     onExpand={setExpandedEmptyStatus}
-                    animateEnter={boardMounted.current}
                     offeredFor={offeredPanelFor}
                     dimmedFor={dimmedFor}
                     aimedFor={aimedFor}
@@ -1280,6 +1290,9 @@ export const Board = React.memo(function Board({
               {drag ? (
                 <div
                   data-ticket-drag-preview
+                  ref={(node) => {
+                    dropOverlayRef.current = node?.parentElement ?? null;
+                  }}
                   className={isPickerOpen(picker) ? "opacity-30" : undefined}
                 >
                   <DragOverlayBody
@@ -1305,13 +1318,7 @@ export const Board = React.memo(function Board({
                 data-choose-hint
                 className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center"
               >
-                <p
-                  className={cn(
-                    "flex items-center gap-2 rounded-full border border-border bg-popover px-2 py-1 text-ui text-muted-foreground shadow-overlay",
-                    !reducedMotion &&
-                      "transition-[opacity,translate] duration-(--duration-sheet) ease-out starting:translate-y-1 starting:opacity-0",
-                  )}
-                >
+                <p className="flex items-center gap-2 rounded-full border border-border bg-popover px-2 py-1 text-ui text-muted-foreground shadow-overlay">
                   <kbd className="rounded-sm border border-border px-1 font-mono text-label text-foreground">
                     ⌥
                   </kbd>

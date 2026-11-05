@@ -97,7 +97,6 @@ async function mount(tickets: Ticket[], aimed = false) {
                 onOpen={() => {}}
                 composerInitiallyOpen={false}
                 onComposerClose={() => {}}
-                animateEnter={false}
                 aimed={aimed}
               />
             </DndContext>

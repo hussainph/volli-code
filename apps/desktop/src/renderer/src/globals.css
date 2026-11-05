@@ -2900,21 +2900,26 @@ aside:has(> [data-volli-rail]) {
   border-top: 0;
   background: transparent;
 }
-.session-prompt .prompt-config {
+.session-prompt .prompt-config,
+.new-ticket-sheet .prompt-config {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
 }
 .session-prompt .prompt-config:hover,
-.session-prompt .prompt-config[data-state="open"] {
+.session-prompt .prompt-config[data-state="open"],
+.new-ticket-sheet .prompt-config:hover,
+.new-ticket-sheet .prompt-config[data-state="open"] {
   background: var(--accent-tint);
 }
-.session-prompt .prompt-add {
+.session-prompt .prompt-add,
+.new-ticket-sheet .prompt-add {
   border-color: transparent;
   background: transparent;
   border-radius: 999px;
 }
-.session-prompt .prompt-add:hover {
+.session-prompt .prompt-add:hover,
+.new-ticket-sheet .prompt-add:hover {
   background: var(--accent-tint);
 }
 .session-prompt .prompt-primary {
@@ -2923,4 +2928,20 @@ aside:has(> [data-volli-rail]) {
 }
 .segmented > [aria-selected="true"] {
   color: var(--primary-text);
+}
+
+/* Capture is one paper plane; controls borrow the Session composer family. */
+.new-ticket-sheet .prompt-toolbar {
+  border-top-color: var(--border);
+  background: transparent;
+}
+.new-ticket-sheet [data-monaco-status],
+.new-ticket-sheet [data-monaco-fallback] {
+  background: transparent;
+}
+
+/* Secondary automation navigation floats over the same viewport canvas. */
+.automation-workbench {
+  background: var(--canvas);
+  background-attachment: fixed;
 }

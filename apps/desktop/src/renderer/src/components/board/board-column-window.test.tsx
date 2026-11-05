@@ -152,7 +152,6 @@ async function render(tickets: Ticket[], options: RenderOptions = {}) {
                   onOpen={() => {}}
                   composerInitiallyOpen={false}
                   onComposerClose={() => {}}
-                  animateEnter={false}
                   dragActive={options.dragActive ?? false}
                 />
               </FlipObserver>

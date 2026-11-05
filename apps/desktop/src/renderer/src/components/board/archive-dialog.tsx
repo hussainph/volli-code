@@ -40,6 +40,7 @@ import {
 } from "@renderer/components/ui/dialog";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -368,7 +369,7 @@ function ArchiveList({
     <>
       <DialogHeader>
         <DialogTitle>Archive</DialogTitle>
-        <DialogDescription>Archived tickets in {project.name}</DialogDescription>
+        <DialogDescription className="text-ui">{project.name}</DialogDescription>
       </DialogHeader>
       {filterable ? (
         <Input
@@ -400,7 +401,7 @@ function ArchiveList({
       ) : archived.length === 0 ? (
         <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
           <ArchiveIcon className="size-6" />
-          <p className="text-sm">No archived tickets.</p>
+          <SectionHeading>No archived tickets</SectionHeading>
         </div>
       ) : shown.length === 0 ? (
         <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>

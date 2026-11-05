@@ -78,6 +78,16 @@ afterEach(async () => {
 });
 
 describe("the Offered panel over the card's own column", () => {
+  it.each([false, true])(
+    "snaps target geometry and highlight when expanded=%s",
+    async (expanded) => {
+      const panel = await mount({ expanded });
+      for (const node of [panel, ...panel.querySelectorAll<HTMLElement>("*")]) {
+        expect(node.getAttribute("class") ?? "").not.toMatch(/transition|starting:/);
+      }
+      expect(rows(panel)[0]?.[3]).toBe(expanded ? "0" : null);
+    },
+  );
   it("draws a live column's rows as targets, with the default lit", async () => {
     const panel = await mount({});
     expect(panel.getAttribute("data-offered-inert")).toBeNull();

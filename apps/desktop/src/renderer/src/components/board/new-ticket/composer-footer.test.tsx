@@ -79,7 +79,12 @@ describe("one attachment affordance", () => {
     expect(html.match(/aria-label="Attach files"/g)).toHaveLength(1);
     expect(html.match(/type="file"/g)).toHaveLength(1);
     expect(html).toContain("multiple");
-    expect(html).toContain("shadow-raised");
+    const markup = document.createElement("div");
+    markup.innerHTML = html;
+    const attach = markup.querySelector('[aria-label="Attach files"]');
+    expect(attach?.getAttribute("data-variant")).toBe("ghost");
+    expect(attach?.className).not.toContain("shadow-raised");
+    expect(attach?.getAttribute("data-size")).toBe("icon-sm");
     expect(html).not.toContain("Attach file reference");
     expect(html).not.toContain("Search files…");
   });
@@ -87,6 +92,23 @@ describe("one attachment affordance", () => {
     expect(render()).not.toContain('aria-label="Attach files"');
   });
 });
+
+it.each([false, true])(
+  "keeps the tonal start primary and regular Create when disabled=%s",
+  (disabled) => {
+    const markup = document.createElement("div");
+    markup.innerHTML = render({ disabled });
+    const create = markup.querySelector<HTMLButtonElement>('[data-testid="composer-create"]')!;
+    const start = markup.querySelector<HTMLButtonElement>('[data-testid="composer-kickoff"]')!;
+    const chooser = markup.querySelector('[data-testid="composer-launch-picker"]')!;
+    expect(create.dataset.variant).toBe("outline");
+    expect(start.dataset.variant).toBe("default");
+    expect(chooser.getAttribute("data-variant")).toBe("default");
+    expect(chooser.className).toContain("border-(--primary-text)/20");
+    expect(create.disabled).toBe(disabled);
+    expect(start.disabled).toBe(disabled);
+  },
+);
 
 it("offers both commits as buttons at rest, with no create-more switch", () => {
   const html = render();
