@@ -4,7 +4,7 @@ import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 
 type Origin = "keyboard" | "pointer";
 type OpenProps = { open?: boolean; defaultOpen?: boolean; onOpenChange?(open: boolean): void };
-type MotionState = { origin: Origin; record(origin: Origin): void };
+type MotionState = { origin: Origin | "instant"; record(origin: Origin): void };
 const UNKNOWN: MotionState = { origin: "keyboard", record: () => {} };
 const MotionOrigin = React.createContext<Record<string, MotionState>>({});
 
@@ -22,6 +22,7 @@ export function MotionOriginRoot({
   children(props: Required<Pick<OpenProps, "open" | "onOpenChange">>): React.ReactNode;
 }) {
   const parent = React.useContext(MotionOrigin);
+  const reduced = useReducedMotion();
   const [internal, setInternal] = React.useState(defaultOpen);
   const open = controlled ?? internal;
   const [origin, setOrigin] = React.useState<Origin>("keyboard");
@@ -30,23 +31,32 @@ export function MotionOriginRoot({
   React.useEffect(() => () => clearTimeout(expiry.current), []);
   const previousOpen = React.useRef(open);
   const requestedOpen = React.useRef<boolean | null>(null);
-  const record = React.useCallback((next: Origin) => {
-    activation.current = next;
-    setOrigin(next);
-    // Browsers can drain microtasks between capture and Radix's bubble listener.
-    // Keep this activation through dispatch, not through the next timer task.
-    clearTimeout(expiry.current);
-    expiry.current = setTimeout(() => {
-      activation.current = null;
-    }, 0);
-  }, []);
+  const record = React.useCallback(
+    (next: Origin) => {
+      activation.current = next;
+      // Keyboard cancels an entrance; a later pointer inside an already-open
+      // surface must not replay it. Closing records its own activation below.
+      if (!open || next === "keyboard") setOrigin(reduced ? "keyboard" : next);
+      // Browsers can drain microtasks between capture and Radix's bubble listener.
+      // Keep this activation through dispatch, not through the next timer task.
+      clearTimeout(expiry.current);
+      expiry.current = setTimeout(() => {
+        activation.current = null;
+      }, 0);
+    },
+    [open, reduced],
+  );
   const externalChange = open !== previousOpen.current && requestedOpen.current !== open;
-  const effectiveOrigin = externalChange ? "keyboard" : origin;
+  const effectiveOrigin: MotionState["origin"] = reduced
+    ? "instant"
+    : externalChange
+      ? "keyboard"
+      : origin;
   React.useLayoutEffect(() => {
-    if (externalChange) setOrigin("keyboard");
+    if (externalChange || reduced) setOrigin("keyboard");
     previousOpen.current = open;
     requestedOpen.current = null;
-  }, [open, externalChange]);
+  }, [open, externalChange, reduced]);
   const value = React.useMemo(
     () => ({ ...parent, [scope]: { origin: effectiveOrigin, record } }),
     [parent, scope, effectiveOrigin, record],
@@ -58,7 +68,7 @@ export function MotionOriginRoot({
         onOpenChange(next) {
           // Radix hover intent resolves after the triggering pointer event.
           requestedOpen.current = next;
-          setOrigin(activation.current ?? (hover ? origin : "keyboard"));
+          setOrigin(reduced ? "keyboard" : (activation.current ?? (hover ? origin : "keyboard")));
           if (controlled === undefined) setInternal(next);
           onOpenChange?.(next);
         },
@@ -78,7 +88,6 @@ export function useMotionOriginProps<T extends HTMLElement>(
   surface = false,
 ) {
   const { origin, record } = React.useContext(MotionOrigin)[scope] ?? UNKNOWN;
-  const reduced = useReducedMotion();
   return {
     ...(surface
       ? {
@@ -92,7 +101,7 @@ export function useMotionOriginProps<T extends HTMLElement>(
           },
         }
       : {}),
-    "data-motion-origin": reduced ? "instant" : origin,
+    "data-motion-origin": origin,
     onPointerDownCapture(event: React.PointerEvent<T>) {
       record("pointer");
       props.onPointerDownCapture?.(event);

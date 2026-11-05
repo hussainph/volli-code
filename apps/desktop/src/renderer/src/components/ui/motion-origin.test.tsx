@@ -37,6 +37,7 @@ function Sheet() {
       </TooltipProvider>
       <DialogContent aria-describedby={undefined}>
         <DialogTitle>Details</DialogTitle>
+        <button type="button">Inspect</button>
         <DialogClose>Done</DialogClose>
       </DialogContent>
     </Dialog>
@@ -100,6 +101,29 @@ describe("activation-local primitive motion", () => {
     await click(document.querySelector('[data-slot="dialog-close"]')!, 0);
     await click(trigger(), 1);
     expect(surface().dataset.motionOrigin).toBe("pointer");
+  });
+
+  it("never replays an entrance on in-surface pointer input or Motion re-enable", async () => {
+    await act(async () => root.render(<Sheet />));
+    await click(trigger(), 0);
+    const inspect = Array.from(document.querySelectorAll("button")).find(
+      (node) => node.textContent === "Inspect",
+    )!;
+    await click(inspect, 1);
+    expect(surface().dataset.motionOrigin).toBe("keyboard");
+    await click(document.querySelector('[data-slot="dialog-close"]')!, 0);
+    await click(trigger(), 1);
+    expect(surface().dataset.motionOrigin).toBe("pointer");
+    await act(async () => {
+      document.documentElement.dataset.motion = "off";
+      window.dispatchEvent(new Event("volli-motion-change"));
+    });
+    expect(surface().dataset.motionOrigin).toBe("instant");
+    await act(async () => {
+      delete document.documentElement.dataset.motion;
+      window.dispatchEvent(new Event("volli-motion-change"));
+    });
+    expect(surface().dataset.motionOrigin).toBe("keyboard");
   });
 
   it("treats controlled async reopening as unknown, not the previous pointer gesture", async () => {
