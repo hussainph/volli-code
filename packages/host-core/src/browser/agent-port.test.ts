@@ -906,7 +906,7 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
       waitForLoad: async () => undefined,
       holdAwake: () => () => undefined,
     });
-    return { port: browser, tabs: fake.tabs };
+    return { port: browser, tabs: fake.tabs, navigated: fake.navigated };
   }
 
   it("says a page with no accessible structure is empty, on a read and on a navigation", async () => {
@@ -948,6 +948,89 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
       );
       await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
       await shot;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["click", "press"] as const)(
+    "never replays %s after its follow-up AX read times out, and releases the queue",
+    async (kind) => {
+      vi.useFakeTimers();
+      try {
+        const late = Promise.withResolvers<object>();
+        let reads = 0;
+        let clicks = 0;
+        const { port: browser } = over(
+          { tree: () => (++reads === 2 ? late.promise : BUTTON_TREE) },
+          () => {
+            clicks += 1;
+          },
+        );
+        const read = await browser.snapshot({ tabId: "mine", signal });
+        const acting = browser.act({
+          tabId: "mine",
+          generation: read.generation,
+          kind,
+          ref: "e1",
+          key: "Enter",
+          signal,
+        });
+        const failed = expect(acting).rejects.toThrow("did not finish taking a snapshot");
+        await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
+        await failed;
+        late.resolve(BUTTON_TREE);
+        const fresh = await browser.snapshot({ tabId: "mine", signal });
+        expect(fresh.snapshotText).toContain("Save");
+        expect(reads).toBe(3);
+        expect(clicks).toBe(kind === "click" ? 1 : 0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("never replays navigation after its follow-up snapshot times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const late = Promise.withResolvers<object>();
+      let reads = 0;
+      const { port: browser, navigated } = over({
+        tree: () => (++reads === 1 ? late.promise : BUTTON_TREE),
+      });
+      const failed = expect(
+        browser.navigate({
+          tabId: "mine",
+          navigation: { kind: "url", url: "https://example.com/once" },
+          signal,
+        }),
+      ).rejects.toThrow("did not finish taking a snapshot");
+      await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
+      await failed;
+      expect(navigated).toEqual([{ tabId: "mine", url: "https://example.com/once" }]);
+      late.resolve(BUTTON_TREE);
+      await browser.snapshot({ tabId: "mine", signal });
+      expect(navigated).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns a structural navigation result without a photo when frames stall", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port: browser } = over({ tree: () => BUTTON_TREE, hang: "Runtime.evaluate" });
+      const navigation = browser.navigate({
+        tabId: "mine",
+        navigation: { kind: "reload" },
+        signal,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await navigation).toMatchObject({
+        snapshotText: expect.stringContaining("Save"),
+        picture: null,
+      });
+      expect((await browser.find({ tabId: "mine", query: "Save", signal })).matches).toBe(1);
     } finally {
       vi.useRealTimers();
     }

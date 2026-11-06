@@ -7,7 +7,16 @@
 import type { WebContents } from "electron";
 
 import { BrowserRefusal } from "@volli/agent-runtime";
-import type { BrowserLoadWaitMode, CdpTransport } from "@volli/host-core/browser";
+import type {
+  BrowserLoadWaitMode,
+  CdpTimeoutDiagnostic,
+  CdpTransport,
+} from "@volli/host-core/browser";
+
+/** Domain initialization runs below the controller's command boundary. */
+export type DebuggerTimeoutDiagnostic = Omit<CdpTimeoutDiagnostic, "phase"> & {
+  phase: CdpTimeoutDiagnostic["phase"] | "domain-enable";
+};
 
 /**
  * The production CDP wire: one tab's `webContents.debugger`, Electron's
@@ -18,10 +27,22 @@ import type { BrowserLoadWaitMode, CdpTransport } from "@volli/host-core/browser
  * Attachment is lazy and re-checked per send, because DevTools sharing the
  * target can drop it between calls.
  */
-export function debuggerTransport(contents: WebContents): CdpTransport {
+export function debuggerTransport(
+  contents: WebContents,
+  onTimeout?: (diagnostic: DebuggerTimeoutDiagnostic) => void,
+): CdpTransport {
   const wire = contents.debugger;
   let initialized = false;
   let disposed = false;
+  let pendingDomainMethod: string | null = null;
+  const enableDomain = async (method: string): Promise<void> => {
+    pendingDomainMethod = method;
+    try {
+      await wire.sendCommand(method);
+    } finally {
+      pendingDomainMethod = null;
+    }
+  };
   const assertLive = (): void => {
     if (disposed) throw new Error("The Browser Tab debugger transport was disposed");
   };
@@ -31,11 +52,11 @@ export function debuggerTransport(contents: WebContents): CdpTransport {
     initialized = false;
     try {
       if (!wire.isAttached()) wire.attach("1.3");
-      await wire.sendCommand("Accessibility.enable");
+      await enableDomain("Accessibility.enable");
       assertLive();
-      await wire.sendCommand("DOM.enable");
+      await enableDomain("DOM.enable");
       assertLive();
-      await wire.sendCommand("Page.enable");
+      await enableDomain("Page.enable");
       assertLive();
       initialized = true;
     } catch {
@@ -48,6 +69,16 @@ export function debuggerTransport(contents: WebContents): CdpTransport {
   };
   return {
     ensureReady,
+    onTimeout: (diagnostic) => {
+      // Deliberate allowlist: never forward parameters, errors, or page data,
+      // even if the controller's diagnostics gain more fields in the future.
+      onTimeout?.({
+        phase: pendingDomainMethod === null ? diagnostic.phase : "domain-enable",
+        method: pendingDomainMethod ?? diagnostic.method,
+        elapsedMs: diagnostic.elapsedMs,
+        generation: diagnostic.generation,
+      });
+    },
     send: async (method, params) => {
       await ensureReady();
       assertLive();

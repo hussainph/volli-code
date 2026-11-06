@@ -39,6 +39,8 @@ export interface BrowserTabHostDependencies extends BrowserTabRegistryPorts {
   createView: (options: WebContentsViewConstructorOptions) => WebContentsView;
   fromPartition: (partition: string) => Session;
   getWindow: () => BrowserWindow | null;
+  /** The composition root supplies `app.getVersion()`; no Electron singleton here. */
+  appVersion?: string;
   /**
    * Creates the window headless tabs are parked in — never shown, never given
    * to the person. Called on the first tab that needs a stage and again only
@@ -1273,7 +1275,32 @@ export class BrowserTabHost extends BrowserTabRegistry<
    * reach this tab, or the app's own renderer, through a loopback endpoint.
    */
   transportFor(tabId: string): CdpTransport {
-    return debuggerTransport(this.webContentsOf(tabId));
+    const entry = this.requireTab(tabId);
+    const contents = entry.view.webContents;
+    return debuggerTransport(contents, (diagnostic) => {
+      // Read only local/native state: diagnostics must not send another CDP
+      // command to the target that just stopped answering. No tab identity or
+      // page-derived values belong in this record.
+      const window = entry.parent.kind === "window" ? entry.parent.window : null;
+      const liveWindow = window !== null && !window.isDestroyed() ? window : null;
+      log.warn("browser CDP command timed out", {
+        phase: diagnostic.phase,
+        method: diagnostic.method,
+        elapsedMs: diagnostic.elapsedMs,
+        generation: diagnostic.generation,
+        debuggerAttached: contents.debugger.isAttached(),
+        parent: entry.parent.kind,
+        // These are the containing app window's native flags, not proof of
+        // unoccluded pixels. The never-shown stage has no visible app window.
+        windowVisible: liveWindow?.isVisible() ?? null,
+        windowMinimized: liveWindow?.isMinimized() ?? null,
+        wakeLeases: entry.wakeLeases,
+        backgroundThrottling: contents.isDestroyed() ? null : contents.getBackgroundThrottling(),
+        build: this.deps.appVersion ?? null,
+        electron: process.versions.electron ?? null,
+        chromium: process.versions.chrome ?? null,
+      });
+    });
   }
 
   /** Settles when the tab stops loading, at the bound, or on withdrawal; see `loadWaiter`. */

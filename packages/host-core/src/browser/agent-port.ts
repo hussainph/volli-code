@@ -419,7 +419,11 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     tabId: string,
     changed: boolean,
     signal: AbortSignal,
-  ): Promise<string | null> => (changed ? await options.host.capturePicture(tabId, signal) : null);
+    controller: BrowserTabController,
+  ): Promise<string | null> =>
+    changed && (await controller.preparePreview(signal))
+      ? await options.host.capturePicture(tabId, signal)
+      : null;
 
   const snapshotOf = async (
     tabId: string,
@@ -440,7 +444,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     const tab = resolve(tabId);
     const ready = await syncedController(tab, controller, signal);
     const printed = await ready.snapshot(signal);
-    const picture = await pictureAfterChange(tab.tabId, changed, signal);
+    const picture = await pictureAfterChange(tab.tabId, changed, signal, ready);
     signal.throwIfAborted();
     // Re-read after the capture, and without refusing: a load that failed
     // while this call waited is the one fact a successful-looking snapshot

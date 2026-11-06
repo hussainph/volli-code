@@ -57,6 +57,15 @@ export interface CdpTransport {
   send: (method: string, params?: object) => Promise<unknown>;
   ensureReady?: () => Promise<void>;
   dispose?: () => void;
+  /** Host-only diagnostics: never receives command parameters or page content. */
+  onTimeout?: (diagnostic: CdpTimeoutDiagnostic) => void;
+}
+
+export interface CdpTimeoutDiagnostic {
+  phase: TimeoutOperation;
+  method: string | null;
+  elapsedMs: number;
+  generation: number;
 }
 
 /** What the cursor is told a Session is doing at a point, in page CSS pixels. */
@@ -157,12 +166,14 @@ function isTimeout(error: unknown): boolean {
   return error instanceof CommandTimeoutError;
 }
 
-type TimeoutOperation = "readiness" | "snapshot" | "find" | "screenshot" | "action";
+type TimeoutOperation = "readiness" | "frame-fence" | "snapshot" | "find" | "screenshot" | "action";
 
 function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string {
   switch (operation) {
     case "readiness":
-      return `The Browser Tab did not become ready within ${timeoutMs}ms. Try the Browser Tab command again.`;
+      return `The Browser Tab did not become ready within ${timeoutMs}ms. Check the tab with a fresh snapshot before repeating any navigation or action; it may already have happened.`;
+    case "frame-fence":
+      return `The Browser Tab did not produce a rendered frame within ${timeoutMs}ms. A snapshot or find can still read its structure. Check its state before repeating any navigation or action.`;
     case "snapshot":
       return `The Browser Tab did not finish taking a snapshot within ${timeoutMs}ms. Wait for the page to settle, then try the snapshot again.`;
     case "find":
@@ -290,6 +301,7 @@ export class BrowserTabController {
   readonly #send: CdpTransport["send"];
   readonly #ensureReady: CdpTransport["ensureReady"];
   readonly #disposeTransport: CdpTransport["dispose"];
+  readonly #onTimeout: CdpTransport["onTimeout"];
   readonly #limits: Required<ControllerLimits>;
   readonly #cursor: TabCursorDriver | undefined;
   #generation = 0;
@@ -311,6 +323,7 @@ export class BrowserTabController {
     this.#send = transport.send;
     this.#ensureReady = transport.ensureReady;
     this.#disposeTransport = transport.dispose;
+    this.#onTimeout = transport.onTimeout;
     this.#cursor = cursor;
     this.#limits = {
       maxSnapshotChars: Math.floor(narrowedLimit(limits.maxSnapshotChars, SNAPSHOT_MAX_CHARS)),
@@ -344,7 +357,11 @@ export class BrowserTabController {
     answer: Promise<T>,
     operation: TimeoutOperation,
     signal?: AbortSignal,
+    method: string | null = null,
+    timeoutMs = this.#limits.maxCommandMs,
   ): Promise<T> {
+    const started = performance.now();
+    const generation = this.#generation;
     // An already-aborted signal never dispatches `abort` to a listener added
     // after the fact, so the race below would wait out the whole clock for a
     // turn that is already gone. Answer it here instead.
@@ -367,10 +384,20 @@ export class BrowserTabController {
         finish(() => reject(signal?.reason ?? new Error("Browser action cancelled")));
       };
       const timer = setTimeout(() => {
-        finish(() =>
-          reject(new CommandTimeoutError(timeoutMessage(operation, this.#limits.maxCommandMs))),
-        );
-      }, this.#limits.maxCommandMs);
+        finish(() => {
+          try {
+            this.#onTimeout?.({
+              phase: operation,
+              method,
+              elapsedMs: Math.round(performance.now() - started),
+              generation,
+            });
+          } catch {
+            // Diagnostics must never mask the deadline or wedge the tab queue.
+          }
+          reject(new CommandTimeoutError(timeoutMessage(operation, timeoutMs)));
+        });
+      }, timeoutMs);
       signal?.addEventListener("abort", abort, { once: true });
       answer.then(
         (value) => finish(() => resolve(value)),
@@ -385,9 +412,10 @@ export class BrowserTabController {
     params?: object,
     signal?: AbortSignal,
     operation: TimeoutOperation = "action",
+    timeoutMs?: number,
   ): Promise<unknown> {
     signal?.throwIfAborted();
-    return await this.#bounded(this.#send(method, params), operation, signal);
+    return await this.#bounded(this.#send(method, params), operation, signal, method, timeoutMs);
   }
 
   /**
@@ -439,7 +467,7 @@ export class BrowserTabController {
    */
   async #releaseHalf(method: string, params: object, alreadyFailed: boolean): Promise<void> {
     try {
-      await this.#bounded(this.#send(method, params), "action");
+      await this.#bounded(this.#send(method, params), "action", undefined, method);
     } catch (error) {
       // Preserve an earlier fault, but never report a successful click when
       // mouse-up (the event that actually clicks) failed to reach the page.
@@ -490,20 +518,50 @@ export class BrowserTabController {
     this.#forget();
   }
 
-  /** One fresh read of the page's accessibility tree, as CDP answers it. */
-  async #readTree(operation: "snapshot" | "find", signal?: AbortSignal): Promise<AXNodeLike[]> {
-    if (this.#renderedGeneration !== this.#generation) {
-      const generation = this.#generation;
-      const rendered = (await this.#command(
-        "Runtime.evaluate",
-        { expression: RENDERED_FRAME_EXPRESSION, awaitPromise: true, returnByValue: true },
-        signal,
-        "readiness",
-      )) as { exceptionDetails?: unknown };
-      if (rendered.exceptionDetails !== undefined)
-        throw new Error("The Browser Tab could not finish rendering its document");
-      this.#renderedGeneration = generation;
+  /**
+   * Only visual work waits for a compositor opportunity. AX reads are structural:
+   * hidden/background pages can answer them even while animation frames stall.
+   * A late or older frame never certifies this generation's pixels or hit tests.
+   */
+  async #ensureRendered(signal?: AbortSignal, timeoutMs?: number): Promise<void> {
+    if (this.#renderedGeneration === this.#generation) return;
+    const generation = this.#generation;
+    const rendered = (await this.#command(
+      "Runtime.evaluate",
+      { expression: RENDERED_FRAME_EXPRESSION, awaitPromise: true, returnByValue: true },
+      signal,
+      "frame-fence",
+      timeoutMs,
+    )) as { exceptionDetails?: unknown };
+    if (rendered.exceptionDetails !== undefined)
+      throw new Error("The Browser Tab could not finish rendering its document");
+    if (generation !== this.#generation) {
+      throw new BrowserRefusal(
+        "browser.stale-ref",
+        "The tab changed while waiting for its rendered frame: take a fresh snapshot.",
+      );
     }
+    this.#renderedGeneration = generation;
+  }
+
+  /**
+   * Optional transcript photos still owe the old first-frame safeguard, but
+   * cannot hold a successful structural read behind a stalled compositor.
+   * No frame means no photo, not permission to capture an older surface.
+   */
+  async preparePreview(signal?: AbortSignal): Promise<boolean> {
+    try {
+      await this.#ensureRendered(signal, Math.min(500, this.#limits.maxCommandMs));
+      return true;
+    } catch {
+      signal?.throwIfAborted();
+      return false;
+    }
+  }
+
+  /** A bounded structural read, independent of the compositor's frame cadence. */
+  async #readTree(operation: "snapshot" | "find", signal?: AbortSignal): Promise<AXNodeLike[]> {
+    const generation = this.#generation;
     const answer = (await this.#command(
       "Accessibility.getFullAXTree",
       undefined,
@@ -519,6 +577,12 @@ export class BrowserTabController {
     if (!Array.isArray(answer.nodes)) {
       throw new Error(
         "The Browser Tab answered without an accessibility tree, so nothing was read. Try the read again, or take a screenshot.",
+      );
+    }
+    if (generation !== this.#generation) {
+      throw new BrowserRefusal(
+        "browser.stale-ref",
+        "The tab changed while its accessibility tree was being read: take a fresh snapshot.",
       );
     }
     this.#treeDigest = axTreeDigest(answer.nodes);
@@ -622,6 +686,9 @@ export class BrowserTabController {
         `The tab is at generation ${this.#generation}, and refs from generation ${request.generation} no longer name what the page shows: take a fresh snapshot.`,
       );
     }
+    // Reads mint structural refs without promising pixels are ready. Preserve
+    // the old stale-surface/hit-test guard at the point input actually needs it.
+    if (request.kind !== "wait") await this.#ensureRendered(signal);
     await this.#perform(request, signal);
     // Resolved AFTER the action so a refused ref reports nothing; the maps are
     // untouched by acting, so the name is the one the model was shown.
@@ -738,6 +805,7 @@ export class BrowserTabController {
     signal?: AbortSignal,
   ): Promise<{ base64Png: string; width: number; height: number }> {
     signal?.throwIfAborted();
+    await this.#ensureRendered(signal);
     const captured = (await this.#command(
       "Page.captureScreenshot",
       { format: "png" },

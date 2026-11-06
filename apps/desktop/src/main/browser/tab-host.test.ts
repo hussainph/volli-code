@@ -93,7 +93,13 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
-  setBackgroundThrottling = vi.fn();
+  backgroundThrottling = true;
+  setBackgroundThrottling = vi.fn((value: boolean) => {
+    this.backgroundThrottling = value;
+  });
+  getBackgroundThrottling(): boolean {
+    return this.backgroundThrottling;
+  }
   // The host encodes JPEG, so the fake answers the same door: a NativeImage
   // whose `toJPEG` returns the bytes the frame should carry. `isEmpty` is the
   // real one's answer for a view with no surface — the 0x0 image Chromium hands
@@ -170,6 +176,8 @@ class FakeView {
 
 const fakeWindow = {
   isDestroyed: () => false,
+  isVisible: () => true,
+  isMinimized: () => false,
   contentView: {
     addChildView: vi.fn(),
     removeChildView: vi.fn(),
@@ -180,6 +188,8 @@ const fakeWindow = {
 function newAppWindow(): typeof fakeWindow {
   return {
     isDestroyed: () => false,
+    isVisible: () => true,
+    isMinimized: () => false,
     contentView: {
       addChildView: vi.fn(),
       removeChildView: vi.fn(),
@@ -311,6 +321,7 @@ beforeEach(() => {
   });
   host = new BrowserTabHost({
     pictures,
+    appVersion: "0.3.0-test",
     now: () => clock,
     createId: () => `opaque-${++nextId}`,
     createView: (options: WebContentsViewConstructorOptions) => {
@@ -3251,6 +3262,125 @@ describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
     wire.dispose?.();
     expect(attached).toBe(false);
     expect(() => host.transportFor("opaque-missing")).toThrow("Unknown Browser Tab");
+  });
+
+  it("logs only safe timeout context, reading current stage and wake state without CDP", () => {
+    const tab = agentTab();
+    const contents = views[0]!.webContents;
+    const sendCommand = vi.fn(async () => ({}));
+    Object.assign(contents, {
+      debugger: { isAttached: () => true, sendCommand },
+    });
+    const wire = host.transportFor(tab.tabId);
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "warn",
+      sink: { write: (record) => void records.push(record) },
+    });
+    const getURL = vi.spyOn(contents, "getURL");
+    const getTitle = vi.spyOn(contents, "getTitle");
+    const diagnostic = {
+      phase: "snapshot" as const,
+      method: "Accessibility.getFullAXTree",
+      elapsedMs: 15_000,
+      generation: 4,
+      params: { text: "private field", url: "https://secret.example/" },
+      error: new Error("private error"),
+    };
+    try {
+      wire.onTimeout?.(diagnostic);
+      expect(records).toEqual([
+        {
+          ts: expect.any(String),
+          level: "warn",
+          component: "browser",
+          msg: "browser CDP command timed out",
+          phase: "snapshot",
+          method: "Accessibility.getFullAXTree",
+          elapsedMs: 15_000,
+          generation: 4,
+          debuggerAttached: true,
+          parent: "stage",
+          windowVisible: null,
+          windowMinimized: null,
+          wakeLeases: 0,
+          backgroundThrottling: true,
+          build: "0.3.0-test",
+          electron: process.versions.electron ?? null,
+          chromium: process.versions.chrome ?? null,
+        },
+      ]);
+      expect(getURL).not.toHaveBeenCalled();
+      expect(getTitle).not.toHaveBeenCalled();
+      const release = host.holdAwake(tab.tabId);
+      host.setPresentation(tab.tabId, "preview");
+      host.show(tab.tabId);
+      wire.onTimeout?.(diagnostic);
+      expect(records[1]).toEqual({
+        ...(records[0] as object),
+        ts: expect.any(String),
+        parent: "window",
+        windowVisible: true,
+        windowMinimized: false,
+        wakeLeases: 1,
+        backgroundThrottling: false,
+      });
+      release();
+      host.hide(tab.tabId);
+      wire.onTimeout?.(diagnostic);
+      expect(records[2]).toEqual({ ...(records[0] as object), ts: expect.any(String) });
+      expect(sendCommand).not.toHaveBeenCalled();
+    } finally {
+      undo();
+    }
+  });
+
+  it.each([
+    { visible: true, minimized: false, destroyed: false },
+    { visible: false, minimized: false, destroyed: false },
+    { visible: true, minimized: true, destroyed: false },
+    { visible: false, minimized: true, destroyed: false },
+    { visible: true, minimized: false, destroyed: true },
+  ])("records the containing window flags without inferring occlusion: %j", (state) => {
+    const tab = agentTab();
+    const containingWindow = newAppWindow();
+    appWindow = containingWindow;
+    host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
+    // The current app window need not be the one still containing this tab.
+    appWindow = fakeWindow;
+    const visible = vi.spyOn(containingWindow, "isVisible").mockReturnValue(state.visible);
+    const minimized = vi.spyOn(containingWindow, "isMinimized").mockReturnValue(state.minimized);
+    vi.spyOn(containingWindow, "isDestroyed").mockReturnValue(state.destroyed);
+    const sendCommand = vi.fn(async () => ({}));
+    Object.assign(views[0]!.webContents, {
+      debugger: { isAttached: () => true, sendCommand },
+    });
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "warn",
+      sink: { write: (record) => void records.push(record) },
+    });
+    try {
+      host.transportFor(tab.tabId).onTimeout?.({
+        phase: "snapshot",
+        method: "Accessibility.getFullAXTree",
+        elapsedMs: 15_000,
+        generation: 1,
+      });
+      expect(records).toEqual([
+        expect.objectContaining({
+          parent: "window",
+          windowVisible: state.destroyed ? null : state.visible,
+          windowMinimized: state.destroyed ? null : state.minimized,
+        }),
+      ]);
+      expect(visible).toHaveBeenCalledTimes(state.destroyed ? 0 : 1);
+      expect(minimized).toHaveBeenCalledTimes(state.destroyed ? 0 : 1);
+      expect(sendCommand).not.toHaveBeenCalled();
+    } finally {
+      undo();
+    }
   });
 
   it("settles a load wait off the tab's own loading events", async () => {
