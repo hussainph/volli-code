@@ -63,6 +63,13 @@ function pressB(target: EventTarget, modifiers: KeyboardEventInit): KeyboardEven
   return event;
 }
 
+it("does not make shell paint depend on arbitrary overlay descendants", () => {
+  renderProvider();
+  const wrapper = container!.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')!;
+  expect(wrapper.className).not.toContain("has-");
+  expect(wrapper.className).not.toContain("bg-sidebar");
+});
+
 describe("SidebarProvider ⌘B listener", () => {
   it.each([0, 1])("carries trigger modality to its one motion owner: click detail %s", (detail) => {
     const { onOpenChange } = renderProvider();

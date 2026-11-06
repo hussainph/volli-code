@@ -3355,8 +3355,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   contain: none;
   will-change: auto;
 }
-/* No inspector content means no inspector control, including in the AX tree. */
-body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="shell"] {
+/* No inspector content means no inspector control, including in the AX tree.
+ * Follow only the shell's resident dock path: a body-wide :has() invalidates
+ * unrelated controls on every portaled menu/dialog insertion and removal. */
+[data-volli-shell]:not(
+    :has(> [data-pane-row] > [data-inspector-host] > [data-inspector-dock][data-enabled])
+  )
+  [data-inspector-trigger="shell"] {
   display: none;
 }
 

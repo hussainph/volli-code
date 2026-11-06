@@ -129,10 +129,10 @@ function SidebarProvider({
               ...style,
             } as React.CSSProperties
           }
-          className={cn(
-            "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
-            className,
-          )}
+          // Shell paint is explicit at the caller. A root-level :has() over
+          // arbitrary descendants makes every portaled overlay insertion
+          // invalidate the whole app; the canvas must not depend on that scan.
+          className={cn("group/sidebar-wrapper flex min-h-svh w-full", className)}
           {...props}
         >
           {children}
