@@ -183,7 +183,7 @@ function NavigatorSelector({
       // 22px drawing, 24px targets. Icon centres share the nav rows' 24px inset.
       className="flex h-[22px] shrink-0 items-center gap-1 border-b border-sidebar-border/50 px-3"
     >
-      <div role="tablist" aria-label="Sidebar content" className="flex items-center gap-1">
+      <div role="tablist" aria-label="Sidebar content" className="flex h-[22px] items-center gap-1">
         {NAVIGATORS.map(({ key, label, icon: Icon }, index) => (
           <Tooltip key={key}>
             <TooltipTrigger asChild>

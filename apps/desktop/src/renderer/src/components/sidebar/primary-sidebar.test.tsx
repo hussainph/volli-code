@@ -91,6 +91,7 @@ describe("primary sidebar content choice", () => {
     const switcher = chrome.querySelector('[aria-label="Sidebar content"]')!;
     expect(chrome.className).toContain("h-[22px]");
     expect(switcher.textContent).toBe("");
+    expect(switcher.className).toContain("h-[22px]");
     expect(switcher.className).not.toContain("glass");
     expect(container.querySelector('[data-testid="feature-nav"]')?.nextElementSibling).toBe(chrome);
     expect(container.querySelector('[data-slot="sidebar-header"]')?.textContent).toBe("ProjectVC");
