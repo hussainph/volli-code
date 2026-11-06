@@ -487,7 +487,7 @@ async function journey(fixture, store, evidenceDir) {
     assert.equal(after.runs[0].missedCount, null, "a waiting Run already claims a missed count");
     // Mac B reads the waiting Run in the project's own Run history.
     await macB.drive.click("button", "Automations");
-    await macB.drive.click("button", "Project activity");
+    await macB.drive.click("button", "History");
     await macB.drive.wait(waitingForAsleepCopy(nameA), 60_000);
     evidence.firstOccurrence = {
       runId: after.runs[0].id,

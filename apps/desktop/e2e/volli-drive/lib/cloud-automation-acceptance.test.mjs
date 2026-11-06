@@ -356,6 +356,20 @@ describe("coalescingProblems", () => {
 });
 
 describe("the copy this driver waits for is the copy production prints", () => {
+  it("opens the project's History destination before reading the sleeping Mac's waiting Run", () => {
+    const page = source(
+      "apps/desktop/src/renderer/src/components/automations/automations-page.tsx",
+    );
+    const journey = source("apps/desktop/e2e/volli-drive/cloud-automation-acceptance-smoke.mjs");
+    assert.match(page, /aria-label="History"\s+onClick=\{\(\) => setView\("history"\)\}/u);
+    const sleep = journey.slice(journey.indexOf("await step(5,"), journey.indexOf("await step(6,"));
+    assert.match(
+      sleep,
+      /await macB\.drive\.click\("button", "Automations"\);\s*await macB\.drive\.click\("button", "History"\);\s*await macB\.drive\.wait\(waitingForAsleepCopy\(nameA\), 60_000\);/u,
+    );
+    assert.ok(!journey.includes('"Project activity"'));
+  });
+
   it("waits for the approved Next middle-dot line, never the retired colon copy", () => {
     const controls = source(
       "apps/desktop/src/renderer/src/components/automations/cloud-automation-controls.tsx",
