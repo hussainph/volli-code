@@ -9,6 +9,11 @@
  * was also what a broken read said.
  */
 import type * as React from "react";
+import { toast } from "sonner";
+import { errorMessage } from "@volli/shared";
+import { Button } from "@renderer/components/ui/button";
+import { CopyIcon } from "@renderer/components/ui/icon";
+import { toastError } from "@renderer/lib/toast";
 import { type IconComponent } from "@renderer/components/ui/icon";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -53,6 +58,21 @@ function ErrorRow({
       <details className="px-4 pb-3 text-ui text-muted-foreground">
         <summary>Details</summary>
         <p className="break-words">{message}</p>
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(message);
+              toast.success("Copied error");
+            } catch (error) {
+              toastError(`Couldn't copy error: ${errorMessage(error)}`);
+            }
+          }}
+        >
+          <CopyIcon />
+          Copy error
+        </Button>
       </details>
     </div>
   );
