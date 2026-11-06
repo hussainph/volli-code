@@ -141,7 +141,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   const panelShown = !terminalFocused && (pinned || reveal.visible);
   // Native child views composite above every renderer z-index. Keep the marker
   // through the floating panel's exit transition as well as its open state, or
-  // the Browser plane would jump in front for the final 160ms of withdrawal.
+  // the Browser plane would jump in front for the final 110ms of withdrawal.
   const [floatingOverlayExiting, setFloatingOverlayExiting] = React.useState(false);
   const previousPanel = React.useRef({ shown: panelShown, docked });
   React.useLayoutEffect(() => {
@@ -154,7 +154,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     } else if (previous.shown) {
       // Only a floating peek has a CSS exit. Pin pushes retain the native-plane
       // fence through contentMotion.moving and release it at the spring finish;
-      // waiting for transitionend here would keep the Browser frozen forever.
+      // waiting for transitionend here would leave the overlay marker latched.
       setFloatingOverlayExiting(!previous.docked);
     }
   }, [panelShown, docked, pinned, terminalFocused, reducedMotion, keyboardInstant]);
@@ -418,10 +418,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             <SidebarInset
               ref={contentMotion.contentRef}
               data-sidebar-content-motion={contentMotion.moving ? "" : undefined}
-              // Keep the content's box model at the endpoint its descendants are
-              // actually laid out against. During an open the shell itself is
-              // already framed for the panel, while this surface deliberately stays
-              // ephemeral and wide until the transform lands.
+              // This endpoint marks intent; the shared width spring owns live
+              // paper geometry. Heavy descendants wait on the pane resize fence.
               data-sidebar-layout={contentMotion.layoutPinned ? "framed" : "ephemeral"}
               // Names the app's principal surface for probes that need to anchor on
               // the card rather than guess at it.

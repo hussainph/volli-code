@@ -241,7 +241,7 @@ export function useEdgeReveal({
   triggerRef?: React.RefObject<HTMLElement | null>;
   side?: "left" | "right";
   closeOnNavigation?: boolean;
-  /** Pinned-projects navigation: tile intent, 100/100/120ms, focus-held peek. */
+  /** Pinned-projects navigation: 100ms tile intent, 170/110ms reveal, focus-held peek. */
   projectTiles?: boolean;
   onProjectIntent?(projectId: string | null): void;
 }): EdgeReveal {
