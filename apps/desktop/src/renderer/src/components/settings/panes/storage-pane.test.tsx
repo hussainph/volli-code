@@ -336,11 +336,12 @@ describe("Settings → Storage Pi session logs", () => {
     await openReview();
 
     await act(async () => buttonNamed("Scan for orphaned Pi logs").click());
-    expect(
-      [...document.querySelectorAll("[role='alert']")].some((node) =>
-        node.textContent?.includes("fixture scan failed"),
-      ),
-    ).toBe(true);
+    expect(document.querySelector('[data-status="failed"]')?.textContent).toContain(
+      "Couldn't load pi session logs",
+    );
+    await act(async () => document.querySelector<HTMLElement>("details summary")?.click());
+    expect(document.querySelector("details")?.open).toBe(true);
+    expect(document.querySelector("details")?.textContent).toContain("fixture scan failed");
     expect(buttonNamed("Try again")).not.toBeNull();
 
     main.answerScan({ ok: true, inventory: INVENTORY });
@@ -463,7 +464,10 @@ describe("Settings → Database section", () => {
 
     const announced = container?.querySelector('[role="status"][aria-live="polite"]');
     expect(announced?.textContent).toContain("Couldn't read the database size");
-    expect(announced?.textContent).toContain("database locked");
+    expect(announced?.textContent).not.toContain("database locked");
+    await act(async () => container?.querySelector<HTMLElement>("details summary")?.click());
+    expect(container?.querySelector("details")?.open).toBe(true);
+    expect(container?.querySelector("details")?.textContent).toContain("database locked");
     expect(container?.textContent).toContain("Unavailable");
 
     await act(async () => buttonNamed("Try again").click());

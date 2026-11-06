@@ -34,7 +34,7 @@ describe("foundation control contracts", () => {
       expect(classes).toContain("shadow-control");
       expect(classes).toContain("active:shadow-control-pressed");
       expect(classes).not.toContain("scale-");
-      expect(classes).toContain("rounded-control");
+      expect(classes).toContain("rounded-native-control");
     },
   );
 

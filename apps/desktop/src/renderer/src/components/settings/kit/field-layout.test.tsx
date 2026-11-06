@@ -23,7 +23,7 @@ describe("Settings field hierarchy and alignment", () => {
     );
     const row = doc.body.firstElementChild!;
     expect(row.className).toContain("items-center");
-    expect(row.className).toContain("py-4");
+    expect(row.className).toContain("py-2");
     expect(row.className).not.toContain("first:pt-0");
     expect(row.className).not.toContain("last:pb-0");
     expect(doc.querySelector("p")!.className).not.toContain("font-medium");
@@ -34,7 +34,8 @@ describe("Settings field hierarchy and alignment", () => {
     expect(EMPTY_INLINE).toContain("text-left");
     expect(EMPTY_PAGE).toContain("text-center");
     const empty = renderToStaticMarkup(<Empty>No commands</Empty>);
-    expect(empty).toContain("text-left");
+    expect(empty).toContain('data-tier="panel"');
+    expect(empty).toContain("No commands");
     const loading = renderToStaticMarkup(
       <AsyncSection title="Commands" state={{ status: "loading" }}>
         {() => null}

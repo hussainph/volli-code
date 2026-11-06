@@ -211,15 +211,17 @@ describe("the rail roster on the push path", () => {
     });
 
     const loading = () => container?.querySelector('[data-testid="ticket-sessions-loading"]');
-    expect(loading()).not.toBeNull();
-    expect(currentSectionText()).not.toContain("No active sessions");
-    // The heading's own control stays live: a pending list blocks nothing
-    // about starting a Session.
-    expect(container?.querySelector("section button")).not.toBeNull();
-
-    await act(async () => {
-      answer?.();
-    });
+    try {
+      expect(loading()).toBeNull();
+      expect(currentSectionText()).not.toContain("No sessions");
+      expect(container?.querySelector('[aria-label="Open a tab"]')).not.toBeNull();
+    } finally {
+      // Always settle the shared in-flight read, even if the pending assertion
+      // fails; later push tests must not inherit this fixture's unanswered read.
+      await act(async () => {
+        answer?.();
+      });
+    }
     expect(loading()).toBeNull();
     expect(text()).toContain("Root shell");
   });
@@ -239,12 +241,11 @@ describe("the rail roster on the push path", () => {
     });
 
     expect(container?.querySelector('[data-testid="ticket-sessions-loading"]')).toBeNull();
-    expect(currentSectionText()).toContain("No active sessions");
-    const empty = [...(container?.querySelectorAll("p") ?? [])].find(
-      (node) => node.textContent === "No active sessions",
-    );
-    expect(empty?.className).not.toContain("border");
-    expect(empty?.className).toContain("text-ui");
+    expect(currentSectionText()).toContain("No sessions");
+    const empty = container?.querySelector('[data-status="empty"]');
+    expect(empty?.querySelector("h2")?.textContent).toBe("No sessions");
+    expect(empty?.getAttribute("data-tier")).toBe("panel");
+    expect(empty?.querySelector("button")?.textContent).toBe("New chat");
     expect(container?.querySelectorAll('[aria-label="New chat"]').length).toBe(1);
   });
 
@@ -281,10 +282,13 @@ describe("the rail roster on the push path", () => {
     expect(currentSectionText()).not.toContain("No active sessions");
     // The shared read grammar's body placement (VC-406): a refused FIRST read
     // takes the body, says so, and brings the one action that can change it.
-    // The bridge detail stays on `title`, off the row.
+    // The transport detail is one disclosure deeper than the named fault.
     const fault = container?.querySelector('[data-testid="ticket-sessions-error"]');
-    expect(fault?.textContent).toContain("Sessions failed to read");
-    expect(fault?.getAttribute("title")).toBe("db locked");
+    expect(fault?.querySelector("h2")?.textContent).toContain("Sessions failed to read");
+    expect(fault?.querySelector("details")?.open).toBe(false);
+    await act(async () => fault?.querySelector<HTMLElement>("summary")?.click());
+    expect(fault?.querySelector("details")?.open).toBe(true);
+    expect(fault?.querySelector("details")?.textContent).toContain("db locked");
     expect(fault?.querySelector("button")?.textContent).toContain("Retry");
   });
 

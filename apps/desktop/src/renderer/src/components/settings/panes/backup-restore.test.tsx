@@ -146,7 +146,12 @@ describe("Storage backup restore", () => {
     const problem = [...document.querySelectorAll('[role="status"]')].find((node) =>
       node.textContent?.includes("Couldn't restore this backup"),
     );
-    expect(problem?.textContent).toContain("Bundle is not a gzip archive");
+    expect(problem?.textContent).not.toContain("Bundle is not a gzip archive");
+    await act(async () => document.querySelector<HTMLElement>("details summary")?.click());
+    expect(document.querySelector("details")?.open).toBe(true);
+    expect(document.querySelector("details")?.textContent).toContain(
+      "Bundle is not a gzip archive",
+    );
     mocks.choose.mockRejectedValue(new Error("file unavailable"));
     await act(async () => button("Choose backup…").click());
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't restore: file unavailable");
@@ -169,7 +174,10 @@ describe("Storage backup restore", () => {
     expect(button("Restore…").disabled).toBe(true);
     const announced = document.querySelector('[role="status"]');
     expect(announced?.textContent).toContain("Couldn't read restore status");
-    expect(announced?.textContent).toContain("Restart in local mode");
+    expect(announced?.textContent).not.toContain("Restart in local mode");
+    await act(async () => document.querySelector<HTMLElement>("details summary")?.click());
+    expect(document.querySelector("details")?.open).toBe(true);
+    expect(document.querySelector("details")?.textContent).toContain("Restart in local mode");
 
     await act(async () => button("Try again").click());
     expect(button("Restore…").disabled).toBe(false);

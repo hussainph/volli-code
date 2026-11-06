@@ -480,7 +480,10 @@ describe("Storage → Orphaned worktrees", () => {
     expect(text).toContain("Cleanup finished with problems");
     expect(text).toContain("git refused: worktree is locked");
     expect(findByText("Scan again")).toBeTruthy();
-    expect(announcedNotice("Cleanup finished with problems").textContent).toContain("1 failed");
+    expect(announcedNotice("Cleanup finished with problems").textContent).not.toContain("1 failed");
+    await act(async () => document.querySelector<HTMLElement>("details summary")?.click());
+    expect(document.querySelector("details")?.open).toBe(true);
+    expect(document.querySelector("details")?.textContent).toContain("1 failed");
   });
 
   // The recovery acceptance, on the surface a person actually looks at: a run

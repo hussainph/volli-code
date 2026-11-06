@@ -10,10 +10,13 @@ describe("RailFaultBanner", () => {
       html.indexOf('role="status"'),
       html.indexOf("</div>", html.indexOf('role="status"')),
     );
-    expect(message).toContain(error);
+    expect(message).not.toContain(error);
+    expect(html).toContain(error);
+    expect(html).toContain("<summary>Details</summary>");
+    expect(html).not.toContain("<details open");
     expect(message).toContain("Updates paused");
     expect(message).not.toContain("<button");
-    expect(html).toContain("line-clamp-2");
+    expect(html).toContain("[overflow-wrap:anywhere]");
     expect(html).toContain("Copy error");
     expect(html).toContain("Retry");
   });

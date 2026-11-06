@@ -542,7 +542,8 @@ describe("TicketFilesPanel", () => {
       expect(before?.isConnected).toBe(false);
       expect(drawn('[data-testid="ticket-files-row"]')).toHaveLength(0);
       expect(document.body.textContent).not.toContain("README.md");
-      expect(drawn('[data-testid="file-tree-loading"]')).toHaveLength(1);
+      expect(drawn('[data-testid="file-tree-loading"]')).toHaveLength(0);
+      expect(document.body.textContent).not.toContain("No files");
     });
 
     it("lets a listing the old ticket left in flight write nothing here", async () => {

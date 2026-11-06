@@ -507,10 +507,10 @@ function boxes(html: string): string[] {
  */
 function answerRow(html: string, label: string): string {
   const row = html
-    .split('<div class="group relative')
+    .split('<div data-density="row"')
     .find((fragment) => fragment.includes(`>${label}</span>`));
   if (row === undefined) throw new Error(`no answer row labelled ${label}`);
-  return `<div class="group relative${row}`;
+  return `<div data-density="row"${row}`;
 }
 
 /** The markup of the one row carrying this label, out of the list it sits in. */
@@ -594,7 +594,8 @@ describe("the two cards as one family", () => {
     // radius, its transparent rest border and its selected fill.
     const html = drawn(ask([askPrompt()]));
     const answer = answerRow(html, "release");
-    expect(answer).toContain("rounded-row border border-transparent px-2");
+    expect(answer).toContain("list-row group relative");
+    expect(answer).toContain("rounded-row px-2");
     for (const bespoke of ["rounded-xl", "border-input", "bg-input/20", "bg-primary/10"])
       expect([bespoke, html.includes(bespoke)]).toEqual([bespoke, false]);
     // Content-height rows: they wrap, so no two-line floor centres a short

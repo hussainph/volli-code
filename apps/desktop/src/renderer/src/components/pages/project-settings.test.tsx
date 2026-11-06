@@ -214,7 +214,8 @@ describe("Configure → Sessions", () => {
     const modelRow = html.slice(html.indexOf('data-testid="project-session-model"'));
 
     expect(modelRow).toContain('data-testid="project-session-model"');
-    expect(modelRow).toContain('data-slot="skeleton"');
+    expect(modelRow).not.toContain('data-slot="skeleton"');
+    expect(modelRow).toContain("disabled");
     expect(modelRow).not.toContain('aria-label="Reasoning level"');
   });
 });

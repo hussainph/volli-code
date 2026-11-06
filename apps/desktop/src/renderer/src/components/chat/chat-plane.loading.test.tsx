@@ -171,10 +171,10 @@ describe("a chat with no messages on screen", () => {
     expect(pill?.textContent).not.toContain("Deep");
   });
 
-  it("holds the transcript's box while the history read is still in flight", async () => {
+  it("keeps the pending transcript silent without claiming an empty history", async () => {
     await mountPlane(chatStore({ projection: null }));
-    expect(loading()).not.toBeNull();
-    expect(loading()?.getAttribute("aria-busy")).toBe("true");
+    expect(loading()).toBeNull();
+    expect(container?.querySelector('[aria-label="Message"]')).not.toBeNull();
     expect(emptyState()).toBeNull();
   });
 
@@ -215,7 +215,8 @@ describe("a chat with no messages on screen", () => {
   it("gives way to the transcript the moment messages arrive", async () => {
     const store = chatStore({ projection: null });
     await mountPlane(store);
-    expect(loading()).not.toBeNull();
+    expect(loading()).toBeNull();
+    expect(emptyState()).toBeNull();
     const message: UIMessage = { id: "u1", role: "user", parts: [{ type: "text", text: "Hi" }] };
     await act(async () => {
       store.setState(

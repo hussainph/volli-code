@@ -46,7 +46,9 @@ describe("shell control material", () => {
         <AddProjectTile />
       </TooltipProvider>,
     );
-    expect(html).toContain("workspace-tile");
+    expect(html).toContain("glass-control");
+    expect(html).toContain("rounded-full");
+    expect(html).toContain('aria-label="Add project"');
     expect(html).toContain("focus-visible:ring-ring");
   });
   it.each([false, true])(

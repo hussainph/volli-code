@@ -246,7 +246,12 @@ describe("Runner setup sheets", () => {
     });
     act(() => root.render(<AddRunnerSheet {...f.props} />));
     await click("Create install command");
-    expect(announced().join("\n")).toContain("Settings → Account and sign in again");
+    expect(announced().join("\n")).toContain("Couldn't add runner");
+    await act(async () => document.querySelector<HTMLElement>("details summary")?.click());
+    expect(document.querySelector("details")?.open).toBe(true);
+    expect(document.querySelector("details")?.textContent).toContain(
+      "Settings → Account and sign in again",
+    );
     expect(document.body.textContent).not.toContain(f.grant.installToken);
   });
 

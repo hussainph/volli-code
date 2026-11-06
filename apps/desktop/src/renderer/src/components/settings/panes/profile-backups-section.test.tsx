@@ -113,7 +113,10 @@ describe("Profile backups", () => {
     expect(button("Back up now").disabled).toBe(true);
     const announced = container.querySelector('[role="status"]');
     expect(announced?.textContent).toContain("Couldn't read backups");
-    expect(announced?.textContent).toContain("Backup history unavailable");
+    expect(announced?.textContent).not.toContain("Backup history unavailable");
+    await act(async () => container.querySelector<HTMLElement>("details summary")?.click());
+    expect(container.querySelector("details")?.open).toBe(true);
+    expect(container.querySelector("details")?.textContent).toContain("Backup history unavailable");
     expect(announced?.querySelector("button")).toBeNull();
 
     await act(async () => button("Try again").click());

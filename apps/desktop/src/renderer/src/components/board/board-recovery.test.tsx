@@ -35,7 +35,8 @@ it("contains a render fault and offers a named, repeatable board retry", async (
     );
     expect(host.querySelector("h2")?.textContent).toBe("Board unavailable");
     expect(host.querySelector("h2")?.classList.contains("text-heading")).toBe(true);
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("The board stopped responding.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Board unavailable");
+    expect(host.querySelector("button")?.textContent).toBe("Reload the board");
     const retry = host.querySelector("button")!;
     await act(async () => retry.click());
     expect(host.querySelector("[data-board-boundary-fallback]")).not.toBeNull();
@@ -54,9 +55,8 @@ describe("empty board", () => {
   it("names the empty state without teaching the composer", () => {
     access.ready = true;
     const html = renderToStaticMarkup(<BoardEmpty projectId="p1" />);
-    expect(html).toContain(
-      '<h2 class="text-heading font-semibold text-foreground">No tickets yet</h2>',
-    );
+    expect(html).toMatch(/<h2[^>]*>No tickets yet<[/]h2>/);
+    expect(html).toContain('data-tier="page"');
     expect(html).toContain("New ticket");
     expect(html).not.toContain("Create &amp; start puts");
   });
@@ -90,6 +90,7 @@ describe("offered drop targets", () => {
     expect(html).toContain("font-medium wrap-anywhere");
     expect(html).not.toContain("flex-1 truncate");
     expect(html).toContain('data-offered-row="move-only"');
-    expect(html).toContain("mx-auto");
+    expect(html).toContain('class="px-2 py-1 text-label text-muted-foreground"');
+    expect(html).toContain("Drop on a choice · Esc cancels");
   });
 });

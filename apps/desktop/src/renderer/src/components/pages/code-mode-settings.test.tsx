@@ -349,7 +349,7 @@ describe("Code Mode in the Models pane", () => {
   });
 });
 
-it("exposes mode meanings and built-in defaults from the production Agents pane", async () => {
+it("offers all three modes and preserves model defaults until a choice in the production Agents pane", async () => {
   const { CodeModeSettings } = await import("../settings/panes/code-mode-pane");
   const { client } = clientWith(DEFAULT_CODE_MODE_POLICY);
   container = document.body.appendChild(document.createElement("div"));
@@ -364,16 +364,21 @@ it("exposes mode meanings and built-in defaults from the production Agents pane"
     ),
   );
   expect(document.body.textContent).not.toContain("Smallest prompt");
-  await click(the('[aria-label="Code Mode meanings and defaults"]'));
-  for (const detail of [
+  expect(document.querySelector('[aria-label="Code Mode meanings and defaults"]')).toBeNull();
+  expect(the('[data-testid="code-mode-default"]').textContent).toBe("Model defaults");
+  expect(await client.codeModePolicy()).toEqual(DEFAULT_CODE_MODE_POLICY);
+  const options = await openSelect(the('[data-testid="code-mode-default"]'));
+  expect(options.map((option) => option.textContent)).toEqual([
     "Direct tools",
     "Code and direct tools",
     "Code only",
-    "Smallest prompt",
-    "Claude Haiku",
-    "Claude Sonnet",
-    "Every other model",
-    "new Sessions",
-  ])
-    expect(document.body.textContent).toContain(detail);
+  ]);
+  await act(async () => options[1]!.focus());
+  await act(async () =>
+    options[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  expect(await client.codeModePolicy()).toEqual({
+    ...DEFAULT_CODE_MODE_POLICY,
+    defaultMode: "both",
+  });
 });

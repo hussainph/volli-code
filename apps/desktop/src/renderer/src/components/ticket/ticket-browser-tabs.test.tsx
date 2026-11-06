@@ -20,7 +20,6 @@ import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
-import { TICKET_BODY_TAB_ID } from "./ticket-body-tab";
 import { TicketDetail } from "./ticket-detail";
 
 vi.mock("@renderer/lib/app-state-storage", () => {
@@ -196,12 +195,12 @@ async function mount(grouped: boolean, person = false): Promise<void> {
   expect(host.querySelectorAll('[data-slot="split-view-pane"]')).toHaveLength(grouped ? 2 : 1);
 }
 
-function expectLeftStrip(grouped: boolean): void {
+function expectLeftStrip(_grouped: boolean): void {
   expect(stripBrowserTabs(Object.values(useBrowserTabsStore.getState().byId))).toEqual([]);
   expect(host.querySelector('[role="tab"][aria-label="Settings"]')).toBeNull();
   expect(workspace()?.splitView ?? null).toBeNull();
   expect(browserViewportSnapshot().has(BROWSER)).toBe(false);
-  expect(workspace()?.active).toBe(grouped ? CHAT_TAB : TICKET_BODY_TAB_ID);
+  expect(workspace()?.active).toBe(CHAT_TAB);
   expect(useChatSessionsStore.getState().openTabs[TICKET]).toEqual([SESSION]);
 }
 
