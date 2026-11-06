@@ -83,6 +83,9 @@ export function usePaneMotion({
     setPour(null);
   }, []);
 
+  // A portal can mount the panel only after its paper/host ref arrives.
+  // contentElement therefore participates in the first real push commit even
+  // when pin state and width did not change: pinned glass must reserve paper.
   React.useLayoutEffect(() => {
     const panel = panelRef.current;
     const element = panel?.closest<HTMLElement>("[data-volli-shell]") ?? panel?.parentElement;
@@ -174,7 +177,7 @@ export function usePaneMotion({
       stopPush();
       element.toggleAttribute(`data-${side}-pane-push-active`, pinned);
     };
-  }, [side, enabled, pinned, instant, geometryKey, panelRef, stopPush]);
+  }, [side, enabled, pinned, instant, geometryKey, panelRef, contentElement, stopPush]);
 
   React.useLayoutEffect(() => {
     const previous = previousMode.current;

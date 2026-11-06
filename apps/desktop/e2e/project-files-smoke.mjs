@@ -212,7 +212,7 @@ async function readTabs(page) {
       preview: tab.getAttribute("data-preview"),
       dirty: tab.getAttribute("data-dirty"),
       active: tab.getAttribute("aria-selected") === "true",
-      hint: tab.querySelector('[data-testid="tab-hint"]')?.textContent ?? null,
+      name: tab.getAttribute("aria-label"),
     })),
   );
 }
@@ -455,22 +455,35 @@ async function main() {
         await navigateToRoot(page);
         await navigateIntoDir(page, "lib", LIB_APP_TS);
         await fileRow(page, LIB_APP_TS).click();
-        const three = await waitUntil("third tab with basename hints", async () => {
+        const three = await waitUntil("third tab with distinct basename identities", async () => {
           const strip = await readTabs(page);
           return strip.length === 3 &&
             strip[2].relPath === LIB_APP_TS &&
-            strip[1].hint === "src" &&
-            strip[2].hint === "lib"
+            strip[1].name === "app.ts · src" &&
+            strip[2].name === "app.ts · lib"
             ? strip
             : null;
         });
         await waitForMonacoReady(page, LIB_APP_TS);
-        const utilHasNoHint = three[0].hint === null;
+        // The compact captions keep the basename; sighted keyboard users can
+        // still read each path through the real tab's focus reveal.
+        for (const [relPath, detail] of [
+          [APP_TS, "app.ts · src"],
+          [LIB_APP_TS, "app.ts · lib"],
+        ]) {
+          await homeFileTab(page, relPath).focus();
+          await waitUntil(
+            `file location reveal: ${detail}`,
+            async () => (await page.getByRole("tooltip").textContent()) === detail,
+          );
+          await page.keyboard.press("Escape");
+        }
+        const utilHasNoHint = three[0].name === "util.ts";
 
         const ok = !!pinned && two.length === 2 && three.length === 3 && utilHasNoHint;
         return {
           ok,
-          detail: `tabs=${tabSignature(three)} hints=${JSON.stringify(three.map((t) => t.hint))}`,
+          detail: `tabs=${tabSignature(three)} names=${JSON.stringify(three.map((t) => t.name))}`,
         };
       },
     );

@@ -954,12 +954,12 @@ function TabShell({
   // on tabs that do not all carry a `title` either. The reveal rides the tab
   // itself rather than bringing a stop of its own, because a tab IS focusable
   // and a control nested in one is a second press between a person and the
-  // place they were going. It opens only when the run is actually clipped:
-  // over a strip of short names it would be noise.
+  // place they were going. Short names stay quiet unless they have a location
+  // qualifier: basename twins need that detail even when neither name clips.
   const labelRef = React.useRef<HTMLSpanElement>(null);
-  const reveal = useClippedReveal(labelRef);
-  const name = label;
-  const detail = hint === undefined ? label : `${label} · ${hint}`;
+  const hasDetail = Boolean(hint);
+  const reveal = useClippedReveal(labelRef, { hasDetail });
+  const detail = hasDetail ? `${label} · ${hint}` : label;
   const inventory = React.useContext(TabInventoryContext);
   const inventoryId = React.useId();
   React.useLayoutEffect(() => {
@@ -990,9 +990,9 @@ function TabShell({
           data-slot="tab"
           data-icon-only={iconOnly || undefined}
           role="tab"
-          // The caption is the pane title alone. Optional file-location detail
-          // belongs only in the clipped-title reveal, not the tab's identity.
-          aria-label={name}
+          // Equal file basenames remain distinct to assistive technology and
+          // to sighted readers through the same hover/keyboard reveal.
+          aria-label={detail}
           aria-selected={active}
           tabIndex={tabStop ? 0 : -1}
           onClick={onActivate}
@@ -1108,7 +1108,7 @@ function TabShell({
           )}
           {!renamingNow && (menuActions.length > 0 || actionsContent) ? (
             <TabActionDropdown
-              label={label}
+              label={detail}
               actions={menuActions}
               onOpenChange={onActionsOpenChange}
             >
@@ -1140,7 +1140,7 @@ function TabShell({
           ) : null}
           {showClose ? (
             <TabClose
-              label={label}
+              label={detail}
               dirty={dirty}
               onClose={(pointer) => {
                 cascade?.close(shellRef.current, pointer);
@@ -1150,10 +1150,8 @@ function TabShell({
           ) : null}
         </div>
       </TooltipTrigger>
-      {/* The hint travels with it: on a strip narrow enough to be clipping the
-          label, the qualifier that tells two `app.ts` apart has already been
-          collapsed by the container query below, so a reveal without it would
-          answer half the question. */}
+      {/* File-location qualifiers are readable on hover/focus even when a
+          short basename fits; the caption itself keeps the compact tab shape. */}
       <TooltipContent side="bottom">{detail}</TooltipContent>
     </Tooltip>
   );

@@ -165,6 +165,37 @@ describe("resident inspector", () => {
 });
 
 describe("inspector shell placement", () => {
+  it("reserves the pinned width when its portal host arrives after the first commit", async () => {
+    const shell = document.createElement("div");
+    shell.dataset.volliShell = "framed";
+    const paper = document.createElement("main");
+    paper.dataset.slot = "sidebar-inset";
+    paper.dataset.volliSurface = "";
+    const outlet = document.createElement("div");
+    shell.append(paper, outlet);
+    document.body.append(shell);
+    const draw = (portal: HTMLDivElement | null) =>
+      root.render(
+        <InspectorHostContext.Provider value={portal}>
+          <InspectorShell enabled owner="home">
+            Pinned inspector
+          </InspectorShell>
+        </InspectorHostContext.Provider>,
+      );
+    try {
+      await act(async () => draw(null));
+      expect(shell.style.getPropertyValue("--right-pane-push")).toBe("");
+      await act(async () => draw(outlet));
+      expect(outlet.querySelector("[data-inspector-panel]")).not.toBeNull();
+      expect(shell.style.getPropertyValue("--right-pane-push")).toBe("300px");
+      await act(async () => useUiStore.setState({ railCollapsed: true }));
+      expect(shell.style.getPropertyValue("--right-pane-push")).toBe("0px");
+    } finally {
+      await act(async () => root.unmount());
+      shell.remove();
+    }
+  });
+
   it("portals outside paper while retaining the resident page through pin and enable changes", async () => {
     const outlet = document.createElement("div");
     const paper = document.createElement("main");

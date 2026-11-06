@@ -800,18 +800,48 @@ describe("TabStrip overflow", () => {
     expect(tab?.querySelector("span")?.className).toContain("truncate");
   });
 
-  it("keeps directory details out of the tab caption and accessible name", () => {
+  it("distinguishes unclipped basename twins by name and keyboard reveal", () => {
     act(() => {
       root?.render(
         <TabStrip label="Home tabs">
-          <Tab label="app.ts" hint="src" active tabStop closable={false} onActivate={() => {}} />
+          <Tab label="app.ts" hint="src" active tabStop onActivate={() => {}} onClose={() => {}} />
+          <Tab
+            label="app.ts"
+            hint="lib"
+            active={false}
+            tabStop={false}
+            onActivate={() => {}}
+            onClose={() => {}}
+          />
         </TabStrip>,
       );
     });
+    const [src, lib] = tabsInStrip();
+    expect(src?.getAttribute("aria-label")).toBe("app.ts · src");
+    expect(lib?.getAttribute("aria-label")).toBe("app.ts · lib");
+    expect(src?.querySelector('[aria-label="Close app.ts · src"]')).not.toBeNull();
+    expect(lib?.querySelector('[aria-label="Actions for app.ts · lib"]')).not.toBeNull();
+    expect(src?.querySelector('[data-slot="tab-label"]')?.textContent).toBe("app.ts");
+    act(() => src?.focus());
+    expect(revealText()).toBe("app.ts · src");
+    act(() => lib?.focus());
+    expect(revealText()).toBe("app.ts · lib");
+  });
+
+  it("reveals an unclipped file location on hover", async () => {
+    act(() =>
+      root?.render(
+        <TabStrip label="Files">
+          <Tab label="app.ts" hint="src" active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      ),
+    );
     const [tab] = tabsInStrip();
-    expect(tab?.getAttribute("aria-label")).toBe("app.ts");
-    expect(tab?.textContent).toBe("app.ts");
-    expect(container?.querySelector('[data-testid="tab-hint"]')).toBeNull();
+    await act(async () => {
+      tab?.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    });
+    expect(revealText()).toBe("app.ts · src");
   });
 
   it("keeps the permanent icon-only Board tab named and keyboard reachable", () => {
