@@ -1415,3 +1415,20 @@ it("carries keyboard scope provenance across the asynchronous host read, not in 
   expect(begin).toHaveBeenLastCalledWith(expect.any(Function), "keyboard");
   expect(gateway.state).toHaveBeenLastCalledWith({ projectId: "p1" });
 });
+
+it.each(["pointer", "keyboard", undefined] as const)(
+  "carries %s appearance activation only to the local repaint, not to either gateway write",
+  async (origin) => {
+    const gateway = fakeGateway();
+    const begin = vi.fn((paint: () => void) => paint());
+    const store = createThemeStore({ deps: { gateway, ...recorder(), beginScopeRepaint: begin } });
+    await store.getState().hydrate();
+    await store.getState().setGlobalAppearance("light", origin);
+    expect(begin).toHaveBeenLastCalledWith(expect.any(Function), origin);
+    expect(gateway.setGlobalAppearance).toHaveBeenLastCalledWith("light");
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+    await store.getState().setProjectAppearance("p1", "dark", origin);
+    expect(begin).toHaveBeenLastCalledWith(expect.any(Function), origin);
+    expect(gateway.setProjectAppearance).toHaveBeenLastCalledWith("p1", "dark");
+  },
+);

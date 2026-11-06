@@ -250,11 +250,15 @@ interface ThemeState {
   cancelPreview(): void;
   commitPreview(scope: ThemeScope): Promise<boolean>;
   setGlobalCanvas(canvas: Canvas): Promise<boolean>;
-  setGlobalAppearance(appearance: Appearance): Promise<boolean>;
+  setGlobalAppearance(appearance: Appearance, origin?: ScopeRepaintOrigin): Promise<boolean>;
   /** One workspace's canvas; `null` puts it back to inheriting the global one. */
   setProjectCanvas(projectId: string, canvas: Canvas | null): Promise<boolean>;
   /** One workspace's appearance; `null` puts it back to inheriting. */
-  setProjectAppearance(projectId: string, appearance: Appearance | null): Promise<boolean>;
+  setProjectAppearance(
+    projectId: string,
+    appearance: Appearance | null,
+    origin?: ScopeRepaintOrigin,
+  ): Promise<boolean>;
 }
 
 /** The inputs that decide what is on screen right now. */
@@ -577,13 +581,16 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * not a transition — see {@link ThemeState.hydrateGlobal}, the only caller
      * that passes it.
      */
-    const setAndRepaint = (patch: Partial<ThemeState>, { ease = true } = {}): void => {
+    const setAndRepaint = (
+      patch: Partial<ThemeState>,
+      { ease = true, origin }: { ease?: boolean; origin?: ScopeRepaintOrigin } = {},
+    ): void => {
       dropPendingPreviewPaint();
       const hadPainted = painted !== null;
       const before = activeTheme(get()).resolved;
       set(patch);
       const after = activeTheme(get()).resolved;
-      repaint({ eased: ease && hadPainted && before !== after });
+      repaint({ eased: ease && hadPainted && before !== after, origin });
     };
 
     /**
@@ -781,9 +788,9 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         return true;
       },
 
-      async setGlobalAppearance(appearance) {
+      async setGlobalAppearance(appearance, origin) {
         const previous = get().globalAppearance;
-        setAndRepaint({ previewAppearance: null, globalAppearance: appearance });
+        setAndRepaint({ previewAppearance: null, globalAppearance: appearance }, { origin });
         const result = await writeThrough("save the appearance", () =>
           deps.gateway.setGlobalAppearance(appearance),
         );
@@ -825,18 +832,21 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         return true;
       },
 
-      async setProjectAppearance(projectId, appearance) {
+      async setProjectAppearance(projectId, appearance, origin) {
         const state = get();
         const inScope = state.projectId === projectId;
         const previous = state.projectOverride;
         if (inScope) {
-          setAndRepaint({
-            previewAppearance: null,
-            projectOverride: surfaceOverride(
-              { projectId, canvas: previous?.canvas ?? null, appearance },
-              heldTerminalOverride(),
-            ),
-          });
+          setAndRepaint(
+            {
+              previewAppearance: null,
+              projectOverride: surfaceOverride(
+                { projectId, canvas: previous?.canvas ?? null, appearance },
+                heldTerminalOverride(),
+              ),
+            },
+            { origin },
+          );
         }
         const result = await writeThrough("save the appearance", () =>
           deps.gateway.setProjectAppearance(projectId, appearance),

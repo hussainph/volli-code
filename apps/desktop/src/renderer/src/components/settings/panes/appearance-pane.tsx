@@ -119,7 +119,9 @@ function AppThemeSection() {
         <AppearanceModeChoice
           value={appearance}
           testId="appearance-mode"
-          onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
+          onChange={(next, origin) =>
+            void useThemeStore.getState().setGlobalAppearance(next, origin)
+          }
         />
       </PrefRow>
       <CanvasInstrument scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />

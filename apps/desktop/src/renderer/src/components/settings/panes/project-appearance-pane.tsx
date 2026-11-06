@@ -102,8 +102,11 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
     resolveAppearance(globalAppearance, systemPrefersDark),
   );
 
-  const writeMode = (next: typeof globalAppearance | null): void => {
-    void useThemeStore.getState().setProjectAppearance(project.id, next);
+  const writeMode = (
+    next: typeof globalAppearance | null,
+    origin?: "pointer" | "keyboard",
+  ): void => {
+    void useThemeStore.getState().setProjectAppearance(project.id, next, origin);
   };
 
   return (

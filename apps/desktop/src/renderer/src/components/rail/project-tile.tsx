@@ -96,7 +96,9 @@ export function ProjectTile({ project, index, dimmed, presentation = "rail" }: P
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  onClick={() => select(project.id)}
+                  onClick={(event) =>
+                    select(project.id, event.detail === 0 ? "keyboard" : "pointer")
+                  }
                   onKeyDown={(event) => {
                     if (!cloudEnabled) return;
                     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))

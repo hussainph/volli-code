@@ -148,17 +148,31 @@ export function AppearanceModeChoice({
   testId: string;
   /** Sun · moon · monitor with no words — the form it takes floating on the pad. */
   iconOnly?: boolean;
-  onChange(next: Appearance): void;
+  onChange(next: Appearance, origin?: "pointer" | "keyboard"): void;
 }) {
+  const origin = React.useRef<"pointer" | "keyboard">("keyboard");
   return (
-    <Segmented
-      ariaLabel="Appearance"
-      testId={testId}
-      value={value}
-      options={APPEARANCE_OPTIONS}
-      iconOnly={iconOnly}
-      onChange={onChange}
-    />
+    <div
+      className="contents"
+      onPointerDownCapture={() => {
+        origin.current = "pointer";
+      }}
+      onKeyDownCapture={() => {
+        origin.current = "keyboard";
+      }}
+      onClickCapture={(event) => {
+        if (event.detail === 0) origin.current = "keyboard";
+      }}
+    >
+      <Segmented
+        ariaLabel="Appearance"
+        testId={testId}
+        value={value}
+        options={APPEARANCE_OPTIONS}
+        iconOnly={iconOnly}
+        onChange={(next) => onChange(next, origin.current)}
+      />
+    </div>
   );
 }
 
