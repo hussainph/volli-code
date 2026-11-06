@@ -135,7 +135,12 @@ export function FileTree({
     setHeight(element.clientHeight);
     return () => observer.disconnect();
   }, []);
+  const previousQuery = React.useRef(query);
   React.useEffect(() => {
+    // Activity reconnects effects when Sessions/Files becomes visible again.
+    // Only a changed filter resets the cursor, not that lifecycle reconnect.
+    if (previousQuery.current === query) return;
+    previousQuery.current = query;
     if (scroller.current) scroller.current.scrollTop = 0;
     setScroll(0);
   }, [query]);
