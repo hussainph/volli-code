@@ -45,6 +45,7 @@ export type SessionGlyphSurface = "sidebar" | "popover";
 export const HARNESS_VENDOR: Partial<Record<FirstClassHarnessId, string>> = {
   "claude-code": "anthropic",
   codex: "openai-codex",
+  cursor: "cursor",
   opencode: "opencode-go",
 };
 

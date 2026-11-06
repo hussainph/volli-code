@@ -111,7 +111,7 @@ describe("the name and the logo", () => {
     expect(chat).not.toBe(terminal);
   });
 
-  it.each(["anthropic", "openai", "google", "openai-codex", "opencode-go"])(
+  it.each(["anthropic", "openai", "google", "openai-codex", "opencode-go", "cursor"])(
     "renders the published %s mark in every size and surface, never a generic Chat/Terminal mark",
     (providerId) => {
       const mark = providerMark(providerId)!;
@@ -142,13 +142,13 @@ describe("harnessVendorId", () => {
     expect(harnessVendorId("claude-code")).toBe("anthropic");
     expect(harnessVendorId("codex")).toBe("openai-codex");
     expect(harnessVendorId("opencode")).toBe("opencode-go");
+    expect(harnessVendorId("cursor")).toBe("cursor");
   });
 
   it("has no vendor for a harness nobody publishes a mark for, or for no harness", () => {
-    expect(harnessVendorId("cursor")).toBeNull();
     expect(harnessVendorId(null)).toBeNull();
     // A custom slug keeps the glyph its row already drew.
     expect(harnessVendorId(parseHarnessId("home-grown-cli"))).toBeNull();
-    expect(Object.keys(HARNESS_VENDOR)).not.toContain("cursor");
+    expect(Object.keys(HARNESS_VENDOR)).toEqual(["claude-code", "codex", "cursor", "opencode"]);
   });
 });

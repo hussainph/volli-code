@@ -37,6 +37,22 @@ describe("providerMark", () => {
     },
   );
 
+  it("gives Cursor its published monochrome cube rather than a pointer fallback", () => {
+    const mark = providerMark("cursor");
+    expect(mark?.viewBox).toBe("0 0 24 24");
+    expect(mark?.paths).toHaveLength(1);
+    expect(mark?.paths[0]).toMatch(/^M11\.503\.131 1\.891 5\.678/);
+    expect(mark?.tint).toBe(MODEL_MARK_TINTS.monochrome);
+    const markup = renderToStaticMarkup(
+      createElement(ModelMark, {
+        model: m("cursor", "unknown", "Cursor"),
+        providerLabel: "Cursor",
+      }),
+    );
+    expect(markup).toContain(`d="${mark!.paths[0]}"`);
+    expect(markup).not.toContain("<span");
+  });
+
   it("gives xAI its real monochrome mark rather than a letter", () => {
     expect(providerMark("xai")?.tint).toBe(MODEL_MARK_TINTS.monochrome);
     const markup = renderToStaticMarkup(
