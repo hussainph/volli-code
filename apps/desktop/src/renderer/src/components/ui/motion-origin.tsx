@@ -16,9 +16,12 @@ export function MotionOriginRoot({
   onOpenChange,
   children,
   hover = false,
+  deferClosedGesture = false,
 }: OpenProps & {
   scope: string;
   hover?: boolean;
+  /** Popup triggers need provenance at open, not an extra closed-state render. */
+  deferClosedGesture?: boolean;
   children(props: Required<Pick<OpenProps, "open" | "onOpenChange">>): React.ReactNode;
 }) {
   const parent = React.useContext(MotionOrigin);
@@ -37,7 +40,11 @@ export function MotionOriginRoot({
       activation.current = next;
       // Keyboard cancels an entrance; a later pointer inside an already-open
       // surface must not replay it. Closing records its own activation below.
-      if (!open || next === "keyboard") setOrigin(reduced ? "keyboard" : next);
+      // A popup can spend this ref in onOpenChange instead of rendering its
+      // closed tree between pointerdown and click. Hover intent and standalone
+      // controls still publish the gesture immediately.
+      if ((open || hover || !deferClosedGesture) && (!open || next === "keyboard"))
+        setOrigin(reduced ? "keyboard" : next);
       // Browsers can drain microtasks between capture and Radix's bubble listener.
       // Keep this activation through dispatch, not through the next timer task.
       clearTimeout(expiry.current);
@@ -45,7 +52,7 @@ export function MotionOriginRoot({
         activation.current = null;
       }, 0);
     },
-    [open, reduced],
+    [open, reduced, hover, deferClosedGesture],
   );
   const externalChange = open !== previousOpen.current && requestedOpen.current !== open;
   const effectiveOrigin: MotionState["origin"] = reduced

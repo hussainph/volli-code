@@ -73,6 +73,33 @@ function Retained({ open, onOpenChange }: { open: boolean; onOpenChange(open: bo
 }
 
 describe("activation-local primitive motion", () => {
+  it("records a popup press without rendering the closed subtree, then opens with pointer provenance", async () => {
+    const render = vi.fn();
+    await act(async () =>
+      root.render(
+        <MotionOriginRoot scope="retained" deferClosedGesture>
+          {(props) => {
+            render();
+            return <Retained {...props} />;
+          }}
+        </MotionOriginRoot>,
+      ),
+    );
+    expect(render).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      trigger().dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, detail: 1 })),
+    );
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(trigger().dataset.state).toBe("closed");
+    await click(trigger(), 1);
+    expect(trigger().dataset.motionOrigin).toBe("pointer");
+    expect(trigger().dataset.state).toBe("open");
+    await act(async () =>
+      trigger().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })),
+    );
+    expect(trigger().dataset.motionOrigin).toBe("keyboard");
+  });
+
   it("retains pointer provenance across the browser's capture/bubble microtask checkpoint", async () => {
     await act(async () =>
       root.render(

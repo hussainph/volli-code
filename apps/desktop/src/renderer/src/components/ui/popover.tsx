@@ -12,7 +12,7 @@ import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
   return (
-    <MotionOriginRoot scope="popover" {...props}>
+    <MotionOriginRoot scope="popover" deferClosedGesture {...props}>
       {(motion) => <PopoverPrimitive.Root data-slot="popover" {...props} {...motion} />}
     </MotionOriginRoot>
   );
