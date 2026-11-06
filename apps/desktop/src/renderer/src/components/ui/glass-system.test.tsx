@@ -36,6 +36,20 @@ afterEach(async () => {
 const buttons = () => Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
 
 describe("Glass system surfaces", () => {
+  it("keeps push ownership through withdrawal and bounds a peek-to-pin reversal", () => {
+    expect(css).toContain("[data-pane-side][data-pane-pin-motion],");
+    for (const side of ["left", "right"]) {
+      const push = css.match(
+        new RegExp(
+          `\\[data-${side}-pane-push-active\\] \\[data-pane-side="${side}"\\] \\{([^}]+)\\}`,
+        ),
+      )?.[1];
+      expect(push).toContain("clamp(");
+      expect(push).toContain(`var(--${side}-pane-push) * var(--pane-push-factor)`);
+      expect(push).toContain("var(--pane-full-width)");
+      expect(push).toContain("transition: none");
+    }
+  });
   it("keeps source headers at the muted medium UI tier and named tabs readable before scrolling", () => {
     const headers = css.match(/\[data-volli-sidebar\] \.sidebar-band-header h3 \{([^}]+)\}/)?.[1];
     expect(headers).toContain("font-size: var(--text-ui)");

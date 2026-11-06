@@ -3495,13 +3495,23 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   contain: layout paint;
 }
 [data-left-pane-push-active] [data-pane-side="left"] {
-  translate: calc(var(--left-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)) 0;
+  translate: clamp(
+      calc(-1 * var(--pane-full-width)),
+      calc(var(--left-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)),
+      0px
+    )
+    0;
   opacity: 1;
   visibility: visible;
   transition: none;
 }
 [data-right-pane-push-active] [data-pane-side="right"] {
-  translate: calc(var(--right-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)) 0;
+  translate: clamp(
+      0px,
+      calc(var(--right-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)),
+      var(--pane-full-width)
+    )
+    0;
   opacity: 1;
   visibility: visible;
   transition: none;
