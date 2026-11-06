@@ -112,7 +112,7 @@ describe("floating navigation native-plane exit", () => {
     state.peek = false;
     useUiStore.setState({ sidebarPinned: true });
     await render();
-    useUiStore.setState({ sidebarPinned: false });
+    await act(async () => useUiStore.setState({ sidebarPinned: false }));
     await render();
     expect(overlay()).toBeNull();
   });
