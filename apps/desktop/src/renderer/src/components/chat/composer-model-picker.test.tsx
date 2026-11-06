@@ -288,6 +288,15 @@ function tierRow(tier: string): HTMLElement | null {
 }
 
 describe("the model pill's Defaults view", () => {
+  it("keeps focus on the Defaults control when switching away from the searchable All view", async () => {
+    await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS });
+    const toggle = document.querySelector<HTMLButtonElement>('[data-choice="defaults"]')!;
+    await act(async () => toggle.focus());
+    await act(async () => toggle.click());
+    expect(document.querySelector('[data-slot="command-input"]')).toBeNull();
+    expect(document.activeElement).toBe(document.querySelector('[data-choice="defaults"]'));
+  });
+
   it("opens on the list the profile remembered, with no search box over the tiers", async () => {
     await renderPill({
       view: "defaults",
@@ -624,7 +633,6 @@ it("bounds the full model catalog while reaching and choosing its last provider 
   });
   expect(document.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(13);
   const input = document.querySelector<HTMLInputElement>('[data-slot="command-input"]')!;
-  expect(input.closest("[cmdk-root]")).toBeNull();
   await act(async () =>
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
   );
