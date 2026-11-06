@@ -40,19 +40,33 @@ uses brightness 1.56971 / contrast .61490 / brightness .71240 / saturation 2.790
 into cached device-resolution displacement plus 0.4px post-lens reconstruction.
 Maps are acquired only on mount/resize, never scroll; oversized overlays stay
 pane-tier. At most 16 unused geometries are retained. Small controls use a cheap
-inset shadow, never a masked gradient rim. No blur value animates. The composer
-sits on opaque paper: its boolean tint uses the first authored hue mixed into
-the same 46/52% veil, not a second mesh masquerading as a backdrop.
+inset shadow, never a masked gradient rim. No blur value animates. Glass over
+paper, including the composer, uses the untinted regular writing veil, not the
+canvas hue or a duplicate mesh. The composer's legacy `data-tint` marker selects
+that writing veil; it does not paint a canvas behind the transcript.
 
 The canvas retains authored hues in both appearances: default pools are 62% /
 58% opaque over a neutral floor mixed with the primary at 22% / 26%. Vibrancy
 changes opacity, not authored lightness. Grain belongs only to the canvas.
 
-Pinned navigation and stationary peeks use the same optical recipe. Reveal, pin
-and pour keep that material unchanged; nested glass and hidden resident panes disable blur.
+Pinned navigation and stationary peeks use the same optical recipe. Reveal and pin
+keep that material unchanged; nested glass and hidden resident panes disable blur.
 No blur covers a live terminal or native browser work plane. Reduced-transparency,
 stronger-contrast and unsupported-filter fallbacks remain opaque. `--shadow-glass`
 and `--shadow-glass-small` provide quiet lift.
+
+### Overlays and scroll edges
+
+All floating UI, including drag ghosts, portals through `ui/overlay-layer.ts` into the
+body-level `volli-overlays` layer. It stays free of filters, transforms and containment.
+A glass ancestor can establish a fixed-position containing block; raising z-index cannot
+repair displaced collision geometry or clipped modals. Shared Radix wrappers retain focus,
+scroll-lock, collision and nested Escape behaviour.
+
+Glass over scrolling paper stays untinted. Reuse the bounded source-list/Files edge fade and
+transcript viewport mask, fading only cut edges. Reserve the composer's measured height in
+content/scroll padding; latest-message controls get a clear band above it. A mask is not a
+substitute for making covered text reachable.
 
 ### Accent, ink and contrast
 
@@ -63,8 +77,8 @@ and `--shadow-glass-small` provide quiet lift.
 - Primary buttons are **tonal**: `--primary-text` accent ink on an accent tint with a same-hue
   sheen. `--accent-tint` is 10%, `--accent-selected` 18%. The legacy `--primary` opaque pair
   still exists; it is not the tonal label token.
-- Colour earns its place on identity/state icons, selected and hover fills, prominent text,
-  the person's chat bubble and the board Session ring. Reading paper and user message bubbles remain neutral.
+- Colour earns its place on identity/state icons, selected and hover fills, prominent text
+  and the board Session ring. Reading paper and user message bubbles remain neutral.
 - `--foreground` is body ink; `--muted-foreground` is opaque secondary;
   `--tertiary-foreground` is the third tier; `--label-ink` sits between body and secondary.
   Do not dilute reading ink with `/50`, `/70` or inherited opacity.
@@ -96,7 +110,7 @@ Use tokens and primitives, not a locally measured lookalike.
 | Floating content card | `radius-floating`: 20px; `--glass-gap`: 6px |
 | Sidebar row | `radius-row`: 8px |
 | Board card / column | `radius-card` / `radius-column`: 10 / 16px; 236px columns |
-| Session composer / user bubble | 24 / 18px corners; 560 / 420px maximum widths |
+| Session composer / user bubble | 24 / 18px corners; 608px composer column including 24px side gutters (560px face) / 420px bubble maximum |
 | Window toolbar | 46px band; 30px glass controls and search |
 | Sidebar | 236px default; symmetric 10px row-fill inset, then 8px to ink |
 | Inspector | Independent 272px glass card, sibling of the paper perimeter |
@@ -129,8 +143,9 @@ inspector are independent rounded cards. Back/forward and one inner-sidebar togg
 one leading toolbar group; search is window-centred, usage sits beside it and the
 inspector toggle stays at the far right. Pinning changes reserved space, never
 ownership or lifetime of the inspector's live subtree. Project tiles summon unpinned
-navigation after 100ms intent, with 100ms reveal / 120ms exit and no reserved space.
-Focus holds a peek; Escape dismisses it. ⌘B pins instantly from the keyboard.
+navigation after 100ms intent, with no reserved space. The pane reveal/exit uses
+170/110ms; the 100ms intent is a dwell, not an animation duration. Focus holds a peek;
+Escape dismisses it. ⌘B pins instantly from the keyboard.
 Rail visibility is in the layout context menu and ⌘⇧S, not a duplicate sidebar glyph.
 A hidden rail folds into the Projects and Workspaces menu with selection, reorder,
 context actions, add and Workspace switching intact.
@@ -148,14 +163,15 @@ uses the same chooser. Direct ⌘T / ⌥⌘T keep existing project/ticket/pane s
 cloud keeps Chat only, and the Runner picker stays with the control.
 
 Sidebar header, rows, section names and footer share an 18px leading ink inset.
-The project name is a measured 15/20px display title, not a new general-purpose type rung.
+The project name uses the 13/20px UI rung with the display family and semibold weight.
 Two-line primary rows are 46px, with a 20px identity tile and 2px row gaps.
 Selected navigation is a neutral ink fill, not an accent outline. The Sessions/Files
-choice uses `ViewSwitcher size="small"`, a quiet 24px pill with 14px glyphs,
-trailing-aligned in the fixed project header. It falls back to icon-only in a
-header narrower than 220px. The inspector keeps its regular pill; Automations
-uses its text variant. Other choices, including Board/List, keep compact native
-icon segments rather than adopting the inspector's pill.
+choice is a fixed borderless icon row below Home/Automations: a 22px row with
+24px targets and 14px glyphs, accent-selected ink, tooltips and arrow-key navigation.
+The project header retains only name/key. The inspector keeps its regular
+selected-label `ViewSwitcher` pill; Automations uses its text variant. Other choices,
+including Board/List, keep compact native icon segments rather than adopting the
+inspector's pill.
 Home and Automations stay fixed; Active/Previous headings scroll with their list.
 Bands, ticket disclosures (32px) and Session rows (46px Active / 32px Previous)
 share one flat presentation model with stable keys and offsets. Expanded ticket
@@ -222,9 +238,14 @@ or its existing selected background, never a fake fill. No Pro, bulk, solid or `
   primitive. Plain menus need not add decorative icons to every row.
 - Prefer a familiar icon over redundant text in cramped chrome, but keep its accessible name,
   tooltip, keyboard shortcut and focus treatment.
-- Model/provider identity uses the shared vendor mark (`models/model-identity.tsx`), with the
-  catalogue's display name rather than a wire id when known. External-app identities can use
-  `IdentityTile`: a centred 32px squircle. Centre marks vertically on two-line rows. Keep one
+- Vendor/provider logomarks are identity, not interchangeable UI symbols. Preserve the real
+  artwork and registry colours through `models/model-identity.tsx`, `SessionGlyph` and
+  `ui/brand-marks.tsx`; generic fallbacks apply only when no registered mark exists. Removing
+  decorative 3D icons does not remove logos. Keep semantic state badges separate. New vendored
+  marks need verified upstream/licence provenance and notice coverage under the repository's
+  generated-notices policy, including updated source entries and regenerated notices.
+- Model/provider identity uses the catalogue's display name rather than a wire id when known.
+  External-app identities can use `IdentityTile`: a centred 32px squircle. Centre marks vertically on two-line rows. Keep one
   cohesive identity treatment, not an unrelated badge drawing per surface.
 - Board state is the accent Session ring, not a second provider mark or a “Working” caption.
 
@@ -242,6 +263,8 @@ Do not add entrances to them because a pointer path happens to animate.
 | Menu / popover entrance | `--duration-menu-in`, `--ease-out` | 160ms; cubic-bezier(.23,1,.32,1) |
 | Menu / popover exit | `--duration-menu-out`, `--ease-out` | 110ms, fade only |
 | Sheet entrance / exit | `--duration-sheet` / `--duration-menu-out` | 220 / 110ms |
+| Pane peek entrance / exit | `GLASS_MOTION.peekIn` / `peekOut` | 170 / 110ms; short translation and opacity |
+| Pointer ticket-group disclosure | `GLASS_MOTION.disclosureIn` / `disclosureOut` | 200 / 160ms; sole disclosure-height exception |
 | Pointer press | `--duration-press`, `--press-scale` | 120ms, .97 |
 
 The spring tokens are sampled CSS `linear()` curves, not instructions to invent another JS
@@ -267,13 +290,37 @@ pointer. Other RailFold bodies and carets settle instantly.
 - Keep backdrop-filter surfaces few and **never nested**. Take materials from primitives,
   not `backdrop-blur-*` at a call site. Native Browser pixels use a still while panes move.
 - Material stays fully formed throughout every animation: never toggle backdrop filtering
-  off during a pour or reveal. A pour is decorative, never a scaled live content subtree.
-  Suppress pointer re-entry while morphing; a closing pane must not immediately peek again.
+  off during a push or reveal. Use one resident pane material and one width driver, not a
+  second decorative glass shell or competing pour timeline. Duplicate backdrop glass can
+  blur text twice or flash its base pose on cancellation. Suppress hover arming while the
+  push owns that side; retain ownership through the closed endpoint so a withdrawn pane
+  cannot fly back as a peek.
 - Preserve virtualisation, memoisation, containment, bounded lists and stable component
   identity. Navigation must not incidentally unmount live terminals or Browser Tabs.
 - Measure the interaction under comparable load. Read [performance-signals.md](performance-signals.md)
   for `volli perf` attribution and [performance-benchmark.md](performance-benchmark.md) for
   controlled comparisons. A short shared-machine run is not a performance claim.
+
+### Interaction budgets
+
+These are acceptance targets, not a claim that every existing path meets them. At 60Hz,
+measure pane PUSH separately from overlay arrival:
+
+- **Per push:** at most one renderer dropped presented frame, GPU-process busy p95 below
+  8ms, covered-frame layout below 4ms, continuous 6px divider gutter. Keep the tail visible
+  in evidence; do not compare only endpoints.
+- **Arrival:** observed cold chrome within 100ms, warm p95 within one refresh (16.67ms at
+  60Hz), zero warm renderer drops across 20 opens, and no renderer task above 50ms. Chrome
+  visibility and input-ready are separate observations, not proof of first presented pixel.
+- Record three fresh launches of one clean build for a cold/warm cohort, retaining failures.
+  A 120Hz refresh budget is 8.33ms; a shared-machine 60Hz sample cannot certify it.
+
+Use renderer `PipelineReporter STATE_DROPPED`, not rAF gaps or batched presentation timestamp
+spacing, for drop counts. GPU-process `GPUTask` wall-span occupancy is not hardware utilization
+or energy. Missing presentation/layer coverage is unavailable, never measured zero. Separate
+frame capture from timing runs and report instrument overhead and unverified cases. The
+[design verification reference](../.agents/skills/volli-design/VERIFICATION.md#performance-measurement)
+defines the measurement and evidence checklist.
 
 ## Copy and feedback
 
@@ -287,15 +334,21 @@ just to satisfy a lint rule. Errors name the failed operation and recovery, not 
 paths or measurements. Surface every requested mutation failure; keep last-good data during
 refresh. Do not treat a person's deliberate setting as a fault.
 
-Loading is a state, not punctuation: use `Spinner`, `LoadingLabel` or geometry-preserving
-skeletons, never “Loading…” / “Saving…” or a bare ellipsis as progress. An ellipsis on
+Loading is a state, not punctuation: hold layout and use `Spinner` or `LoadingLabel`,
+never skeleton rows/bars, “Loading…” / “Saving…” or a bare ellipsis as progress. An ellipsis on
 “Open file…” still means another decision follows. Busy controls retain their accessible
 name and disabled semantics. Empty, first-read, refreshing, failed and read-only states
-remain distinct.
+remain distinct. A successful zero-result read alone is empty: pending reserves layout with
+one real busy indicator, not an illustration or fabricated zero. Failed reads retain a
+noun-specific reason and one recovery, including when the owning list uses silent Inline.
 
 `EmptyState` supplies static, canvas-tinted compositions for Page and Panel placement,
-with a short reason heading and at most one real action. Empty chats remain quiet;
-inline lists and pickers show no empty caption or illustration. Sidebar reuse takes
+with a short reason heading and at most one real action. Choose a composition by surface
+structure (columns, tree, filed cards, connected plugs, book, lock/key, Session rows or search),
+not the same icon-in-box fan everywhere. Theme-derived glow and a fading dot matrix stay
+decorative, static and hidden from assistive technology; failed art is neutral. An optional
+single instruction line earns its place only when the action does not already explain it.
+Empty chats remain quiet; inline lists and pickers show no empty caption or illustration. Sidebar reuse takes
 `EmptyStateScope tier="inline"`; failed reads remain visible and recoverable. Loading
 never flashes a successful empty state, and retained rows survive a failed refresh.
 
@@ -312,13 +365,26 @@ feature composition live outside them.
 
 A redesign preserves **feature parity**: every action, state, affordance, permission boundary,
 shortcut, accessible name, focus return, tooltip, drag target and empty/loading/error path
-stays reachable from the same place. Removing visual detail means disclosing it, not deleting
-capability. Compare default, hover, focus-visible, pressed, selected, disabled, empty, loading,
-error, long names, many items, drag and reduced-motion states against siblings.
+stays reachable from its owning surface. Removing visual detail moves it one click deeper
+into a real menu, disclosure or editor, never deletes capability. Compare default, hover,
+focus-visible, pressed, selected, disabled, empty, loading, error, long names, many items,
+drag and reduced-motion states against siblings.
 
-UI work loads [.agents/skills/volli-design](../.agents/skills/volli-design/SKILL.md): zoom out,
-choose principles and a proven reference, then design. Verify in the live app with
-`verify-volli`, across light/dark and materially different canvases, not screenshots alone.
+UI work loads [.agents/skills/volli-design](../.agents/skills/volli-design/SKILL.md): establish
+fidelity and the feature floor, inspect references, port components into page context, then
+stress Empty / Normal / Extreme states before review. The approved mock sets composition;
+AppKit informs intent/metrics where it is silent; explicit owner overrides win. Code and tests
+remain authoritative for implemented behaviour. Cross-linked `volli-copy`,
+`volli-design-references` and `verify-volli` cover wording, precedent and isolated live proof.
+
+Every changed surface needs a main-floor audit: main behaviour/artwork → new behaviour/artwork
+→ approved departure or regression → fix/evidence. Include brand marks, not just controls.
+Stress zero/one/thousands, long and multilingual content, missing identities, narrow/wide,
+light/dark/custom canvases and distinct pending/failed/empty states. Bound or virtualise views
+without losing search, keyboard reach or omitted-count truth. Compare built main, candidate
+and mock side by side in page context. For motion, inspect consecutive-frame pixels as well
+as geometry; a one-frame ghost/slab can pass an endpoint test. See the design skill's
+verification reference for capture, stress and performance measurement methods.
 
 ### Automated guardrails
 
