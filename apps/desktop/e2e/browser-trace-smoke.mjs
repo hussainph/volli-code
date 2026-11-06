@@ -153,6 +153,17 @@ async function driveSession(app, input) {
         if (Date.now() > deadline) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
+      // Load completion is not compositor readiness. Warm only the camera
+      // BEFORE the one person action; check 2 must still exclude that action's
+      // own non-null picture, reported through the real trace-recording path.
+      const cameraSignal = AbortSignal.timeout(10_000);
+      out.personCameraAttempts = 0;
+      while (true) {
+        cameraSignal.throwIfAborted();
+        out.personCameraAttempts++;
+        if ((await host.capturePicture(person.tabId, cameraSignal)) !== null) break;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
       const personSnap = await port.snapshot({ tabId: person.tabId, signal });
       const personRef = /button[^\n]*\[ref=(e\d+)\]/.exec(personSnap.snapshotText)?.[1];
       const acted = await port.act({
@@ -521,18 +532,6 @@ async function main() {
     2,
     "every frame is on disk in the traces directory, and the person's tab left nothing",
     async () => {
-      // Action thumbnails are optional: load completion is not compositor
-      // readiness, so the first capture can legitimately be empty. Establish
-      // a real live picture before asserting that a person's pixels were NOT
-      // persisted. Retry only the camera, never the person's click.
-      const personPicture =
-        driven.personPicture ??
-        (await waitUntil("a live picture of the person's tab", () =>
-          app.evaluate(
-            async (_electron, tabId) => globalThis.volliBrowserHost.capturePicture(tabId),
-            driven.personTabId,
-          ),
-        ));
       const frameFiles = await fs.readdir(join(tracesRoot, "frames"));
       // Each frame is the picture disk's self-describing pair: bytes and record.
       const frames = frameFiles.filter((name) => name.endsWith(".jpg"));
@@ -541,7 +540,9 @@ async function main() {
       const named = recorded
         .flatMap((trace) => trace.steps)
         .flatMap((step) => (step.pictureId ? [step.pictureId] : []));
-      const personFrame = frames.some((name) => name.startsWith(personPicture));
+      const personFrame =
+        driven.personPicture !== null &&
+        frames.some((name) => name.startsWith(driven.personPicture));
       const personTrace = recorded.some((trace) => trace.tabId === driven.personTabId);
       return {
         ok:
@@ -550,10 +551,10 @@ async function main() {
           frames.length === named.length &&
           sidecars.length === named.length &&
           records.length === 1 &&
-          personPicture !== null &&
+          driven.personPicture !== null &&
           !personFrame &&
           !personTrace,
-        detail: `frames=${frames.length} named=${named.length} records=${records.length} personPicture=${personPicture} actionPicture=${driven.personPicture}`,
+        detail: `frames=${frames.length} named=${named.length} records=${records.length} personPicture=${driven.personPicture} personCameraAttempts=${driven.personCameraAttempts}`,
       };
     },
   );
