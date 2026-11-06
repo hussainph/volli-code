@@ -713,6 +713,7 @@ const codeModeModelKeySchema = nonEmptyString.refine((key) => {
 }, "Expected a providerId/modelId key");
 const codeModePolicySchema = z.object({
   enabled: z.boolean(),
+  defaultMode: z.enum(CODE_MODE_MODES).optional(),
   models: z
     .record(codeModeModelKeySchema, z.enum(CODE_MODE_MODES))
     .refine(

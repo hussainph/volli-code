@@ -88,11 +88,13 @@
  * store reads and the working copy's `ensure` stay in `home-rail.tsx`.
  */
 import * as React from "react";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  ChatIcon,
+  FolderOpenIcon,
+  BranchIcon,
+  TerminalIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
 
 import { effortLabel } from "@volli/session-presentation";
 import { workingCopyLooseCount, type ModelAccessModel } from "@volli/shared";
@@ -108,7 +110,6 @@ import {
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
@@ -288,10 +289,10 @@ function ModelNameLine({ model }: { model: HomeSessionModel }) {
  * yet.
  */
 function Glyph({ facts }: { facts: NonNullable<HomeSessionFacts> }) {
-  const Icon = facts.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
+  const Icon = facts.kind === "chat" ? ChatIcon : TerminalIcon;
   return (
     <Icon
-      weight="bold"
+      strokeWidth={2.25}
       aria-label={facts.kind === "chat" ? "Chat" : "Terminal"}
       className="size-4 shrink-0 text-muted-foreground"
     />
@@ -337,9 +338,7 @@ function WorkingCopyRows({
     return (
       <div aria-hidden data-testid="home-working-copy-loading">
         {["w-3/5", "w-2/5"].map((width) => (
-          <div key={width} className={cn(CARD_ROW, RAIL_CARD_SEAM)}>
-            <Skeleton className={cn("h-3", width)} />
-          </div>
+          <div key={width} className={cn(CARD_ROW, RAIL_CARD_SEAM)}></div>
         ))}
       </div>
     );
@@ -356,7 +355,7 @@ function WorkingCopyRows({
         title={workingCopy.error}
         data-testid="home-working-copy-error"
       >
-        <WarningIcon weight="bold" className="size-4 shrink-0 text-destructive" />
+        <WarningIcon strokeWidth={2.25} className="size-4 shrink-0 text-destructive" />
         <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
           Couldn&apos;t read the venue
         </span>
@@ -382,7 +381,7 @@ function WorkingCopyRows({
           that opens a bubble repeating the word under it. */}
       {workingCopy.workingCopy.branch === null ? (
         <div className={cn(CARD_ROW, RAIL_CARD_SEAM)} data-testid="home-working-copy-branch">
-          <GitBranchIcon weight="bold" className="size-4 shrink-0 text-muted-foreground" />
+          <BranchIcon strokeWidth={2.25} className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-mono text-ui text-muted-foreground">
             detached
           </span>
@@ -390,7 +389,7 @@ function WorkingCopyRows({
         </div>
       ) : (
         <WorkingCopyRow
-          icon={GitBranchIcon}
+          icon={BranchIcon}
           term="Branch"
           full={workingCopy.workingCopy.branch}
           value={workingCopy.workingCopy.branch}
@@ -422,7 +421,7 @@ function WorkingCopyRow({
   trailing,
   testId,
 }: {
-  icon: React.ComponentType<{ className?: string; weight?: "bold" }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   term: string;
   full: string;
   value: string;
@@ -437,7 +436,7 @@ function WorkingCopyRow({
         side="left"
         className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left font-mono text-ui text-muted-foreground"
       >
-        <Icon weight="bold" className="size-4 shrink-0" />
+        <Icon strokeWidth={2.25} className="size-4 shrink-0" />
         <span className="min-w-0 truncate">{value}</span>
       </ValueReveal>
       {trailing}

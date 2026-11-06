@@ -7,11 +7,11 @@
  *
  *   01-first-boot.png          — empty profile: "Add your first project".
  *   02-connect-provider.png    — project added; board's Model Access first-run
- *                                block ("Connect a model provider to start").
+ *                                block ("No model provider").
  *   03-provider-menu.png       — the Sign in menu, providers listed.
  *   04-signin-key-step.png     — the provider's own key step (masked input).
  *   05-signed-in.png           — Model Access: the account row, signed in.
- *   06-choose-default.png      — board again: "Choose a default model to start."
+ *   06-choose-default.png      — board again: "No default model"
  *   07-board-ready.png         — default set: "Use Create & start…".
  *   08-new-ticket-composer.png — the composer, filled, Create & Start visible.
  *   09-kickoff-workspace.png   — after ⇧⌘↵ the composer closes and the board
@@ -136,10 +136,10 @@ try {
   console.log("SKIP  add-project native picker — project seeded via seedProjects()");
 
   // ---- 02: board first-run block, no provider ------------------------------
-  await attempt(2, "02 board — 'Connect a model provider to start.'", async () => {
+  await attempt(2, "02 board — 'No model provider'", async () => {
     await waitUntil(
       "model first-run block",
-      async () => (await firstRunLine(page, "Connect a model provider to start.").count()) === 1,
+      async () => (await firstRunLine(page, "No model provider").count()) === 1,
       { timeout: 20000 },
     );
     return capture(page, "02-connect-provider.png");
@@ -176,8 +176,11 @@ try {
     await waitUntil(
       "the account row offers Sign out",
       async () => {
+        // The test id marks the row's name; its buttons are siblings, so the
+        // row is the shell one level up (see model-access-signin-smoke.mjs).
         const button = page
           .getByTestId(`account-${PROVIDER_ID}`)
+          .locator("xpath=..")
           .getByRole("button", { name: "Sign out", exact: true });
         return (await button.count()) === 1;
       },
@@ -187,9 +190,9 @@ try {
   });
 
   // ---- 06: back on the board — choose a default ----------------------------
-  await attempt(6, "06 board — 'Choose a default model to start.'", async () => {
+  await attempt(6, "06 board — 'No default model'", async () => {
     await page.keyboard.press("Escape");
-    const line = firstRunLine(page, "Choose a default model to start.");
+    const line = firstRunLine(page, "No default model");
     const appeared = await waitUntil(
       "choose-default line",
       async () => (await line.count()) === 1,

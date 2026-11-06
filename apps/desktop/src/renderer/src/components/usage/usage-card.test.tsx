@@ -164,10 +164,31 @@ describe("the usage footers' faces", () => {
     for (const markup of [home(), ticket()]) {
       expect(markup).toContain("<footer");
       for (const utility of RAIL_FOOTER.split(" ")) expect(markup).toContain(utility);
-      expect(markup).toContain(RAIL_FOOTER_ROW);
+      for (const utility of RAIL_FOOTER_ROW.split(" ")) {
+        if (!utility.startsWith("min-h") && !utility.startsWith("py-"))
+          expect(markup).toContain(utility);
+      }
       // A rounded frame here would read as a block that happens to be last
       // rather than as the page's floor.
       expect(markup).not.toContain("rounded-xl");
+    }
+  });
+
+  it("leads with cost, keeps exact tokens secondary, and defers token classes", () => {
+    for (const [markup, testId] of [
+      [home(), "home-usage"],
+      [ticket(), "ticket-usage"],
+    ]) {
+      const host = parse(markup!);
+      const trigger = host.querySelector(`[data-testid="${testId}"]`)!;
+      expect(trigger.textContent).toContain("137K tokens");
+      expect(trigger.querySelector('[title="137,100 tokens"]')).not.toBeNull();
+      expect(trigger.textContent!.indexOf("$0.19")).toBeLessThan(
+        trigger.textContent!.indexOf("137K tokens"),
+      );
+      expect(trigger.querySelector("button")).toBeNull();
+      expect(host.querySelector('[aria-label^="Token classes"]')).toBeNull();
+      expect(host.querySelector("dl")).toBeNull();
     }
   });
 
@@ -193,8 +214,8 @@ describe("the usage footers' faces", () => {
     expect(markup).toContain("tokens");
     // The window is on the face because it is what the figure MEANS.
     expect(markup).toContain("30d");
-    // The bar is a body fact: the face is one row.
-    expect(markup).not.toContain('role="img"');
+    // No capacity meter without a meaningful denominator.
+    expect(markup).not.toContain('aria-label="Token classes:');
   });
 
   it("hedges an estimate with a muted `est.` after the money, never a tilde before it (VC-406)", () => {
@@ -204,7 +225,9 @@ describe("the usage footers' faces", () => {
     expect(markup).toContain(
       '$0.19</span><span class="shrink-0 text-label text-muted-foreground">est.</span>',
     );
-    expect(markup).toContain('aria-label="Project usage $0.19 est. over 30d — show breakdown"');
+    expect(markup).toContain(
+      'aria-label="Project usage 137,100 tokens, $0.19 est. over 30d — show breakdown"',
+    );
     expect(markup).not.toContain("~$");
   });
 
@@ -298,6 +321,7 @@ describe("a model row", () => {
     expect(text(ranking)).toContain("Wire the projection");
     expect(ranking).not.toContain("<svg");
     expect(ranking).not.toContain('aria-label="Model ·');
+    expect(ranking).toContain('aria-label="Session · Wire the projection"');
   });
 });
 
@@ -319,19 +343,39 @@ describe("the Ticket footer", () => {
 
   it("keeps the closed row pinned and reveals the trimmed breakdown above it (VC-406)", () => {
     const closed = ticket();
-    expect(closed).toContain('aria-label="Ticket usage $0.19 est. — show breakdown"');
-    expect(closed).not.toContain('role="img"');
+    expect(closed).toContain(
+      'aria-label="Ticket usage 137,100 tokens, $0.19 est. — show breakdown"',
+    );
+    expect(closed).not.toContain("Cache read");
     expect(closed).not.toContain("Cached input share");
 
     const open = ticket({ open: true });
-    expect(open).toContain('aria-label="Ticket usage $0.19 est. — hide breakdown"');
-    expect(open).toContain('role="img"');
+    expect(open).toContain('aria-label="Ticket usage 137,100 tokens, $0.19 est. — hide breakdown"');
+    expect(open).toContain("Cache read");
+    expect(open).toContain("83.2%");
     expect(open).toContain("Cached input share");
     expect(open).toContain("Top model");
     expect(open).toContain("By session");
     expect(open).toContain("Wire the projection");
     expect(open).not.toContain("Total tokens");
-    expect(open.indexOf('role="img"')).toBeLessThan(open.indexOf('data-testid="ticket-usage"'));
+    expect(open.indexOf("Cache read")).toBeLessThan(open.indexOf('data-testid="ticket-usage"'));
+  });
+
+  it("keeps the full per-model catalogue and every token class one disclosure away", () => {
+    const closed = ticket({ models: MODELS });
+    expect(closed).not.toContain("GPT-5.3 Codex");
+    const open = ticket({ models: MODELS, open: true });
+    for (const label of [
+      "By model",
+      "GPT-5.3 Codex",
+      "Uncached input",
+      "Output",
+      "Cache read",
+      "Cache write",
+    ])
+      expect(text(open)).toContain(label);
+    for (const exact of ["12,600 tokens", "3,300 tokens", "114,000 tokens", "7,200 tokens"])
+      expect(open).toContain(exact);
   });
 
   it("reports a Session that metered nothing rather than dropping it", () => {
@@ -355,6 +399,11 @@ describe("the fold's height budget", () => {
       expect(body.className).toContain("max-h-40");
       expect(body.className).toContain("overflow-y-auto");
       expect(body.className).toContain("overscroll-contain");
+      expect(body.className).toContain("[scroll-padding-block:8px]");
+      expect(body.className).toContain("py-2");
+      expect(body.tabIndex).toBe(0);
+      expect(body.getAttribute("role")).toBe("region");
+      expect(body.getAttribute("aria-label")).toMatch(/usage breakdown$/);
     }
   });
 
@@ -366,7 +415,7 @@ describe("the fold's height budget", () => {
     // No row is dropped to make it fit: the cap scrolls, it does not truncate.
     expect(body.textContent).toContain("Session 0");
     expect(body.textContent).toContain("Session 39");
-    expect(body.querySelectorAll("dl > div")).toHaveLength(MANY_SESSIONS.length);
+    expect(body.querySelectorAll("dl:last-child > div")).toHaveLength(MANY_SESSIONS.length);
   });
 
   it("leaves the trigger outside the scroller, so the row stays put and stays pressable", () => {
@@ -389,6 +438,22 @@ describe("the fold's height budget", () => {
     expect(body.contains(trigger)).toBe(false);
     // The control that changes the window rides inside the bounded body, where
     // pressing it cannot be confused with opening the fold.
-    expect(body.textContent).toContain("Project usage");
+    expect(body.textContent).not.toContain("Project usage");
+    expect(body.querySelector('[role="combobox"][aria-label="Usage window"]')).not.toBeNull();
+  });
+});
+
+describe("compact accounting rows", () => {
+  it("keeps every class/rank row 28px and makes long Session names keyboard-readable", () => {
+    const body = node(ticket({ open: true }), "ticket-usage-body");
+    for (const row of body.querySelectorAll("dl > div")) expect(row.className).toContain("min-h-7");
+    expect(body.querySelector('button[aria-label^="Session ·"]')).not.toBeNull();
+    for (const group of body.querySelectorAll("section.usage-rank-list")) {
+      expect(group.querySelector("h3")?.className).toContain("sr-only");
+      expect(group.querySelector("dl > div dt")?.textContent).toContain(
+        group.getAttribute("aria-label"),
+      );
+      expect(group.querySelector("dl > div")).not.toBeNull();
+    }
   });
 });

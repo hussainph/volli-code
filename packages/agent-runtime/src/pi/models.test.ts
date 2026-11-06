@@ -533,6 +533,30 @@ describe("piModelsFilePath", () => {
 });
 
 describe("piOwnedModels", () => {
+  it("keeps auth.json as the default credential store", async () => {
+    const agentDir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
+    const access = piOwnedModelAccess({ agentDir });
+    await access.catalogReady;
+    expect(access.credentials).toBeInstanceOf(PiFileCredentialStore);
+    expect(await access.credentials.read("openai-codex")).toEqual(OAUTH);
+    await access.models.logout("openai-codex");
+    expect(JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8"))).toEqual({});
+  });
+
+  it("uses a host-injected store without reading or changing the default auth file", async () => {
+    const agentDir = agentDirWith("{ must never read this auth file");
+    const credentials = storeIn(agentDirWith(JSON.stringify({ "openai-codex": OAUTH })));
+    const access = piOwnedModelAccess({ agentDir, credentials });
+    await access.catalogReady;
+    expect(access.credentials).toBe(credentials);
+    await expect(access.models.checkAuth("openai-codex")).resolves.toMatchObject({ type: "oauth" });
+    await access.models.logout("openai-codex");
+    expect(await credentials.read("openai-codex")).toBeUndefined();
+    expect(readFileSync(join(agentDir, "auth.json"), "utf8")).toBe(
+      "{ must never read this auth file",
+    );
+  });
+
   it("drops a cached addition with no current admission proof before catalogReady resolves", async () => {
     const agentDir = agentDirWith("{}");
     const first = piOwnedModelAccess({ agentDir });

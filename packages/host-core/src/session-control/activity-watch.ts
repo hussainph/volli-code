@@ -51,7 +51,9 @@ import type {
 
 import { sessionListingRow } from "./listing-row";
 import type { SubscribeSessionWake } from "./session-wake";
+import { setImmediate } from "node:timers";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("activity-watch");
 
@@ -155,6 +157,13 @@ export interface SessionActivityWatchPorts {
   observeBirth?: (sessionId: string) => void;
   /** Overridable for tests; defaults to {@link DEFAULT_COALESCE_MS}. */
   coalesceMs?: number;
+  /**
+   * A macrotask turn between two dirty Sessions of one flush (VC-1076).
+   * Defaults to `setImmediate`. Awaiting the fold alone yields nothing: a
+   * SQLite fold resolves synchronously, so its `await` only queues a
+   * microtask and a flush of twenty Sessions ran as one block.
+   */
+  yieldToHost?: () => Promise<void>;
   /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
@@ -186,6 +195,7 @@ export function watchSessionActivity(
     ports.onError ?? ((error: unknown) => log.warn("session activity watch failed", { error }));
   const provenanceOf = ports.provenanceOf ?? (() => PERSON_STARTED);
   const readOf = ports.readOf ?? (() => SESSION_READ);
+  const yieldToHost = ports.yieldToHost ?? yieldToMainProcess;
 
   const dirty = new Set<string>();
   /**
@@ -209,7 +219,9 @@ export function watchSessionActivity(
     if (timer !== null) return;
     timer = setTimeout(() => {
       timer = null;
-      draining = draining.then(flush).catch(onError);
+      draining = draining
+        .then(() => withMainSpan({ door: "timer", operation: "session-activity-flush" }, flush))
+        .catch(onError);
     }, coalesceMs);
     // Never hold the event loop open for a diagnostic timer: an app that has
     // finished its work must be allowed to quit with this pending.
@@ -222,7 +234,12 @@ export function watchSessionActivity(
     const liveAttachmentIds = new Set(
       ports.listOpenNativeBindings().map((binding) => binding.attachmentId),
     );
-    for (const sessionId of ids) {
+    for (const [index, sessionId] of ids.entries()) {
+      // Between Sessions, never before the first: the host gets a turn per
+      // fold rather than one per flush.
+      if (index > 0) await yieldToHost();
+      // A stop mid-flush ends it here; nothing would receive the rest.
+      if (stopped) return;
       try {
         const projection = await engine.getSession({ sessionId });
         // A Session the ledger no longer has is not an error worth reporting:
@@ -296,4 +313,10 @@ export function watchSessionActivity(
       await draining;
     },
   };
+}
+
+function yieldToMainProcess(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }

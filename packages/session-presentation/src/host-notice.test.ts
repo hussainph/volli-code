@@ -293,20 +293,21 @@ describe("host-notice copy", () => {
     expect(subagentNoticeCopy(projected)).toEqual({
       headline: "Find artifact conventions",
       state: "done",
-      note: "",
+      cause: null,
     });
-    expect(subagentNoticeCopy({ ...projected, state: "interrupted" }).note).toBe(
-      "Its turn ended before it answered.",
-    );
+    expect(subagentNoticeCopy({ ...projected, state: "interrupted" })).toMatchObject({
+      state: "interrupted",
+      cause: null,
+    });
     expect(subagentNoticeCopy({ ...projected, state: "stopped" }).state).toBe("stopped");
     expect(subagentNoticeCopy({ ...projected, state: "failed" }).state).toBe("failed");
     expect(subagentNoticeCopy({ ...projected, state: "timed-out" })).toMatchObject({
       state: "timed out",
-      note: "It did not finish within its time bound and was stopped.",
+      cause: null,
     });
     expect(
-      subagentNoticeCopy({ ...projected, state: "interrupted", reason: "app-relaunched" }).note,
-    ).toContain("Volli relaunched");
+      subagentNoticeCopy({ ...projected, state: "interrupted", reason: "app-relaunched" }).cause,
+    ).toBe("Volli relaunched");
   });
 
   it("uses the established fallback for an untitled child", () => {
@@ -323,7 +324,7 @@ describe("host-notice copy", () => {
       }),
     ).toEqual({
       headline: "GitHub",
-      note: "You took control; Session writes are refused until you hand it back.",
+      state: "You took control",
     });
     expect(
       browserHoldNoticeCopy({
@@ -334,7 +335,7 @@ describe("host-notice copy", () => {
       }),
     ).toEqual({
       headline: "Documentation",
-      note: "You asked the Session to leave; it will release the tab when it is safe.",
+      state: "Asked to leave",
     });
   });
 });

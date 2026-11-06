@@ -632,6 +632,50 @@ describe("packPiLogs", () => {
     ]);
   });
 
+  test("a line several segments long is found window by window and uploaded whole, once (VC-1030)", async () => {
+    const long = jsonLine({ n: 2, image: "i".repeat(200) });
+    const lines = [jsonLine({ n: 1 }), long, jsonLine({ n: 3 })];
+    await writeFile(file().path, lines.join(""));
+    const report = await spool({ piSegmentMaxBytes: 16, piLineMaxBytes: 1024 }).packPiLogs(
+      session,
+      [file()],
+    );
+    const first = Buffer.byteLength(lines[0]!);
+    expect(report.oversized).toEqual([]);
+    expect(report.segments.map((s) => [s.startOffset, s.endOffset])).toEqual([
+      [0, first],
+      [first, first + long.length],
+      [first + long.length, first + long.length + Buffer.byteLength(lines[2]!)],
+    ]);
+    // Nothing to redact: the uploaded line is the source, byte for byte.
+    expect(await readSegment(first)).toBe(long);
+  });
+
+  test("a long line still being written waits for the next pass, unreported", async () => {
+    await writeFile(file().path, `${jsonLine({ n: 1 })}{"image":"${"i".repeat(100)}`);
+    const report = await spool({ piSegmentMaxBytes: 16, piLineMaxBytes: 1024 }).packPiLogs(
+      session,
+      [file()],
+    );
+    expect(report).toMatchObject({ missing: [], truncated: [], oversized: [] });
+    expect(report.segments).toHaveLength(1);
+  });
+
+  test("a line whose end is found just past the longest one object holds is oversized", async () => {
+    await writeFile(file().path, `${"x".repeat(44)}\n`);
+    const report = await spool({ piSegmentMaxBytes: 16, piLineMaxBytes: 40 }).packPiLogs(session, [
+      file(),
+    ]);
+    expect(report).toMatchObject({ segments: [], oversized: [piFileId] });
+  });
+
+  test("a long line that is not JSON is redacted in pieces, a value across their seam included", async () => {
+    const pad = "p".repeat(1024 * 1024 - 3);
+    await writeFile(file().path, `${pad}${SECRET} tail\n`);
+    await spool().packPiLogs(session, [file()]);
+    expect(await readSegment(0)).toBe(`${pad}‹secret:API_KEY› tail\n`);
+  });
+
   test("a file shorter than what was uploaded is reported and left alone; no files is no call", async () => {
     await writeFile(file().path, jsonLine({ n: 1 }) + jsonLine({ n: 2 }));
     const s = spool();

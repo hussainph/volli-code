@@ -3,7 +3,7 @@
  * Only in a Volli Cloud launch (`settingsGroups`'s `runners` option); in any
  * other launch the category does not exist.
  */
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
+import { StorageIcon } from "@renderer/components/ui/icon";
 
 import type { PrefCategory } from "./kit";
 import { RunnersPane } from "./panes/runners-pane";
@@ -14,7 +14,7 @@ export function runnersCategory(): PrefCategory {
   return {
     key: RUNNERS_CATEGORY_KEY,
     label: "Runners",
-    icon: HardDrivesIcon,
+    icon: StorageIcon,
     keywords: [
       "runner",
       "runners",

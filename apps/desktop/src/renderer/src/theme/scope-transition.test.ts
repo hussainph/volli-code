@@ -222,7 +222,7 @@ describe("beginScopeRepaint without the View Transition API", () => {
     // eases it.
     const applyTokens = vi.fn();
 
-    beginScopeRepaint(applyTokens);
+    beginScopeRepaint(applyTokens, "pointer");
 
     expect(applyTokens).toHaveBeenCalledTimes(1);
   });
@@ -231,7 +231,7 @@ describe("beginScopeRepaint without the View Transition API", () => {
     vi.stubGlobal("document", { documentElement: {} });
     const applyTokens = vi.fn();
 
-    beginScopeRepaint(applyTokens);
+    beginScopeRepaint(applyTokens, "pointer");
 
     expect(applyTokens).toHaveBeenCalledTimes(1);
   });
@@ -245,7 +245,7 @@ describe("beginScopeRepaint as a view transition", () => {
     const engine = fakeViewTransitions();
     const applyTokens = vi.fn();
 
-    beginScopeRepaint(applyTokens);
+    beginScopeRepaint(applyTokens, "pointer");
 
     expect(engine.startViewTransition).toHaveBeenCalledTimes(1);
     expect(applyTokens).not.toHaveBeenCalled();
@@ -263,8 +263,8 @@ describe("beginScopeRepaint as a view transition", () => {
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
 
-    beginScopeRepaint(vi.fn());
-    beginScopeRepaint(vi.fn());
+    beginScopeRepaint(vi.fn(), "pointer");
+    beginScopeRepaint(vi.fn(), "pointer");
     await flush();
     process.off("unhandledRejection", unhandled);
 
@@ -281,7 +281,7 @@ describe("beginScopeRepaint as a view transition", () => {
     // lost click — and input outranking decoration is right anyway.
     const engine = fakeViewTransitions();
 
-    beginScopeRepaint(vi.fn());
+    beginScopeRepaint(vi.fn(), "pointer");
     expect(engine.current()?.skipped).toBe(false);
     engine.press();
 
@@ -294,7 +294,7 @@ describe("beginScopeRepaint as a view transition", () => {
     // relationship to.
     const engine = fakeViewTransitions();
 
-    beginScopeRepaint(vi.fn());
+    beginScopeRepaint(vi.fn(), "pointer");
     const transition = engine.current();
     transition?.run();
     transition?.finish();
@@ -310,8 +310,8 @@ describe("beginScopeRepaint as a view transition", () => {
     const first = vi.fn();
     const second = vi.fn();
 
-    beginScopeRepaint(first);
-    beginScopeRepaint(second);
+    beginScopeRepaint(first, "pointer");
+    beginScopeRepaint(second, "pointer");
     engine.current()?.run();
 
     expect(first).toHaveBeenCalledTimes(1);
@@ -331,7 +331,7 @@ describe("disarmScopeRepaint", () => {
     const engine = fakeViewTransitions();
     const applyTokens = vi.fn();
 
-    beginScopeRepaint(applyTokens);
+    beginScopeRepaint(applyTokens, "pointer");
     disarmScopeRepaint();
 
     expect(engine.current()?.skipped).toBe(true);
@@ -341,7 +341,7 @@ describe("disarmScopeRepaint", () => {
   it("has nothing left to skip once the transition has finished", async () => {
     const engine = fakeViewTransitions();
 
-    beginScopeRepaint(vi.fn());
+    beginScopeRepaint(vi.fn(), "pointer");
     const transition = engine.current();
     transition?.run();
     transition?.finish();
@@ -359,11 +359,85 @@ describe("disarmScopeRepaint", () => {
     // nothing able to end it — a stuck window under HMR.
     const engine = fakeViewTransitions();
 
-    beginScopeRepaint(vi.fn());
-    beginScopeRepaint(vi.fn());
+    beginScopeRepaint(vi.fn(), "pointer");
+    beginScopeRepaint(vi.fn(), "pointer");
     await flush();
     disarmScopeRepaint();
 
     expect(engine.transitions[1]?.skipped).toBe(true);
+  });
+});
+
+describe("scope repaint Motion gates", () => {
+  it("keeps a live pointer fade when a Motion notification still enables motion", async () => {
+    // A fresh media-query owner keeps this test independent of the OS-reduce
+    // case's cached MediaQueryList. Neither app nor OS asks us to skip here.
+    vi.resetModules();
+    const repaint = await import("./scope-transition");
+    const engine = fakeViewTransitions();
+    const events = new EventTarget();
+    vi.stubGlobal("window", events);
+    Object.assign(events, {
+      matchMedia: () => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+    Object.assign(document, { documentElement: { dataset: { motion: "on" } } });
+    try {
+      repaint.beginScopeRepaint(vi.fn(), "pointer");
+      events.dispatchEvent(new Event("volli-motion-change"));
+      expect(engine.current()?.skipped).toBe(false);
+      expect(engine.startViewTransition).toHaveBeenCalledOnce();
+      engine.current()?.run();
+      engine.current()?.finish();
+      await flush();
+      expect(engine.listeners).toEqual([]);
+    } finally {
+      repaint.disarmScopeRepaint();
+    }
+  });
+
+  it("hard-cuts a keyboard scope change, skipping any earlier pointer transition", () => {
+    const engine = fakeViewTransitions();
+    beginScopeRepaint(vi.fn(), "pointer");
+    const apply = vi.fn();
+    beginScopeRepaint(apply, "keyboard");
+    expect(engine.startViewTransition).toHaveBeenCalledTimes(1);
+    expect(engine.current()?.skipped).toBe(true);
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("never captures while app Motion is off", () => {
+    const engine = fakeViewTransitions();
+    Object.assign(document, { documentElement: { dataset: { motion: "off" } } });
+    const apply = vi.fn();
+    beginScopeRepaint(apply);
+    expect(engine.startViewTransition).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("hard-cuts OS reduce, unknown and system changes, and skips a live pointer fade", async () => {
+    const engine = fakeViewTransitions();
+    const events = new EventTarget();
+    const query = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    vi.stubGlobal("window", events);
+    Object.assign(events, { matchMedia: () => query });
+    Object.assign(document, { documentElement: { dataset: { motion: "on" } } });
+    const apply = vi.fn();
+    beginScopeRepaint(apply);
+    beginScopeRepaint(apply, "system");
+    expect(engine.startViewTransition).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledTimes(2);
+    beginScopeRepaint(apply, "pointer");
+    expect(engine.startViewTransition).toHaveBeenCalledOnce();
+    query.matches = true;
+    events.dispatchEvent(new Event("volli-motion-change"));
+    expect(engine.current()?.skipped).toBe(true);
+    beginScopeRepaint(apply, "pointer");
+    expect(engine.startViewTransition).toHaveBeenCalledOnce();
+    await flush();
+    expect(engine.listeners).toEqual([]);
   });
 });

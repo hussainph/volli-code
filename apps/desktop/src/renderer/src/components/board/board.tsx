@@ -1,3 +1,5 @@
+import { GLASS_MOTION, cssTimeMs, springEasing } from "@renderer/lib/glass-motion";
+import { useBoardMotionVisibility } from "@renderer/hooks/use-motion-visibility";
 import * as React from "react";
 import {
   closestCorners,
@@ -110,6 +112,8 @@ import { DEFAULT_PROJECT_UI, useProjectUiStore, type BoardView } from "@renderer
  */
 interface DragState {
   activeTicket: Ticket;
+  /** Keyboard gestures change position immediately, including their landing. */
+  keyboard: boolean;
   selectedTickets: Ticket[];
   ticketIds: string[];
   preview: Ticket[];
@@ -294,7 +298,11 @@ function sameColumn(previous: readonly Ticket[], next: readonly Ticket[]): boole
  * whole subtree every time, which is the exact class of churn the provider
  * exists to stop.
  */
-const CLUSTER_SPRING = { type: "spring", duration: 0.5, bounce: 0.2 } as const;
+const CLUSTER_SPRING = {
+  type: "spring",
+  duration: GLASS_MOTION.snappySeconds,
+  bounce: 0.1,
+} as const;
 
 function DragOverlayBody({
   activeTicket,
@@ -327,7 +335,7 @@ function DragOverlayBody({
         />
       </div>
     ) : (
-      <div className="rounded-lg shadow-card">
+      <div className="rounded-card shadow-card">
         <TicketCardContent
           ticket={ticket}
           ticketPrefix={ticketPrefix}
@@ -453,8 +461,16 @@ export const Board = React.memo(function Board({
     (state) =>
       frozen.current?.sort ?? state.byProject[projectId]?.boardSort ?? DEFAULT_PROJECT_UI.boardSort,
   );
+  const boardRef = React.useRef<HTMLDivElement>(null);
+  useBoardMotionVisibility(boardRef);
   const [drag, setDrag] = React.useState<DragState | null>(null);
-  const pendingSlotAnimation = React.useRef<Map<string, DOMRect> | null>(null);
+  const pendingSlotAnimation = React.useRef<{
+    rects: Map<string, DOMRect>;
+    instant: boolean;
+  } | null>(null);
+  const releaseInstant = React.useRef(true);
+  const landingAnimations = React.useRef(new Set<Animation>());
+  const dropOverlayRef = React.useRef<HTMLElement>(null);
   // Selection is store-backed (session-only), so sidebar/detail navigation can
   // still collapse it to one card while board gestures may hold several.
   const selectedIds = useBoardStore((state) => state.selectedByProject[projectId]) ?? NO_TICKET_IDS;
@@ -466,11 +482,41 @@ export const Board = React.memo(function Board({
   }, [selectedIds]);
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
-  React.useLayoutEffect(() => {
-    const sourceRects = pendingSlotAnimation.current;
-    if (sourceRects === null) return;
+  // One policy for both views, not a monitor and preference subscription per card.
+  const instantSort = reducedMotion || drag === null || drag.keyboard;
+  React.useEffect(() => {
+    if (!reducedMotion) return;
+    releaseInstant.current = true;
     pendingSlotAnimation.current = null;
-    if (reducedMotion) return;
+    for (const animation of landingAnimations.current) animation.cancel();
+    landingAnimations.current.clear();
+    // Finish dnd-kit's own overlay so its completion removes the picture too.
+    for (const animation of dropOverlayRef.current?.getAnimations() ?? []) animation.finish();
+  }, [reducedMotion]);
+  React.useEffect(() => {
+    const animations = landingAnimations.current;
+    return () => {
+      for (const animation of animations) animation.cancel();
+      animations.clear();
+    };
+  }, []);
+  // WAAPI does not resolve CSS variables in animation options. Resolve the
+  // foundation spring only when the shared Motion preference changes.
+  const dropMotion = React.useMemo(() => {
+    if (reducedMotion) return null;
+    const style = getComputedStyle(document.documentElement);
+    const duration = Math.min(
+      GLASS_MOTION.pointerDrop,
+      cssTimeMs(style.getPropertyValue("--duration-bouncy")) ?? GLASS_MOTION.pointerDrop,
+    );
+    return duration > 0 ? { duration, easing: springEasing("drop") } : null;
+  }, [reducedMotion]);
+  React.useLayoutEffect(() => {
+    const pending = pendingSlotAnimation.current;
+    if (pending === null) return;
+    const sourceRects = pending.rects;
+    pendingSlotAnimation.current = null;
+    if (reducedMotion || pending.instant) return;
 
     for (const [ticketId, source] of sourceRects) {
       const slot = ticketSlotElement(ticketId);
@@ -479,17 +525,18 @@ export const Board = React.memo(function Board({
       const dx = source.left - destination.left;
       const dy = source.top - destination.top;
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-      const easing = getComputedStyle(slot).getPropertyValue("--ease-swift").trim();
-      // Web Animations does not resolve `var(...)` in its options dictionary;
-      // read the canonical motion token from the element instead. If a future
-      // shell omits it, skip the flourish rather than throwing during layout.
-      if (easing === "") continue;
+      const duration = GLASS_MOTION.pointerDrop;
+      const easing = springEasing("drop");
       for (const animation of slot.getAnimations()) animation.cancel();
       slot.dataset.boardSlotAnimated = "true";
-      slot.animate(
+      const animation = slot.animate(
         [{ transform: `translate3d(${dx}px, ${dy}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
-        { duration: 200, easing },
+        { duration, easing },
       );
+      landingAnimations.current.add(animation);
+      const forget = () => landingAnimations.current.delete(animation);
+      animation.addEventListener("finish", forget, { once: true });
+      animation.addEventListener("cancel", forget, { once: true });
     }
   }, [storeTickets, reducedMotion]);
 
@@ -652,14 +699,6 @@ export const Board = React.memo(function Board({
     () => new Set(storeTickets.map((ticket) => ticket.id)),
     [storeTickets],
   );
-
-  // Columns and pills only play their enter transition when they appear on an
-  // ALREADY-mounted board (a drop expanded a column, a filter emptied one).
-  // Opening the board page — a many-times-a-day action — stays instant.
-  const boardMounted = React.useRef(false);
-  React.useEffect(() => {
-    boardMounted.current = true;
-  }, []);
 
   // What this project's columns offer and what they arm (VC-128). Read when the
   // board appears rather than subscribed, for the palette's reason: the record
@@ -938,8 +977,10 @@ export const Board = React.memo(function Board({
       view: boardView,
       countdownOpen,
     };
+    releaseInstant.current = reducedMotion || activatorEvent.type === "keydown";
     setDrag({
       activeTicket,
+      keyboard: activatorEvent.type === "keydown",
       selectedTickets,
       ticketIds,
       preview: storeTickets,
@@ -1025,7 +1066,7 @@ export const Board = React.memo(function Board({
             };
     const choice = deliberateChoice(release.status, release.choice);
     const sourceRects =
-      !reducedMotion && completed.ticketIds.length > 1
+      !reducedMotion && !completed.keyboard && completed.ticketIds.length > 1
         ? new Map(
             completed.ticketIds.flatMap((ticketId) => {
               const slot = ticketSlotElement(ticketId);
@@ -1051,7 +1092,10 @@ export const Board = React.memo(function Board({
     // changes parents. The board's layout effect consumes the captured source
     // rects immediately after the destination DOM commits, before it paints.
     window.requestAnimationFrame(() => {
-      pendingSlotAnimation.current = sourceRects;
+      pendingSlotAnimation.current =
+        sourceRects === null
+          ? null
+          : { rects: sourceRects, instant: completed.keyboard || reducedMotion };
       void useBoardStore
         .getState()
         .moveTickets(projectId, completed.ticketIds, drop.toStatus, drop.toIndex, choice);
@@ -1060,7 +1104,8 @@ export const Board = React.memo(function Board({
       // effect sees it. The effect clears eagerly, and this is only a stale-ref
       // fallback for a no-op/unmount path.
       window.setTimeout(() => {
-        if (pendingSlotAnimation.current === sourceRects) pendingSlotAnimation.current = null;
+        if (pendingSlotAnimation.current?.rects === sourceRects)
+          pendingSlotAnimation.current = null;
       }, 1_000);
     });
   }
@@ -1085,6 +1130,7 @@ export const Board = React.memo(function Board({
   }
 
   function handleDragCancel() {
+    releaseInstant.current = true;
     applyPicker({ kind: "drag-end" });
     frozen.current = null;
     setDrag(null);
@@ -1102,7 +1148,7 @@ export const Board = React.memo(function Board({
           instead of one per card. The whole board is its `children` prop, which
           is what lets an open dialog re-render the host alone. */}
       <TicketDialogHost projectId={projectId}>
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div ref={boardRef} className="flex min-h-0 flex-1 flex-col">
           <BoardHeader
             projectId={projectId}
             ticketCount={visible.length}
@@ -1134,6 +1180,7 @@ export const Board = React.memo(function Board({
               // shown → full sections; hidden (empty-at-start) → slim drop rows,
               // rendered only while dragging so a row can land in any status.
               <BoardListView
+                revealTicketId={revealTicketId}
                 projectId={projectId}
                 ticketPrefix={ticketPrefix}
                 projectLabels={projectLabels}
@@ -1142,6 +1189,7 @@ export const Board = React.memo(function Board({
                 emptyDropStatuses={emptyDropStatuses}
                 boardEmpty={boardEmpty}
                 dragActive={drag !== null}
+                instantSort={instantSort}
                 aimedStatus={aimedStatus}
                 selectedIds={selectedIds}
                 draggingIds={draggingIds}
@@ -1169,7 +1217,7 @@ export const Board = React.memo(function Board({
                   // Columns cap below full height so a strip of canvas stays
                   // grab-able under them (mouse pan). Scrollbar is
                   // hidden — drag / shift-wheel / trackpad replace it.
-                  "flex min-h-0 flex-1 items-start gap-4 overflow-x-auto px-gutter pb-4",
+                  "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-3 pb-4",
                   "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}
@@ -1203,7 +1251,6 @@ export const Board = React.memo(function Board({
                     onOpen={handleOpen}
                     composerInitiallyOpen={expandedEmptyStatus === status}
                     onComposerClose={handleComposerClose}
-                    animateEnter={boardMounted.current}
                     // A card keyboard focus is coming home to (VC-419). Only
                     // the column that holds it hears about it; every other one
                     // is handed `null` and does nothing.
@@ -1211,6 +1258,7 @@ export const Board = React.memo(function Board({
                     // A column's window may only GROW while a card is in the
                     // air: see `column-window.ts`.
                     dragActive={drag !== null}
+                    instantSort={instantSort}
                   />
                 ))}
                 {boardBare ? null : (
@@ -1218,7 +1266,6 @@ export const Board = React.memo(function Board({
                     statuses={hidden}
                     dragActive={drag !== null}
                     onExpand={setExpandedEmptyStatus}
-                    animateEnter={boardMounted.current}
                     offeredFor={offeredPanelFor}
                     dimmedFor={dimmedFor}
                     aimedFor={aimedFor}
@@ -1245,18 +1292,26 @@ export const Board = React.memo(function Board({
               // cannot have: the release would run the column's default
               // instead of what the hand was pointing at.
               className="pointer-events-none"
+              transition={instantSort ? "" : undefined}
               dropAnimation={
                 // A picked release lands where the PICKER says, which is not
                 // necessarily where the card is: animating the card into the
                 // slot it was hovering would draw the wrong landing.
-                reducedMotion || isPickerOpen(picker) || (drag?.ticketIds.length ?? 0) > 1
+                reducedMotion ||
+                releaseInstant.current ||
+                drag?.keyboard ||
+                isPickerOpen(picker) ||
+                (drag?.ticketIds.length ?? 0) > 1
                   ? null
-                  : { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
+                  : dropMotion
               }
             >
               {drag ? (
                 <div
                   data-ticket-drag-preview
+                  ref={(node) => {
+                    dropOverlayRef.current = node?.parentElement ?? null;
+                  }}
                   className={isPickerOpen(picker) ? "opacity-30" : undefined}
                 >
                   <DragOverlayBody
@@ -1265,7 +1320,7 @@ export const Board = React.memo(function Board({
                     ticketPrefix={ticketPrefix}
                     projectLabels={projectLabels}
                     listView={boardView === "list"}
-                    reducedMotion={reducedMotion}
+                    reducedMotion={reducedMotion || drag.keyboard}
                   />
                 </div>
               ) : null}
@@ -1282,13 +1337,7 @@ export const Board = React.memo(function Board({
                 data-choose-hint
                 className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center"
               >
-                <p
-                  className={cn(
-                    "flex items-center gap-2 rounded-full border border-border bg-popover px-2 py-1 text-ui text-muted-foreground shadow-overlay",
-                    !reducedMotion &&
-                      "transition-[opacity,translate] duration-200 ease-out starting:translate-y-1 starting:opacity-0",
-                  )}
-                >
+                <p className="flex items-center gap-2 rounded-full border border-border bg-popover px-2 py-1 text-ui text-muted-foreground shadow-overlay">
                   <kbd className="rounded-sm border border-border px-1 font-mono text-label text-foreground">
                     ⌥
                   </kbd>

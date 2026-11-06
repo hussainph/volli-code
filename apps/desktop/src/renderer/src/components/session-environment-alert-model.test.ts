@@ -88,9 +88,7 @@ describe("sessionEnvironmentMeasurement", () => {
       fault: "login-path-unreadable",
       key: "login-path-unreadable",
       title: "Volli couldn't read your terminal's PATH",
-      detail:
-        "Sessions can't find node and pnpm, so some commands may be missing. " +
-        "Fix now asks your terminal again — Sessions you start afterwards get the result.",
+      detail: "Sessions can't find node and pnpm.",
     });
   });
 
@@ -105,7 +103,7 @@ describe("sessionEnvironmentMeasurement", () => {
     const measured = status("probe-failed", "probe-failed", {
       tools: { ...DEFAULT_TOOLS, gh: null, node: null },
     });
-    expect(topNotice(measured)?.detail).toContain("Sessions can't find node,");
+    expect(topNotice(measured)?.detail).toContain("Sessions can't find node.");
   });
 
   it("names a single missing command without a list", () => {
@@ -113,7 +111,7 @@ describe("sessionEnvironmentMeasurement", () => {
       tools: { ...DEFAULT_TOOLS, node: null },
     });
 
-    expect(topNotice(measured)?.detail).toContain("Sessions can't find node,");
+    expect(topNotice(measured)?.detail).toContain("Sessions can't find node.");
   });
 
   // The banner is somebody's first minute in the product. "Login-shell passes",
@@ -141,8 +139,7 @@ describe("sessionEnvironmentMeasurement", () => {
       fault: null,
       key: "readiness:Acme:git,node",
       title: "Sessions aren't ready for Acme",
-      detail:
-        "Missing from the Session PATH: git, node. If they are installed, open Settings → CLI to repair the Session PATH.",
+      detail: "Missing from the Session PATH: git, node",
     });
   });
 
@@ -159,6 +156,12 @@ describe("sessionEnvironmentMeasurement", () => {
 
     const first = projectEnvironmentReadiness(withNode, { name: "Acme" });
     expect(first?.key).toBe("readiness:Acme:node");
+    // Production uses the stable project id: a rename is not a new fault.
+    const stable = projectEnvironmentReadiness(withNode, { id: "project-a", name: "Acme" });
+    expect(stable?.key).toBe("readiness:project-a:node");
+    expect(projectEnvironmentReadiness(withNode, { id: "project-a", name: "Renamed" })?.key).toBe(
+      stable?.key,
+    );
     // Different project, different facts: neither shares a dismissal.
     expect(projectEnvironmentReadiness(withNode, { name: "Other" })?.key).not.toBe(first?.key);
     expect(projectEnvironmentReadiness(withNodeAndPnpm, { name: "Acme" })?.key).not.toBe(
@@ -190,7 +193,7 @@ describe("sessionEnvironmentMeasurement", () => {
     });
 
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Missing from the Session PATH: node. If they are installed, open Settings → CLI to repair the Session PATH.",
+      "Missing from the Session PATH: node",
     );
   });
 
@@ -260,7 +263,7 @@ describe("sessionEnvironmentMeasurement", () => {
       });
 
       expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-        "Missing from the Session PATH: node. If they are installed, open Settings → CLI to repair the Session PATH.",
+        "Missing from the Session PATH: node",
       );
     });
   });
@@ -327,8 +330,7 @@ describe("sessionEnvironmentMeasurement", () => {
       fault: null,
       key: "readiness:Acme:node",
       title: "Sessions aren't ready for Acme",
-      detail:
-        "Missing from the Session PATH: node. If they are installed, open Settings → CLI to repair the Session PATH.",
+      detail: "Missing from the Session PATH: node",
     });
   });
 });

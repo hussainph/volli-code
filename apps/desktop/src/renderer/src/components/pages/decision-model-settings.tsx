@@ -21,8 +21,8 @@
  * says "needs setup" and offers Sign in, which hands over to the Accounts
  * section below, where every provider credential is entered.
  */
-import { SignpostIcon } from "@phosphor-icons/react/dist/csr/Signpost";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { DirectionsIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
   decisionCloudDisclosure,
@@ -75,6 +75,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Notice } from "@renderer/components/ui/notice";
 import { Segmented } from "@renderer/components/ui/segmented";
 import {
@@ -180,7 +181,7 @@ export function CloudOptInDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Send decisions to {label}?</AlertDialogTitle>
           <AlertDialogDescription>
-            {shown === null ? "" : decisionCloudDisclosure(label)} Choose None at any time to stop.
+            {shown === null ? "" : decisionCloudDisclosure(label)}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -237,8 +238,7 @@ function AutoPickRow({
           <AlertDialogHeader>
             <AlertDialogTitle>Let {label} choose models?</AlertDialogTitle>
             <AlertDialogDescription>
-              {decisionCloudDisclosure(label, ["model.select"])} Switch it off at any time to stop;
-              a Session that is already running never changes model.
+              {decisionCloudDisclosure(label, ["model.select"])}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -341,14 +341,16 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
 
   if (state.status === "loading") {
     return (
-      <PrefSection title="Decision model" icon={SignpostIcon}>
-        <p className={EMPTY_INLINE}>Loading…</p>
+      <PrefSection title="Decision model" icon={DirectionsIcon}>
+        <p className={EMPTY_INLINE}>
+          <LoadingLabel>Loading</LoadingLabel>
+        </p>
       </PrefSection>
     );
   }
   if (state.status === "error") {
     return (
-      <PrefSection title="Decision model" icon={SignpostIcon}>
+      <PrefSection title="Decision model" icon={DirectionsIcon}>
         <Notice
           announce
           tone="error"
@@ -372,7 +374,7 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
   const cloud = global.kind === "cloud" ? cloudStatus(global, view.catalog) : null;
 
   return (
-    <PrefSection title="Decision model" icon={SignpostIcon}>
+    <PrefSection title="Decision model" icon={DirectionsIcon}>
       <PrefRow label="Model" testId="decision-model-mode">
         <Segmented
           ariaLabel="Decision model"
@@ -561,7 +563,9 @@ export function ProjectDecisionModelRow({
     return (
       <PrefRow label="Decision model" testId="project-decision-model">
         {state.status === "loading" ? (
-          <span className="text-ui text-muted-foreground">Loading…</span>
+          <span className="text-ui text-muted-foreground">
+            <LoadingLabel>Loading</LoadingLabel>
+          </span>
         ) : (
           <div className="flex items-center gap-3" title={state.message}>
             <span className="text-ui text-muted-foreground">Couldn&rsquo;t load</span>

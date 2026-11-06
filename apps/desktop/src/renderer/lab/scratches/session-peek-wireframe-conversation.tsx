@@ -101,7 +101,9 @@ export function PeekConversation({
     <SessionPeekDialog
       open={fixture !== null}
       title="Conversation"
-      description="Lab fixture · not a live session"
+      metadata={
+        <span className="text-ui text-muted-foreground">Simulated wiring · lab fixture</span>
+      }
       openLabel="Open session"
       onOpen={onOpen}
       onClose={onClose}

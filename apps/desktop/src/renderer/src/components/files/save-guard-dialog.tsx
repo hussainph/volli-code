@@ -47,9 +47,7 @@ export function FileSaveGuardDialog({
       <AlertDialogContent data-testid="file-save-guard">
         <AlertDialogHeader>
           <AlertDialogTitle>Save changes to {name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            {name} has unsaved changes. Closing it without saving discards them.
-          </AlertDialogDescription>
+          <AlertDialogDescription>Closing without saving discards them.</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel data-testid="file-save-guard-cancel">Cancel</AlertDialogCancel>

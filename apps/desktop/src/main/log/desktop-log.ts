@@ -9,6 +9,15 @@
  * - **In the terminal** too in a dev build, as readable lines.
  * - **Levels:** `VOLLI_LOG_LEVEL` when set; otherwise `debug` in a dev build
  *   (every hop, for the end-to-end view) and `info` in a packaged one.
+ * - **Main stalls** (VC-1073): while the log is installed, every event-loop
+ *   block in main over 200 ms (`VOLLI_MAIN_STALL_MS` when set) writes a
+ *   `main-stall` line naming the door and operation that held it, and an
+ *   hourly roll-up (`VOLLI_MAIN_STALL_SUMMARY_MS` when set;
+ *   `startMainStallMonitor`).
+ * - **Renderer stalls** (VC-1091): each window's long frames and slow inputs,
+ *   labelled by interaction, as `renderer-stall` lines, and an hourly
+ *   `renderer stall load` roll-up on the same cadence (`rendererStalls`,
+ *   which `volli:renderer-stalls` writes through).
  *
  * Nothing here is visible to a person using the app: no window, no setting.
  */
@@ -20,12 +29,15 @@ import {
   installHostLog,
   profileLogsRoot,
   reportToStderr,
+  startMainStallMonitor,
   teeSinks,
   type LogRing,
   type LogSink,
   type RotatingFileSink,
 } from "@volli/host-core/log";
 import { logLevelFrom, type LogLevel } from "@volli/shared";
+
+import { startRendererStallLog, type RendererStallLog } from "./renderer-stall";
 
 export interface DesktopLog {
   /** Where the files are. */
@@ -37,6 +49,8 @@ export interface DesktopLog {
    * handler map's `logs.*` read: the dev log viewer's local stream.
    */
   readonly ring: LogRing;
+  /** Where each window's stall batches are written, and rolled up hourly beside main's. */
+  readonly rendererStalls: RendererStallLog;
   /** Resolves once every line so far reached the disk, or after `deadlineMs`, whichever is first. */
   flush(deadlineMs?: number): Promise<void>;
   /** Uninstalls and closes the file. */
@@ -53,6 +67,30 @@ export interface DesktopLogOptions {
   readonly console?: Pick<Console, "debug" | "info" | "warn" | "error">;
   /** Whether lines also go to the terminal. Defaults to `dev`. */
   readonly terminal?: boolean;
+}
+
+/** A positive-integer environment variable, or `undefined` for the monitor's default. */
+function positiveMs(
+  env: Readonly<Record<string, string | undefined>>,
+  name: string,
+): number | undefined {
+  const raw = env[name];
+  if (raw === undefined || !/^[1-9][0-9]*$/.test(raw)) return undefined;
+  return Number(raw);
+}
+
+/** `VOLLI_MAIN_STALL_MS` as a threshold: a positive integer, or the monitor's default. */
+export function mainStallThresholdMs(
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  return positiveMs(env, "VOLLI_MAIN_STALL_MS");
+}
+
+/** `VOLLI_MAIN_STALL_SUMMARY_MS` as the roll-up interval, for a bench or a short run (VC-1090). */
+export function mainStallSummaryMs(
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  return positiveMs(env, "VOLLI_MAIN_STALL_SUMMARY_MS");
 }
 
 /** The profile's log directory. */
@@ -81,17 +119,27 @@ export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
   const sinks: LogSink[] = [file, ring, ...(options.sinks ?? [])];
   if (options.terminal ?? options.dev) sinks.push(consoleSink(options.console));
   const undo = installHostLog({ level, sink: teeSinks(...sinks) });
+  const thresholdMs = mainStallThresholdMs(options.env);
+  const summaryIntervalMs = mainStallSummaryMs(options.env);
+  const stalls = startMainStallMonitor({
+    ...(thresholdMs === undefined ? {} : { thresholdMs }),
+    ...(summaryIntervalMs === undefined ? {} : { summaryIntervalMs }),
+  });
+  const rendererStalls = startRendererStallLog();
   return {
     directory,
     level,
     file,
     ring,
+    rendererStalls,
     flush: (deadlineMs = 500) =>
       Promise.race([
         file.flush(),
         new Promise<void>((resolve) => setTimeout(resolve, deadlineMs).unref()),
       ]),
     async close() {
+      stalls.stop();
+      rendererStalls.stop();
       undo();
       await file.close();
     },

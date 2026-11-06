@@ -20,21 +20,30 @@
  * Ids are the store's own UUIDs and nothing else becomes a file name; the
  * check here is a second lock on the same door, the way `blobRelPath` refuses
  * anything that is not a hash.
+ *
+ * Writes and removals leave the caller's turn (VC-1082). This runs on
+ * Electron main beside every Session's agent loop, so the files are written
+ * through `fs.promises`, in order per picture ({@link diskQueue}); until a
+ * picture's write lands, its bytes answer every read from memory, so nothing
+ * a caller can observe depends on when the disk caught up. A write still in
+ * flight when the process dies is lost the way a crash mid-write always lost
+ * it — the record is written last, so a picture is never listed without its
+ * bytes — and an orderly quit waits for them ({@link BrowserPictureDisk.settled}).
  */
 import {
   closeSync,
   constants,
   existsSync,
   fstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   readSync,
-  rmSync,
-  writeFileSync,
 } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { hostLogger } from "../log/root";
 
 import {
   BROWSER_PICTURE_CHUNK_BYTES,
@@ -54,6 +63,49 @@ const EXTENSION: Record<BrowserPictureMime, string> = {
   "image/webp": "webp",
   "image/bmp": "bmp",
 };
+
+const log = hostLogger("browser");
+
+/**
+ * Disk work run off the caller's turn: in submission order for each file (a
+ * removal never overtakes the write before it), any order across files. A
+ * failure is logged and ends that one job, never the queue: no person waits on
+ * these writes, and the bytes are still answered from memory until they land.
+ */
+export interface DiskQueue {
+  run(key: string, work: () => Promise<void>, settle?: () => void): void;
+  /** Resolves once every job queued so far, and any they queued, has finished. */
+  settled(): Promise<void>;
+}
+
+export function diskQueue(what: string): DiskQueue {
+  const tails = new Map<string, Promise<void>>();
+  return {
+    run(key, work, settle) {
+      const tail = (tails.get(key) ?? Promise.resolve())
+        .then(work)
+        .catch((error: unknown) => {
+          log.warn(`${what} could not be written to disk`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          settle?.();
+          if (tails.get(key) === tail) tails.delete(key);
+        });
+      tails.set(key, tail);
+    },
+    async settled() {
+      while (tails.size > 0) await Promise.all(tails.values());
+    },
+  };
+}
+
+/** A picture sink on disk, with the wait an orderly quit gives its writes. */
+export interface BrowserPictureDisk extends BrowserPicturePersistence {
+  /** Resolves once every write and removal asked of it so far is on disk. */
+  settled(): Promise<void>;
+}
 
 /** The pictures directory under a given Electron `userData` path. */
 export function browserPicturesRoot(userDataPath: string): string {
@@ -96,16 +148,38 @@ function readRecord(root: string, name: string): BrowserPictureRecord | null {
   }
 }
 
-export function browserPictureDisk(root: string): BrowserPicturePersistence {
+export function browserPictureDisk(root: string): BrowserPictureDisk {
+  const queue = diskQueue("A browser picture");
+  /** Pictures whose write has not landed yet: every read answers them from here. */
+  const pending = new Map<string, { bytes: Uint8Array; record: BrowserPictureRecord }>();
+  /** Pictures whose removal has not landed yet: no read or listing answers them. */
+  const removing = new Set<string>();
   return {
     write(bytes, record) {
       if (!UUID.test(record.id)) throw new Error("Browser picture ids are UUIDs");
-      mkdirSync(root, { recursive: true });
-      writeFileSync(join(root, `${record.id}.${EXTENSION[record.mime]}`), bytes);
-      writeFileSync(join(root, `${record.id}.json`), JSON.stringify(record));
+      const entry = { bytes, record };
+      pending.set(record.id, entry);
+      // Written again after a removal: the queue lands the removal first.
+      removing.delete(record.id);
+      queue.run(
+        record.id,
+        async () => {
+          // A removal queued meanwhile already won; nothing to write.
+          if (pending.get(record.id) !== entry) return;
+          await mkdir(root, { recursive: true });
+          await writeFile(join(root, `${record.id}.${EXTENSION[record.mime]}`), bytes);
+          // The record last: a listed picture always has its bytes beside it.
+          await writeFile(join(root, `${record.id}.json`), JSON.stringify(record));
+        },
+        () => {
+          if (pending.get(record.id) === entry) pending.delete(record.id);
+        },
+      );
     },
     read(id) {
-      if (!UUID.test(id)) return null;
+      if (!UUID.test(id) || removing.has(id)) return null;
+      const held = pending.get(id);
+      if (held !== undefined) return { bytes: held.bytes, mime: held.record.mime };
       for (const mime of Object.keys(EXTENSION) as BrowserPictureMime[]) {
         const path = join(root, `${id}.${EXTENSION[mime]}`);
         if (existsSync(path)) return { bytes: readFileSync(path), mime };
@@ -113,8 +187,22 @@ export function browserPictureDisk(root: string): BrowserPicturePersistence {
       return null;
     },
     readChunk(id, offset) {
-      if (!UUID.test(id) || !Number.isSafeInteger(offset) || offset < 0 || offset % 3 !== 0)
+      if (
+        !UUID.test(id) ||
+        removing.has(id) ||
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        offset % 3 !== 0
+      )
         return null;
+      const held = pending.get(id)?.bytes;
+      if (held !== undefined) {
+        if (offset >= held.length) return null;
+        return {
+          bytes: held.subarray(offset, offset + BROWSER_PICTURE_CHUNK_BYTES),
+          byteLength: held.length,
+        };
+      }
       for (const mime of Object.keys(EXTENSION) as BrowserPictureMime[]) {
         let fd: number | undefined;
         try {
@@ -144,21 +232,35 @@ export function browserPictureDisk(root: string): BrowserPicturePersistence {
       return null;
     },
     list() {
-      if (!existsSync(root)) return [];
       const records: BrowserPictureRecord[] = [];
-      for (const name of readdirSync(root)) {
-        if (!name.endsWith(".json")) continue;
-        const record = readRecord(root, name);
-        if (record !== null) records.push(record);
+      if (existsSync(root)) {
+        for (const name of readdirSync(root)) {
+          if (!name.endsWith(".json")) continue;
+          const record = readRecord(root, name);
+          if (record !== null && !pending.has(record.id) && !removing.has(record.id))
+            records.push(record);
+        }
       }
+      for (const { record } of pending.values()) records.push(record);
       return records;
     },
     remove(id) {
       if (!UUID.test(id)) return;
-      rmSync(join(root, `${id}.json`), { force: true });
-      for (const mime of Object.keys(EXTENSION) as BrowserPictureMime[]) {
-        rmSync(join(root, `${id}.${EXTENSION[mime]}`), { force: true });
-      }
+      pending.delete(id);
+      removing.add(id);
+      queue.run(
+        id,
+        async () => {
+          // The record first, as it was written last: a half-removed picture is
+          // never listed.
+          await rm(join(root, `${id}.json`), { force: true });
+          for (const mime of Object.keys(EXTENSION) as BrowserPictureMime[]) {
+            await rm(join(root, `${id}.${EXTENSION[mime]}`), { force: true });
+          }
+        },
+        () => removing.delete(id),
+      );
     },
+    settled: () => queue.settled(),
   };
 }

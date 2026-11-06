@@ -105,7 +105,9 @@ function statusFaults(rows: readonly CliStatusRow[]): AboutFault[] {
   return cliStatusDisclosure(rows).attentionRows.map((row) => ({
     id: `cli-status:${row.key}`,
     headline: cliStatusFaultTitle(row),
-    detail: row.remedy ?? "Select Re-check for current repair guidance.",
+    detail: row.remedy?.includes("Settings → CLI")
+      ? "Run `volli doctor` in a terminal for repair steps."
+      : (row.remedy?.replaceAll("re-check", "retry") ?? "Retry for current repair steps."),
   }));
 }
 
@@ -121,18 +123,19 @@ export function aboutHealth({ status, doctor, rows, checks }: AboutHealthInput):
   ];
 
   // A known failure outranks a concurrent read: this set of checks can no
-  // longer complete, so continuing to say "Checking…" would hide the recovery
+  // longer complete, so continuing to say "Checking" would hide the recovery
   // action behind work whose answer cannot make the set whole.
   if (status === "unavailable" || doctor === "unavailable") {
     return {
       state: "unavailable",
       headline: "Couldn't complete these checks",
-      faults,
+      // A partial check cannot offer Fix or prescribe repairs it has not confirmed.
+      faults: faults.map((fault) => Object.assign({}, fault, { detail: "" })),
       canFix: false,
     };
   }
   if (status === "loading" || doctor === "loading") {
-    return { state: "checking", headline: "Checking…", faults: [], canFix: false };
+    return { state: "checking", headline: "Checking", faults: [], canFix: false };
   }
   if (faults.length === 0) {
     return { state: "healthy", headline: "Everything's working", faults, canFix: false };

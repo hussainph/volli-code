@@ -1,3 +1,5 @@
+import { EmptyState, PanelEmptyState } from "@renderer/components/ui/empty-state";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * The Browser replay (VC-453): a Session's Browser Traces, stepped through
  * frame by frame. Opened from a browse row's card in the transcript and from
@@ -29,11 +31,12 @@
  * nothing and holds no frames.
  */
 import * as React from "react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { FilmStripIcon } from "@phosphor-icons/react/dist/csr/FilmStrip";
-import { CursorClickIcon } from "@phosphor-icons/react/dist/csr/CursorClick";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  VideoIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
 
 import {
   type BrowserTrace,
@@ -92,7 +95,7 @@ export function BrowserTraceDialog({
       <DialogContent
         data-browser-trace-dialog=""
         aria-describedby={undefined}
-        className="flex h-[80vh] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
+        className="flex h-[80vh] max-h-none max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
       >
         {request === null ? null : (
           <TraceReplay
@@ -213,7 +216,7 @@ function TraceReplay({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Tall enough that the content's close button (top-4 right-4) lands in it. */}
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-12 pl-4">
-        <FilmStripIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <VideoIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <DialogTitle className="min-w-0 truncate text-ui font-semibold">Browser replay</DialogTitle>
         {timeline.length > 0 ? (
           <span className="shrink-0 text-ui text-muted-foreground tabular-nums" data-trace-position>
@@ -223,20 +226,15 @@ function TraceReplay({
         ) : null}
       </div>
       {state.kind === "loading" ? (
-        <div className="m-4 flex-1 animate-pulse rounded-md bg-muted/50" aria-hidden />
+        <div className="m-4 flex-1">
+          <LoadingLabel>Loading recording</LoadingLabel>
+        </div>
       ) : current === null || facts === null ? (
         <div
           className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center text-ui text-muted-foreground"
           data-trace-empty
         >
-          <div className="relative flex size-16 items-center justify-center rounded-container border border-border bg-card shadow-raised">
-            <FilmStripIcon aria-hidden className="size-8" />
-            <CursorClickIcon
-              aria-hidden
-              className="absolute -right-2 -bottom-2 size-6 text-primary-text"
-            />
-          </div>
-          <span className="font-medium text-foreground">Nothing recorded for this Session</span>
+          <EmptyState tier="page" illustration="file" title="Nothing recorded" />
         </div>
       ) : (
         <>
@@ -257,7 +255,7 @@ function TraceReplay({
                   title={facts.trouble}
                   data-trace-trouble
                 >
-                  <WarningCircleIcon aria-hidden weight="fill" className="size-3.5 shrink-0" />
+                  <WarningIcon aria-hidden className="size-3.5 shrink-0" />
                   <span className="truncate font-mono">{facts.trouble}</span>
                 </span>
               )}
@@ -288,7 +286,7 @@ function TraceReplay({
               disabled={at === 0}
               onClick={() => setIndex(at - 1)}
             >
-              <CaretLeftIcon weight="bold" />
+              <ChevronLeftIcon strokeWidth={2.25} />
             </Button>
             <ScrubTrack timeline={timeline} index={at} onScrub={setIndex} label={facts.verb} />
             <Button
@@ -299,7 +297,7 @@ function TraceReplay({
               disabled={at >= timeline.length - 1}
               onClick={() => setIndex(at + 1)}
             >
-              <CaretRightIcon weight="bold" />
+              <ChevronRightIcon strokeWidth={2.25} />
             </Button>
           </div>
         </>
@@ -331,11 +329,15 @@ function Frame({
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-3">
       {pictureId === null ? (
-        <span className="text-ui text-muted-foreground">No picture for this step</span>
+        <PanelEmptyState
+          illustration="file"
+          status="unavailable"
+          title="No picture for this step"
+        />
       ) : picture.kind === "gone" ? (
-        <span className="text-ui text-muted-foreground">Picture unavailable</span>
+        <PanelEmptyState illustration="file" status="unavailable" title="Picture unavailable" />
       ) : drawn === null ? (
-        <div className="size-full animate-pulse rounded-sm bg-muted/50" aria-hidden />
+        <LoadingLabel>Loading picture</LoadingLabel>
       ) : (
         <img
           alt={
@@ -407,7 +409,7 @@ function ScrubTrack({
         <span
           key={`${frame.traceId}:${frame.step.seq}`}
           className={cn(
-            "min-w-0 flex-1 rounded-xs transition-[height] duration-100 motion-reduce:transition-none",
+            "min-w-0 flex-1 rounded-control-mini duration-(--duration-menu-out) motion-reduce:transition-none",
             position === index
               ? "h-4 bg-primary"
               : frame.step.outcome === "ok" && frame.step.error === null

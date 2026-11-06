@@ -3048,6 +3048,33 @@ describe("volli:session-read-set (VC-30)", () => {
     expect(notice.row).not.toHaveProperty("read");
   });
 
+  it("folds no projection: the row is the listing's own, from its cache (VC-1101)", async () => {
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
+    const sessionId = await chatSession(sessionEngine, null);
+    const getSession = vi.spyOn(sessionEngine, "getSession");
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    dataChangedSends.length = 0;
+
+    const marked = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: true,
+    });
+
+    expect(marked.ok).toBe(true);
+    // A receipt moves no ledger fact, so a click never pays a whole fold.
+    expect(getSession).not.toHaveBeenCalled();
+    const notice = dataChangedSends.find((send) => send.channel === "volli:session-activity")
+      ?.payload as SessionActivityNotice;
+    // The pushed row is exactly the row the listing fetch now returns.
+    const listed = await invoke<Promise<SessionsResult>>("volli:session-list", {
+      projectId: notice.projectId,
+    });
+    expect(listed.ok && listed.sessions.find((row) => rowId(row) === sessionId)).toEqual(
+      notice.row,
+    );
+  });
+
   it("refuses a Session the ledger does not have, and publishes nothing", async () => {
     const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     handlers.clear();
@@ -4976,6 +5003,81 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({ ok: true });
     expect(existsSync(target)).toBe(false);
+  });
+});
+
+describe("a main-side app-state effect (VC-1037)", () => {
+  type AppStateEffect = (key: string, value: string) => AppStateSetResult;
+  const registerWith = (effect: AppStateEffect): void => {
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, onAppStateSet: effect },
+    );
+  };
+  const stored = (): unknown =>
+    ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:ui'").get();
+
+  it("runs before the write is acknowledged", () => {
+    const seen: Array<[string, string]> = [];
+    registerWith((key, value) => {
+      seen.push([key, value]);
+      return { ok: true };
+    });
+
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "next")).toEqual({
+      ok: true,
+    });
+    expect(seen).toEqual([["volli:ui", "next"]]);
+    expect(stored()).toEqual({ value: "next" });
+  });
+
+  it("restores the previous value when the effect refuses, so the ack and the row agree", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "before")).toEqual({
+      ok: true,
+    });
+    registerWith(() => ({ ok: false, error: "Allow Volli in System Settings." }));
+
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "after")).toEqual({
+      ok: false,
+      error: "Allow Volli in System Settings.",
+    });
+    expect(stored()).toEqual({ value: "before" });
+  });
+
+  it("removes a first write the effect refused, rather than leaving it behind", () => {
+    registerWith(() => ({ ok: false, error: "refused" }));
+
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "first")).toEqual({
+      ok: false,
+      error: "refused",
+    });
+    expect(stored()).toBeUndefined();
+  });
+
+  it("treats a thrown effect as the same refused write", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "before")).toEqual({
+      ok: true,
+    });
+    registerWith(() => {
+      throw new Error("The OS refused the login item.");
+    });
+
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "after")).toEqual({
+      ok: false,
+      error: "The OS refused the login item.",
+    });
+    expect(stored()).toEqual({ value: "before" });
+  });
+
+  it("never runs for a write main itself refuses", () => {
+    const effect = vi.fn<AppStateEffect>((): AppStateSetResult => ({ ok: true }));
+    registerWith(effect);
+
+    expect(invoke<AppStateSetResult>("volli:app-state-set", MIN_READER_VERSION_KEY, "999")).toEqual(
+      { ok: false, error: "This app state key is owned by the database." },
+    );
+    expect(effect).not.toHaveBeenCalled();
   });
 });
 

@@ -7,7 +7,7 @@
  */
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import type { Project, Ticket } from "@volli/shared";
+import { SPLIT_VIEW_ROOT_PANE_ID, splitViewPanes, type Project, type Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
@@ -16,6 +16,7 @@ import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { remoteHost } from "@renderer/stores/host-sources";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { useProvisionalPaneLayoutStore } from "@renderer/stores/provisional-pane-layout";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { projectScope, ticketScope } from "@renderer/stores/sessions";
@@ -94,6 +95,7 @@ beforeEach(() => {
   useProjectsStore.setState({ ...originalProjectsState, projects: [PROJECT] }, true);
   useBoardStore.setState({ ...originalBoardState, ticketsByProject: { p1: [TICKET] } }, true);
   useChatDraftsStore.setState({ drafts: {} });
+  useProvisionalPaneLayoutStore.setState({ byOwner: new Map() });
   const projectUi = createProjectUiStore({
     getItem: () => null,
     setItem: () => {},
@@ -140,6 +142,44 @@ function remoteProject(granted: readonly string[] | undefined, cloud = true) {
 }
 
 describe("bootChatSession", () => {
+  it.each([ticketScope("p1", "t1"), projectScope("p1")])(
+    "retains the command's empty pane for a Draft even if landing changes focus (%j)",
+    async (scope) => {
+      const ui = useProjectUiStore.getState();
+      const ticket = scope.kind === "ticket";
+      if (ticket) {
+        ui.setTicketActiveTab("p1", "t1", "chat:neighbour");
+        ui.splitTicketPane("p1", "t1", SPLIT_VIEW_ROOT_PANE_ID, "left");
+      } else {
+        ui.setHomeActiveTab("p1", "chat:neighbour");
+        ui.splitHomePane("p1", SPLIT_VIEW_ROOT_PANE_ID, "left");
+      }
+      const read = () =>
+        ticket
+          ? useProjectUiStore.getState().byProject.p1!.ticketTabs.t1!.splitView!
+          : useProjectUiStore.getState().byProject.p1!.homeSplitView!;
+      const destination = read().focusedPaneId;
+      const neighbour = splitViewPanes(read()).find((leaf) => leaf.id !== destination)!;
+      const id = await bootChatSession(scope, {
+        land: (sessionId) => {
+          useChatSessionsStore.getState().openChatTab(ticket ? "t1" : "p1", sessionId);
+          if (ticket) ui.focusTicketPane("p1", "t1", neighbour.id);
+          else ui.focusHomePane("p1", neighbour.id);
+          return true;
+        },
+      });
+      expect(id).not.toBeNull();
+      expect(read().focusedPaneId).toBe(destination);
+      expect(
+        useProvisionalPaneLayoutStore
+          .getState()
+          .byOwner.get(ticket ? "t1" : "p1")
+          ?.get(id!),
+      ).toEqual({ paneId: destination, front: true });
+      expect(JSON.stringify(useProjectUiStore.getState().byProject)).not.toContain(id);
+    },
+  );
+
   it.each([ticketScope("p1", "t1"), projectScope("p1")])(
     "opens a remote chat Draft only with this project's sessions grant (%j)",
     async (scope) => {

@@ -23,7 +23,12 @@
  * layer that reaches for a Session field does not compile.
  */
 
-import { promptResourceBlock, routeOf, verbToolWireName } from "@volli/shared";
+import {
+  isRepoInstructionsResource,
+  promptResourceBlock,
+  routeOf,
+  verbToolWireName,
+} from "@volli/shared";
 import type {
   PromptResource,
   RuntimeBrief,
@@ -92,22 +97,39 @@ const OPERATING_LAYER_WITHOUT_RESOURCES = operatingLayer(false);
  * At 820 characters / ~205 estimated tokens this core stays inside the
  * documented 150–250 token budget on its own; the delegation paragraph is
  * budgeted separately below.
+ *
+ * Its one resource-dependent sentence (VC-1054): a Session born with the
+ * repository instructions recorded among its resources is told they are
+ * below, instead of being sent to go and inspect them. Keyed on the frozen
+ * resource set, so every Session born without that record — every Session
+ * born before it existed, and every workspace with no instruction file —
+ * composes the original sentence byte for byte.
  */
-const EXECUTION_CORE = [
-  "# Execution",
-  "",
-  "Answer or review requests by investigating and reporting; edit only when a",
-  "change is requested or authorized. Before editing, inspect the relevant workspace",
-  "state and repository instructions. Prefer available specialized tools to shell",
-  "substitutes, and parallelize independent calls. When web_search and web_fetch",
-  "are available, read public web content with them, not curl, wget or scripts;",
-  "localhost and local dev servers are fine from the shell. Preserve user and",
-  "concurrent-agent changes; never discard work you did not create. Carry each",
-  "requested change through focused implementation and proportional",
-  "verification; do not stop at analysis when action is authorized. Ask only for",
-  "a genuine blocking decision. Finish with the outcome, the exact checks run and",
-  "their results, and any unresolved blockers.",
-].join("\n");
+function executionCore(repoInstructionsSupplied: boolean): string {
+  return [
+    "# Execution",
+    "",
+    "Answer or review requests by investigating and reporting; edit only when a",
+    "change is requested or authorized. Before editing, inspect the relevant workspace",
+    ...(repoInstructionsSupplied
+      ? [
+          "state; repository instructions are supplied below as a RESOURCE. Prefer",
+          "available specialized tools to shell",
+        ]
+      : ["state and repository instructions. Prefer available specialized tools to shell"]),
+    "substitutes, and parallelize independent calls. When web_search and web_fetch",
+    "are available, read public web content with them, not curl, wget or scripts;",
+    "localhost and local dev servers are fine from the shell. Preserve user and",
+    "concurrent-agent changes; never discard work you did not create. Carry each",
+    "requested change through focused implementation and proportional",
+    "verification; do not stop at analysis when action is authorized. Ask only for",
+    "a genuine blocking decision. Finish with the outcome, the exact checks run and",
+    "their results, and any unresolved blockers.",
+  ].join("\n");
+}
+
+const EXECUTION_CORE = executionCore(false);
+const EXECUTION_CORE_WITH_REPO_INSTRUCTIONS = executionCore(true);
 
 /**
  * When to delegate, and to whom (VC-459).
@@ -202,7 +224,12 @@ const CODE_MODE_PARAGRAPH = [
   "directly.",
 ].join("\n");
 
-function executionLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
+function executionLayer(
+  role: RuntimeSessionRole,
+  tools: RuntimeToolBundle,
+  repoInstructionsSupplied: boolean,
+): string {
+  const core = repoInstructionsSupplied ? EXECUTION_CORE_WITH_REPO_INSTRUCTIONS : EXECUTION_CORE;
   // The birth marker protects old Cache Prefixes while new Sessions no longer
   // invite bash calls their programs cannot make (VC-748).
   const paragraph =
@@ -212,11 +239,11 @@ function executionLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): str
   const codeMode = tools.codeMode?.nudge === true ? `\n\n${paragraph}` : "";
   const verbs = tools.verbs ?? [];
   if (role === "subagent" || !verbs.includes("session.delegate")) {
-    return `${EXECUTION_CORE}${codeMode}`;
+    return `${core}${codeMode}`;
   }
   const automation =
     role === "project" && verbs.includes("automation.run") ? `\n${AUTOMATION_RUN_GUIDANCE}` : "";
-  return `${EXECUTION_CORE}\n\n${DELEGATION_PARAGRAPH[role]}${automation}${codeMode}`;
+  return `${core}\n\n${DELEGATION_PARAGRAPH[role]}${automation}${codeMode}`;
 }
 
 const ROLE_LAYER: Record<RuntimeSessionRole, string> = {
@@ -403,8 +430,9 @@ const WORKSPACE_LAYER: Record<RuntimeSessionRole, string> = {
  * (`prompt-baseline.test.ts`), and four lines of this spent a quarter of the
  * remaining headroom to say what the variable's own name says. The full
  * statement of the contract — which variables Volli fills, the no-clobber rule,
- * the flag for every tool that reads none — lives in `AGENTS.md`, which a
- * Session reads on demand rather than paying for on every request.
+ * the flag for every tool that reads none — lives in this repository's
+ * `AGENTS.md`: project instructions a Session on this repository is handed as
+ * its own resource (VC-1054), not a cost every Volli Session pays.
  */
 function shellLayer(): readonly string[] {
   return [
@@ -489,7 +517,10 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
       text:
         resources.length > 0 ? OPERATING_LAYER_WITH_RESOURCES : OPERATING_LAYER_WITHOUT_RESOURCES,
     },
-    { id: "execution", text: executionLayer(input.role, input.tools) },
+    {
+      id: "execution",
+      text: executionLayer(input.role, input.tools, resources.some(isRepoInstructionsResource)),
+    },
     { id: "role", text: roleLayer(input.role, input.tools) },
     { id: "authority", text: authorityLayer(input.role, input.tools) },
     { id: "workspace", text: WORKSPACE_LAYER[input.role] },

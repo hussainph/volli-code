@@ -13,6 +13,7 @@ export {
   mintSpanId,
   mintTraceId,
   withLogContext,
+  withMainSpan,
   withRootLogContext,
   withTrace,
 } from "../log/context";
@@ -55,6 +56,12 @@ export {
 } from "../log/ring";
 export { hostLogger, hostLogLevel, installHostLog } from "../log/root";
 export { consoleSink, jsonLineSink, teeSinks } from "../log/sinks";
+export {
+  MAIN_STALL_DEFAULTS,
+  type MainStallMonitor,
+  type MainStallMonitorOptions,
+  startMainStallMonitor,
+} from "../log/stall";
 export {
   SSH_INSTALL_STEPS,
   type SshInstallStep,

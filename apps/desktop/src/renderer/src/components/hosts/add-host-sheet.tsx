@@ -16,11 +16,8 @@
  */
 import * as React from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { ChevronDownIcon, CheckIcon, CopyIcon, TerminalIcon } from "@renderer/components/ui/icon";
+
 import type { AddHostLogLine, RemoteHost } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -30,6 +27,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@renderer/components/ui/dialog";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -91,11 +89,11 @@ export function AddHostSheet() {
         // Anchored from the top, not centred: the sheet changes height as
         // the flow moves, and a centred sheet would move its title each time.
         // Capped to the window: its middle scrolls, its footer always shows.
-        // Arrives as the lab's does (260 ms, from .96 and 8 px low), leaves faster.
+        // Enters in 260 ms from .96 and 8 px low, then leaves faster.
         className={cn(
-          "top-[14vh] flex max-h-[80vh] max-w-[30rem] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[30rem]",
-          "data-[state=open]:duration-[260ms] data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
-          "data-[state=closed]:duration-150 data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
+          "top-[14vh] flex max-h-[80vh] max-w-[min(30rem,calc(100%-2rem))] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[30rem]",
+          "data-[state=open]:duration-(--duration-sheet) data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
+          "data-[state=closed]:duration-(--duration-menu-in) data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
         )}
       >
         <MotionConfig reducedMotion="user">
@@ -184,9 +182,9 @@ function EntryScreen({
       </div>
       <div className="flex flex-col gap-2 px-6 pb-4">
         <div className="relative">
-          <TerminalWindowIcon
+          <TerminalIcon
             aria-hidden
-            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+            className="pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground"
           />
           <Input
             autoFocus
@@ -197,21 +195,15 @@ function EntryScreen({
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            className="h-9 pl-9 font-mono text-sm"
+            className="pl-8 font-mono"
             onChange={(event) => flow.setTarget(event.target.value)}
           />
         </div>
-        <p
-          className={cn(
-            "px-1 text-ui",
-            error === null ? "text-muted-foreground" : "text-destructive",
-          )}
-        >
-          {error ?? "Uses this Mac’s ssh: your keys, agent and ~/.ssh/config."}
-        </p>
+        {error === null ? null : <p className="px-1 text-ui text-destructive">{error}</p>}
       </div>
-      <div className="flex items-center justify-end border-t border-border/60 px-4 py-4">
-        <Button size="sm" type="submit" disabled={!valid || starting}>
+      <div className="flex items-center justify-end relative px-4 py-4 before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border/60">
+        <Button type="submit" disabled={!valid || starting}>
+          {starting ? <Spinner aria-label="Connecting" /> : <TerminalIcon />}
           Connect
         </Button>
       </div>
@@ -259,7 +251,7 @@ function FlowScreen({
   const done = view?.status === "done";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-4 px-6 pt-6 pb-4">
+      <div className="flex shrink-0 items-center gap-4 pl-6 pr-12 pt-6 pb-4">
         <HostGlyph
           // The OS as soon as the check finds it, not only once the host is kept.
           os={host?.os ?? view?.facts.os ?? null}
@@ -267,7 +259,7 @@ function FlowScreen({
           badge={view === null ? null : flowBadge(view)}
         />
         <div className="min-w-0">
-          <DialogTitle className="truncate">
+          <DialogTitle className="line-clamp-2 break-all" title={name}>
             <SwapText>
               {done
                 ? host?.reachability?.state.status === "ready"
@@ -276,7 +268,7 @@ function FlowScreen({
                 : name}
             </SwapText>
           </DialogTitle>
-          <DialogDescription className={cn("truncate text-ui", !done && "font-mono")}>
+          <DialogDescription className={cn("break-all text-ui", !done && "font-mono")}>
             {done && view !== null ? readySummary(view, host) : target}
           </DialogDescription>
         </div>
@@ -294,7 +286,7 @@ function FlowScreen({
                       <StepMark status={row.mark} />
                       <SwapText
                         className={cn(
-                          "min-w-0 flex-1 text-ui transition-colors duration-200",
+                          "min-w-0 flex-1 text-ui transition-colors duration-(--duration-sheet)",
                           row.mark === "pending" ? "text-muted-foreground" : "text-foreground",
                         )}
                       >
@@ -330,7 +322,7 @@ function FlowScreen({
               ) : null}
             </AnimatePresence>
           </div>
-          <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-4 py-4">
+          <div className="flex shrink-0 items-center gap-2 relative px-4 py-4 before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border/60">
             <Button
               size="sm"
               variant="ghost"
@@ -339,9 +331,9 @@ function FlowScreen({
               onClick={() => setDetails((value) => !value)}
             >
               Details
-              <CaretDownIcon
+              <ChevronDownIcon
                 className={cn(
-                  "size-3 transition-transform duration-200 ease-out motion-reduce:transition-none",
+                  "size-3 transition-transform duration-(--duration-sheet) ease-out motion-reduce:transition-none",
                   details && "rotate-180",
                 )}
               />
@@ -526,7 +518,6 @@ function SudoBody({
           autoComplete="off"
           aria-label={prompt.placeholder}
           placeholder={prompt.placeholder}
-          className="h-9 text-sm"
           defaultValue=""
           disabled={busy}
           onInput={(event) => onPasswordText(event.currentTarget.value.length > 0)}
@@ -534,7 +525,6 @@ function SudoBody({
       </form>
       {prompt.userInstall === null ? null : (
         <p className="flex items-start gap-2 text-ui text-muted-foreground">
-          <InfoIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           <span>No sudo? Install it for your account only. {prompt.userInstall.note}</span>
         </p>
       )}
@@ -750,13 +740,12 @@ function ReadyBody({ view, host }: { view: AddHostFlowView; host: RemoteHost | u
         <ul aria-label="About this host" className="flex flex-col gap-1 px-6 pb-4">
           {facts.map((fact) => (
             <li key={fact} className="flex items-center gap-2 text-ui text-muted-foreground">
-              <InfoIcon aria-hidden className="size-3.5 shrink-0" />
               {fact}
             </li>
           ))}
         </ul>
       )}
-      <div className="flex items-center justify-end gap-2 border-t border-border/60 px-4 py-4">
+      <div className="flex items-center justify-end gap-2 relative px-4 py-4 before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border/60">
         {host === undefined ? null : (
           // The next step after adding a box (VC-710): a project on it.
           <Button
@@ -790,7 +779,7 @@ export function CommandLine({ command }: { command: string }) {
     return () => window.clearTimeout(id);
   }, [copied]);
   return (
-    <div className="flex h-8 items-center gap-2 rounded-control border border-border bg-muted/50 pr-1 pl-4 font-mono text-ui">
+    <div className="flex min-h-8 items-center gap-2 rounded-control border border-border bg-muted/50 pr-1 pl-4 font-mono text-ui">
       <span aria-hidden className="text-muted-foreground select-none">
         $
       </span>
@@ -811,7 +800,7 @@ export function CommandLine({ command }: { command: string }) {
         className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
         {copied ? (
-          <CheckIcon weight="bold" className="size-3.5 text-positive" />
+          <CheckIcon strokeWidth={2.25} className="size-3.5 text-positive" />
         ) : (
           <CopyIcon className="size-3.5" />
         )}
@@ -827,9 +816,7 @@ const fieldText = (fields: AddHostLogLine["fields"]): string =>
     .join(" ");
 
 /**
- * What ran on the box, in the box's terminal colours rather than the app's:
- * a window onto another machine should look like one. Never a secret (main
- * logs none).
+ * Support details use the app’s semantic ink in every appearance. Main logs no secrets.
  */
 function LogView({
   lines,
@@ -843,20 +830,20 @@ function LogView({
   const scroller = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [lines.length]);
+    if (element && detail === null) element.scrollTop = element.scrollHeight;
+  }, [lines.length, detail]);
   return (
     <div
       ref={scroller}
       role="log"
       aria-label="Details"
-      className="h-40 overflow-y-auto rounded-lg border border-white/5 bg-[#101012] px-4 py-2 font-mono text-ui leading-5 text-white/60 shadow-raised"
+      className="h-40 overflow-y-auto scroll-py-2 rounded-lg border border-border bg-muted/30 px-4 py-2 font-mono text-ui leading-5 text-foreground"
     >
       {lines.length === 0 && detail === null ? (
-        <div className="text-white/35">Nothing yet</div>
+        <div className="font-sans text-muted-foreground">No details yet</div>
       ) : null}
       {omitted === 0 ? null : (
-        <div className="text-white/35">
+        <div className="font-sans text-muted-foreground">
           {omitted === 1 ? "1 earlier line omitted" : `${omitted} earlier lines omitted`}
         </div>
       )}
@@ -864,19 +851,19 @@ function LogView({
         <div
           key={seq}
           className={cn(
-            "break-words whitespace-pre-wrap",
-            line.level === "warn" && "text-[#e3b341]",
-            line.level === "error" && "text-[#ff7b72]",
+            "break-all whitespace-pre-wrap",
+            line.level === "warn" && "text-attention",
+            line.level === "error" && "text-destructive",
           )}
         >
           {line.message}
           {Object.keys(line.fields).length === 0 ? null : (
-            <span className="text-white/35"> {fieldText(line.fields)}</span>
+            <span className="text-muted-foreground"> {fieldText(line.fields)}</span>
           )}
         </div>
       ))}
       {detail === null ? null : (
-        <div className="mt-1 break-words whitespace-pre-wrap text-[#ff7b72]">{detail}</div>
+        <div className="mt-1 break-all whitespace-pre-wrap text-destructive">{detail}</div>
       )}
     </div>
   );

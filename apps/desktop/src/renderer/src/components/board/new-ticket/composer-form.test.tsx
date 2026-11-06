@@ -2,7 +2,16 @@
 import { act, useImperativeHandle, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import type { Automation, BlobLinkView, Project, ModelSelection } from "@volli/shared";
+import {
+  LOCAL_LAUNCH,
+  type Automation,
+  type BlobLinkView,
+  type Project,
+  type ModelSelection,
+} from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
+import type { ComposerRunner } from "@renderer/components/chat/runner-picker-model";
+import { startRunnerKickoff } from "./runner-kickoff";
 import { ComposerForm } from "./composer-form";
 import type { ComposerFooter } from "./composer-footer";
 import type { ComposerBreadcrumb } from "./composer-breadcrumb";
@@ -34,12 +43,24 @@ const mocks = vi.hoisted(() => ({
     explicit: false,
     setSelection: () => {},
   },
+  runners: {
+    runners: [],
+    selected: null as ComposerRunner | null,
+    thisMacId: "mac",
+    loading: false,
+    error: null,
+    choose: () => {},
+  },
   branches: { status: "loading" },
   editorFocus: vi.fn(),
 }));
 vi.mock("@renderer/hooks/use-file-index", () => ({ useFileIndex: () => mocks.files }));
 vi.mock("@renderer/hooks/use-attachments", () => ({ useAttachments: () => mocks.attachments }));
 vi.mock("./composer-run", () => ({ useComposerRun: () => mocks.run }));
+vi.mock("@renderer/components/chat/runner-picker", () => ({
+  useRunnerPicker: () => mocks.runners,
+}));
+vi.mock("./runner-kickoff", () => ({ startRunnerKickoff: vi.fn(async () => "draft") }));
 vi.mock("./composer-branch", () => ({ useBranchListing: () => mocks.branches }));
 vi.mock("@renderer/components/automations/automation-run-menu", () => ({
   useAutomationRunOffer: () => mocks.offer,
@@ -59,6 +80,7 @@ vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
     value,
     onChange,
     ariaLabel,
+    savePolicy,
     ref,
   }: ComponentProps<typeof MonacoDocumentEditor>) {
     // The title's Enter hands focus to the body through this handle.
@@ -70,6 +92,7 @@ vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
     return (
       <textarea
         aria-label={ariaLabel}
+        data-save-policy={savePolicy ?? "autosave"}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -145,6 +168,8 @@ beforeEach(async () => {
   mocks.attachments.attachments = [];
   mocks.run.selection = null;
   mocks.run.explicit = false;
+  mocks.runners.selected = null;
+  adoptLaunch(LOCAL_LAUNCH);
   mocks.offer.ready = true;
   mocks.offer.groups = [
     { status: "doing", label: "Doing", current: false, automations: [automation] },
@@ -169,7 +194,30 @@ afterEach(async () => {
   host.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  adoptLaunch(LOCAL_LAUNCH);
 });
+
+/**
+ * The body's text lives in the draft cache from the keystroke it is typed in, so
+ * its document must never count as unsaved, or ⌘Q asks about it (VC-1094).
+ */
+it("arrives as an editable field and prepares the rich draft view only during idle after focus", async () => {
+  let idle: IdleRequestCallback | undefined;
+  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+    idle = callback;
+    return 1;
+  });
+  vi.stubGlobal("cancelIdleCallback", vi.fn());
+  const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Ticket description"]');
+  expect(host.querySelector("[data-save-policy]")).toBeNull();
+  await act(async () => body?.focus());
+  expect(host.querySelector("[data-save-policy]")).toBeNull();
+  await act(async () => idle?.({ didTimeout: false, timeRemaining: () => 8 }));
+  expect(host.querySelector<HTMLElement>("[data-save-policy]")?.dataset["savePolicy"]).toBe(
+    "draft",
+  );
+});
+
 async function click(text: string) {
   await act(async () =>
     [...host.querySelectorAll("button")].find((el) => el.textContent === text)!.click(),
@@ -218,7 +266,8 @@ it.each([
     cancelable: true,
   });
   await act(async () => host.querySelector("input")!.dispatchEvent(event));
-  expect(mocks.editorFocus).toHaveBeenCalledTimes(moves ? 1 : 0);
+  const body = host.querySelector('textarea[aria-label="Ticket description"]');
+  expect(document.activeElement === body).toBe(moves);
   expect(event.defaultPrevented).toBe(moves);
 });
 
@@ -453,7 +502,7 @@ it("asks for the commit tray's own fold by marking its composer container", () =
   ).toBe("commit-tray");
 });
 
-it("gives the attachment strip the same air above the tiles and below them", async () => {
+it("keeps ticket attachments in the bounded composer manager", async () => {
   mocks.attachments.attachments = [
     {
       linkId: null,
@@ -474,9 +523,8 @@ it("gives the attachment strip the same air above the tiles and below them", asy
       />,
     ),
   );
-  // The strip is the last band before the tray's own top edge, so a top-only
-  // inset left the 64px tiles sitting ON that hairline beside the buttons.
-  const strip = host.querySelector('[aria-label="Attachments"]');
+  const strip = host.querySelector('[data-slot="composer-attachments"]');
+  expect(strip?.querySelector('[aria-label="Manage 1 attachments"]')).not.toBeNull();
   expect(strip?.className).toContain("py-2");
   expect(strip?.className).not.toContain("pt-2");
 });
@@ -536,3 +584,66 @@ it("refuses every submission while the project's host cannot serve, keeping the 
     useExperimentsStore.setState({ snapshot: null });
   }
 });
+
+async function renderCloud() {
+  adoptLaunch({ store: "cloud", userId: "user", backendUrl: "https://example.convex.cloud" });
+  await act(async () =>
+    root.render(
+      <ComposerForm
+        initialProject={project}
+        expanded={false}
+        onToggleExpand={() => {}}
+        onClose={() => {}}
+      />,
+    ),
+  );
+}
+
+it("does not create a cloud kickoff through the keyboard before a runner is selected", async () => {
+  await renderCloud();
+  await chord(true);
+  expect(runKickoff).not.toHaveBeenCalled();
+  await chord();
+  expect(runPlainCreate).toHaveBeenCalledOnce();
+});
+
+it.each(["remote", "mac"])(
+  "routes cloud kickoff for %s through a runner Draft, never local creation",
+  async (id) => {
+    mocks.runners.selected = {
+      id,
+      name: "Chosen runner",
+      kind: "mac",
+      status: "online",
+      statusChangedAt: 1,
+      providers: ["anthropic"],
+      version: "1",
+      upgradeRequired: false,
+    };
+    mocks.run.selection = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
+    vi.mocked(runKickoff).mockImplementationOnce(async (fields, deps, opts) => {
+      await deps.startChat(fields.projectId, "created-ticket", {
+        title: "ONE-1",
+        refineTitle: true,
+        message: "Begin work",
+        ...opts,
+      });
+      return { created: true };
+    });
+    await renderCloud();
+    await chord(true);
+    expect(startRunnerKickoff).toHaveBeenCalledWith(
+      "p1",
+      "created-ticket",
+      {
+        title: "ONE-1",
+        refineTitle: true,
+        message: "Begin work",
+        model: mocks.run.selection,
+      },
+      mocks.runners.selected,
+    );
+    // The ticket is consumed even if its Session is still awaiting intake.
+    expect(clearDraft).toHaveBeenCalledOnce();
+  },
+);

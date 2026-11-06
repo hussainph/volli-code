@@ -4,7 +4,7 @@
  * Sessions. It draws nothing otherwise: in a local launch, when the folder is
  * known, or before this Mac is a runner (Settings → Runners owns that).
  */
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { FolderOpenIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { useProjectsStore } from "@renderer/stores/projects";

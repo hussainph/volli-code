@@ -72,7 +72,7 @@ export function BoardVisual({ projectId }: { projectId: string }) {
                           }
                     }
                   />
-                  <span className="w-full truncate text-center text-label uppercase text-muted-foreground">
+                  <span className="w-full truncate text-center text-ui text-muted-foreground">
                     {TICKET_STATUS_LABELS[status]}
                   </span>
                 </div>

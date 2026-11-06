@@ -291,7 +291,11 @@ describe("the board card's Automations submenu", () => {
 
     // The ticket sits in Doing; the Todo automation is still listed, under its
     // own column heading, alongside this ticket's own column's heading.
-    expect(text()).toContain("Doing · this ticket");
+    expect(text()).toContain("DoingThis ticket");
+    const currentGroup = document.querySelector('[data-slot="context-menu-group"]');
+    expect(currentGroup?.textContent).toContain("Doing");
+    expect(currentGroup?.textContent).toContain("This ticket");
+    expect(menuItem("Review sweep").querySelector("span")?.className).not.toContain("truncate");
     expect(text()).toContain("Todo");
 
     await act(async () => {
@@ -328,7 +332,7 @@ describe("the board card's Automations submenu", () => {
 
     await open();
 
-    expect(text()).toContain("Reading automations…");
+    expect(text()).toContain("Reading automations");
     expect(document.querySelectorAll('[data-slot="context-menu-item"]')).toHaveLength(0);
 
     await act(async () => {
@@ -350,7 +354,7 @@ describe("the board card's Automations submenu", () => {
 
     await open();
 
-    expect(text()).toContain("Reading automations…");
+    expect(text()).toContain("Reading automations");
     expect(document.querySelectorAll('[data-slot="context-menu-item"]')).toHaveLength(0);
     expect(runAutomationOnTicket).not.toHaveBeenCalled();
   });

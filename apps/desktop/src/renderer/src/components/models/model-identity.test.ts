@@ -1,6 +1,9 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import { MODEL_MARK_TINTS } from "@volli/shared";
 
-import { modelFamily, needsProvider } from "./model-identity";
+import { ModelMark, modelFamily, needsProvider, providerMark } from "./model-identity";
 
 const m = (providerId: string, modelId: string, label: string) => ({ providerId, modelId, label });
 
@@ -20,6 +23,106 @@ describe("modelFamily", () => {
     expect(modelFamily(m("zai", "glm-5.2", "GLM-5.2"))).toBeNull();
     // "gpt" inside another word is not GPT.
     expect(modelFamily(m("x", "egpt-thing", "Egpt Thing"))).toBeNull();
+  });
+});
+
+describe("providerMark", () => {
+  it.each(["nvidia", "minimax", "groq", "together", "cerebras", "fireworks"] as const)(
+    "gives %s vetted artwork and its shared tint",
+    (id) => {
+      const mark = providerMark(id);
+      expect(mark?.viewBox).toBe("0 0 24 24");
+      expect(mark?.paths.length).toBeGreaterThan(0);
+      expect(mark?.tint).toBe(MODEL_MARK_TINTS[id]);
+    },
+  );
+
+  it("gives Cursor its published monochrome cube rather than a pointer fallback", () => {
+    const mark = providerMark("cursor");
+    expect(mark?.viewBox).toBe("0 0 24 24");
+    expect(mark?.paths).toHaveLength(1);
+    expect(mark?.paths[0]).toMatch(/^M11\.503\.131 1\.891 5\.678/);
+    expect(mark?.tint).toBe(MODEL_MARK_TINTS.monochrome);
+    const markup = renderToStaticMarkup(
+      createElement(ModelMark, {
+        model: m("cursor", "unknown", "Cursor"),
+        providerLabel: "Cursor",
+      }),
+    );
+    expect(markup).toContain(`d="${mark!.paths[0]}"`);
+    expect(markup).not.toContain("<span");
+  });
+
+  it("gives xAI its real monochrome mark rather than a letter", () => {
+    expect(providerMark("xai")?.tint).toBe(MODEL_MARK_TINTS.monochrome);
+    const markup = renderToStaticMarkup(
+      createElement(ModelMark, {
+        model: m("xai", "grok-4.6", "Grok 4.6"),
+        providerLabel: "xAI",
+      }),
+    );
+    expect(markup).toContain("<svg");
+    expect(markup).not.toContain("<span");
+  });
+
+  it.each([
+    ["moonshotai", "kimi-coding"],
+    ["moonshotai-cn", "kimi-coding"],
+    ["minimax-cn", "minimax"],
+    ["opencode", "opencode-go"],
+  ])("reuses %s's existing vendor mark", (alias, original) => {
+    expect(providerMark(alias!)).toBe(providerMark(original!));
+  });
+
+  it("maps Meta to the existing Llama family artwork", () => {
+    const family = renderToStaticMarkup(
+      createElement(ModelMark, {
+        model: m("custom", "llama-4", "Llama 4"),
+        providerLabel: "Custom",
+        by: "family",
+      }),
+    );
+    const provider = renderToStaticMarkup(
+      createElement(ModelMark, {
+        model: m("meta", "unknown", "Unknown"),
+        providerLabel: "Meta",
+      }),
+    );
+    expect(provider).toBe(family);
+  });
+
+  it.each(["radius", "typesafe", "custom"])("keeps %s on the honest lettermark fallback", (id) => {
+    expect(providerMark(id)).toBeNull();
+    const markup = renderToStaticMarkup(
+      createElement(ModelMark, {
+        model: m(id, "unknown", "Unknown"),
+        providerLabel: id,
+      }),
+    );
+    expect(markup).toContain("<span");
+    expect(markup).not.toContain("<svg");
+  });
+
+  it.each([
+    "groq",
+    "xai",
+    "together",
+    "cerebras",
+    "fireworks",
+    "amazon-bedrock",
+    "baseten",
+    "ant-ling",
+  ])("preserves %s's source winding rules when rendered", (id) => {
+    const markup = renderToStaticMarkup(
+      createElement(ModelMark, {
+        model: m(id, "unknown", "Unknown"),
+        providerLabel: id,
+      }),
+    );
+    expect(markup).toContain('fill-rule="evenodd"');
+    if (id === "cerebras" || id === "fireworks") {
+      expect(markup).toContain('clip-rule="evenodd"');
+    }
   });
 });
 

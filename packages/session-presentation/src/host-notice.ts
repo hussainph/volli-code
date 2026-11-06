@@ -318,18 +318,14 @@ const STATE_WORD: Record<SubagentNoticeState, string> = {
   "timed-out": "timed out",
 };
 
-const STATE_NOTE: Record<SubagentNoticeState, string> = {
-  completed: "",
-  interrupted: "Its turn ended before it answered.",
-  stopped: "It was stopped before it answered.",
-  failed: "Its executor failed before it answered.",
-  "timed-out": "It did not finish within its time bound and was stopped.",
-};
-
 export interface SubagentNoticeCopy {
   headline: string;
   state: string;
-  note: string;
+  /**
+   * Why it ended, when that is a fact the state word does not carry. Only a
+   * relaunch is: "interrupted" says what happened, not that Volli did it.
+   */
+  cause: string | null;
 }
 
 export function subagentNoticeCopy(notice: SubagentNotice): SubagentNoticeCopy {
@@ -337,10 +333,7 @@ export function subagentNoticeCopy(notice: SubagentNotice): SubagentNoticeCopy {
   return {
     headline: title.length > 0 ? title : "Subagent",
     state: STATE_WORD[notice.state],
-    note:
-      notice.reason === "app-relaunched"
-        ? "Volli relaunched while its turn was active, so the turn ended before it answered."
-        : STATE_NOTE[notice.state],
+    cause: notice.reason === "app-relaunched" ? "Volli relaunched" : null,
   };
 }
 
@@ -401,15 +394,13 @@ export function shellNoticeCopy(notice: BackgroundShellHostNotice): ShellNoticeC
 
 export interface BrowserHoldNoticeCopy {
   headline: string;
-  note: string;
+  /** The hold, as a status: who has the tab now, or that it was asked back. */
+  state: string;
 }
 
 export function browserHoldNoticeCopy(notice: BrowserHoldNotice): BrowserHoldNoticeCopy {
   return {
     headline: notice.label,
-    note:
-      notice.action === "person-took"
-        ? "You took control; Session writes are refused until you hand it back."
-        : "You asked the Session to leave; it will release the tab when it is safe.",
+    state: notice.action === "person-took" ? "You took control" : "Asked to leave",
   };
 }

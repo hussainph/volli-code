@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -162,6 +162,26 @@ describe("runtime attachment assembly", () => {
     await assembled.sessionRuntime?.close();
   });
 
+  it("hands each attachment's web_fetch the host's HTML extractor", async () => {
+    const options = await fixture();
+    vi.spyOn(options.webAccess!, "resolve").mockReturnValue({
+      configured: true,
+      provider: "brave",
+      apiKey: "fixture-key",
+    });
+    const fetcher = vi.spyOn(agentRuntime, "createSafeWebFetch");
+    const extract: agentRuntime.WebExtractor = vi.fn(async () => ({
+      text: "",
+      extracted: false,
+      truncated: false,
+    }));
+    const assembled = createRuntimeAssembly({ ...options, webExtract: extract });
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    expect(typeof native.resolveWebPorts?.().webFetch).toBe("function");
+    expect(fetcher).toHaveBeenCalledWith({ extract });
+    await assembled.sessionRuntime?.close();
+  });
+
   it.each(["execute", "background shell"] as const)(
     "wires %s credential reads through environmentAsync with the Session and signal",
     async (door) => {
@@ -293,6 +313,10 @@ describe("runtime attachment assembly", () => {
     const data = Buffer.alloc(50_000, 201).toString("base64");
     const id = native.persistActivityImage!("session", { data, mimeType: "image/png" })!;
     expect(first.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
+    // The disk write leaves the caller's turn (VC-1082); a relaunch reads what landed.
+    await vi.waitFor(() =>
+      expect(existsSync(join(root, "browser-pictures", `${id}.json`))).toBe(true),
+    );
     const second = createRuntimeAssembly(options);
     expect(second.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
     expect(createRuntimeAssembly({ ...options, pictures: second.pictures }).pictures).toBe(

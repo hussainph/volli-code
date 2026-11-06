@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * The title bar's host chip and its switcher (VC-576; VC-615 flows 5–6,
  * ported from the lab's `#host-health`).
@@ -19,15 +20,18 @@
  */
 import * as React from "react";
 import { MotionConfig, motion } from "motion/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { WifiSlashIcon } from "@phosphor-icons/react/dist/csr/WifiSlash";
+import {
+  ChevronDownIcon,
+  SettingsIcon,
+  KeyIcon,
+  AddIcon,
+  OfflineIcon,
+  ProcessorIcon,
+} from "@renderer/components/ui/icon";
 
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
@@ -98,7 +102,7 @@ function EnabledHostChip() {
             type="button"
             aria-label={`Host: ${host.name}${BADGE_WORDS[hostBadge(host) ?? "none"]}`}
             data-slot="host-chip"
-            className="app-region-no-drag ml-1 flex h-7 translate-y-px items-center gap-2 rounded-full pr-2 pl-0.5 text-ui text-foreground transition-colors hover:bg-accent/60 data-[state=open]:bg-accent"
+            className="glass-control app-region-no-drag ml-1 flex h-7 translate-y-px items-center gap-2 rounded-full pr-2 pl-0.5 text-ui text-foreground transition-colors hover:bg-accent/60 data-[state=open]:bg-accent"
           >
             <motion.span
               animate={pulsing ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
@@ -110,7 +114,7 @@ function EnabledHostChip() {
               <HostGlyph os={host.os} local={host.local} badge={hostBadge(host)} />
             </motion.span>
             <span className={cn(offline && "text-muted-foreground")}>{host.name}</span>
-            <CaretDownIcon aria-hidden className="size-3 text-muted-foreground" />
+            <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" aria-label="Switch host" className="w-80">
@@ -216,7 +220,7 @@ export function HostSwitcher({
             />
           ) : null}
           <MenuAction
-            icon={CpuIcon}
+            icon={ProcessorIcon}
             label={`Models on ${host.name}…`}
             onAct={() => {
               onDone();
@@ -227,15 +231,15 @@ export function HostSwitcher({
       ))}
       {addHostOffered ? (
         <MenuAction
-          icon={PlusIcon}
+          icon={addActivity?.status === "running" ? Spinner : AddIcon}
           label={
             addActivity === null
               ? "Add a host…"
               : addActivity.status === "running"
-                ? `Adding ${addActivity.name}…`
+                ? `Adding ${addActivity.name}`
                 : addActivity.status === "done"
                   ? `${addActivity.name} added — view…`
-                  : `Adding ${addActivity.name} — needs attention…`
+                  : `Adding ${addActivity.name} — needs attention`
           }
           onAct={() => {
             onDone();
@@ -244,7 +248,7 @@ export function HostSwitcher({
         />
       ) : null}
       <MenuAction
-        icon={GearSixIcon}
+        icon={SettingsIcon}
         label="Manage hosts…"
         onAct={() => {
           onDone();
@@ -307,7 +311,7 @@ function MenuAction({
   label,
   onAct,
 }: {
-  icon: typeof PlusIcon;
+  icon: typeof AddIcon | typeof Spinner;
   label: string;
   onAct: () => void;
 }) {
@@ -363,7 +367,7 @@ function DetailBody({ host, detail }: { host: HostRecord; detail: HostDetailMode
     case "offline":
       return (
         <DetailLine
-          icon={<WifiSlashIcon aria-hidden className="size-4 text-muted-foreground" />}
+          icon={<OfflineIcon aria-hidden className="size-4 text-muted-foreground" />}
           text={detail.text ?? "Sessions there keep running"}
         >
           <Button size="xs" variant="secondary" onClick={() => store.retry(host.id)}>

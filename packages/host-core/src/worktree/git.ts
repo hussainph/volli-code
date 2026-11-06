@@ -464,6 +464,13 @@ function localGitArgs(args: readonly string[]): string[] {
       flags = ["-e"];
       maxOperands = 1;
       break;
+    // A tree-ish then the paths to list in it: the repository instructions a
+    // ref holds, with the modes that say which entry is a symlink (VC-1055).
+    case "ls-tree":
+      prefix = [command];
+      flags = ["-z", "--full-tree"];
+      maxOperands = Number.POSITIVE_INFINITY;
+      break;
     case "symbolic-ref":
       prefix = [command];
       flags = ["--quiet"];

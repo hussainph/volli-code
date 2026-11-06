@@ -48,6 +48,7 @@ import { useBoardStore } from "@renderer/stores/board";
 import { createChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
+  createSessionActivityIntake,
   type ProjectSessionRows,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
@@ -65,6 +66,7 @@ import {
   type ProjectUiState,
 } from "@renderer/stores/project-ui";
 
+import type { SessionActivityNotice } from "../../../ipc/contract";
 import type { ApiOverrides } from "../fake-api";
 import { appApi, seedApp } from "../seed";
 
@@ -72,14 +74,34 @@ export const title = "Sidebar sessions · store performance";
 export const note = "Profiler + long-task matrix at 1,198 Sessions / 392 tickets / 50 worktrees";
 export const viewport = "window" as const;
 
-const TICKET_COUNT = 392;
-const SESSION_COUNT = 1_198;
-const TERMINAL_COUNT = 392;
+/**
+ * Two fixture scales, chosen by `?scale=` on the lab URL. `real` is VC-354's
+ * measured profile and stays the default so its numbers stay comparable;
+ * `owner` is VC-1078's: the 5,034-Session / 1,218-ticket profile where every
+ * pushed activity row used to re-walk ~4,700 chats.
+ */
+const SCALE_PARAMS = new URLSearchParams(window.location.search);
+const SCALE = SCALE_PARAMS.get("scale") === "owner" ? "owner" : "real";
+const OWNER_SCALE = SCALE === "owner";
+const TICKET_COUNT = OWNER_SCALE ? 1_218 : 392;
+const SESSION_COUNT = OWNER_SCALE ? 5_034 : 1_198;
+const TERMINAL_COUNT = OWNER_SCALE ? 334 : 392;
 const CHAT_COUNT = SESSION_COUNT - TERMINAL_COUNT;
 const WORKTREE_COUNT = 50;
 const LIVE_TERMINALS = 8;
-const LIVE_CHATS = 8;
+const LIVE_CHATS = OWNER_SCALE ? 20 : 8;
 const STREAMS = 6;
+/**
+ * The activity storm (VC-1078): how many running Sessions push rows, how often
+ * each one pushes, and for how long. 60 ms is main's per-Session debounce in
+ * `activity-watch.ts`, so a Session mid-turn can push up to ~16 rows a second.
+ */
+const STORM_STREAMS = Math.min(
+  LIVE_CHATS,
+  Math.max(1, Number.parseInt(SCALE_PARAMS.get("storm") ?? "16", 10) || 16),
+);
+const STORM_INTERVAL_MS = 60;
+const STORM_DURATION_MS = 4_000;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -353,8 +375,23 @@ interface PersistenceScenarioResult {
   appStateScheduleMs: { median: number; p95: number; max: number };
 }
 
+interface StormResult {
+  streams: number;
+  intervalMs: number;
+  durationMs: number;
+  pushes: number;
+  /** How late the last push was delivered: the backlog a busy renderer built up. */
+  lagMs: number;
+  /** Store writes the pushes turned into (one per push before VC-1078). */
+  storeWrites: number;
+  frames: { count: number; median: number; p95: number; max: number; over50: number };
+  profilers: Record<string, ProfileSummary>;
+  longTasks: LongTaskSummary;
+}
+
 interface SidebarPerfResult {
   fixture: SidebarPerfApi["fixture"];
+  storm: StormResult;
   domNodes: number;
   sessionRows: { active: number; previous: number };
   scenarios: Record<string, ScenarioResult>;
@@ -365,6 +402,7 @@ interface SidebarPerfResult {
 interface SidebarPerfApi {
   ready: boolean;
   fixture: {
+    scale: string;
     sessions: number;
     terminals: number;
     chats: number;
@@ -728,6 +766,135 @@ function pushProjectChatActivity(): void {
   }
 }
 
+/**
+ * The one door a pushed activity row enters the renderer through — the same
+ * call `subscribeProjectSessionActivity` makes for every `volli:session-activity`
+ * notice, so the storm below measures the shipped intake, not a shortcut.
+ */
+const activityIntake = createSessionActivityIntake(useProjectSessionsStore);
+
+function deliverActivity(notice: SessionActivityNotice): void {
+  activityIntake.push(notice);
+}
+
+/**
+ * VC-1078's activity storm: `STORM_STREAMS` running chats each pushing a fresh
+ * row every ~60 ms for four seconds, each push its own macrotask — the shape
+ * IPC delivers them in. Every row is a NEW object (structured clone gives the
+ * renderer nothing else) whose only change is `lastActivityAt`, which is what a
+ * Session mid-turn sends for each durable fact it writes.
+ *
+ * Measured over the whole storm: frame intervals from a rAF loop, long tasks,
+ * and the sidebar's React commits.
+ */
+/** When the storm's last push was due, relative to its start. */
+function offsetOfLastPush(perStream: number): number {
+  return (
+    ((STORM_STREAMS - 1) * STORM_INTERVAL_MS) / STORM_STREAMS + (perStream - 1) * STORM_INTERVAL_MS
+  );
+}
+
+async function measureStorm(): Promise<StormResult> {
+  profileLog = [];
+  const tasks: PerformanceEntry[] = [];
+  const observer =
+    typeof PerformanceObserver === "undefined"
+      ? null
+      : new PerformanceObserver((list) => tasks.push(...list.getEntries()));
+  observer?.observe({ type: "longtask", buffered: false });
+  let storeWrites = 0;
+  const unsubscribe = useProjectSessionsStore.subscribe((state, previous) => {
+    if (state.byProject !== previous.byProject) storeWrites += 1;
+  });
+
+  const frames: number[] = [];
+  let running = true;
+  let lastFrame = await raf();
+  const frameLoop = (at: number): void => {
+    frames.push(at - lastFrame);
+    lastFrame = at;
+    if (running) requestAnimationFrame(frameLoop);
+  };
+  requestAnimationFrame(frameLoop);
+
+  // Every push is scheduled up front at its own instant, like IPC deliveries
+  // that do not wait for the renderer to finish the last one: a renderer that
+  // cannot keep up falls behind, and `lagMs` is how far.
+  const started = performance.now();
+  const perStream = Math.floor(STORM_DURATION_MS / STORM_INTERVAL_MS);
+  let pushes = 0;
+  let lastPushAt = started;
+  const timers: number[] = [];
+  await new Promise<void>((resolve) => {
+    for (let stream = 0; stream < STORM_STREAMS; stream += 1) {
+      const sessionId = `perf-chat-${stream + 1}`;
+      // Phase-shifted so the streams interleave the way independent Sessions do.
+      const offset = (stream * STORM_INTERVAL_MS) / STORM_STREAMS;
+      for (let tick = 0; tick < perStream; tick += 1) {
+        timers.push(
+          window.setTimeout(
+            () => {
+              const current = useProjectSessionsStore
+                .getState()
+                .byProject[PERF_PROJECT.id]!.chat.find((record) => record.sessionId === sessionId)!;
+              sequence += 1;
+              pushes += 1;
+              deliverActivity({
+                projectId: PERF_PROJECT.id,
+                ticketId: current.ticketId,
+                row: {
+                  kind: "chat",
+                  // A fresh model too: structured clone copies nested objects.
+                  record: {
+                    ...current,
+                    model: current.model === null ? null : { ...current.model },
+                    lastActivityAt: Date.now(),
+                  },
+                  usage: EMPTY_SESSION_USAGE_SUMMARY,
+                  provenance: PERSON_STARTED,
+                },
+              });
+              lastPushAt = performance.now();
+              if (pushes === STORM_STREAMS * perStream) resolve();
+            },
+            offset + tick * STORM_INTERVAL_MS,
+          ),
+        );
+      }
+    }
+  });
+  const lagMs = lastPushAt - (started + offsetOfLastPush(perStream));
+  // Let anything the last pushes scheduled land before the window closes.
+  await nextPaint();
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  await nextPaint();
+  running = false;
+  for (const timer of timers) window.clearTimeout(timer);
+  unsubscribe();
+  tasks.push(...(observer?.takeRecords() ?? []));
+  observer?.disconnect();
+
+  return {
+    streams: STORM_STREAMS,
+    intervalMs: STORM_INTERVAL_MS,
+    durationMs: STORM_DURATION_MS,
+    pushes,
+    lagMs: round(Math.max(0, lagMs)),
+    storeWrites,
+    frames: {
+      count: frames.length,
+      ...summarizeTimes(frames),
+      over50: frames.filter((frame) => frame > 50).length,
+    },
+    profilers: summarizeProfiles(profileLog),
+    longTasks: {
+      count: tasks.length,
+      totalMs: round(tasks.reduce((sum, task) => sum + task.duration, 0)),
+      maxMs: round(Math.max(0, ...tasks.map((task) => task.duration))),
+    },
+  };
+}
+
 function writeResidentChatSlice(): void {
   const sessionId = `perf-chat-${(sequence % LIVE_CHATS) + 1}`;
   sequence += 1;
@@ -796,6 +963,8 @@ function countRows(band: "active" | "previous"): number {
 }
 
 async function runMatrix(samples: number) {
+  // First, while the fixture is still the one `seed` wrote.
+  const storm = await measureStorm();
   const scenarios: Record<string, ScenarioResult> = {};
   scenarios.projectChatBurst = await measureScenario(samples, STREAMS, pushProjectChatActivity);
   scenarios.residentChatSlice = await measureScenario(samples, 1, writeResidentChatSlice);
@@ -827,6 +996,7 @@ async function runMatrix(samples: number) {
   );
   return {
     fixture: window.sidebarPerf!.fixture,
+    storm,
     domNodes: document.querySelector("[data-perf-sidebar]")?.querySelectorAll("*").length ?? 0,
     sessionRows: { active: countRows("active"), previous: countRows("previous") },
     scenarios,
@@ -840,6 +1010,7 @@ function PerfHarness() {
     const perf: SidebarPerfApi = {
       ready: false,
       fixture: {
+        scale: SCALE,
         sessions: SESSION_COUNT,
         terminals: TERMINAL_COUNT,
         chats: CHAT_COUNT,

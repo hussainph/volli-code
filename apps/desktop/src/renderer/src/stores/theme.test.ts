@@ -1006,6 +1006,20 @@ describe("the first-paint hint", () => {
     expect(report.planeBackground).not.toBe(report.background);
   });
 
+  it("surfaces a rejected first-paint write without crashing the paint", async () => {
+    const { store } = freshStore({
+      setFirstPaint: vi.fn(async () => {
+        throw new Error("write interrupted");
+      }),
+    });
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+    await settle();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      expect.stringContaining("write interrupted"),
+      expect.anything(),
+    );
+  });
+
   it("surfaces a failed hint write rather than letting it stop silently", async () => {
     // A hint that quietly stopped updating shows up as a boot flash nobody can
     // explain, one launch later.
@@ -1386,3 +1400,35 @@ describe("overlapping and out-of-scope writes", () => {
     expect(effectiveAppearance(store.getState())).toBe("dark");
   });
 });
+
+it("carries keyboard scope provenance across the asynchronous host read, not in its payload", async () => {
+  const gateway = fakeGateway({
+    state: vi.fn(async ({ projectId }) => ({
+      ok: true as const,
+      value: statePayload({ projectId: projectId ?? null }),
+    })),
+  });
+  const begin = vi.fn((paint: () => void) => paint());
+  const store = createThemeStore({ deps: { gateway, ...recorder(), beginScopeRepaint: begin } });
+  await store.getState().hydrate();
+  await store.getState().hydrate(projectScope({ canvas: TEAL }), "keyboard");
+  expect(begin).toHaveBeenLastCalledWith(expect.any(Function), "keyboard");
+  expect(gateway.state).toHaveBeenLastCalledWith({ projectId: "p1" });
+});
+
+it.each(["pointer", "keyboard", undefined] as const)(
+  "carries %s appearance activation only to the local repaint, not to either gateway write",
+  async (origin) => {
+    const gateway = fakeGateway();
+    const begin = vi.fn((paint: () => void) => paint());
+    const store = createThemeStore({ deps: { gateway, ...recorder(), beginScopeRepaint: begin } });
+    await store.getState().hydrate();
+    await store.getState().setGlobalAppearance("light", origin);
+    expect(begin).toHaveBeenLastCalledWith(expect.any(Function), origin);
+    expect(gateway.setGlobalAppearance).toHaveBeenLastCalledWith("light");
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+    await store.getState().setProjectAppearance("p1", "dark", origin);
+    expect(begin).toHaveBeenLastCalledWith(expect.any(Function), origin);
+    expect(gateway.setProjectAppearance).toHaveBeenLastCalledWith("p1", "dark");
+  },
+);

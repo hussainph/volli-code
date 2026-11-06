@@ -30,12 +30,13 @@ const SYSTEM_PROMPT_FRAMING = 8;
 const LITERAL_SPECIAL_TOKENS = { disallowedSpecial: new Set<string>() };
 
 type TokenCounter = (text: string) => number;
-type TokenizerFamily = "o200k" | "cl100k" | "conservative";
+export type TokenizerFamily = "o200k" | "cl100k" | "conservative";
 
 const O200K_ID_PATTERN = /^(?:gpt-4o|gpt-4\.[15]|gpt-5|o[134](?:-|$)|chatgpt-4o|codex-mini)/;
 const CL100K_ID_PATTERN = /^(?:gpt-4(?:-|$)|gpt-3\.5)/;
 
-function tokenizerFamily(model: Model<Api>): TokenizerFamily {
+/** The tokenizer a model's estimates use; two models of one family always agree. */
+export function tokenizerFamily(model: Model<Api>): TokenizerFamily {
   if (!model.api.startsWith("openai") && model.api !== "azure-openai-responses")
     return "conservative";
   const id = model.id.toLowerCase();

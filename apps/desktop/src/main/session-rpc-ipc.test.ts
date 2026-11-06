@@ -1111,7 +1111,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     await expect(
       invoke(sender(), { path: "modelAccess.codeModePolicy", type: "query", input: undefined }),
     ).resolves.toEqual({ ok: true, data: stored });
-    const saved = { enabled: false, models: { "openai-codex/gpt-5.5": "both" } };
+    const saved = {
+      enabled: true,
+      defaultMode: "both",
+      models: { "openai-codex/gpt-5.5": "only" },
+    };
     await expect(
       invoke(sender(), { path: "modelAccess.setCodeModePolicy", type: "mutation", input: saved }),
     ).resolves.toEqual({ ok: true, data: saved });

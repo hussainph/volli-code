@@ -98,8 +98,20 @@ export function useHighlightedLines(
   React.useEffect(() => {
     if (language === null || !onScreen) return;
     let live = true;
+    // Bails out on tokens it already holds: a view revealed from `<Activity
+    // mode="hidden">` (VC-1080) re-runs this effect, and the cache answers
+    // with the same tokens — a fresh object here would re-render every code
+    // block of a transcript that has not changed.
     const adopt = (highlighted: HighlightResult) => {
-      if (live) setResult({ text, language, tokens: highlighted.tokens });
+      if (!live) return;
+      setResult((held) =>
+        held !== null &&
+        held.text === text &&
+        held.language === language &&
+        held.tokens === highlighted.tokens
+          ? held
+          : { text, language, tokens: highlighted.tokens },
+      );
     };
     const cached = code.highlight({ code: text, language, themes: code.getThemes() }, adopt);
     if (cached !== null) adopt(cached);

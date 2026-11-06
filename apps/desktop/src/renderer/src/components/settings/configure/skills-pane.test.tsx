@@ -134,8 +134,22 @@ describe("Configure → Skills", () => {
           </TooltipProvider>,
         ),
       );
-      // The table clips the name, so the cell carries it whole on hover too.
-      expect(container.querySelector(`span[title="${long.name}"]`)).not.toBeNull();
+      // The table clips the name, so the cell is the shared ValueReveal: a
+      // focus stop naming it whole, never a hover-only native title.
+      const name = container.querySelector<HTMLButtonElement>(
+        `button[data-slot="value-reveal"][aria-label="Skill · ${long.name}"]`,
+      );
+      expect(name?.textContent).toBe(long.name);
+      expect(name?.className).toContain("truncate");
+      expect(container.querySelector(`[title="${long.name}"]`)).toBeNull();
+      // The actions column is measured for its two glyph actions, the cell's
+      // gap between them and its insets — not a fixed guess.
+      const open = [...container.querySelectorAll("col")].find((col) =>
+        col.style.width.includes("--spacing-control-default"),
+      );
+      expect(open?.style.width).toBe(
+        "calc(2 * var(--spacing-control-default) + 6 * var(--spacing))",
+      );
 
       const preview = container.querySelector<HTMLButtonElement>(
         `button[aria-label="Preview ${long.name}"]`,
@@ -145,13 +159,53 @@ describe("Configure → Skills", () => {
       const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
       expect(dialog?.querySelector("h2")?.textContent).toBe(long.name);
       expect(dialog?.textContent).toContain(long.description);
-      expect(dialog?.textContent).toContain(`Personal · ${long.root}`);
+      expect(dialog?.textContent).toContain(`Global · ${long.root}`);
       expect(dialog?.querySelector(".typeset h2")?.textContent).toBe("Steps");
       expect(dialog?.textContent).toContain("Read every line of this before acting.");
       expect(setSkillModes).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       container.remove();
+      vi.unstubAllGlobals();
+    }
+    // A full client mount of the table (a Select and two tooltip actions per
+    // row) and then the dialog's rendered markdown: no loop, but more than the
+    // default 5s budget on a machine shared with other test runs.
+  }, 20_000);
+
+  it("filters global and project skills in one pane without changing their rules", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <SkillsPane project={project} />
+          </TooltipProvider>,
+        ),
+      );
+      const scope = host.querySelector('[aria-label="Skill scope"]')!;
+      const pick = (name: string) =>
+        Array.from(scope.querySelectorAll("button")).find((button) => button.textContent === name)!;
+      await act(async () => pick("Global").click());
+      expect(pick("Global").getAttribute("aria-pressed")).toBe("true");
+      expect(host.querySelector("tbody")?.textContent).toContain(skills[3]!.name);
+      expect(host.querySelector("tbody")?.textContent).not.toContain(skills[0]!.name);
+      await act(async () => pick("This project").click());
+      expect(host.querySelector("tbody")?.textContent).toContain(skills[0]!.name);
+      expect(host.querySelector("tbody")?.textContent).not.toContain(skills[3]!.name);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
       vi.unstubAllGlobals();
     }
   });
@@ -190,4 +244,85 @@ describe("Configure → Skills", () => {
       expect(ruled({}, [tdd, quiet], "manual")).toEqual({ tdd: "manual" });
     });
   });
+});
+
+it("wraps scope controls and exposes Auto's token estimate on keyboard focus", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <SkillsPane project={project} />
+        </TooltipProvider>,
+      ),
+    );
+    const summary = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Auto token estimate"]',
+    )!;
+    expect(summary.textContent).toBe("Auto");
+    expect(summary.parentElement?.className).toContain("flex-wrap");
+    expect(container.textContent).not.toContain("tokens per turn");
+    expect(
+      container.querySelector('[data-slot="pref-section-title"]')?.parentElement?.className,
+    ).toContain("sr-only");
+    await act(async () => summary.focus());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("tokens per turn"),
+    );
+    expect(container.querySelector('[aria-label="Skill scope"]')?.textContent).toContain(
+      "This project",
+    );
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+const policyNavigation = { openProject: vi.fn(), selectPolicyProject: vi.fn() };
+it("names and selects the project whose activation policy the shared inventory edits", async () => {
+  const { SettingsNavigation } = await import("../settings-navigation");
+  const { useProjectsStore } = await import("@renderer/stores/projects");
+  const previous = useProjectsStore.getState().projects;
+  const second = { ...project, id: "p2", name: "Second project" };
+  useProjectsStore.setState({ projects: [project, second] });
+  policyNavigation.selectPolicyProject.mockClear();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <SettingsNavigation.Provider value={policyNavigation}>
+          <TooltipProvider>
+            <SkillsPane project={project} policyProjectPicker />
+          </TooltipProvider>
+        </SettingsNavigation.Provider>,
+      ),
+    );
+    expect(container.textContent).toContain("Activation project");
+    const picker = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Skill activation project"]',
+    )!;
+    expect(picker.textContent).toBe(project.name);
+    await act(async () =>
+      picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (node) => node.textContent === second.name,
+    )!;
+    await act(async () => {
+      option.focus();
+      option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(policyNavigation.selectPolicyProject).toHaveBeenCalledWith(second.id);
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    useProjectsStore.setState({ projects: previous });
+    vi.unstubAllGlobals();
+  }
 });

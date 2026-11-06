@@ -402,6 +402,15 @@ export class SecretStore {
     return this.#streamRedactor.redactor.step(window, from, final);
   }
 
+  /**
+   * Changes whenever {@link redact} or {@link redactPartial} could read some
+   * text differently: a value joined the history or was renamed. It may
+   * change during a redaction call, which reads the store on first use.
+   */
+  get redactionVersion(): number {
+    return this.#historyVersion;
+  }
+
   /** Withhold a live preview's trailing credential prefix, including a newline. */
   redactPartial(text: string): string {
     return this.#redact(text, true);

@@ -246,7 +246,7 @@ describe("FileView — Preview only ever reads", () => {
     // and the band says the page is not showing it.
     expect(previewPane()).not.toBeNull();
     expect(onDirtyChange.mock.calls).toEqual([[true]]);
-    expect(container?.textContent).toContain("Unsaved");
+    expect(container?.textContent).toContain("unsaved edits not shown");
     expect(write).not.toHaveBeenCalled();
 
     await choose("source");

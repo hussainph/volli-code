@@ -34,10 +34,13 @@
  * make this pane a form, and a picker whose choice does not hold is a picker
  * lying about what is configured.
  */
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import {
+  RefreshIcon,
+  CollapseVerticalIcon,
+  ProcessorIcon,
+  PreviewIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { toast } from "sonner";
 import {
@@ -95,16 +98,9 @@ import { useUiStore } from "@renderer/stores/ui";
 
 /**
  * The rows of the Default models section, in the order the tree is drawn —
- * the shared tier list (`MODEL_TIER_ROWS`, VC-259) wearing this pane's
- * hint rule.
- *
- * `hint` is the `(i)` beside the label (VC-81 asked for one on the utility
- * row), and only the rows whose label does not already name the job carry
- * one: "Fast" says nothing about what is fast, "Ticket Sessions" says
- * everything. It is a hint and never a paragraph under the control — CLAUDE.md
- * lets controls talk, and this ticket restated it. It never describes the
- * inheritance chain either — each unset row names the row it follows in its
- * own control — and it is held to the twelve-word budget.
+ * the shared tier list (`MODEL_TIER_ROWS`, VC-259). Each row is its label and
+ * its control: no purpose line under it (AGENTS.md, "let controls talk"), and
+ * each unset row names the row it follows in its own control.
  *
  * `depth` is the indent: the three kind-of-work tiers sit under Ticket
  * Sessions because that is the rung they resolve through.
@@ -112,13 +108,14 @@ import { useUiStore } from "@renderer/stores/ui";
 export const PURPOSE_ROWS: readonly {
   purpose: ModelPurpose;
   label: string;
-  hint?: string;
   depth: 0 | 1;
 }[] = (["global", "utility", "ticket", "fast", "deep", "visual"] as const).map((purpose) => {
   const row = MODEL_TIER_ROWS.find((candidate) => candidate.tier === purpose)!;
-  return purpose === "global" || purpose === "ticket"
-    ? { purpose, label: row.label, depth: 0 }
-    : { purpose, label: row.label, hint: row.hint, depth: row.advanced ? 1 : 0 };
+  return {
+    purpose,
+    label: row.label,
+    depth: purpose === "global" || purpose === "ticket" || !row.advanced ? 0 : 1,
+  };
 });
 
 /** The Select value that says "no explicit choice — resolve through the fallback tier". */
@@ -320,12 +317,11 @@ export function ModelAccessSettings({
   const offerable = offerableModels(models);
   const sees = acceptsImageInputIn(models);
 
-  const renderDefaultRow = ({ purpose, label, hint }: (typeof PURPOSE_ROWS)[number]) => (
+  const renderDefaultRow = ({ purpose, label }: (typeof PURPOSE_ROWS)[number]) => (
     <DefaultModelRow
       key={purpose}
       purpose={purpose}
       label={label}
-      {...(hint === undefined ? {} : { hint })}
       selection={defaults[purpose]}
       // Only Visual can inherit a rung and still be refused — a Ticket model
       // that cannot read images — and only that is said. An empty ladder is
@@ -343,12 +339,7 @@ export function ModelAccessSettings({
     <>
       <PrefSection
         title="Default models"
-        icon={CpuIcon}
-        hint={
-          hostName === undefined ? (
-            <>A project with a pinned model uses that model instead.</>
-          ) : undefined
-        }
+        icon={ProcessorIcon}
         action={
           <Button
             size="icon-sm"
@@ -357,11 +348,7 @@ export function ModelAccessSettings({
             disabled={loading}
             onClick={() => void load(true)}
           >
-            {loading ? (
-              <Spinner className="size-3.5" />
-            ) : (
-              <ArrowClockwiseIcon className="size-3.5" />
-            )}
+            {loading ? <Spinner className="size-3.5" /> : <RefreshIcon className="size-3.5" />}
           </Button>
         }
       >
@@ -390,7 +377,7 @@ export function ModelAccessSettings({
           }}
         />
       ) : null}
-      <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
+      <PrefSection title="Compaction" icon={CollapseVerticalIcon}>
         <PrefRow label="Automatic compaction" testId="auto-compaction">
           <Switch
             aria-label="Compact a Session automatically before it fills its context window"
@@ -468,7 +455,7 @@ function CatalogSection({
   return (
     <PrefSection
       title="Catalog"
-      icon={EyeIcon}
+      icon={PreviewIcon}
       action={<TableSearch value={query} placeholder="Search models" onChange={setQuery} />}
     >
       <DataTable
@@ -479,7 +466,7 @@ function CatalogSection({
         search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
         query={query}
         placeholder="Search models"
-        empty="No models. Sign in to a provider below."
+        empty="No models"
         noResults="No models match."
         columns={[
           {
@@ -531,11 +518,6 @@ function CatalogSection({
  * disabled one with "Reasoning" as its only content — and keeps the slot
  * empty so the model column stays a column.
  *
- * A row with a `hint` carries it as the `(i)` beside its label — rendered by
- * {@link PrefRow}, so every hint on both surfaces is the same glyph in the
- * same place, and the slot explains itself without a paragraph under the
- * control (CLAUDE.md's copy rule).
- *
  * The list is grouped by provider, as the composer's own picker is, and each
  * row is a {@link ModelName}: the mark, the name, and the provider only where
  * the name alone would not say which model this is.
@@ -543,7 +525,6 @@ function CatalogSection({
 function DefaultModelRow({
   purpose,
   label,
-  hint,
   selection,
   blocked,
   models,
@@ -554,7 +535,6 @@ function DefaultModelRow({
 }: {
   purpose: ModelPurpose;
   label: string;
-  hint?: string;
   selection: ModelSelection | null;
   /** Unset, and the rung it would inherit is one it may not use. */
   blocked: boolean;
@@ -579,11 +559,7 @@ function DefaultModelRow({
         : "";
 
   return (
-    <PrefRow
-      label={label}
-      {...(hint === undefined ? {} : { hint })}
-      testId={`default-model-${purpose}`}
-    >
+    <PrefRow label={label} testId={`default-model-${purpose}`}>
       {/* A column, so a row that inherits nothing can say why under its own
           control. Every row keeps [model lg][level sm]. */}
       <div className="flex flex-col items-end gap-1">
@@ -653,7 +629,7 @@ function DefaultModelRow({
             className="pr-1 text-ui text-attention"
             data-testid={`default-model-${purpose}-blocked`}
           >
-            The Ticket model can&rsquo;t read images &mdash; choose one here.
+            Ticket model can&rsquo;t read images
           </span>
         ) : null}
       </div>

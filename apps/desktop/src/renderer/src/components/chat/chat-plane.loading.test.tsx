@@ -151,9 +151,8 @@ async function mountPlane(store: ReturnType<typeof chatStore>) {
 }
 
 const loading = () => container?.querySelector('[data-testid="chat-transcript-loading"]') ?? null;
-// A project-scope empty state always offers its three visuals, so the picker
-// is the one element every drawing of it carries.
-const emptyState = () => container?.querySelector('[data-testid="empty-visual-picker"]') ?? null;
+// The quiet entry is present before its optional overview is opened.
+const emptyState = () => container?.querySelector('[data-slot="chat-empty-state"]') ?? null;
 
 describe("a chat with no messages on screen", () => {
   it("shows Auto ahead of an inherited tier for an automatic pick", async () => {
@@ -172,10 +171,10 @@ describe("a chat with no messages on screen", () => {
     expect(pill?.textContent).not.toContain("Deep");
   });
 
-  it("holds the transcript's box while the history read is still in flight", async () => {
+  it("keeps the pending transcript silent without claiming an empty history", async () => {
     await mountPlane(chatStore({ projection: null }));
-    expect(loading()).not.toBeNull();
-    expect(loading()?.getAttribute("aria-busy")).toBe("true");
+    expect(loading()).toBeNull();
+    expect(container?.querySelector('[aria-label="Message"]')).not.toBeNull();
     expect(emptyState()).toBeNull();
   });
 
@@ -200,12 +199,24 @@ describe("a chat with no messages on screen", () => {
   it("stands the skeleton down when the read failed, so the failure is what shows", async () => {
     await mountPlane(chatStore({ projection: null, sessionError: "Lost the Session stream" }));
     expect(loading()).toBeNull();
+    expect(emptyState()).toBeNull();
+    const blockers = container?.querySelectorAll('[data-slot="session-blocker"]');
+    expect(blockers).toHaveLength(1);
+    expect(blockers?.[0]?.closest('[role="log"]')).not.toBeNull();
+    expect(blockers?.[0]?.textContent).toContain("Lost the Session stream");
+    // The shared Notice: the message wraps anywhere and long reports clamp
+    // behind Show more rather than truncating.
+    const message = blockers?.[0]?.querySelector("p")?.parentElement;
+    expect(message?.className).toContain("[overflow-wrap:anywhere]");
+    expect(message?.className).toContain("line-clamp-2");
+    expect(message?.className).not.toContain("truncate");
   });
 
   it("gives way to the transcript the moment messages arrive", async () => {
     const store = chatStore({ projection: null });
     await mountPlane(store);
-    expect(loading()).not.toBeNull();
+    expect(loading()).toBeNull();
+    expect(emptyState()).toBeNull();
     const message: UIMessage = { id: "u1", role: "user", parts: [{ type: "text", text: "Hi" }] };
     await act(async () => {
       store.setState(

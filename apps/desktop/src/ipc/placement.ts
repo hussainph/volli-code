@@ -1152,6 +1152,12 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "stays",
     reason: "This window's warnings into this machine's log; never sent to a host.",
   },
+  "volli:renderer-stalls": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "This window's long frames and slow inputs into this machine's log; never sent to a host.",
+  },
 
   // ---- VolliPiSessionOrphanIpcContract -----------------------------------
   "volli:pi-session-orphans-scan": {

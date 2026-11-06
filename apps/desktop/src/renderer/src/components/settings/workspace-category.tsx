@@ -1,4 +1,5 @@
-import { UsersIcon } from "@phosphor-icons/react/dist/csr/Users";
+import { TeamIcon } from "@renderer/components/ui/icon";
+
 import type { PrefCategory } from "./kit";
 import { WorkspacePane } from "./panes/workspace-pane";
 
@@ -7,7 +8,7 @@ export function workspaceCategory(): PrefCategory {
   return {
     key: "workspace",
     label: "Workspace",
-    icon: UsersIcon,
+    icon: TeamIcon,
     keywords: [
       "workspace",
       "name",

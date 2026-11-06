@@ -21,6 +21,7 @@
  * reference's content or a reason a person typed.
  */
 import type { SessionEvent } from "@volli/shared";
+import type { SessionAttachFailureCause } from "@volli/session-engine";
 
 import { logContext, withRootLogContext } from "../log/context";
 import {
@@ -59,12 +60,41 @@ const INFO_KINDS: ReadonlySet<string> = new Set([
   "interaction.cancelled",
 ]);
 
+/**
+ * Why each not-yet-logged attach failed (VC-1099), by attachment id. The
+ * runtime reports a cause on the attach's own chain just before it commits
+ * the `attachment.failed` fact; that fact's line takes the cause and drops it.
+ * Bounded like `log/correlation`: a cause whose fact never committed is
+ * forgotten oldest first.
+ */
+const attachFailureCauses = new Map<string, SessionAttachFailureCause>();
+const MAX_PENDING_ATTACH_FAILURE_CAUSES = 256;
+
+/** The Session runtime's `onAttachFailure`: files a cause for its `attachment.failed` line. */
+export function noteAttachFailureCause(cause: SessionAttachFailureCause): void {
+  attachFailureCauses.delete(cause.attachmentId);
+  attachFailureCauses.set(cause.attachmentId, cause);
+  if (attachFailureCauses.size > MAX_PENDING_ATTACH_FAILURE_CAUSES)
+    attachFailureCauses.delete(attachFailureCauses.keys().next().value!);
+}
+
 /** One line per committed fact, each under the trace it can be joined to. */
 export function logSessionEvents(events: readonly SessionEvent[]): void {
   const ambient = logContext()["traceId"];
   const ambientTrace = typeof ambient === "string" ? ambient : undefined;
   for (const event of events) {
-    const fields = sessionEventFields(event);
+    const fields: Record<string, string | number | boolean> = sessionEventFields(event);
+    if (event.payload.kind === "attachment.failed") {
+      const cause = attachFailureCauses.get(event.payload.attachment.id);
+      if (cause !== undefined) {
+        attachFailureCauses.delete(cause.attachmentId);
+        fields["phase"] = cause.phase;
+        fields["errorName"] = cause.errorName;
+        fields["timedOut"] = cause.timedOut;
+        fields["phaseMs"] = cause.phaseMs;
+        fields["elapsedMs"] = cause.elapsedMs;
+      }
+    }
     const commandId = typeof fields["commandId"] === "string" ? fields["commandId"] : undefined;
     const turnId = typeof fields["turnId"] === "string" ? fields["turnId"] : undefined;
     const traceId = commandTrace(commandId) ?? turnTrace(event.sessionId, turnId) ?? ambientTrace;
@@ -104,6 +134,8 @@ export function sessionEventFields(event: SessionEvent): Record<string, string |
     case "command.receipt.recorded":
       fields["commandId"] = event.payload.receipt.commandId;
       fields["status"] = event.payload.receipt.status;
+      // A refusal's machine code, never its detail (VC-1099).
+      if (event.payload.receipt.status === "rejected") fields["code"] = event.payload.receipt.code;
       break;
     case "attention.raised":
       fields["attentionId"] = event.payload.attention.id;
@@ -116,8 +148,12 @@ export function sessionEventFields(event: SessionEvent): Record<string, string |
       fields["role"] = event.payload.session.role;
       break;
     case "attachment.opened":
+      fields["attachmentId"] = event.payload.attachment.id;
+      break;
     case "attachment.failed":
       fields["attachmentId"] = event.payload.attachment.id;
+      // Its machine code, never its detail: a detail may quote a path (VC-1099).
+      fields["code"] = event.payload.failure.code;
       break;
     case "interaction.opened":
       fields["interactionId"] = event.payload.interaction.id;

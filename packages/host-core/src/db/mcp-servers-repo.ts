@@ -2,7 +2,9 @@ import type Database from "better-sqlite3";
 import {
   MCP_DESCRIPTION_MAX_CHARS,
   MCP_ERROR_MAX_CHARS,
+  MCP_SERVER_NAME_MAX_CHARS,
   MCP_TOOL_NAME_MAX_CHARS,
+  mcpProviderToolName,
   sanitizeMcpProvenance,
   sanitizeMcpServerDraft,
   sanitizeMcpToolHints,
@@ -15,6 +17,7 @@ import {
 } from "@volli/shared";
 
 import { prepared } from "./prepared";
+import { getAppState, setAppState } from "./app-state-repo";
 
 interface McpServerRow {
   id: string;
@@ -262,4 +265,284 @@ export function selectedMcpToolDefinitions(
       : [],
   );
   return validateMcpToolDefinitions(definitions);
+}
+
+/**
+ * Machine-wide configuration is expand-only: old project rows remain readable
+ * by N-1 and by birth-frozen Sessions. The host row survives project removal.
+ * Imported ids (including removed ones) are durable tombstones, not a cache.
+ * No credential values enter this record; transports contain references only.
+ */
+interface GlobalMcpState {
+  version: 1;
+  rows: McpServerRow[];
+  imported: string[];
+  aliases: Record<string, string>;
+  retained: McpServerRow[];
+  names: Record<string, string>;
+  /** Serialized last imported/mirrored row; older builds wrote opaque hashes here. */
+  legacy?: Record<string, string>;
+}
+
+function legacySnapshot(row: McpServerRow): string {
+  // Compare configuration directly, not through a credential-derived hash.
+  // Like the rows themselves, transports contain credential references only.
+  // Fixed field order works for both SQLite's column order and our mirrors,
+  // without re-validating every catalog schema just to detect a changed row.
+  const fields = [
+    row.id,
+    row.project_id,
+    row.name,
+    row.enabled,
+    row.transport,
+    row.catalog,
+    row.stale,
+    row.error,
+    row.refreshed_at,
+    row.created_at,
+    row.updated_at,
+    row.source,
+    row.registry_type,
+    row.version,
+    row.digest,
+  ];
+  return JSON.stringify(fields);
+}
+
+function storedRow(server: McpServerRecord): McpServerRow {
+  return {
+    id: server.id,
+    project_id: server.projectId,
+    name: server.name,
+    enabled: server.enabled ? 1 : 0,
+    transport: JSON.stringify(server.transport),
+    catalog: JSON.stringify(server.catalog),
+    stale: server.stale ? 1 : 0,
+    error: server.error,
+    refreshed_at: server.refreshedAt,
+    created_at: server.createdAt,
+    updated_at: server.updatedAt,
+    source: server.provenance.source,
+    registry_type: server.provenance.registryType,
+    version: server.provenance.version,
+    digest: server.provenance.digest,
+  };
+}
+
+function writeGlobal(db: Database.Database, state: GlobalMcpState): void {
+  // Use exactly the production SQLite row codec for both stores.
+  for (const row of state.rows) mapRow(row);
+  setAppState(db, "volli:mcp-global", JSON.stringify(state), Date.now());
+}
+
+function globalState(db: Database.Database): GlobalMcpState {
+  const raw = getAppState(db, "volli:mcp-global");
+  const value: unknown = raw === undefined ? undefined : parseJson(raw, "global configuration");
+  let state: GlobalMcpState;
+  if (value === undefined) {
+    state = { version: 1, rows: [], imported: [], aliases: {}, retained: [], names: {} };
+  } else {
+    if (value === null || typeof value !== "object")
+      throw new Error("Stored global MCP configuration is invalid.");
+    const candidate = value as GlobalMcpState;
+    if (
+      candidate.version !== 1 ||
+      !Array.isArray(candidate.rows) ||
+      !Array.isArray(candidate.retained) ||
+      !Array.isArray(candidate.imported) ||
+      candidate.imported.some((id) => typeof id !== "string") ||
+      candidate.names === null ||
+      typeof candidate.names !== "object" ||
+      Array.isArray(candidate.names) ||
+      Object.values(candidate.names).some((name) => typeof name !== "string") ||
+      candidate.aliases === null ||
+      typeof candidate.aliases !== "object" ||
+      Array.isArray(candidate.aliases) ||
+      Object.values(candidate.aliases).some((id) => typeof id !== "string") ||
+      (candidate.legacy !== undefined &&
+        (candidate.legacy === null ||
+          typeof candidate.legacy !== "object" ||
+          Array.isArray(candidate.legacy) ||
+          Object.values(candidate.legacy).some((snapshot) => typeof snapshot !== "string")))
+    ) {
+      throw new Error("Stored global MCP configuration is invalid.");
+    }
+    for (const row of [...candidate.rows, ...candidate.retained]) mapRow(row);
+    state = candidate;
+  }
+  const imported = new Set(state.imported);
+  const legacy = prepared<[], McpServerRow>(
+    db,
+    "SELECT * FROM mcp_servers ORDER BY created_at, id",
+  ).all();
+  let changed = raw === undefined || state.legacy === undefined;
+  state.legacy ??= {};
+  for (const row of legacy) {
+    const snapshot = legacySnapshot(row);
+    const previous: string | undefined = state.legacy[row.id];
+    if (previous !== snapshot) {
+      state.legacy = { ...state.legacy, [row.id]: snapshot };
+      changed = true;
+      // The machine record survives project deletion, but a real edit through
+      // the legacy writer must remain visible to credential and endpoint guards.
+      // Never re-import tombstoned ids, or overwrite the initial deduped union
+      // merely because an unchanged legacy row differs from that union.
+      // An older opaque hash cannot be compared without hashing credentials
+      // again. Seed the new baseline, preserving the imported catalog union.
+      if (previous !== undefined && previous.startsWith("[") && imported.has(row.id)) {
+        const canonical = state.rows.findIndex((candidate) => candidate.id === row.id);
+        const retained = state.retained.findIndex((candidate) => candidate.id === row.id);
+        if (canonical >= 0) {
+          const name = state.names[row.id] === row.name ? state.rows[canonical]!.name : row.name;
+          state.rows[canonical] = { ...row, name };
+          state.names = { ...state.names, [row.id]: row.name };
+        } else if (retained >= 0) state.retained[retained] = row;
+      }
+    }
+    if (imported.has(row.id)) continue;
+    const server = mapRow(row);
+    // Compare the complete sanitized transport: same executable/URL with
+    // different arguments or credential references is NOT the same service.
+    const identical = state.rows.find(
+      (existing) =>
+        (state.names[existing.id] ?? existing.name) === row.name &&
+        JSON.stringify(mapRow(existing).transport) === JSON.stringify(server.transport),
+    );
+    if (identical) {
+      state.aliases = { ...state.aliases, [row.id]: identical.id };
+      state.retained.push(row);
+      // A union keeps every selected tool. Only the new-Session catalog uses
+      // canonical ids; the retained row still has its original frozen ids.
+      const canonical = mapRow(identical);
+      const catalog = [...canonical.catalog];
+      for (const tool of server.catalog) {
+        const index = catalog.findIndex((entry) => entry.name === tool.name);
+        if (index < 0)
+          catalog.push({
+            ...tool,
+            definition:
+              tool.definition === null
+                ? null
+                : {
+                    ...tool.definition,
+                    serverId: canonical.id,
+                    providerName: mcpProviderToolName(canonical.id, canonical.name, tool.name),
+                  },
+          });
+        else if (tool.enabled && catalog[index]!.definition !== null)
+          catalog[index] = { ...catalog[index]!, enabled: true };
+      }
+      identical.catalog = JSON.stringify(catalog);
+      if (server.enabled) identical.enabled = 1;
+    } else {
+      let name = row.name;
+      let suffix = 1;
+      const source =
+        prepared<[string], { name: string }>(db, "SELECT name FROM projects WHERE id = ?").get(
+          row.project_id,
+        )?.name ?? "imported";
+      while (state.rows.some((existing) => existing.name === name)) {
+        const ending = ` (${source.slice(0, 40)}${suffix === 1 ? "" : ` ${suffix}`})`;
+        name = `${row.name.slice(0, MCP_SERVER_NAME_MAX_CHARS - ending.length)}${ending}`;
+        suffix += 1;
+      }
+      // Keep catalog provider identities and ids unchanged for frozen callers.
+      state.rows.push({ ...row, name });
+      state.names = { ...state.names, [row.id]: row.name };
+    }
+    state.imported.push(row.id);
+    imported.add(row.id);
+    changed = true;
+  }
+  if (changed) writeGlobal(db, state);
+  return state;
+}
+
+export function listGlobalMcpServers(db: Database.Database): McpServerRecord[] {
+  return db.transaction(() => globalState(db).rows.map(mapRow))();
+}
+
+export function getGlobalMcpServer(db: Database.Database, id: string): McpServerRecord | undefined {
+  const state = globalState(db);
+  const row = state.rows.find((candidate) => candidate.id === id);
+  // A duplicate's old id keeps its own credentials and transport, rather than
+  // borrowing the canonical server's credentials on a frozen reattachment.
+  const retained = state.retained.find((candidate) => candidate.id === id);
+  return row ? mapRow(row) : retained ? mapRow(retained) : undefined;
+}
+
+export function putGlobalMcpServer(
+  db: Database.Database,
+  server: McpServerRecord,
+): McpServerRecord {
+  return db.transaction(() => {
+    const state = globalState(db);
+    if (Object.hasOwn(state.aliases, server.id))
+      throw new Error("An imported alias is retained for existing Sessions only.");
+    const row = storedRow(server);
+    const checked = mapRow(row);
+    const index = state.rows.findIndex((existing) => existing.id === server.id);
+    if (index < 0) state.rows.push(row);
+    else state.rows[index] = row;
+    state.names = { ...state.names, [server.id]: server.name };
+    if (!state.imported.includes(server.id)) state.imported.push(server.id);
+    // Record our own mirrors as the baseline. Only a subsequent legacy write
+    // may replace the machine row; otherwise deduped catalogs would be lost.
+    const mirror = (value: McpServerRecord): void => {
+      const saved = putMcpServer(db, value);
+      state.legacy = { ...state.legacy, [saved.id]: legacySnapshot(storedRow(saved)) };
+    };
+    // Keep the original owning project for N-1, never move or fabricate one.
+    const legacy = getMcpServer(db, server.id);
+    const owner = legacy?.projectId ?? server.projectId;
+    if (prepared<[string], { id: string }>(db, "SELECT id FROM projects WHERE id = ?").get(owner)) {
+      mirror({ ...checked, projectId: owner });
+    }
+    for (const [alias, canonical] of Object.entries(state.aliases)) {
+      if (canonical !== server.id) continue;
+      const retained = state.retained.find((candidate) => candidate.id === alias);
+      if (retained) {
+        retained.enabled = server.enabled ? 1 : 0;
+        retained.updated_at = server.updatedAt;
+      }
+      const previous = getMcpServer(db, alias);
+      if (previous) mirror({ ...previous, enabled: server.enabled, updatedAt: server.updatedAt });
+    }
+    writeGlobal(db, state);
+    return checked;
+  })();
+}
+
+/** All removed ids, so the caller revokes each id's separate sealed credentials. */
+export function deleteGlobalMcpServer(db: Database.Database, id: string): readonly string[] {
+  return db.transaction(() => {
+    const state = globalState(db);
+    if (!state.rows.some((row) => row.id === id)) return [];
+    const ids = [
+      id,
+      ...Object.entries(state.aliases)
+        .filter(([, canonical]) => canonical === id)
+        .map(([alias]) => alias),
+    ];
+    state.rows = state.rows.filter((row) => row.id !== id);
+    state.retained = state.retained.filter((row) => !ids.includes(row.id));
+    for (const removed of ids) {
+      prepared(db, "DELETE FROM mcp_servers WHERE id = ?").run(removed);
+      delete state.aliases[removed];
+      delete state.names[removed];
+    }
+    writeGlobal(db, state);
+    return ids;
+  })();
+}
+
+/** Every credential/process identity hidden behind one deduplicated settings row. */
+export function globalMcpServerIds(db: Database.Database, id: string): readonly string[] {
+  const state = globalState(db);
+  return [
+    id,
+    ...Object.entries(state.aliases)
+      .filter(([, canonical]) => canonical === id)
+      .map(([alias]) => alias),
+  ];
 }

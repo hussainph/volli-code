@@ -16,26 +16,26 @@
  */
 import {
   BrowserIcon,
-  CaretRightIcon,
-  CheckCircleIcon,
-  CircleDashedIcon,
+  ChevronRightIcon,
+  SuccessIcon,
+  PendingIcon,
   CopyIcon,
-  FilePlusIcon,
-  FileTextIcon,
+  AddFileIcon,
+  DocumentIcon,
   FolderIcon,
   GaugeIcon,
-  GlobeSimpleIcon,
-  ListChecksIcon,
-  MagnifyingGlassIcon,
-  PencilSimpleIcon,
-  ProhibitIcon,
-  SpinnerGapIcon,
-  TerminalWindowIcon,
-  UsersThreeIcon,
-  WrenchIcon,
-  XCircleIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+  GlobeIcon,
+  ChecklistIcon,
+  SearchIcon,
+  EditIcon,
+  BlockedIcon,
+  TerminalIcon,
+  TeamIcon,
+  ToolsIcon,
+  ErrorIcon,
+  type IconComponent as Icon,
+} from "@renderer/components/ui/icon";
+
 import type { ActivityBrowse, ActivityKind } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
@@ -69,6 +69,7 @@ import {
   useBrowserPicture,
 } from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
@@ -153,7 +154,7 @@ function Caret({
         className,
       )}
     >
-      <CaretRightIcon
+      <ChevronRightIcon
         aria-hidden
         className={cn(
           "size-3 text-muted-foreground transition-transform",
@@ -307,17 +308,17 @@ function RowDisclosure({
 /* -------------------------------------------------------------------- atoms */
 
 const KIND_ICONS: Record<ActivityKind, Icon> = {
-  "run-command": TerminalWindowIcon,
-  "read-file": FileTextIcon,
-  "edit-file": PencilSimpleIcon,
-  "write-file": FilePlusIcon,
-  search: MagnifyingGlassIcon,
+  "run-command": TerminalIcon,
+  "read-file": DocumentIcon,
+  "edit-file": EditIcon,
+  "write-file": AddFileIcon,
+  search: SearchIcon,
   "list-directory": FolderIcon,
-  "fetch-url": GlobeSimpleIcon,
-  plan: ListChecksIcon,
-  delegate: UsersThreeIcon,
+  "fetch-url": GlobeIcon,
+  plan: ChecklistIcon,
+  delegate: TeamIcon,
   browse: BrowserIcon,
-  other: WrenchIcon,
+  other: ToolsIcon,
 };
 
 /**
@@ -329,10 +330,36 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
  * below it carries the mark for its own kind.
  */
 function BundleGlyph() {
-  return <WrenchIcon aria-hidden className={GLYPH_CLASS} />;
+  return <ToolsIcon aria-hidden className={GLYPH_CLASS} />;
 }
 
 const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
+
+/**
+ * The one progress mark in the glyph column, shared by the bundle header, a
+ * running tool row and a live thought. The fixed 14px slot is what layout and
+ * the bundle's visibility arbitration see — never the rotating bounds — and
+ * reduced motion stills the ring in that same slot rather than swapping it, so
+ * the column never shifts. Decorative: the verb beside it already says the work
+ * is in progress, and a second `status` region would repeat it to readers.
+ * `tracked` marks a row's mark for `useVisibleBundleProgress`; the header's own
+ * mark stays untracked.
+ */
+function ProgressGlyph({ tracked = false }: { tracked?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      data-activity-progress={tracked ? "" : undefined}
+      className="flex size-3.5 shrink-0"
+    >
+      <Spinner
+        aria-hidden
+        role="presentation"
+        className="size-full text-primary motion-reduce:animate-none"
+      />
+    </span>
+  );
+}
 
 /**
  * The one glyph a tool row gets.
@@ -369,23 +396,15 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
     // claims an outcome, and neither is owed an alarm.
     case "pending":
     case "not-run":
-      return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
+      return <PendingIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
-      return (
-        <span aria-hidden data-activity-progress className={cn("flex", className)}>
-          <SpinnerGapIcon className="size-full animate-spin text-primary" />
-        </span>
-      );
+      return <ProgressGlyph tracked />;
     case "failed":
-      return (
-        <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
-      );
+      return <ErrorIcon aria-hidden className={cn(className, "text-destructive")} />;
     case "denied":
-      return (
-        <ProhibitIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
-      );
+      return <BlockedIcon aria-hidden className={cn(className, "text-destructive")} />;
     default:
-      return <CheckCircleIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
+      return <SuccessIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
   }
 }
 
@@ -459,12 +478,16 @@ const ToolRowContent = React.memo(function ToolRowContent({
   className?: string;
 }) {
   const row = describeActivity(part);
-  // A failed/refused call owes its explanation even with the detail closed.
-  // This is the runtime's error, not a reinterpretation of successful output.
-  const deniedReason =
+  // Failures are payloads too: keep the runtime's full error behind the same
+  // disclosure and capped output frame as a successful call. An output-error
+  // part has no output, so its presenter may otherwise have no detail (Read)
+  // or only the call's input (Write). Never mistake that input for the result.
+  const failureReason =
     row.status === "failed" || row.status === "denied"
       ? (row.errorText ?? activityDescriptor(part).outcome?.summary ?? null)
       : null;
+  const errorText =
+    row.errorText ?? (row.status === "denied" || row.detail === null ? failureReason : null);
   // A browse row that touched a tab opens onto the tab card (VC-238): the live
   // tab, its owner, its picture, and the controls that show or close it.
   const card = row.browse !== null && row.browse.tabId !== null ? row.browse : null;
@@ -473,7 +496,11 @@ const ToolRowContent = React.memo(function ToolRowContent({
   // printed. Other rows only need a disclosure when their presenter has detail.
   const imageContent = codeModeImageContent(part);
   const expandable =
-    row.detail !== null || row.command !== null || card !== null || imageContent !== null;
+    row.detail !== null ||
+    errorText !== null ||
+    row.command !== null ||
+    card !== null ||
+    imageContent !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -506,27 +533,19 @@ const ToolRowContent = React.memo(function ToolRowContent({
         ) : null}
       </div>
       <RunningBashReason />
-      {deniedReason ? (
-        <p
-          data-slot="refusal-explanation"
-          className="py-1 text-ui text-foreground whitespace-pre-wrap break-words"
-        >
-          {deniedReason}
-        </p>
-      ) : null}
       {expandable ? (
         <Disclosure open={open}>
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
           {imageContent !== null ? (
             <CodeModeOutput input={part.input} content={imageContent} />
-          ) : (
-            <ToolDetail
-              kind={row.kind}
-              command={row.command}
-              detail={row.detail}
-              openPath={row.openPath}
-            />
-          )}
+          ) : null}
+          <ToolDetail
+            kind={row.kind}
+            command={imageContent === null ? row.command : null}
+            detail={imageContent === null ? row.detail : null}
+            errorText={errorText}
+            openPath={row.openPath}
+          />
         </Disclosure>
       ) : null}
     </div>
@@ -685,7 +704,7 @@ function RowActions({ row }: { row: ActivityRow }) {
   }, [copyState]);
   if (!row.object) return <span className="ml-auto" />;
   const CopyStateIcon =
-    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
+    copyState === "copied" ? SuccessIcon : copyState === "failed" ? ErrorIcon : CopyIcon;
   return (
     <span className="ml-auto flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
       <Button
@@ -816,11 +835,13 @@ function ToolDetail({
   kind,
   command,
   detail,
+  errorText,
   openPath,
 }: {
   kind: ActivityKind;
   command: string | null;
   detail: ActivityDetail | null;
+  errorText: string | null;
   openPath: string | null;
 }) {
   return (
@@ -828,7 +849,11 @@ function ToolDetail({
       {command !== null ? (
         <DetailFrame className="whitespace-pre-wrap text-foreground">{command}</DetailFrame>
       ) : null}
-      {detail !== null ? (
+      {errorText !== null ? (
+        <DetailFrame className="whitespace-pre-wrap break-words text-muted-foreground">
+          {errorText}
+        </DetailFrame>
+      ) : detail !== null ? (
         <ActivityOutputDetail detail={detail} kind={kind} openPath={openPath} />
       ) : null}
     </>
@@ -1165,14 +1190,7 @@ export const ActivityBundle = React.memo(
           data-slot="activity-bundle-header"
           className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
         >
-          {streaming && (!open || !rowProgressVisible) ? (
-            <SpinnerGapIcon
-              aria-hidden
-              className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
-            />
-          ) : (
-            <BundleGlyph />
-          )}
+          {streaming && (!open || !rowProgressVisible) ? <ProgressGlyph /> : <BundleGlyph />}
           {/* A closed bundle must not hide its live thought behind a finished
               tool summary. Open, the thought already has its own visible row. */}
           {!open && liveThought?.kind === "reasoning" ? (
@@ -1313,9 +1331,7 @@ const ReasoningRow = React.memo(function ReasoningRow({
     <div className="group/row not-prose">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         {progressing ? (
-          <span aria-hidden data-activity-progress className="flex size-3.5 shrink-0">
-            <SpinnerGapIcon className="size-full animate-spin text-primary" />
-          </span>
+          <ProgressGlyph tracked />
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}
@@ -1359,9 +1375,9 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
           the receipt is the settled record of what you did about it, and a
           second filled mark on the same fact is the same bit twice. */}
       {approved ? (
-        <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
+        <SuccessIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
       ) : (
-        <ProhibitIcon aria-hidden className={GLYPH_CLASS} />
+        <BlockedIcon aria-hidden className={GLYPH_CLASS} />
       )}
       <span className="shrink-0">You {approved ? "allowed" : "denied"}</span>
       {row.object ? (

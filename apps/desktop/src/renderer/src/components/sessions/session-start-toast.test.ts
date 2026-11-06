@@ -19,7 +19,7 @@ function notice(overrides: Partial<SessionStartedNotice> = {}): SessionStartedNo
 describe("sessionStartToastModel", () => {
   it("names the human actor and targets the session's chat tab", () => {
     expect(sessionStartToastModel(notice())).toEqual({
-      message: "You started a session on VC-4",
+      message: "Session started on VC-4 · You",
       target: {
         projectId: "project-one",
         ticketId: "ticket-one",
@@ -30,19 +30,19 @@ describe("sessionStartToastModel", () => {
 
   it("names the driving session's own ticket when the door derived one", () => {
     expect(sessionStartToastModel(notice({ actor: "session", actorTicket: "VC-9" })).message).toBe(
-      "VC-9's session started a session on VC-4",
+      "Session started on VC-4 · VC-9",
     );
   });
 
   it("still announces a Board Session's start without inventing a ticket", () => {
     expect(sessionStartToastModel(notice({ actor: "session" })).message).toBe(
-      "An agent session started a session on VC-4",
+      "Session started on VC-4 · Another Session",
     );
   });
 
   it("names automation plainly", () => {
     expect(sessionStartToastModel(notice({ actor: "automation" })).message).toBe(
-      "Automation started a session on VC-4",
+      "Session started on VC-4 · Automation",
     );
   });
 
@@ -52,7 +52,7 @@ describe("sessionStartToastModel", () => {
   // one does, it does not arrive wearing the user's name.
   it("never announces an unidentified caller as the person reading the toast", () => {
     expect(sessionStartToastModel(notice({ actor: "unauthenticated" })).message).toBe(
-      "An unauthenticated caller started a session on VC-4",
+      "Session started on VC-4 · An unauthenticated caller",
     );
   });
 });

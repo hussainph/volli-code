@@ -21,8 +21,8 @@
  * nowhere, because the reveal IS the act — and it carries the untruncated value
  * as its own accessible name, so nothing has to be opened to hear it at all.
  */
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
+import { FolderOpenIcon, BranchIcon } from "@renderer/components/ui/icon";
+
 import type { WorkingCopyMeasurement } from "@volli/shared";
 
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
@@ -40,7 +40,7 @@ function ScopeChip({
   full,
   children,
 }: {
-  icon: React.ComponentType<{ className?: string; weight?: "bold" }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   term: string;
   full: string;
   children: React.ReactNode;
@@ -54,9 +54,9 @@ function ScopeChip({
       full={full}
       reveal={full}
       side="bottom"
-      className="inline-flex h-7 max-w-48 items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground focus-visible:border-ring"
+      className="inline-flex h-5 max-w-48 items-center gap-1 rounded-full border border-border bg-card px-2 text-label text-muted-foreground focus-visible:border-ring"
     >
-      <Icon weight="bold" className="size-3 shrink-0" />
+      <Icon strokeWidth={2.25} className="size-3 shrink-0" />
       <span className="min-w-0 truncate">{children}</span>
     </ValueReveal>
   );
@@ -75,7 +75,7 @@ export function WorkingCopyChips({ workingCopy }: { workingCopy: WorkingCopyMeas
       {/* A detached HEAD has no branch to name, and inventing one ("HEAD",
           "none") would be naming a thing that is not there. */}
       {workingCopy.branch === null ? null : (
-        <ScopeChip icon={GitBranchIcon} term="Branch" full={workingCopy.branch}>
+        <ScopeChip icon={BranchIcon} term="Branch" full={workingCopy.branch}>
           {workingCopy.branch}
         </ScopeChip>
       )}
