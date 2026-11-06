@@ -112,13 +112,23 @@ describe("cloud Automation controls", () => {
       ]).map((row) => row.id),
     ).toEqual([R]);
   });
-  it("defaults column arming to this Mac, shows its armer, and has no per-machine switch", async () => {
-    await mount(<CloudColumnArming projectId={P} status="doing" />);
+  it("defaults column arming to this Mac and names the action distinctly from the automation navigation", async () => {
+    const navigate = vi.fn();
+    await mount(
+      <>
+        <button onClick={navigate}>Review</button>
+        <CloudColumnArming projectId={P} status="doing" />
+      </>,
+    );
     await click("Doing runs Review on Ada’s Mac · Armed by Ada");
     expect(document.body.textContent).toContain("Armed by Ada");
     expect(document.body.textContent).toContain("Ada’s Mac (this Mac)");
     expect(document.querySelector('[role="switch"]')).toBeNull();
-    await click("Review");
+    expect(document.querySelector('[aria-label="Arm Doing with Review"]')?.textContent).toBe(
+      "Review",
+    );
+    await click("Arm Doing with Review");
+    expect(navigate).not.toHaveBeenCalled();
     expect(useAutomationsStore.getState().arm).toHaveBeenCalledWith({
       projectId: P,
       status: "doing",
@@ -144,7 +154,10 @@ describe("cloud Automation controls", () => {
     await mount(<CloudColumnArming projectId={P} status="doing" />);
     expect(container.textContent).toContain("Paused · Re-arm");
     await click("Doing · Paused · Re-arm");
-    await click("Re-arm Review");
+    expect(document.querySelector('[aria-label="Re-arm Doing with Review"]')?.textContent).toBe(
+      "Re-arm Review",
+    );
+    await click("Re-arm Doing with Review");
     expect(useAutomationsStore.getState().arm).toHaveBeenCalledWith({
       projectId: P,
       status: "doing",

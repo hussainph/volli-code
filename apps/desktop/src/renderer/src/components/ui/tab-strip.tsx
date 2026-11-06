@@ -969,7 +969,7 @@ function TabShell({
       id: inventoryId,
       label,
       leading,
-      detail,
+      detail: hint || undefined,
       status,
       activate: () => {
         onActivate();
@@ -979,7 +979,7 @@ function TabShell({
     return () => {
       inventory.delete(node);
     };
-  }, [inventory, inventoryId, label, leading, detail, status, onActivate]);
+  }, [inventory, inventoryId, label, leading, hint, status, onActivate]);
 
   return (
     <Tooltip {...reveal}>

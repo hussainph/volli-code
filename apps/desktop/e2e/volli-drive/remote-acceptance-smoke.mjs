@@ -272,15 +272,22 @@ async function journey() {
     await click("button", "Home");
     // Operator configuration restarts hostd. New ticket stays enabled during
     // the reconnect grace, so it cannot prove rejoin (VC-768). Observe the
-    // project's real Workspace-ready state, then the renderer's write control.
+    // project's real Workspace-ready state, then the header's write control.
+    // An empty board legitimately offers the same New ticket action in its
+    // empty state too; bind the persistent page-wide group, not an arbitrary
+    // first match or a uniqueness check over both entry points.
     await waitUntil(
       "Workspace rejoins after model deployment and New ticket is actionable",
       async () =>
         (await call("acceptance-workspace")).ready &&
-        hasActionableControl((await snap()).text, "button", "New ticket"),
+        hasActionableControl(
+          snapshotSubtree((await snap()).text, "group", "Board actions"),
+          "button",
+          "New ticket",
+        ),
       { timeout: 10_000, interval: 100 },
     );
-    await click("button", "New ticket");
+    await click("button", "New ticket", { scope: { role: "group", name: "Board actions" } });
     await type("Ticket title", TITLE);
     await click("button", "Create ticket");
     await wait(TITLE);

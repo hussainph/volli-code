@@ -172,6 +172,61 @@ describe("one capsule per group", () => {
     press(tab("Chat"), "ArrowRight");
     expect(document.activeElement).toBe(tab("a.ts"));
   });
+  it("keeps twin file captions short and their hover-list directories on the secondary line", async () => {
+    const src = {
+      ...file,
+      id: "file:src/app.ts",
+      relPath: "src/app.ts",
+      title: "app.ts",
+      hint: "src",
+    };
+    const docs = {
+      ...file,
+      id: "file:docs/app.ts",
+      relPath: "docs/app.ts",
+      title: "app.ts",
+      hint: "docs",
+    };
+    act(() =>
+      root.render(
+        <HomePaneTabStrip
+          label="Files"
+          projectId="project"
+          tabs={[HOME_BOARD_TAB, src, docs]}
+          activeTabId={src.id}
+          groups={[
+            {
+              id: "twins",
+              panes: [
+                { paneId: "left", tabIds: [src.id], activeTabId: src.id },
+                { paneId: "right", tabIds: [docs.id], activeTabId: docs.id },
+              ],
+            },
+          ]}
+          shownGroupId="twins"
+          onUngroup={noop}
+          onSelect={noop}
+          onClose={noop}
+          onRename={noop}
+          onPinFile={noop}
+          onCloseOtherFiles={noop}
+        />,
+      ),
+    );
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 300));
+    });
+    const card = document.querySelector('[data-slot="hover-card-content"]')!;
+    expect(
+      [...card.querySelectorAll(".list-row-secondary")].map((node) => node.textContent),
+    ).toEqual(["src", "docs"]);
+    expect(
+      [...card.querySelectorAll("[data-tab-id] .truncate.text-ui")].map((node) => node.textContent),
+    ).toEqual(["app.ts", "app.ts"]);
+  });
+
   it("lists all members on hover, retaining their details and status", async () => {
     const callbacks = home(chat.id);
     const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;

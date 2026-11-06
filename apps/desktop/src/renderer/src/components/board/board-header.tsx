@@ -139,6 +139,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
       // stays in the outline and leaves the screen — the two are one object at
       // one scope, and it only has one name.
       titleHidden
+      actionsLabel="Board actions"
       actionsClassName="max-w-full flex-wrap"
       actions={
         <>

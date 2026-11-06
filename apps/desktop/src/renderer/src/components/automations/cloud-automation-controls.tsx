@@ -180,6 +180,7 @@ export function CloudColumnArming({
                 key={row.id}
                 variant="ghost"
                 size="sm"
+                aria-label={`${paused && row.id === arming?.automationId ? "Re-arm" : "Arm"} ${TICKET_STATUS_LABELS[status]} with ${row.name}`}
                 disabled={!canWrite || saving || runnerId === null}
                 onClick={() => void arm(row.id)}
               >

@@ -562,6 +562,37 @@ describe("TabStrip overflow", () => {
     expect(scroller().scrollLeft).toBeGreaterThan(0);
   });
 
+  it("keeps basename-only inventory names with a distinct directory on the secondary line", async () => {
+    act(() =>
+      root?.render(
+        <TabStrip label="Files">
+          <Tab label="app.ts" hint="src" active tabStop closable={false} onActivate={() => {}} />
+          <Tab
+            label="app.ts"
+            hint="docs"
+            active={false}
+            tabStop={false}
+            closable={false}
+            onActivate={() => {}}
+          />
+        </TabStrip>,
+      ),
+    );
+    layoutStrip({ area: 156, content: 320 });
+    resized();
+    const all = container!.querySelector<HTMLButtonElement>('[aria-label="All tabs"]')!;
+    await act(async () =>
+      all.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    expect(
+      [...menu.querySelectorAll(".list-row-secondary")].map((node) => node.textContent),
+    ).toEqual(["src", "docs"]);
+    expect([...menu.querySelectorAll(".truncate.text-ui")].map((node) => node.textContent)).toEqual(
+      ["app.ts", "app.ts"],
+    );
+  });
+
   it("draws no affordance at all for a strip that fits", () => {
     renderTabs(2, 0);
     measureScroller(2);

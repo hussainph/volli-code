@@ -50,6 +50,7 @@ export function PageHeader({
   title,
   actions,
   actionsClassName,
+  actionsLabel,
   variant = "workbench",
   titleHidden = false,
   className,
@@ -62,6 +63,8 @@ export function PageHeader({
   actions?: ReactNode;
   /** Optional geometry for a dense, wrapping toolbar cluster. */
   actionsClassName?: string;
+  /** Names the page-wide action group independently of in-content actions. */
+  actionsLabel?: string;
   /** Surface controls sharing the title's row. */
   children?: ReactNode;
   variant?: keyof typeof TIERS;
@@ -82,7 +85,11 @@ export function PageHeader({
       </div>
       {children}
       {actions ? (
-        <div className={cn("ml-auto flex shrink-0 items-center gap-2", actionsClassName)}>
+        <div
+          role={actionsLabel ? "group" : undefined}
+          aria-label={actionsLabel}
+          className={cn("ml-auto flex shrink-0 items-center gap-2", actionsClassName)}
+        >
           {actions}
         </div>
       ) : null}

@@ -533,13 +533,14 @@ test("step 3 waits for the real Workspace rejoin before clicking the grace-enabl
   let clicks = 0;
   const run = new Function(
     "tools",
-    `const { click, call, snap, waitUntil, hasActionableControl } = tools;
+    `const { click, call, snap, waitUntil, hasActionableControl, snapshotSubtree } = tools;
      return (async () => { ${body} })();`,
   );
   await run({
-    click: async (_role, name) => {
+    click: async (_role, name, options) => {
       if (name === "New ticket") {
         assert.equal(reads, 3, "a grace-enabled button must not be mistaken for rejoin");
+        assert.deepEqual(options, { scope: { role: "group", name: "Board actions" } });
         clicks++;
       }
     },
@@ -549,13 +550,16 @@ test("step 3 waits for the real Workspace rejoin before clicking the grace-enabl
         ready: acceptanceWorkspaceReady(workspaceSnapshot(statuses[reads++])),
       };
     },
-    snap: async () => ({ text: '- button "New ticket" [ref=e2]' }),
+    snap: async () => ({
+      text: '- group "Board actions" [ref=e1]:\n  - button "New ticket" [ref=e2]\n- region "Empty board" [ref=e3]:\n  - button "New ticket" [ref=e4]',
+    }),
     waitUntil: async (_label, check, options) => {
       assert.deepEqual(options, { timeout: 10_000, interval: 100 });
       for (let i = 0; i < 3; i++) if (await check()) return;
       assert.fail("Workspace never became ready");
     },
     hasActionableControl,
+    snapshotSubtree,
   });
   assert.equal(clicks, 1);
   const supervisor = read("../supervisor.mjs");
@@ -730,7 +734,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   assert.ok(smoke.includes('call("acceptance-arrange-box")'));
   assert.match(
     smoke,
-    /hasActionableControl\(\(await snap\(\)\)\.text, "button", "New ticket"\)/u,
+    /hasActionableControl\(\s*snapshotSubtree\(\(await snap\(\)\)\.text, "group", "Board actions"\),\s*"button",\s*"New ticket",?\s*\)/u,
     "the daemon's operator restart must rejoin before the first ticket write, not just keep its chip name",
   );
   assert.ok(smoke.includes("can't add projects to it."));

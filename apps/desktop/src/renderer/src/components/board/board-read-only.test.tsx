@@ -82,7 +82,9 @@ describe("board create controls", () => {
         <BoardHeader projectId="remote" ticketCount={0} tickets={[]} filter={EMPTY_TICKET_FILTER} />
       </TooltipProvider>,
     );
-    expectStoodDown(button(container, "New ticket"));
+    const actions = container.querySelector('[role="group"][aria-label="Board actions"]')!;
+    expect(actions.querySelectorAll("button").length).toBeGreaterThan(0);
+    expectStoodDown(button(actions, "New ticket"));
     world.setHetzner({ link: { status: "open" } });
     expectUntouched(button(container, "New ticket"));
   });

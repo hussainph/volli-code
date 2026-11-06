@@ -140,6 +140,8 @@ describe("HomeTabStrip file tabs", () => {
 
     expect(html).not.toContain(">src<");
     expect(html).not.toContain(">docs<");
-    expect(html.match(/aria-label="app.ts"/g)).toHaveLength(2);
+    expect(html.match(/data-slot="tab-label"[^>]*>app\.ts<\/span>/g)).toHaveLength(2);
+    expect(html).toContain('aria-label="app.ts · src"');
+    expect(html).toContain('aria-label="app.ts · docs"');
   });
 });

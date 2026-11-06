@@ -26,6 +26,18 @@ describe("PageHeader", () => {
     expect(html).toContain("ml-auto");
   });
 
+  it("can name page-wide actions independently of equivalent empty-state actions", () => {
+    const html = renderToStaticMarkup(
+      <PageHeader
+        title="Board"
+        actionsLabel="Board actions"
+        actions={<button>New ticket</button>}
+      />,
+    );
+    expect(html).toContain('role="group" aria-label="Board actions"');
+    expect(html).toContain("New ticket");
+  });
+
   it("uses one page-title step across reading and workbench tiers", () => {
     const workbench = renderToStaticMarkup(<PageHeader title="Board" />);
     const reading = renderToStaticMarkup(<PageHeader variant="reading" title="Appearance" />);

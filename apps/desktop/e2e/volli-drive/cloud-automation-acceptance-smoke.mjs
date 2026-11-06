@@ -342,8 +342,8 @@ async function journey(fixture, store, evidenceDir) {
     await macA.drive.click("button", "Arm Doing");
     // The column caption is plain text; the actual arming choice is a named
     // button in the open popover, not an invented heading role.
-    await macA.drive.wait(`button "${DOING_AUTOMATION.name}"`, 30_000);
-    await macA.drive.click("button", DOING_AUTOMATION.name);
+    await macA.drive.wait(`button "Arm Doing with ${DOING_AUTOMATION.name}"`, 30_000);
+    await macA.drive.click("button", `Arm Doing with ${DOING_AUTOMATION.name}`);
     await macA.drive.pressKey("Escape");
     await macA.drive.wait(`Doing runs ${DOING_AUTOMATION.name} on ${nameA}`, 30_000);
     // Select the schedule in the same page's rail, then its own Armed switch.
