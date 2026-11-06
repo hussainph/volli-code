@@ -143,18 +143,21 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   // through the floating panel's exit transition as well as its open state, or
   // the Browser plane would jump in front for the final 160ms of withdrawal.
   const [floatingOverlayExiting, setFloatingOverlayExiting] = React.useState(false);
-  const previousPanelShown = React.useRef(panelShown);
+  const previousPanel = React.useRef({ shown: panelShown, docked });
   React.useLayoutEffect(() => {
-    const wasShown = previousPanelShown.current;
-    previousPanelShown.current = panelShown;
+    const previous = previousPanel.current;
+    previousPanel.current = { shown: panelShown, docked };
     // Instant exits dispatch no transitionend. Release the Browser freeze in
     // that same commit, including when Motion is turned off during an exit.
     if (pinned || terminalFocused || panelShown || reducedMotion || keyboardInstant) {
       setFloatingOverlayExiting(false);
-    } else if (wasShown) {
-      setFloatingOverlayExiting(true);
+    } else if (previous.shown) {
+      // Only a floating peek has a CSS exit. Pin pushes retain the native-plane
+      // fence through contentMotion.moving and release it at the spring finish;
+      // waiting for transitionend here would keep the Browser frozen forever.
+      setFloatingOverlayExiting(!previous.docked);
     }
-  }, [panelShown, pinned, terminalFocused, reducedMotion, keyboardInstant]);
+  }, [panelShown, docked, pinned, terminalFocused, reducedMotion, keyboardInstant]);
   // How far past `-100%` the panel parks to be gone. Only far enough to clear
   // the clip line, because the clip is what "gone" now means: its own width
   // lands the right edge on the panel box's own left edge, `floatingInset` puts

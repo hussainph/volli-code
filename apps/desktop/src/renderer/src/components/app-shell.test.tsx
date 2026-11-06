@@ -108,6 +108,15 @@ describe("floating navigation native-plane exit", () => {
     expect(overlay()).toBeNull();
   });
 
+  it("does not wait for a peek transition after the push owner has closed", async () => {
+    state.peek = false;
+    useUiStore.setState({ sidebarPinned: true });
+    await render();
+    useUiStore.setState({ sidebarPinned: false });
+    await render();
+    expect(overlay()).toBeNull();
+  });
+
   it("releases the Browser immediately for reduced-motion exits", async () => {
     state.reduced = true;
     await render();
