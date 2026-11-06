@@ -312,18 +312,23 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
       answer?.();
     });
     expect(loading().length).toBe(0);
-    expect(bandText("active")).toContain("No active sessions");
-    expect(bandText("previous")).toContain("Nothing yet");
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
   });
 
   it("says the bands are empty only once the listing has said so", async () => {
     await mount();
 
     expect(loading().length).toBe(0);
-    expect(bandText("active")).toContain("No active sessions");
-    expect(bandText("previous")).toContain("Nothing yet");
-    expect(container?.querySelector('[data-next-action="active"]')).not.toBeNull();
-    expect(container?.querySelector('[data-next-action="previous"]')).not.toBeNull();
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
+    expect(container?.querySelector('[data-next-action="active"]')).toBeNull();
+    expect(container?.querySelector('[data-next-action="previous"]')).toBeNull();
+    // A quiet noun, not dashed placeholder rows or an explainer; no zero
+    // beside a band header that the empty state already answers.
+    expect(bandText("active")).not.toContain("Start a chat");
+    expect(bandText("previous")).not.toContain("Return to earlier sessions");
+    expect(container?.querySelector("[data-band-count]")).toBeNull();
   });
 
   it("stands both skeletons down when the project listing fails, without either false empty", async () => {
@@ -334,8 +339,9 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(loading().length).toBe(0);
     expect(bandText("active")).not.toContain("No active sessions");
     expect(bandText("previous")).not.toContain("Nothing yet");
-    expect(bandText("active")).toContain("Couldn't load sessions.");
-    expect(bandText("previous")).toContain("Couldn't load sessions.");
+    expect(bandText("active")).toContain("Couldn't load sessions");
+    expect(bandText("previous")).not.toContain("Couldn't load sessions");
+    expect(container?.querySelectorAll('[role="alert"]')).toHaveLength(1);
     expect(container?.querySelector("[data-next-action]")).toBeNull();
   });
 
@@ -707,9 +713,8 @@ describe("the Previous band's cap (VC-116)", () => {
       Array.from({ length: PREVIOUS_BAND_LIMIT }, (_, index) => `chat:c${index}`),
     );
     // The header still counts every Session back there, not the drawn ones.
-    // Its count is the band's first tabular figure; the rows' ages follow it.
     expect(
-      container?.querySelector('[data-session-band="previous"] .tabular-nums')?.textContent,
+      container?.querySelector('[data-session-band="previous"] [data-band-count]')?.textContent,
     ).toBe(String(PREVIOUS_BAND_LIMIT * 2 + 5));
     expect(reachButton("Show more")).not.toBeNull();
     expect(reachButton("Show less")).toBeNull();
@@ -840,4 +845,117 @@ describe("ActiveSessions attention signals (VC-1078)", () => {
     });
     expect(latestSignals).toHaveBeenCalledTimes(3);
   });
+});
+
+it("selects without navigation, ranges, selects all and clears, with existing read commands in bulk", async () => {
+  seedSessions(
+    ["c1", "c2", "c3"].map((sessionId) =>
+      listingRow(
+        chatRecord({
+          sessionId,
+          title: `Session ${sessionId}`,
+          lastActivityAt: Date.now(),
+          createdAt: Date.now(),
+        }),
+      ),
+    ),
+  );
+  await mount();
+  const click = async (id: string, init: MouseEventInit) =>
+    act(async () =>
+      rowButton(id).dispatchEvent(new MouseEvent("click", { bubbles: true, ...init })),
+    );
+  await click("chat:c1", { metaKey: true });
+  await click("chat:c3", { shiftKey: true });
+  expect(setRead).not.toHaveBeenCalled();
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 30, clientY: 30 }),
+    ),
+  );
+  const bulk = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (node) => node.textContent === "Mark 3 sessions as read",
+  );
+  expect(bulk).toBeDefined();
+  await act(async () => bulk!.click());
+  for (const id of ["c1", "c2", "c3"])
+    expect(setRead).toHaveBeenCalledWith({ sessionId: id, unread: false });
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    ),
+  );
+  setRead.mockClear();
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", metaKey: true, bubbles: true }),
+    ),
+  );
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 })),
+  );
+  expect(
+    [...document.querySelectorAll('[role="menuitem"]')].some(
+      (node) => node.textContent === "Mark 3 sessions as unread",
+    ),
+  ).toBe(true);
+});
+
+it("mounts only the source-list viewport and moves keyboard focus across its window boundary", async () => {
+  const now = Date.now();
+  seedSessions(
+    Array.from({ length: 1000 }, (_, i) =>
+      listingRow(
+        chatRecord({
+          sessionId: `c${i}`,
+          ticketId: null,
+          role: "project",
+          createdAt: now - i,
+          lastActivityAt: now - i,
+        }),
+      ),
+    ),
+  );
+  const h = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+  const rect = HTMLElement.prototype.getBoundingClientRect;
+  const bounds = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-session-bands"))
+        return new DOMRect(
+          0,
+          -(this.closest<HTMLElement>('[data-slot="sidebar-content"]')?.scrollTop ?? 0),
+          240,
+          48000,
+        );
+      return rect.call(this);
+    });
+  try {
+    container = document.body.appendChild(document.createElement("div"));
+    root = createRoot(container);
+    await act(async () =>
+      root!.render(
+        <SidebarProvider>
+          <div data-slot="sidebar-content">
+            <ActiveSessions project={PROJECT} visible />
+          </div>
+        </SidebarProvider>,
+      ),
+    );
+    const ids = activeRowIds();
+    expect(ids.length).toBeLessThan(25);
+    expect(ids.length).toBeGreaterThan(10);
+    const last = ids.at(-1)!;
+    await press(last, "ArrowDown");
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    const focused = document.activeElement?.closest<HTMLElement>("[data-peek-row]");
+    expect(focused).not.toBeNull();
+    expect(focused?.dataset.peekRow).not.toBe(last);
+    expect(activeRowIds().length).toBeLessThan(30);
+  } finally {
+    h.mockRestore();
+    bounds.mockRestore();
+  }
 });

@@ -37,6 +37,7 @@ import {
   makeScratch,
   REPO,
   tabStrip,
+  tabStripChooser,
   waitForChildExit,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -314,7 +315,7 @@ async function loadingSettled(page, title) {
  * one API the product got wrong is testing itself.
  */
 async function openBrowserTabFromMenu(page) {
-  await page.getByRole("button", { name: "Other things to open", exact: true }).click();
+  await tabStripChooser(page, HOME_TAB_STRIP).click();
   await page.getByRole("menuitem", { name: "Browser", exact: true }).click();
 }
 
@@ -645,6 +646,8 @@ async function main() {
     extraEnv: { HOME: scratchHome, VOLLI_BROWSER_PROBE: "1" },
   });
   await assertProfileIsolated(app, userDataDir);
+  // Match the macOS CI work area, including the overflowing top tab strip.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
 
   const page = await app.firstWindow();
   const pageErrors = [];
@@ -780,7 +783,7 @@ async function main() {
 
     // Exercise a real Radix menu too: this is the everyday overlay path the
     // ticket reported, whereas the floating sidebar uses the explicit marker.
-    await page.getByRole("button", { name: "Other things to open", exact: true }).click();
+    await tabStripChooser(page, HOME_TAB_STRIP).click();
     await waitUntil(
       "the new-session menu to freeze the Browser plane over its last pixels",
       async () =>
@@ -994,7 +997,9 @@ async function main() {
         return !state.docked && state.toolsView === undefined ? state : null;
       }).catch(() => null);
       const windowsAfter = await osWindowCount(app);
-      const browserAlert = await page.getByRole("alert").count();
+      // Global live-region announcers can be present but empty. Every actual
+      // alert still fails this check, in addition to error toasts/page errors.
+      const browserAlert = await page.getByRole("alert").filter({ hasText: /\S/ }).count();
       const toastError = await page.getByText(/Could not toggle DevTools/i).count();
       return {
         ok:
@@ -1181,7 +1186,7 @@ async function main() {
         .locator(`[data-peek-row="chat:${OVERLAY_SESSION.id}"][data-peek-surface="nav"]`)
         .getByRole("button")
         .click();
-      const transcriptTab = tabStrip(page, "Home tabs").getByRole("tab", {
+      const transcriptTab = transcriptPane.getByRole("tab", {
         name: OVERLAY_SESSION.title,
         exact: true,
       });
@@ -1218,12 +1223,16 @@ async function main() {
       // segment closes it: the emptied pane collapses and the group of two
       // dissolves, closing neither original Browser Tab (VC-614).
       await transcriptTab.getByTestId("tab-close").click();
-      await waitUntil(
-        "the original unsplit Browser surface",
-        async () =>
-          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
-          (await remoteViewAttached(app, secondUrl)),
-      );
+      // The group dissolves beneath the pointer. Leave its former close
+      // target so a newly exposed hover affordance/tooltip cannot keep the
+      // native plane correctly frozen while we assert its restoration.
+      await page.mouse.move(700, 70);
+      await waitUntil("the original unsplit Browser surface", async () => {
+        const panes = await page.locator('[data-slot="split-view-pane"][data-pane-id]').count();
+        const attached = await remoteViewAttached(app, secondUrl);
+        if (panes === 1 && attached) return true;
+        throw new Error(`panes=${panes} browserAttached=${attached}`);
+      });
       return {
         ok: promptVisible && targetVisible && pageErrors.length === 0,
         detail: `prompt=${JSON.stringify(receipt)} restored=${JSON.stringify(restored)} promptVisible=${promptVisible} targetVisible=${targetVisible}`,

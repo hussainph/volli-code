@@ -123,11 +123,11 @@ describe("TicketFilesList", () => {
   });
 
   it("shows an empty hint when there is nothing to list", () => {
-    expect(render([], [])).toContain("Nothing here yet");
+    expect(render([], [])).toContain("No files");
   });
 
   it("says nothing at all until a read has landed (VC-406)", () => {
-    // "Nothing here yet" is a claim about what a read RETURNED; a list with no
+    // "No files" is a claim about what a read RETURNED; a list with no
     // completed read is not entitled to make it, and its panel is already
     // saying why there is nothing.
     expect(render([], [], undefined, { canClaimEmpty: false })).toBe("");
@@ -137,7 +137,7 @@ describe("TicketFilesList", () => {
     const html = render([], [], undefined, { emptyLabel: "No matches" });
 
     expect(html).toContain("No matches");
-    expect(html).not.toContain("Nothing here yet");
+    expect(html).not.toContain("No files");
   });
 });
 
@@ -187,7 +187,7 @@ describe("TicketFilesList inline edits (VC-191)", () => {
     const html = render([], [], controlsWith({ kind: "draft", entry: "file" }));
 
     expect(html).toContain('aria-label="New file name"');
-    expect(html).not.toContain("Nothing here yet");
+    expect(html).not.toContain("No files");
   });
 });
 
@@ -542,7 +542,8 @@ describe("TicketFilesPanel", () => {
       expect(before?.isConnected).toBe(false);
       expect(drawn('[data-testid="ticket-files-row"]')).toHaveLength(0);
       expect(document.body.textContent).not.toContain("README.md");
-      expect(drawn('[data-testid="file-tree-loading"]')).toHaveLength(1);
+      expect(drawn('[data-testid="file-tree-loading"]')).toHaveLength(0);
+      expect(document.body.textContent).not.toContain("No files");
     });
 
     it("lets a listing the old ticket left in flight write nothing here", async () => {

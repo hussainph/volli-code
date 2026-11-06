@@ -1,5 +1,7 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
+import { ArchiveIcon } from "@renderer/components/ui/icon";
+
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cardTicketKey, type Label, type Ticket } from "@volli/shared";
@@ -10,7 +12,6 @@ import type { TicketSessionActivity } from "@renderer/components/board/board-ses
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TicketCardLabels } from "@renderer/components/board/ticket-card-labels";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
-import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import {
   rememberTicketFocusOrigin,
   TICKET_FOCUS_ATTRIBUTE,
@@ -35,9 +36,8 @@ function ArchiveReadyBadge({ ticket }: { ticket: Ticket }) {
       title="Ready to archive"
       aria-label="Ready to archive"
     >
-      {/* Filled, and one of the few that is: it marks the single card on a
-          board of peers whose worktree is finished with. */}
-      <ArchiveIcon weight="fill" className="size-3" />
+      {/* Accent ink marks the one card whose worktree is finished with. */}
+      <ArchiveIcon className="size-3" />
     </span>
   );
 }
@@ -71,23 +71,20 @@ export function TicketCardContent({
 
   return (
     <article
+      data-selected={selected || undefined}
       className={cn(
         // `relative` for the session ring below, which lies on the card's own
         // border line rather than outside it.
         "relative",
-        // `shadow-raised` and not `shadow-card`: the tier names an elevation,
-        // not a component noun. A board card is a tile lying ON its column, the
-        // same lift an active tab takes; `shadow-card` is the deeper halo the
-        // detached drag preview wears while the tile is off the board
-        // (`board.tsx`). This shadow used to be applied from a hand-maintained
-        // `article.bg-card` selector in globals.css, which is exactly why the
-        // three overlays that selector forgot were wearing stock black.
-        // px-3, not the ladder's 4: a dense card trades air for content, and at
-        // px-4 real titles truncate a word earlier. Recorded spacing exception.
-        "flex flex-col gap-1 rounded-lg border bg-card px-3 py-2 shadow-raised cursor-default select-none transition-[border-color] duration-150 ease-out",
+        // A quiet contact shadow lifts paper off the neutral column. The
+        // detached drag preview keeps its deeper `shadow-card` halo.
+        // px-3 preserves the dense card's title measure.
+        "board-card flex flex-col rounded-card border border-transparent cursor-default select-none",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
-        selected ? "border-primary/70" : "border-border hover:border-border-strong",
+        selected
+          ? "border-foreground/40 bg-(--fill-row-selected)"
+          : "border-transparent hover:border-border-strong",
       )}
     >
       {/* An agent is running on this ticket. Always rendered, never conditionally
@@ -96,15 +93,21 @@ export function TicketCardContent({
           well as in, which React cannot do for an unmount on its own.
           `aria-hidden` for the reason `StatusDot` gives — the card is not the
           only place this is said, and the sidebar's band says it in words. */}
-      <span aria-hidden className="session-ring" data-activity={sessionActivity ?? undefined} />
+      <span
+        aria-hidden
+        className="session-ring board-session-ring"
+        data-activity={sessionActivity ?? undefined}
+      />
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-label text-muted-foreground">{displayId}</span>
+        <span className="board-card-key font-mono text-label text-muted-foreground">
+          {displayId}
+        </span>
         <div className="flex items-center gap-1">
           <ArchiveReadyBadge ticket={ticket} />
           <PriorityIndicator priority={ticket.priority} />
         </div>
       </div>
-      <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
+      <p className="board-card-title text-ui font-normal text-foreground line-clamp-2">
         {ticket.title}
       </p>
       {/* Capped at one line, with a `+n` chip for the rest — a card's height is
@@ -121,11 +124,11 @@ export function TicketCardContent({
 // `--ease-out` by reference, not by re-typing it: this used to be the literal
 // that the token was later minted from, and a second copy is how a token
 // silently stops being one.
-export const SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
+export const SORT_TRANSITION = { duration: GLASS_MOTION.menuIn, easing: "var(--ease-out)" };
 
 /**
  * Sortable + context-menu wrapper shared by the board card and the list row:
- * one useSortable wiring, one reduced-motion gate, one dimmed-while-dragging
+ * one useSortable wiring, one Board-owned motion gate, one dimmed-while-dragging
  * treatment. Consumers supply only the presentational body (and, for the list
  * row, its data-* e2e hooks via `dataAttributes`).
  */
@@ -134,6 +137,7 @@ export function SortableTicketShell({
   projectId,
   selected,
   dragHidden,
+  instantSort = false,
   dragTicketIds,
   onSelect,
   onOpen,
@@ -145,6 +149,8 @@ export function SortableTicketShell({
   selected: boolean;
   /** Every selected source stays mounted as a layout placeholder during a group drag. */
   dragHidden: boolean;
+  /** Board-owned motion policy, stable throughout pointer movement. */
+  instantSort?: boolean;
   /** The complete payload a drop target receives if this card starts a drag. */
   dragTicketIds: readonly string[];
   onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
@@ -159,7 +165,6 @@ export function SortableTicketShell({
   dataAttributes?: Record<string, string>;
   children: React.ReactNode;
 }) {
-  const reducedMotion = useReducedMotion();
   const dragData = React.useMemo<TicketDragData>(
     () => ({ kind: "tickets", projectId, ticketIds: dragTicketIds }),
     [projectId, dragTicketIds],
@@ -167,7 +172,7 @@ export function SortableTicketShell({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
     data: dragData,
-    transition: reducedMotion ? null : SORT_TRANSITION,
+    transition: instantSort ? null : SORT_TRANSITION,
   });
 
   // Keyboard-open path (a11y): dnd-kit already makes the card focusable
@@ -202,7 +207,7 @@ export function SortableTicketShell({
           ref={setNodeRef}
           style={{ transform: CSS.Transform.toString(transform), transition }}
           className={cn(
-            "transition-[opacity] duration-150 ease-out",
+            "transition-[opacity] duration-(--duration-menu-in) ease-out",
             (isDragging || dragHidden) && "opacity-40",
           )}
           onClick={(event) =>
@@ -235,6 +240,8 @@ interface TicketCardProps {
   projectLabels: readonly Label[];
   selected: boolean;
   dragHidden: boolean;
+  /** Board-owned motion policy, stable throughout pointer movement. */
+  instantSort?: boolean;
   /** Omitted for an unselected card, whose payload is just its own id. */
   dragTicketIds?: readonly string[];
   /** What is running on this ticket, or `null` for nothing (VC-100). */
@@ -259,6 +266,7 @@ export const TicketCard = React.memo(function TicketCard({
   projectLabels,
   selected,
   dragHidden,
+  instantSort = false,
   dragTicketIds,
   sessionActivity,
   onSelect,
@@ -271,6 +279,7 @@ export const TicketCard = React.memo(function TicketCard({
       projectId={projectId}
       selected={selected}
       dragHidden={dragHidden}
+      instantSort={instantSort}
       dragTicketIds={dragTicketIds ?? ownDragIds}
       onSelect={onSelect}
       onOpen={onOpen}

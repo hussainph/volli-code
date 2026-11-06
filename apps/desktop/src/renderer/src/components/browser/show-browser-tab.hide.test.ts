@@ -18,7 +18,12 @@ import {
 } from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
-import { hideBrowserTab, leaveHomeStrip, showBrowserTab } from "./show-browser-tab";
+import {
+  hideBrowserTab,
+  leaveHomeStrip,
+  leaveTicketBrowserStrip,
+  showBrowserTab,
+} from "./show-browser-tab";
 
 // A workspace store of its own over memory, so nothing writes through to the
 // app_state bridge this test has no main process behind.
@@ -149,12 +154,12 @@ describe("leaveHomeStrip after a hide", () => {
     expect(home()?.homeSplitView ?? null).toBeNull();
   });
 
-  it("falls back to the Board when nothing else was visited", async () => {
+  it("uses the strip neighbour, not visit history", async () => {
     useProjectUiStore.getState().setHomeActiveTab(PROJECT, "browser:b");
 
     await hideBrowserTab(bridge(), "b", () => leaveHomeStrip(PROJECT, "b"));
 
-    expect(home()?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+    expect(home()?.homeActiveTab).toBe("chat:s");
   });
 
   it("can be opened beside its chat again from the Island", async () => {
@@ -173,5 +178,35 @@ describe("leaveHomeStrip after a hide", () => {
     expect(group).not.toBeNull();
     expect(groupForTab(home()?.homeSplitView ?? null, "chat:s")).toBe(group);
     expect(home()?.homeActiveTab).toBe("browser:b");
+  });
+});
+
+describe("browser strip neighbour handoff", () => {
+  const order = [HOME_BOARD_TAB_ID, "chat:s", "browser:b", "chat:next"];
+  it("Home: active, background and last tab", () => {
+    useChatSessionsStore.setState({ openTabs: { [PROJECT]: ["s", "next"] } });
+    const workspace = useProjectUiStore.getState();
+    workspace.setHomeActiveTab(PROJECT, "browser:b");
+    leaveHomeStrip(PROJECT, "b", order);
+    expect(home()?.homeActiveTab).toBe("chat:next");
+    workspace.setHomeActiveTab(PROJECT, "chat:s");
+    leaveHomeStrip(PROJECT, "b", order);
+    expect(home()?.homeActiveTab).toBe("chat:s");
+    workspace.setHomeActiveTab(PROJECT, "browser:b");
+    leaveHomeStrip(PROJECT, "b", [HOME_BOARD_TAB_ID, "browser:b"]);
+    expect(home()?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+  });
+  it("Ticket: active, background and last tab", () => {
+    const workspace = useProjectUiStore.getState();
+    const active = () => useProjectUiStore.getState().byProject[PROJECT]?.ticketTabs.t?.active;
+    workspace.setTicketActiveTab(PROJECT, "t", "browser:b");
+    leaveTicketBrowserStrip(PROJECT, "t", "browser:b", ["body", "browser:b", "chat:next"]);
+    expect(active()).toBe("chat:next");
+    workspace.setTicketActiveTab(PROJECT, "t", "chat:s");
+    leaveTicketBrowserStrip(PROJECT, "t", "browser:b", ["body", "browser:b", "chat:s"]);
+    expect(active()).toBe("chat:s");
+    workspace.setTicketActiveTab(PROJECT, "t", "browser:b");
+    leaveTicketBrowserStrip(PROJECT, "t", "browser:b", ["body", "browser:b"]);
+    expect(active()).toBe("body");
   });
 });

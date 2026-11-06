@@ -1,3 +1,4 @@
+import { Progress } from "@renderer/components/ui/progress";
 import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * The drawings the host surfaces share, ported from the VC-615 lab kit
@@ -6,18 +7,17 @@ import { Spinner } from "@renderer/components/ui/spinner";
  * running step's mark and a provider's monogram.
  *
  * Motion follows the kit's rules: entrances ease out on the app's curve, UI
- * motion stays under 300 ms, only transform / opacity / filter animate, and
+ * motion stays under 300 ms, only transform / opacity animate, and
  * reduced motion lands every value at once ({@link useMotionTiming}),
- * opacity and blur included: a surface's `MotionConfig reducedMotion="user"`
+ * opacity included: a surface's `MotionConfig reducedMotion="user"`
  * stops only transforms.
  */
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { AnimatePresence, motion, useReducedMotion, type Transition } from "motion/react";
-import { AppleLogoIcon } from "@phosphor-icons/react/dist/csr/AppleLogo";
-import { DesktopTowerIcon } from "@phosphor-icons/react/dist/csr/DesktopTower";
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
-import { LinuxLogoIcon } from "@phosphor-icons/react/dist/csr/LinuxLogo";
+import { CheckIcon, HostIcon, StorageIcon } from "@renderer/components/ui/icon";
+import { AppleMark, LinuxMark } from "@renderer/components/ui/brand-marks";
+
+import { AnimatePresence, motion, type Transition } from "motion/react";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 
 import { cn } from "@renderer/lib/utils";
 import type { HostOs } from "@renderer/stores/host-connection";
@@ -77,12 +77,12 @@ export function HostGlyph({
   const timed = useMotionTiming();
   const tile = TILE[size];
   const Icon = local
-    ? DesktopTowerIcon
+    ? HostIcon
     : os === "linux"
-      ? LinuxLogoIcon
+      ? LinuxMark
       : os === "macos"
-        ? AppleLogoIcon
-        : HardDrivesIcon;
+        ? AppleMark
+        : StorageIcon;
   return (
     <span
       data-slot="host-glyph"
@@ -103,7 +103,7 @@ export function HostGlyph({
       />
       <Icon
         aria-hidden
-        weight={os === null && !local ? "regular" : "fill"}
+
         className={cn("relative", tile.icon)}
       />
       <AnimatePresence>
@@ -119,12 +119,12 @@ export function HostGlyph({
               badge === "attention" && "bg-attention",
               badge === "offline" && "bg-muted-foreground/50",
             )}
-            initial={{ scale: 0.4, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.4, opacity: 0 }}
-            transition={timed({ type: "spring", duration: 0.35, bounce: 0.3 })}
+            initial={{ transform: "scale(0.95)", opacity: 0 }}
+            animate={{ transform: "scale(1)", opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={timed({ type: "spring", duration: 0.24, bounce: 0.1 })}
           >
-            {badge === "ready" ? <CheckIcon weight="bold" className="size-[70%]" /> : null}
+            {badge === "ready" ? <CheckIcon strokeWidth={2.25} className="size-[70%]" /> : null}
           </motion.span>
         )}
       </AnimatePresence>
@@ -135,7 +135,7 @@ export function HostGlyph({
 /* ── Text that changes in place ─────────────────────────────────────────── */
 
 /**
- * A label that changes in place: the old words lift away and blur, the new
+ * A label that changes in place: the old words lift away, the new
  * ones settle in from below. Keyed by the text, so "Reconnecting" becoming
  * "2 Sessions running" is one gesture, not a cut.
  */
@@ -147,9 +147,9 @@ export function SwapText({ children, className }: { children: string; className?
         <motion.span
           key={children}
           className="col-start-1 row-start-1 truncate"
-          initial={{ opacity: 0, y: 5, filter: "blur(3px)" }}
-          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-          exit={{ opacity: 0, y: -5, filter: "blur(3px)" }}
+          initial={{ opacity: 0, transform: "translateY(5px)" }}
+          animate={{ opacity: 1, transform: "translateY(0)" }}
+          exit={{ opacity: 0, transform: "translateY(-5px)" }}
           transition={timed({ duration: 0.2, ease: EASE_OUT })}
         >
           {children}
@@ -161,40 +161,9 @@ export function SwapText({ children, className }: { children: string; className?
 
 /* ── Height that follows content ───────────────────────────────────────── */
 
-/**
- * Animates its own height to whatever its child measures, so the switcher's
- * current-host row grows into an update's confirm and shrinks back rather
- * than snapping between heights.
- */
+/** A host detail follows its content without a measured-height animation. */
 export function AutoHeight({ children }: { children: React.ReactNode }) {
-  const timed = useMotionTiming();
-  const inner = React.useRef<HTMLDivElement>(null);
-  const [height, setHeight] = React.useState<number | "auto">("auto");
-  React.useLayoutEffect(() => {
-    const element = inner.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return (
-    <motion.div
-      className="overflow-hidden"
-      // A focus landing below the animating edge scrolls an overflow-hidden
-      // box, and the top of the content silently disappears. This box never
-      // scrolls.
-      onScroll={(event) => {
-        event.currentTarget.scrollTop = 0;
-      }}
-      initial={false}
-      animate={{ height }}
-      transition={timed({ duration: 0.32, ease: EASE_SWIFT })}
-    >
-      <div ref={inner}>{children}</div>
-    </motion.div>
-  );
+  return <div>{children}</div>;
 }
 
 /* ── Progress ──────────────────────────────────────────────────────────── */
@@ -202,21 +171,14 @@ export function AutoHeight({ children }: { children: React.ReactNode }) {
 export function ProgressLine({ value, label }: { value: number; label: string }) {
   const timed = useMotionTiming();
   return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(Math.max(0, Math.min(1, value)) * 100)}
-      className="h-1 overflow-hidden rounded-full bg-muted"
-    >
+    <Progress value={Math.round(Math.max(0, Math.min(1, value)) * 100)} aria-label={label}>
       <motion.div
-        className="h-full origin-left rounded-full bg-foreground/80"
+        className="h-full origin-left rounded-full bg-(image:--flow)"
         initial={false}
-        animate={{ scaleX: Math.max(0.02, Math.min(1, value)) }}
+        animate={{ transform: `scaleX(${Math.max(0.02, Math.min(1, value))})` }}
         transition={timed({ duration: 0.2, ease: "linear" })}
       />
-    </div>
+    </Progress>
   );
 }
 
@@ -287,9 +249,9 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
         ) : status === "active" ? (
           <motion.span
             key="active"
-            initial={{ opacity: 0, scale: 0.6 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.6 }}
+            initial={{ opacity: 0, transform: "scale(0.95)" }}
+            animate={{ opacity: 1, transform: "scale(1)" }}
+            exit={{ opacity: 0, transform: "scale(0.95)" }}
             transition={timed({ duration: 0.16, ease: EASE_OUT })}
           >
             <ActiveStepMark />
@@ -299,22 +261,19 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
             key="done"
             viewBox="0 0 16 16"
             className="size-4 text-positive"
-            initial={{ opacity: 0, scale: 0.5 }}
-            animate={{ opacity: 1, scale: 1 }}
+            initial={{ opacity: 0, transform: "scale(0.95)" }}
+            animate={{ opacity: 1, transform: "scale(1)" }}
             exit={{ opacity: 0 }}
-            transition={timed({ type: "spring", duration: 0.3, bounce: 0.35 })}
+            transition={timed({ type: "spring", duration: 0.24, bounce: 0.1 })}
           >
             <circle cx="8" cy="8" r="7" fill="currentColor" />
-            <motion.path
+            <path
               d="M4.9 8.3 L7.1 10.4 L11.2 5.9"
               fill="none"
               stroke="var(--positive-foreground)"
               strokeWidth="1.75"
               strokeLinecap="round"
               strokeLinejoin="round"
-              initial={{ pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              transition={timed({ duration: 0.22, delay: 0.08, ease: EASE_OUT })}
             />
           </motion.svg>
         ) : (
@@ -322,10 +281,10 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
             key={status}
             viewBox="0 0 16 16"
             className={cn("size-4", status === "failed" ? "text-destructive" : "text-attention")}
-            initial={{ opacity: 0, scale: 0.5 }}
-            animate={{ opacity: 1, scale: 1 }}
+            initial={{ opacity: 0, transform: "scale(0.95)" }}
+            animate={{ opacity: 1, transform: "scale(1)" }}
             exit={{ opacity: 0 }}
-            transition={timed({ type: "spring", duration: 0.3, bounce: 0.35 })}
+            transition={timed({ type: "spring", duration: 0.24, bounce: 0.1 })}
           >
             <circle cx="8" cy="8" r="7" fill="currentColor" />
             <path

@@ -305,7 +305,8 @@ describe("the Activity Island in the chat plane", () => {
     expect(dialogs).toHaveLength(1);
     const dialog = dialogs[0]!;
     expect(dialog.textContent).toContain("Grep the tests");
-    expect(dialog.querySelector("[data-session-peek-state]")?.textContent).toBe("done");
+    expect(dialog.querySelector("[data-session-peek-state]")?.textContent).toBe("Done");
+    expect(dialog.querySelector("[data-session-peek-state] svg")).not.toBeNull();
     // The shared shell preserves the same model and effort as the island row.
     expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("sonnet-4.5");
     expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("High");

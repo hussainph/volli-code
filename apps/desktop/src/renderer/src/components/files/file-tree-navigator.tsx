@@ -1,6 +1,10 @@
+import { PanelEmptyState, useEmptyStateTier } from "@renderer/components/ui/empty-state";
 import * as React from "react";
-import { ArrowClockwiseIcon as ArrowClockwise } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowsInLineVerticalIcon as ArrowsInLineVertical } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
+import {
+  RefreshIcon as ArrowClockwise,
+  CollapseVerticalIcon as ArrowsInLineVertical,
+} from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 import { FileTree } from "./file-tree";
 import type { FileEntry } from "./file-tree-model";
@@ -12,7 +16,6 @@ import { Button } from "@renderer/components/ui/button";
 import {
   NewFileRailAction,
   RailHeadingReadStatus,
-  RailPanelSkeleton,
   RailReadFaultBody,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
@@ -56,6 +59,7 @@ export function FileTreeNavigator(props: {
   selected?: string | null;
   referenced?: readonly FileEntry[];
   attachmentMenu?: React.ReactNode;
+  scrollingHeading?: React.ReactNode;
   onOpen(path: string): void;
   onPin(path: string): void;
   onRename(from: string, to: string): void;
@@ -77,6 +81,7 @@ function NavigatorScope({
   selected,
   referenced = NO_REFERENCES,
   attachmentMenu,
+  scrollingHeading,
   onOpen,
   onPin,
   onRename,
@@ -160,6 +165,7 @@ function NavigatorScope({
         directories.filter((path) => path !== removed && !path.startsWith(`${removed}/`)),
       ),
   };
+  const emptyTier = useEmptyStateTier();
   const mutations = useFileNavigatorMutations({ scope, cwd: view.cwd, host });
   const feedback = railReadFeedback(read, "Files");
   const merged = React.useMemo(() => {
@@ -190,16 +196,18 @@ function NavigatorScope({
         attachmentMenu={attachmentMenu}
         actions={
           <>
-            {available && (
-              <NewFileRailAction
-                disabled={!mutations.canWrite}
-                onNewFile={() => mutations.startDraft("file")}
-              />
-            )}
+            {available &&
+              !(emptyTier === "panel" && read.hasData && merged.length === 0 && !view.query) && (
+                <NewFileRailAction
+                  disabled={!mutations.canWrite}
+                  onNewFile={() => mutations.startDraft("file")}
+                />
+              )}
             <Button
               size="icon-sm"
               variant="ghost"
               aria-label="Collapse folders"
+              title="Collapse folders"
               onClick={() => {
                 setTreeEpoch((value) => value + 1);
                 setView({ ...view, cwd: "" });
@@ -211,6 +219,7 @@ function NavigatorScope({
               size="icon-sm"
               variant="ghost"
               aria-label="Refresh files"
+              title="Refresh files"
               disabled={read.pending}
               onClick={() => void refresh()}
             >
@@ -227,9 +236,7 @@ function NavigatorScope({
           />
         }
       />
-      {feedback?.place === "body" && feedback.kind === "reading" ? (
-        <RailPanelSkeleton label="files" testId="file-tree-loading" />
-      ) : (
+      {feedback?.place === "body" && feedback.kind === "reading" ? null : (
         <>
           <RailReadFaultBody
             feedback={feedback}
@@ -238,18 +245,20 @@ function NavigatorScope({
             testId="file-tree-error"
           />
           {!available && merged.length === 0 ? (
-            <p data-testid="ticket-files-no-worktree" className="p-4 text-ui text-muted-foreground">
-              No worktree yet
-            </p>
+            <div data-testid="ticket-files-no-worktree">
+              <PanelEmptyState illustration="folder" status="unavailable" title="No worktree yet" />
+            </div>
           ) : (
             read.hasData && (
               <FileTree
                 key={treeEpoch}
+                scrollingHeading={scrollingHeading}
                 entries={merged}
                 initialFolder={view.cwd}
                 projectId={projectId}
                 ticketId={ticketId}
                 query={view.query}
+                onClearSearch={() => setView({ ...view, query: "" })}
                 selected={selected}
                 controls={available ? mutations : undefined}
                 onOpen={onOpen}
@@ -263,7 +272,7 @@ function NavigatorScope({
       )}
       {truncated && (
         <p role="status" className="shrink-0 px-4 py-2 text-ui text-muted-foreground">
-          File limit reached. Use Open file to find more.
+          File limit reached
         </p>
       )}
       {available &&

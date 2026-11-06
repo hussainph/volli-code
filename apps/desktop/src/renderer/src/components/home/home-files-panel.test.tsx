@@ -187,7 +187,8 @@ describe("HomeFilesPanel across a project switch", () => {
     expect(after?.textContent).toContain("Other Repo");
     expect(after?.textContent).not.toContain("Volli Code");
     expect(rows()).toHaveLength(0);
-    expect([...document.querySelectorAll('[data-testid="file-tree-loading"]')]).toHaveLength(1);
+    expect(document.querySelector('[data-testid="file-tree-loading"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("No files");
   });
 
   it("lets no late listing from the old project land on the new one", async () => {
@@ -202,7 +203,8 @@ describe("HomeFilesPanel across a project switch", () => {
     expect(document.body.textContent).not.toContain("stale.md");
     expect(rows()).toHaveLength(0);
     // Still the new project's own first read, not a landed one.
-    expect([...document.querySelectorAll('[data-testid="file-tree-loading"]')]).toHaveLength(1);
+    expect(document.querySelector('[data-testid="file-tree-loading"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("No files");
   });
 
   it("keeps each project's selected folder and filter while indexing the whole checkout", async () => {
@@ -239,7 +241,8 @@ describe("HomeFilesPanel", () => {
     // tab has already named (VC-406).
     expect(html).toContain("Volli Code");
     expect(html).not.toContain("Project files");
-    expect(html).toContain('aria-label="Loading files"');
+    expect(html).not.toContain('aria-label="Loading files"');
+    expect(html).not.toContain("No files");
   });
 
   it("offers New File in its header — the Home half of VC-191's both-scopes rule", () => {
@@ -315,6 +318,6 @@ describe("HomeFilesList", () => {
   });
 
   it("shows the shared empty hint for an empty folder", () => {
-    expect(render("empty", [])).toContain("Nothing here yet");
+    expect(render("empty", [])).toContain("No files");
   });
 });

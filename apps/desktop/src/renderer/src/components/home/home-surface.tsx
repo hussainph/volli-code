@@ -116,7 +116,7 @@ import {
   topStripTabIds,
 } from "@renderer/components/split/split-tab-groups";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
-import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
+import { InspectorShell } from "@renderer/components/sidebar/inspector-shell";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
@@ -495,10 +495,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // has none: a repository navigator or Session facts over the board would be
   // about an object that is not in front.
   const railCollapsed = useUiStore((state) => state.railCollapsed);
-  const railWidth = useUiStore((state) => state.railWidth);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-  const railVisible =
-    stripVisible && !boardTabActive && activeBrowserTab === undefined && !railCollapsed;
+  const railVisible = stripVisible && !boardTabActive && activeBrowserTab === undefined;
 
   // ── Starting a Session ───────────────────────────────────────────────────
   const startingTerminal = useSessionsStore((state) =>
@@ -518,10 +516,14 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // nothing at all, silently.
   const createBrowser = React.useCallback(async () => {
     if (selectedId === null) return;
+    const destination =
+      useProjectUiStore.getState().byProject[selectedId]?.homeSplitView?.focusedPaneId;
     await openBrowserTab(browserApi, { projectId: selectedId }, (tabId) => {
+      if (destination !== undefined)
+        useProjectUiStore.getState().focusHomePane(selectedId, destination);
       releaseActive();
       // A new Browser Tab OPENS into the shown group's focused pane.
-      useProjectUiStore.getState().openHomeTab(selectedId, tabId);
+      useProjectUiStore.getState().openHomeTab(selectedId, tabId, destination);
     });
   }, [browserApi, releaseActive, selectedId]);
 
@@ -603,26 +605,26 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             return;
           }
           useBrowserTabsStore.getState().remove(tabId);
-          leaveHomeStrip(selectedId, tabId);
+          leaveHomeStrip(selectedId, tabId, orderedTabIds);
         })
         .catch((reason: unknown) => {
           toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
         });
     },
-    [browserApi, selectedId],
+    [browserApi, selectedId, orderedTabIds],
   );
 
   /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
   const hideBrowser = React.useCallback(
     (tabId: string) => {
       if (selectedId === null) return;
-      void hideBrowserTab(browserApi, tabId, () => leaveHomeStrip(selectedId, tabId)).catch(
-        (reason: unknown) => {
-          toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
-        },
-      );
+      void hideBrowserTab(browserApi, tabId, () =>
+        leaveHomeStrip(selectedId, tabId, orderedTabIds),
+      ).catch((reason: unknown) => {
+        toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
+      });
     },
-    [browserApi, selectedId],
+    [browserApi, selectedId, orderedTabIds],
   );
 
   const handleClose = React.useCallback(
@@ -973,14 +975,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   };
 
   const rail =
-    railVisible && selected !== null ? (
-      <aside
-        className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
-        style={{ width: railWidth }}
-      >
-        <RailResizeHandle />
+    selected !== null ? (
+      <InspectorShell enabled={railVisible} owner="home">
         <HomeRail project={selected} activeTabId={activeTabId} />
-      </aside>
+      </InspectorShell>
     ) : null;
 
   return (
@@ -1026,6 +1024,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
               releaseActive();
               useProjectUiStore.getState().ungroupHome(selectedId, groupId);
             }}
+            onTakeOutTab={ungroupLocalTab}
+            onHideBrowser={hideBrowser}
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
             fileTabs={fileTabs}
@@ -1096,6 +1096,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                         projectId={selectedId}
                         tabIds={pane.tabIds}
                         activeTabId={pane.activeTabId ?? ""}
+                        onTakeOutTab={ungroupLocalTab}
+                        onHideBrowser={hideBrowser}
                         terminalTabs={terminalTabs}
                         chatIds={openChatIds}
                         fileTabs={fileTabs}
@@ -1206,6 +1208,8 @@ interface HomeStripProps {
   groups?: readonly TabGroup[];
   shownGroupId?: string | null;
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tabId: string): void;
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
@@ -1249,6 +1253,8 @@ function HomeTabs({
     groups: strip.groups,
     shownGroupId: strip.shownGroupId,
     onUngroup: strip.onUngroup,
+    onTakeOutTab: strip.onTakeOutTab,
+    onHideBrowser: strip.onHideBrowser,
     activeTabId: strip.activeTabId,
     onReorder: strip.onReorder,
     onSelect: strip.onSelect,

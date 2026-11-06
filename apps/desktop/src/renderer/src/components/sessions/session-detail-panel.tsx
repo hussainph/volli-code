@@ -7,13 +7,15 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  * Presentational and store-free: the saved record is a compact icon/value list.
  * It shows no terminal-shaped empty frame and no tutorial box beneath the facts.
  */
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { FlagCheckeredIcon } from "@phosphor-icons/react/dist/csr/FlagCheckered";
-import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
-import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import type { Icon } from "@phosphor-icons/react";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  RefreshIcon,
+  ClockIcon,
+  FinishedIcon,
+  FolderIcon,
+  SignOutIcon,
+  type IconComponent as Icon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
 
 import type { TerminalHistoryDetail } from "@volli/session-presentation";
 
@@ -92,7 +94,7 @@ export function SessionDetailPanel({
         />
         {detail.endedAt !== null ? (
           <DetailRow
-            icon={FlagCheckeredIcon}
+            icon={FinishedIcon}
             label="Ended"
             value={formatStamp(detail.endedAt, { time: true })}
           />
@@ -114,13 +116,13 @@ export function SessionDetailPanel({
             this one and never replaces it. */}
         {detail.actions.recreate !== null ? (
           <Button variant="default" disabled={busy} onClick={onNewTerminal}>
-            <TerminalWindowIcon aria-hidden />
+            <TerminalIcon aria-hidden />
             New terminal here
           </Button>
         ) : null}
         {detail.actions.resume !== null ? (
           <Button variant="outline" disabled={busy} onClick={onResume}>
-            <ArrowClockwiseIcon aria-hidden />
+            <RefreshIcon aria-hidden />
             Resume session
           </Button>
         ) : null}

@@ -1,8 +1,6 @@
 import * as React from "react";
-import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
-import { ArrowUpIcon } from "@phosphor-icons/react/dist/csr/ArrowUp";
-import { StackIcon } from "@phosphor-icons/react/dist/csr/Stack";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { ArrowDownIcon, SendIcon, LayersIcon, AutomationIcon } from "@renderer/components/ui/icon";
+
 import type { SessionUsageSummary } from "@volli/shared";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { UsageTokenCount, tokenCountLabel } from "./usage-token-count";
@@ -33,10 +31,10 @@ const CLASS_STYLE: Record<UsageClassId, React.CSSProperties> = {
   } as React.CSSProperties,
 };
 const ICONS = {
-  cacheRead: StackIcon,
+  cacheRead: LayersIcon,
   input: ArrowDownIcon,
-  cacheWrite: LightningIcon,
-  output: ArrowUpIcon,
+  cacheWrite: AutomationIcon,
+  output: SendIcon,
 };
 
 type Segment = ReturnType<typeof usageBarSegments>[number];
@@ -151,18 +149,27 @@ export const UsageBar = React.memo(function UsageBar({
 export function UsageClassRows({ summary }: { summary: SessionUsageSummary }) {
   const segments = usageBarSegments(summary);
   if (segments.length === 0) return null;
+  const total = totalUsageTokens(summary);
   return (
-    <dl className="flex flex-col gap-2">
+    <dl className="shrink-0">
       {segments.map((segment) => (
-        <div key={segment.id} className="flex items-center gap-2">
+        <div key={segment.id} className="flex min-h-7 items-center gap-2">
           <span
             aria-hidden
             style={{ background: `var(--usage-ink)`, ...CLASS_STYLE[segment.id] }}
             className="size-2 shrink-0 rounded-full"
           />
-          <dt className="min-w-0 flex-1 truncate text-ui text-muted-foreground">{segment.label}</dt>
-          <dd className="shrink-0 text-ui text-foreground">
+          <dt
+            title={segment.label}
+            className="min-w-0 flex-1 truncate text-ui text-muted-foreground"
+          >
+            {segment.label}
+          </dt>
+          <dd className="flex shrink-0 items-baseline gap-2 text-right text-ui tabular-nums text-foreground">
             <UsageTokenCount tokens={segment.tokens} />
+            <span className="w-12 text-right text-label tabular-nums text-muted-foreground">
+              {((segment.tokens / total) * 100).toFixed(1)}%
+            </span>
           </dd>
         </div>
       ))}

@@ -19,7 +19,8 @@ import { useState } from "react";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
-import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
+import { DownloadIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, summarizeUpdateFailure, UPDATE_FAILURE_FALLBACK } from "@volli/shared";
 
 import { Spinner } from "@renderer/components/ui/spinner";
@@ -42,7 +43,7 @@ function requestCheck(): void {
 
 function failureLabel(error: string | null): string {
   const summary = summarizeUpdateFailure(error ?? UPDATE_FAILURE_FALLBACK).replace(/\.$/u, "");
-  return `Update check failed: ${summary}${summary.endsWith("…") ? "" : "."} Select for details.`;
+  return `Update check failed: ${summary}`;
 }
 
 export function UpdateButton() {
@@ -60,8 +61,8 @@ export function UpdateButton() {
         ? `Downloading ${state.targetVersion ?? "update"} (${Math.round(state.percent ?? 0)}%)`
         : state.phase === "downloaded"
           ? state.targetVersion === null
-            ? "Update ready. Select to install."
-            : `Volli Code ${state.targetVersion} is ready. Select to install.`
+            ? "Install update"
+            : `Install Volli Code ${state.targetVersion}`
           : state.phase === "error"
             ? failureLabel(state.error)
             : "Check for updates";
@@ -99,7 +100,7 @@ export function UpdateButton() {
                 state.phase === "error" ? "text-destructive" : "text-sidebar-foreground",
               )}
             >
-              {busy ? <Spinner /> : <DownloadSimpleIcon className="size-4" />}
+              {busy ? <Spinner /> : <DownloadIcon className="size-4" />}
               {state.phase === "downloaded" && (
                 // The badge that keeps a dismissed update visible: the attention
                 // tone, because a staged install is a decision waiting on a human

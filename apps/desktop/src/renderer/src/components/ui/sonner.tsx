@@ -1,9 +1,12 @@
 import * as React from "react";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { SpinnerGapIcon } from "@phosphor-icons/react/dist/csr/SpinnerGap";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  SuccessIcon,
+  InfoIcon,
+  SpinnerIcon,
+  WarningIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 import { cn } from "@renderer/lib/utils";
@@ -21,19 +24,17 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
     <Sonner
       theme={appearance}
       className="toaster group"
-      // The one surface in the app where the glyph is MEANT to out-weigh its
-      // sentence: a toast is read as a colour first and a string second, and it
-      // is gone before a second read. Everywhere else outline is the baseline.
-      // The spinner is the exception to the exception — a filled spinner-gap is
-      // a disc with no gap to rotate — so it takes the weight step instead.
+      position="bottom-right"
+      gap={6}
+      // The error is the exception; routine confirmations keep outline glyphs.
       icons={{
-        success: <CheckCircleIcon weight="fill" className="size-4" />,
-        info: <InfoIcon weight="fill" className="size-4" />,
-        warning: <WarningCircleIcon weight="fill" className="size-4" />,
-        error: <XCircleIcon weight="fill" className="size-4" />,
+        success: <SuccessIcon className="size-4" />,
+        info: <InfoIcon className="size-4" />,
+        warning: <WarningIcon className="size-4" />,
+        error: <ErrorIcon className="size-4 text-destructive" />,
         loading: (
-          <SpinnerGapIcon
-            weight="bold"
+          <SpinnerIcon
+            strokeWidth={2.25}
             className="size-4 animate-spin motion-reduce:animate-none"
           />
         ),
@@ -44,8 +45,14 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
           ...toastOptions?.classNames,
           toast: cn("material-floating", toastOptions?.classNames?.toast),
           description: cn("!text-muted-foreground", toastOptions?.classNames?.description),
-          actionButton: cn("!cursor-default", toastOptions?.classNames?.actionButton),
-          cancelButton: cn("!cursor-default", toastOptions?.classNames?.cancelButton),
+          actionButton: cn(
+            "!cursor-default !bg-(--accent-selected) !text-primary-text",
+            toastOptions?.classNames?.actionButton,
+          ),
+          cancelButton: cn(
+            "!cursor-default !bg-(--accent-tint) !text-foreground",
+            toastOptions?.classNames?.cancelButton,
+          ),
           closeButton: cn("!cursor-default", toastOptions?.classNames?.closeButton),
         },
       }}
@@ -54,7 +61,7 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--foreground)",
           "--normal-border": "var(--border)",
-          "--border-radius": "var(--radius)",
+          "--border-radius": "var(--radius-menu)",
         } as React.CSSProperties
       }
       {...props}

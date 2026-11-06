@@ -1,3 +1,8 @@
+import {
+  paneResizeActive,
+  usePaneResizeActive,
+  onPaneResizeSettled,
+} from "@renderer/lib/pane-resize";
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
 
@@ -101,6 +106,7 @@ function useRendererOverlayActive(
       });
     };
     const schedule = (): void => {
+      if (paneResizeActive()) return;
       overlayScan = undefined;
       queue();
     };
@@ -144,6 +150,7 @@ function useRendererOverlayActive(
       "animationcancel",
     ];
     read();
+    const resizeSettled = onPaneResizeSettled(schedule);
     const observer = new MutationObserver(schedule);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
     const resize = new ResizeObserver(schedule);
@@ -155,6 +162,7 @@ function useRendererOverlayActive(
     return () => {
       observer.disconnect();
       resize.disconnect();
+      resizeSettled();
       window.removeEventListener("resize", schedule);
       document.removeEventListener("scroll", schedule, true);
       for (const event of motionEvents) document.removeEventListener(event, motion, true);
@@ -209,8 +217,10 @@ export function BrowserPane({
   const [error, setError] = React.useState<string | null>(null);
   const [frames, setFrames] = React.useState<readonly BrowserTabCaptureFrame[]>([]);
   const [captureSettled, setCaptureSettled] = React.useState(false);
-  const overlayActive = useRendererOverlayActive(anchorRef, visible);
-  const planeVisible = planeVisibility({ visible, overlayActive, captureSettled });
+  const paneResizing = usePaneResizeActive();
+  const rendererOverlay = useRendererOverlayActive(anchorRef, visible);
+  const overlayActive = rendererOverlay || paneResizing;
+  const planeVisible = !paneResizing && planeVisibility({ visible, overlayActive, captureSettled });
   const paintPixels = shouldPaintPlanePixels({ visible, frameCount: frames.length });
 
   // A state push should move an untouched address bar but must not erase an
@@ -265,11 +275,30 @@ export function BrowserPane({
     return () => window.cancelAnimationFrame(frame);
   }, [blank, tab.tabId]);
 
-  // Photograph the plane WHEN an overlay opens, so the stand-in is the frame
-  // the person was actually looking at. Capturing ahead of time was cheaper but
-  // dishonest: a pre-taken frame is stale by however long ago it was taken, and
-  // a hover-opened overlay never even had a gesture to ride on.
-  //
+  React.useEffect(() => setFrames([]), [tab.tabId, tab.url]);
+
+  // Cache one settled-page still before a structural intent can hide the
+  // native plane. Pin/unpin consumes it without capture/readback in the push;
+  // native bounds still wait for the shared resize fence. This is a stand-in,
+  // not a live page: ordinary overlay opens retain their fresh-capture path.
+  React.useEffect(() => {
+    if (!visible || tab.loading || paneResizing || rendererOverlay || frames.length > 0) return;
+    let live = true;
+    const warm = window.setTimeout(() => {
+      if (paneResizeActive()) return;
+      void api
+        .capture({ tabId: tab.tabId })
+        .then((result) => {
+          if (live && result.ok) setFrames(result.frames);
+        })
+        .catch(() => {});
+    }, PLANE_CAPTURE_DEADLINE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(warm);
+    };
+  }, [api, tab.tabId, tab.url, tab.loading, visible, paneResizing, rendererOverlay, frames.length]);
+
   // No toast on failure. Nobody asked for this capture, no person is waiting on
   // it, and the previous frames stay usable — the exception AGENTS.md
   // documents. A toast is also itself an overlay, so failing loudly here would
@@ -278,6 +307,12 @@ export function BrowserPane({
     if (!visible) {
       setFrames([]);
       setCaptureSettled(false);
+      return;
+    }
+    if (paneResizing) {
+      // Never schedule GPU readback during the live-width spring. The cached
+      // pixels were already painted under the native plane at the intent edge.
+      setCaptureSettled(true);
       return;
     }
     if (!overlayActive) {
@@ -306,7 +341,7 @@ export function BrowserPane({
       live = false;
       window.clearTimeout(deadline);
     };
-  }, [api, overlayActive, tab.tabId, visible]);
+  }, [api, overlayActive, paneResizing, tab.tabId, visible]);
 
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -327,13 +362,17 @@ export function BrowserPane({
     // The controller invokes this lazy read only for the latest observation in
     // a frame, avoiding a synchronous layout read for notifications it drops.
     const readBounds = () => anchor.getBoundingClientRect();
-    const measure = () => controller.reportBounds(readBounds);
+    const measure = () => {
+      if (!paneResizeActive()) controller.reportBounds(readBounds);
+    };
+    const offResize = onPaneResizeSettled(measure);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(anchor);
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
+      offResize();
       window.removeEventListener("resize", measure);
       controller.dispose();
       if (controllerRef.current === controller) controllerRef.current = null;

@@ -39,11 +39,11 @@ export interface Canvas {
   /** One to `MAX_STOPS`, in the order they were added. */
   stops: CanvasStop[];
   /**
-   * The dominant pool: bigger, later-fading, and the one every other color —
-   * the token ladder included — is derived from.
+   * The stop used for the window's neutral floor and editing harmony.
+   * The accent follows the first authored stop; pool footprints follow order.
    */
   primaryIndex: number;
-  /** 0 = near-neutral wash, 1 = as saturated as the per-mode caps allow. */
+  /** 0 = no pools, 1 = full pool opacity; authored hues are unchanged. */
   vibrancy: number;
   /** 0 = no noise layer at all. */
   grain: number;

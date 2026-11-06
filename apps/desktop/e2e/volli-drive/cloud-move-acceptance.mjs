@@ -127,9 +127,13 @@ async function closeSheet(name) {
   await click("button", name);
   await waitUntil(
     `the move sheet to close after ${name}`,
-    async () => !/^\s*- '?(?:alert)?dialog\b/mu.test((await drive("snapshot")).text),
+    async () => !/heading "(?:Move|Moves) to Volli Cloud"/u.test((await drive("snapshot")).text),
     { timeout: 10_000, interval: 100 },
   );
+  // The move sheet has its own lifetime. Settings deliberately survives it;
+  // close that panel explicitly before returning to the underlying workspace.
+  if (visibleControls((await drive("snapshot")).text, "button", "Close Settings").length)
+    await click("button", "Close Settings");
 }
 async function assertPreflightCounts() {
   let prepared;
@@ -244,7 +248,8 @@ try {
   await step("Local ticket Session and worktree", async () => {
     await wait(MOVE_PROJECT.name);
     await openTicket("MOV-1");
-    await click("button", "New chat", { first: true });
+    await click("button", "Open a tab", { first: true });
+    await click("menuitem", "Chat ⌘T");
     await send("Move proof before the move");
     const sessions = await sql("SELECT id, ticket_id FROM sessions WHERE role='ticket'");
     assert.equal(sessions.length, 1);
@@ -354,13 +359,13 @@ try {
       deadline,
     );
     await closeSheet("Close");
-    await wait("Move Project is read-only while it moves to Volli Cloud.");
+    await wait("Moving Move Project to Volli Cloud · Read-only");
     await click("button", "Home", { first: true });
     const navigation = await drive("snapshot");
     assert.ok(
       visibleControls(navigation.text, "button", "Move to Volli Cloud progress").length === 1,
     );
-    assert.ok(navigation.text.includes("Move Project is read-only while it moves to Volli Cloud."));
+    assert.ok(navigation.text.includes("Moving Move Project to Volli Cloud · Read-only"));
     await drive("screenshot", { name: "read-only-banner-and-durable-row" });
     await click("button", "Move to Volli Cloud progress");
     await wait("Moves to Volli Cloud");
@@ -517,7 +522,8 @@ try {
       );
       assert.ok(before, "the moved Session is visible before resume");
       await send("Move proof after the move");
-      await click("button", "New chat", { first: true });
+      await click("button", "Open a tab", { first: true });
+      await click("menuitem", "Chat ⌘T");
       await send("New cloud Session after move");
       const sessions = await read("sessions:list", listing);
       assert.ok(

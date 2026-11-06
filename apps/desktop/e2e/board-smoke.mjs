@@ -148,9 +148,11 @@ function cardById(page, id) {
  */
 async function columnCount(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-      (div) => div.getClientRects().length > 0,
-    );
+    const headers = Array.from(
+      document.querySelectorAll(
+        "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+      ),
+    ).filter((div) => div.getClientRects().length > 0);
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -165,9 +167,11 @@ async function columnCount(page, label) {
 /** The board-column header box for `label`, excluding matching sidebar metadata. */
 async function columnHeaderBox(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-      (div) => div.getClientRects().length > 0,
-    );
+    const headers = Array.from(
+      document.querySelectorAll(
+        "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+      ),
+    ).filter((div) => div.getClientRects().length > 0);
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -186,9 +190,11 @@ async function columnHeaderBox(page, label) {
 async function boardStateByColumn(page) {
   return page.evaluate(() => {
     const labels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-      (div) => div.getClientRects().length > 0,
-    );
+    const headers = Array.from(
+      document.querySelectorAll(
+        "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+      ),
+    ).filter((div) => div.getClientRects().length > 0);
     const state = {};
     for (const label of labels) {
       const header = headers.find((div) => {
@@ -286,9 +292,11 @@ async function goToBoard(page) {
  */
 async function firstCardIdInColumn(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-      (div) => div.getClientRects().length > 0,
-    );
+    const headers = Array.from(
+      document.querySelectorAll(
+        "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+      ),
+    ).filter((div) => div.getClientRects().length > 0);
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -302,9 +310,11 @@ async function firstCardIdInColumn(page, label) {
 async function columnHasCard(page, label, id) {
   return page.evaluate(
     ({ columnLabel, cardId }) => {
-      const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-        (div) => div.getClientRects().length > 0,
-      );
+      const headers = Array.from(
+        document.querySelectorAll(
+          "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+        ),
+      ).filter((div) => div.getClientRects().length > 0);
       const header = headers.find((div) => {
         const first = div.children[0];
         return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -321,9 +331,11 @@ async function columnHasCard(page, label, id) {
 /** Every card id in a board column, top to bottom. */
 async function columnCardIds(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-      (div) => div.getClientRects().length > 0,
-    );
+    const headers = Array.from(
+      document.querySelectorAll(
+        "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+      ),
+    ).filter((div) => div.getClientRects().length > 0);
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -338,9 +350,8 @@ async function columnCardIds(page, label) {
  * The ticket ids listed in one of the sidebar's session bands, in DOM order.
  * `null` when that band is not on screen at all.
  *
- * Anchored on `data-session-band` rather than on heading text. The bands' own
- * labels are uppercased by CSS from sentence-case strings, so matching them
- * would be matching a typographic treatment; and a ticketless row prints a
+ * Anchored on `data-session-band` rather than on heading text, because a
+ * label is copy and the attribute is the seam; and a ticketless row prints a
  * globe instead of an id, so a row is not guaranteed to contribute an entry
  * here at all — which is exactly why the attribute exists.
  *
@@ -362,7 +373,9 @@ async function sidebarSessionIds(page, band = "active") {
 
 /**
  * The count a session band's header prints — the built listing's own row count,
- * read back off the rendered heading. `null` when that band is not on screen.
+ * read back off the rendered heading. `0` when the header draws no count (Active
+ * never does, and Previous drops a zero), `null` when that band is not on
+ * screen.
  *
  * Worth asserting separately from the ids above because the two come from
  * different halves of the seam: the count is `listing.<band>.length` straight
@@ -371,9 +384,10 @@ async function sidebarSessionIds(page, band = "active") {
  */
 async function sidebarBandCount(page, band) {
   return page.evaluate((name) => {
-    const header = document.querySelector(`[data-session-band="${name}"]`)?.firstElementChild;
-    const raw = header?.children[1]?.textContent?.trim();
-    return raw === undefined ? null : Number(raw);
+    const group = document.querySelector(`[data-session-band="${name}"]`);
+    if (!group) return null;
+    const raw = group.querySelector("[data-band-count]")?.textContent?.trim();
+    return raw === undefined ? 0 : Number(raw);
   }, band);
 }
 
@@ -410,11 +424,12 @@ async function main() {
     // ===================================================================
     await attempt(
       0,
-      "Fresh profile: one textured project-start canvas with a display heading and text-only action",
+      "Fresh profile: one textured project-start canvas with a compact heading and tonal action",
       async () => {
         const state = page.locator("[data-empty-projects-state]");
-        const primaryAction = page.getByRole("button", { name: "Add Project…", exact: true });
-        const heading = page.getByRole("heading", { name: "Add your first project", exact: true });
+        // The rail keeps its compact shortcut; the canvas owns the one primary action.
+        const primaryAction = state.getByRole("button", { name: "Add project", exact: true });
+        const heading = page.getByRole("heading", { name: "No projects", exact: true });
         const oldSidebarPrompt = page.getByText("Add a project to get started", { exact: true });
         const oldSidebarHeader = page.getByText("No project selected", { exact: true });
         const texture = await state.evaluate((element) => {
@@ -429,10 +444,9 @@ async function main() {
         const ok =
           (await state.count()) === 1 &&
           (await primaryAction.count()) === 1 &&
-          (await primaryAction.locator("svg").count()) === 0 &&
-          // text-title (24px) — the app's largest step since the type-scale
-          // language landed (DESIGN.md); the old >=32 display size is gone.
-          headingSize >= 24 &&
+          (await primaryAction.locator("svg").count()) === 1 &&
+          // EMPTY_PAGE uses the shared 18px heading; page mastheads stay 24px.
+          headingSize === 18 &&
           (await oldSidebarPrompt.count()) === 0 &&
           (await oldSidebarHeader.count()) === 0 &&
           texture.canvas !== "none" &&
@@ -495,7 +509,7 @@ async function main() {
         }
         const cardCount = await page.locator("article").filter({ visible: true }).count();
         const bareState = await page
-          .getByText(/Write the first ticket|model provider to start|default model to start/)
+          .getByText(/^(No tickets yet|No model provider|No default model)$/)
           .count();
         const volliKeys = await volliLocalStorageKeys(page);
         const ok =
@@ -585,12 +599,12 @@ async function main() {
     // === 3. Collapsed rail: Empty caption + Done starts as a pill ============
     await attempt(
       3,
-      'Collapsed rail: "Empty" caption present, Done is a pill (not a column)',
+      "Collapsed rail: no redundant Empty caption, Done is a named pill (not a column)",
       async () => {
         const emptyCaption = await page.getByText("Empty", { exact: true }).count();
         const doneAsColumn = await columnCount(page, "Done");
         const donePillText = await page.getByText("Done", { exact: true }).count();
-        const ok = emptyCaption >= 1 && doneAsColumn === null && donePillText >= 1;
+        const ok = emptyCaption === 0 && doneAsColumn === null && donePillText >= 1;
         return {
           ok,
           detail: `empty=${emptyCaption} doneColumnCount=${doneAsColumn} donePillTextCount=${donePillText}`,
@@ -672,7 +686,7 @@ async function main() {
       7,
       'Label chip: toggling "board" narrows to its 1 card, toggling off restores 11',
       async () => {
-        await page.getByRole("button", { name: "Label", exact: true }).click();
+        await page.getByRole("button", { name: "Labels", exact: true }).click();
         await sleep(200);
         const boardLabel = page.getByRole("menuitemcheckbox", { name: "board", exact: true });
         await boardLabel.click();
@@ -1127,10 +1141,9 @@ async function main() {
     // manual order is still the seed order (VC-5, VC-6, VC-7) and VC-6 ("Harden
     // terminal engine reconnect") is its lone High.
 
-    // The Ordering chip lives in the header's right-side cluster (`ml-auto`);
-    // scoping to it disambiguates from the FilterBar's "Priority" facet button,
-    // which shares the chip's label once Priority ordering is picked.
-    const orderingChip = page.locator("div.ml-auto.shrink-0 button").first();
+    // Facets now share the right-side cluster. Ordering is its direct trigger;
+    // the FilterBar's "Priority" trigger is nested inside the facet group.
+    const orderingChip = page.locator('header > div > button[data-slot="dropdown-menu-trigger"]');
 
     // === 12. Ordering: Priority re-sorts a column, Manual restores it =======
     await attempt(
@@ -1294,13 +1307,54 @@ async function main() {
         // The retired bare row's own words, gone from the app entirely.
         const noBareRows =
           (await page.getByText("No live session", { exact: false }).count()) === 0;
+        // Empty source-list bands are quiet: headings, truthful counts, no
+        // synthetic row or call to action in place of a Session.
         const emptyCopy =
-          (await page.getByText("No active sessions", { exact: true }).count()) === 1 &&
-          (await page.getByText("Nothing yet", { exact: true }).count()) === 1;
+          (await page.getByRole("heading", { name: "Active", exact: true }).count()) === 1 &&
+          (await page.getByRole("heading", { name: "Previous", exact: true }).count()) === 1;
         const ok = boardHasWork && noTicketRows && bandCounts && noBareRows && emptyCopy;
         return {
           ok,
           detail: `doing=${JSON.stringify(doingIds)} activeIds=${JSON.stringify(activeIds)} previousIds=${JSON.stringify(previousIds)} bandCounts=${bandCounts} noBareRows=${noBareRows} emptyCopy=${emptyCopy}`,
+        };
+      },
+    );
+
+    await attempt(
+      16.5,
+      "fixed icon navigator sits below feature nav with roving arrow selection",
+      async () => {
+        const selector = page.getByRole("tablist", { name: "Sidebar content", exact: true });
+        const sessions = selector.getByRole("tab", { name: "Sessions", exact: true });
+        const files = selector.getByRole("tab", { name: "Files", exact: true });
+        const geometry = await selector.evaluate((row) => ({
+          height: row.getBoundingClientRect().height,
+          text: row.textContent,
+          inHeader: row.closest('[data-slot="sidebar-header"]') !== null,
+          targets: [...row.querySelectorAll("button")].map((button) => ({
+            height: button.getBoundingClientRect().height,
+            width: button.getBoundingClientRect().width,
+            glyph: button.querySelector("svg").getBoundingClientRect().width,
+          })),
+        }));
+        await sessions.focus();
+        await page.keyboard.press("ArrowRight");
+        const fileSelected = await files.getAttribute("aria-selected");
+        const focus = await files.evaluate((button) => document.activeElement === button);
+        await page.keyboard.press("ArrowLeft");
+        const sessionSelected = await sessions.getAttribute("aria-selected");
+        return {
+          ok:
+            geometry.height === 22 &&
+            geometry.text === "" &&
+            !geometry.inHeader &&
+            geometry.targets.every(
+              (target) => target.width === 24 && target.height === 24 && target.glyph === 14,
+            ) &&
+            fileSelected === "true" &&
+            sessionSelected === "true" &&
+            focus,
+          detail: JSON.stringify({ geometry, fileSelected, sessionSelected, focus }),
         };
       },
     );
@@ -1310,7 +1364,7 @@ async function main() {
     // back through the bootstrap payload, per the migration.
     await attempt(
       17,
-      "UI zoom command scales content (~1.1x) while the 36px chrome band stays put; uiScale persists to app_state",
+      "UI zoom command scales content (~1.1x) while the 46px chrome band stays put; uiScale persists to app_state",
       async () => {
         const band = page.locator(".app-region-drag").first();
         const content = cardById(page, "VC-8");
@@ -1347,9 +1401,9 @@ async function main() {
         }
 
         const bandStable =
-          Math.abs(bandBefore.height - 36) < 1 &&
-          Math.abs(bandZoomed.height - 36) < 1 &&
-          Math.abs(bandReset.height - 36) < 1;
+          Math.abs(bandBefore.height - 46) < 1 &&
+          Math.abs(bandZoomed.height - 46) < 1 &&
+          Math.abs(bandReset.height - 46) < 1;
         const growth = contentZoomed.height / contentBefore.height;
         const grew = growth > 1.07 && growth < 1.13;
         const restored = Math.abs(contentReset.height - contentBefore.height) < 1;
@@ -1495,7 +1549,7 @@ async function main() {
 
         // VC-57 renamed the user-facing word to "project"; the rail's
         // internal names followed (data-project-rail).
-        await page.getByRole("button", { name: "Hide project switcher" }).click();
+        await page.keyboard.press("Meta+Shift+s");
         await sleep(400);
         const railHidden = await projectRail.boundingBox();
         const canvasExpanded = await mainCanvas.boundingBox();
@@ -1508,10 +1562,10 @@ async function main() {
         await sleep(1500);
         await goToBoard(page);
         const hiddenPersisted = await page.locator("[data-project-rail]").boundingBox();
-        const showToggle = page.getByRole("button", { name: "Show project switcher" });
+        // The same layout shortcut is reachable with the rail hidden.
         const persisted = hiddenPersisted !== null && hiddenPersisted.width < 1;
 
-        await showToggle.click();
+        await page.keyboard.press("Meta+Shift+s");
         await sleep(400);
         const railRestored = await page.locator("[data-project-rail]").boundingBox();
         const canvasRestored = await page.locator('[data-slot="sidebar-inset"]').boundingBox();

@@ -158,7 +158,7 @@ try {
     },
   );
 
-  await attempt(2, "the nav is Home / Configure — Sessions and Files are both gone", async () => {
+  await attempt(2, "the nav keeps Home; Settings owns configuration", async () => {
     // The sidebar's Sessions/Files segmented toggle picks what the sidebar
     // lists below the nav; it is a value, not a destination, so its two
     // buttons are not nav items.
@@ -171,9 +171,16 @@ try {
     const home = await navButtons("Home");
     const configure = await navButtons("Configure");
     const board = await navButtons("Board");
+    const settings = await navButtons("Settings");
     return {
-      ok: sessions === 0 && files === 0 && home === 1 && configure === 1 && board === 0,
-      detail: `sessionsNav=${sessions} filesNav=${files} homeNav=${home} configureNav=${configure} boardNav=${board}`,
+      ok:
+        sessions === 0 &&
+        files === 0 &&
+        home === 1 &&
+        configure === 0 &&
+        board === 0 &&
+        settings === 1,
+      detail: `sessionsNav=${sessions} filesNav=${files} homeNav=${home} configureNav=${configure} boardNav=${board} settingsNav=${settings}`,
     };
   });
 

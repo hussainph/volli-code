@@ -58,7 +58,6 @@ async function mount(options: {
         statuses={["needs_review", "done"]}
         dragActive
         onExpand={() => {}}
-        animateEnter={false}
         offeredFor={options.offeredFor}
         dimmedFor={options.dimmedFor}
       />,
@@ -73,6 +72,12 @@ function columnUnder(element: Element | null): string | null {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+});
+
+it("names each collapsed column without a stray Empty heading", async () => {
+  await mount({});
+  expect(container?.textContent).toContain("Done");
+  expect(container?.textContent).not.toContain("Empty");
 });
 
 afterEach(async () => {

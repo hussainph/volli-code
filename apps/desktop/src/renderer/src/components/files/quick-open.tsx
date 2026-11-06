@@ -1,3 +1,4 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
 /**
  * Quick-open (⌘P) — jump to a file by name (plan §4.4, wall W4).
  *
@@ -23,8 +24,8 @@
  * in the same tick) and could be read stale.
  */
 import * as React from "react";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { FileIcon, SearchIcon } from "@renderer/components/ui/icon";
+
 import { Command } from "cmdk";
 import { errorMessage, type IndexedFile } from "@volli/shared";
 
@@ -34,7 +35,6 @@ import {
   quickOpenScope,
   quickOpenSurfaceFiles,
 } from "@renderer/components/files/quick-open-model";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
   COMMAND_FOOTER,
   COMMAND_OVERLAY_FRAME,
@@ -87,6 +87,7 @@ export function QuickOpen({
   );
 
   const [query, setQuery] = React.useState("");
+  const searchInput = React.useRef<HTMLInputElement>(null);
   const [index, setIndex] = React.useState<readonly IndexedFile[]>([]);
   const [truncated, setTruncated] = React.useState(false);
   // The gesture that is about to select: ⌘Enter, or a ⌘-click. See the header
@@ -99,6 +100,15 @@ export function QuickOpen({
   const scopeKind = scope?.kind ?? null;
   const scopeProjectId = scope?.projectId ?? null;
   const scopeTicketId = scope?.kind === "ticket" ? scope.ticketId : null;
+  const destination = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    const ui =
+      scopeProjectId === null ? undefined : useProjectUiStore.getState().byProject[scopeProjectId];
+    destination.current = !open
+      ? undefined
+      : (scopeTicketId === null ? ui?.homeSplitView : ui?.ticketTabs[scopeTicketId]?.splitView)
+          ?.focusedPaneId;
+  }, [open, scopeProjectId, scopeTicketId]);
   React.useEffect(() => {
     // A remote project's files are on its host (VC-711): nothing to open here.
     if (
@@ -150,6 +160,11 @@ export function QuickOpen({
       pinIntent.current = false;
       if (scope === null) return;
       const projectUi = useProjectUiStore.getState();
+      if (destination.current !== undefined) {
+        if (scope.kind === "ticket")
+          projectUi.focusTicketPane(scope.projectId, scope.ticketId, destination.current);
+        else projectUi.focusHomePane(scope.projectId, destination.current);
+      }
       const surface = quickOpenSurfaceFiles(
         scope,
         projectUi.byProject[scope.projectId] ?? DEFAULT_PROJECT_UI,
@@ -188,12 +203,13 @@ export function QuickOpen({
       // The ⌘K palette's overlay, to the token: two surfaces summoned by two
       // chords onto the same spot are one drawing, not two that resemble
       // each other.
-      overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
+      overlayClassName="fixed inset-0 z-50 bg-scrim"
       contentClassName={COMMAND_OVERLAY_FRAME}
     >
       <div className={COMMAND_SEARCH_FIELD}>
-        <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <Command.Input
+          ref={searchInput}
           autoFocus
           value={query}
           onValueChange={setQuery}
@@ -215,17 +231,31 @@ export function QuickOpen({
         data-testid="quick-open-list"
         className="min-h-0 max-h-[min(460px,60svh)] overflow-x-hidden overflow-y-auto overscroll-contain p-1"
       >
-        <Command.Empty className={EMPTY_INLINE}>
-          {/* Three different nothings, said apart. "No matching files" over a
-              window with no project selected would be true of the query and
-              false about the reason; the truncation line is said only where it
-              could matter — a file genuinely absent from a capped index — so a
-              standing "20k limit" note is not chrome about nothing. */}
-          {scope === null
-            ? "Select a project to search its files."
-            : truncated
-              ? "No matching files — the index hit its size limit."
-              : "No matching files."}
+        <Command.Empty>
+          <EmptyState
+            tier="panel"
+            illustration={scope === null ? "folder" : "search"}
+            status={scope === null ? "unavailable" : "filtered"}
+            title={
+              scope === null
+                ? "Select a project"
+                : truncated
+                  ? "No matching indexed files"
+                  : "No matching files"
+            }
+            line={truncated ? "Narrow the search." : undefined}
+            action={
+              scope === null
+                ? undefined
+                : {
+                    label: "Clear search",
+                    onAction: () => {
+                      setQuery("");
+                      searchInput.current?.focus();
+                    },
+                  }
+            }
+          />
         </Command.Empty>
         {rows.map((row) => (
           <Command.Item

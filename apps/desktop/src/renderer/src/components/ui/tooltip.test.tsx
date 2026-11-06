@@ -69,6 +69,10 @@ describe("Tooltip", () => {
     expect(label).not.toBeNull();
     expect(label?.className).toContain("pointer-events-none");
     expect(label?.className).toContain("select-none");
+    expect(label?.className).toContain("data-[state=instant-open]:animate-none");
+    expect(label?.className).toContain("duration-(--duration-menu-in)");
+    expect(label?.className).not.toContain("zoom-");
+    expect(label?.className).not.toContain("slide-");
     const arrow = label?.querySelector('[data-slot="tooltip-arrow"]');
     expect(arrow?.getAttribute("width")).toBe("8");
     expect(arrow?.getAttribute("height")).toBe("4");

@@ -1,6 +1,6 @@
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
+import { CheckIcon, MinusIcon } from "@renderer/components/ui/icon";
+
 import { Checkbox as CheckboxPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -30,7 +30,7 @@ function Checkbox({
       className={cn(
         // The focus ring is the button recipe's, for the same reason a switch
         // keeps it — there is no caret to speak for it.
-        "control-material data-[state=checked]:[--control-fill:var(--primary)] data-[state=indeterminate]:[--control-fill:var(--primary)] peer inline-flex size-4 shrink-0 items-center justify-center border border-border-strong bg-card text-primary-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed transition-colors duration-150 ease-out motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=indeterminate]:bg-primary",
+        "control-material data-[state=checked]:[--control-fill:var(--primary)] data-[state=indeterminate]:[--control-fill:var(--primary)] peer inline-flex size-4 shrink-0 items-center justify-center border border-border-strong bg-card text-primary-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed transition-colors duration-(--duration-menu-in) ease-out motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=indeterminate]:bg-primary",
         className,
       )}
       // A box, never a circle: at 16px every rung of the radius ladder (8px
@@ -42,9 +42,9 @@ function Checkbox({
     >
       <CheckboxPrimitive.Indicator data-slot="checkbox-indicator" className="flex">
         {props.checked === "indeterminate" ? (
-          <MinusIcon weight="bold" className="size-3" />
+          <MinusIcon strokeWidth={2.25} className="size-3" />
         ) : (
-          <CheckIcon weight="bold" className="size-3" />
+          <CheckIcon strokeWidth={2.25} className="size-3" />
         )}
       </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>

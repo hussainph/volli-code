@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Search — the rail's find-across-files page, at both scopes (VC-193, plan
@@ -39,7 +40,8 @@ import { LoadingLabel } from "@renderer/components/ui/loading-label";
  *    but the words, so no unmounted page keeps a search alive.
  */
 import * as React from "react";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { SearchIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import {
@@ -49,7 +51,6 @@ import {
   searchQuery,
   searchRevealTarget,
   searchSummary,
-  searchTruncationNote,
   SEARCH_DEBOUNCE_MS,
   type SearchGroup,
   type SearchScope,
@@ -62,7 +63,6 @@ import {
 import {
   RailHeadingReadStatus,
   RailReadFaultBody,
-  RAIL_PANEL_INSET,
   RAIL_PANEL_MARGIN,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
@@ -71,6 +71,8 @@ import {
 } from "@renderer/components/ticket/rail-read-feedback";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { fileRevealKey, requestFileReveal } from "@renderer/editor/reveal-line";
 import { cn } from "@renderer/lib/utils";
 import type { FileSearchFile, FileSearchLimit, FileSearchMatch } from "../../../../ipc/contract";
@@ -277,11 +279,14 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
 
   return (
     <div data-testid="file-search-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-        <div className="flex items-center gap-2">
+      <header className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-2">
+        <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <p className="text-ui font-medium">Search</p>
+            <div
+              data-slot="navigator-header-band"
+              className="flex min-h-7 min-w-0 items-center gap-1"
+            >
+              <SectionHeading as="h3">Search</SectionHeading>
               {/* The read's own state rides this row rather than a strip below
                   it, and brings the retry a stale list needs. */}
               <RailHeadingReadStatus
@@ -294,16 +299,24 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
             {/* The navigator's own mono sub-line, saying which checkout these
                 results come from — the branch in a Ticket view, the
                 project in Home. */}
-            <p
-              data-testid="file-search-scope"
-              className="truncate font-mono text-ui text-muted-foreground"
+            <ValueReveal
+              term="Scope"
+              full={root}
+              className="block min-h-6 w-full min-w-0 rounded-control-small text-left"
             >
-              {root}
-            </p>
+              <span
+                data-testid="file-search-scope"
+                dir="rtl"
+                className="block truncate text-left font-mono text-label text-muted-foreground"
+              >
+                <span dir="ltr">{root}</span>
+              </span>
+            </ValueReveal>
           </div>
-          <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         </div>
         <Input
+          variant="search"
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
           aria-label="Search files"
@@ -337,7 +350,6 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
       <SearchResults
         groups={groups}
         query={outcome?.query ?? null}
-        limit={outcome?.limit ?? "none"}
         idle={query === null}
         searching={pendingQuery !== null}
         canClaimEmpty={railReadCanClaimEmpty({
@@ -348,6 +360,7 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
         projectId={projectId}
         ticketId={ticketId}
         onOpenMatch={openMatch}
+        onClearSearch={() => setRaw("")}
       />
     </div>
   );
@@ -357,17 +370,16 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
 function SearchResults({
   groups,
   query,
-  limit,
   idle,
   searching,
   canClaimEmpty,
   projectId,
   ticketId,
   onOpenMatch,
+  onClearSearch,
 }: {
   groups: readonly SearchGroup[];
   query: string | null;
-  limit: FileSearchLimit;
   idle: boolean;
   searching: boolean;
   /**
@@ -379,14 +391,10 @@ function SearchResults({
   projectId: string;
   ticketId: string | null;
   onOpenMatch(relPath: string, match: FileSearchMatch, query: string): void;
+  onClearSearch(): void;
 }) {
-  if (idle) {
-    return (
-      <p data-testid="file-search-idle" className={EMPTY_INLINE}>
-        Type to find text in these files
-      </p>
-    );
-  }
+  // Idle is a resting state: the field above is the whole of it.
+  if (idle) return null;
   if (groups.length === 0) {
     if (searching) {
       return (
@@ -397,12 +405,16 @@ function SearchResults({
     }
     if (!canClaimEmpty) return null;
     return (
-      <p data-testid="file-search-empty" className={EMPTY_INLINE}>
-        No matches
-      </p>
+      <div data-testid="file-search-empty">
+        <PanelEmptyState
+          illustration="search"
+          title="No matches"
+          line="Try another search."
+          action={{ label: "Clear search", onAction: onClearSearch }}
+        />
+      </div>
     );
   }
-  const note = searchTruncationNote(limit);
   return (
     <div data-testid="file-search-results" className="flex min-h-0 flex-1 flex-col pb-8">
       <FileTree
@@ -435,14 +447,6 @@ function SearchResults({
           },
         }}
       />
-      {note === null ? null : (
-        <p
-          data-testid="file-search-truncated"
-          className={cn("pt-2 text-ui text-muted-foreground", RAIL_PANEL_INSET)}
-        >
-          {note}
-        </p>
-      )}
     </div>
   );
 }

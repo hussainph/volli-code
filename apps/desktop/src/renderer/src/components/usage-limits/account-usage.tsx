@@ -1,7 +1,9 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /** Subscription allowances as Instrument rings. Each ring measures quota left;
  * the notch measures time left against the same anchored snapshot. Tone carries
  * pace as well as amount. Pins remain explicit host-owned controls. */
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
+import { PinIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
   elapsedShare,
@@ -35,11 +37,15 @@ export function AccountUsage({
   pin?: UsageWindowPin;
 }) {
   if (limits.unavailable !== undefined) {
+    if (limits.unavailable.reason === "unsupported")
+      return (
+        <div data-testid={testId}>
+          <PanelEmptyState illustration="board" status="unavailable" title="No usage windows" />
+        </div>
+      );
     return (
       <p data-testid={testId} className="mb-4 text-ui text-muted-foreground last:mb-0">
-        {limits.unavailable.reason === "unsupported"
-          ? "No subscription usage windows on this account."
-          : "Usage limits couldn't be read. Refresh to try again."}
+        Couldn't read usage limits
       </p>
     );
   }
@@ -204,8 +210,8 @@ function PinButton({
       onClick={onPress}
       className="-my-1 self-center"
     >
-      <PushPinIcon
-        weight={pinned ? "fill" : "bold"}
+      <PinIcon
+        strokeWidth={2.25}
         className={pinned ? "text-foreground" : "text-muted-foreground"}
       />
     </Button>

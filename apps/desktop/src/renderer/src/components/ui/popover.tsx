@@ -1,18 +1,26 @@
-"use client";
+import { useOverlayLayer } from "./overlay-layer";
+import { GlassSurface } from "./surface";
 
 import * as React from "react";
+import { ControlShapeProvider } from "./control-shape";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />;
+  return (
+    <MotionOriginRoot scope="popover" deferClosedGesture {...props}>
+      {(motion) => <PopoverPrimitive.Root data-slot="popover" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function PopoverTrigger({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Trigger>) {
-  return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
+  const motion = useMotionOriginProps("popover", props);
+  return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} {...motion} />;
 }
 
 function PopoverAnchor({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Anchor>) {
@@ -97,37 +105,70 @@ function PopoverContent({
   className,
   align = "start",
   sideOffset = 6,
+  tint = false,
+  blur = true,
+  showArrow = true,
+  children,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+}: React.ComponentProps<typeof PopoverPrimitive.Content> & {
+  tint?: boolean;
+  blur?: boolean;
+  showArrow?: boolean;
+}) {
   const claimWheel = usePopoverWheelClaim();
+  const motion = useMotionOriginProps("popover", props, false, true);
   return (
-    <PopoverPrimitive.Portal>
-      <PopoverPrimitive.Content
-        data-slot="popover-content"
-        align={align}
-        sideOffset={sideOffset}
-        className={cn(
-          // `animate-none!` is important on purpose: the reduced-motion gate
-          // loses the specificity fight with `data-[state=open]:animate-in`
-          // without it. The full argument is on MENU_SURFACE_FADE in
-          // `ui/menu-classes.ts`, which every overlay in this folder follows.
-          "material-floating z-50 max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-4 text-ui text-foreground shadow-overlay ease-out outline-hidden [&>div:has(>[data-slot=popover-header])]:gap-2 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
-          className,
-        )}
-        {...props}
-        // AFTER the spread, so a caller's `ref` riding the rest props cannot
-        // clobber the composition: both halves are forwarded by hand below.
-        // (The declared prop type is `ComponentProps` of Radix's forwardRef
-        // component, which does not name `ref` — but React 19 delivers it
-        // through props to function components regardless, so the composition
-        // is live rather than theoretical.)
-        ref={(node) => {
-          claimWheel(node);
-          const forwarded = (props as { ref?: React.Ref<HTMLDivElement | null> }).ref;
-          if (typeof forwarded === "function") forwarded(node);
-          else if (forwarded) forwarded.current = node;
-        }}
-      />
+    <PopoverPrimitive.Portal container={useOverlayLayer()}>
+      <GlassSurface asChild tier={blur ? "full" : "pane"}>
+        <PopoverPrimitive.Content
+          data-slot="popover-content"
+          data-tint={tint}
+          data-glass-blur={blur ? undefined : "off"}
+          align={align}
+          sideOffset={sideOffset}
+          avoidCollisions
+          collisionPadding={8}
+          className={cn(
+            // `animate-none!` is important on purpose: the reduced-motion gate
+            // loses the specificity fight with `data-[state=open]:animate-in`
+            // without it. The full argument is on MENU_SURFACE_FADE in
+            // `ui/menu-classes.ts`, which every overlay in this folder follows.
+            "material-floating z-50 max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-visible origin-(--radix-popover-content-transform-origin) rounded-container border bg-popover p-4 text-ui text-foreground shadow-overlay ease-out outline-hidden [&>div:has(>[data-slot=popover-header])]:gap-2 motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+            className,
+          )}
+          {...props}
+          {...motion}
+          // AFTER the spread, so a caller's `ref` riding the rest props cannot
+          // clobber the composition: both halves are forwarded by hand below.
+          // (The declared prop type is `ComponentProps` of Radix's forwardRef
+          // component, which does not name `ref` — but React 19 delivers it
+          // through props to function components regardless, so the composition
+          // is live rather than theoretical.)
+          ref={(node) => {
+            claimWheel(node);
+            const forwarded = (props as { ref?: React.Ref<HTMLDivElement | null> }).ref;
+            if (typeof forwarded === "function") forwarded(node);
+            else if (forwarded) forwarded.current = node;
+          }}
+        >
+          <ControlShapeProvider context="popover">
+            <div
+              data-slot="popover-body"
+              className="min-h-0 max-h-[calc(var(--radix-popover-content-available-height)-2rem)] overflow-y-auto overscroll-contain"
+            >
+              {children}
+            </div>
+          </ControlShapeProvider>
+          {showArrow ? (
+            <PopoverPrimitive.Arrow
+              data-slot="popover-arrow"
+              width={12}
+              height={6}
+              className="fill-popover stroke-border [stroke-width:0.5]"
+            />
+          ) : null}
+        </PopoverPrimitive.Content>
+      </GlassSurface>
     </PopoverPrimitive.Portal>
   );
 }

@@ -482,10 +482,11 @@ describe("the offer list", () => {
   it("keeps its page door in the heading row, at every state", async () => {
     await mount({});
 
-    expect(text()).toContain("No automations in this project yet.");
+    expect(text()).toContain("No automations");
 
     const panel = document.querySelector('[data-testid="ticket-rail-automations"]');
-    const heading = panel?.querySelector("h2");
+    const heading = panel?.querySelector("h3");
+    expect(heading?.className).toContain("text-ui");
     const door = control("Open Automations");
     expect(heading?.textContent).toBe("Automations");
     // VC-257 is a layout change: the heading and the door must share the
@@ -526,15 +527,11 @@ describe("the offer list", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    expect(text()).not.toContain("No automations in this project yet.");
-    // The wait is drawn as rows, not as a sentence (VC-406): two skeleton rows
-    // before anything has been read, so the first read moves as little as it
-    // can and a re-read moves nothing.
-    expect(text()).not.toContain("Reading automations…");
+    expect(text()).not.toContain("No automations");
+    // A first read paints neither fabricated rows nor a successful empty claim.
+    expect(text()).not.toContain("Reading automations");
     const unread = document.querySelector('[data-testid="ticket-rail-automations-unread"]');
-    expect(unread).not.toBeNull();
-    expect(unread?.getAttribute("aria-busy")).toBe("true");
-    expect(unread?.children).toHaveLength(2);
+    expect(unread).toBeNull();
   });
 
   it("lists nothing, and claims nothing, until its own reads have landed", async () => {
@@ -549,9 +546,9 @@ describe("the offer list", () => {
     await render();
 
     expect(rows()).toHaveLength(0);
-    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).toBeNull();
     // And no claim about the project, which it has not read.
-    expect(text()).not.toContain("No automations in this project yet.");
+    expect(text()).not.toContain("No automations");
 
     await act(async () => {
       list.resolve({ ok: true, automations: [automation()] });
@@ -577,7 +574,7 @@ describe("the offer list", () => {
     await render();
 
     expect(rows()).toHaveLength(0);
-    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).toBeNull();
 
     // The read lands on the truth: nothing arms this column any more.
     await act(async () => {
@@ -652,7 +649,7 @@ describe("what it says about its own read", () => {
     // Not a skeleton waiting for a read nobody will make, and not a claim
     // about a project this block never read.
     expect(skeleton()).toBeNull();
-    expect(text()).not.toContain("No automations in this project yet.");
+    expect(text()).not.toContain("No automations");
     expect(rows()).toHaveLength(0);
 
     // The one press that changes it, local to the block: no planning change,
@@ -764,8 +761,8 @@ describe("what it says about its own read", () => {
     expect(rows()).toHaveLength(0);
     expect(text()).not.toContain("Review sweep");
     expect(readStatus()).toBeNull();
-    expect(skeleton()).not.toBeNull();
-    expect(text()).not.toContain("No automations in this project yet.");
+    expect(skeleton()).toBeNull();
+    expect(text()).not.toContain("No automations");
 
     await act(async () => {
       second.resolve({ ok: true, automations: [automation({ id: "b1", name: "Deploy check" })] });
@@ -891,11 +888,11 @@ describe("the pending gate and the failure that earns a retry", () => {
     // pressable and minting a second Session.
     expect(runAutomationOnTicket).toHaveBeenCalledTimes(1);
     expect(runButton().disabled).toBe(true);
-    expect(runButton().textContent).toContain("Starting…");
+    expect(runButton().textContent).toContain("Starting");
     // The row carries the same acknowledgment, so the popover need not stay
     // open to prove the press was heard.
     expect(row("Review sweep").dataset.launch).toBe("pending");
-    expect(row("Review sweep").textContent).toContain("Starting…");
+    expect(row("Review sweep").textContent).toContain("Starting");
 
     await press(runButton());
     expect(runAutomationOnTicket).toHaveBeenCalledTimes(1);
@@ -946,7 +943,7 @@ describe("the pending gate and the failure that earns a retry", () => {
     await press(runButton());
     // The alert belonged to the attempt that produced it.
     expect(document.querySelector('[role="alert"]')).toBeNull();
-    expect(runButton().textContent).toContain("Starting…");
+    expect(runButton().textContent).toContain("Starting");
     await launch.resolve("started");
   });
 

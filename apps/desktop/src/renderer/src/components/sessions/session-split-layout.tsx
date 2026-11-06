@@ -1,16 +1,31 @@
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { ColumnsPlusRightIcon } from "@phosphor-icons/react/dist/csr/ColumnsPlusRight";
-import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
-import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
-import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
-import { RowsPlusBottomIcon } from "@phosphor-icons/react/dist/csr/RowsPlusBottom";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  RefreshIcon,
+  UndoIcon,
+  AddColumnIcon,
+  MaximizeIcon,
+  RemoveCircleIcon,
+  AddCircleIcon,
+  AddRowIcon,
+  MoreIcon,
+  TerminalIcon,
+  CloseIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import type { SessionListingRow, SessionRecord } from "@volli/shared";
 
 import { TerminalView } from "@renderer/components/sessions/terminal-view";
 import { SplitViewDivider } from "@renderer/components/split/split-view-divider";
+import { PaneHeader } from "@renderer/components/ui/pane-header";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@renderer/components/ui/dropdown-menu";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -84,6 +99,7 @@ export function SessionSplitLayout({
       <SplitNode
         ownerId={ownerId}
         tabId={tab.sessionId}
+        title={tab.title}
         layout={tab.layout}
         visible={visible}
         activePaneId={tab.activePaneId}
@@ -95,42 +111,13 @@ export function SessionSplitLayout({
         onResume={onResume}
         recordsById={recordsById}
       />
-      {/* Mounted only for the tab that is actually on screen: the control reads
-          six store selectors, and every hidden keep-alive tab in every project
-          paying for them would be a subscription bill for an answer none of them
-          can be the subject of. */}
-      {visible ? <PaneFocusControl sessionId={tab.sessionId} /> : null}
     </div>
   );
 }
 
-/**
- * Enter terminal focus, drawn ON the terminal it acts on.
- *
- * It used to be a fixture of the chrome band, and that was the wrong address
- * twice over. The band is window chrome — traffic lights, drag region, ⌘K — and
- * a control that acts on one pane among several sitting up there says the whole
- * window is about to do something. Worse, the band had to derive whether a
- * terminal was even on screen before it could decide to render, which is how a
- * control ends up conditional on facts it has no business holding. Here the
- * condition is structural: this component only exists inside a visible pane
- * tree, so it cannot appear where a terminal isn't.
- *
- * Hover-revealed, in the pane's own top-right corner — the corner a maximize
- * control has lived in since window managers had corners — because a terminal is
- * a reading surface and a button standing permanently over its scrollback would
- * be chrome charged to the canvas forever. Keyboard users are not left behind:
- * it takes focus in tab order and reveals itself on `focus-visible`, and
- * ⌥⌘Return does the whole thing without pointing at anything.
- *
- * It does NOT render while focused. Exit is the band's persistent control, and
- * that split is deliberate rather than an oversight: zen mode hands the canvas to
- * a PTY that the user is by then driving from the keyboard, and the way out of a
- * mode must not be a thing you have to go looking for with a mouse.
- *
- * The target comes from {@link useTerminalFocusTarget} rather than from this
- * pane's own scope, so the button and the chord cannot disagree about what would
- * be focused — the pane only adds "and I am the one it names".
+/** Terminal focus stays on the active pane's header, never over scrollback.
+ * Hidden tabs pay no focus-target subscriptions. The existing shortcut and
+ * persistent zen exit remain unchanged.
  */
 function PaneFocusControl({ sessionId }: { sessionId: string }) {
   const target = useTerminalFocusTarget();
@@ -138,52 +125,24 @@ function PaneFocusControl({ sessionId }: { sessionId: string }) {
   if (focused || target === null || target.sessionId !== sessionId) return null;
 
   return (
-    <div
-      className="absolute top-2 right-2 z-20"
-      // The pane below activates (and focuses its engine) on pointer-down; a
-      // press meant for this button must not also yank keyboard focus into the
-      // PTY the button is about to hand the whole canvas to.
-      onPointerDown={(event) => event.stopPropagation()}
+    <Button
+      type="button"
+      variant="toolbar"
+      size="icon-xs"
+      onClick={() => useUiStore.getState().setTerminalFocusTarget(target)}
+      aria-label="Enter terminal focus"
+      title="Enter terminal focus (⌥⌘⏎)"
+      aria-keyshortcuts="Alt+Meta+Enter"
     >
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={() => useUiStore.getState().setTerminalFocusTarget(target)}
-        // No `aria-pressed`: the label carries the state, and this button has no
-        // pressed appearance for it to describe — the same call every other
-        // chrome toggle in this app makes.
-        aria-label="Enter terminal focus"
-        title="Enter terminal focus (⌥⌘⏎)"
-        aria-keyshortcuts="Alt+Meta+Enter"
-        className={cn(
-          // Its own material, not a ghost: a transparent rest state over
-          // arbitrary scrollback is a glyph competing with whatever character
-          // happens to be under it. The wash is of the ink (`--foreground` runs
-          // toward white in dark and black in light), so it stays a lift in both
-          // modes the way the ⌘K pill does, and the blur keeps the border legible
-          // against a moving canvas.
-          "border border-border/50 bg-background/70 text-muted-foreground shadow-raised backdrop-blur-sm",
-          "hover:bg-background hover:text-foreground",
-          // Chrome charged to the canvas only while the pointer is on it. Opacity
-          // alone, so there is nothing here for reduced motion to object to.
-          "opacity-0 transition-opacity duration-150 ease-out group-hover/focus:opacity-100 focus-visible:opacity-100",
-        )}
-      >
-        {/* Outline, the baseline: `icon-sm` draws this at 14px, and CLAUDE.md's
-            small-size tier — the one ground `bold` stands on — is ≤12px. What
-            keeps it legible over scrollback is the button's own material below,
-            not a heavier pen. */}
-        <CornersOutIcon />
-        <span className="sr-only">Enter terminal focus</span>
-      </Button>
-    </div>
+      <MaximizeIcon />
+    </Button>
   );
 }
 
 interface SplitNodeProps {
   ownerId: string;
   tabId: string;
+  title: string;
   layout: SessionLayout;
   visible: boolean;
   activePaneId: string;
@@ -219,88 +178,85 @@ function SplitNode(props: SplitNodeProps) {
             data-terminal-tab-id={props.tabId}
             data-terminal-owner-id={props.ownerId}
             className={cn(
-              "relative h-full min-h-0 w-full min-w-0 overflow-hidden bg-background",
+              "group/pane relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background",
               props.isSplit &&
-                (active ? "ring-1 ring-primary/50 ring-inset" : "ring-1 ring-border/50 ring-inset"),
+                (active
+                  ? "ring-2 ring-(--accent-selected) ring-inset"
+                  : "ring-1 ring-border ring-inset"),
             )}
             onPointerDown={() => props.onActivate(layout.sessionId)}
             onContextMenu={() => props.onActivate(layout.sessionId)}
           >
-            <TerminalView
-              ownerId={props.ownerId}
-              tabId={props.tabId}
-              sessionId={layout.sessionId}
-              visible={props.visible}
-              active={active}
-              onActivate={() => props.onActivate(layout.sessionId)}
-            />
-            {resumable ? (
-              <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-4"
-                onPointerDown={(event) => event.stopPropagation()}
-              >
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  className="pointer-events-auto shadow-raised"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onResume?.(layout.sessionId);
-                  }}
+            <PaneHeader
+              identity={<TerminalIcon className="size-3.5" />}
+              title={record?.title || props.title}
+              actions={
+                <div
+                  className="flex items-center gap-0.5"
+                  onPointerDown={(event) => event.stopPropagation()}
                 >
-                  <ArrowClockwiseIcon />
-                  Resume session
-                </Button>
-              </div>
-            ) : null}
+                  {active && props.visible ? <PaneFocusControl sessionId={props.tabId} /> : null}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="toolbar"
+                        size="icon-xs"
+                        aria-label="Terminal actions"
+                        title="Terminal actions"
+                      >
+                        <MoreIcon strokeWidth={2.25} />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <TerminalPaneCommands {...props} sessionId={layout.sessionId} />
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Button
+                    variant="toolbar"
+                    size="icon-xs"
+                    aria-label="Close pane"
+                    title="Close pane"
+                    onClick={() => props.onClose(layout.sessionId)}
+                  >
+                    <CloseIcon strokeWidth={2.25} />
+                  </Button>
+                </div>
+              }
+            />
+            <div className="relative min-h-0 flex-1">
+              <TerminalView
+                ownerId={props.ownerId}
+                tabId={props.tabId}
+                sessionId={layout.sessionId}
+                visible={props.visible}
+                active={active}
+                onActivate={() => props.onActivate(layout.sessionId)}
+              />
+              {resumable ? (
+                <div
+                  className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-4"
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="pointer-events-auto shadow-raised"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.onResume?.(layout.sessionId);
+                    }}
+                  >
+                    <RefreshIcon />
+                    Resume session
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem
-            icon={ColumnsPlusRightIcon}
-            onSelect={() => props.onSplit(layout.sessionId, "vertical")}
-          >
-            Split Right
-            <ContextMenuShortcut>⌘D</ContextMenuShortcut>
-          </ContextMenuItem>
-          <ContextMenuItem
-            icon={RowsPlusBottomIcon}
-            onSelect={() => props.onSplit(layout.sessionId, "horizontal")}
-          >
-            Split Down
-            <ContextMenuShortcut>⇧⌘D</ContextMenuShortcut>
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            icon={PlusCircleIcon}
-            onSelect={() => getEngine(layout.sessionId)?.adjustFontSize(1)}
-          >
-            Increase Font Size
-            <ContextMenuShortcut>⌘+</ContextMenuShortcut>
-          </ContextMenuItem>
-          <ContextMenuItem
-            icon={MinusCircleIcon}
-            onSelect={() => getEngine(layout.sessionId)?.adjustFontSize(-1)}
-          >
-            Decrease Font Size
-            <ContextMenuShortcut>⌘−</ContextMenuShortcut>
-          </ContextMenuItem>
-          <ContextMenuItem
-            icon={ArrowCounterClockwiseIcon}
-            onSelect={() => getEngine(layout.sessionId)?.resetFontSize()}
-          >
-            Reset Font Size
-            <ContextMenuShortcut>⌘0</ContextMenuShortcut>
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            icon={XCircleIcon}
-            variant="destructive"
-            onSelect={() => props.onClose(layout.sessionId)}
-          >
-            Close pane
-          </ContextMenuItem>
+          <TerminalPaneCommands {...props} sessionId={layout.sessionId} context />
         </ContextMenuContent>
       </ContextMenu>
     );
@@ -316,8 +272,8 @@ function SplitNode(props: SplitNodeProps) {
     >
       <div
         className="min-h-0 min-w-0 overflow-hidden"
-        // Split the 6px divider cost evenly so a 0.5 ratio is visually equal.
-        style={{ flex: `0 0 calc(${layout.ratio * 100}% - 3px)` }}
+        // Split the 5px divider cost evenly so a 0.5 ratio is visually equal.
+        style={{ flex: `0 0 calc(${layout.ratio * 100}% - 2.5px)` }}
       >
         <SplitNode {...props} layout={layout.first} />
       </div>
@@ -339,4 +295,83 @@ function SplitNode(props: SplitNodeProps) {
       </div>
     </div>
   );
+}
+
+/** The header menu and the existing context menu offer the same commands. */
+function TerminalPaneCommands({
+  sessionId,
+  context = false,
+  onSplit,
+  onClose,
+}: Pick<SplitNodeProps, "onSplit" | "onClose"> & { sessionId: string; context?: boolean }) {
+  const commands = [
+    {
+      label: "Split Right",
+      icon: AddColumnIcon,
+      shortcut: "⌘D",
+      run: () => onSplit(sessionId, "vertical"),
+    },
+    {
+      label: "Split Down",
+      icon: AddRowIcon,
+      shortcut: "⇧⌘D",
+      run: () => onSplit(sessionId, "horizontal"),
+    },
+    { separator: "font-size" },
+    {
+      label: "Increase Font Size",
+      icon: AddCircleIcon,
+      shortcut: "⌘+",
+      run: () => getEngine(sessionId)?.adjustFontSize(1),
+    },
+    {
+      label: "Decrease Font Size",
+      icon: RemoveCircleIcon,
+      shortcut: "⌘−",
+      run: () => getEngine(sessionId)?.adjustFontSize(-1),
+    },
+    {
+      label: "Reset Font Size",
+      icon: UndoIcon,
+      shortcut: "⌘0",
+      run: () => getEngine(sessionId)?.resetFontSize(),
+    },
+    { separator: "close" },
+    {
+      label: "Close pane",
+      icon: ErrorIcon,
+      shortcut: undefined,
+      run: () => onClose(sessionId),
+      destructive: true,
+    },
+  ];
+  return commands.map((command) => {
+    if (command.separator !== undefined)
+      return context ? (
+        <ContextMenuSeparator key={command.separator} />
+      ) : (
+        <DropdownMenuSeparator key={command.separator} />
+      );
+    const variant = command.destructive ? "destructive" : "default";
+    return context ? (
+      <ContextMenuItem
+        key={command.label}
+        icon={command.icon}
+        variant={variant}
+        onSelect={command.run}
+      >
+        {command.label}
+        {command.shortcut === undefined ? null : (
+          <ContextMenuShortcut>{command.shortcut}</ContextMenuShortcut>
+        )}
+      </ContextMenuItem>
+    ) : (
+      <DropdownMenuItem key={command.label} variant={variant} onSelect={command.run}>
+        {command.label}
+        {command.shortcut === undefined ? null : (
+          <DropdownMenuShortcut>{command.shortcut}</DropdownMenuShortcut>
+        )}
+      </DropdownMenuItem>
+    );
+  });
 }

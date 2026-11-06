@@ -1,11 +1,13 @@
-"use client";
+import { useOverlayLayer } from "./overlay-layer";
+import { GlassSurface } from "./surface";
 
 import * as React from "react";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { ChevronRightIcon, CheckIcon } from "@renderer/components/ui/icon";
+
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 import {
   MENU_INDICATOR,
   MENU_INDICATOR_MARK,
@@ -23,19 +25,30 @@ import {
 } from "@renderer/components/ui/menu-classes";
 
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
+  return (
+    <MotionOriginRoot scope="dropdown-menu" {...props}>
+      {(motion) => <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function DropdownMenuPortal({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
-  return <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />;
+  return (
+    <DropdownMenuPrimitive.Portal
+      data-slot="dropdown-menu-portal"
+      {...props}
+      container={useOverlayLayer()}
+    />
+  );
 }
 
 function DropdownMenuTrigger({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
-  return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />;
+  const motion = useMotionOriginProps("dropdown-menu", props);
+  return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} {...motion} />;
 }
 
 function DropdownMenuContent({
@@ -43,21 +56,25 @@ function DropdownMenuContent({
   sideOffset = 4,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
-    <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content
-        data-slot="dropdown-menu-content"
-        sideOffset={sideOffset}
-        className={cn(
-          MENU_SURFACE,
-          "material-floating",
-          MENU_SURFACE_PAD,
-          MENU_SURFACE_MOTION,
-          "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
-          className,
-        )}
-        {...props}
-      />
+    <DropdownMenuPrimitive.Portal container={useOverlayLayer()}>
+      <GlassSurface asChild tier="full">
+        <DropdownMenuPrimitive.Content
+          data-slot="dropdown-menu-content"
+          sideOffset={sideOffset}
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
     </DropdownMenuPrimitive.Portal>
   );
 }
@@ -77,16 +94,13 @@ function DropdownMenuItem({
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
       data-variant={variant}
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, "plain-menu-row", className)}
       {...props}
     />
   );
 }
 
-// Checkbox/radio items put the selection indicator TRAILING (right edge)
-// rather than stock shadcn's leading pl-8 gutter: these menus
-// carry their own leading icons (priority bars, tag dots), and an empty
-// check column in front of them read as dead space.
+// Checkbox/radio items share the native leading checked-state gutter.
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -96,14 +110,14 @@ function DropdownMenuCheckboxItem({
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, "plain-menu-row", className)}
       checked={checked}
       {...props}
     >
       {children}
       <span className={MENU_INDICATOR}>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
     </DropdownMenuPrimitive.CheckboxItem>
@@ -116,7 +130,7 @@ function DropdownMenuRadioGroup({
   return <DropdownMenuPrimitive.RadioGroup data-slot="dropdown-menu-radio-group" {...props} />;
 }
 
-// Same trailing indicator as the checkbox item — a check, not a radio dot,
+// Same leading indicator as the checkbox item — a check, not a radio dot,
 // so single-select (ordering, dialog pickers) and multi-select (facet chips)
 // menus read as one visual language.
 function DropdownMenuRadioItem({
@@ -127,13 +141,13 @@ function DropdownMenuRadioItem({
   return (
     <DropdownMenuPrimitive.RadioItem
       data-slot="dropdown-menu-radio-item"
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, "plain-menu-row", className)}
       {...props}
     >
       {children}
       <span className={MENU_INDICATOR}>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
     </DropdownMenuPrimitive.RadioItem>
@@ -173,7 +187,13 @@ function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"spa
 }
 
 function DropdownMenuSub({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>) {
-  return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />;
+  return (
+    <MotionOriginRoot scope="dropdown-menu" {...props} hover>
+      {(motion) => (
+        <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} {...motion} />
+      )}
+    </MotionOriginRoot>
+  );
 }
 
 function DropdownMenuSubTrigger({
@@ -181,14 +201,16 @@ function DropdownMenuSubTrigger({
   children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger>) {
+  const motion = useMotionOriginProps("dropdown-menu", props, true);
   return (
     <DropdownMenuPrimitive.SubTrigger
       data-slot="dropdown-menu-sub-trigger"
-      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, "plain-menu-row", className)}
       {...props}
+      {...motion}
     >
       {children}
-      <CaretRightIcon weight="bold" className="ml-auto" />
+      <ChevronRightIcon data-slot="menu-submenu-caret" strokeWidth={2.25} className="ml-auto" />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }
@@ -198,20 +220,24 @@ function DropdownMenuSubContent({
   className,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+  const motion = useMotionOriginProps("dropdown-menu", props, false, true);
   return (
-    <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.SubContent
-        data-slot="dropdown-menu-sub-content"
-        className={cn(
-          MENU_SURFACE,
-          "material-floating",
-          MENU_SURFACE_PAD,
-          MENU_SURFACE_MOTION,
-          "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
-          className,
-        )}
-        {...props}
-      />
+    <DropdownMenuPrimitive.Portal container={useOverlayLayer()}>
+      <GlassSurface asChild tier="full">
+        <DropdownMenuPrimitive.SubContent
+          data-slot="dropdown-menu-sub-content"
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
     </DropdownMenuPrimitive.Portal>
   );
 }

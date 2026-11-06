@@ -1,9 +1,6 @@
-/** Home usage: a token-led Instrument footer pinned beneath Now. The coloured
- * bar stays visible; the bounded RailFold keeps attribution above the trigger.
- * Store reads and the fold preference live in usage-rail.tsx. */
-import { ChartDonutIcon } from "@phosphor-icons/react/dist/csr/ChartDonut";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { ReceiptIcon } from "@phosphor-icons/react/dist/csr/Receipt";
+/** One pinned spend reading for the project/session inspector. Accounting and
+ * the time-window control unfold into a bounded scroller, never a dashboard. */
+import { UsageIcon, ChatIcon, CostIcon, FilterIcon } from "@renderer/components/ui/icon";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
@@ -18,7 +15,7 @@ import {
 } from "@renderer/components/ticket/rail-panel-parts";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
-import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
+
 import {
   Select,
   SelectContent,
@@ -26,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
-import { UsageBar } from "@renderer/components/usage/usage-bar";
+import { UsageClassRows } from "@renderer/components/usage/usage-bar";
 import {
   UsageBreakdown,
   UsageBreakdownFact,
@@ -116,18 +113,18 @@ export function HomeUsageFooter({
 
   return (
     <RailFold asChild open={open} onOpenChange={onOpenChange}>
-      <footer
-        data-testid="home-usage-footer"
-        className={cn(RAIL_FOOTER, "usage-instrument", className)}
-      >
+      <footer data-testid="home-usage-footer" className={cn(RAIL_FOOTER, className)}>
         {/* The body comes BEFORE the row in the DOM: it opens upward. */}
         <RailFoldBody>
           <div
             data-testid="home-usage-body"
+            role="region"
+            aria-label="Project usage breakdown"
+            tabIndex={0}
             className={cn(
               // `overscroll-contain` so reaching the end of the ranking does not
               // hand the wheel to the page scroller behind it.
-              "flex max-h-40 flex-col gap-3 overflow-y-auto overscroll-contain border-b border-sidebar-border/70 pt-3 pb-4",
+              "usage-breakdown-scroll flex max-h-40 flex-col gap-2 overflow-y-auto overscroll-contain border-b border-sidebar-border/70 py-2 [scroll-padding-block:8px]",
               RAIL_PANEL_INSET,
             )}
           >
@@ -136,8 +133,13 @@ export function HomeUsageFooter({
                 value={usageWindow}
                 onValueChange={(value) => onWindowChange(value as UsageWindow)}
               >
-                <SelectTrigger size="sm" aria-label="Usage window" className="w-auto gap-2">
-                  <FunnelIcon weight="bold" className="size-3" />
+                <SelectTrigger
+                  variant="inspector"
+                  size="sm"
+                  aria-label="Usage window"
+                  className="w-auto gap-2"
+                >
+                  <FilterIcon strokeWidth={2.25} className="size-3" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -149,6 +151,7 @@ export function HomeUsageFooter({
                 </SelectContent>
               </Select>
             </div>
+            <UsageClassRows summary={summary} />
             <div className="flex flex-col gap-2">
               {cached === null ? null : (
                 <UsageBreakdownFact label="Cached input share" value={cached} />
@@ -167,7 +170,7 @@ export function HomeUsageFooter({
             {session === null || sessionCost === null ? null : (
               <div
                 data-testid="home-usage-session"
-                className="flex items-center justify-between gap-2 border-t border-border pt-2"
+                className="flex min-h-7 shrink-0 items-center justify-between gap-2 border-t border-border"
               >
                 <span className="shrink-0 text-ui text-muted-foreground">This session</span>
                 <UsageCostFigure summary={session} className="text-ui text-foreground" />
@@ -185,7 +188,7 @@ export function HomeUsageFooter({
             } breakdown`}
             className={cn(RAIL_FOOTER_ROW, "py-2")}
           >
-            <ReceiptIcon className="size-4 shrink-0 text-muted-foreground" />
+            <CostIcon className="size-4 shrink-0 text-muted-foreground" />
             {cost === null ? (
               // Nothing metered is not a free project — it is an unmeasured one,
               // and `$0.00` here would be the most misleading string this
@@ -202,11 +205,6 @@ export function HomeUsageFooter({
             <RailFoldCaret open={open} placement="footer" />
           </button>
         </RailFoldTrigger>
-        {tokens > 0 ? (
-          <div className={cn(RAIL_PANEL_INSET, "pb-4")}>
-            <UsageBar summary={summary} />
-          </div>
-        ) : null}
       </footer>
     </RailFold>
   );
@@ -316,7 +314,7 @@ function HomeUsageCard({
           holding. */}
       {session !== null && sessionCost !== null ? (
         <UsageCardRow
-          icon={ChatCircleIcon}
+          icon={ChatIcon}
           label="This session"
           trailing={<UsageCostFigure summary={session} />}
           ariaLabel={`This session ${sessionCost} — open breakdown`}
@@ -328,7 +326,7 @@ function HomeUsageCard({
 
       {models.length > 0 ? (
         <UsageCardRow
-          icon={ChartDonutIcon}
+          icon={UsageIcon}
           label={`${models.length} ${models.length === 1 ? "model" : "models"}`}
           ariaLabel={`${models.length} ${models.length === 1 ? "model" : "models"} — open the per-model breakdown`}
           testId="home-usage-models"

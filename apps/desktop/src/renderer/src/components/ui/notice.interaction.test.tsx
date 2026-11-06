@@ -45,17 +45,22 @@ describe("Notice controls", () => {
     act(() => root.render(<Notice title="Saved" dismissalKey="notice-test:save-2" />));
     expect(host.textContent).toBe("Saved");
   });
-  it("expands and collapses full long errors without putting controls in the live region", () => {
-    act(() => root.render(<Notice tone="error" title="Read failed" detail={longError} announce />));
+  it("keeps raw diagnostics in a closed disclosure outside the live headline", () => {
+    act(() =>
+      root.render(
+        <Notice tone="error" title="Couldn't read sessions" detail={longError} announce />,
+      ),
+    );
     const message = host.querySelector('[role="status"]')!;
-    expect(message.className).toContain("line-clamp-2");
-    expect(message.textContent).toContain(longError);
+    expect(message.textContent).toBe("Couldn't read sessions");
     expect(message.querySelector("button")).toBeNull();
-    act(() => button("Show more").click());
-    expect(message.className).not.toContain("line-clamp-2");
-    expect(button("Show less").getAttribute("aria-expanded")).toBe("true");
-    act(() => button("Show less").click());
-    expect(message.className).toContain("line-clamp-2");
+    const details = host.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(longError);
+    expect(details.querySelector("summary")?.textContent).toBe("Details");
+    act(() => details.querySelector("summary")!.click());
+    expect(details.open).toBe(true);
+    expect(message.textContent).not.toContain(longError);
   });
 
   it("copies the complete message, and surfaces clipboard failures", async () => {

@@ -1,11 +1,13 @@
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  type IconComponent,
+  SuccessIcon,
+  CopyIcon,
+  InfoIcon,
+  WarningIcon,
+  ErrorIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
@@ -21,9 +23,9 @@ const NOTICE_TONE: Record<NoticeTone, string> = {
 };
 const NOTICE_ICON = {
   neutral: InfoIcon,
-  error: XCircleIcon,
-  positive: CheckCircleIcon,
-  warning: WarningCircleIcon,
+  error: ErrorIcon,
+  positive: SuccessIcon,
+  warning: WarningIcon,
 };
 
 // Retained for this renderer run, across page unmounts. An explicit key names
@@ -50,7 +52,7 @@ export function Notice({
   ...rest
 }: React.HTMLAttributes<HTMLDivElement> & {
   tone?: NoticeTone;
-  icon?: React.ComponentType<React.ComponentProps<PhosphorIcon>>;
+  icon?: React.ComponentType<React.ComponentProps<IconComponent>>;
   title: React.ReactNode;
   detail?: React.ReactNode;
   actions?: React.ReactNode;
@@ -130,7 +132,7 @@ export function Notice({
       <span data-slot="notice-icon" className="flex h-5 shrink-0 items-center">
         <Icon
           aria-hidden
-          weight={Icon === NOTICE_ICON[tone] ? "fill" : undefined}
+
           className={cn("size-4", tone === "positive" && "text-positive")}
         />
       </span>
@@ -155,8 +157,16 @@ export function Notice({
           >
             {title}
           </p>
-          {detail === undefined ? null : <p className="mt-1 text-ui">{detail}</p>}
+          {detail === undefined || tone === "error" ? null : (
+            <p className="mt-1 text-ui">{detail}</p>
+          )}
         </div>
+        {tone === "error" && detail !== undefined ? (
+          <details className="mt-1 text-ui">
+            <summary>Details</summary>
+            <div className="[overflow-wrap:anywhere]">{detail}</div>
+          </details>
+        ) : null}
         {(expandable && (overflowing || expanded)) || (tone === "error" && plainText) ? (
           <div className="flex flex-wrap items-center gap-2 pt-2">
             {expandable && (overflowing || expanded) ? (
@@ -187,7 +197,7 @@ export function Notice({
       ) : null}
       {onDismiss || dismissalKey ? (
         <Button size="icon-xs" variant="ghost" aria-label="Dismiss notice" onClick={dismiss}>
-          <XIcon />
+          <CloseIcon />
         </Button>
       ) : null}
     </div>

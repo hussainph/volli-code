@@ -695,6 +695,33 @@ async function boot() {
           reasoningLevel: provider.reasoningLevel,
         }
       : null,
+    {
+      flushClientState: () =>
+        app.evaluate(async ({ BrowserWindow, ipcMain }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().startsWith("volli-app:"),
+          );
+          if (!window) throw new Error("fixture window disappeared before flush");
+          const requestId = `drive-fixture-${Date.now()}`;
+          await new Promise((resolveFlush, rejectFlush) => {
+            const cleanup = () => {
+              clearTimeout(timer);
+              ipcMain.removeListener("volli:client-state-flushed", acked);
+            };
+            const acked = (event, id) => {
+              if (event.sender.id !== window.webContents.id || id !== requestId) return;
+              cleanup();
+              resolveFlush();
+            };
+            const timer = setTimeout(() => {
+              cleanup();
+              rejectFlush(new Error("fixture client-state flush timed out"));
+            }, 10000);
+            ipcMain.on("volli:client-state-flushed", acked);
+            window.webContents.send("volli:client-state-flush", requestId);
+          });
+        }),
+    },
   );
   mark("fixtureSeeded");
   await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });

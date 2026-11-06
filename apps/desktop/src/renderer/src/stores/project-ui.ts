@@ -481,7 +481,17 @@ function splitAfterFileTabs(
  * moment ago — joins the shown group's focused pane instead (`openTab`).
  * Board and Body are ordinary tabs here like any other.
  */
-function activateInSplit(split: SplitViewState, tabId: string, open: boolean): SplitViewState {
+function activateInSplit(
+  split: SplitViewState,
+  tabId: string,
+  open: boolean,
+  destination?: string,
+): SplitViewState {
+  if (open && destination !== undefined) {
+    // An async create lands where its command began, not wherever focus moved
+    // while the host was opening it. A vanished pane degrades to full width.
+    return selectTab(claimTabInPane(split, tabId, destination, true), tabId);
+  }
   return open ? openTab(split, tabId) : selectTab(split, tabId);
 }
 
@@ -510,10 +520,11 @@ function activatedHomeSplit(
   current: ProjectUiState,
   tabId: string,
   open = false,
+  destination?: string,
 ): SplitViewState | null {
   const split = current.homeSplitView ?? null;
   if (split === null) return null;
-  const next = activateInSplit(split, tabId, open);
+  const next = activateInSplit(split, tabId, open, destination);
   return next === split ? null : next;
 }
 
@@ -522,10 +533,11 @@ function activatedTicketSplit(
   existing: TicketTabsState,
   tabId: string,
   open = false,
+  destination?: string,
 ): SplitViewState | null {
   const split = existing.splitView ?? null;
   if (split === null) return null;
-  const next = activateInSplit(split, tabId, open);
+  const next = activateInSplit(split, tabId, open, destination);
   return next === split ? null : next;
 }
 
@@ -742,14 +754,16 @@ interface ProjectUiStoreState {
   /**
    * {@link ProjectUiStoreState.setHomeActiveTab} for a tab that was just
    * OPENED (a new chat, terminal or Browser Tab): while a group is shown it
-   * joins the focused pane's stack instead of replacing the group.
+   * joins the focused pane's stack instead of replacing the group. Async
+   * creators can retain the command's original pane in `destination`.
    */
-  openHomeTab(projectId: string, tabId: string): void;
+  openHomeTab(projectId: string, tabId: string, destination?: string): void;
   /**
    * Renderer fallback receipt, not a tab selection: never moves pane focus and
-   * never announces a selection.
+   * never announces a selection. `expected` refuses a stale render's receipt
+   * after a newer open, selection or hide handoff.
    */
-  recordResolvedHomeTab(projectId: string, tabId: string): void;
+  recordResolvedHomeTab(projectId: string, tabId: string, expected?: string): void;
   /**
    * Record Home's strip as drawn (VC-105): `order` is its movable tab ids, the
    * Board never among them. A receipt, not an arrangement — it moves no tab and
@@ -928,11 +942,17 @@ interface ProjectUiStoreState {
   /**
    * {@link ProjectUiStoreState.setTicketActiveTab} for a tab that was just
    * OPENED (a new chat, terminal or Browser Tab): while a group is shown it
-   * joins the focused pane's stack instead of replacing the group.
+   * joins the focused pane's stack instead of replacing the group. `destination`
+   * retains an async command's original pane, as Home's twin does.
    */
-  openTicketTab(projectId: string, ticketId: string, tabId: string): void;
+  openTicketTab(projectId: string, ticketId: string, tabId: string, destination?: string): void;
   /** Automatic stale-tab receipt: neither selects a pane nor announces intent. */
-  recordResolvedTicketTab(projectId: string, ticketId: string, tabId: string): void;
+  recordResolvedTicketTab(
+    projectId: string,
+    ticketId: string,
+    tabId: string,
+    expected?: string,
+  ): void;
   /**
    * {@link ProjectUiStoreState.moveHomeTab} at ticket scope (VC-189) — same overlay,
    * same pin-what-you-arranged rule, one scope down. The Ticket Body tab is
@@ -1546,9 +1566,10 @@ function activateHomeTab(
   projectId: string,
   tabId: string,
   open: boolean,
+  destination?: string,
 ): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
   const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
-  const split = activatedHomeSplit(current, tabId, open);
+  const split = activatedHomeSplit(current, tabId, open, destination);
   if (current.homeActiveTab === tabId && split === null) return state;
   return patchProjectUi(state, projectId, {
     homeActiveTab: tabId,
@@ -1564,10 +1585,11 @@ function activateTicketTab(
   ticketId: string,
   tabId: string,
   open: boolean,
+  destination?: string,
 ): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
   const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
   const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
-  const split = activatedTicketSplit(existing, tabId, open);
+  const split = activatedTicketSplit(existing, tabId, open, destination);
   if (existing.active === tabId && split === null) return state;
   return patchProjectUi(state, projectId, {
     ticketTabs: {
@@ -1706,16 +1728,20 @@ export function createProjectUiStore(
           publishHomeSelection(get(), projectId, tabId);
         },
 
-        openHomeTab(projectId, tabId) {
+        openHomeTab(projectId, tabId, destination) {
           markInteraction("pane-switch");
-          set((state) => activateHomeTab(state, projectId, tabId, true));
+          set((state) => activateHomeTab(state, projectId, tabId, true, destination));
           publishHomeSelection(get(), projectId, tabId);
         },
 
-        recordResolvedHomeTab(projectId, tabId) {
+        recordResolvedHomeTab(projectId, tabId, expected) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
-            if (current.homeActiveTab === tabId) return state;
+            if (
+              (expected !== undefined && current.homeActiveTab !== expected) ||
+              current.homeActiveTab === tabId
+            )
+              return state;
             return patchProjectUi(state, projectId, {
               homeActiveTab: tabId,
               homeTabHistory: homeHistoryAfterVisit(current, tabId),
@@ -2263,17 +2289,21 @@ export function createProjectUiStore(
           publishTicketSelection(get(), projectId, ticketId, tabId);
         },
 
-        openTicketTab(projectId, ticketId, tabId) {
+        openTicketTab(projectId, ticketId, tabId, destination) {
           markInteraction("pane-switch");
-          set((state) => activateTicketTab(state, projectId, ticketId, tabId, true));
+          set((state) => activateTicketTab(state, projectId, ticketId, tabId, true, destination));
           publishTicketSelection(get(), projectId, ticketId, tabId);
         },
 
-        recordResolvedTicketTab(projectId, ticketId, tabId) {
+        recordResolvedTicketTab(projectId, ticketId, tabId, expected) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
-            if (existing.active === tabId) return state;
+            if (
+              (expected !== undefined && existing.active !== expected) ||
+              existing.active === tabId
+            )
+              return state;
             return patchProjectUi(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,

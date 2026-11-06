@@ -27,14 +27,14 @@ function markupClass(element: React.ReactElement): string {
 }
 
 describe("foundation control contracts", () => {
-  it.each(["default", "outline", "secondary", "destructive"] as const)(
+  it.each(["outline", "secondary", "destructive"] as const)(
     "%s keeps lift and sinks on press, without a click-scale animation",
     (variant) => {
       const classes = buttonVariants({ variant });
       expect(classes).toContain("shadow-control");
       expect(classes).toContain("active:shadow-control-pressed");
       expect(classes).not.toContain("scale-");
-      expect(classes).toContain("rounded-control");
+      expect(classes).toContain("rounded-native-control");
     },
   );
 
@@ -78,7 +78,7 @@ describe("foundation control contracts", () => {
     expect(input).not.toContain("border");
   });
 
-  it("draws selected segments filled and unselected segments outlined", () => {
+  it("shares one thumb while keeping segment states accessible", () => {
     const html = renderToStaticMarkup(
       <Segmented
         ariaLabel="View"
@@ -90,8 +90,8 @@ describe("foundation control contracts", () => {
         onChange={noop}
       />,
     );
-    expect(html).toMatch(/data-variant="default"[^>]*aria-pressed="true"/);
-    expect(html).toMatch(/data-variant="outline"[^>]*aria-pressed="false"/);
+    expect(html).toMatch(/data-variant="ghost"[^>]*aria-pressed="true"/);
+    expect(html).toMatch(/data-variant="ghost"[^>]*aria-pressed="false"/);
   });
 
   it("uses the same material for switch and checkbox in both states", () => {

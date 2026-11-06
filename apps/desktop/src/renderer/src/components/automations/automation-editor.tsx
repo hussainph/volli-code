@@ -10,17 +10,19 @@
  * shared stack's normal-flow default.
  */
 import { automationSourceIsCloud } from "@renderer/stores/automation-source";
-import { CloudNextScheduledRun } from "./cloud-automation-controls";
+import { CloudAutomationState } from "./cloud-automation-controls";
 import * as React from "react";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import {
-  AUTOMATION_SCHEDULE_PRESET_LABELS,
+  ClockIcon,
+  ProcessorIcon,
+  FolderOpenIcon,
+  GlobeIcon,
+  MoreIcon,
+  InfoIcon,
+} from "@renderer/components/ui/icon";
+
+import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   AUTOMATION_SCHEDULE_PRESETS,
   automationScheduleProblem,
   automationTriggerColumns,
@@ -34,6 +36,7 @@ import {
   isValidAutomationRuntime,
   modelTierRow,
   NO_AUTOMATION_TRIGGER,
+  nextScheduleOccurrence,
   SCHEDULE_WEEKDAY_LABELS,
   SCHEDULE_WEEKDAYS,
   TICKET_STATUS_LABELS,
@@ -61,6 +64,7 @@ import { ModelName } from "@renderer/components/models/model-identity";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import {
   Select,
@@ -75,14 +79,24 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
+import { ContentColumn } from "@renderer/components/layout/content-column";
+import { PrefRow } from "@renderer/components/settings/kit/pref-row";
+import { Checkbox } from "@renderer/components/ui/checkbox";
+import { Segmented } from "@renderer/components/ui/segmented";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@renderer/components/ui/dropdown-menu";
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
+import { AutomationTriggerState } from "./automation-trigger-state";
+import { AutomationRuntimeValue } from "./automation-runtime-value";
+import { triggerLabel } from "./automations-page-model";
+import { PrefSection } from "@renderer/components/settings/kit/pref-section";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
-import {
-  INSTRUCTIONS_PLACEHOLDER,
-  MANUAL_TRIGGER_LABEL,
-  nextScheduledRun,
-  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
-} from "./automations-page-model";
+import { INSTRUCTIONS_PLACEHOLDER, nextScheduledRun } from "./automations-page-model";
 import {
   clearEditorDraft,
   loadEditorDraft,
@@ -99,6 +113,10 @@ type TriggerChoice = "none" | "columns" | "schedule";
 
 const DEFAULT_SCHEDULE_HOUR = 9;
 const DEFAULT_SCHEDULE_WEEKDAY: ScheduleWeekday = "monday";
+
+function columnNames(statuses: readonly TicketStatus[]) {
+  return statuses.map((status) => TICKET_STATUS_LABELS[status]).join(", ");
+}
 
 function twoDigits(value: number): string {
   return value.toString().padStart(2, "0");
@@ -177,14 +195,14 @@ function TimeField({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto p-2">
         <div className="flex items-end gap-2">
-          <label className="flex flex-col gap-1 text-label text-muted-foreground uppercase">
+          <label className="flex flex-col gap-1 text-ui font-medium text-muted-foreground">
             Hour
             <ScheduleNumberInput value={hour} max={23} ariaLabel="Hour" onChange={onHourChange} />
           </label>
           <span aria-hidden className="h-6 text-ui leading-6 text-muted-foreground">
             :
           </span>
-          <label className="flex flex-col gap-1 text-label text-muted-foreground uppercase">
+          <label className="flex flex-col gap-1 text-ui font-medium text-muted-foreground">
             Minute
             <ScheduleNumberInput
               value={minute}
@@ -200,7 +218,7 @@ function TimeField({
 }
 
 /**
- * "Next: …" at the schedule control (VC-298), for a schedule this machine will
+ * "Next · …" at the schedule control (VC-298), for a schedule this machine will
  * actually fire. Its own component so the clock it keeps re-renders this line
  * rather than the editor, and its answer is memoized so the editor's renders
  * do not recompute it. Once the shown occurrence passes it reads the next one,
@@ -229,102 +247,6 @@ function NextScheduledRun({
     return () => window.clearTimeout(timer);
   }, [next.at, now]);
   return <p className="text-ui text-foreground tabular-nums">{next.label}</p>;
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-label text-muted-foreground uppercase">{children}</h2>;
-}
-
-function TriggerChoice({
-  value,
-  selected,
-  icon: Icon,
-  onSelect,
-  children,
-}: {
-  value: TriggerChoice;
-  selected: TriggerChoice;
-  icon: typeof PlayIcon;
-  onSelect(value: TriggerChoice): void;
-  children: React.ReactNode;
-}) {
-  const active = value === selected;
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={() => onSelect(value)}
-      className={cn(
-        "flex h-7 w-full items-center gap-2 rounded-lg border px-2 text-left text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring",
-        active
-          ? "border-ring bg-accent text-foreground"
-          : "border-border text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1">{children}</span>
-      <span
-        aria-hidden
-        className={cn(
-          "size-2 rounded-full border",
-          active ? "border-primary bg-primary" : "border-muted-foreground",
-        )}
-      />
-    </button>
-  );
-}
-
-function ColumnPicker({
-  value,
-  onChange,
-}: {
-  value: readonly TicketStatus[];
-  onChange(value: readonly TicketStatus[]): void;
-}) {
-  const label =
-    value.length === 0
-      ? "Choose columns"
-      : value.map((status) => TICKET_STATUS_LABELS[status]).join(", ");
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label="Columns"
-          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-1">
-        {TICKET_STATUSES.map((status) => {
-          const selected = value.includes(status);
-          return (
-            <button
-              key={status}
-              type="button"
-              role="checkbox"
-              aria-checked={selected}
-              onClick={() =>
-                onChange(
-                  TICKET_STATUSES.filter((candidate) =>
-                    candidate === status ? !selected : value.includes(candidate),
-                  ),
-                )
-              }
-              className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:bg-accent"
-            >
-              <CheckIcon className={cn("size-3.5", !selected && "invisible")} weight="bold" />
-              {TICKET_STATUS_LABELS[status]}
-            </button>
-          );
-        })}
-      </PopoverContent>
-    </Popover>
-  );
 }
 
 function modelValue(model: Pick<ComposerModel, "providerId" | "modelId">): string {
@@ -401,12 +323,12 @@ function RuntimeFields({
           if (selection !== null) onChange(selection);
         }}
       >
-        <SelectTrigger className="w-full" aria-label="Runtime model">
+        <SelectTrigger variant="inspector" className="w-full" aria-label="Runtime model">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="inherit">
-            <CpuIcon />
+            <ProcessorIcon />
             Project default
           </SelectItem>
           {/* The tier's own label, never the model it currently resolves to:
@@ -416,7 +338,7 @@ function RuntimeFields({
             <SelectLabel>Defaults</SelectLabel>
             {AGENT_MODEL_TIERS.map((tier) => (
               <SelectItem key={tier} value={`${TIER_VALUE_PREFIX}${tier}`}>
-                <CpuIcon />
+                <ProcessorIcon />
                 {modelTierRow(tier).label}
               </SelectItem>
             ))}
@@ -444,13 +366,13 @@ function RuntimeFields({
             if (next !== null) onChange(next);
           }}
         >
-          <SelectTrigger className="w-full" aria-label="Reasoning effort">
+          <SelectTrigger variant="inspector" className="w-full" aria-label="Reasoning effort">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {levels.map((level) => (
               <SelectItem key={level} value={level}>
-                <CpuIcon />
+                <ProcessorIcon />
                 {level}
               </SelectItem>
             ))}
@@ -534,11 +456,19 @@ export function AutomationEditorPanel({
   actions,
   history,
   onDiscardedNewDraft,
+  disabled = false,
+  back,
+  renameRequest = 0,
+  readState = "ready",
 }: {
   projectId: string;
   automation: Automation | null;
   actions?: React.ReactNode;
   history?: React.ReactNode;
+  disabled?: boolean;
+  back?: React.ReactNode;
+  renameRequest?: number;
+  readState?: "ready" | "loading" | "failed";
   /** Discarding a NEW record leaves nothing to show; the page chooses what replaces it. */
   onDiscardedNewDraft?: () => void;
 }) {
@@ -546,13 +476,65 @@ export function AutomationEditorPanel({
   const update = useAutomationsStore((state) => state.update);
   const commandId = React.useRef(crypto.randomUUID());
   const automationId = automation?.id ?? null;
+  const creating = automation === null;
+  type Group = "name" | "trigger" | "instructions" | "runtime";
+  const panel = React.useRef<HTMLDivElement>(null);
+  const lock = React.useRef(false);
+  const [editing, setEditing] = React.useState<Group | null>(() => {
+    const draft = loadEditorDraft(projectId, undefined, automationId);
+    if (draft === null || automation === null) return null;
+    return draft.name !== automation.name
+      ? "name"
+      : draft.instructions !== automation.instructions
+        ? "instructions"
+        : JSON.stringify(draft.runtime) !== JSON.stringify(automation.runtime)
+          ? "runtime"
+          : "trigger";
+  });
+  const [expanded, setExpanded] = React.useState(false);
+  const [policy, setPolicy] = React.useState(false);
+  function startEdit(group: Group) {
+    if (editing !== null && editing !== group) {
+      panel.current
+        ?.querySelector<HTMLElement>(
+          "[data-editing=true] input, [data-editing=true] textarea, [data-editing=true] button",
+        )
+        ?.focus();
+      return;
+    }
+    setEditing(group);
+  }
+  function focusEdit(group: Group | null) {
+    requestAnimationFrame(() => {
+      panel.current
+        ?.querySelector<HTMLElement>(
+          group === "name" ? "h2 button" : `[aria-label="Edit ${group}"]`,
+        )
+        ?.focus();
+    });
+  }
+  const previousRename = React.useRef(renameRequest);
+  React.useEffect(() => {
+    if (previousRename.current !== renameRequest) {
+      previousRename.current = renameRequest;
+      startEdit("name");
+    }
+  });
+  React.useEffect(() => {
+    if (editing !== null || creating)
+      panel.current
+        ?.querySelector<HTMLElement>(
+          "[data-editing=true] input, [data-editing=true] textarea, [data-editing=true] button",
+        )
+        ?.focus();
+  }, [editing, automationId, creating]);
   // Switched on HERE, read live: turning automatic triggers off clears the
   // next-run line in the same render the switch moves (VC-298).
   const firesHere = useAutomationsStore(
     (state) => automationId !== null && state.enabledIds.includes(automationId),
   );
   // Edits and new drafts both survive navigation. A refreshed saved record
-  // never replaces unsaved words; its updatedAt key remounts from this cache.
+  // never replaces unsaved words; record identity, not updatedAt, owns this mount.
   const [restored] = React.useState<AutomationEditorDraft | null>(() =>
     loadEditorDraft(projectId, undefined, automationId),
   );
@@ -596,6 +578,7 @@ export function AutomationEditorPanel({
   );
   const [minute, setMinute] = React.useState(storedSchedule?.minute ?? 0);
   const [timeZone, setTimeZone] = React.useState(storedSchedule?.timeZone ?? hostTimeZone());
+  const problemId = React.useId();
   const [problem, setProblem] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
@@ -631,22 +614,20 @@ export function AutomationEditorPanel({
           : { preset, hour, minute, timeZone },
     [preset, weekday, hour, minute, timeZone],
   );
-  const trigger: AutomationTrigger =
-    triggerChoice === "schedule"
-      ? { kind: "schedule", schedule }
-      : triggerChoice === "columns" && columns.length > 0
-        ? { kind: "columns", columns }
-        : NO_AUTOMATION_TRIGGER;
+  const trigger = React.useMemo<AutomationTrigger>(
+    () =>
+      triggerChoice === "schedule"
+        ? { kind: "schedule", schedule }
+        : triggerChoice === "columns"
+          ? { kind: "columns", columns }
+          : NO_AUTOMATION_TRIGGER,
+    [triggerChoice, schedule, columns],
+  );
   const ownershipChoice: OwnershipChoice =
     automationSourceIsCloud() || triggerChoice === "schedule" ? "project" : ownership;
   const savingProjectId =
     automation === null ? (ownershipChoice === "project" ? projectId : null) : automation.projectId;
   const scheduleProblem = automationScheduleProblem({ projectId: savingProjectId, trigger });
-  const incomplete =
-    name.trim().length === 0 ||
-    instructions.trim().length === 0 ||
-    (triggerChoice === "columns" && columns.length === 0) ||
-    scheduleProblem !== null;
 
   const draft = React.useMemo<AutomationEditorDraft>(
     () => ({
@@ -696,6 +677,34 @@ export function AutomationEditorPanel({
     }
   }, [automationId, projectId, draft, dirty]);
 
+  const baseline = React.useRef(automation);
+  React.useEffect(() => {
+    const previous = baseline.current;
+    baseline.current = automation;
+    if (automation === null || previous === null || previous === automation) return;
+    setName((current) => (current === previous.name ? automation.name : current));
+    setInstructions((current) =>
+      current === previous.instructions ? automation.instructions : current,
+    );
+    if (
+      JSON.stringify(runtime) === JSON.stringify(previous.runtime) &&
+      isValidAutomationRuntime(automation.runtime)
+    )
+      setRuntime(automation.runtime);
+    if (JSON.stringify(trigger) === JSON.stringify(previous.trigger)) {
+      setTriggerChoice(automation.trigger.kind);
+      setColumns(automationTriggerColumns(automation.trigger));
+      const saved = automationTriggerSchedule(automation.trigger);
+      if (saved) {
+        setPreset(saved.preset);
+        setMinute(saved.minute);
+        setTimeZone(saved.timeZone);
+        if (saved.preset !== "hourly") setHour(saved.hour);
+        if (saved.preset === "weekly") setWeekday(saved.weekday);
+      }
+    }
+  }, [automation, runtime, trigger]);
+
   /** Discard restores the saved record; only a new record becomes blank. */
   function discardDraft(): void {
     clearEditorDraft(projectId, undefined, automationId);
@@ -724,6 +733,8 @@ export function AutomationEditorPanel({
     setTimeZone(savedSchedule?.timeZone ?? hostTimeZone());
     setResumed(false);
     setProblem(null);
+    setEditing(null);
+    focusEdit(editing);
     // A new record has nothing to restore TO, so discarding it would otherwise
     // leave a blank create form standing where the page expects one selected
     // record. Hand the surface back to the rail's first Automation, which is
@@ -731,11 +742,56 @@ export function AutomationEditorPanel({
     if (automation === null) onDiscardedNewDraft?.();
   }
 
+  function cancelGroup(): void {
+    if (automation === null) return;
+    if (editing === "name") setName(automation.name);
+    if (editing === "instructions") setInstructions(automation.instructions);
+    if (editing === "runtime")
+      setRuntime(isValidAutomationRuntime(automation.runtime) ? automation.runtime : null);
+    if (editing === "trigger") {
+      setTriggerChoice(automation.trigger.kind);
+      setColumns(automationTriggerColumns(automation.trigger));
+      const saved = automationTriggerSchedule(automation.trigger);
+      setPreset(saved?.preset ?? "daily");
+      setMinute(saved?.minute ?? 0);
+      setTimeZone(saved?.timeZone ?? hostTimeZone());
+      setHour(saved && saved.preset !== "hourly" ? saved.hour : DEFAULT_SCHEDULE_HOUR);
+      setWeekday(saved?.preset === "weekly" ? saved.weekday : DEFAULT_SCHEDULE_WEEKDAY);
+    }
+    setProblem(null);
+    setEditing(null);
+    focusEdit(editing);
+  }
+
   async function submit(): Promise<void> {
-    if (incomplete || saving) return;
+    if (lock.current || disabled || !guardWrite(projectId)) return;
+    const validation =
+      name.trim() === ""
+        ? "Name required"
+        : instructions.trim() === ""
+          ? "Instructions required"
+          : triggerChoice === "columns" && columns.length === 0
+            ? "Select a column"
+            : scheduleProblem;
+    if (validation !== null) {
+      setProblem(validation);
+      return;
+    }
+    const latest =
+      automation === null
+        ? null
+        : (useAutomationsStore
+            .getState()
+            .byProject[projectId]?.find((row) => row.id === automation.id) ?? automation);
+    if (latest !== null && editing !== "runtime" && !isValidAutomationRuntime(latest.runtime)) {
+      setProblem("Saved Runtime is invalid. Choose a valid model-and-reasoning pair");
+      return;
+    }
+    lock.current = true;
     setSaving(true);
     const submittedDraft = JSON.stringify(draft);
     try {
+      // A group changes only its own fields. Whole-record update merges with the latest projection.
       const refusal =
         automation === null
           ? await save({
@@ -749,244 +805,519 @@ export function AutomationEditorPanel({
           : await update({
               commandId: commandId.current,
               automationId: automation.id,
-              name,
-              instructions,
-              trigger,
-              runtime,
+              name: editing === "name" ? name : latest!.name,
+              instructions: editing === "instructions" ? instructions : latest!.instructions,
+              trigger: editing === "trigger" ? trigger : latest!.trigger,
+              runtime:
+                editing === "runtime" || !isValidAutomationRuntime(latest!.runtime)
+                  ? runtime
+                  : latest!.runtime,
             });
       if (refusal === null) {
         commandId.current = crypto.randomUUID();
         setProblem(null);
+        const remainingDraft =
+          latest !== null &&
+          ((editing !== "name" && name !== latest.name) ||
+            (editing !== "instructions" && instructions !== latest.instructions) ||
+            (editing !== "runtime" && JSON.stringify(runtime) !== JSON.stringify(latest.runtime)) ||
+            (editing !== "trigger" && JSON.stringify(trigger) !== JSON.stringify(latest.trigger)));
         // Never clear newer typing that happened while this save was in flight.
         if (
+          loadEditorDraft(projectId, undefined, automationId) === null ||
           JSON.stringify(loadEditorDraft(projectId, undefined, automationId)) === submittedDraft
         ) {
-          clearEditorDraft(projectId, undefined, automationId);
-          setResumed(false);
+          if (!remainingDraft) {
+            clearEditorDraft(projectId, undefined, automationId);
+            setResumed(false);
+          }
+          setEditing(null);
+          focusEdit(editing);
         }
       } else {
-        setProblem(refusal);
+        setProblem(`Couldn’t save ${name}: ${refusal}`);
       }
     } catch (error) {
-      setProblem(errorMessage(error));
+      setProblem(`Couldn’t save ${name}: ${errorMessage(error)}`);
     } finally {
+      lock.current = false;
       setSaving(false);
     }
   }
 
-  return (
-    <div data-slot="automation-editor" className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-4 border-b border-border px-6 py-4">
-        <input
-          autoFocus
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
-          aria-label="Name"
-          placeholder="Name this automation"
-          className="min-w-0 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
-        />
-        <DraftIndicator dirty={dirty} resumed={resumed} onDiscard={discardDraft} />
-        {actions}
-        <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
-          {automation === null ? "Create automation" : "Save changes"}
+  function groupActions(group: Group) {
+    if (automation === null) return null;
+    return editing === group ? (
+      <div className="flex items-center gap-1">
+        <Button variant="ghost" size="sm" disabled={saving} onClick={cancelGroup}>
+          Cancel
         </Button>
-      </header>
-
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
-        <main className="min-h-0 overflow-y-auto p-6">
-          <div className="mx-auto flex w-full max-w-content flex-col gap-6">
-            <section className="flex min-h-0 flex-col gap-2">
-              <div className="flex items-center justify-between gap-2">
-                <SectionLabel>Instructions</SectionLabel>
-                <AutomationAuthoringButton
-                  projectId={projectId}
-                  context={{
-                    name,
-                    instructions,
-                    trigger,
-                    runtime,
-                    skillSlugs: skills.map((skill) => skill.name),
-                  }}
-                />
-              </div>
-              <ComposerPickerStack
-                value={instructions}
-                onValueChange={setInstructions}
-                ready
-                interactionOpen={false}
-                promptTemplates={templates}
-                skills={skills}
-                verbs={[]}
-                files={fileIndex.getIndex()}
-                onFilePickerOpen={fileIndex.refresh}
-                layout="overlay"
-              >
-                <InstructionsTextarea
-                  value={instructions}
-                  onValueChange={setInstructions}
-                  className="min-h-48"
-                />
-              </ComposerPickerStack>
-            </section>
-            {history}
-          </div>
-        </main>
-
-        <aside className="min-h-0 overflow-y-auto border-l border-border bg-rail/30">
-          <section className="flex flex-col gap-2 border-b border-border p-4">
-            <SectionLabel>Ownership</SectionLabel>
-            {automation === null ? (
-              <Select
-                value={ownershipChoice}
-                disabled={triggerChoice === "schedule"}
-                onValueChange={(value) => setOwnership(value as OwnershipChoice)}
-              >
-                <SelectTrigger className="w-full" aria-label="Ownership">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="project">
-                    <FolderOpenIcon />
-                    This project
-                  </SelectItem>
-                  {automationSourceIsCloud() ? null : (
-                    <SelectItem value="global">
-                      <GlobeIcon />
-                      All projects
-                    </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
+        <Button
+          size="sm"
+          disabled={disabled || saving}
+          aria-label={`Save ${group}`}
+          onClick={() => void submit()}
+        >
+          {saving ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    ) : (
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={disabled || saving}
+        aria-label={`Edit ${group}`}
+        onClick={() => startEdit(group)}
+      >
+        Edit
+      </Button>
+    );
+  }
+  const triggerEditing = creating || editing === "trigger";
+  const instructionsEditing = creating || editing === "instructions";
+  const runtimeEditing = creating || editing === "runtime";
+  const savedSchedule = automation === null ? null : automationTriggerSchedule(automation.trigger);
+  const armings = useAutomationsStore((state) => state.armingByProject[projectId]);
+  const armedColumns =
+    automation === null
+      ? []
+      : automationTriggerColumns(automation.trigger).filter((status) =>
+          armings?.some((a) => a.status === status && a.automationId === automation.id),
+        );
+  return (
+    <div
+      ref={panel}
+      data-slot="automation-editor"
+      className="automation-groups flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
+      onKeyDown={(event) => {
+        if (event.defaultPrevented || saving) return;
+        if (
+          event.key === "Escape" &&
+          editing !== null &&
+          !panel.current?.querySelector("[data-slot=composer-picker]")
+        ) {
+          event.preventDefault();
+          discardDraft();
+        }
+        if (
+          event.key === "Enter" &&
+          ((event.metaKey && (creating || editing !== null)) || editing === "name")
+        ) {
+          event.preventDefault();
+          void submit();
+        }
+      }}
+    >
+      <ContentColumn className="py-6">
+        {back}
+        <header className="mb-6 flex min-w-0 flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1" data-editing={creating || editing === "name"}>
+            {creating || editing === "name" ? (
+              <Input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.currentTarget.value)}
+                aria-label="Name"
+                placeholder="Name"
+                aria-invalid={problem === "Name required"}
+                aria-describedby={problem === "Name required" ? problemId : undefined}
+                className="min-w-0 text-heading font-semibold"
+                disabled={disabled || saving}
+              />
             ) : (
-              <div className="flex h-7 items-center gap-2 text-ui text-foreground">
-                {automation.projectId === null ? <GlobeIcon /> : <FolderOpenIcon />}
-                {automation.projectId === null ? "All projects" : "This project"}
+              <h2 aria-label={automation.name} className="text-heading font-semibold wrap-anywhere">
+                <button
+                  className="w-full rounded-control text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`Rename ${automation.name}`}
+                  disabled={disabled}
+                  onClick={() => startEdit("name")}
+                >
+                  {automation.name}
+                </button>
+              </h2>
+            )}
+            {!creating && (
+              <div className="mt-2 text-ui text-muted-foreground">
+                {readState === "loading" ? (
+                  "Loading automation…"
+                ) : readState === "failed" ? null : automationSourceIsCloud() ? (
+                  <CloudAutomationState projectId={projectId} automation={automation} />
+                ) : automation.trigger.kind === "none" || !firesHere ? (
+                  "Manual only"
+                ) : savedSchedule ? (
+                  <NextScheduledRun schedule={savedSchedule} automationId={automation.id} />
+                ) : (
+                  `${armedColumns.length > 0 ? "Armed" : "Offered"} in ${columnNames(armedColumns.length > 0 ? armedColumns : automationTriggerColumns(automation.trigger))}`
+                )}
               </div>
             )}
-          </section>
-
-          <section className="flex flex-col gap-2 border-b border-border p-4">
-            <SectionLabel>Trigger</SectionLabel>
-            <div role="radiogroup" aria-label="Trigger" className="flex flex-col gap-1">
-              <TriggerChoice
-                value="none"
-                selected={triggerChoice}
-                icon={PlayIcon}
-                onSelect={setTriggerChoice}
-              >
-                {MANUAL_TRIGGER_LABEL}
-              </TriggerChoice>
-              <TriggerChoice
-                value="columns"
-                selected={triggerChoice}
-                icon={ArrowRightIcon}
-                onSelect={setTriggerChoice}
-              >
-                Ticket enters
-              </TriggerChoice>
-              <TriggerChoice
-                value="schedule"
-                selected={triggerChoice}
-                icon={ClockIcon}
-                onSelect={setTriggerChoice}
-              >
-                On a schedule
-              </TriggerChoice>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {editing === "name" ? groupActions("name") : actions}
+          </div>
+          {(dirty || creating) && (
+            <div className="basis-full">
+              <DraftIndicator dirty={dirty} resumed={resumed} onDiscard={discardDraft} />
             </div>
-
-            {triggerChoice === "columns" ? (
-              <ColumnPicker value={columns} onChange={setColumns} />
-            ) : null}
-
-            {triggerChoice === "schedule" ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2">
-                <Select
-                  value={preset}
-                  onValueChange={(value) => setPreset(value as AutomationSchedulePreset)}
-                >
-                  <SelectTrigger className="w-full" aria-label="Schedule">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        <ClockIcon />
-                        {AUTOMATION_SCHEDULE_PRESET_LABELS[value]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {preset === "weekly" ? (
-                  <Select
-                    value={weekday}
-                    onValueChange={(value) => setWeekday(value as ScheduleWeekday)}
+          )}
+        </header>
+        <fieldset
+          aria-describedby={problem ? problemId : undefined}
+          disabled={disabled || saving}
+          className="flex min-w-0 flex-col gap-5"
+        >
+          <div data-editing={triggerEditing}>
+            <PrefSection
+              title="Trigger"
+              action={
+                <div className="flex items-center gap-1">
+                  {groupActions("trigger")}
+                  {!automationSourceIsCloud() && (savedSchedule || triggerChoice === "schedule") ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" aria-label="Trigger more actions">
+                          <MoreIcon />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => setPolicy(true)}>
+                          <InfoIcon />
+                          Schedule policy
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : null}
+                </div>
+              }
+            >
+              {triggerEditing ? (
+                <>
+                  <PrefRow label="Trigger">
+                    <Segmented<TriggerChoice>
+                      ariaLabel="Trigger"
+                      tabIdPrefix="automation-trigger"
+                      value={triggerChoice}
+                      options={[
+                        { key: "none", label: "None" },
+                        { key: "columns", label: "Columns" },
+                        { key: "schedule", label: "Schedule" },
+                      ]}
+                      onChange={setTriggerChoice}
+                    />
+                  </PrefRow>
+                  <div
+                    role="tabpanel"
+                    className={
+                      triggerChoice === "schedule" ? "border-t border-border/50" : undefined
+                    }
+                    id={`automation-trigger-page-${triggerChoice}`}
+                    aria-labelledby={`automation-trigger-tab-${triggerChoice}`}
                   >
-                    <SelectTrigger className="w-full" aria-label="Day of the week">
+                    {triggerChoice === "columns" && (
+                      <div className="flex flex-wrap gap-x-5 gap-y-3 border-t border-border p-3">
+                        {TICKET_STATUSES.map((status) => (
+                          <label key={status} className="flex items-center gap-2 text-ui">
+                            <Checkbox
+                              checked={columns.includes(status)}
+                              aria-label={TICKET_STATUS_LABELS[status]}
+                              onCheckedChange={() =>
+                                setColumns(
+                                  TICKET_STATUSES.filter((s) =>
+                                    s === status ? !columns.includes(s) : columns.includes(s),
+                                  ),
+                                )
+                              }
+                            />
+                            {TICKET_STATUS_LABELS[status]}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {triggerChoice === "schedule" && (
+                      <>
+                        <PrefRow label="Frequency">
+                          <Select
+                            value={preset}
+                            onValueChange={(v) => setPreset(v as AutomationSchedulePreset)}
+                          >
+                            <SelectTrigger
+                              variant="inspector"
+                              className="w-auto"
+                              aria-label="Frequency"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
+                                <SelectItem key={value} value={value}>
+                                  <ClockIcon />
+                                  {
+                                    {
+                                      hourly: "Hourly",
+                                      daily: "Daily",
+                                      weekdays: "Weekdays",
+                                      weekly: "Weekly",
+                                    }[value]
+                                  }
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </PrefRow>
+                        {preset === "weekly" && (
+                          <PrefRow label="Day">
+                            <Select
+                              value={weekday}
+                              onValueChange={(v) => setWeekday(v as ScheduleWeekday)}
+                            >
+                              <SelectTrigger
+                                variant="inspector"
+                                className="w-auto"
+                                aria-label="Day"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {SCHEDULE_WEEKDAYS.map((value) => (
+                                  <SelectItem key={value} value={value}>
+                                    <ClockIcon />
+                                    {SCHEDULE_WEEKDAY_LABELS[value]}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </PrefRow>
+                        )}
+                        {preset === "hourly" ? (
+                          <PrefRow label="Minute">
+                            <ScheduleNumberInput
+                              value={minute}
+                              max={59}
+                              ariaLabel="Minute"
+                              onChange={setMinute}
+                            />
+                          </PrefRow>
+                        ) : (
+                          <PrefRow label="Time">
+                            <TimeField
+                              hour={hour}
+                              minute={minute}
+                              onHourChange={setHour}
+                              onMinuteChange={setMinute}
+                            />
+                          </PrefRow>
+                        )}
+                        <PrefRow label="Time zone">
+                          <TimeZonePicker
+                            value={timeZone}
+                            onChange={setTimeZone}
+                            className="max-w-full"
+                          />
+                        </PrefRow>
+                        {!creating && scheduleProblem === null && (
+                          <PrefRow label="Next runs">
+                            <SchedulePreview schedule={schedule} automationId={automation.id} />
+                          </PrefRow>
+                        )}
+                      </>
+                    )}
+                    {scheduleProblem && (
+                      <p role="alert" className="p-3 text-ui text-destructive">
+                        {scheduleProblem}
+                      </p>
+                    )}
+                  </div>
+                </>
+              ) : savedSchedule ? (
+                <>
+                  <PrefRow label="Frequency">
+                    <span className="text-ui">
+                      {triggerLabel(automation.trigger).replace(` · ${savedSchedule.timeZone}`, "")}
+                    </span>
+                  </PrefRow>
+                  <PrefRow label="Time zone">
+                    <span className="text-ui wrap-anywhere">{savedSchedule.timeZone}</span>
+                  </PrefRow>
+                </>
+              ) : (
+                <PrefRow label="Trigger">
+                  <span className="text-ui wrap-anywhere">{triggerLabel(automation.trigger)}</span>
+                </PrefRow>
+              )}
+              {automation !== null && (
+                <AutomationTriggerState
+                  projectId={projectId}
+                  automation={automation}
+                  disabled={disabled || saving}
+                />
+              )}
+            </PrefSection>
+          </div>
+          <div data-editing={instructionsEditing}>
+            <PrefSection
+              title="Instructions"
+              action={
+                <div className="flex flex-wrap items-center gap-1">
+                  {instructionsEditing && (
+                    <AutomationAuthoringButton
+                      projectId={projectId}
+                      context={{
+                        name,
+                        instructions,
+                        trigger,
+                        runtime,
+                        skillSlugs: skills.map((s) => s.name),
+                      }}
+                    />
+                  )}
+                  {groupActions("instructions")}
+                </div>
+              }
+            >
+              {instructionsEditing ? (
+                <ComposerPickerStack
+                  value={instructions}
+                  onValueChange={setInstructions}
+                  ready
+                  interactionOpen={false}
+                  promptTemplates={templates}
+                  skills={skills}
+                  verbs={[]}
+                  files={fileIndex.getIndex()}
+                  onFilePickerOpen={fileIndex.refresh}
+                  layout="overlay"
+                >
+                  <InstructionsTextarea
+                    value={instructions}
+                    onValueChange={setInstructions}
+                    className="min-h-40"
+                  />
+                </ComposerPickerStack>
+              ) : (
+                <div className="p-3">
+                  <p
+                    className={cn(
+                      "whitespace-pre-wrap text-ui leading-6 wrap-anywhere",
+                      !expanded && "line-clamp-5",
+                    )}
+                  >
+                    {automation.instructions}
+                  </p>
+                  {(automation.instructions.length > 250 ||
+                    automation.instructions.split("\n").length > 5) && (
+                    <Button size="sm" variant="ghost" onClick={() => setExpanded(!expanded)}>
+                      {expanded ? "Less" : "More"}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </PrefSection>
+          </div>
+          <div data-editing={runtimeEditing}>
+            <PrefSection title="Runtime" action={groupActions("runtime")}>
+              <PrefRow label="Model">
+                {runtimeEditing ? (
+                  <RuntimeFields models={models} runtime={runtime} onChange={setRuntime} />
+                ) : (
+                  <AutomationRuntimeValue
+                    runtime={automation.runtime}
+                    projectId={projectId}
+                    projectTarget={automation.trigger.kind === "schedule"}
+                  />
+                )}
+              </PrefRow>
+              <PrefRow label="Scope">
+                {creating ? (
+                  <Select
+                    value={ownershipChoice}
+                    disabled={triggerChoice === "schedule"}
+                    onValueChange={(v) => setOwnership(v as OwnershipChoice)}
+                  >
+                    <SelectTrigger variant="inspector" className="w-auto" aria-label="Scope">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {SCHEDULE_WEEKDAYS.map((value) => (
-                        <SelectItem key={value} value={value}>
-                          <ClockIcon />
-                          {SCHEDULE_WEEKDAY_LABELS[value]}
+                      <SelectItem value="project">
+                        <FolderOpenIcon />
+                        This project
+                      </SelectItem>
+                      {!automationSourceIsCloud() && (
+                        <SelectItem value="global">
+                          <GlobeIcon />
+                          All projects
                         </SelectItem>
-                      ))}
+                      )}
                     </SelectContent>
                   </Select>
-                ) : null}
-                {preset === "hourly" ? (
-                  <label className="flex items-center justify-between gap-2 text-ui text-muted-foreground">
-                    Minutes past the hour
-                    <ScheduleNumberInput
-                      value={minute}
-                      max={59}
-                      ariaLabel="Minutes past the hour"
-                      onChange={setMinute}
-                    />
-                  </label>
                 ) : (
-                  <TimeField
-                    hour={hour}
-                    minute={minute}
-                    onHourChange={setHour}
-                    onMinuteChange={setMinute}
-                  />
+                  <span className="text-ui">
+                    {automation.projectId === null ? "All projects" : "This project"}
+                  </span>
                 )}
-                <TimeZonePicker
-                  value={timeZone}
-                  onChange={setTimeZone}
-                  className="w-full max-w-none"
-                />
-                {firesHere && automationId !== null && scheduleProblem === null ? (
-                  automationSourceIsCloud() ? (
-                    <CloudNextScheduledRun projectId={projectId} automationId={automationId} />
-                  ) : (
-                    <NextScheduledRun schedule={schedule} automationId={automationId} />
-                  )
-                ) : null}
-                {automationSourceIsCloud() ? null : (
-                  <p className="text-ui text-muted-foreground">
-                    {SCHEDULE_SKIPPED_OCCURRENCE_POLICY}
-                  </p>
-                )}
-              </div>
-            ) : null}
-            {scheduleProblem === null ? null : (
-              <p className="text-label text-muted-foreground">{scheduleProblem}</p>
-            )}
-          </section>
+              </PrefRow>
+            </PrefSection>
+          </div>
+          {creating && (
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={discardDraft}>
+                Discard
+              </Button>
+              <Button size="sm" onClick={() => void submit()}>
+                {saving ? "Saving…" : "Create"}
+              </Button>
+            </div>
+          )}
+        </fieldset>
+        {problem !== null && (
+          <p id={problemId} role="alert" className="mt-3 text-ui text-destructive">
+            {problem}
+          </p>
+        )}
+        {!creating && history}
+      </ContentColumn>
+      <Dialog open={policy} onOpenChange={setPolicy}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Schedule policy</DialogTitle>
+          </DialogHeader>
+          <p className="text-ui">
+            Up to {AUTOMATION_SCHEDULE_LATE_GRACE_MS / 60_000} min late. Skipped when Volli is
+            closed or this Mac is asleep.
+          </p>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
 
-          <section className="flex flex-col gap-2 p-4">
-            <SectionLabel>Runtime</SectionLabel>
-            <RuntimeFields models={models} runtime={runtime} onChange={setRuntime} />
-          </section>
-        </aside>
-      </div>
-      {problem === null ? null : (
-        <p role="alert" className="border-t border-border px-6 py-2 text-label text-destructive">
-          {problem}
-        </p>
-      )}
+function SchedulePreview({
+  schedule,
+  automationId,
+}: {
+  schedule: AutomationSchedule;
+  automationId: string;
+}) {
+  const [now] = React.useState(() => Date.now());
+  const dates = React.useMemo(() => {
+    let after = now;
+    return Array.from({ length: 3 }, () => {
+      after = nextScheduleOccurrence({ schedule, staggerKey: automationId, after });
+      return new Date(after).toLocaleString(undefined, {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: schedule.timeZone,
+      });
+    });
+  }, [schedule, automationId, now]);
+  return (
+    <div className="text-right text-ui tabular-nums">
+      {dates.map((date) => (
+        <div key={date}>{date}</div>
+      ))}
     </div>
   );
 }

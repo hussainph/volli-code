@@ -12,6 +12,12 @@ import { AppearanceModeChoice, CanvasEditor } from "./canvas-editor";
 const GLOBAL: ThemeScope = { kind: "global" };
 const ORIGINAL_COMMIT_PREVIEW = useThemeStore.getState().commitPreview;
 
+const ONE_STOP: Canvas = {
+  ...DEFAULT_CANVAS,
+  stops: [DEFAULT_CANVAS.stops[0]],
+  primaryIndex: 0,
+};
+
 const THREE_STOPS: Canvas = {
   ...DEFAULT_CANVAS,
   stops: [
@@ -67,9 +73,9 @@ describe("CanvasEditor", () => {
   it("hands a finished edit to a memory-only host without committing it", async () => {
     const onCanvasChange = vi.fn();
     const commitPreview = vi.fn(async () => true);
-    useThemeStore.setState({ preview: DEFAULT_CANVAS, commitPreview });
+    useThemeStore.setState({ preview: ONE_STOP, commitPreview });
     const document = await mountEditor({
-      canvas: DEFAULT_CANVAS,
+      canvas: ONE_STOP,
       resolved: "dark",
       onCanvasChange,
     });
@@ -89,8 +95,8 @@ describe("CanvasEditor", () => {
 
   it("keeps Settings' scoped save behavior when no memory-only host is passed", async () => {
     const commitPreview = vi.fn(async () => true);
-    useThemeStore.setState({ preview: DEFAULT_CANVAS, commitPreview });
-    const document = await mountEditor({ scope: GLOBAL, canvas: DEFAULT_CANVAS, resolved: "dark" });
+    useThemeStore.setState({ preview: ONE_STOP, commitPreview });
+    const document = await mountEditor({ scope: GLOBAL, canvas: ONE_STOP, resolved: "dark" });
 
     const add = document.querySelector<HTMLButtonElement>('button[aria-label="Add a colour"]');
     if (add === null) throw new Error("missing add colour button");
@@ -165,13 +171,32 @@ describe("CanvasEditor", () => {
     expect(render(THREE_STOPS, "dark")).toContain('aria-label="Remove colour 3"');
   });
 
-  it("refuses to remove the last colour, and to add past the engine's ceiling", () => {
-    const one = render(DEFAULT_CANVAS, "dark");
-    expect(one).toContain('aria-label="Remove a colour"');
-    expect(one).toContain("You need at least one colour");
+  it("refuses to remove the last colour, and to add past the engine's ceiling", async () => {
+    const onCanvasChange = vi.fn();
+    const commitPreview = vi.fn(async () => true);
+    useThemeStore.setState({ preview: null, commitPreview });
+    const document = await mountEditor({ canvas: ONE_STOP, resolved: "dark", onCanvasChange });
+    const remove = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove a colour"]',
+    );
+    if (remove === null) throw new Error("missing remove colour button");
+    expect(remove.disabled).toBe(true);
+    expect(remove.title).toBe("You need at least one colour");
+    await act(async () => remove.click());
 
-    const three = render(THREE_STOPS, "dark");
-    expect(three).toContain("A canvas can have at most 3 colours");
+    await act(async () =>
+      root?.render(
+        <CanvasEditor canvas={THREE_STOPS} resolved="dark" onCanvasChange={onCanvasChange} />,
+      ),
+    );
+    const add = document.querySelector<HTMLButtonElement>('button[aria-label="Add a colour"]');
+    if (add === null) throw new Error("missing add colour button");
+    expect(add.disabled).toBe(true);
+    expect(add.title).toBe("A canvas can have at most 3 colours");
+    await act(async () => add.click());
+    expect(onCanvasChange).not.toHaveBeenCalled();
+    expect(commitPreview).not.toHaveBeenCalled();
+    expect(useThemeStore.getState().preview).toBeNull();
   });
 
   it("opens the swatch row on the page the primary lives on", () => {

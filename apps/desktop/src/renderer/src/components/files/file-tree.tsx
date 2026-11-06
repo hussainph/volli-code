@@ -1,17 +1,21 @@
+import { scrollEdgeMask } from "@renderer/components/ui/scroll-edge-mask";
 import * as React from "react";
-import { CaretDownIcon as CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretRightIcon as CaretRight } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { FileCodeIcon as FileCode } from "@phosphor-icons/react/dist/csr/FileCode";
-import { FileTextIcon as FileText } from "@phosphor-icons/react/dist/csr/FileText";
-import { FolderIcon as Folder } from "@phosphor-icons/react/dist/csr/Folder";
-import { FolderOpenIcon as FolderOpen } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { PaperclipIcon as Paperclip } from "@phosphor-icons/react/dist/csr/Paperclip";
-import { PushPinIcon as PushPin } from "@phosphor-icons/react/dist/csr/PushPin";
-import { FilePlusIcon as FilePlus } from "@phosphor-icons/react/dist/csr/FilePlus";
-import { FolderPlusIcon as FolderPlus } from "@phosphor-icons/react/dist/csr/FolderPlus";
-import { PencilSimpleIcon as PencilSimple } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { FilesIcon as Files } from "@phosphor-icons/react/dist/csr/Files";
-import { TrashIcon as Trash } from "@phosphor-icons/react/dist/csr/Trash";
+import {
+  ChevronDownIcon as CaretDown,
+  ChevronRightIcon as CaretRight,
+  CodeFileIcon as FileCode,
+  DocumentIcon as FileText,
+  FolderIcon as Folder,
+  FolderOpenIcon as FolderOpen,
+  AttachmentIcon as Paperclip,
+  PinIcon as PushPin,
+  AddFileIcon as FilePlus,
+  AddFolderIcon as FolderPlus,
+  EditIcon as PencilSimple,
+  FilesIcon as Files,
+  DeleteIcon as Trash,
+} from "@renderer/components/ui/icon";
+
 import {
   buildTree,
   flattenTree,
@@ -30,7 +34,8 @@ import {
   ContextMenuSeparator,
 } from "@renderer/components/ui/context-menu";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
-import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
+import { SOURCE_LIST_ROW } from "@renderer/components/ui/list-row";
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import { cn } from "@renderer/lib/utils";
 
@@ -46,7 +51,7 @@ function PathLabel({ label, query }: { label: string; query: string }) {
         hits.has(index) ? (
           <mark
             key={label.slice(0, index + 1)}
-            className="rounded-keycap bg-primary/10 text-primary-text"
+            className="rounded-keycap bg-(--accent-selected) text-primary-text"
           >
             {letter}
           </mark>
@@ -74,11 +79,15 @@ export function FileTree({
   onFolder,
   onExpandedChange,
   searchMatches,
+  scrollingHeading,
+  onClearSearch,
 }: {
   entries: readonly FileEntry[];
+  scrollingHeading?: React.ReactNode;
   projectId: string;
   ticketId?: string;
   query?: string;
+  onClearSearch?(): void;
   initialFolder?: string;
   selected?: string | null;
   controls?: FileNavigatorControls;
@@ -100,6 +109,7 @@ export function FileTree({
   );
   const [focus, setFocus] = React.useState<string | null>(null);
   const [scroll, setScroll] = React.useState(0);
+  const headingHeight = scrollingHeading ? 32 : 0;
   const [height, setHeight] = React.useState(400);
   const scroller = React.useRef<HTMLDivElement>(null);
   const id = React.useId();
@@ -111,7 +121,7 @@ export function FileTree({
   );
   const focused = rows.some((row) => rowKey(row) === focus) ? focus : rows[0] && rowKey(rows[0]);
   const focusedIndex = rows.findIndex((row) => rowKey(row) === focused);
-  const first = Math.max(0, Math.floor(scroll / ROW_HEIGHT) - OVERSCAN);
+  const first = Math.max(0, Math.floor((scroll - headingHeight) / ROW_HEIGHT) - OVERSCAN);
   const last = Math.min(rows.length, Math.ceil((scroll + height) / ROW_HEIGHT) + OVERSCAN);
   const indices = Array.from({ length: Math.max(0, last - first) }, (_, index) => first + index);
   if (focusedIndex >= 0 && (focusedIndex < first || focusedIndex >= last))
@@ -125,7 +135,12 @@ export function FileTree({
     setHeight(element.clientHeight);
     return () => observer.disconnect();
   }, []);
+  const previousQuery = React.useRef(query);
   React.useEffect(() => {
+    // Activity reconnects effects when Sessions/Files becomes visible again.
+    // Only a changed filter resets the cursor, not that lifecycle reconnect.
+    if (previousQuery.current === query) return;
+    previousQuery.current = query;
     if (scroller.current) scroller.current.scrollTop = 0;
     setScroll(0);
   }, [query]);
@@ -154,7 +169,7 @@ export function FileTree({
     const element = scroller.current;
     if (!row || !element) return;
     setFocus(rowKey(row));
-    const top = bounded * ROW_HEIGHT;
+    const top = headingHeight + bounded * ROW_HEIGHT;
     if (top < element.scrollTop) element.scrollTop = top;
     else if (top + ROW_HEIGHT > element.scrollTop + element.clientHeight)
       element.scrollTop = top + ROW_HEIGHT - element.clientHeight;
@@ -233,9 +248,16 @@ export function FileTree({
         tabIndex={0}
         aria-activedescendant={focused ? rowId(focused) : undefined}
         className="group/tree relative min-h-0 flex-1 overflow-auto outline-none"
+        style={{
+          maskImage: scrollEdgeMask({
+            atTop: scroll <= 0,
+            atBottom: scroll + height >= rows.length * ROW_HEIGHT + headingHeight - 1,
+          }),
+        }}
         onKeyDown={keyDown}
         onScroll={(event) => setScroll(event.currentTarget.scrollTop)}
       >
+        {scrollingHeading ? <div className="h-8">{scrollingHeading}</div> : null}
         <div className="relative mx-2" style={{ height: rows.length * ROW_HEIGHT }}>
           {indices.map((index) => {
             const row = rows[index]!;
@@ -285,12 +307,13 @@ export function FileTree({
                         : "ticket-files-row"
                     }
                     data-line={row.match?.line}
+                    data-selected={selected === path || undefined}
                     data-path={path}
                     data-kind={row.match ? "match" : file ? "file" : "directory"}
                     title={row.match ? row.match.text : referenced ? `Referenced · ${path}` : path}
                     className={cn(
-                      "absolute inset-x-0 flex cursor-default select-none items-center gap-2 rounded-row px-2 text-ui hover:bg-accent/50",
-                      selected === path && "bg-primary/10",
+                      "absolute inset-x-0 flex cursor-default select-none items-center gap-1.5 px-2 text-ui",
+                      SOURCE_LIST_ROW,
                       focused === key &&
                         "group-focus-visible/tree:inset-ring-1 group-focus-visible/tree:inset-ring-ring",
                     )}
@@ -343,13 +366,13 @@ export function FileTree({
                     ) : row.expanded ? (
                       <CaretDown
                         aria-hidden
-                        weight="bold"
+                        strokeWidth={2.25}
                         className="size-3 shrink-0 text-muted-foreground"
                       />
                     ) : (
                       <CaretRight
                         aria-hidden
-                        weight="bold"
+                        strokeWidth={2.25}
                         className="size-3 shrink-0 text-muted-foreground"
                       />
                     )}
@@ -445,15 +468,25 @@ export function FileTree({
             );
           })}
         </div>
-        {rows.length === 0 &&
-          (query ? (
-            <p className="p-4 text-ui text-muted-foreground">No matches</p>
-          ) : (
-            <div className="flex flex-col gap-2 p-4 text-ui text-muted-foreground">
-              <NextActionIllustration kind="files" />
-              <p>No files</p>
-            </div>
-          ))}
+        {rows.length === 0 && controls?.edit.kind !== "draft" ? (
+          <PanelEmptyState
+            illustration={query ? "search" : "file"}
+            title={query ? "No matching files" : "No files"}
+            action={
+              query
+                ? onClearSearch
+                  ? { label: "Clear search", onAction: onClearSearch }
+                  : undefined
+                : controls
+                  ? {
+                      label: "New file",
+                      onAction: () => controls.startDraft("file"),
+                      disabled: !controls.canWrite,
+                    }
+                  : undefined
+            }
+          />
+        ) : null}
       </div>
     </>
   );

@@ -81,7 +81,7 @@ describe("sidebar file scope", () => {
       }),
     );
     await act(async () => useUiStore.setState({ settingsOpen: true }));
-    expect(container.querySelector("button")?.dataset.ticket).toBe("main");
+    expect(container.querySelector("button")?.dataset.ticket).toBe("t");
   });
   it("pins and focuses a ticket file even when that pinned tab already exists", async () => {
     await show();
@@ -96,6 +96,7 @@ describe("sidebar file scope", () => {
   it("opens a main-checkout file in front of Settings instead of behind it", async () => {
     useUiStore.setState({ settingsOpen: true });
     await show();
+    await act(async () => useProjectUiStore.getState().closeTicket("p"));
     expect(container.querySelector("button")?.dataset.ticket).toBe("main");
     await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
     expect(useUiStore.getState().settingsOpen).toBe(false);

@@ -353,12 +353,12 @@ describe("the summary", () => {
     );
   });
 
-  it("holds the box with a skeleton while the fold is in flight", () => {
+  it("keeps an accessible pending region without invented prose", () => {
     render({ content: null, loading: true });
     const block = container.querySelector("[data-summary-state]");
     expect(block?.getAttribute("data-summary-state")).toBe("loading");
     expect(block?.getAttribute("aria-busy")).toBe("true");
-    expect(container.querySelector("[data-slot='skeleton']")).not.toBeNull();
+    expect(container.querySelector("[data-slot='skeleton']")).toBeNull();
   });
 
   it("says so when the fold gave nothing readable", () => {

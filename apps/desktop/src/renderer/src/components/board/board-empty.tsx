@@ -1,13 +1,12 @@
-import { NextActionIllustration } from "@renderer/components/ui/next-action-illustration";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
 
 import {
   ModelAccessFirstRun,
   useModelAccessReady,
 } from "@renderer/components/sessions/model-access-first-run";
-import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { Button } from "@renderer/components/ui/button";
+import { useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
@@ -61,23 +60,20 @@ export function BoardEmpty({ projectId, className }: { projectId: string; classN
       ) : modelReady === false ? (
         <ModelAccessFirstRun />
       ) : (
-        <>
-          <NextActionIllustration kind="board" />
-          <h2 className="text-heading font-semibold text-foreground">No tickets yet</h2>
-          <Button
-            size="lg"
-            {...readOnlyControl(canWrite)}
-            onClick={() => useUiStore.getState().setNewTicketOpen(true)}
-          >
-            <PlusIcon className="size-3.5" />
-            New ticket
-            {/* The shortcut-chip treatment the primary buttons already use
-                (ticket-activity-feed.tsx, project-tile.tsx). */}
-            <kbd className="rounded-sm bg-primary-foreground/10 px-1 py-px font-sans text-label font-normal text-primary-foreground/70">
-              C
-            </kbd>
-          </Button>
-        </>
+        <EmptyState
+          tier="page"
+          illustration="board"
+          title="No tickets yet"
+          action={{
+            label: "New ticket",
+            icon: <AddIcon className="size-3.5" />,
+            onAction: () => useUiStore.getState().setNewTicketOpen(true),
+            disabled: !canWrite,
+            readOnly: !canWrite,
+            shortcut: "C",
+            keyshortcuts: "C",
+          }}
+        />
       )}
     </div>
   );

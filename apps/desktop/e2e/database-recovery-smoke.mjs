@@ -629,6 +629,7 @@ async function malformedHeaderScenario() {
     async () => {
       const actionRaw = await snapshot([...raw.keys()]);
       await run.page.getByRole("button", { name: RESTORE_LABEL, exact: true }).click();
+      await run.page.locator("details").getByText("Details", { exact: true }).click();
       await run.page
         .getByText(
           "Restore failed. Your original database and safety copies are preserved for manual recovery.",

@@ -8,6 +8,9 @@ describe("Switch material", () => {
     const track = html.match(/<button[^>]*>/)?.[0] ?? "";
     const thumb = html.match(/<span[^>]*data-slot="switch-thumb"[^>]*>/)?.[0] ?? "";
     expect(track).toContain('role="switch"');
+    expect(track).toContain("w-(--switch-width)");
+    expect(thumb).toContain("w-(--switch-thumb-width)");
+    expect(thumb).toContain("h-(--switch-thumb-height)");
     expect(track).toContain(`aria-checked="${checked}"`);
     expect(track).toContain("shadow-control-pressed");
     expect(thumb).toContain("control-material");

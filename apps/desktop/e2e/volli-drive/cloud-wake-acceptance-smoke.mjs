@@ -322,7 +322,8 @@ async function journey(fixture, store) {
     // The always-on default can be either Mac. This existing journey explicitly
     // needs A's local folder and pins it through the same picker a person uses.
     await macA.chooseRunner(nameA);
-    await macA.click("button", "New chat", { first: true });
+    await macA.click("button", "Open a tab", { first: true });
+    await macA.click("menuitem", "Chat ⌘T");
     await macA.send(FIRST);
     await macA.wait(reply(FIRST), 60_000);
     await macA.gone("Stop turn", 60_000);
@@ -444,7 +445,8 @@ async function journey(fixture, store) {
 
   await step(8, async () => {
     await macB.chooseRunner(nameA);
-    await macB.click("button", "New chat", { first: true });
+    await macB.click("button", "Open a tab", { first: true });
+    await macB.click("menuitem", "Chat ⌘T");
     await macB.send(PICKED_RUNNER);
     await macB.wait(reply(PICKED_RUNNER), 90_000);
     await macB.wait(`Running on ${nameA}`, 30_000);

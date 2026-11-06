@@ -5,7 +5,7 @@ Generated file. Do not edit by hand.
   verify:      pnpm run check:notices
 
 Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).
-It covers 586 third-party packages: the production dependency closure
+It covers 587 third-party packages: the production dependency closure
 of the desktop app and of the bundled `volli` CLI, the native platform packages
 electron-builder ships as binaries, the build-time sources whose output is part of
 the bundle, and the vendored material recorded in apps/desktop/notices/sources.json.
@@ -54,7 +54,7 @@ they are listed so the index accounts for every module in the bundle.
   @volli/shared
 
 =========================================================================================================
-2. PACKAGE INDEX (586 packages)
+2. PACKAGE INDEX (587 packages)
 =========================================================================================================
 
   <package>@<version>  <licence declared by the package>  [how it reaches the .app]
@@ -113,9 +113,11 @@ they are listed so the index accounts for every module in the bundle.
   @floating-ui/dom@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/react-dom@2.1.9  MIT  [bundled into a chunk]
   @floating-ui/utils@0.2.12  MIT  [bundled into a chunk]
-  @fontsource-variable/geist-mono@5.3.0  OFL-1.1  [bundled into a chunk]
   @fontsource-variable/mona-sans@5.3.0  OFL-1.1  [bundled into a chunk]
+  @fontsource/space-mono@5.3.0  OFL-1.1  [bundled into a chunk]
   @google/genai@2.21.0  Apache-2.0  [bundled into a chunk]
+  @hugeicons/core-free-icons@4.4.0  MIT  [bundled into a chunk]
+  @hugeicons/react@1.1.10  MIT  [bundled into a chunk]
   @iconify/types@2.0.0  MIT  [bundled into a chunk]
   @iconify/utils@3.1.7  MIT  [bundled into a chunk]
   @img/colour@1.1.0  MIT  [node_modules tree, unpacked from the asar]
@@ -138,7 +140,6 @@ they are listed so the index accounts for every module in the bundle.
   @opentelemetry/sdk-metrics@2.12.0  Apache-2.0  [bundled into a chunk]
   @opentelemetry/sdk-trace@2.12.0  Apache-2.0  [bundled into a chunk]
   @opentelemetry/semantic-conventions@1.43.0  Apache-2.0  [bundled into a chunk]
-  @phosphor-icons/react@2.1.10  MIT  [bundled into a chunk]
   @pondwader/socks5-server@1.0.10  MIT  [bundled into a chunk]
   @protobufjs/aspromise@1.1.2  BSD-3-Clause  [bundled into a chunk]
   @protobufjs/base64@1.1.2  BSD-3-Clause  [bundled into a chunk]
@@ -2862,11 +2863,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: @fontsource-variable/geist-mono@5.3.0
+Packages: @fontsource-variable/mona-sans@5.3.0
 SPDX: OFL-1.1
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
-Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git) GeistMono-Italic[wght].ttf: Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git)
+Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona" MonaSans-Italic[wdth,wght].ttf: Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona"
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -2962,11 +2963,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
 =========================================================================================================
-Packages: @fontsource-variable/mona-sans@5.3.0
+Packages: @fontsource/space-mono@5.3.0
 SPDX: OFL-1.1
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
-Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona" MonaSans-Italic[wdth,wght].ttf: Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona"
+Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Italic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Bold.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-BoldItalic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -3268,6 +3269,34 @@ File: LICENSE
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+
+=========================================================================================================
+Packages: @hugeicons/core-free-icons@4.4.0, @hugeicons/react@1.1.10
+SPDX: MIT
+File: LICENSE.md
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2025 Hugeicons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 
 =========================================================================================================
@@ -3782,34 +3811,6 @@ File: LICENSE
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-
-
-=========================================================================================================
-Packages: @phosphor-icons/react@2.1.10
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2020 Phosphor Icons
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 =========================================================================================================
@@ -13172,7 +13173,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-7. VENDORED SOURCES (5)
+7. VENDORED SOURCES (7)
 =========================================================================================================
 
 Third-party source copied into this repository rather than installed. Each entry
@@ -13232,6 +13233,72 @@ licence is asserted for it. What is known and what is missing:
   than a packaging fact, so this entry records it and asserts nothing;
   apps/desktop/notices/README.md carries it as an open item for the separate licensing
   review.
+
+=========================================================================================================
+Source: Lobe Icons provider logomarks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten, Ant Group)
+Paths: apps/desktop/src/renderer/src/components/models/model-identity.tsx
+Upstream: https://github.com/lobehub/lobe-icons (packages/static-svg/icons)
+SPDX: MIT
+Evidence:
+  The eight marks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten,
+  Ant Group) in model-identity.tsx marked `lobe-icons (MIT)` preserve the upstream
+  static SVG paths and viewBoxes verbatim (VC-617). The other marks there come from
+  simple-icons, CC0-1.0, which needs no notice.
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+=========================================================================================================
+Source: Phosphor brand identity marks (Apple, Linux, GitHub, Google)
+Paths: apps/desktop/src/renderer/src/components/ui/brand-marks.tsx
+Upstream: @phosphor-icons/react@2.1.10, dist/defs/{AppleLogo,LinuxLogo,GithubLogo,GoogleLogo}.es.js
+SPDX: MIT
+Evidence:
+  The identity paths in brand-marks.tsx are retained verbatim from the previously
+  installed package, independently of the UI symbol set.
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2020 Phosphor Icons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 =========================================================================================================
 Source: Pi 0.99.2 harness compatibility sources

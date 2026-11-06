@@ -7,9 +7,20 @@ import { cn } from "@renderer/lib/utils";
  * Workbench surfaces (board, list view, terminals) are Tier B and stay fluid;
  * they must not wrap in this.
  */
-export function ContentColumn({ className, ...props }: React.ComponentProps<"div">) {
+export function ContentColumn({
+  className,
+  measure = "reading",
+  ...props
+}: React.ComponentProps<"div"> & { measure?: "reading" | "document" }) {
   return (
-    <div className={cn("mx-auto min-w-0 w-full max-w-content px-gutter", className)} {...props} />
+    <div
+      className={cn(
+        "mx-auto min-w-0 w-full px-gutter",
+        measure === "document" ? "max-w-document" : "max-w-content",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 

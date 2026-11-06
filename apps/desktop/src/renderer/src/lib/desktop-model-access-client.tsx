@@ -40,6 +40,7 @@ export function DesktopModelAccessProvider({ children }: React.PropsWithChildren
       setCodeModePolicy: (policy) =>
         rpc.modelAccess.setCodeModePolicy.mutate({
           enabled: policy.enabled,
+          ...(policy.defaultMode === undefined ? {} : { defaultMode: policy.defaultMode }),
           models: { ...policy.models },
         }),
       pickerView: () => rpc.modelAccess.pickerView.query(),

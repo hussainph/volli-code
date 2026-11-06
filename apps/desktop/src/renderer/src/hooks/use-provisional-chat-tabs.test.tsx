@@ -482,7 +482,14 @@ for (const ticket of [false, true]) {
       act(() => s.writes.splitPane(OWNER_PANE, "down", null));
       await act(async () => {
         container
-          .querySelector('[data-pane-id="n4"] [aria-label="New browser"]')!
+          .querySelector('[data-pane-id="n4"] [aria-label="Pane actions"]')!
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          );
+      });
+      await act(async () => {
+        document
+          .querySelector('[role="menuitem"][aria-label="New browser"]')!
           .dispatchEvent(new MouseEvent("click", { bubbles: true }));
         await s.browserFlight();
       });

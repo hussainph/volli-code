@@ -36,26 +36,25 @@
  * hook reaching for `window.api`.
  */
 import * as React from "react";
+import { defaultFilter } from "cmdk";
+import { SearchableCommand } from "@renderer/components/ui/searchable-command";
 import {
-  ArrowBendUpLeftIcon,
-  ArrowUpIcon,
-  CaretUpDownIcon,
+  ReplyIcon,
+  SendIcon,
+  UnfoldIcon,
   CheckIcon,
-  DotsThreeIcon,
-  PencilSimpleIcon,
+  EditIcon,
   QueueIcon,
   StopIcon,
-  TrashIcon,
-} from "@phosphor-icons/react";
+  DeleteIcon,
+} from "@renderer/components/ui/icon";
 
 import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import {
   PromptInput,
   PromptInputBody,
   PromptInputCommand,
-  PromptInputCommandEmpty,
   PromptInputCommandGroup,
-  PromptInputCommandInput,
   PromptInputCommandItem,
   PromptInputCommandList,
   PromptInputFooter,
@@ -127,7 +126,7 @@ import {
   COMPOSER_CONFIG_CHIP,
   COMPOSER_CONTROL_SIZE,
   PROMPT_SURFACE,
-  COMPOSER_GLYPH_WEIGHT,
+  COMPOSER_GLYPH_STROKE,
   COMPOSER_PRIMARY_SIZE,
 } from "@renderer/components/chat/composer-chrome";
 import { EffortPill, EffortSlider } from "@renderer/components/chat/composer-effort-ui";
@@ -135,13 +134,10 @@ import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
 import { ModelMark, ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import {
   Tooltip,
   TooltipContent,
@@ -217,6 +213,8 @@ export interface SessionComposerProps {
   promptTemplates?: readonly PromptTemplate[];
   /** The `/` picker's second supply: skills, delivered as message-scoped RESOURCE blocks. */
   skills?: readonly SkillReference[];
+  omittedSkillDirectories?: number;
+  onOpenSkills?(): void;
   /**
    * The verbs the `/` picker offers — the actions that run instead of
    * sending. Caller's supply, because the offer rule reads Session facts this
@@ -405,6 +403,8 @@ export const SessionComposer = React.memo(function SessionComposer({
   onStop,
   promptTemplates = NO_TEMPLATES,
   skills = NO_SKILLS,
+  omittedSkillDirectories = 0,
+  onOpenSkills,
   verbs,
   files = NO_FILES,
   onFilePickerOpen,
@@ -425,11 +425,6 @@ export const SessionComposer = React.memo(function SessionComposer({
   // dropped screenshot with no words is a question.
   const canSubmit = ready && (value.trim().length > 0 || attachments.length > 0);
   const effortStops = effortLevels(models, selection);
-  // The menu's own event callbacks share this render. Keeping the selected id
-  // in their closure lets close distinguish Edit from an ordinary dismissal
-  // without adding component state to a fully controlled composer.
-  let editedQueueId: string | null = null;
-
   const send = (intent: ComposerIntent) => {
     if (!canSubmit) return;
     // The one place `/` expansion happens, and the last thing before the
@@ -463,7 +458,6 @@ export const SessionComposer = React.memo(function SessionComposer({
     if (editing.current.has(id)) return;
     const taken = takeQueued(queued, id);
     if (!taken) return;
-    editedQueueId = id;
     editing.current.add(id);
     try {
       if (
@@ -491,6 +485,8 @@ export const SessionComposer = React.memo(function SessionComposer({
       interactionOpen={interactionOpen}
       promptTemplates={promptTemplates}
       skills={skills}
+      omittedSkillDirectories={omittedSkillDirectories}
+      onOpenSkills={onOpenSkills}
       // The caller's supply, or the same offer rule with no reply behind it.
       // A verb RUNS — it is not queued and does not join a turn in flight —
       // so the verbs a live turn would refuse are already out of whichever
@@ -504,6 +500,7 @@ export const SessionComposer = React.memo(function SessionComposer({
     >
       <PromptInput
         data-composer-container=""
+        data-tint="true"
         className={cn(
           // `group/composer` names the box for anything inside that reads
           // its state; the picker card and the queued rows are groups' worth
@@ -512,7 +509,7 @@ export const SessionComposer = React.memo(function SessionComposer({
           // pane is 265px and a split can be narrower, and a control that
           // drops a word must drop it for the BOX's width, not the window's —
           // the tab strip's own rule.
-          "group/composer @container/composer pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
+          "glass session-prompt group/composer @container/composer pointer-events-auto overflow-hidden",
           PROMPT_SURFACE,
           className,
         )}
@@ -540,109 +537,127 @@ export const SessionComposer = React.memo(function SessionComposer({
           // and by 420px all three controls were outside. The row's own
           // `min-w-0 flex-1 truncate` was already right and could do nothing,
           // because nothing was applying any pressure to it.
-          <PromptInputHeader className="flex-col flex-nowrap items-stretch gap-1 border-b border-border/70">
-            {queued.map((entry) => (
-              <div
-                key={entry.id}
-                role="group"
-                aria-label={`Queued message: ${entry.text}`}
-                className="flex min-w-0 items-center gap-1 text-ui"
-              >
-                {/* The files ride the queued row through hold, queue and steer
-                    (VC-137) but were never drawn, so a queued message with
-                    three screenshots looked exactly like one with none
-                    (VC-273). */}
-                <AttachmentThumbRow attachments={entry.attachments ?? []} />
-                <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
-                <span data-slot="queue-status" className="shrink-0 text-muted-foreground">
-                  {steeringMessages?.has(entry.id) || entry.afterCurrentStep
-                    ? "Sends after this step"
-                    : entry.localUnsent
-                      ? "Not sent"
-                      : entry.queueState === "releasing"
-                        ? "Sending"
-                        : "Queued"}
-                </span>
-                <span className="flex shrink-0 items-center gap-1">
-                  {working ? (
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="ghost"
-                      aria-label={`Steer queued message: ${entry.text}`}
-                      // A release already claimed this identity; only the
-                      // host's cancel can take it back, so Steer stays off.
-                      disabled={
-                        entry.queueState === "releasing" ||
-                        steeringMessages?.has(entry.id) === true ||
-                        entry.afterCurrentStep === true
-                      }
-                      onClick={() => {
-                        onSteerQueued(entry.id);
-                        onComposerFocusRequest?.();
-                      }}
-                    >
-                      <ArrowBendUpLeftIcon className="size-3" />
-                      <span className="composer-steer-label">Steer</span>
-                    </Button>
-                  ) : null}
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    aria-label={`Remove queued message: ${entry.text}`}
-                    // Enabled while releasing: the host cancels a release it has
-                    // no proof of delivery for and refuses one in flight. The
-                    // row only leaves once the host accepts.
-                    onClick={async () => {
-                      if (
-                        (await onQueuedChange(queued.filter((item) => item.id !== entry.id))) ===
-                        false
-                      )
-                        return;
-                      onComposerFocusRequest?.();
-                    }}
-                  >
-                    <TrashIcon className="size-3" />
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label={`Queued message actions: ${entry.text}`}
+          //
+          // `px-2`: the ListRow's own 8px inset rides on top of it, so the
+          // queued words start 16px in — the draft's own left edge.
+          // Its own provider, for {@link ComposerHint}'s reason: the reveal is
+          // a Radix tooltip, and the composer can render without the app
+          // shell's provider.
+          <TooltipProvider>
+            <PromptInputHeader className="flex-col flex-nowrap items-stretch gap-1 border-b border-border px-2 py-2">
+              {queued.map((entry) => (
+                // The group names the row for assistive tech and holds BOTH the
+                // row's text and its actions; ListRow keeps the actions a
+                // sibling of its (inert) content, so the label lives out here.
+                <div
+                  key={entry.id}
+                  role="group"
+                  aria-label={`Queued message: ${entry.text}`}
+                  className="rounded-card bg-muted"
+                >
+                  <ListRow
+                    onActivate={null}
+                    density="two-line"
+                    // The words get the row's whole measure; the status sits
+                    // beneath them instead of competing for the same line. The
+                    // reveal is how a clipped message is read without editing it.
+                    primary={
+                      <ValueReveal
+                        term="Queued message"
+                        full={entry.text}
+                        side="top"
+                        className="block min-w-0 truncate rounded-sm text-left text-ui font-normal text-foreground"
                       >
-                        <DotsThreeIcon className="size-3" weight="bold" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="end"
-                      onCloseAutoFocus={(event) => {
-                        if (editedQueueId !== entry.id) return;
-                        editedQueueId = null;
-                        // Edit removes the trigger. Radix must not restore focus
-                        // to that vanished node after we focused the composer.
-                        event.preventDefault();
-                        // And the focus `editQueued` placed did not survive: this
-                        // menu is modal, so its FocusScope trapped focus inside
-                        // the content and snapped it right back off the textarea.
-                        // When the row then unmounted, the browser dropped focus
-                        // to <body>. This handler is the first moment after the
-                        // trap is gone, so the request lands here or nowhere.
-                        onComposerFocusRequest?.();
-                      }}
-                    >
-                      <DropdownMenuItem onSelect={() => editQueued(entry.id)}>
-                        <PencilSimpleIcon weight="fill" />
-                        Edit message
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </span>
-              </div>
-            ))}
-          </PromptInputHeader>
+                        {entry.text}
+                      </ValueReveal>
+                    }
+                    secondary={
+                      <>
+                        <span
+                          data-slot="queue-status"
+                          className="block truncate text-ui font-normal text-muted-foreground"
+                        >
+                          <QueuedStatus
+                            label={
+                              steeringMessages?.has(entry.id) || entry.afterCurrentStep
+                                ? "Sends after this step"
+                                : entry.localUnsent
+                                  ? "Not sent"
+                                  : entry.queueState === "releasing"
+                                    ? "Sending"
+                                    : "Queued"
+                            }
+                          />
+                        </span>
+                        {/* Files share the text column rather than competing
+                            with it and the actions at a narrow split width. */}
+                        <AttachmentThumbRow
+                          attachments={entry.attachments ?? []}
+                          className="mt-1"
+                        />
+                      </>
+                    }
+                    actions={
+                      <span className="flex shrink-0 items-center gap-1">
+                        {working ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            aria-label={`Steer queued message: ${entry.text}`}
+                            // A release already claimed this identity; only the
+                            // host's cancel can take it back, so Steer stays off.
+                            disabled={
+                              entry.queueState === "releasing" ||
+                              steeringMessages?.has(entry.id) === true ||
+                              entry.afterCurrentStep === true
+                            }
+                            onClick={() => {
+                              onSteerQueued(entry.id);
+                              onComposerFocusRequest?.();
+                            }}
+                          >
+                            <ReplyIcon className="size-3" />
+                            <span className="composer-steer-label">Steer</span>
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Remove queued message: ${entry.text}`}
+                          // Enabled while releasing: the host cancels a release it has
+                          // no proof of delivery for and refuses one in flight. The
+                          // row only leaves once the host accepts.
+                          onClick={async () => {
+                            if (
+                              (await onQueuedChange(
+                                queued.filter((item) => item.id !== entry.id),
+                              )) === false
+                            )
+                              return;
+                            onComposerFocusRequest?.();
+                          }}
+                        >
+                          <DeleteIcon className="size-3" />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Edit queued message: ${entry.text}`}
+                          title="Edit message"
+                          onClick={() => void editQueued(entry.id)}
+                        >
+                          <EditIcon className="size-3" />
+                        </Button>
+                      </span>
+                    }
+                  />
+                </div>
+              ))}
+            </PromptInputHeader>
+          </TooltipProvider>
         ) : null}
 
         <PromptInputBody>
@@ -659,6 +674,7 @@ export const SessionComposer = React.memo(function SessionComposer({
               everything around it ran edge to edge (VC-137). `w-full` is the
               same rule the textarea below already follows. */}
           <AttachmentStrip
+            presentation="composer"
             attachments={attachments}
             {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
             // `px-4`: the tiles' left edge is the text's left edge, one inset
@@ -773,13 +789,12 @@ export const SessionComposer = React.memo(function SessionComposer({
                   variant="outline"
                   size={COMPOSER_PRIMARY_SIZE}
                   aria-label="Stop turn"
+                  className="rounded-full"
                   onClick={onStop}
                 >
-                  {/* One of the few glyphs that keeps its fill: a stop square
-                      MEANS solid the way a play triangle does, and hollow it
-                      reads as a checkbox. It is also the exception rather than
-                      the category — it only exists while a turn is running. */}
-                  <StopIcon weight="fill" />
+                  {/* The stop exists only while a turn is running and keeps
+                      the shared outline drawing. */}
+                  <StopIcon />
                 </Button>
               </ComposerHint>
             ) : null}
@@ -799,20 +814,18 @@ export const SessionComposer = React.memo(function SessionComposer({
             <ComposerHint label={working ? "Queue ⏎ · Steer ⌘⏎" : "Send ⏎ · New line ⇧⏎"}>
               <PromptInputSubmit
                 status="ready"
-                className="prompt-primary rounded-control"
+                className="prompt-primary rounded-full"
                 size={COMPOSER_PRIMARY_SIZE}
                 disabled={!canSubmit}
                 {...readOnlyMark(!hostReadOnly)}
                 aria-label={working ? "Queue" : "Send"}
                 aria-keyshortcuts="Enter"
               >
-                {/* `bold`, both: at 16px a regular arrow is a hairline on a
-                    filled disc, and coverage is scale-invariant, so the weight
-                    step is the only thing that fixes it. */}
+                {/* A stronger stroke keeps both symbols legible on the send control. */}
                 {working ? (
-                  <QueueIcon weight={COMPOSER_GLYPH_WEIGHT} />
+                  <QueueIcon strokeWidth={COMPOSER_GLYPH_STROKE} />
                 ) : (
-                  <ArrowUpIcon weight={COMPOSER_GLYPH_WEIGHT} />
+                  <SendIcon strokeWidth={COMPOSER_GLYPH_STROKE} />
                 )}
               </PromptInputSubmit>
             </ComposerHint>
@@ -822,6 +835,15 @@ export const SessionComposer = React.memo(function SessionComposer({
     </ComposerPickerStack>
   );
 });
+
+/**
+ * Where a queued message stands, under its words. A release in flight is the
+ * one in-progress state, so it carries the shared spinner rather than
+ * punctuation; the rest are facts and read as plain words.
+ */
+function QueuedStatus({ label }: { label: string }) {
+  return label === "Sending" ? <LoadingLabel>{label}</LoadingLabel> : <>{label}</>;
+}
 
 /**
  * A chord on hover, for the two controls whose keystroke nothing else names.
@@ -885,6 +907,8 @@ export function ComposerPickerStack({
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
+  omittedSkillDirectories?: number;
+  onOpenSkills?(): void;
   /** `flow` reserves height above the input; `overlay` covers it in place. */
   layout?: "flow" | "overlay";
 }>) {
@@ -896,6 +920,8 @@ export function ComposerPickerStack({
       active={picker.active}
       onActiveChange={picker.setActive}
       onSelect={picker.select}
+      omittedSkillDirectories={input.omittedSkillDirectories}
+      onOpenSkills={input.onOpenSkills}
     />
   );
 
@@ -976,9 +1002,9 @@ function ComposerTextarea({
       aria-label="Message"
       aria-keyshortcuts="Enter Shift+Enter Meta+Enter Control+Enter"
       placeholder="Ask, plan, or implement…"
-      // A writing sheet, not a search field: 16px insets with room for a
-      // short paragraph. Content still grows to the existing scroll ceiling.
-      className="min-h-20 py-4 text-sm"
+      // One short paragraph at rest, including in a split. Field sizing still
+      // grows with content to the existing scroll ceiling; footer never clips.
+      className="min-h-10 py-2 text-sm"
       onChange={(event) => {
         markInteraction("draft-typing");
         caret.trackCaret(event.currentTarget);
@@ -1716,7 +1742,7 @@ function ModelPillFace({
           · {effortLabel(compactEffortValue)}
         </span>
       )}
-      <CaretUpDownIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
+      <UnfoldIcon className="shrink-0" strokeWidth={COMPOSER_GLYPH_STROKE} />
     </>
   );
 }
@@ -1831,14 +1857,28 @@ export function ModelPill({
     onOpenChange?.(next);
   };
   const open = openProp ?? uncontrolledOpen;
-  // First-appearance order: the catalog's own ordering is the harness's answer
-  // to "which provider matters", and re-sorting it here would be our opinion.
-  const providers = models.reduce<Array<{ id: string; label: string }>>((result, model) => {
-    if (!result.some((provider) => provider.id === model.providerId)) {
-      result.push({ id: model.providerId, label: model.providerLabel });
+  const [modelQuery, setModelQuery] = React.useState("");
+  React.useEffect(() => {
+    if (!open) setModelQuery("");
+  }, [open]);
+  // Preserve cmdk's fuzzy ranking and first-appearance provider order, while
+  // mounting only the visible catalog rows (not every provider's full catalog).
+  const catalog = React.useMemo(() => {
+    const groups = new Map<string, { model: ComposerModel; score: number }[]>();
+    for (const model of models) {
+      const score = modelQuery
+        ? defaultFilter(`${model.providerId} ${model.modelId} ${model.label}`, modelQuery)
+        : 1;
+      if (score <= 0) continue;
+      const group = groups.get(model.providerId) ?? [];
+      group.push({ model, score });
+      groups.set(model.providerId, group);
     }
-    return result;
-  }, []);
+    return [...groups.values()]
+      .map((group) => group.toSorted((a, b) => b.score - a.score))
+      .toSorted((a, b) => b[0]!.score - a[0]!.score)
+      .flatMap((group) => group.map(({ model }) => model));
+  }, [models, modelQuery]);
   // Composed once and spent four times — the pill's name, its `title`, the line
   // the open list leads with, and the bubble a frozen pill reveals — so no two
   // of them can disagree about one selection.
@@ -1971,7 +2011,7 @@ export function ModelPill({
           // `py-1` — the ladder's 4px rung. `py-1.5` was 6px from nowhere on
           // `docs/DESIGN.md`'s five steps, bought nothing this line needed, and
           // is exactly the kind of value the collapse exists to keep out.
-          className="flex items-start gap-2 border-b px-2 py-1 text-ui text-muted-foreground"
+          className="flex items-center gap-2 border-b px-3 py-2 text-ui text-muted-foreground"
         >
           <ModelMark
             model={
@@ -2032,9 +2072,8 @@ export function ModelPill({
           ) : null}
           {/* No search box over the Defaults view: five rows, nothing to
               filter, and a field that filtered nothing would be a lie. */}
-          {showDefaults ? null : <PromptInputCommandInput placeholder="Model" autoFocus />}
-          <PromptInputCommandList>
-            {showDefaults ? (
+          {showDefaults ? (
+            <PromptInputCommandList>
               <PromptInputCommandGroup>
                 {tiers.map((row) => (
                   <TierRow
@@ -2060,58 +2099,43 @@ export function ModelPill({
                   />
                 ))}
               </PromptInputCommandGroup>
-            ) : null}
-            {showDefaults ? null : <PromptInputCommandEmpty>No match</PromptInputCommandEmpty>}
-            {showDefaults
-              ? null
-              : providers.map((provider) => (
-                  <PromptInputCommandGroup key={provider.id} heading={provider.label}>
-                    {models
-                      .filter((model) => model.providerId === provider.id)
-                      .map((model) => {
-                        const selected =
-                          model.providerId === selection.providerId &&
-                          model.modelId === selection.modelId;
-                        return (
-                          // A model row, and only a model row. It used to carry the
-                          // effort segment on whichever row was selected — up to
-                          // seven pressable buttons inside a listbox option, kept
-                          // from also picking the row by a `stopPropagation`. Effort
-                          // is a chip in the footer now, so the workaround and the
-                          // thing it worked around both left together.
-                          <PromptInputCommandItem
-                            key={model.id}
-                            value={`${model.providerId} ${model.modelId} ${model.label}`}
-                            onSelect={() => {
-                              onChange({
-                                ...selection,
-                                providerId: model.providerId,
-                                modelId: model.modelId,
-                                // The stop set changes under the effort chip when
-                                // the model does; a level the incoming model cannot
-                                // run is rewritten rather than held.
-                                reasoningLevel: reclampEffort(
-                                  model.reasoningLevels,
-                                  selection.reasoningLevel,
-                                ),
-                              });
-                              setOpen(false);
-                            }}
-                          >
-                            <CheckIcon
-                              className={cn("size-3.5 shrink-0", !selected && "invisible")}
-                              weight="bold"
-                            />
-                            <ModelMark model={model} providerLabel={model.providerLabel} />
-                            <span className="min-w-0 flex-1 truncate tabular-nums">
-                              {model.label}
-                            </span>
-                          </PromptInputCommandItem>
-                        );
-                      })}
-                  </PromptInputCommandGroup>
-                ))}
-          </PromptInputCommandList>
+            </PromptInputCommandList>
+          ) : (
+            <SearchableCommand
+              items={catalog}
+              keyOf={(model) => model.id}
+              groupOf={(model) => model.providerLabel}
+              query={modelQuery}
+              onQueryChange={setModelQuery}
+              placeholder="Model"
+              empty="No match"
+              onSelect={(model) => {
+                onChange({
+                  ...selection,
+                  providerId: model.providerId,
+                  modelId: model.modelId,
+                  reasoningLevel: reclampEffort(model.reasoningLevels, selection.reasoningLevel),
+                });
+                setOpen(false);
+              }}
+              renderItem={(model) => (
+                <>
+                  <CheckIcon
+                    className={cn(
+                      "size-3.5 shrink-0",
+                      !(
+                        model.providerId === selection.providerId &&
+                        model.modelId === selection.modelId
+                      ) && "invisible",
+                    )}
+                    strokeWidth={2.25}
+                  />
+                  <ModelMark model={model} providerLabel={model.providerLabel} />
+                  <span className="min-w-0 flex-1 truncate tabular-nums">{model.label}</span>
+                </>
+              )}
+            />
+          )}
         </PromptInputCommand>
       </PopoverContent>
     </Popover>
@@ -2195,7 +2219,7 @@ function TierRow({
       data-testid={`model-picker-tier-${row.tier}`}
       data-tier-state={row.state}
     >
-      <CheckIcon className={cn("size-3.5 shrink-0", !selected && "invisible")} weight="bold" />
+      <CheckIcon className={cn("size-3.5 shrink-0", !selected && "invisible")} strokeWidth={2.25} />
       {/* Three columns: the tier name at a fixed width (five short words), the
           model taking what is left and truncating, and the level — or the
           state word in its place — pinned to the right edge where truncation

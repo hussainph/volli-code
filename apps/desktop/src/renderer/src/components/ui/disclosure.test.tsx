@@ -1,11 +1,8 @@
-import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./accordion";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./collapsible";
 import { Separator } from "./separator";
-
-const css = readFileSync(new URL("./disclosure.css", import.meta.url), "utf8");
 
 describe("disclosure defaults", () => {
   it("provides an overridable type baseline and contains unbroken accordion values", () => {
@@ -22,9 +19,9 @@ describe("disclosure defaults", () => {
     expect(html).toContain("min-w-0 max-w-full");
     expect(html).toContain("overflow-wrap:anywhere");
     expect(html).toContain("text-sm");
-    expect(html).toContain("--radix-accordion-content-height");
+    expect(html).not.toContain("disclosure-content");
   });
-  it("keeps Collapsible unstyled while animating its content by default, with an opt-out", () => {
+  it("keeps generic disclosures instant while accepting the legacy animated prop", () => {
     const html = renderToStaticMarkup(
       <Collapsible open>
         <CollapsibleTrigger>Details</CollapsibleTrigger>
@@ -33,17 +30,10 @@ describe("disclosure defaults", () => {
       </Collapsible>,
     );
     expect(html).toContain('data-state="open" data-slot="collapsible"');
-    expect(html).toContain("--radix-collapsible-content-height");
-    expect(html.match(/disclosure-content/g)).toHaveLength(1);
+    expect(html).not.toContain("disclosure-content");
+    expect(html).not.toContain("--disclosure-height");
     expect(html).toContain("px-2");
-    expect(html).toContain('<div data-state="open" data-slot="collapsible">');
-  });
-  it("animates measured height and opacity quickly, with no animation for reduced motion", () => {
-    expect(css).toContain("200ms var(--ease-out)");
-    expect(css).toContain("height: var(--disclosure-height)");
-    expect(css).toContain("opacity: 0");
-    expect(css).toContain("prefers-reduced-motion: reduce");
-    expect(css).toContain("animation: none");
+    expect(html).toContain('data-animated="false"');
   });
   it("stretches a vertical separator in a flex row without requiring a percentage height", () => {
     const html = renderToStaticMarkup(<Separator orientation="vertical" decorative={false} />);

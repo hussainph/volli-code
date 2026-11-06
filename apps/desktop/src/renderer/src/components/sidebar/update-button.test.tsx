@@ -74,10 +74,10 @@ describe("UpdateButton failure copy", () => {
 
     const summary = summarizeUpdateFailure(raw ?? UPDATE_FAILURE_FALLBACK).replace(/\.$/u, "");
     const prefix = "Update check failed: ";
-    const suffix = summary.endsWith("…") ? " Select for details." : ". Select for details.";
     const label = button!.getAttribute("aria-label");
     const tooltip = document.querySelector('[role="tooltip"]')?.textContent;
-    expect(label).toBe(`${prefix}${summary}${suffix}`);
+    expect(label).toBe(`${prefix}${summary}`);
+    expect(label).not.toContain("Select for details");
     expect(tooltip).toBe(label);
     for (const text of [label!, tooltip!]) {
       expect(text).not.toContain("..");
@@ -85,9 +85,7 @@ describe("UpdateButton failure copy", () => {
       expect(text).not.toMatch(
         /https?:\/\/|github\.com|updates\.example\.com|Headers:|x-request-id|private-request|method:|url:/iu,
       );
-      expect(text.slice(prefix.length, -suffix.length).length).toBeLessThanOrEqual(
-        UPDATE_FAILURE_SUMMARY_MAX,
-      );
+      expect(text.slice(prefix.length).length).toBeLessThanOrEqual(UPDATE_FAILURE_SUMMARY_MAX);
     }
     if (raw === null || raw.startsWith("https://")) {
       expect(summary).toBe(UPDATE_FAILURE_FALLBACK);

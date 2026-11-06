@@ -417,7 +417,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     // Retained names survive missing configuration; calls return
                     // a named unavailable result for removed servers.
                     servers: serversForFrozenMcpTools(
-                      mcpSettings.list(scope.projectId),
+                      mcpSettings.list(scope.projectId, scope.mcpTools),
                       scope.mcpTools,
                     ),
                     // Read at every call, so a server a person disables or

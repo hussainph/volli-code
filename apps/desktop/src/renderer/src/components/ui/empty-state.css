@@ -1,0 +1,480 @@
+/* One static family. Paint derives from the active generated canvas, never a
+ * composition-specific palette. Decorative tiles use a neutral fallback fill;
+ * their illustration must not create live backdrop work or activity semantics. */
+.empty-state {
+  --es-glow-source: color-mix(in oklab, var(--canvas-accent) 55%, var(--canvas-secondary-stop));
+  --es-glow-a: color-mix(in oklab, var(--canvas-accent) 15%, transparent);
+  --es-glow-b: color-mix(in oklab, var(--canvas-secondary-stop) 10%, transparent);
+  --es-highlight: color-mix(in oklab, var(--es-glow-source) 24%, var(--background));
+  --es-inner-glow:
+    radial-gradient(ellipse at 18% 5%, var(--es-glow-a), transparent 72%),
+    radial-gradient(ellipse at 90% 100%, var(--es-glow-b), transparent 72%);
+  --es-seam: color-mix(in srgb, var(--foreground) 64%, var(--background));
+  --es-dot: color-mix(in srgb, var(--foreground) 16%, transparent);
+  --es-edge: color-mix(in srgb, var(--foreground) 19%, transparent);
+  --es-tile: color-mix(in srgb, var(--background) 88%, transparent);
+  --es-tile-back: color-mix(in srgb, var(--background) 70%, transparent);
+  --es-shadow-color: color-mix(in srgb, var(--foreground) 13%, transparent);
+  --es-shadow:
+    0 8px 20px -7px var(--es-shadow-color), 0 2px 3px var(--es-shadow-color),
+    inset 0 1px 0 var(--es-highlight);
+  --es-pop: var(--canvas-accent);
+  --es-w: 280px;
+  --es-art-h: 176px;
+  --es-step: 10px;
+  --es-art-gap: 12px;
+  --es-action-gap: 18px;
+  --es-scene-scale: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: min(100%, 360px);
+  margin-inline: auto;
+  padding: 24px;
+  color: var(--foreground);
+  isolation: isolate;
+}
+:root.dark .empty-state {
+  --es-glow-a: color-mix(in oklab, var(--canvas-accent) 20%, transparent);
+  --es-glow-b: color-mix(in oklab, var(--canvas-secondary-stop) 14%, transparent);
+  --es-highlight: color-mix(in oklab, var(--es-glow-source) 38%, var(--muted));
+  --es-tile: color-mix(in srgb, var(--muted) 93%, transparent);
+  --es-tile-back: color-mix(in srgb, var(--muted) 82%, transparent);
+  --es-shadow-color: var(--scrim);
+  --es-dot: color-mix(in srgb, var(--foreground) 19%, transparent);
+}
+.empty-state[data-tier="panel"] {
+  --es-w: 180px;
+  --es-art-h: 100px;
+  --es-step: 8px;
+  --es-art-gap: 8px;
+  --es-action-gap: 12px;
+  --es-scene-scale: 0.65;
+  max-width: 300px;
+  padding: 16px;
+}
+.empty-art {
+  width: min(var(--es-w), 100%);
+  height: var(--es-art-h);
+  position: relative;
+  flex: none;
+  margin-bottom: var(--es-art-gap);
+  pointer-events: none;
+}
+.empty-art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, var(--es-dot) 1px, transparent 1.2px);
+  background-size: var(--es-step) var(--es-step);
+  mask-image: radial-gradient(
+    ellipse 50% 52% at 50% 48%,
+    currentColor 15%,
+    color-mix(in srgb, currentColor 60%, transparent) 43%,
+    transparent 100%
+  );
+}
+.empty-scene {
+  width: 240px;
+  height: 144px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(var(--es-scene-scale));
+  transform-origin: center;
+}
+.empty-state h2,
+.empty-state h3 {
+  max-width: 100%;
+  text-wrap: balance;
+}
+.empty-state .empty-line {
+  margin-top: 6px;
+  max-width: 100%;
+  text-wrap: balance;
+}
+.empty-state .empty-action {
+  margin-top: var(--es-action-gap);
+  border-radius: 999px;
+}
+.empty-state .es-piece {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--es-edge);
+  border-radius: var(--radius-container);
+  background: var(--es-inner-glow), var(--es-tile);
+  color: var(--es-seam);
+  box-shadow: var(--es-shadow);
+}
+.empty-state .es-piece > svg {
+  width: 32px;
+  height: 32px;
+}
+.empty-state .es-wire {
+  position: absolute;
+  inset: 0;
+  width: 240px;
+  height: 144px;
+  color: var(--es-seam);
+  opacity: 0.55;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.empty-state .es-accent::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--es-pop);
+}
+.empty-state[data-status="failed"] {
+  --es-inner-glow: linear-gradient(transparent, transparent);
+  --es-highlight: color-mix(in srgb, var(--foreground) 12%, var(--background));
+  --es-pop: transparent;
+}
+.empty-state[data-status="failed"] .empty-art::before {
+  opacity: 0.4;
+}
+
+/* Distinct silhouettes, not a repeated icon tile. */
+.empty-state .mini-column {
+  width: 43px;
+  height: 94px;
+  top: 26px;
+  border-radius: var(--radius-container);
+  place-items: initial;
+  background: var(--es-inner-glow), var(--es-tile-back);
+}
+.empty-state .mini-column.one {
+  left: 45px;
+  transform: rotate(-5deg);
+  top: 31px;
+  height: 81px;
+}
+.empty-state .mini-column.two {
+  left: 99px;
+  top: 19px;
+  height: 108px;
+}
+.empty-state .mini-column.three {
+  left: 153px;
+  transform: rotate(5deg);
+  top: 31px;
+  height: 81px;
+}
+.empty-state .column-pin {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--es-seam);
+}
+.empty-state .mini-column.two .column-pin {
+  background: var(--es-pop);
+}
+.empty-state .mini-card {
+  position: absolute;
+  top: 24px;
+  left: 5px;
+  right: 5px;
+  height: 28px;
+  border: 1px solid var(--es-edge);
+  border-radius: var(--radius-container);
+  display: grid;
+  place-items: center;
+  background: var(--es-inner-glow), var(--es-tile);
+  box-shadow: 0 1px 2px var(--es-shadow-color);
+}
+.empty-state .mini-card svg {
+  width: 18px;
+  height: 18px;
+}
+.empty-state .mini-card.second {
+  top: 63px;
+}
+.empty-state .bolt-tile {
+  left: 74px;
+  top: 23px;
+  width: 64px;
+  height: 86px;
+  transform: rotate(-8deg);
+}
+.empty-state .clock-chip {
+  left: 130px;
+  top: 70px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  transform: rotate(8deg);
+}
+.empty-state .clock-chip > svg {
+  width: 28px;
+  height: 28px;
+}
+.empty-state .clock-chip:after {
+  right: 2px;
+  bottom: 7px;
+}
+.empty-state .folder-back {
+  left: 77px;
+  top: 27px;
+  width: 83px;
+  height: 65px;
+  transform: rotate(-9deg);
+  border-radius: var(--radius-container);
+  background: var(--es-inner-glow), var(--es-tile-back);
+}
+.empty-state .folder-front {
+  left: 94px;
+  top: 55px;
+  width: 94px;
+  height: 66px;
+  transform: rotate(4deg);
+  border-radius: var(--radius-container);
+}
+.empty-state .folder-front > svg {
+  width: 40px;
+  height: 40px;
+}
+.empty-state .tree-leaf {
+  left: 51px;
+  top: 91px;
+  width: 32px;
+  height: 36px;
+  border-radius: var(--radius-container);
+  transform: rotate(-2deg);
+}
+.empty-state .tree-leaf > svg {
+  width: 22px;
+  height: 22px;
+}
+.empty-state .filed-card {
+  width: 33px;
+  height: 63px;
+  top: 26px;
+  border-radius: var(--radius-container);
+}
+.empty-state .filed-card > svg {
+  width: 20px;
+  height: 20px;
+  margin-top: -12px;
+}
+.empty-state .filed-card.a {
+  left: 77px;
+  transform: rotate(-10deg);
+}
+.empty-state .filed-card.b {
+  left: 110px;
+  top: 20px;
+}
+.empty-state .filed-card.c {
+  left: 143px;
+  transform: rotate(10deg);
+}
+.empty-state .filed-card.b:after {
+  top: 8px;
+  bottom: auto;
+  right: 5px;
+  width: 4px;
+  height: 4px;
+}
+.empty-state .archive-box {
+  left: 69px;
+  top: 76px;
+  width: 114px;
+  height: 48px;
+  border-radius: var(--radius-container);
+}
+.empty-state .archive-box > svg {
+  width: 36px;
+  height: 36px;
+}
+.empty-state .plug-left {
+  left: 40px;
+  top: 29px;
+  width: 59px;
+  height: 58px;
+  transform: rotate(-4deg);
+}
+.empty-state .plug-right {
+  left: 143px;
+  top: 63px;
+  width: 59px;
+  height: 58px;
+  transform: rotate(4deg);
+}
+.empty-state .book-cover {
+  left: 74px;
+  top: 35px;
+  width: 86px;
+  height: 80px;
+  transform: rotate(-7deg);
+  border-radius: var(--radius-container);
+}
+.empty-state .book-cover:before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--es-edge);
+}
+.empty-state .bookmark {
+  left: 143px;
+  top: 19px;
+  width: 22px;
+  height: 47px;
+  border-radius: var(--radius-container);
+  transform: rotate(6deg);
+  background: var(--es-inner-glow), var(--es-tile-back);
+}
+.empty-state .bookmark:after {
+  right: 8px;
+  top: 9px;
+}
+.empty-state .open-book {
+  left: 62px;
+  top: 50px;
+  width: 116px;
+  height: 73px;
+  transform: rotate(2deg);
+  border-radius: var(--radius-container);
+}
+.empty-state .open-book > svg {
+  width: 71px;
+  height: 53px;
+  stroke-width: 1.1;
+}
+.empty-state .lock-tile {
+  left: 77px;
+  top: 25px;
+  width: 72px;
+  height: 88px;
+  transform: rotate(5deg);
+  border-radius: var(--radius-container);
+}
+.empty-state .lock-tile > svg {
+  width: 38px;
+  height: 38px;
+}
+.empty-state .key-chip {
+  left: 132px;
+  top: 91px;
+  width: 49px;
+  height: 31px;
+  border-radius: 999px;
+  transform: rotate(-13deg);
+}
+.empty-state .key-chip > svg {
+  width: 23px;
+  height: 23px;
+}
+.empty-state .session-row {
+  width: 136px;
+  height: 37px;
+  border-radius: var(--radius-container);
+  display: flex;
+  gap: 16px;
+  padding: 0 10px;
+}
+.empty-state .session-row.one {
+  left: 43px;
+  top: 32px;
+  transform: rotate(-3deg);
+}
+.empty-state .session-row.two {
+  left: 61px;
+  top: 82px;
+  transform: rotate(3deg);
+}
+.empty-state .session-row > svg {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+.empty-state .row-branch {
+  display: flex;
+  width: 20px;
+  height: 20px;
+}
+.empty-state .row-branch svg {
+  width: 20px;
+  height: 20px;
+}
+.empty-state .row-chevron {
+  display: flex;
+  margin-left: auto;
+  width: 14px;
+  height: 14px;
+}
+.empty-state .row-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+.empty-state .session-row.two:after {
+  right: auto;
+  left: 30px;
+  bottom: 6px;
+  width: 4px;
+  height: 4px;
+}
+.empty-state .result-row {
+  left: 40px;
+  top: 72px;
+  width: 151px;
+  height: 43px;
+  border-radius: var(--radius-container);
+  display: flex;
+  padding: 0 12px;
+  gap: 22px;
+  transform: rotate(-2deg);
+}
+.empty-state .result-row > svg {
+  width: 22px;
+  height: 22px;
+}
+.empty-state .result-code {
+  display: flex;
+  width: 22px;
+  height: 22px;
+}
+.empty-state .result-code svg {
+  width: 22px;
+  height: 22px;
+}
+.empty-state .lens {
+  left: 134px;
+  top: 25px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  transform: rotate(9deg);
+}
+.empty-state .lens > svg {
+  width: 42px;
+  height: 42px;
+}
+.empty-state .lens:after {
+  right: 3px;
+  bottom: 0;
+  width: 4px;
+  height: 4px;
+}
+.empty-state .broken-tile {
+  left: 87px;
+  top: 34px;
+  width: 66px;
+  height: 76px;
+  border-radius: var(--radius-container);
+  transform: rotate(-3deg);
+}

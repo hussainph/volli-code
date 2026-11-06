@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
  * What is left of every subscription, from anywhere in the app (VC-350).
  *
@@ -40,9 +41,8 @@
  * in the ui store; what it means is `usage-pin.ts`.
  */
 
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { ChevronDownIcon, PinIcon, RefreshIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { remainingPercent, usageTone, type UsageTone, type UsageWindow } from "@volli/shared";
 
@@ -71,7 +71,6 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Spinner } from "@renderer/components/ui/spinner";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
@@ -206,14 +205,10 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
     <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
         <Button
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           className="app-region-no-drag shrink-0"
-          // Sized from the glyph rather than beside it: `icon-sm`'s own
-          // proportion is 3px of padding, and the two numbers this draws need
-          // a bigger box than the Gauge did. Writing it as arithmetic on the
-          // glyph's constant is what keeps a target that always fits the
-          // drawing it holds.
+          // The glyph stays optically inside the shared 28px chrome target.
           style={{ width: USAGE_ICON_BUTTON_PX, height: USAGE_ICON_BUTTON_PX }}
           // The name is now the reading — "Usage limits, 8% left on Anthropic
           // Session" — because a glyph that says something a screen reader
@@ -226,22 +221,22 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
           <UsageLimitsIcon reading={glyph} />
         </Button>
       </PopoverTrigger>
-      <PopoverContent aria-label="Usage limits" align="center" className="w-80 p-0">
+      <PopoverContent tint aria-label="Usage limits" align="center" className="w-80 p-0">
         <div className="usage-instrument flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2">
           <span className="text-ui font-medium">Usage limits</span>
           <Button
-            variant="ghost"
+            variant="toolbar"
             size="icon-sm"
             aria-label="Refresh usage limits"
             title="Refresh"
             disabled={busy}
             onClick={() => void load(true)}
           >
-            {busy ? <Spinner /> : <ArrowClockwiseIcon />}
+            {busy ? <Spinner /> : <RefreshIcon />}
           </Button>
         </div>
         <div className="max-h-96 overflow-y-auto overscroll-contain px-2">
-          <ReadingView reading={reading} now={now} pin={pin} />
+          <ReadingView reading={reading} now={now} pin={pin} onRetry={() => void load(true)} />
         </div>
       </PopoverContent>
     </Popover>
@@ -252,10 +247,12 @@ function ReadingView({
   reading,
   now,
   pin,
+  onRetry,
 }: {
   reading: Reading | null;
   now: number | undefined;
   pin: UsagePin | null;
+  onRetry(): void;
 }) {
   if (reading === null) {
     return (
@@ -265,10 +262,17 @@ function ReadingView({
     );
   }
   if (reading.kind === "failed") {
-    return <p className={EMPTY_INLINE}>Usage limits couldn&apos;t be read.</p>;
+    return (
+      <PanelEmptyState
+        illustration="failed"
+        status="failed"
+        title="Couldn’t read usage limits"
+        action={{ label: "Try again", onAction: onRetry }}
+      />
+    );
   }
   if (reading.accounts.length === 0) {
-    return <p className={EMPTY_INLINE}>No subscriptions with usage limits.</p>;
+    return <PanelEmptyState illustration="board" title="No subscriptions with usage limits" />;
   }
   return (
     <Accordion
@@ -317,10 +321,10 @@ function AccountItem({
               button. It is here so a closed list still says which account
               the glyph is showing, when that is not the one on top. */}
           {holdsPin ? (
-            <PushPinIcon
+            <PinIcon
               aria-label="Pinned to the window bar"
               role="img"
-              weight="fill"
+
               className="size-3 shrink-0 text-muted-foreground"
             />
           ) : null}
@@ -332,10 +336,10 @@ function AccountItem({
               Refresh, so without the key it would judge a new snapshot
               against the clock as it stood when the popover first opened. */}
           <BindingReading key={account.limits.checkedAt} window={account.binding} now={now} />
-          <CaretDownIcon
+          <ChevronDownIcon
             aria-hidden
-            className="size-3 shrink-0 text-muted-foreground transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-            weight="bold"
+            className="size-3 shrink-0 text-muted-foreground transition-transform duration-(--duration-menu-in) ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+            strokeWidth={2.25}
           />
         </span>
       </AccordionTrigger>

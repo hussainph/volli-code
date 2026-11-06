@@ -168,3 +168,39 @@ describe("usePromptTemplates", () => {
     expect(offered).toEqual(["wait-what"]);
   });
 });
+
+it("keeps the host's bounded-discovery count with its lists and accepts older responses without it", async () => {
+  const dom = new JSDOM("<div id=app></div>");
+  vi.stubGlobal("window", dom.window);
+  vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("navigator", dom.window.navigator);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const read = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      templates: [],
+      skills: [WAIT_WHAT],
+      omittedSkillDirectories: 3,
+    })
+    .mockResolvedValueOnce({ ok: true, templates: [], skills: [] });
+  Object.defineProperty(dom.window, "api", {
+    configurable: true,
+    value: { files: { promptTemplates: read } },
+  });
+  let count = -1;
+  let reload: (() => Promise<boolean>) | undefined;
+  function Probe() {
+    const supply = usePromptTemplates("project-1");
+    count = supply.omittedSkillDirectories;
+    reload = supply.reload;
+    return null;
+  }
+  root = createRoot(dom.window.document.querySelector("#app")!);
+  await act(async () => root?.render(<Probe />));
+  expect(count).toBe(3);
+  await act(async () => {
+    await reload?.();
+  });
+  expect(count).toBe(0);
+});

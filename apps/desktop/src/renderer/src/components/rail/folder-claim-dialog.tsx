@@ -18,9 +18,8 @@
  * nothing is relinked until one is chosen.
  */
 import * as React from "react";
-import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
-import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { SwapIcon, AddFolderIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import { projectRelinkNotices, projectRelinkNoticeText } from "@volli/shared";
 import type { ProjectRelinkAftermath } from "@volli/shared";
 
@@ -79,9 +78,7 @@ export function FolderClaimDialog() {
               <DialogTitle>Is this a project you already have?</DialogTitle>
               <DialogDescription>
                 Volli can't find the folder for the project
-                {(claim?.candidates.length ?? 0) > 1 ? "s" : ""} below. If you moved or renamed one
-                of them, relink it instead of adding a second copy — its tickets, settings and
-                history stay with it.
+                {(claim?.candidates.length ?? 0) > 1 ? "s" : ""} below.
               </DialogDescription>
             </DialogHeader>
 
@@ -107,7 +104,7 @@ export function FolderClaimDialog() {
                     })
                   }
                 >
-                  <ArrowsLeftRightIcon />
+                  <SwapIcon />
                   <span className="flex min-w-0 flex-col gap-1">
                     <span>Relink {candidate.name}</span>
                     <span className="truncate font-mono text-label text-muted-foreground">
@@ -123,7 +120,7 @@ export function FolderClaimDialog() {
                 Cancel
               </Button>
               <Button disabled={busy} onClick={() => void choose(addAsNew)}>
-                <FolderPlusIcon />
+                <AddFolderIcon />
                 Add as a new project
               </Button>
             </DialogFooter>
@@ -132,9 +129,7 @@ export function FolderClaimDialog() {
           <>
             <DialogHeader>
               <DialogTitle>Relinked</DialogTitle>
-              <DialogDescription>
-                The move is saved. Some of it could not follow on its own:
-              </DialogDescription>
+              <DialogDescription>These items need attention:</DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-2">
               {notices.map((notice) => (

@@ -16,11 +16,14 @@
  */
 import * as React from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import {
+  RefreshIcon,
+  ChevronLeftIcon,
+  FolderIcon,
+  KeyIcon,
+  AddIcon,
+} from "@renderer/components/ui/icon";
+
 import type { RemoteHost } from "@volli/shared";
 import { toast } from "sonner";
 
@@ -58,7 +61,6 @@ import {
   listNotice,
   projectRows,
   projectSource,
-  sourceHint,
   sourceProblem,
   type ProjectListState,
   type ProjectFailure,
@@ -86,8 +88,8 @@ export function OpenProjectSheet() {
         aria-describedby={undefined}
         className={cn(
           "top-[14vh] flex max-h-[80vh] max-w-[30rem] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[30rem]",
-          "data-[state=open]:duration-[260ms] data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
-          "data-[state=closed]:duration-150 data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
+          "data-[state=open]:duration-(--duration-sheet) data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
+          "data-[state=closed]:duration-(--duration-menu-in) data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
         )}
       >
         <MotionConfig reducedMotion="user">
@@ -325,7 +327,7 @@ function ListScreen({
                 data-project-row={row.id}
               >
                 <span className="grid size-6 shrink-0 place-items-center rounded-sm bg-muted text-muted-foreground">
-                  <FolderSimpleIcon aria-hidden className="size-3.5" />
+                  <FolderIcon aria-hidden className="size-3.5" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-ui font-medium">{row.name}</span>
@@ -372,7 +374,7 @@ function ListScreen({
       <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-4 py-4">
         {canCreate(state) && notice?.recovery.kind !== "new" ? (
           <Button size="sm" variant="ghost" onClick={onNew}>
-            <PlusIcon />
+            <AddIcon />
             New project…
           </Button>
         ) : null}
@@ -412,7 +414,7 @@ function Notice({
               recovery.kind === "new" ? onNew : recovery.kind === "re-add" ? onReAdd : onRetry
             }
           >
-            {recovery.kind === "new" ? <PlusIcon /> : <ArrowClockwiseIcon />}
+            {recovery.kind === "new" ? <AddIcon /> : <RefreshIcon />}
             {recovery.label}
           </Button>
         </div>
@@ -550,14 +552,7 @@ function NewProjectScreen({
             setText(event.target.value);
           }}
         />
-        <p
-          className={cn(
-            "px-1 text-ui",
-            problem === null ? "text-muted-foreground" : "text-destructive",
-          )}
-        >
-          {problem ?? sourceHint(source, modern)}
-        </p>
+        {problem === null ? null : <p className="px-1 text-ui text-destructive">{problem}</p>}
         <Input
           aria-label="Name (optional)"
           value={name}
@@ -621,7 +616,7 @@ function NewProjectScreen({
           disabled={running !== null}
           onClick={onBack}
         >
-          <CaretLeftIcon />
+          <ChevronLeftIcon />
           Back
         </Button>
         <span className="flex-1" />

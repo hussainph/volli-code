@@ -1,4 +1,5 @@
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { WarningIcon } from "@renderer/components/ui/icon";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -95,13 +96,16 @@ describe("Notice", () => {
     expect(html).toContain('title="fatal: not a git repository"');
   });
 
-  it("fills the mark on a fault and leaves a quiet one outline", () => {
+  it("keeps both marks outline and distinguishes the fault with destructive ink", () => {
     const error = renderToStaticMarkup(
       <Notice tone="error" icon={WarningIcon} title="Updates paused" />,
     );
     const neutral = renderToStaticMarkup(<Notice icon={WarningIcon} title="Autosave paused." />);
 
-    expect(error).not.toBe(neutral);
+    expect(error).toContain("text-destructive");
+    expect(neutral).not.toContain("text-destructive");
+    expect(error).toContain('fill="none"');
+    expect(neutral).toContain('fill="none"');
     expect(error).toContain("<svg");
     expect(neutral).toContain("<svg");
   });

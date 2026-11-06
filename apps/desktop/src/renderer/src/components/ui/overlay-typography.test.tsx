@@ -208,7 +208,7 @@ describe("UI typography defaults", () => {
 });
 
 describe("overlay layout contracts", () => {
-  it("portals a submenu out of the parent float that would clip it, keeping the nested fill", async () => {
+  it("portals a submenu out of the parent float that would clip it, keeping the floating glass", async () => {
     await act(async () =>
       root.render(
         <DropdownMenu open modal={false}>
@@ -230,8 +230,11 @@ describe("overlay layout contracts", () => {
     expect(styles).toMatch(/\.material-floating,[^{]*\{[^}]*contain:\s*paint/);
     expect(parent.contains(sub)).toBe(false);
     expect(sub.classList.contains("material-floating")).toBe(true);
+    expect(styles).toMatch(
+      /\.material-floating,[^{]*\{[^}]*backdrop-filter:\s*blur\(var\(--glass-blur\)\)/,
+    );
     const nested = styles.match(/([^{}]*)\{[^}]*backdrop-filter:\s*none !important/)?.[1] ?? "";
-    expect(nested).toContain('[data-slot$="menu-sub-content"].material-floating');
+    expect(nested).not.toContain('[data-slot$="menu-sub-content"].material-floating');
     expect(sub.getAttribute("data-slot")?.endsWith("menu-sub-content")).toBe(true);
   });
   it("bounds dialog content and reserves title room for its close action", async () => {

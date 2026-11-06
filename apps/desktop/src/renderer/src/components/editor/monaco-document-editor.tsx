@@ -1,3 +1,4 @@
+import { observePaneLayout, paneResizeActive } from "@renderer/lib/pane-resize";
 import * as React from "react";
 import { useBlobReader } from "@renderer/components/attachments/blob-read";
 import type { editor } from "monaco-editor";
@@ -55,6 +56,17 @@ export interface MonacoDocumentEditorHandle {
   markSaved(revision: DocumentRevision): void;
 }
 
+export interface DocumentEditorHandover {
+  /** Adopt a still-editable stand-in's latest text and selection atomically. */
+  adopt(
+    value: string,
+    start: number,
+    end: number,
+    focus: boolean,
+    direction?: "forward" | "backward" | "none",
+  ): void;
+}
+
 export interface MonacoDocumentEditorProps {
   /**
    * Which logical document this is. One identity owns one Monaco model no matter
@@ -74,6 +86,7 @@ export interface MonacoDocumentEditorProps {
   revision?: DocumentRevision;
   /** Fired on every document edit with the full markdown string. */
   onChange(value: string): void;
+  onReady?(handover: DocumentEditorHandover): void;
   /**
    * Every dirty transition of the shared registry model. Artifact tabs feed
    * this into the workbench close-guard; the ticket body leaves it unset.
@@ -88,6 +101,8 @@ export interface MonacoDocumentEditorProps {
    */
   savePolicy?: Extract<DocumentSavePolicy, "autosave" | "draft">;
   placeholder?: string;
+  /** 28px empty document target; focus height remains the host's decision. */
+  compact?: boolean;
   autoFocus?: boolean;
   /**
    * Classes for the editor host. Min/max height belong here and are honoured
@@ -201,10 +216,12 @@ export const MonacoDocumentEditor = React.forwardRef<
     revision = null,
     savePolicy = "autosave",
     onChange,
+    onReady,
     onDirtyChange,
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact = false,
     autoFocus,
     className,
     style,
@@ -214,6 +231,8 @@ export const MonacoDocumentEditor = React.forwardRef<
   },
   ref,
 ) {
+  const readyRef = React.useRef(onReady);
+  readyRef.current = onReady;
   const hostRef = React.useRef<HTMLDivElement>(null);
   const editorRef = React.useRef<editor.IStandaloneCodeEditor | null>(null);
   const leaseRef = React.useRef<DocumentMonacoLease | null>(null);
@@ -232,6 +251,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact,
     ariaLabel,
     autoFocus,
   });
@@ -244,6 +264,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact,
     ariaLabel,
     autoFocus,
   };
@@ -340,7 +361,7 @@ export const MonacoDocumentEditor = React.forwardRef<
 
     void loadMonacoRuntime()
       .then((runtime) => {
-        if (cancelled) return;
+        if (cancelled || runtime === null) return;
         const seed = seedRef.current;
         const seedRevision = liveRef.current.revision ?? null;
         lease = runtime.registry.acquire({
@@ -372,9 +393,12 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         view = runtime.monaco.editor.create(host, {
           ...documentModeOptions({ placeholder: liveRef.current.placeholder }),
+          ...(liveRef.current.compact ? { padding: { top: 2, bottom: 2 } } : {}),
           theme: activeMonacoEditorThemeId(),
           ariaLabel: liveRef.current.ariaLabel,
           model: lease.model,
+          automaticLayout: false,
+          dimension: { width: host.clientWidth, height: host.clientHeight },
         });
         editorRef.current = view;
 
@@ -401,12 +425,14 @@ export const MonacoDocumentEditor = React.forwardRef<
         // every measurable box.
         const editorView = view;
         const fitToContent = (): void => {
+          if (paneResizeActive()) return;
           const contentHeight = editorView.getContentHeight();
           host.style.height = `${contentHeight}px`;
           editorView.layout({ width: host.clientWidth, height: host.clientHeight });
           liveRef.current.onContentHeightChange?.(contentHeight);
         };
         subscriptions.push(editorView.onDidContentSizeChange(fitToContent));
+        subscriptions.push({ dispose: observePaneLayout(host, fitToContent) });
         fitToContent();
 
         const model = lease.model;
@@ -439,6 +465,23 @@ export const MonacoDocumentEditor = React.forwardRef<
         // editable" there rather than "not applicable".
         host.dataset.monacoReadOnly = "false";
         if (liveRef.current.autoFocus) view.focus();
+        const mountedView = view;
+        readyRef.current?.({
+          adopt(nextValue, start, end, focus, direction = "none") {
+            applyExternal(nextValue, liveRef.current.revision ?? null);
+            // A native selection's endpoints are ordered, but its caret can
+            // be at either end. ISelection preserves that backward anchor.
+            const anchor = model.getPositionAt(direction === "backward" ? end : start);
+            const caret = model.getPositionAt(direction === "backward" ? start : end);
+            mountedView.setSelection({
+              selectionStartLineNumber: anchor.lineNumber,
+              selectionStartColumn: anchor.column,
+              positionLineNumber: caret.lineNumber,
+              positionColumn: caret.column,
+            });
+            if (focus) mountedView.focus();
+          },
+        });
         // The ticket description is the surface the switch benchmark waits on
         // — the harness's readiness predicate looks for Monaco's own textarea,
         // so creating and laying out this editor is inside the measured window

@@ -13265,6 +13265,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -13961,6 +13969,14 @@
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -13993,6 +14009,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -14897,6 +14921,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -15593,6 +15625,14 @@
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -15625,6 +15665,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },

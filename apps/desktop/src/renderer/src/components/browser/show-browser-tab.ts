@@ -1,5 +1,6 @@
-import { groupForTab } from "@volli/shared";
+import { arrangeTabs, groupForTab } from "@volli/shared";
 
+import { successorTabIndex } from "@renderer/components/ui/tab-focus";
 import type { BrowserApi } from "./browser-api";
 import { HOME_BOARD_TAB_ID, browserTabId } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
@@ -69,9 +70,16 @@ export async function showBrowserTab(
  * dissolves) and the surface lands on the pane's own successor, so the MRU
  * return inside `closeHomeBrowserTab` only ever runs unsplit.
  */
-export function leaveHomeStrip(projectId: string, tabId: string): void {
+export function leaveHomeStrip(
+  projectId: string,
+  tabId: string,
+  beforeIds?: readonly string[],
+): void {
   const workspace = useProjectUiStore.getState();
   const id = browserTabId(tabId);
+  const activeBefore = workspace.byProject[projectId]?.homeActiveTab;
+  const wasGrouped =
+    groupForTab(workspace.byProject[projectId]?.homeSplitView ?? null, id) !== null;
   workspace.removeHomeTabFromSplit(projectId, id);
   const sessions = useSessionsStore.getState().byOwner[projectId]?.tabs ?? [];
   const chats = useChatSessionsStore.getState().openTabs[projectId] ?? [];
@@ -81,13 +89,42 @@ export function leaveHomeStrip(projectId: string, tabId: string): void {
       (tab) => tab.projectId === projectId && tab.ticketId === null,
     ),
   );
-  workspace.closeHomeBrowserTab(projectId, id, [
+  const remaining = [
     HOME_BOARD_TAB_ID,
     ...sessions.map((tab) => tab.sessionId),
     ...chats.map(chatTabId),
     ...files.map((tab) => fileTabId(tab.relPath)),
     ...browsers.map((tab) => browserTabId(tab.tabId)),
-  ]);
+  ];
+  const order =
+    beforeIds ??
+    arrangeTabs(
+      [...remaining, id].map((candidate) => ({ id: candidate })),
+      workspace.byProject[projectId]?.homeTabOrder ?? [],
+      1,
+    ).map((tab) => tab.id);
+  const nextIndex = successorTabIndex(order.length, order.indexOf(id));
+  const next = nextIndex === null ? HOME_BOARD_TAB_ID : order[nextIndex]!;
+  workspace.closeHomeBrowserTab(projectId, id, remaining);
+  if (activeBefore === id && !wasGrouped)
+    workspace.setHomeActiveTab(projectId, remaining.includes(next) ? next : HOME_BOARD_TAB_ID);
+}
+
+/** Ticket twin of Home's close/hide handoff. Group ownership remains the split reducer's. */
+export function leaveTicketBrowserStrip(
+  projectId: string,
+  ticketId: string,
+  id: string,
+  beforeIds: readonly string[],
+): void {
+  const workspace = useProjectUiStore.getState();
+  const current = workspace.byProject[projectId]?.ticketTabs[ticketId];
+  const activeBefore = current?.active;
+  const wasGrouped = groupForTab(current?.splitView ?? null, id) !== null;
+  workspace.removeTicketTabFromSplit(projectId, ticketId, id);
+  if (activeBefore !== id || wasGrouped) return;
+  const next = successorTabIndex(beforeIds.length, beforeIds.indexOf(id));
+  workspace.setTicketActiveTab(projectId, ticketId, next === null ? "body" : beforeIds[next]!);
 }
 
 /**

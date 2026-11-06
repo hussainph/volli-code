@@ -29,7 +29,7 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
-import { makeGitRepo, tabStripNewChatButton, TICKET_TAB_STRIP } from "../../lib/smoke-kit.mjs";
+import { makeGitRepo, openNewChatTab, TICKET_TAB_STRIP } from "../../lib/smoke-kit.mjs";
 import { fixtureSessionId } from "./fixture.mjs";
 
 /** VC-1078's storm shape: streams, one push each per interval, for this long. */
@@ -184,7 +184,7 @@ export async function measureDraftTyping(kit, { page, app, manifest, storm }) {
   // A fresh `+ Chat` on the long chat's ticket: the fixture's own Sessions are
   // history with no live executor, and their composers stay disabled.
   const before = await page.locator(TICKET_STRIP_TABS).count();
-  await tabStripNewChatButton(page, TICKET_TAB_STRIP).click();
+  await openNewChatTab(page, TICKET_TAB_STRIP);
   await page.waitForFunction(
     ({ selector, count }) => document.querySelectorAll(selector).length > count,
     { selector: TICKET_STRIP_TABS, count: before },

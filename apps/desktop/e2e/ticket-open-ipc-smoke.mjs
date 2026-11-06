@@ -294,7 +294,7 @@ try {
 
   // ---- setup: a live terminal (also materializes ticket A's worktree) -----
   await must(2, "start a ticket session so a split has a pane to split", async () => {
-    await startTerminalSession(page.locator("aside"));
+    await startTerminalSession(page.locator('[data-inspector-panel][data-shown="true"]'));
     await waitUntil(
       "terminal",
       () =>

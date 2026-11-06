@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, Activity } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -71,7 +71,7 @@ describe("virtual file tree", () => {
         ?.dispatchEvent(new KeyboardEvent("keydown", { key: pressed, metaKey, bubbles: true }));
     });
   }
-  it("illustrates a genuinely empty tree, never a filter with no matches", async () => {
+  it("uses distinct file and filtered-search reasons without fabricating tree rows", async () => {
     const open = vi.fn();
     const pin = vi.fn();
     for (const query of ["", "missing"]) {
@@ -82,12 +82,43 @@ describe("virtual file tree", () => {
           </TooltipProvider>,
         ),
       );
-      expect(container.querySelector('[data-next-action="files"]') !== null).toBe(!query);
-      expect(container.textContent).toContain(query ? "No matches" : "No files");
+      expect(container.querySelector(".empty-art")?.getAttribute("data-composition")).toBe(
+        query ? "search" : "file",
+      );
+      expect(container.querySelector("h2")?.textContent).toBe(
+        query ? "No matching files" : "No files",
+      );
       expect(container.querySelectorAll('[role="treeitem"]')).toHaveLength(0);
     }
     expect(open).not.toHaveBeenCalled();
     expect(pin).not.toHaveBeenCalled();
+  });
+  it("retains nonzero Files scroll through Activity hide/show, but resets for a new query", async () => {
+    const entries = Array.from({ length: 100 }, (_, i) => ({ path: `file-${i}.md` }));
+    const draw = (mode: "visible" | "hidden", query = "") =>
+      root.render(
+        <TooltipProvider>
+          <Activity mode={mode}>
+            <FileTree
+              projectId="p"
+              entries={entries}
+              query={query}
+              onOpen={() => {}}
+              onPin={() => {}}
+            />
+          </Activity>
+        </TooltipProvider>,
+      );
+    await act(async () => draw("visible"));
+    const tree = container.querySelector<HTMLElement>('[role="tree"]')!;
+    tree.scrollTop = 381;
+    await act(async () => tree.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await act(async () => draw("hidden"));
+    await act(async () => draw("visible"));
+    expect(container.querySelector('[role="tree"]')).toBe(tree);
+    expect(tree.scrollTop).toBe(381);
+    await act(async () => draw("visible", "file-9"));
+    expect(tree.scrollTop).toBe(0);
   });
   it("bounds 12,000 expanded files and keeps the active descendant mounted", async () => {
     const open = vi.fn();

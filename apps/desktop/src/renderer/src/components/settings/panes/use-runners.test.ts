@@ -70,17 +70,18 @@ describe("a runner's status", () => {
 
 describe("this Mac's own state", () => {
   it("speaks for itself only while being added, connecting, or out of reach", () => {
+    // `Health` draws `starting` with a spinner, so the word carries no ellipsis.
     expect(thisMacStatus(mac({ state: "unregistered" }))).toEqual({
       state: "starting",
-      label: "Adding…",
+      label: "Adding",
     });
     expect(thisMacStatus(mac({ state: "registering" }))).toEqual({
       state: "starting",
-      label: "Adding…",
+      label: "Adding",
     });
     expect(thisMacStatus(mac({ state: "connecting" }))).toEqual({
       state: "starting",
-      label: "Connecting…",
+      label: "Connecting",
     });
     expect(thisMacStatus(mac({ state: "offline", since: EARLIER_TODAY }), NOW)).toEqual({
       state: "idle",

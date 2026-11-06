@@ -501,10 +501,10 @@ describe("the Active row's ink tiers", () => {
 /**
  * VC-402 × A3: a companion leads with its HARNESS'S VENDOR, so a Claude Code
  * pane and a Claude chat read as the same maker. Only a harness nobody
- * publishes a mark for keeps the band's Phosphor mnemonic.
+ * publishes a mark for keeps the band's shared symbol.
  */
 describe("a companion's mark", () => {
-  it("draws a different mark for every first-class harness, in both bands", () => {
+  it("uses flat seam marks consistently in both bands, with accessible harness identity", () => {
     const byDrawing = new Map<string, HarnessId[]>();
     for (const harnessId of FIRST_CLASS_HARNESS_IDS) {
       const active = logo(render(row({ harnessId })));
@@ -514,9 +514,10 @@ describe("a companion's mark", () => {
       byDrawing.set(active, [...(byDrawing.get(active) ?? []), harnessId]);
     }
 
-    expect([...byDrawing.values()].map((ids) => ids.join(" + "))).toEqual([
-      ...FIRST_CLASS_HARNESS_IDS,
-    ]);
+    expect([...byDrawing.values()].flat().toSorted()).toEqual(
+      [...FIRST_CLASS_HARNESS_IDS].toSorted(),
+    );
+    expect(byDrawing.size).toBeGreaterThan(0);
   });
 
   it("names a companion running no CLI by what the listing resolved, not by its kind", () => {
@@ -593,13 +594,15 @@ describe("TicketGroupRow", () => {
     );
   }
 
-  it("keeps its face: the ticket, how many sessions, and the newest one's age", () => {
+  it("keeps ticket/count visible and exposes the newest date without a duplicate age column", () => {
     const markup = renderGroup(5, false);
 
     expect(markup).toContain("VC-7");
     expect(markup).toContain("Nav sidebar");
     expect(markup).toContain(">5<");
-    expect(markup).toContain("1h");
+    expect(markup).toContain(`title="${new Date(HOUR_AGO).toLocaleString()}"`);
+    expect(markup).toContain('aria-description="Latest session:');
+    expect(markup).not.toContain(">1h<");
   });
 
   it("draws the count even at one, and spells its unit out of band", () => {

@@ -1,5 +1,5 @@
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
+import { TerminalIcon, ToolsIcon } from "@renderer/components/ui/icon";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { errorMessage } from "@volli/shared";
@@ -132,9 +132,7 @@ export function SessionEnvironmentAlert() {
       if (!result.ok) {
         toastError(`Couldn't repair the Session PATH: ${result.error}`);
       } else if (measured !== undefined && measured.faults.length > 0) {
-        toastError(
-          "Volli still couldn't read your terminal's PATH. Review details for what it found.",
-        );
+        toastError("Volli still couldn't read your terminal's PATH");
       }
     } catch (error) {
       toastError(`Couldn't repair the Session PATH: ${errorMessage(error)}`);
@@ -203,12 +201,12 @@ export function SessionEnvironmentNotice({
               aria-busy={fixing}
               onClick={onFix}
             >
-              {fixing ? <Spinner aria-label="Fixing" /> : <WrenchIcon />}
+              {fixing ? <Spinner aria-label="Fixing" /> : <ToolsIcon />}
               {fixing ? "Fixing" : "Fix now"}
             </Button>
           )}
           <Button size="xs" variant="outline" onClick={onReview}>
-            <TerminalWindowIcon />
+            <TerminalIcon />
             Review details
           </Button>
         </>

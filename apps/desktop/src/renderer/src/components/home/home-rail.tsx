@@ -1,3 +1,6 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
+import { startProjectChat } from "@renderer/components/sessions/session-create";
+import { useCanSendSession } from "@renderer/lib/cloud-session-read-only";
 /**
  * Home's right rail — the Ticket view's Calm Stack one scope up (VC-55).
  *
@@ -61,11 +64,14 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { useShallow } from "zustand/react/shallow";
-import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  ChatPendingIcon,
+  ChatIcon,
+  FoldersIcon,
+  SearchIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
+
 import { sessionProvenanceHoverLine, type Project } from "@volli/shared";
 
 import { FileSearchPanel } from "@renderer/components/files/search-panel";
@@ -92,8 +98,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
@@ -173,7 +178,8 @@ export function HomeRail({
     // load-bearing at runtime, and the group class is a utility the compiler
     // owns.
     <div
-      className="group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      className="glass group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      data-tint="true"
       data-testid="home-rail"
       data-volli-rail="home"
       data-narrow={narrow ? "true" : "false"}
@@ -261,9 +267,9 @@ const HOME_MODE_TABS: readonly RailModeTab<HomeRailMode>[] = HOME_RAIL_MODES.map
   key,
   label: HOME_RAIL_MODE_LABELS[key],
   icon: {
-    now: ChatCircleDotsIcon,
+    now: ChatPendingIcon,
     files: FoldersIcon,
-    search: MagnifyingGlassIcon,
+    search: SearchIcon,
   }[key],
 }));
 
@@ -305,6 +311,7 @@ function parseHomeChatTab(activeTabId: string): string | null {
  * for. It appears past four rows, counted over the whole roster.
  */
 function BoardSessionsBlock({ projectId }: { projectId: string }) {
+  const writable = useCanSendSession(projectId);
   const ensure = useProjectSessionsStore((state) => state.ensure);
   React.useEffect(() => {
     void ensure(projectId);
@@ -434,19 +441,9 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
           onChange={(event) => setQuery(event.target.value)}
           aria-label="Find a session"
           placeholder="Find a session…"
-          className="h-8 text-ui md:text-ui"
+          variant="search"
+          className="text-ui md:text-ui"
         />
-      ) : null}
-      {!hasData && feedback?.kind === "reading" ? (
-        <div
-          className="flex flex-col"
-          {...loadingRegionProps("sessions")}
-          data-testid="home-sessions-loading"
-        >
-          {(["w-3/5", "w-2/5"] as const).map((width) => (
-            <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-10" />
-          ))}
-        </div>
       ) : null}
       {/* A refused baseline knows nothing about this Project's durable
           Sessions. The toast has the bridge detail; this line keeps the rail
@@ -465,7 +462,19 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
       live.length === 0 &&
       earlier.length === 0 &&
       canClaimEmpty ? (
-        <p className={EMPTY_INLINE}>{searching ? "No matching sessions" : "No sessions yet"}</p>
+        <PanelEmptyState
+          illustration="chat"
+          title={searching ? "No matching sessions" : "No sessions"}
+          action={
+            searching
+              ? { label: "Clear search", onAction: () => setQuery("") }
+              : {
+                  label: "New chat",
+                  onAction: () => void startProjectChat(projectId),
+                  disabled: !writable,
+                }
+          }
+        />
       ) : null}
       {live.length > 0 ? (
         <ul className="flex flex-col" data-testid="home-sessions-live">
@@ -496,7 +505,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
                   ? "Hide earlier sessions"
                   : `Show ${earlier.length} earlier session${earlier.length === 1 ? "" : "s"}`
               }
-              className="flex w-full items-center gap-1 rounded-sm px-2 py-1 text-left text-label text-muted-foreground outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+              className="flex w-full items-center gap-1 rounded-sm px-2 py-1 text-left text-label text-muted-foreground outline-none transition-colors duration-(--duration-menu-in) ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
             >
               Earlier · {earlier.length}
               <RailFoldCaret open={foldOpen} placement="eyebrow" />
@@ -540,7 +549,7 @@ function BoardSessionRow({
 }) {
   const provenance = useSessionProvenance(projectId, row.id);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
-  const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
+  const Glyph = row.kind === "chat" ? ChatIcon : TerminalIcon;
   const sessionId = row.kind === "chat" ? row.id : null;
   const team = useSessionTeam(sessionId);
   const content = (
@@ -549,7 +558,6 @@ function BoardSessionRow({
       data-testid="home-session-row"
       leading={
         <Glyph
-          weight="bold"
           aria-label={row.kind === "chat" ? "Chat" : "Terminal"}
           className="size-4 shrink-0 text-muted-foreground"
         />

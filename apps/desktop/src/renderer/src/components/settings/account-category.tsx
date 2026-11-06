@@ -4,7 +4,7 @@
  * (`settingsGroups`'s `account` option); with it off the category does not
  * exist.
  */
-import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
+import { AccountIcon } from "@renderer/components/ui/icon";
 
 import type { PrefCategory } from "./kit";
 import { AccountPane } from "./panes/account-pane";
@@ -15,7 +15,7 @@ export function accountCategory(): PrefCategory {
   return {
     key: ACCOUNT_CATEGORY_KEY,
     label: "Account",
-    icon: UserCircleIcon,
+    icon: AccountIcon,
     keywords: [
       "account",
       "volli cloud",

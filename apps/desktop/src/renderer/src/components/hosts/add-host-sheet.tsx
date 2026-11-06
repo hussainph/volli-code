@@ -16,10 +16,8 @@
  */
 import * as React from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { ChevronDownIcon, CheckIcon, CopyIcon, TerminalIcon } from "@renderer/components/ui/icon";
+
 import type { AddHostLogLine, RemoteHost } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -94,8 +92,8 @@ export function AddHostSheet() {
         // Enters in 260 ms from .96 and 8 px low, then leaves faster.
         className={cn(
           "top-[14vh] flex max-h-[80vh] max-w-[min(30rem,calc(100%-2rem))] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[30rem]",
-          "data-[state=open]:duration-[260ms] data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
-          "data-[state=closed]:duration-150 data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
+          "data-[state=open]:duration-(--duration-sheet) data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
+          "data-[state=closed]:duration-(--duration-menu-in) data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
         )}
       >
         <MotionConfig reducedMotion="user">
@@ -184,7 +182,7 @@ function EntryScreen({
       </div>
       <div className="flex flex-col gap-2 px-6 pb-4">
         <div className="relative">
-          <TerminalWindowIcon
+          <TerminalIcon
             aria-hidden
             className="pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground"
           />
@@ -201,18 +199,11 @@ function EntryScreen({
             onChange={(event) => flow.setTarget(event.target.value)}
           />
         </div>
-        <p
-          className={cn(
-            "px-1 text-ui",
-            error === null ? "text-muted-foreground" : "text-destructive",
-          )}
-        >
-          {error ?? "Uses this Mac’s ssh: your keys, agent and ~/.ssh/config."}
-        </p>
+        {error === null ? null : <p className="px-1 text-ui text-destructive">{error}</p>}
       </div>
       <div className="flex items-center justify-end relative px-4 py-4 before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border/60">
         <Button type="submit" disabled={!valid || starting}>
-          {starting ? <Spinner aria-label="Connecting" /> : <TerminalWindowIcon />}
+          {starting ? <Spinner aria-label="Connecting" /> : <TerminalIcon />}
           Connect
         </Button>
       </div>
@@ -295,7 +286,7 @@ function FlowScreen({
                       <StepMark status={row.mark} />
                       <SwapText
                         className={cn(
-                          "min-w-0 flex-1 text-ui transition-colors duration-200",
+                          "min-w-0 flex-1 text-ui transition-colors duration-(--duration-sheet)",
                           row.mark === "pending" ? "text-muted-foreground" : "text-foreground",
                         )}
                       >
@@ -340,9 +331,9 @@ function FlowScreen({
               onClick={() => setDetails((value) => !value)}
             >
               Details
-              <CaretDownIcon
+              <ChevronDownIcon
                 className={cn(
-                  "size-3 transition-transform duration-200 ease-out motion-reduce:transition-none",
+                  "size-3 transition-transform duration-(--duration-sheet) ease-out motion-reduce:transition-none",
                   details && "rotate-180",
                 )}
               />
@@ -809,7 +800,7 @@ export function CommandLine({ command }: { command: string }) {
         className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
         {copied ? (
-          <CheckIcon weight="bold" className="size-3.5 text-positive" />
+          <CheckIcon strokeWidth={2.25} className="size-3.5 text-positive" />
         ) : (
           <CopyIcon className="size-3.5" />
         )}

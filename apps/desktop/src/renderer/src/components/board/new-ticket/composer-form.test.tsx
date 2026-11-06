@@ -201,9 +201,21 @@ afterEach(async () => {
  * The body's text lives in the draft cache from the keystroke it is typed in, so
  * its document must never count as unsaved, or ⌘Q asks about it (VC-1094).
  */
-it("hands the body editor the draft save policy", () => {
+it("arrives as an editable field and prepares the rich draft view only during idle after focus", async () => {
+  let idle: IdleRequestCallback | undefined;
+  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+    idle = callback;
+    return 1;
+  });
+  vi.stubGlobal("cancelIdleCallback", vi.fn());
   const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Ticket description"]');
-  expect(body?.dataset["savePolicy"]).toBe("draft");
+  expect(host.querySelector("[data-save-policy]")).toBeNull();
+  await act(async () => body?.focus());
+  expect(host.querySelector("[data-save-policy]")).toBeNull();
+  await act(async () => idle?.({ didTimeout: false, timeRemaining: () => 8 }));
+  expect(host.querySelector<HTMLElement>("[data-save-policy]")?.dataset["savePolicy"]).toBe(
+    "draft",
+  );
 });
 
 async function click(text: string) {
@@ -254,7 +266,8 @@ it.each([
     cancelable: true,
   });
   await act(async () => host.querySelector("input")!.dispatchEvent(event));
-  expect(mocks.editorFocus).toHaveBeenCalledTimes(moves ? 1 : 0);
+  const body = host.querySelector('textarea[aria-label="Ticket description"]');
+  expect(document.activeElement === body).toBe(moves);
   expect(event.defaultPrevented).toBe(moves);
 });
 
@@ -489,7 +502,7 @@ it("asks for the commit tray's own fold by marking its composer container", () =
   ).toBe("commit-tray");
 });
 
-it("gives the attachment strip the same air above the tiles and below them", async () => {
+it("keeps ticket attachments in the bounded composer manager", async () => {
   mocks.attachments.attachments = [
     {
       linkId: null,
@@ -510,9 +523,8 @@ it("gives the attachment strip the same air above the tiles and below them", asy
       />,
     ),
   );
-  // The strip is the last band before the tray's own top edge, so a top-only
-  // inset left the 64px tiles sitting ON that hairline beside the buttons.
-  const strip = host.querySelector('[aria-label="Attachments"]');
+  const strip = host.querySelector('[data-slot="composer-attachments"]');
+  expect(strip?.querySelector('[aria-label="Manage 1 attachments"]')).not.toBeNull();
   expect(strip?.className).toContain("py-2");
   expect(strip?.className).not.toContain("pt-2");
 });

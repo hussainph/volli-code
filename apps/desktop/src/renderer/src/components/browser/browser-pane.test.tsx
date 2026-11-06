@@ -99,9 +99,9 @@ describe("BrowserPane Hide to Island (VC-1118)", () => {
       />,
     );
 
-  it("offers the way back for a Session's tab its surface can hide", () => {
+  it("leaves the way back on the tab, not in the page toolbar", () => {
     const html = drawWithHide(tab({ createdBy: "session", ownerSessionId: "ses-a" }));
-    expect(html).toContain('aria-label="Hide to Island"');
+    expect(html).not.toContain('aria-label="Hide to Island"');
   });
 
   it("never offers it for a person's tab, nor where no surface can hide", () => {

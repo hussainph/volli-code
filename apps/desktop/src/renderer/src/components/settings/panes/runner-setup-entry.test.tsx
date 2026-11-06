@@ -87,7 +87,7 @@ it.each(["Add a runner", "Get an always-on runner"])(
         { state: "used", expiresAt, runner: { id: "runner", name: "box", status: "online" } },
       ),
     );
-    expect(document.body.textContent).toContain("box is online. Pick it in the composer.");
+    expect(document.body.textContent).toContain("box is online");
     await click("Done");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await vi.waitFor(() => expect(document.activeElement?.textContent).toBe(entry));

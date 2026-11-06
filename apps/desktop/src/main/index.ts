@@ -244,6 +244,7 @@ import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
 import { registerSecretIpc } from "./secrets/ipc";
+import { isSecretRenderer } from "./secrets/renderer-trust";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import {
   registerDegradedSessionRpcIpcHandlers,
@@ -606,10 +607,10 @@ function createWindow(
     // (.app-region-drag in globals.css) and the traffic-light whitespace —
     // everything below that band is ordinary layout.
     titleBarStyle: "hiddenInset",
-    // Centers the 12px traffic-light group inside ChromeBar's 36px band
-    // ((36 - 12) / 2 = 12). Must stay in sync with ChromeBar's h-9 height
-    // (chrome-bar.tsx), the same way backgroundColor below tracks the canvas.
-    trafficLightPosition: { x: 10, y: 12 },
+    // Centers the 12px traffic-light group inside ChromeBar's 46px band
+    // ((46 - 12) / 2 = 17). Must stay in sync with --spacing-titlebar
+    // (globals.css), the same way backgroundColor below tracks the canvas.
+    trafficLightPosition: { x: 16, y: 17 },
     // The canvas's own base fill (window-theme.ts runs the same pure pipeline
     // the renderer does, preferring the background the renderer last actually
     // painted) — prevents the white flash before first paint, and keeps the
@@ -1547,16 +1548,9 @@ const appStartup = app.whenReady().then(async () => {
   sessionWakeBus?.subscribe(({ event }) => {
     if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
   });
-  registerSecretIpc(secrets, (sender) => {
-    const url = sender.getURL();
-    const renderer = isDev ? process.env["ELECTRON_RENDERER_URL"] : PACKAGED_RENDERER_ENTRY_URL;
-    if (renderer === undefined || !URL.canParse(renderer) || !URL.canParse(url)) return false;
-    const actual = new URL(url);
-    const expected = new URL(renderer);
-    actual.hash = "";
-    expected.hash = "";
-    return actual.href === expected.href;
-  });
+  registerSecretIpc(secrets, (sender) =>
+    isSecretRenderer(sender.getURL(), isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined),
+  );
   const mcpSettings = liveHost?.runtimeServices.mcp ?? null;
   // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
   // workspace's installed copy unpackaged, and the copy electron-builder

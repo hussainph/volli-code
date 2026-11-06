@@ -235,3 +235,5 @@ export type {
   CloudMoveStatus,
   CloudMoveSnapshot,
 } from "./cloud-moves";
+
+export * from "./settings-icon-colors";

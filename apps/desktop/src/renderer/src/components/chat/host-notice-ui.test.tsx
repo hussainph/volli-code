@@ -6,6 +6,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { SubagentNotice } from "@volli/session-presentation";
+import { BrowserIcon, PreviewIcon, TerminalIcon, TeamIcon } from "@renderer/components/ui/icon";
+
+/** Compare the drawing, not SVG attributes unrelated to icon weight. */
+function firstGlyph(html: string): string {
+  return new DOMParser().parseFromString(html, "text/html").querySelector("svg")?.innerHTML ?? "";
+}
 
 import {
   BrowserHoldNoticeRow,
@@ -37,17 +43,30 @@ afterEach(async () => {
 });
 
 describe("a Subagent Session notice row", () => {
+  it.each(["stopped", "failed", "interrupted"] as const)(
+    "draws %s with a status glyph and no redundant detail paragraph",
+    (state) => {
+      const html = renderToStaticMarkup(<SubagentNoticeRow notice={{ ...completed, state }} />);
+      expect(html).not.toContain("<p ");
+      expect(html).toContain('class="sr-only"');
+      expect(html).toContain("<svg");
+      if (state === "failed") expect(html).toContain("text-destructive");
+      if (state === "interrupted") expect(html).toContain("text-attention");
+    },
+  );
+
   it("draws the child and outcome without a redundant detail row or message-bubble controls", () => {
     const html = renderToStaticMarkup(<SubagentNoticeRow notice={completed} />);
 
     expect(html).toContain("Find artifact conventions");
+    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<TeamIcon />)));
     expect(html).toContain("done");
     expect(html).not.toContain('<p class="truncate text-ui text-muted-foreground/70">');
     expect(html).toContain('data-slot="separator"');
     expect(html).not.toContain('aria-label="Copy"');
   });
 
-  it("puts the complete title and note in the row's hover text", () => {
+  it("puts the complete title and state in the row's hover text", () => {
     const longTitle = "A title long enough to be truncated in a narrow Pane";
     const html = renderToStaticMarkup(
       <SubagentNoticeRow notice={{ ...completed, title: longTitle }} />,
@@ -88,7 +107,8 @@ describe("a Subagent Session notice row", () => {
       />,
     );
 
-    expect(html).toContain("Volli relaunched while its turn was active");
+    expect(html).toContain('title="Find artifact conventions — interrupted · Volli relaunched"');
+    expect(html).not.toContain("before it answered");
   });
 });
 
@@ -116,7 +136,8 @@ describe("a background shell notice row (VC-495)", () => {
     const html = renderToStaticMarkup(<ShellNoticeRow notice={exited} />);
 
     expect(html).toContain("pnpm test --watch");
-    expect(html).toContain("exited 1");
+    expect(html).toContain('<span class="sr-only">exited 1</span>');
+    expect(html).toContain("text-destructive");
     expect(html).toContain("Ran 2m 5s.");
     expect(html).toContain('data-slot="separator"');
     expect(html).not.toContain('aria-label="Copy"');
@@ -126,6 +147,7 @@ describe("a background shell notice row (VC-495)", () => {
     const html = renderToStaticMarkup(<ShellNoticeRow notice={matched} />);
 
     expect(html).toContain("dev server");
+    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<TerminalIcon />)));
     expect(html).toContain("matched");
     expect(html).toContain('title="dev server — matched. Printed &quot;listening on&quot;."');
   });
@@ -148,8 +170,10 @@ describe("other host-notice rows", () => {
       />,
     );
 
+    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<BrowserIcon />)));
     expect(html).toContain(">GitHub</span>");
-    expect(html).toContain("You took control");
+    expect(html).toContain(">You took control</span>");
+    expect(html).not.toContain("Session writes are refused");
     expect(html).toContain("Browser Tab long-opaque-tab-id — GitHub");
     expect(html).not.toContain('aria-label="Copy"');
   });
@@ -200,10 +224,11 @@ describe("a watch notice row (VC-457)", () => {
       <WatchNoticeRow notice={{ kind: "watch", events: [moved] }} />,
     );
     expect(html).toContain("VC-12 moved (Done)");
+    expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<PreviewIcon />)));
     expect(html).not.toContain("<p ");
   });
 
-  it("counts several changes and lists them underneath", () => {
+  it("counts several changes without repeating a paragraph", () => {
     const html = renderToStaticMarkup(
       <HostNoticeRow
         notice={{
@@ -217,5 +242,7 @@ describe("a watch notice row (VC-457)", () => {
     );
     expect(html).toContain("2 watched changes");
     expect(html).toContain("VC-12 moved (Done) · ab12cd34 was stopped");
+    expect(html).not.toContain("<p ");
+    expect(html).toContain('class="sr-only"');
   });
 });
