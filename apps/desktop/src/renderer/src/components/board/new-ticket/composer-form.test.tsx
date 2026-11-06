@@ -201,9 +201,13 @@ afterEach(async () => {
  * The body's text lives in the draft cache from the keystroke it is typed in, so
  * its document must never count as unsaved, or ⌘Q asks about it (VC-1094).
  */
-it("hands the body editor the draft save policy", () => {
+it("arrives as an editable field and gives the rich view the draft save policy on focus", async () => {
   const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Ticket description"]');
-  expect(body?.dataset["savePolicy"]).toBe("draft");
+  expect(host.querySelector("[data-save-policy]")).toBeNull();
+  await act(async () => body?.focus());
+  expect(host.querySelector<HTMLElement>("[data-save-policy]")?.dataset["savePolicy"]).toBe(
+    "draft",
+  );
 });
 
 async function click(text: string) {
@@ -254,7 +258,8 @@ it.each([
     cancelable: true,
   });
   await act(async () => host.querySelector("input")!.dispatchEvent(event));
-  expect(mocks.editorFocus).toHaveBeenCalledTimes(moves ? 1 : 0);
+  const body = host.querySelector('textarea[aria-label="Ticket description"]');
+  expect(document.activeElement === body).toBe(moves);
   expect(event.defaultPrevented).toBe(moves);
 });
 

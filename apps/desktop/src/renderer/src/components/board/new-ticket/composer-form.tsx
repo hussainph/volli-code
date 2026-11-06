@@ -24,9 +24,9 @@ import { runAutomationOnTicket } from "@renderer/components/automations/run-auto
 import { useAutomationRunOffer } from "@renderer/components/automations/automation-run-menu";
 import {
   type DocumentFileRefs,
-  MonacoDocumentEditor,
   type MonacoDocumentEditorHandle,
 } from "@renderer/components/editor/monaco-document-editor";
+import { DraftDocumentEditor } from "@renderer/components/editor/draft-document-editor";
 import { startTicketChat } from "@renderer/components/sessions/session-create";
 import { useRunnerPicker } from "@renderer/components/chat/runner-picker";
 import { launchStore } from "@renderer/stores/launch";
@@ -498,9 +498,8 @@ export function ComposerForm({
           aria-label="Ticket title"
           className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <MonacoDocumentEditor
+        <DraftDocumentEditor
           ref={editorRef}
-          deferUntilPaint
           // No ticket exists yet, so the draft body borrows a ticket-body
           // identity under a reserved id. Ticket ids are UUIDs, so this can
           // never collide with a real body's model.
@@ -512,7 +511,6 @@ export function ComposerForm({
           viewId="composer:body"
           // The draft cache (draft.ts) keeps every edit, so the body is never
           // unsaved work; see DocumentSavePolicy.
-          savePolicy="draft"
           value={body}
           onChange={setBody}
           placeholder="Add description…"

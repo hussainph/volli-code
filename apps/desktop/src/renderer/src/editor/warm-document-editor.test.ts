@@ -21,7 +21,7 @@ describe("idle document font measurement", () => {
         automaticLayout: false,
         dimension: { width: 600, height: 24 },
       });
-      return { dispose } as editor.IStandaloneCodeEditor;
+      return { dispose } as unknown as editor.IStandaloneCodeEditor;
     });
     warmDocumentEditorFonts({ create }, doc);
     warmDocumentEditorFonts({ create }, doc);

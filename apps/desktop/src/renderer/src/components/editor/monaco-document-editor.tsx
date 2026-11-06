@@ -1,4 +1,3 @@
-import { afterPaint } from "@renderer/lib/after-paint";
 import { observePaneLayout, paneResizeActive } from "@renderer/lib/pane-resize";
 import * as React from "react";
 import { useBlobReader } from "@renderer/components/attachments/blob-read";
@@ -57,6 +56,11 @@ export interface MonacoDocumentEditorHandle {
   markSaved(revision: DocumentRevision): void;
 }
 
+export interface DocumentEditorHandover {
+  /** Adopt a still-editable stand-in's latest text and selection atomically. */
+  adopt(value: string, start: number, end: number, focus: boolean): void;
+}
+
 export interface MonacoDocumentEditorProps {
   /**
    * Which logical document this is. One identity owns one Monaco model no matter
@@ -76,6 +80,7 @@ export interface MonacoDocumentEditorProps {
   revision?: DocumentRevision;
   /** Fired on every document edit with the full markdown string. */
   onChange(value: string): void;
+  onReady?(handover: DocumentEditorHandover): void;
   /**
    * Every dirty transition of the shared registry model. Artifact tabs feed
    * this into the workbench close-guard; the ticket body leaves it unset.
@@ -93,8 +98,6 @@ export interface MonacoDocumentEditorProps {
   /** 28px empty document target; focus height remains the host's decision. */
   compact?: boolean;
   autoFocus?: boolean;
-  /** Let an enclosing transient shell present before initializing its view. */
-  deferUntilPaint?: boolean;
   /**
    * Classes for the editor host. Min/max height belong here and are honoured
    * (see the auto-height note on the component); PADDING does not — the host's
@@ -207,13 +210,13 @@ export const MonacoDocumentEditor = React.forwardRef<
     revision = null,
     savePolicy = "autosave",
     onChange,
+    onReady,
     onDirtyChange,
     onBlur,
     onContentHeightChange,
     placeholder,
     compact = false,
     autoFocus,
-    deferUntilPaint = false,
     className,
     style,
     ariaLabel,
@@ -222,6 +225,8 @@ export const MonacoDocumentEditor = React.forwardRef<
   },
   ref,
 ) {
+  const readyRef = React.useRef(onReady);
+  readyRef.current = onReady;
   const hostRef = React.useRef<HTMLDivElement>(null);
   const editorRef = React.useRef<editor.IStandaloneCodeEditor | null>(null);
   const leaseRef = React.useRef<DocumentMonacoLease | null>(null);
@@ -342,18 +347,13 @@ export const MonacoDocumentEditor = React.forwardRef<
     if (host === null) return;
 
     let cancelled = false;
-    const paint = new AbortController();
     let view: editor.IStandaloneCodeEditor | null = null;
     let lease: DocumentMonacoLease | null = null;
     let attachment: DocumentModeAttachment | null = null;
     const subscriptions: { dispose(): void }[] = [];
     host.dataset.monacoStatus = "loading";
 
-    const prepare = async () => {
-      if (deferUntilPaint) await afterPaint(paint.signal);
-      return cancelled ? null : loadMonacoRuntime();
-    };
-    void prepare()
+    void loadMonacoRuntime()
       .then((runtime) => {
         if (cancelled || runtime === null) return;
         const seed = seedRef.current;
@@ -459,6 +459,21 @@ export const MonacoDocumentEditor = React.forwardRef<
         // editable" there rather than "not applicable".
         host.dataset.monacoReadOnly = "false";
         if (liveRef.current.autoFocus) view.focus();
+        const mountedView = view;
+        readyRef.current?.({
+          adopt(value, start, end, focus) {
+            applyExternal(value, liveRef.current.revision ?? null);
+            const first = model.getPositionAt(start);
+            const last = model.getPositionAt(end);
+            mountedView.setSelection({
+              startLineNumber: first.lineNumber,
+              startColumn: first.column,
+              endLineNumber: last.lineNumber,
+              endColumn: last.column,
+            });
+            if (focus) mountedView.focus();
+          },
+        });
         // The ticket description is the surface the switch benchmark waits on
         // — the harness's readiness predicate looks for Monaco's own textarea,
         // so creating and laying out this editor is inside the measured window
@@ -477,7 +492,6 @@ export const MonacoDocumentEditor = React.forwardRef<
 
     return () => {
       cancelled = true;
-      paint.abort();
       attachment?.dispose();
       attachmentRef.current = null;
       for (const subscription of subscriptions) subscription.dispose();
@@ -502,7 +516,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         liveRef.current.onDirtyChange?.(false);
       }
     };
-  }, [applyExternal, emitDirty, key, viewId, deferUntilPaint]);
+  }, [applyExternal, emitDirty, key, viewId]);
 
   // External value → document sync. While focused we can't move the caret, so
   // remember it and let the blur handler adopt it if the buffer is untouched.

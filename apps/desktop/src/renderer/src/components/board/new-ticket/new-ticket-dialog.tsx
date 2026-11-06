@@ -62,6 +62,7 @@ export function NewTicketDialog() {
       }}
     >
       <DialogContent
+        material="none"
         data-testid="new-ticket-composer"
         showCloseButton={false}
         className={cn(
