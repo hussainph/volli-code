@@ -98,8 +98,11 @@ describe("floating navigation native-plane exit", () => {
   it("keeps the Browser frozen until a moving panel's exit ends", async () => {
     await render();
     const panel = overlay()!;
+    expect(panel.hasAttribute("data-pane-withdrawn")).toBe(false);
     state.peek = false;
     await render();
+    expect(panel.hasAttribute("data-pane-withdrawn")).toBe(true);
+    expect(panel.getAttribute("aria-hidden")).toBe("true");
     expect(overlay()).toBe(panel);
     await act(async () => panel.dispatchEvent(new Event("transitionend", { bubbles: true })));
     expect(overlay()).toBeNull();

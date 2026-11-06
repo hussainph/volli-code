@@ -1799,6 +1799,13 @@ article.bg-card {
 [data-slot="tooltip-content"].material-floating {
   contain: none;
 }
+/* A lens belongs to one surface, not its descendants. Registering that fact
+ * also keeps the pre-paint optics write from restyling every row in a picker.
+ * Universal syntax preserves the empty fallback and exact cached URL bytes. */
+@property --glass-refraction {
+  syntax: "*";
+  inherits: false;
+}
 /* One material chain. Tint keeps the mock's neutral 46–56% veil over the
  * actual canvas; never paint a duplicate canvas beneath the blur. */
 .glass,
@@ -1852,10 +1859,12 @@ article.bg-card {
     inset 0 0 0 0.5px var(--glass-edge);
 }
 /* Withdrawn resident panes keep identity but spend no descendant animation or
- * blur budget. Do not pause the panel's own reveal/pour. */
-:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *,
-:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::before,
-:is([data-slot="sidebar"], [data-inspector-panel])[aria-hidden="true"] *::after {
+ * blur budget. Do not pause the panel's own reveal/pour. Use the pane owner's
+ * state, not aria-hidden: modal isolation toggles that attribute throughout the
+ * app, needlessly invalidating every descendant of these rules on each open. */
+[data-pane-withdrawn] *,
+[data-pane-withdrawn] *::before,
+[data-pane-withdrawn] *::after {
   animation-play-state: paused !important;
 }
 /* Keep the state mark, but spend no timeline work outside the visible window.
@@ -2547,7 +2556,10 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
     transparent 65%
   );
 }
-[data-control="button"]:active:not(:disabled):not([aria-disabled="true"]) {
+/* Popup anchors keep a stable rectangle. Scaling one makes Floating UI chase
+ * the press/release every frame, repeatedly restyling the newly opened list.
+ * Their existing face/ink press state still provides activation feedback. */
+[data-control="button"]:not([aria-haspopup]):active:not(:disabled):not([aria-disabled="true"]) {
   transform: scale(var(--press-scale));
 }
 /* Keyboard-triggered activation and navigation are immediate. */

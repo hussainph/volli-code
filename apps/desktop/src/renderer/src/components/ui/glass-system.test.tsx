@@ -149,6 +149,16 @@ describe("Glass system surfaces", () => {
     expect(context.props.children[0].type).toBe(DeleteIcon);
   });
 
+  it("keeps a surface's lens URL local rather than inheriting it into every picker row", () => {
+    expect(css).toContain('@property --glass-refraction {\n  syntax: "*";\n  inherits: false;\n}');
+  });
+
+  it("keeps popup anchors stationary through press feedback without disabling ordinary button feedback", () => {
+    expect(css).toContain(
+      '[data-control="button"]:not([aria-haspopup]):active:not(:disabled):not([aria-disabled="true"]) {\n  transform: scale(var(--press-scale));',
+    );
+  });
+
   it("shares sheet timing with its scrim and retargets toast transforms, never layout height", () => {
     expect(css).toContain("--radius-sheet: 14px");
     expect(css).toContain("--duration-sheet: 220ms");

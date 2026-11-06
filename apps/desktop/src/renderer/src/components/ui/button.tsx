@@ -13,6 +13,7 @@ const buttonVariants = cva(
   // Text fields carry their caret instead (`ui/field-classes.ts`).
   //
   // Pointer presses scale the drawing without moving its layout target.
+  // CSS excludes popup anchors so their positioned surface has a stable rect.
   "inline-flex min-w-0 max-w-full shrink-0 items-center justify-center gap-2 rounded-native-control text-sm font-medium whitespace-normal break-words transition-[transform,opacity] duration-(--duration-menu-in) ease-out outline-none motion-reduce:transition-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {

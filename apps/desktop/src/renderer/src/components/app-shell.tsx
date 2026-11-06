@@ -381,6 +381,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             collapsible="none"
             data-project-rail
             aria-hidden={railHidden || undefined}
+            data-pane-withdrawn={railHidden || undefined}
             inert={railHidden}
             className={cn(
               // Transparent, not `bg-rail`: the rail was already painted in the
@@ -498,6 +499,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               data-slot="sidebar"
               data-native-plane-overlay={nativePlaneOverlay ? "" : undefined}
               aria-hidden={!panelShown || undefined}
+              data-pane-withdrawn={!panelShown || undefined}
               inert={!panelShown}
               onTransitionEnd={(event) => {
                 if (event.target === event.currentTarget)

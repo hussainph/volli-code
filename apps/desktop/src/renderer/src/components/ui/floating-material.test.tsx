@@ -158,7 +158,7 @@ describe("floating material as shipped", () => {
   it("keeps hidden pane material stable while pausing descendant animation", async () => {
     await act(async () =>
       root.render(
-        <div data-inspector-panel="" aria-hidden="true">
+        <div data-inspector-panel="" data-pane-withdrawn="" aria-hidden="true">
           <div className="glass" data-tint="true">
             <span className="working">Working</span>
           </div>
@@ -169,6 +169,10 @@ describe("floating material as shipped", () => {
     expect(backdrop(panel.firstElementChild!)).toBe(BLUR);
     expect(getComputedStyle(host.querySelector(".working")!).animationPlayState).toBe("paused");
     expect(getComputedStyle(panel).animationPlayState).not.toBe("paused");
+    // A modal's aria-hidden is accessibility isolation, not pane withdrawal.
+    // Returning the pane to view resumes it even if a modal still hides it.
+    panel.removeAttribute("data-pane-withdrawn");
+    expect(getComputedStyle(host.querySelector(".working")!).animationPlayState).not.toBe("paused");
   });
 
   const floats: [string, string, () => React.ReactNode][] = [

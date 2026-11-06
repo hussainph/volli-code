@@ -105,6 +105,7 @@ export function InspectorShell({
         data-native-plane-overlay={collapsed && shown ? "" : undefined}
         data-shown={shown || pane.moving || undefined}
         aria-hidden={!shown || undefined}
+        data-pane-withdrawn={!shown || undefined}
         inert={!shown}
         onTransitionEnd={(event) => {
           if (event.target === event.currentTarget)

@@ -104,6 +104,7 @@ describe("resident inspector", () => {
       const child = host.querySelector("[data-live-child]");
       await click(1);
       expect(panel.getAttribute("aria-hidden")).toBe("true");
+      expect(panel.hasAttribute("data-pane-withdrawn")).toBe(true);
       expect(panel.parentElement!.style.width).toBe("var(--right-pane-push, 0px)");
       expect(animate).toHaveBeenCalledWith(
         expect.anything(),
@@ -123,6 +124,7 @@ describe("resident inspector", () => {
       expect(panel.getAttribute("aria-hidden")).toBe("true");
       await move(980, 18, 2);
       expect(panel.getAttribute("aria-hidden")).toBeNull();
+      expect(panel.hasAttribute("data-pane-withdrawn")).toBe(false);
       expect(panel.style.getPropertyValue("--reveal-duration")).not.toBe("0ms");
       await click(1);
       expect(panel.parentElement!.style.width).toBe("var(--right-pane-push, 0px)");
