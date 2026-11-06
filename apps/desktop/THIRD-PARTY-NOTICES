@@ -13235,13 +13235,14 @@ licence is asserted for it. What is known and what is missing:
   review.
 
 =========================================================================================================
-Source: Lobe Icons provider logomarks (Groq, xAI, Together, Cerebras, Fireworks)
+Source: Lobe Icons provider logomarks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten, Ant Group)
 Paths: apps/desktop/src/renderer/src/components/models/model-identity.tsx
 Upstream: https://github.com/lobehub/lobe-icons (packages/static-svg/icons)
 SPDX: MIT
 Evidence:
-  The five path strings in model-identity.tsx marked `lobe-icons, MIT` are copied
-  verbatim from the upstream static SVGs (VC-617). The other marks there come from
+  The eight marks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten,
+  Ant Group) in model-identity.tsx marked `lobe-icons (MIT)` preserve the upstream
+  static SVG paths and viewBoxes verbatim (VC-617). The other marks there come from
   simple-icons, CC0-1.0, which needs no notice.
 ---------------------------------------------------------------------------------------------------------
 MIT License
