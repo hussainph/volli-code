@@ -65,12 +65,6 @@ async function main() {
   // paint lands on the token fallback (they re-theme live either way).
   void initTerminalAppearance();
 
-  // Same reasoning for the terminal/editor half of the theme state: it is a db
-  // read with no dependency on the bootstrap payload, so fetching it
-  // concurrently only narrows the window where a non-default value hasn't
-  // landed yet. The CANVAS half rides in on the bootstrap payload instead and
-  // is adopted in boot() — there is deliberately no second read path for it.
-  void useThemeStore.getState().hydrate();
   // The `auto` half of the appearance setting: a real OS flip, pushed from main
   // because this process cannot see one (its own `prefers-color-scheme` query
   // answers from the mode the app stamped — see theme/canvas-paint.ts).
@@ -101,6 +95,15 @@ async function main() {
     return;
   }
 
+  // boot() installs the stored canvas/appearance before its restored-project
+  // listener requests that scope's theme state. A concurrent global request
+  // could instead paint the default `auto` mode over preload's first-paint
+  // hint, exposing one dark frame in a stored-light launch. With no project,
+  // there is no selection announcement, so request the global terminal chain
+  // here. The independent Ghostty-config warmup above remains concurrent.
+  if (useProjectsStore.getState().selectedProjectId === null) {
+    void useThemeStore.getState().hydrate();
+  }
   await startStylePreferences();
 
   root.render(

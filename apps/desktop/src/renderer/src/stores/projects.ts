@@ -498,8 +498,9 @@ export function createProjectsStore(
   /**
    * Announces a selection change to {@link SelectedProjectListener} — and only
    * a real CHANGE: re-selecting the project already showing would otherwise
-   * cost a redundant theme round-trip on every rail click, and boot hydrating
-   * `null` over `null` would race main.tsx's own global-scope read.
+   * cost a redundant theme round-trip on every rail click. Boot hydrating
+   * `null` over `null` leaves the global-scope read to main.tsx, after the
+   * bootstrap's stored appearance has landed.
    */
   function announceSelection(
     previous: string | null,
