@@ -241,9 +241,17 @@ interface CardFrame {
   reveal: IslandRevealMode;
   arm: boolean;
   togglePin(): void;
+  /** A card action deliberately navigated away from its owning pane. */
+  leaveFocus(): void;
 }
 
-const CARD_UNFRAMED: CardFrame = { pinned: false, reveal: "always", arm: false, togglePin() {} };
+const CARD_UNFRAMED: CardFrame = {
+  pinned: false,
+  reveal: "always",
+  arm: false,
+  togglePin() {},
+  leaveFocus() {},
+};
 const CardContext = React.createContext<CardFrame>(CARD_UNFRAMED);
 
 /** Cards act through the verbs directly — the clusters never learn them. */
@@ -413,6 +421,9 @@ function ClusterShell({
       reveal: feel.reveal,
       arm: feel.armDestructive,
       togglePin: () => coordination?.togglePin(id),
+      leaveFocus: () => {
+        interactedOutside.current = true;
+      },
     }),
     [pinned, feel.reveal, feel.armDestructive, coordination, id],
   );
@@ -540,7 +551,16 @@ function ClusterShell({
             interactedOutside.current = false;
             if (!restore) return;
             event.preventDefault();
-            anchorRef.current?.focus();
+            const anchor = anchorRef.current;
+            // Revealing a tab can hide the owning chat before this card's
+            // close autofocus runs. Focusing that resident-but-hidden anchor
+            // would focus its old pane and undo the destination just selected.
+            if (
+              anchor?.isConnected &&
+              anchor.checkVisibility?.({ checkVisibilityCSS: true }) !== false
+            ) {
+              anchor.focus();
+            }
           }}
           onMouseEnter={() => coordination.enter(id)}
           onMouseLeave={() => coordination.leave(id)}
@@ -766,6 +786,14 @@ function TabChip({ tab }: { tab: IslandTab }) {
 
 function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolean }) {
   const actions = useActions();
+  const frame = React.useContext(CardContext);
+  const promote = (id: string) => {
+    // The owning chat can remain visible beside the destination. Returning
+    // focus there when this card closes would nevertheless select that pane
+    // again, undoing Show tab's choice of the Browser pane.
+    frame.leaveFocus();
+    actions.promoteTab(id);
+  };
   return (
     <Card glyph={GlobeIcon} heading={tabsHeading(tabs)}>
       <CardRows>
@@ -790,10 +818,10 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                 }
                 title={`${showLabel}: ${tab.title ?? tab.host}\n${tab.detail ?? tab.host}`}
                 aria-label={`${showLabel}: ${tab.title ?? tab.host}`}
-                onActivate={() => actions.promoteTab(tab.id)}
+                onActivate={() => promote(tab.id)}
                 actions={
                   <span className="flex shrink-0 items-center">
-                    <ActionButton label={showLabel} onPress={() => actions.promoteTab(tab.id)}>
+                    <ActionButton label={showLabel} onPress={() => promote(tab.id)}>
                       <ExternalIcon />
                     </ActionButton>
                     <ActionButton

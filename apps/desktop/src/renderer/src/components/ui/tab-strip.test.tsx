@@ -15,6 +15,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { Tab, TabStrip } from "./tab-strip";
+import { TabActionScope } from "./tab-actions";
+import { MinusIcon } from "./icon";
 
 const TAB_WIDTH = 100;
 
@@ -467,9 +469,65 @@ describe("TabStrip overflow", () => {
     // revealing its parent now would move it out from under the pending click.
     act(() => close.focus());
     expect(port.scrollLeft).toBe(320);
+    // A title/width-cascade resize can arrive before pointer-up too.
+    contentResized();
+    expect(port.scrollLeft).toBe(320);
     act(() => close.click());
     expect(onClose).toHaveBeenCalledOnce();
     expect(document.activeElement).toBe(tabsInStrip()[4]);
+  });
+
+  it("does not reveal a capsule over a focused control when pane selection changes", () => {
+    const draw = (selected: number) =>
+      act(() =>
+        root?.render(
+          <TabStrip label="Home tabs">
+            {Array.from({ length: 9 }, (_, index) => (
+              <Tab
+                key={index}
+                label={`Tab ${index}`}
+                active={index === selected}
+                tabStop={index === selected}
+                onActivate={() => {}}
+                onClose={() => {}}
+              />
+            ))}
+          </TabStrip>,
+        ),
+      );
+    draw(0);
+    const port = measureScroller(9, 320);
+    const close = tabsInStrip()[3]!.querySelector<HTMLButtonElement>('[data-slot="tab-close"]')!;
+    act(() => close.focus());
+    draw(3);
+    expect(document.activeElement).toBe(close);
+    expect(port.scrollLeft).toBe(320);
+  });
+
+  it("captures a minimise press independently of dragging and focuses the Close neighbour", () => {
+    const hide = vi.fn();
+    const activate = vi.fn();
+    act(() =>
+      root?.render(
+        <TabStrip label="Home tabs">
+          <TabActionScope actions={[{ label: "Hide to Island", icon: MinusIcon, run: hide }]}>
+            <Tab label="Browser" active tabStop onActivate={activate} />
+          </TabActionScope>
+          <Tab label="Neighbour" active={false} tabStop={false} onActivate={() => {}} />
+        </TabStrip>,
+      ),
+    );
+    const button = container!.querySelector<HTMLButtonElement>('[data-slot="tab-minimise"]')!;
+    const capture = vi.fn();
+    button.setPointerCapture = capture;
+    const down = new MouseEvent("pointerdown", { bubbles: true, button: 0 });
+    Object.defineProperty(down, "pointerId", { value: 7 });
+    act(() => button.dispatchEvent(down));
+    expect(capture).toHaveBeenCalledWith(7);
+    act(() => button.click());
+    expect(hide).toHaveBeenCalledOnce();
+    expect(activate).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(tabsInStrip()[1]);
   });
 
   it("leaves the strip where it is when the tab is already whole in view", () => {

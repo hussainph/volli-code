@@ -244,6 +244,11 @@ function revealCurrentTab(scroller: HTMLElement): void {
     focused instanceof HTMLElement && scroller.contains(focused)
       ? focused.closest<HTMLElement>('[role="tab"]')
       : null;
+  // A nested close/menu/minimise control may have received pointer focus
+  // between down and up. Revealing its whole (partly clipped) capsule would
+  // move that control away from the pending release. The browser has already
+  // revealed the focused control itself; keep its position until focus leaves.
+  if (focusedTab !== null && focused !== focusedTab) return;
   const tab =
     focusedTab ?? scroller.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   if (tab !== null) revealTab(tab, false);
@@ -917,7 +922,10 @@ function TabShell({
   React.useLayoutEffect(() => {
     if (!active) return;
     const shell = shellRef.current;
-    if (shell !== null) revealTab(shell, false);
+    if (shell === null) return;
+    const focused = document.activeElement;
+    if (focused !== shell && focused !== null && shell.contains(focused)) return;
+    revealTab(shell, false);
   }, [active]);
   // The close is hidden mid-rename on purpose: the only two exits from an
   // inline edit are commit and cancel, and an × that blurs (committing) and
@@ -1113,9 +1121,16 @@ function TabShell({
               data-slot="tab-minimise"
               aria-label="Hide to Island"
               title="Hide to Island"
-              onPointerDown={(event) => event.stopPropagation()}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                // Focusing a partly clipped capsule can scroll its strip
+                // between down/up. Keep this press on the actual control,
+                // without starting the capsule's drag sensor.
+                if (event.button === 0) event.currentTarget.setPointerCapture(event.pointerId);
+              }}
               onClick={(event) => {
                 event.stopPropagation();
+                focusSuccessorTab(event.currentTarget);
                 hide.run();
               }}
               className="flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 hover:bg-border hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"

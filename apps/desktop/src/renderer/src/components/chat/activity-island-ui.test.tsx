@@ -367,6 +367,40 @@ describe("the card", () => {
     expect(document.activeElement).toBe(cluster("tabs"));
   });
 
+  it("does not refocus the still-visible owning pane after Show tab selects another pane", async () => {
+    const actions = actionsSpy();
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actions);
+    const anchor = cluster("tabs");
+    act(() => anchor.focus());
+    press(anchor, "Enter");
+    await settle();
+    click(rowIn("tabs", "t1"));
+    expect(actions.promoteTab).toHaveBeenCalledWith("t1");
+    act(() =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    await settle();
+    expect(card("tabs")).toBeNull();
+    expect(document.activeElement).not.toBe(anchor);
+  });
+
+  it("does not focus a hidden owning pane after a card action reveals another tab", async () => {
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    const anchor = cluster("tabs");
+    act(() => anchor.focus());
+    press(anchor, "Enter");
+    await settle();
+    expect(document.activeElement).toBe(rowIn("tabs", "t1"));
+    // The resident chat becomes hidden as the revealed tab takes the surface.
+    anchor.checkVisibility = () => false;
+    act(() =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    await settle();
+    expect(card("tabs")).toBeNull();
+    expect(document.activeElement).not.toBe(anchor);
+  });
+
   it("leaves focus where a pointer put it when an outside click closes the card", async () => {
     // The person clicked something else; the card must not pull focus back to
     // the pill on its way out.
