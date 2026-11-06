@@ -217,7 +217,7 @@ try {
     await form
       .getByRole("heading", { name: "Nightly sweep", exact: true })
       .waitFor({ timeout: 15000 });
-    await form.getByRole("button", { name: "Automations", exact: true }).click();
+    await form.getByRole("button", { name: "All automations", exact: true }).click();
     await page.locator("[data-automation-rail-row]").filter({ hasText: "Nightly sweep" }).waitFor();
 
     // This probe is about which Automations are listed under which Ownership,
@@ -360,7 +360,7 @@ try {
     const reviewId = await listedId("Review sweep");
     await page
       .locator('[data-slot="automation-editor"]')
-      .getByRole("button", { name: "Automations", exact: true })
+      .getByRole("button", { name: "All automations", exact: true })
       .click();
     await page.locator(`[data-automation-rail-row="${reviewId}"]`).click();
     const form = page.locator('[data-slot="automation-editor"]');

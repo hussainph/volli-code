@@ -1716,6 +1716,9 @@ describe("grouped reading navigation", () => {
     expect(buttonsNamed("Doing sweep")).toHaveLength(1);
     expect(buttonsNamed("Hourly sweep")).toHaveLength(1);
     expect(buttonsNamed("Rename Doing sweep")).toHaveLength(1);
+    expect(button("Rename Doing sweep").closest("h2")?.getAttribute("aria-label")).toBe(
+      "Doing sweep",
+    );
     await act(async () => button("All automations").click());
     expect(document.querySelector(".automations-surface")?.getAttribute("data-detail")).toBe(
       "false",
@@ -1723,6 +1726,9 @@ describe("grouped reading navigation", () => {
     await act(async () => buttonsNamed("Hourly sweep")[0]!.click());
     expect(buttonsNamed("Hourly sweep")).toHaveLength(1);
     expect(buttonsNamed("Rename Hourly sweep")).toHaveLength(1);
+    expect(button("Rename Hourly sweep").closest("h2")?.getAttribute("aria-label")).toBe(
+      "Hourly sweep",
+    );
   });
 
   it("keeps three recent occurrences and opens the real scoped All runs read", async () => {

@@ -218,7 +218,7 @@ function TimeField({
 }
 
 /**
- * "Next: …" at the schedule control (VC-298), for a schedule this machine will
+ * "Next · …" at the schedule control (VC-298), for a schedule this machine will
  * actually fire. Its own component so the clock it keeps re-renders this line
  * rather than the editor, and its answer is memoized so the editor's renders
  * do not recompute it. Once the shown occurrence passes it reads the next one,
@@ -925,7 +925,7 @@ export function AutomationEditorPanel({
                 disabled={disabled || saving}
               />
             ) : (
-              <h2 className="text-heading font-semibold wrap-anywhere">
+              <h2 aria-label={automation.name} className="text-heading font-semibold wrap-anywhere">
                 <button
                   className="w-full rounded-control text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={`Rename ${automation.name}`}

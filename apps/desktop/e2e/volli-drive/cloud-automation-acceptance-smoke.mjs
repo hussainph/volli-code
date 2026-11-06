@@ -354,7 +354,7 @@ async function journey(fixture, store, evidenceDir) {
     await macA.drive.click("switch", `Armed: ${SCHEDULE_AUTOMATION.name}`);
     // Armed and not paused: the editor's own next-occurrence line, from the
     // backend's cursor rather than from a client computation.
-    await macA.drive.wait("Next:", 30_000);
+    await macA.drive.wait("Next ·", 30_000);
     const armings = await automationArmings({
       convexUrl: fixture.convexUrl,
       token: token(),

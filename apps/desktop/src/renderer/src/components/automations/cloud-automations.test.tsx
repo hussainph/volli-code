@@ -203,6 +203,7 @@ describe("cloud Automation controls", () => {
         schedules: { [P]: [{ ...schedule, nextFireAt: Date.parse("2026-03-07T12:34:00Z") }] },
       }),
     );
+    expect(container.textContent).toContain("Next ·");
     expect(container.textContent).toContain("12:34");
   });
   it("names the update recovery when this Mac has an old build", async () => {

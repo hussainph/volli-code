@@ -356,6 +356,16 @@ describe("coalescingProblems", () => {
 });
 
 describe("the copy this driver waits for is the copy production prints", () => {
+  it("waits for the approved Next middle-dot line, never the retired colon copy", () => {
+    const controls = source(
+      "apps/desktop/src/renderer/src/components/automations/cloud-automation-controls.tsx",
+    );
+    const journey = source("apps/desktop/e2e/volli-drive/cloud-automation-acceptance-smoke.mjs");
+    assert.match(controls, /Next ·\{/u);
+    assert.ok(journey.includes('await macA.drive.wait("Next ·", 30_000)'));
+    assert.ok(!journey.includes('wait("Next:"'));
+  });
+
   it("waiting for a sleeping Mac is the Run label's own words", () => {
     const state = source("apps/desktop/src/renderer/src/stores/cloud-automations/state.ts");
     assert.match(state, /Waiting for \$\{name\}/u);
