@@ -23,13 +23,13 @@
   },
   "dependencies": {
     "@volli/shared": "workspace:*",
-    "convex": "1.48.0"
+    "convex": "1.49.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "@volli/host-core": "workspace:*",
     "@volli/session-engine": "workspace:*",
-    "convex-test": "0.0.65",
+    "convex-test": "0.0.67",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }
