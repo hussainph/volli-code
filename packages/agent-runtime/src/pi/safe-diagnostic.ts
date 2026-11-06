@@ -83,6 +83,18 @@ export function safeStopMessage(raw: string, port?: RedactionPort): string {
   return start >= 0 && status !== undefined ? normalizeDiagnostic(`${status} ${safe}`) : safe;
 }
 
+/** A typed program exception is not a provider envelope. In particular JSON
+ * syntax errors can contain braces; never try to parse the exception as JSON.
+ * Redact the complete cause before bounding, independently of display output. */
+export function safeProgramErrorMessage(raw: string, port?: RedactionPort): string {
+  return normalizeDiagnostic(
+    redactPayloadSecrets(port === undefined ? raw : redactCredentialText(raw, port)).replace(
+      /https?:\/\/\S+/gi,
+      "[redacted URL]",
+    ),
+  );
+}
+
 function normalizeDiagnostic(raw: string): string {
   const collapsed = raw
     .replace(/\s+/g, " ")

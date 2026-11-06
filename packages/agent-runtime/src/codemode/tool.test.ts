@@ -166,6 +166,101 @@ async function run(
 }
 
 describe("the sandbox", () => {
+  it("keeps successful mutations visible when later parsing fails, beyond the nested record cap", async () => {
+    let changes = 0;
+    const f = fixture({
+      tools: [
+        textTool("write", () => {
+          changes += 1;
+          return "created\nNot JSON";
+        }),
+      ],
+    });
+    const result = await run(
+      f,
+      "let last; for (let i = 0; i < 60; i++) last = await tools.write({}); JSON.parse(last);",
+    );
+    expect(changes).toBe(60);
+    expect(result.isError).toBe(true);
+    expect(result.details.error).toBe("script");
+    expect(result.details.errorCause).toBeTruthy();
+    expect(result.details.callCounts).toEqual({
+      succeeded: 60,
+      failed: 0,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(result.details.nestedCalls.calls).toHaveLength(50);
+    expect(result.details.nestedCalls.complete).toBe(false);
+    expect(result.text).toContain("Program failed after 60 successful calls");
+    expect(result.text).toContain("Completed calls are not rolled back");
+  });
+
+  it("counts caught failures, MCP server errors and bash nonzero exits without making the program fail", async () => {
+    const mcpName = mcpProviderToolName("srv", "Server", "fail");
+    const f = fixture({
+      tools: [
+        textTool("write", () => "created"),
+        textTool("broken", () => {
+          throw new Error("nested failure");
+        }),
+        resultTool(mcpName, {
+          content: [
+            { type: "text", text: MCP_UNTRUSTED_DATA_WARNING },
+            { type: "text", text: "server failure" },
+          ],
+          details: {},
+          isError: true,
+        }),
+        bash(() => {
+          throw new Error("Command exited with code 2");
+        }),
+      ],
+    });
+    const result = await run(
+      f,
+      `await tools.write({}); try { await tools.broken({}); } catch {} const mcp = await tools.${mcpName}({}); const bash = await tools.bash({command:'x'}); return { isError: mcp.isError, exitCode: bash.exitCode };`,
+    );
+    expect(result.isError).toBe(false);
+    expect(result.details.errorCause).toBeUndefined();
+    expect(result.details.callCounts).toEqual({
+      succeeded: 1,
+      failed: 3,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(result.details.nestedCalls.calls.map((call) => call.status)).toEqual([
+      "ok",
+      "error",
+      "error",
+      "error",
+    ]);
+    expect(result.text).toContain('Returned: {"isError":true,"exitCode":2}');
+  });
+
+  it("reports partial completion when a ninth captured image is absent and dereferenced", async () => {
+    const f = fixture({
+      tools: [
+        resultTool("browser_screenshot", {
+          content: [{ type: "image", data: PNG, mimeType: "image/png" }],
+          details: {},
+        }),
+      ],
+    });
+    const result = await f.tool.execute("ninth-image", {
+      code: "for (let i = 0; i < 9; i++) { const shot = await tools.browser_screenshot({}); const handle = shot.images[0].handle; image(handle); }",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.details.callCounts).toEqual({
+      succeeded: 9,
+      failed: 0,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(result.details.errorCause).toContain("undefined");
+    expect(result.content.filter((block) => block.type === "image")).toHaveLength(8);
+  });
+
   it("uses Pi 1.0's safe membership check and diagnoses missing computed members without making a call", async () => {
     const execute = vi.fn(() => "hi");
     const f = fixture({ tools: [textTool("echo", execute)] });
@@ -321,6 +416,8 @@ describe("limits", () => {
     const { details, text } = await run(f, "tools.write({}); while (true) {}");
     expect(Date.now() - started).toBeLessThan(4_000);
     expect(details.error).toBe("timeout");
+    expect(details.callCounts).toEqual({ succeeded: 1, failed: 0, unfinished: 0, replayed: 0 });
+    expect(details.errorCause).toContain("limit plus 0.5 s paused");
     expect(text).toContain("limit plus 0.5 s paused");
   });
 
@@ -568,6 +665,40 @@ function markedRead(toolName: string): McpToolDefinition {
 }
 
 describe("questions asked while a call runs", () => {
+  it("does not count journaled MCP errors as successful calls on replay", async () => {
+    const halt = halter();
+    const name = mcpProviderToolName("srv", "Server", "fail");
+    let calls = 0;
+    const tool = resultTool(name, {
+      content: [
+        { type: "text", text: MCP_UNTRUSTED_DATA_WARNING },
+        { type: "text", text: "server failure" },
+      ],
+      details: {},
+      isError: true,
+    });
+    const execute = tool.execute;
+    tool.execute = async (...args) => {
+      calls += 1;
+      return execute(...args);
+    };
+    const f = fixture({ tools: [tool, halt.tool] });
+    const code = `await tools.${name}({}); await tools.halt({}); throw new Error('later');`;
+    await run(f, code, "failed-replay", halt.state.controller.signal);
+    halt.state.halting = false;
+    const replay = await run(f, code, "failed-replay");
+    expect(calls).toBe(1);
+    expect(replay.isError).toBe(true);
+    expect(replay.details.callCounts).toEqual({
+      succeeded: 1,
+      failed: 1,
+      unfinished: 0,
+      replayed: 1,
+    });
+    expect(replay.text).toContain("1 failed (replayed)");
+    expect(replay.text).toContain("Program failed after 1 successful call");
+  });
+
   it("holds MCP sign-in questions to one at a time, keeps reads overlapping until they ask, and stops the clock", async () => {
     let asking = 0;
     let peakAsking = 0;
@@ -903,7 +1034,40 @@ describe("replay", () => {
     const replay = await run(f, code, "outer-5");
     expect(calls).toBe(2);
     expect(replay.details.error).toBe("replay");
+    expect(replay.details.callCounts).toEqual({
+      succeeded: 2,
+      failed: 0,
+      unfinished: 0,
+      replayed: 1,
+    });
+    expect(replay.text).toContain("Program failed after 2 successful calls");
+    expect(replay.text).toContain("Completed calls are not rolled back");
     expect(replay.text).toContain("Replay cannot answer call 2 (big)");
+  });
+
+  it("preserves failure classification when an inspectable error result is too large to replay", async () => {
+    const journal = new CodeModeJournal();
+    const code = "await tools.write({});";
+    const entry = journal.open(runKey("unkept-error", code), 0);
+    entry.bytes = 4 * 1024 * 1024;
+    remember(entry, 1, {
+      name: "write",
+      argumentsDigest: digest(canonicalJson({})),
+      outcome: { ok: true, value: "inspectable error" },
+      isError: true,
+    });
+    const execute = vi.fn(() => "must not repeat");
+    const f = fixture({ tools: [textTool("write", execute)], journal });
+    const replay = await run(f, code, "unkept-error");
+    expect(execute).not.toHaveBeenCalled();
+    expect(replay.isError).toBe(true);
+    expect(replay.details.callCounts).toEqual({
+      succeeded: 0,
+      failed: 1,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(replay.text).toContain("1 call: 0 ok, 1 failed");
   });
 
   it("forgets the oldest unfinished run once the journal is full", async () => {
@@ -1159,7 +1323,7 @@ describe("results", () => {
       ],
     });
     expect((await run(empty, `return await tools.${definition.providerName}({});`)).text).toContain(
-      '{"text":"","isError":false,"images":[],"omittedImages":0}',
+      '{"text":"","isError":false,"images":[],"omittedImages":0,"result":{"version":1,"truncated":false}}',
     );
     const textOnly = fixture({
       tools: [
@@ -1179,9 +1343,11 @@ describe("results", () => {
     });
     expect(
       (await run(textOnly, `return await tools.${definition.providerName}({});`)).text,
-    ).toContain('{"text":"just text","isError":false,"images":[],"omittedImages":0}');
+    ).toContain(
+      '{"text":"just text","isError":false,"images":[],"omittedImages":0,"result":{"version":1,"truncated":false}}',
+    );
     expect((await run(plain, `return await tools.${definition.providerName}({});`)).text).toContain(
-      '{"text":"bare","isError":false,"images":[],"omittedImages":0}',
+      '{"text":"bare","isError":false,"images":[],"omittedImages":0,"result":{"version":1,"truncated":false}}',
     );
   });
 
@@ -1547,6 +1713,15 @@ describe("results", () => {
         ]);
       } else {
         expect(replay.details.error).toBe("replay");
+        expect(replay.details.callCounts).toEqual({
+          succeeded: 1,
+          failed: 0,
+          unfinished: 0,
+          replayed: 0,
+        });
+        expect(replay.content[0]).toMatchObject({
+          text: expect.stringContaining("Completed calls are not rolled back"),
+        });
         expect(replay.content[0]).toMatchObject({
           type: "text",
           text: expect.stringContaining("its result was too large to keep"),
