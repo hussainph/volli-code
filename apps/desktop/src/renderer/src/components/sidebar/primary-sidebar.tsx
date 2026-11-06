@@ -6,13 +6,9 @@ import {
 import * as React from "react";
 import { ControlShapeProvider } from "../ui/control-shape";
 import { EmptyStateScope } from "../ui/empty-state";
-import {
-  ConversationsIcon as Chats,
-  TreeIcon as TreeStructure,
-  SettingsIcon,
-} from "@renderer/components/ui/icon";
+import { ConversationsIcon as Chats, FolderIcon, SettingsIcon } from "@renderer/components/ui/icon";
 
-import { ViewSwitcher } from "@renderer/components/ui/view-switcher";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { SidebarFiles } from "./sidebar-files";
 import { SessionBandHeader } from "./session-band-header";
 
@@ -104,7 +100,7 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
           >
             {/* ChromeBar above owns the traffic lights and the drag region — this
             is now a plain panel header. */}
-            <SidebarHeader className="@container/project-header px-4 pt-3 pb-2">
+            <SidebarHeader className="px-4 pt-3 pb-2">
               {selected ? (
                 <div className="flex min-w-0 items-center justify-between gap-2">
                   <div className="min-w-0">
@@ -113,20 +109,6 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
                     </div>
                     <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
                   </div>
-                  <ViewSwitcher
-                    label="Sidebar content"
-                    size="small"
-                    className="sidebar-view-switcher"
-                    active={content}
-                    modes={[
-                      { key: "sessions", label: "Sessions", icon: Chats },
-                      { key: "files", label: "Files", icon: TreeStructure },
-                    ]}
-                    onSelect={(next) => {
-                      rememberedContent.set(selected.id, next);
-                      setContents((previous) => new Map(previous).set(selected.id, next));
-                    }}
-                  />
                 </div>
               ) : (
                 <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
@@ -136,6 +118,13 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
             {selected ? (
               <>
                 <NavList projectId={selected.id} />
+                <NavigatorSelector
+                  active={content}
+                  onSelect={(next) => {
+                    rememberedContent.set(selected.id, next);
+                    setContents((previous) => new Map(previous).set(selected.id, next));
+                  }}
+                />
 
                 <React.Activity mode={filesVisible ? "visible" : "hidden"}>
                   <SidebarFiles project={selected} />
@@ -201,6 +190,64 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
         </div>
       </ControlShapeProvider>
     </EmptyStateScope>
+  );
+}
+
+const NAVIGATORS = [
+  { key: "sessions", label: "Sessions", icon: Chats },
+  { key: "files", label: "Files", icon: FolderIcon },
+] as const;
+
+/** Fixed navigator selector; the two independent scrollports remain mounted below it. */
+function NavigatorSelector({
+  active,
+  onSelect,
+}: {
+  active: "sessions" | "files";
+  onSelect(next: "sessions" | "files"): void;
+}) {
+  const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  return (
+    <div
+      role="tablist"
+      aria-label="Sidebar content"
+      data-slot="navigator-selector"
+      // 22px drawing, 24px targets. Icon centres share the nav rows' 24px inset.
+      className="flex h-[22px] shrink-0 items-center gap-1 border-b border-sidebar-border/50 px-3"
+    >
+      {NAVIGATORS.map(({ key, label, icon: Icon }, index) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <button
+              ref={(node) => {
+                refs.current[index] = node;
+              }}
+              type="button"
+              role="tab"
+              aria-label={label}
+              aria-selected={key === active}
+              tabIndex={key === active ? 0 : -1}
+              data-choice={key}
+              onClick={() => onSelect(key)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === "Home" ? 0 : event.key === "End" ? 1 : 1 - index;
+                onSelect(NAVIGATORS[next]!.key);
+                refs.current[next]?.focus();
+              }}
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center rounded-control-small outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-sidebar-accent-veil",
+                key === active ? "text-primary" : "text-muted-foreground",
+              )}
+            >
+              <Icon className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{label}</TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
   );
 }
 

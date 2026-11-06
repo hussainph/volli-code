@@ -9,7 +9,9 @@ vi.mock("@renderer/hooks/use-selected-project", () => ({
   useSelectedProject: () => ({ id: "p", name: "Project", ticketPrefix: "VC" }),
 }));
 vi.mock("@renderer/hooks/use-active-nav", () => ({ useActiveNav: () => ["home", () => {}] }));
-vi.mock("@renderer/components/sidebar/nav-list", () => ({ NavList: () => null }));
+vi.mock("@renderer/components/sidebar/nav-list", () => ({
+  NavList: () => <div data-testid="feature-nav">Home Automations</div>,
+}));
 vi.mock("@renderer/components/cloud-moves/cloud-moves", () => ({ CloudMoveRailRow: () => null }));
 vi.mock("@renderer/components/sidebar/update-button", () => ({ UpdateButton: () => null }));
 vi.mock("./sidebar-files", () => ({
@@ -37,7 +39,9 @@ vi.mock("@renderer/components/sidebar/active-sessions", () => ({
   },
 }));
 vi.mock("@renderer/components/sidebar/sidebar-scroll", () => ({
-  SidebarScrollArea: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SidebarScrollArea: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="session-scrollport">{children}</div>
+  ),
 }));
 
 describe("primary sidebar content choice", () => {
@@ -81,10 +85,22 @@ describe("primary sidebar content choice", () => {
       ),
     );
   }
-  it("uses the small header pill with instant roving keyboard selection", async () => {
+  it("places borderless icon-only choices below navigation, outside both scrollports", async () => {
     await show();
     const switcher = container.querySelector('[aria-label="Sidebar content"]')!;
-    expect(switcher.getAttribute("data-size")).toBe("small");
+    expect(switcher.getAttribute("data-slot")).toBe("navigator-selector");
+    expect(switcher.className).toContain("h-[22px]");
+    expect(switcher.textContent).toBe("");
+    expect(switcher.className).not.toContain("glass");
+    expect(container.querySelector('[data-testid="feature-nav"]')?.nextElementSibling).toBe(
+      switcher,
+    );
+    expect(container.querySelector('[data-slot="sidebar-header"]')?.textContent).toBe("ProjectVC");
+    for (const tab of switcher.querySelectorAll("button")) {
+      expect(tab.className).toContain("size-6");
+      expect(tab.querySelector("svg")?.classList.contains("size-3.5")).toBe(true);
+      expect(tab.closest('[data-testid="session-scrollport"]')).toBeNull();
+    }
     const sessions = switcher.querySelector<HTMLButtonElement>('[data-choice="sessions"]')!;
     await act(async () =>
       sessions.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
@@ -92,7 +108,20 @@ describe("primary sidebar content choice", () => {
     const files = switcher.querySelector<HTMLButtonElement>('[data-choice="files"]')!;
     expect(files.getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(files);
-    expect(switcher.getAttribute("data-animated")).toBe("false");
+    expect(files.className).toContain("text-primary");
+    expect(sessions.className).toContain("text-muted-foreground");
+    await act(async () =>
+      files.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+    );
+    expect(document.activeElement).toBe(sessions);
+    await act(async () =>
+      sessions.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
+    );
+    expect(document.activeElement).toBe(files);
+    await act(async () =>
+      files.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })),
+    );
+    expect(document.activeElement).toBe(sessions);
   });
   it("remembers Files in this window and suspends hidden session activity", async () => {
     await show();
@@ -128,6 +157,25 @@ describe("primary sidebar content choice", () => {
     }
     expect(mounts).toHaveBeenCalledTimes(1);
   });
+  it("keeps independent nonzero scroll positions through repeated mode changes", async () => {
+    await show();
+    const sessions = container.querySelector<HTMLElement>('[data-testid="session-scrollport"]')!;
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[data-choice="files"]')!.click(),
+    );
+    const files = container.querySelector<HTMLElement>('[data-testid="sidebar-files"]')!;
+    sessions.scrollTop = 291;
+    files.scrollTop = 405;
+    for (const choice of ["sessions", "files", "sessions", "files"]) {
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>(`[data-choice="${choice}"]`)!.click(),
+      );
+      expect(container.querySelector('[data-testid="session-scrollport"]')).toBe(sessions);
+      expect(container.querySelector('[data-testid="sidebar-files"]')).toBe(files);
+      expect(sessions.scrollTop).toBe(291);
+      expect(files.scrollTop).toBe(405);
+    }
+  });
   it("restores the Active total inline without duplicating the header or counting Files", async () => {
     await show();
     expect(container.querySelector("[data-band-count]")).toBeNull();
@@ -138,7 +186,7 @@ describe("primary sidebar content choice", () => {
     expect(header.querySelector('[aria-label="Sidebar content"]')).toBeNull();
     expect(
       container.querySelector('[data-slot="sidebar-header"] [aria-label="Sidebar content"]'),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(container.querySelectorAll("h3")).toHaveLength(1);
     await act(async () =>
       container.querySelector<HTMLButtonElement>('[data-choice="files"]')!.click(),

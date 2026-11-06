@@ -3487,16 +3487,6 @@ body:not(:has([data-inspector-dock][data-enabled])) [data-inspector-trigger="she
   transition: none;
 }
 
-/* Narrow source headers keep the small pill icon-only, never a clipped label. */
-@container project-header (max-width:220px) {
-  .sidebar-view-switcher [role="tab"] {
-    width: 20px;
-  }
-  .sidebar-view-switcher [data-slot="view-switcher-label"] {
-    display: none;
-  }
-}
-
 /* Preferences is one floating glass window: no scrim, no duplicate canvas and
  * no second material boundary around either side of its split interior. */
 [data-slot="dialog-content"].settings-window {
