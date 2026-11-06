@@ -1,6 +1,6 @@
-/** Flat shared-seam identity with the existing semantic state badge. Provider
- * and harness names remain accessible; no logo tiles or bespoke brand drawings.
- * State is supplied by the caller's Session projection, never inferred here. */
+/** A Session's vendor mark and semantic corner badge, shared by rows, tabs and
+ * peek cards. Published artwork keeps the registry's vendor colour, independent
+ * of state. State comes from the caller's Session projection, never inferred. */
 import * as React from "react";
 import {
   ChatIcon,
@@ -14,6 +14,7 @@ import {
 
 import { isFirstClassHarnessId, type FirstClassHarnessId, type HarnessId } from "@volli/shared";
 
+import { ModelMark, providerMark } from "@renderer/components/models/model-identity";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 
@@ -75,13 +76,13 @@ const DISC: Record<SessionGlyphSurface, string> = { sidebar: "bg-sidebar", popov
 export interface SessionGlyphProps {
   /**
    * The provider id the logo is drawn from: a chat's `model.providerId`, or a
-   * terminal's {@link harnessVendorId}. `null` draws {@link fallback} instead.
+   * terminal's {@link harnessVendorId}. No published mark draws {@link fallback} instead.
    */
   providerId: string | null;
   providerLabel: string;
   /**
    * The state the badge says, from `sessionActivityDotState(...)`. `null` draws
-   * the logo alone, muted — a row that carries no state at all.
+   * the logo alone at quiet opacity, retaining its vendor colour.
    */
   state: StatusDotState | null;
   /** Which shipped glyph stands in when there is no logo to draw. */
@@ -99,8 +100,8 @@ export interface SessionGlyphProps {
 }
 
 export function SessionGlyph({
-  providerId: _providerId,
-  providerLabel: _providerLabel,
+  providerId,
+  providerLabel,
   state,
   kind,
   fallback,
@@ -112,6 +113,7 @@ export function SessionGlyph({
   const tile = size === "card";
   const tab = size === "tab";
   const Stand = fallback ?? (kind === "chat" ? ChatIcon : TerminalIcon);
+  const hasMark = providerId !== null && providerMark(providerId) !== null;
   return (
     <span
       role="img"
@@ -119,15 +121,24 @@ export function SessionGlyph({
       data-session-glyph={state ?? "none"}
       className={cn(
         "relative inline-flex shrink-0 items-center justify-center",
-        tile ? "size-6" : "size-5",
+        tile ? "size-6 rounded-md bg-muted/50" : "size-5",
         tab && "mr-0.5",
       )}
     >
-      <Stand
-        aria-hidden
-        strokeWidth={2.25}
-        className={cn(tile ? "size-4" : "size-3.5", "text-muted-foreground")}
-      />
+      {hasMark ? (
+        <ModelMark
+          model={{ providerId, modelId: providerId, label: providerLabel }}
+          providerLabel={providerLabel}
+          by="provider"
+          className={cn(tile ? "size-4" : "size-3.5", state === null && "opacity-70")}
+        />
+      ) : (
+        <Stand
+          aria-hidden
+          strokeWidth={2.25}
+          className={cn(tile ? "size-4" : "size-3.5", "text-muted-foreground")}
+        />
+      )}
       {badge === null ? null : (
         <span
           aria-hidden
