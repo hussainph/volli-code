@@ -9,7 +9,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
+import { createFactDrain } from "../../packages/host-core/src/cloud-runner/drain";
 import { sqliteDrainCursorStore } from "../../packages/host-core/src/cloud-runner/sqlite-stores";
+import { localSessionRow } from "../../packages/host-core/src/db/local-product";
+import { sqliteDrainLedger } from "../../packages/host-core/src/session-control/sqlite-ledger";
 import {
   bindCloudSessionOwner,
   projectFreeze,
@@ -18,9 +21,18 @@ import { createCloudSessionOwner } from "../../packages/host-core/src/cloud-stor
 import { createHostSessionServices } from "../../packages/host-core/src/session-services";
 import { MigrationExportError } from "../../packages/host-core/src/migration-export/errors";
 import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-export/exporter";
+import { PI_LOG_SEGMENT_MAX_BYTES } from "@volli/shared/cloud";
+import { PI_MOVE_LINE_MAX_BYTES } from "../../packages/host-core/src/migration-export/records";
+import { SYNTHETIC_IDS } from "../../packages/host-core/src/migration-dry-run/test-support/synthetic-profile";
 import { api } from "../functions/_generated/api";
 import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
-import { finalDigests, moveWorld, type MoveWorld } from "./move-engine-harness";
+import {
+  cloudBorn,
+  cursorOf,
+  finalDigests,
+  moveWorld,
+  type MoveWorld,
+} from "./move-engine-harness";
 
 // Each case writes, migrates, exports and moves a whole profile: on a cold CI
 // runner the first one alone can pass the default 5 s.
@@ -152,6 +164,221 @@ describe("a move, start to finish", () => {
     expect(projectFreeze(world.db, world.projectId)).toBe("confirmed");
     expect(existsSync(join(world.root, "cloud-moves", moveId, "export"))).toBe(false);
     expect(existsSync(join(world.root, "cloud-moves", moveId, "plan.json"))).toBe(true);
+  });
+});
+
+/**
+ * Cursors no release on the moved project may touch: the mover's on another
+ * project's Session, and someone else's on one of the moved project's.
+ */
+/** The mover's cursors on the moved project's Sessions. */
+function projectCursors(w: MoveWorld) {
+  return w.db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM session_drain_cursors WHERE owner_user_id = ?
+        AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
+    )
+    .get(w.userId, w.projectId);
+}
+
+function strangerCursors(w: MoveWorld): string[] {
+  const elsewhere = w.db
+    .prepare("SELECT id FROM sessions WHERE project_id != ? ORDER BY id LIMIT 1")
+    .get(w.projectId) as { id: string };
+  const theirs = w.db
+    .prepare(
+      `SELECT id FROM sessions WHERE project_id = ?
+        AND id NOT IN (SELECT session_id FROM session_drain_cursors) ORDER BY id LIMIT 1`,
+    )
+    .get(w.projectId) as { id: string } | undefined;
+  const theirsId =
+    theirs?.id ??
+    (
+      w.db
+        .prepare("SELECT id FROM sessions WHERE project_id = ? ORDER BY id DESC LIMIT 1")
+        .get(w.projectId) as { id: string }
+    ).id;
+  const plant = w.db.prepare(
+    `INSERT OR REPLACE INTO session_drain_cursors
+       (session_id, owner_user_id, claim_generation, accepted_through, updated_at)
+     VALUES (?, ?, 1, 0, 1)`,
+  );
+  plant.run(elsewhere.id, w.userId);
+  plant.run(theirsId, "someone-else");
+  return [elsewhere.id, theirsId];
+}
+
+describe("a Session born in Volli Cloud's copy", () => {
+  test("Go back to local takes its cursor back too", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    await engine.confirm(moveId);
+    const born = await cloudBorn(world);
+    expect(cursorOf(world, born)).toEqual({ n: 1 });
+    const strangers = strangerCursors(world);
+    await engine.goBackToLocal(moveId);
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    for (const sessionId of strangers) expect(cursorOf(world, sessionId)).toEqual({ n: 1 });
+    expect(projectCursors(world)).toEqual({ n: 0 });
+  });
+
+  test("Go back to local from a commit the handover never followed takes it back", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "handing_over", hit: 1, onKilled: () => killed() } })
+      .run(queueId);
+    await stopped;
+    const engine = world.engine();
+    // The crash came after the commit and before the handover wrote anything.
+    expect(engine.journal.move(moveId)!.state).toBe("committed");
+    const born = await cloudBorn(world);
+    engine.journal.patch(moveId, { journal: { handover: undefined } });
+    expect((await engine.goBackToLocal(moveId)).state).toBe("returned");
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+  });
+
+  test("a roll back after the commit takes it back and names it", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const born = await cloudBorn(world);
+    const strangers = strangerCursors(world);
+    const rolled = await engine.rollBack(moveId, { confirmChanged: true });
+    expect(rolled.state).toBe("rolled_back");
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    for (const sessionId of strangers) expect(cursorOf(world, sessionId)).toEqual({ n: 1 });
+    expect(projectCursors(world)).toEqual({ n: 0 });
+    const named = (rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack;
+    expect(named).toContain(born);
+    for (const sessionId of strangers) expect(named).not.toContain(sessionId);
+  });
+
+  test("a roll back resumed after it took cursors back keeps the names it gave before", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const born = await cloudBorn(world);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "rollback.cursors", hit: 1, onKilled: () => killed() } })
+      .rollBack(moveId, { confirmChanged: true });
+    await stopped;
+    const first = world.engine().journal.move(moveId)!;
+    expect(first.state).toBe("rolling_back");
+    const earlier = (first.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack;
+    expect(earlier).toContain(born);
+    expect(earlier.length).toBeGreaterThan(1);
+    // A cursor written back before the relaunch (a drain's late reply, say).
+    world.db
+      .prepare(
+        `INSERT INTO session_drain_cursors
+           (session_id, owner_user_id, claim_generation, accepted_through, updated_at)
+         VALUES (?, ?, 1, 0, 1)`,
+      )
+      .run(born, world.userId);
+    const released: string[] = [];
+    const rolled = await world
+      .engine({ ports: { cursorsReleased: (ids) => void released.push(...ids) } })
+      .rollBack(moveId, { confirmChanged: true });
+    expect(rolled.state).toBe("rolled_back");
+    expect(released).toEqual([born]);
+    expect(cursorOf(world, born)).toEqual({ n: 0 });
+    expect((rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack).toEqual(
+      earlier,
+    );
+  });
+});
+
+/**
+ * A cloud launch's drain over the moved profile, with one moved Session's
+ * last fact left to send and its send held until `answer`.
+ */
+async function drainMidSend(w: MoveWorld) {
+  const { session_id: sessionId, accepted_through: through } = w.db
+    .prepare(
+      `SELECT session_id, accepted_through FROM session_drain_cursors
+        WHERE owner_user_id = ? AND accepted_through > 0 ORDER BY session_id LIMIT 1`,
+    )
+    .get(w.userId) as { session_id: string; accepted_through: number };
+  w.db
+    .prepare("UPDATE session_drain_cursors SET accepted_through = ? WHERE session_id = ?")
+    .run(through - 1, sessionId);
+  let answer!: (outcome: Error | null) => void;
+  const answered = new Promise<Error | null>((resolve) => (answer = resolve));
+  let sent!: () => void;
+  const sending = new Promise<void>((resolve) => (sent = resolve));
+  const drain = createFactDrain({
+    ownerUserId: w.userId,
+    ledger: sqliteDrainLedger(w.db),
+    cursors: sqliteDrainCursorStore(w.db),
+    accept: async () => {
+      sent();
+      const outcome = await answered;
+      if (outcome !== null) throw outcome;
+      return { acceptedThrough: through, duplicates: 0, quarantined: 0 };
+    },
+  });
+  drain.start();
+  await sending;
+  return { sessionId, drain, answer };
+}
+
+/** The local copy lists this Session (no cursor hides it). */
+const listedLocally = (w: MoveWorld, sessionId: string) =>
+  w.db
+    .prepare(`SELECT 1 AS listed FROM sessions WHERE id = ? AND ${localSessionRow("sessions.id")}`)
+    .get(sessionId) !== undefined;
+
+describe("a cloud drain mid-send while the project goes back (VC-1013)", () => {
+  test("Go back to local: the answer writes no cursor back; the local copy lists the Session", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    await engine.confirm(moveId);
+    const { sessionId, drain, answer } = await drainMidSend(world);
+    expect(listedLocally(world, sessionId)).toBe(false);
+    const released: string[] = [];
+    await world
+      .engine({ ports: { cursorsReleased: (ids) => (released.push(...ids), drain.forget(ids)) } })
+      .goBackToLocal(moveId);
+    expect(released).toContain(sessionId);
+    answer(null);
+    await drain.idle();
+    // Forgotten: the drain holds, counts and waits on nothing of the Session.
+    expect(drain.status()).toEqual({ sessions: 0, waiting: 0, blocked: 0 });
+    drain.stop();
+    expect(cursorOf(world, sessionId)).toEqual({ n: 0 });
+    expect(listedLocally(world, sessionId)).toBe(true);
+  });
+
+  test("a roll back after the commit: a refusal from the purged copy writes no cursor back", async () => {
+    world = await moveWorld();
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    const { sessionId, drain, answer } = await drainMidSend(world);
+    const released: string[] = [];
+    const rolled = await world
+      .engine({ ports: { cursorsReleased: (ids) => (released.push(...ids), drain.forget(ids)) } })
+      .rollBack(moveId, { confirmChanged: true });
+    expect(rolled.state).toBe("rolled_back");
+    expect(released).toEqual(
+      (rolled.failure!.detail as { cursorsTakenBack: string[] }).cursorsTakenBack,
+    );
+    expect(released).toContain(sessionId);
+    answer(
+      Object.assign(new Error("not_your_runner"), {
+        data: { code: "not_your_runner", message: "gone", acceptedThrough: null },
+      }),
+    );
+    await drain.idle();
+    drain.stop();
+    expect(cursorOf(world, sessionId)).toEqual({ n: 0 });
+    expect(listedLocally(world, sessionId)).toBe(true);
   });
 });
 
@@ -505,6 +732,45 @@ describe("problems with this Mac's own files", () => {
       state: "rolled_back",
       failure: { code: "local_file_unreadable" },
     });
+  });
+});
+
+const piFile = (w: MoveWorld) =>
+  join(w.root, "profile", "pi-sessions", "--move--", "move-fixture.jsonl");
+
+describe("Pi lines longer than a slice (VC-1030)", () => {
+  const MiB = 1024 * 1024;
+
+  test("moves a Pi line longer than one stored segment, whole, in a segment of its own", async () => {
+    const long = PI_LOG_SEGMENT_MAX_BYTES + MiB;
+    world = await moveWorld({ artifacts: 1, piLongLineBytes: long });
+    const { engine, queueId, moveId } = enqueue(world);
+    expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    expect(engine.journal.move(moveId)).toMatchObject({ state: "checked", failure: null });
+    const segments = (await world.t.run((ctx) => ctx.db.query("piLogSegments").collect())).toSorted(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+    // Contiguous from the first byte to the last, the long line one segment exactly.
+    expect(segments[0]!.startOffset).toBe(0);
+    for (const [index, segment] of segments.entries())
+      if (index > 0) expect(segment.startOffset).toBe(segments[index - 1]!.endOffset);
+    expect(segments.at(-1)!.endOffset).toBe(readFileSync(piFile(world)).length);
+    expect(segments.filter((s) => s.endOffset - s.startOffset === long)).toHaveLength(1);
+  });
+
+  test("a Pi line longer than a move carries refuses the project by name, before anything is sent", async () => {
+    world = await moveWorld({ artifacts: 1, piLongLineBytes: PI_MOVE_LINE_MAX_BYTES + 1 });
+    const { engine, queueId, moveId } = enqueue(world);
+    await engine.run(queueId);
+    expect(engine.journal.move(moveId)).toMatchObject({
+      failure: {
+        code: "export_pi_log_too_large",
+        step: "frozen",
+        detail: { sessionId: SYNTHETIC_IDS.hotSession },
+      },
+    });
+    expect(world.calls.get("projectImports:begin")).toBeUndefined();
+    expect(projectFreeze(world.db, world.projectId)).toBeNull();
   });
 });
 

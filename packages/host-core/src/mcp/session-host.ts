@@ -145,8 +145,8 @@ function decisionText(
         : `The person driving declined to ${block.rejected === true ? "replace" : "add"} ${block.missing.join(", ")} for ${name}, so ${tool} was not called.`;
     case "nobody":
       return block.kind === "sign-in"
-        ? `${name} needs a person to sign in before ${tool} can run, and nobody could be asked from this Session. A person can sign in from Settings \u2192 Configure \u2192 MCP Servers. The call was not made.`
-        : `${name} ${block.rejected === true ? "rejected" : "needs"} ${block.missing.join(", ")} before ${tool} can run, and only a person can ${block.rejected === true ? "replace" : "add"} it, in Settings \u2192 Configure \u2192 MCP Servers. Nobody could be asked from this Session. The call was not made.`;
+        ? `${name} needs a person to sign in before ${tool} can run, and nobody could be asked from this Session. A person can sign in from Settings \u2192 MCP Servers. The call was not made.`
+        : `${name} ${block.rejected === true ? "rejected" : "needs"} ${block.missing.join(", ")} before ${tool} can run, and only a person can ${block.rejected === true ? "replace" : "add"} it, in Settings \u2192 MCP Servers. Nobody could be asked from this Session. The call was not made.`;
   }
 }
 
@@ -154,11 +154,11 @@ function decisionText(
 function stillBlockedText(server: McpServerDraft, block: McpConnectionBlock): string {
   const name = safeSummary(server.name, "The server");
   if (block.kind === "sign-in") {
-    return `${name} still refused the call after the sign-in, so it was not made. A person can sign in again in Settings \u2192 Configure \u2192 MCP Servers.`;
+    return `${name} still refused the call after the sign-in, so it was not made. A person can sign in again in Settings \u2192 MCP Servers.`;
   }
   return block.rejected === true
-    ? `${name} still rejects ${block.missing.join(", ")}, so the call was not made. Only a person can replace it, in Settings \u2192 Configure \u2192 MCP Servers.`
-    : `${name} is still missing ${block.missing.join(", ")}, so the call was not made. Only a person can add it, in Settings \u2192 Configure \u2192 MCP Servers.`;
+    ? `${name} still rejects ${block.missing.join(", ")}, so the call was not made. Only a person can replace it, in Settings \u2192 MCP Servers.`
+    : `${name} is still missing ${block.missing.join(", ")}, so the call was not made. Only a person can add it, in Settings \u2192 MCP Servers.`;
 }
 
 /** Every live host, so an app quit can close the ones a Session teardown missed. */
@@ -687,7 +687,7 @@ export class McpSessionHost {
               tool: request.toolName,
               toolCallId: request.toolCallId,
               turnId: null,
-              reason: `${name}${where} ${block.rejected === true ? "rejected" : "needs"} ${block.missing.join(", ")} before ${request.toolName} can run. ${block.rejected === true ? "Replace" : "Add"} it in Settings \u2192 Configure \u2192 MCP Servers, then allow to retry the call. The agent never sees the value.`,
+              reason: `${name}${where} ${block.rejected === true ? "rejected" : "needs"} ${block.missing.join(", ")} before ${request.toolName} can run. ${block.rejected === true ? "Replace" : "Add"} it in Settings \u2192 MCP Servers, then allow to retry the call. The agent never sees the value.`,
               trip: "confirm",
               overridable: true,
             },

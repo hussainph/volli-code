@@ -4,7 +4,8 @@
  * it: the real project UI store rehydrating a persisted record, the real chat
  * tab store the restore opens tabs in, and the active-tab receipt beside it.
  * Only the Session client is stubbed — adopting attaches to main, and what is
- * under test is which Sessions are adopted, in what order, and when.
+ * under test is which tabs are opened, in what order, and when — and that only
+ * the one in front is adopted (VC-515): the rest attach when a pane shows them.
  */
 import * as React from "react";
 import { act } from "react";
@@ -141,7 +142,13 @@ describe("useHomeStripRestore — Home's strip across a relaunch (VC-105)", () =
     expect(store.getState().byProject[PROJECT]?.homeActiveTab).toBe(B);
 
     render({ store, durable: ["sess-c", "sess-a", "sess-b"] });
-    expect(adopted.mock.calls).toEqual([["sess-a"], ["sess-b"], ["sess-c"]]);
+    expect(useChatSessionsStore.getState().openTabs[PROJECT]).toEqual([
+      "sess-a",
+      "sess-b",
+      "sess-c",
+    ]);
+    // Only the tab in front pays for a snapshot and a live stream now.
+    expect(adopted.mock.calls).toEqual([["sess-b"]]);
     expect(seen).toEqual({ active: B, strip: [HOME_BOARD_TAB_ID, A, B, C] });
     // The record now names the strip as drawn: the dead terminal is pruned
     // live, and what will be written to disk is the next relaunch's strip.
@@ -152,7 +159,9 @@ describe("useHomeStripRestore — Home's strip across a relaunch (VC-105)", () =
     const { store, persisted } = relaunch({ homeActiveTab: B, homeTabOrder: [A, B, C] });
 
     render({ store, durable: ["sess-a", "sess-c"] });
-    expect(adopted.mock.calls).toEqual([["sess-a"], ["sess-c"]]);
+    expect(useChatSessionsStore.getState().openTabs[PROJECT]).toEqual(["sess-a", "sess-c"]);
+    // The tab that was in front is the one that is gone: nothing is adopted.
+    expect(adopted).not.toHaveBeenCalled();
     expect(seen).toEqual({ active: HOME_BOARD_TAB_ID, strip: [HOME_BOARD_TAB_ID, A, C] });
     expect(persisted()).toMatchObject({ homeActiveTab: HOME_BOARD_TAB_ID, homeTabOrder: [A, C] });
   });
@@ -173,7 +182,7 @@ describe("useHomeStripRestore — Home's strip across a relaunch (VC-105)", () =
     expect(seen.strip).toEqual([HOME_BOARD_TAB_ID, A, B]);
 
     act(() => useChatSessionsStore.setState({ openTabs: { [PROJECT]: ["sess-a"] } }));
-    expect(adopted).toHaveBeenCalledTimes(2);
+    expect(adopted.mock.calls).toEqual([["sess-a"]]);
     expect(seen.strip).toEqual([HOME_BOARD_TAB_ID, A]);
     expect(persisted()).toMatchObject({ homeTabOrder: [A] });
   });
@@ -187,7 +196,8 @@ describe("useHomeStripRestore — Home's strip across a relaunch (VC-105)", () =
     act(() => store.getState().moveHomeTab(PROJECT, "file:x.ts", ["file:x.ts"]));
     render({ store, durable: ["sess-a", "sess-b"], extra });
 
-    expect(adopted.mock.calls).toEqual([["sess-a"], ["sess-b"]]);
+    expect(useChatSessionsStore.getState().openTabs[PROJECT]).toEqual(["sess-a", "sess-b"]);
+    expect(adopted.mock.calls).toEqual([["sess-a"]]);
     expect(seen).toEqual({ active: A, strip: [HOME_BOARD_TAB_ID, "file:x.ts", A, B] });
   });
 
@@ -196,7 +206,7 @@ describe("useHomeStripRestore — Home's strip across a relaunch (VC-105)", () =
     const { store } = relaunch({ homeTabOrder: [browser, A] });
 
     render({ store, durable: ["sess-a"], browserTabsHydrated: false });
-    expect(adopted.mock.calls).toEqual([["sess-a"]]);
+    expect(useChatSessionsStore.getState().openTabs[PROJECT]).toEqual(["sess-a"]);
     // A record written now would drop the Browser Tab that has not arrived.
     expect(store.getState().byProject[PROJECT]?.homeTabOrder).toEqual([browser, A]);
 

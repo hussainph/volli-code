@@ -10,11 +10,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import {
-  DATA_EXPORT_CONTENTS,
-  DATA_EXPORT_LIMITS,
-  DATA_EXPORT_MENU_LABEL,
-} from "../data-export-copy";
+import { DATA_EXPORT_LIMITS, DATA_EXPORT_MENU_LABEL } from "../data-export-copy";
 
 const { menuTemplates, showSaveDialog, showErrorBox } = vi.hoisted(() => ({
   menuTemplates: [] as unknown[][],
@@ -80,7 +76,8 @@ describe("export disclosure", () => {
     expect(DATA_EXPORT_LIMITS).toContain("attachments");
     expect(DATA_EXPORT_LIMITS).toContain("transcript");
     expect(DATA_EXPORT_LIMITS.toLowerCase()).not.toContain("backup");
-    expect(DATA_EXPORT_CONTENTS.toLowerCase()).not.toContain("every setting");
+    // One line, at the moment of the choice — no tour of what the file holds.
+    expect(DATA_EXPORT_LIMITS.split(". ")).toHaveLength(1);
   });
 
   it("puts the disclosure in the save dialog itself, before any file is written", async () => {
@@ -89,7 +86,7 @@ describe("export disclosure", () => {
     await exportDatabase({ ok: true, db: {} as never });
 
     const options = showSaveDialog.mock.calls[0]?.[0] as Electron.SaveDialogOptions | undefined;
-    expect(options?.message).toContain(DATA_EXPORT_LIMITS);
+    expect(options?.message).toBe(DATA_EXPORT_LIMITS);
     expect(options?.title).toBe("Export data as JSON");
     expect(options?.defaultPath).toMatch(/^volli-export-\d{4}-\d{2}-\d{2}\.json$/);
   });

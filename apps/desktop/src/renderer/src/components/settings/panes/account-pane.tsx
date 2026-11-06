@@ -20,16 +20,22 @@
  * launch, Sign out confirms, then signs out and restarts.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BuildingsIcon } from "@phosphor-icons/react/dist/csr/Buildings";
-import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
-import { GoogleLogoIcon } from "@phosphor-icons/react/dist/csr/GoogleLogo";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
-// TODO: use #1014’s shared legal URLs and keep this checkbox as the only sign-in disclosure.
-import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
+import {
+  type IconComponent,
+  ExternalIcon,
+  WorkspaceIcon,
+  AddIcon,
+  SignOutIcon,
+  DeleteIcon,
+  AccountIcon,
+} from "@renderer/components/ui/icon";
+import { GithubMark, GoogleMark } from "@renderer/components/ui/brand-marks";
+
+import {
+  PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_URL,
+  PREVIEW_PRIVACY_URL,
+} from "@volli/shared";
 import type {
   AccountConnection,
   AccountGithubInstallation,
@@ -39,6 +45,7 @@ import type {
 } from "@volli/shared";
 
 import {
+  AsyncSection,
   Empty,
   Health,
   ItemRow,
@@ -59,9 +66,12 @@ import {
 import { toast } from "sonner";
 
 import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restart";
+import { useNow } from "@renderer/components/hosts/use-hosts";
 import { Checkbox } from "@renderer/components/ui/checkbox";
 import { Input } from "@renderer/components/ui/input";
 import { Button } from "@renderer/components/ui/button";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import { toastError } from "@renderer/lib/toast";
 import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
 import { launchStore } from "@renderer/stores/launch";
@@ -77,10 +87,10 @@ import {
 const BUTTONS: readonly {
   connection: AccountConnection;
   label: string;
-  icon: typeof GithubLogoIcon;
+  icon: typeof GithubMark;
 }[] = [
-  { connection: "github", label: "Continue with GitHub", icon: GithubLogoIcon },
-  { connection: "google", label: "Continue with Google", icon: GoogleLogoIcon },
+  { connection: "github", label: "Continue with GitHub", icon: GithubMark },
+  { connection: "google", label: "Continue with Google", icon: GoogleMark },
 ];
 
 /** Runs a command; a failure is a toast with what main said. */
@@ -90,13 +100,31 @@ function act(run: () => Promise<unknown>, what: string): void {
   });
 }
 
-function Failure({ text }: { text: string | null }) {
-  return text !== null ? (
-    <p role="alert" className="text-ui text-destructive">
-      {text}
-    </p>
-  ) : null;
+/** The reason the last flow failed; the control that failed is its recovery. */
+function Failure({ text, className }: { text: string | null; className?: string }) {
+  return text !== null ? <Notice tone="error" title={text} announce className={className} /> : null;
 }
+
+/** A read that failed, with the retry beside it rather than in the section header. */
+function ReadFailed({
+  title,
+  icon,
+  message,
+  onRetry,
+}: {
+  title: string;
+  icon: IconComponent;
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <AsyncSection title={title} icon={icon} state={{ status: "error", message, onRetry }}>
+      {() => null}
+    </AsyncSection>
+  );
+}
+
+const WAITING_FOR_BROWSER = <LoadingLabel>Waiting for the browser</LoadingLabel>;
 
 function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: AccountCommands }) {
   const [inviteCode, setInviteCode] = React.useState("");
@@ -105,14 +133,14 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
   return (
     <PrefSection
       title="Sign in"
-      icon={UserCircleIcon}
+      icon={AccountIcon}
       action={
         waiting ? (
           <SectionAction label="Cancel" onAct={() => act(commands.cancelSignIn, "Cancel")} />
         ) : undefined
       }
     >
-      <div className="flex flex-col gap-2" data-testid="account-sign-in">
+      <div className="flex flex-col gap-2 p-4" data-testid="account-sign-in">
         <Input
           aria-label="Preview invite code"
           placeholder="Invite code (optional)"
@@ -129,12 +157,12 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
             disabled={waiting}
           />
           <span>
-            I agree to the{" "}
-            <a href="https://volli.app/legal/preview/" target="_blank" rel="noreferrer">
+            I am at least 18 and agree to the{" "}
+            <a href={PREVIEW_AGREEMENT_URL} target="_blank" rel="noopener noreferrer">
               Preview Agreement
             </a>{" "}
             and acknowledge the{" "}
-            <a href="https://volli.app/legal/privacy/" target="_blank" rel="noreferrer">
+            <a href={PREVIEW_PRIVACY_URL} target="_blank" rel="noopener noreferrer">
               Privacy notice
             </a>
             .
@@ -152,18 +180,13 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
                 return;
               }
               act(
-                () =>
-                  commands.signIn(
-                    connection,
-                    code || undefined,
-                    PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
-                  ),
+                () => commands.signIn(connection, code || undefined, PREVIEW_AGREEMENT_VERSION),
                 "Sign-in",
               );
             }}
           >
             <Icon />
-            {waiting && snapshot.signingInWith === connection ? "Waiting for the browser…" : label}
+            {waiting && snapshot.signingInWith === connection ? WAITING_FOR_BROWSER : label}
           </Button>
         ))}
         <Failure text={snapshot.failure} />
@@ -181,7 +204,7 @@ const CONNECTION = {
   { state: "ready" | "waiting" | "error"; label: string }
 >;
 
-function purgeDate(at: number): string {
+function cancellationDate(at: number): string {
   return new Date(at).toLocaleDateString(undefined, { dateStyle: "long" });
 }
 
@@ -214,7 +237,7 @@ function GithubConnection({
   return (
     <PrefSection
       title="GitHub"
-      icon={GithubLogoIcon}
+      icon={GithubMark}
       action={
         connecting ? (
           <SectionAction label="Cancel" onAct={() => act(commands.cancel, "Cancel")} />
@@ -240,16 +263,16 @@ function GithubConnection({
             disabled={connecting}
             onClick={() => act(commands.connect, "Connect")}
           >
-            <GithubLogoIcon />
+            <GithubMark />
             {connecting
-              ? "Waiting for the browser…"
+              ? WAITING_FOR_BROWSER
               : connection?.status === "needs_reconnect"
                 ? "Reconnect"
                 : "Connect"}
           </Button>
         ) : null}
       </PrefRow>
-      <Failure text={snapshot.failure} />
+      <Failure text={snapshot.failure} className="m-4" />
     </PrefSection>
   );
 }
@@ -272,23 +295,28 @@ function GithubAccounts({
   return (
     <PrefSection
       title="GitHub accounts"
-      icon={BuildingsIcon}
+      icon={WorkspaceIcon}
       action={
         <div className="flex items-center gap-1">
-          <SectionAction
-            label={installing ? "Waiting for the browser…" : "Install on an account"}
-            icon={installing ? undefined : PlusIcon}
-            disabled={installing}
-            onAct={() => act(commands.install, "Install")}
-          />
           {installing ? (
-            <SectionAction label="Cancel" onAct={() => act(commands.cancel, "Cancel")} />
-          ) : null}
+            <>
+              <Button size="xs" variant="ghost" disabled>
+                {WAITING_FOR_BROWSER}
+              </Button>
+              <SectionAction label="Cancel" onAct={() => act(commands.cancel, "Cancel")} />
+            </>
+          ) : (
+            <SectionAction
+              label="Install on an account"
+              icon={AddIcon}
+              onAct={() => act(commands.install, "Install")}
+            />
+          )}
         </div>
       }
     >
       {installations === null ? null : installations.length === 0 ? (
-        <Empty>No GitHub accounts yet.</Empty>
+        <Empty illustration="mcp">No GitHub accounts</Empty>
       ) : (
         <div data-testid="github-installations">
           {installations.map((installation) => (
@@ -307,7 +335,7 @@ function GithubAccounts({
                 onClick={() => openConfigure(installation.configureUrl)}
               >
                 Configure on GitHub
-                <ArrowSquareOutIcon />
+                <ExternalIcon />
               </Button>
             </ItemRow>
           ))}
@@ -315,10 +343,7 @@ function GithubAccounts({
       )}
       {snapshot.requested ? (
         // The backend cannot tell an owner's approval request from a cancel on GitHub.
-        <p role="status" className="text-ui text-muted-foreground">
-          If you asked an organization owner to approve, Volli will show the account here once they
-          do.
-        </p>
+        <Notice announce className="m-4" title="Owner approval may be pending" />
       ) : null}
     </PrefSection>
   );
@@ -330,17 +355,16 @@ function Github({ rpc }: { rpc: AccountRpc | undefined }) {
   if (view.kind === "loading") return null;
   if (view.kind === "failed" || view.snapshot.state === "failed") {
     return (
-      <PrefSection
+      <ReadFailed
         title="GitHub"
-        icon={GithubLogoIcon}
-        action={<SectionAction label="Retry" onAct={retry} />}
-      >
-        <Empty>
-          {view.kind === "failed"
+        icon={GithubMark}
+        message={
+          view.kind === "failed"
             ? view.message
-            : (view.snapshot.failure ?? "Couldn't read your GitHub connection.")}
-        </Empty>
-      </PrefSection>
+            : (view.snapshot.failure ?? "Couldn't read your GitHub connection.")
+        }
+        onRetry={retry}
+      />
     );
   }
   const { snapshot } = view;
@@ -368,13 +392,14 @@ function SignedIn({
 }) {
   const [confirming, setConfirming] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
+  const now = useNow(account.deletionPurgeAfter !== null, 30_000);
   const cloudLaunch = launchStore() === "cloud";
   const cloudEnabled = useExperimentsStore((state) => isExperimentOn(state.snapshot, "cloud"));
   return (
     <>
       <PrefSection
         title="Account"
-        icon={UserCircleIcon}
+        icon={AccountIcon}
         action={
           <SectionAction
             label="Sign out"
@@ -398,7 +423,7 @@ function SignedIn({
             </Health>
           </PrefRow>
         ) : null}
-        {account.backend === "refused" ? <Failure text={failure} /> : null}
+        {account.backend === "refused" ? <Failure text={failure} className="m-4" /> : null}
         {restartOffered(account) ? (
           <PrefRow label="Board">
             <Button size="sm" variant="outline" onClick={() => act(commands.relaunch, "Restart")}>
@@ -416,18 +441,24 @@ function SignedIn({
         <Github key={account.userId} rpc={rpc} />
       ) : null}
       {account.backend !== "none" ? (
-        <PrefSection title="Deletion" icon={TrashIcon}>
+        <PrefSection title="Deletion" icon={DeleteIcon}>
           {account.deletionPurgeAfter !== null ? (
-            <PrefRow label="Scheduled">
-              <span className="text-ui">{purgeDate(account.deletionPurgeAfter)}</span>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => act(commands.cancelDeletion, "Restore")}
-              >
-                Restore account
-              </Button>
-            </PrefRow>
+            account.deletionPurgeAfter > now ? (
+              <PrefRow label="Cancel by">
+                <span className="text-ui">{cancellationDate(account.deletionPurgeAfter)}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => act(commands.cancelDeletion, "Restore")}
+                >
+                  Restore account
+                </Button>
+              </PrefRow>
+            ) : (
+              <PrefRow label="Request">
+                <span className="text-ui">Window ended · privacy@volli.app</span>
+              </PrefRow>
+            )
           ) : (
             <PrefRow label="Account">
               <Button
@@ -447,7 +478,8 @@ function SignedIn({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete your Volli account?</AlertDialogTitle>
             <AlertDialogDescription>
-              Your account is deleted in 30 days. Until then you can restore it here.
+              Blocks cloud access and disconnects GitHub and cloud devices. Restorable for 30 days;
+              to erase your data, email privacy@volli.app.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -498,27 +530,21 @@ export function AccountPane({ rpc }: { rpc?: AccountRpc } = {}) {
   useRestartOffer(view.kind === "ready" ? view.snapshot : null, commands);
   if (view.kind === "loading") {
     return (
-      <PrefSection title="Account" icon={UserCircleIcon}>
-        <Empty>Checking your sign-in…</Empty>
+      <PrefSection title="Account" icon={AccountIcon}>
+        <Empty>
+          <LoadingLabel>Checking your sign-in</LoadingLabel>
+        </Empty>
       </PrefSection>
     );
   }
   if (view.kind === "failed") {
-    return (
-      <PrefSection
-        title="Account"
-        icon={UserCircleIcon}
-        action={<SectionAction label="Retry" onAct={retry} />}
-      >
-        <Empty>{view.message}</Empty>
-      </PrefSection>
-    );
+    return <ReadFailed title="Account" icon={AccountIcon} message={view.message} onRetry={retry} />;
   }
   const { snapshot } = view;
   if (snapshot.state === "unconfigured") {
     return (
-      <PrefSection title="Account" icon={UserCircleIcon}>
-        <Empty>This build has no Volli Cloud sign-in.</Empty>
+      <PrefSection title="Account" icon={AccountIcon}>
+        <Empty>No Volli Cloud sign-in in this build</Empty>
       </PrefSection>
     );
   }

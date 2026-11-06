@@ -24,6 +24,8 @@ import type {
 import { useProjectsStore } from "@renderer/stores/projects";
 
 import { AboutPane } from "./about-pane";
+import { toastError } from "@renderer/lib/toast";
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 
 function project(id: string, path: string) {
   return {
@@ -210,6 +212,7 @@ function exactButton(label: string): HTMLButtonElement | null {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(toastError).mockClear();
   clipboard = [];
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -240,7 +243,7 @@ describe("AboutPane — before the checks land", () => {
     const host = renderFirstFrame();
 
     expect(panel(host).dataset["healthState"]).toBe("checking");
-    expect(host.textContent).toContain("Checking…");
+    expect(host.textContent).toContain("Checking");
     expect(host.textContent).not.toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
     expect(host.querySelector('[data-slot="status-dot"]')?.getAttribute("data-state")).not.toBe(
@@ -252,7 +255,7 @@ describe("AboutPane — before the checks land", () => {
     // The very first paint, before any effect has run: still no report.
     const html = renderToStaticMarkup(<AboutPane />);
 
-    expect(html).toContain("Preparing report…");
+    expect(html).toContain("Preparing report");
     expect(html).not.toContain("Copy report…");
   });
 });
@@ -262,6 +265,7 @@ describe("AboutPane — once the checks land", () => {
     const host = await render();
 
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(host.textContent).toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
     expect(button(host, "Copy report…")?.disabled).toBe(false);
@@ -296,13 +300,14 @@ describe("AboutPane — once the checks land", () => {
 
     expect(panel(host).dataset["healthState"]).toBe("checking");
     expect(host.textContent).not.toContain("Everything's working");
-    expect(button(host, "Fixing…")?.disabled).toBe(true);
+    expect(button(host, "Fixing")?.disabled).toBe(true);
 
     await act(async () => {
       repair.resolve({ ok: true, checks: PASSING, summary: "All 1 checks passed." });
     });
 
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(host.textContent).toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
   });
@@ -322,7 +327,7 @@ describe("AboutPane — once the checks land", () => {
 });
 
 describe("AboutPane — a check that could not run", () => {
-  it("says the checks are incomplete, offers Re-check, and never claims health", async () => {
+  it("says the checks are incomplete, offers Retry, and never claims health", async () => {
     stubApi({ doctor: { ok: false, error: "the login shell did not answer" } });
 
     const host = await render();
@@ -331,7 +336,12 @@ describe("AboutPane — a check that could not run", () => {
     expect(host.textContent).toContain("Couldn't complete these checks");
     expect(host.textContent).not.toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
-    expect(button(host, "Re-check")?.disabled).toBe(false);
+    expect(button(host, "Retry")?.disabled).toBe(false);
+    expect(host.querySelector("details")?.open).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
+    await act(async () => button(host, "Retry")?.click());
+    expect(toastError).not.toHaveBeenCalled();
+    expect(panel(host).dataset["healthState"]).toBe("unavailable");
   });
 
   it("refuses the report when the status read failed", async () => {
@@ -340,6 +350,7 @@ describe("AboutPane — a check that could not run", () => {
     const host = await render();
 
     expect(button(host, "Report unavailable")?.disabled).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   // The metadata is part of the report gate, exactly like the three data sets
@@ -351,7 +362,9 @@ describe("AboutPane — a check that could not run", () => {
 
     // The install itself is fine — only the report is short of an input.
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(button(host, "Report unavailable")?.disabled).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
 
@@ -368,6 +381,7 @@ describe("AboutPane — when the project changes", () => {
     });
     const host = await render();
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
 
     // The second project's reads never answer: whatever is on screen now is
     // what the pane believes with no current measurement at all.
@@ -405,6 +419,7 @@ describe("AboutPane — when the project changes", () => {
       useProjectsStore.setState({ selectedProjectId: "p2" });
     });
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
 
     await act(async () => {
       oldStatus.resolve({
@@ -415,6 +430,7 @@ describe("AboutPane — when the project changes", () => {
     });
 
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(host.textContent).toContain("Everything's working");
     expect(host.textContent).not.toContain("App socket: Not running");
     expect(host.textContent).not.toContain("Shell integration files are missing");
@@ -463,10 +479,11 @@ describe("AboutPane — the report snapshot", () => {
     stubApi({ support: [first.promise, second.promise] });
     const host = await render();
     expect(panel(host).dataset["healthState"]).toBe("healthy");
-    expect(button(host, "Preparing report…")?.disabled).toBe(true);
+    expect(panel(host).hidden).toBe(true);
+    expect(button(host, "Preparing report")?.disabled).toBe(true);
 
     act(() => {
-      button(host, "Re-check")?.click();
+      button(host, "Retry")?.click();
     });
     await act(async () => {
       second.resolve({

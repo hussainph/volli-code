@@ -1,4 +1,16 @@
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import {
+  startProjectChat,
+  startProjectTerminal,
+} from "@renderer/components/sessions/session-create";
+import * as React from "react";
+import { ControlShapeProvider } from "../ui/control-shape";
+import { EmptyStateScope } from "../ui/empty-state";
+import { ConversationsIcon as Chats, FolderIcon, SettingsIcon } from "@renderer/components/ui/icon";
+
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { SidebarFiles } from "./sidebar-files";
+import { SessionBandHeader } from "./session-band-header";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
 import { CloudMoveRailRow } from "@renderer/components/cloud-moves/cloud-moves";
@@ -17,6 +29,7 @@ import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
+import { useProjectsStore } from "@renderer/stores/projects";
 
 /**
  * The sidebar panel's contents: project header, feature nav, contextual content
@@ -45,65 +58,195 @@ import { useUiStore } from "@renderer/stores/ui";
  * to come out of the calc or the pane is wider than the box clipping it and the
  * overhang is shaved off the right.
  */
-export function PrimarySidebar() {
-  const selected = useSelectedProject();
-  const [activeNav] = useActiveNav();
+// Plain per-window memory: no durable preference or renderer storage. The
+// choice survives sidebar remounts without changing any workspace's lifetime.
+const rememberedContent = new Map<string, "sessions" | "files">();
+
+export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string | null } = {}) {
+  const current = useSelectedProject();
+  const preview = useProjectsStore((state) =>
+    previewProjectId
+      ? state.projects.find((project) => project.id === previewProjectId)
+      : undefined,
+  );
+  const selected = preview ?? current;
+  const [activeNav] = useActiveNav(selected?.id);
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
+  const [activeCount, setActiveCount] = React.useState<{ projectId: string; count: number } | null>(
+    null,
+  );
+  const selectedId = selected?.id;
+  const reportActiveCount = React.useCallback(
+    (count: number) => {
+      if (selectedId !== undefined) setActiveCount({ projectId: selectedId, count });
+    },
+    [selectedId],
+  );
+  const [contents, setContents] = React.useState(() => new Map(rememberedContent));
+  const content = contents.get(selectedId ?? "") ?? "sessions";
+  const filesVisible = content === "files";
   // The Session bands ride with Home, which is the one page their rows navigate
   // into — both a Ticket view and a Board Session are reached from there.
-  const sessionsVisible = !settingsOpen && activeNav === "home";
+  const sessionsVisible = activeNav === "home" && content === "sessions";
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
-      <div
-        data-sidebar-presentation="expanded"
-        className="absolute inset-y-0 left-0 flex min-h-0 w-[calc(var(--sidebar-width)-var(--rail-width)-var(--sidebar-edge))] flex-col overflow-hidden"
-      >
-        {/* ChromeBar above owns the traffic lights and the drag region — this
+    <EmptyStateScope tier="inline">
+      <ControlShapeProvider context="sidebar">
+        <div className="relative h-full w-full overflow-hidden">
+          <div
+            data-sidebar-presentation="expanded"
+            className="absolute inset-y-0 left-0 flex min-h-0 w-[calc(var(--sidebar-width)-var(--rail-width)-var(--sidebar-edge))] flex-col overflow-hidden"
+          >
+            {/* ChromeBar above owns the traffic lights and the drag region — this
             is now a plain panel header. */}
-        <SidebarHeader className="px-4 py-4">
-          {selected ? (
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{selected.name}</div>
-              <div className="text-ui text-muted-foreground">{selected.ticketPrefix}</div>
-            </div>
-          ) : (
-            <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
-          )}
-        </SidebarHeader>
+            <SidebarHeader className="px-4 pt-3 pb-2">
+              {selected ? (
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-ui font-semibold font-display">
+                      {selected.name}
+                    </div>
+                    <div className="text-label text-muted-foreground">{selected.ticketPrefix}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
+              )}
+            </SidebarHeader>
 
-        {selected ? (
-          <>
-            <NavList />
-            <SidebarScrollArea>
-              <div className={cn(!sessionsVisible && "hidden")}>
-                {/* Render-hidden, not unmounted — so the section cannot tell it
+            {selected ? (
+              <>
+                <NavList projectId={selected.id} />
+                <NavigatorSelector
+                  active={content}
+                  onSelect={(next) => {
+                    rememberedContent.set(selected.id, next);
+                    setContents((previous) => new Map(previous).set(selected.id, next));
+                  }}
+                />
+
+                <React.Activity mode={filesVisible ? "visible" : "hidden"}>
+                  <SidebarFiles project={selected} />
+                </React.Activity>
+                <div
+                  className={cn("flex min-h-0 flex-1 flex-col", content === "files" && "hidden")}
+                >
+                  <SidebarScrollArea>
+                    <div className="sidebar-section-header shrink-0 py-2">
+                      <SessionBandHeader
+                        label="Active"
+                        count={
+                          content === "sessions" && activeCount?.projectId === selected.id
+                            ? activeCount.count
+                            : undefined
+                        }
+                      >
+                        <NewSessionControl
+                          projectId={selected.id}
+                          placement="rail"
+                          disabled={false}
+                          onNewChat={() => void startProjectChat(selected.id)}
+                          onNewTerminal={() => void startProjectTerminal(selected.id)}
+                        />
+                      </SessionBandHeader>
+                    </div>
+                    <div className={cn(!sessionsVisible && "hidden")}>
+                      {/* Render-hidden, not unmounted — so the section cannot tell it
                     is off screen, and the coarse chat-activity poll it runs
                     would keep firing behind Configure or Settings. `visible`
                     is that fact, handed down from the one place that has it. */}
-                <ActiveSessions project={selected} visible={sessionsVisible} />
-              </div>
-            </SidebarScrollArea>
-          </>
-        ) : (
-          <SidebarContent />
-        )}
+                      <ActiveSessions
+                        project={selected}
+                        visible={sessionsVisible}
+                        activeHeader={false}
+                        onActiveCountChange={reportActiveCount}
+                      />
+                    </div>
+                  </SidebarScrollArea>
+                </div>
+              </>
+            ) : (
+              <SidebarContent />
+            )}
 
-        <SidebarFooter>
-          <CloudMoveRailRow />
-          {/* Settings keeps the wide row; the updater (VC-59) is the square
+            <SidebarFooter>
+              <CloudMoveRailRow />
+              {/* Settings keeps the wide row; the updater (VC-59) is the square
               beside it — a rare, occasionally-important control that must not
               compete with a daily one. UpdateButton renders null in dev and
               until main's first snapshot, leaving the row exactly as it was. */}
-          <div className="flex items-center gap-1">
-            <div className="min-w-0 flex-1">
-              <SettingsMenuButton active={settingsOpen} onSelect={() => setSettingsOpen(true)} />
-            </div>
-            <UpdateButton />
+              <div className="flex items-center gap-1">
+                <div className="min-w-0 flex-1">
+                  <SettingsMenuButton
+                    active={settingsOpen}
+                    onSelect={() => setSettingsOpen(!settingsOpen)}
+                  />
+                </div>
+                <UpdateButton />
+              </div>
+            </SidebarFooter>
           </div>
-        </SidebarFooter>
-      </div>
+        </div>
+      </ControlShapeProvider>
+    </EmptyStateScope>
+  );
+}
+
+const NAVIGATORS = [
+  { key: "sessions", label: "Sessions", icon: Chats },
+  { key: "files", label: "Files", icon: FolderIcon },
+] as const;
+
+/** Fixed navigator selector; the two independent scrollports remain mounted below it. */
+function NavigatorSelector({
+  active,
+  onSelect,
+}: {
+  active: "sessions" | "files";
+  onSelect(next: "sessions" | "files"): void;
+}) {
+  const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  return (
+    <div
+      role="tablist"
+      aria-label="Sidebar content"
+      data-slot="navigator-selector"
+      // 22px drawing, 24px targets. Icon centres share the nav rows' 24px inset.
+      className="flex h-[22px] shrink-0 items-center gap-1 border-b border-sidebar-border/50 px-3"
+    >
+      {NAVIGATORS.map(({ key, label, icon: Icon }, index) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <button
+              ref={(node) => {
+                refs.current[index] = node;
+              }}
+              type="button"
+              role="tab"
+              aria-label={label}
+              aria-selected={key === active}
+              tabIndex={key === active ? 0 : -1}
+              data-choice={key}
+              onClick={() => onSelect(key)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === "Home" ? 0 : event.key === "End" ? 1 : 1 - index;
+                onSelect(NAVIGATORS[next]!.key);
+                refs.current[next]?.focus();
+              }}
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center rounded-control-small outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-sidebar-accent-veil",
+                key === active ? "text-primary" : "text-muted-foreground",
+              )}
+            >
+              <Icon className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{label}</TooltipContent>
+        </Tooltip>
+      ))}
     </div>
   );
 }
@@ -113,7 +256,7 @@ function SettingsMenuButton({ active, onSelect }: { active: boolean; onSelect():
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton isActive={active} onClick={onSelect}>
-          <GearSixIcon />
+          <SettingsIcon />
           <span>Settings</span>
         </SidebarMenuButton>
       </SidebarMenuItem>

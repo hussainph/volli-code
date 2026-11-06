@@ -93,6 +93,12 @@ export interface HostCoreOptions {
   /** Lazy so model/catalog construction keeps the host's former boot point. */
   readonly modelAccess?: () => PiModelAccess;
   readonly webKeySealing?: WebKeySealingOptions;
+  /**
+   * The host's bundled HTML extraction worker (`serveWebExtractWorker` from
+   * `@volli/agent-runtime/web-extract-worker`), so `web_fetch` parses pages
+   * off the thread this host serves from. Absent, it parses on that thread.
+   */
+  readonly webExtractWorker?: string | URL;
   readonly venue?: (db: Database.Database) => RunnerIdentity;
   readonly secretStore?: SecretStore;
   readonly secretKey?: SecretKeyPort;
@@ -204,6 +210,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   const maintenance = createHostMaintenance({
     db,
     ports,
+    checkpointBackfill: true,
     worktrees,
     processReaders: options.processReaders,
     ...(backupPlatform === undefined
@@ -301,6 +308,9 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
           machinePaths,
           ...(options.modelAccess === undefined ? {} : { modelAccess: options.modelAccess() }),
           ...(options.webKeySealing === undefined ? {} : { webKeySealing: options.webKeySealing }),
+          ...(options.webExtractWorker === undefined
+            ? {}
+            : { webExtractWorker: options.webExtractWorker }),
           ...(options.venue === undefined ? {} : { venue: options.venue(db) }),
         },
       ));

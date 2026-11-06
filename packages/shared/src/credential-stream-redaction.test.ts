@@ -212,6 +212,20 @@ describe("ExactValueByteRedactor", () => {
     }
   });
 
+  it("reuses its scratch between steps without carrying a match from one into the next", () => {
+    const redactor = new ExactValueByteRedactor([["secret", marker("S")]]);
+    const step = (text: string) => decoder.decode(redactor.step(bytes(text), 0, true).bytes);
+    // A long window first, so later short ones reuse (and must clear) its scratch.
+    expect(step(`${"x".repeat(100)}secret`)).toBe(`${"x".repeat(100)}${marker("S")}`);
+    expect(step("plain")).toBe("plain");
+    expect(step("secret!")).toBe(`${marker("S")}!`);
+    // A larger window than any before grows it; one past what is kept has its own.
+    expect(step(`${"y".repeat(1000)}secret`)).toBe(`${"y".repeat(1000)}${marker("S")}`);
+    const huge = `${"z".repeat(4 * 1024 * 1024)}secret`;
+    expect(step(huge)).toBe(`${"z".repeat(4 * 1024 * 1024)}${marker("S")}`);
+    expect(step("a secret")).toBe(`a ${marker("S")}`);
+  });
+
   it("hides the rest of a value added after its first bytes were written", () => {
     let redactor = redactorFor(new Map());
     const stream = new CredentialRedactionStream((w, f, final) => redactor.step(w, f, final));

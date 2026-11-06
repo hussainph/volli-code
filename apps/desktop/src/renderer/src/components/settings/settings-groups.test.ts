@@ -7,6 +7,8 @@
  * sharded smoke that costs minutes. This is the same rule stated where it
  * costs milliseconds.
  */
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { EXPERIMENTS, MODEL_TIER_ROWS, resolveExperiments } from "@volli/shared";
@@ -52,10 +54,12 @@ describe("Settings → General", () => {
       .flatMap((group) => group.categories)
       .find((category) => category.key === "general");
     expect(general).toBeDefined();
-    const html = renderToStaticMarkup(general?.content);
+    const html = renderToStaticMarkup(createElement(TooltipProvider, null, general?.content));
 
-    expect(html).toContain("Show the project switcher");
-    expect(html).toContain("Keep the sidebar open");
+    expect(html).not.toContain("Show the project switcher");
+    expect(html).not.toContain("Keep the sidebar open");
+    expect(html).toContain("Zoom");
+    expect(html).toContain("Diff layout");
     expect(html).not.toContain("Protection");
     expect(html).not.toContain("experimental");
     expect(keywordsFor("general").some((term) => term.includes("protection"))).toBe(false);
@@ -102,8 +106,8 @@ describe("Settings → Experimental", () => {
 
     const html = renderToStaticMarkup(experimental.content);
     for (const experiment of EXPERIMENTS) {
-      expect(html).toContain(experiment.label);
-      expect(html).toContain(experiment.description);
+      expect(html).toContain("Loading experiments");
+      expect(html).not.toContain('role="switch"');
       expect(
         terms.some((term) => term.includes(experiment.label.toLowerCase())),
         `${experiment.label} is drawn in Experimental but nothing in the rail finds it`,
@@ -127,14 +131,14 @@ describe("the Models category's search index", () => {
   });
 
   it("finds the Code Mode section by its labels and the words someone looks for it by (VC-471)", () => {
-    const terms = keywordsFor(MODELS_CATEGORY_KEY).map((term) => term.toLowerCase());
+    const terms = keywordsFor("agents").map((term) => term.toLowerCase());
 
     // The section title and switch ("Code Mode"), the row behind Advanced,
     // and what a person who has only heard of it types.
-    for (const label of ["Code Mode", "Pin a model", "codemode", "sandbox", "javascript"]) {
+    for (const label of ["Code Mode", "Add model exception", "codemode", "sandbox", "javascript"]) {
       expect(
         terms.some((term) => term.includes(label.toLowerCase())),
-        `${label} should find Settings → Models`,
+        `${label} should find Settings → Agents`,
       ).toBe(true);
     }
   });
@@ -190,11 +194,30 @@ describe("retired review settings", () => {
   it("offers no review or display-hint entries while retaining classify", () => {
     expect(keywordsFor("appearance")).not.toContain("show auto mode hints");
     expect(keywordsFor("appearance")).not.toContain("auto mode hints");
-    const terms = keywordsFor(MODELS_CATEGORY_KEY);
+    const terms = keywordsFor("agents");
     expect(terms).not.toContain("shadow review");
     expect(terms).not.toContain("block reason");
     expect(terms).toContain("classify");
   });
+});
+
+describe("moved controls", () => {
+  it("keeps model accounts and agent behavior in separate search destinations", () => {
+    expect(keywordsFor("models")).not.toContain("code mode");
+    expect(keywordsFor("models")).not.toContain("decision model");
+    expect(keywordsFor("agents")).toContain("decision model");
+  });
+  it("routes database export to Privacy & data, not Storage", () => {
+    expect(keywordsFor("storage")).not.toContain("database");
+    expect(keywordsFor("telemetry")).toContain("database export");
+  });
+});
+
+it("gives Agents and Models distinct rail icons", () => {
+  const all = settingsGroups().flatMap((group) => group.categories);
+  expect(all.find((category) => category.key === "agents")?.icon).not.toBe(
+    all.find((category) => category.key === "models")?.icon,
+  );
 });
 
 const servicesKeys = (account?: boolean) =>

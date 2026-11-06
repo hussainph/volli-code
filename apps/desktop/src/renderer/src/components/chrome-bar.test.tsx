@@ -15,18 +15,53 @@ import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { ChromeBar } from "./chrome-bar";
 
 describe("chrome band copy", () => {
-  it("labels the rail toggle with the ruled word — project switcher, never workspace", () => {
+  it("keeps one routine sidebar toggle beside history", () => {
     const html = renderToStaticMarkup(
       <SidebarProvider>
         <ChromeBar />
       </SidebarProvider>,
     );
-
-    expect(html).toContain("project switcher");
-    expect(html).not.toContain("workspace switcher");
-    // The sidebar trigger beside it names the pane, not the rail concept.
+    const buttons = html.match(/<button[^>]+>/g) ?? [];
+    const toggles = buttons.filter((button) =>
+      /aria-label="(?:Hide project switcher|Toggle navigation sidebar)"/.test(button),
+    );
+    expect(toggles).toHaveLength(1);
+    for (const toggle of toggles) {
+      expect(toggle).toContain('data-size="icon"');
+      expect(toggle).toContain('data-variant="toolbar"');
+    }
+    expect(html).toContain("search-capsule");
+    expect(html).toContain("size-4");
+  });
+  it("groups the sidebar toggle with history, leaves search centred and puts inspection last", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <ChromeBar />
+      </SidebarProvider>,
+    );
+    const names = [
+      "Back",
+      "Forward",
+      "Toggle navigation sidebar",
+      "Search tickets, sessions, and commands",
+      "Hide details rail",
+    ];
+    const offsets = names.map((name) => html.indexOf(`aria-label="${name}"`));
+    expect(offsets.every((at) => at >= 0)).toBe(true);
+    expect(offsets).toEqual(offsets.toSorted((a, b) => a - b));
+    const cluster = html.slice(html.indexOf("absolute left-1/2 top-1/2"));
+    expect(cluster).not.toContain('aria-label="Toggle navigation sidebar"');
+    expect(html).toContain('data-inspector-trigger="shell"');
+  });
+  it("keeps rail visibility out of the routine toolbar without losing the layout menu", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <ChromeBar />
+      </SidebarProvider>,
+    );
+    expect(html).not.toContain('aria-label="Hide project switcher"');
     expect(html).toContain("Toggle navigation sidebar");
-    // Usage limits is window chrome too, so every ordinary page inherits it.
+    expect(html).toContain('data-sidebar-trigger=""');
     expect(html).toContain('aria-label="Usage limits"');
   });
 });

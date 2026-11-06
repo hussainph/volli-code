@@ -65,6 +65,9 @@ export interface FileNavigatorHost {
   openCreated(relPath: string): void;
   /** Move any open tab from `from` to `to`, carrying what the host remembers about it. */
   renameTab(from: string, to: string): void;
+  /** A successful directory create is not in the file-only index yet. */
+  createdDirectory?(relPath: string): void;
+  removed?(relPath: string): void;
 }
 
 /** Everything a navigator row and its rail header need to offer these actions. */
@@ -189,6 +192,7 @@ export function useFileNavigatorMutations(input: {
           // A new folder is a place, not a document: there is nothing to open,
           // and the navigator's own listing is where it appears.
           if (entry === "file") hostRef.current.openCreated(result.relPath);
+          else hostRef.current.createdDirectory?.(result.relPath);
         } catch (error) {
           toastError(`Couldn't create ${name}: ${errorMessage(error)}`);
         }
@@ -264,6 +268,7 @@ export function useFileNavigatorMutations(input: {
             toastError(`Couldn't move the ${noun} to the Trash: ${result.error}`);
             return;
           }
+          hostRef.current.removed?.(relPath);
           hostRef.current.refresh();
         } catch (error) {
           toastError(`Couldn't move the ${noun} to the Trash: ${errorMessage(error)}`);

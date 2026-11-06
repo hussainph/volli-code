@@ -21,8 +21,7 @@
  * still needs freshness, cancellation and delivery guarantees from the runtime.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { ExternalIcon, SuccessIcon } from "@renderer/components/ui/icon";
 
 import { PeekConversation } from "./session-peek-wireframe-conversation";
 import { usePeekController } from "./session-peek-wireframe-controller";
@@ -734,7 +733,7 @@ export default function SessionPeekWireframeScratch() {
         >
           <Notice
             tone="neutral"
-            icon={CheckCircleIcon}
+            icon={SuccessIcon}
             layout="stack"
             title={`Sent to ${FIXTURES.find((fixture) => fixture.rowId === receipt.rowId)?.sessionTitle ?? receipt.rowId}`}
             detail={`Simulation · ${undoLeft}s to undo`}
@@ -752,7 +751,7 @@ export default function SessionPeekWireframeScratch() {
         <div className="fixed top-3 left-1/2 z-[70] -translate-x-1/2">
           <Notice
             tone="neutral"
-            icon={ArrowSquareOutIcon}
+            icon={ExternalIcon}
             title={`Lab: would open ${fixtureByRow.get(state.opened)?.sessionTitle ?? state.opened}`}
             detail="No navigation here — the scratch has no session to open."
           />

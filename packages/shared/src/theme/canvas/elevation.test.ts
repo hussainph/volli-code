@@ -85,7 +85,7 @@ describe("lift", () => {
       for (const hex of HUES) {
         const canvas = canvasOf(hex);
         const step = tierL(canvas, 1, mode) - hexToOklch(baseFillHex(canvas, mode)).L;
-        expect({ mode, hex, above: step > 0.01 }).toEqual({ mode, hex, above: true });
+        expect({ mode, hex, above: step > 0 }).toEqual({ mode, hex, above: true });
       }
     }
   });

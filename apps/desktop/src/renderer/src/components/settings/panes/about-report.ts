@@ -54,6 +54,7 @@ export function buildAboutReport({
     `Boot recovery: ${support.bootRecovery}`,
     // Only a Volli Cloud launch has a runner line.
     ...(support.cloudRunner === undefined ? [] : [`Runner: ${support.cloudRunner}`]),
+    ...(support.perfStalls === undefined ? [] : [`Stalls: ${support.perfStalls}`]),
   ];
 
   if (rows.length > 0) {

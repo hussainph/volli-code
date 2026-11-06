@@ -1684,6 +1684,22 @@ export interface SessionProjection {
 }
 
 /**
+ * A Session as a listing hands it out: its {@link SessionProjection} without
+ * the full command and receipt history (VC-848).
+ *
+ * The listing fold cache keeps one of these per listed Session for as long as
+ * the host runs, so its weight is paid once per Session in the roster. The two
+ * arrays left out grow with every command a Session ever received, and on a
+ * real 5,087-Session profile they were about two thirds of a resident row
+ * (`e2e/bench/listing-row-weight-vc848.mjs`). A caller that needs them reads
+ * that Session through `getSession`, which keeps the full projection.
+ *
+ * A full projection is a listing row too (it only has more fields), so code
+ * that reads no history takes this type and accepts either.
+ */
+export type SessionListingProjection = Omit<SessionProjection, "commands" | "receipts">;
+
+/**
  * The resumable state behind a persisted Session projection.
  *
  * `projection` is the public read model. `pendingExecutorStarts` is the one
@@ -2373,6 +2389,16 @@ function sameSessionCommandIntent(
  * Adding a verb that rewrites a row breaks every such reader.
  */
 export interface SessionLedgerTransaction {
+  /**
+   * True when this transaction runs inside one the ledger does not own (in
+   * SQLite, a savepoint under a caller's outer transaction). Its promise then
+   * settles when the savepoint is released, and the outer transaction can
+   * still roll everything back afterwards. A caller that remembers what a
+   * transaction wrote once it settles (the engine's hot checkpoints) must not
+   * remember it from an enclosed one. Absent or false: settling is
+   * committing.
+   */
+  readonly enclosed?: boolean;
   /** The stored row as inserted. Only its events change what a Session shows. */
   getSession(sessionId: string): Session | null;
   /** Returns immutable base Sessions ordered by creation time descending, then id descending. */

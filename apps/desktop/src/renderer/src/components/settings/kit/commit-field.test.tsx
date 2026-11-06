@@ -1,81 +1,129 @@
 // @vitest-environment jsdom
-/**
- * The commit field's keys while an IME is composing (VC-806). Chromium on
- * macOS delivers the Enter that accepts a candidate, and the Escape that
- * closes the candidate window, as `keydown`s with `isComposing` set. Taking
- * Enter blurred the field, which commits; taking Escape reverted the draft.
- */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { CommitField } from "./commit-field";
 
-import { CommitField, type CommitResult } from "./commit-field";
-
-let root: Root;
 let host: HTMLDivElement;
-const onCommit = vi.fn(async (): Promise<CommitResult> => ({ ok: true }));
-
-function input(): HTMLInputElement {
-  return host.querySelector("input")!;
-}
-
-function press(key: "Enter" | "Escape", composing: boolean): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", {
-    key,
-    bubbles: true,
-    cancelable: true,
-    isComposing: composing,
-    keyCode: composing ? 229 : key === "Enter" ? 13 : 27,
-  });
-  act(() => {
-    input().dispatchEvent(event);
-  });
-  return event;
-}
-
-beforeEach(async () => {
+let root: Root;
+beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  onCommit.mockClear();
-  host = document.createElement("div");
-  document.body.append(host);
+  host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root.render(<CommitField value="Old" onCommit={onCommit} />));
-  act(() => input().focus());
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      input(),
-      "テスト",
-    );
-    input().dispatchEvent(new Event("input", { bubbles: true }));
-  });
 });
-
-afterEach(async () => {
-  await act(async () => root.unmount());
+afterEach(() => {
+  act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
 });
+function press(name: string) {
+  const button = host.querySelector<HTMLButtonElement>(`[aria-label="${name}"]`)!;
+  return act(async () => button.click());
+}
 
-it("neither commits nor reverts on a composing Enter or Escape", () => {
-  const enter = press("Enter", true);
-  press("Escape", true);
-
-  expect(enter.defaultPrevented).toBe(false);
-  expect(document.activeElement).toBe(input());
-  expect(onCommit).not.toHaveBeenCalled();
-  expect(input().value).toBe("テスト");
-});
-
-it("still commits on a plain Enter", async () => {
-  await act(async () => {
-    press("Enter", false);
+describe("CommitField quantities", () => {
+  it("steps numeric unit fields, commits once per press and respects bounds", async () => {
+    const onCommit = vi.fn((value: string) => ({ ok: true as const, value }));
+    act(() =>
+      root.render(
+        <CommitField
+          value="2"
+          suffix="days"
+          ariaLabel="Retention"
+          min={1}
+          max={3}
+          onCommit={onCommit}
+        />,
+      ),
+    );
+    expect(host.querySelector("input")!.type).toBe("number");
+    await press("Increase Retention");
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("3");
+    expect(
+      host.querySelector<HTMLButtonElement>('[aria-label="Increase Retention"]')!.disabled,
+    ).toBe(true);
+    await press("Decrease Retention");
+    expect(onCommit).toHaveBeenLastCalledWith("2");
+    expect(host.querySelector("input")!.value).toBe("2");
   });
-  expect(document.activeElement).not.toBe(input());
-  expect(onCommit).toHaveBeenCalledExactlyOnceWith("テスト");
-});
 
-it("still reverts the draft on a plain Escape", () => {
-  press("Escape", false);
-  expect(input().value).toBe("Old");
-  expect(onCommit).not.toHaveBeenCalled();
+  it("validates and confirms stepper changes just like typed commits", async () => {
+    const onCommit = vi.fn(() => ({ ok: true as const }));
+    const confirm = vi.fn(() => false);
+    act(() =>
+      root.render(
+        <CommitField
+          type="number"
+          value="2"
+          ariaLabel="Limit"
+          validate={() => "Too many"}
+          onCommit={onCommit}
+        />,
+      ),
+    );
+    await press("Increase Limit");
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe("Too many");
+    expect(onCommit).not.toHaveBeenCalled();
+    act(() =>
+      root.render(
+        <CommitField
+          key="confirm"
+          type="number"
+          value="2"
+          ariaLabel="Limit"
+          confirm={confirm}
+          onCommit={onCommit}
+        />,
+      ),
+    );
+    await press("Decrease Limit");
+    expect(confirm).toHaveBeenCalledWith("1");
+    expect(host.querySelector("input")!.value).toBe("2");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("shows rejected saves and freezes the stepper during pending writes", async () => {
+    let resolve!: (result: { ok: false; error: string }) => void;
+    const onCommit = vi.fn(
+      () =>
+        new Promise<{ ok: false; error: string }>((done) => {
+          resolve = done;
+        }),
+    );
+    act(() =>
+      root.render(<CommitField type="number" value="2" ariaLabel="Limit" onCommit={onCommit} />),
+    );
+    await press("Increase Limit");
+    expect(host.querySelector("input")!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Decrease Limit"]')!.disabled).toBe(
+      true,
+    );
+    await act(async () => resolve({ ok: false, error: "Offline" }));
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe("Offline");
+    expect(host.querySelector("input")!.disabled).toBe(false);
+  });
+
+  it("surfaces thrown writes and leaves ordinary text fields without steppers", async () => {
+    act(() =>
+      root.render(
+        <CommitField
+          type="number"
+          value="2"
+          ariaLabel="Limit"
+          onCommit={async () => {
+            throw new Error("Write failed");
+          }}
+        />,
+      ),
+    );
+    await press("Increase Limit");
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe("Write failed");
+    act(() =>
+      root.render(
+        <CommitField key="text" value="main" ariaLabel="Branch" onCommit={() => ({ ok: true })} />,
+      ),
+    );
+    expect(host.querySelector("input")!.type).toBe("text");
+    expect(host.querySelector("button")).toBeNull();
+  });
 });

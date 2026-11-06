@@ -43,12 +43,14 @@
  * people the row is for, which is the right way round.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { CircleDashedIcon } from "@phosphor-icons/react/dist/csr/CircleDashed";
-import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import {
+  ExternalIcon,
+  ChevronDownIcon,
+  SuccessIcon,
+  PendingIcon,
+  RemoveCircleIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
 
 import type { PrCheck, PrCheckState, TicketRetentionState } from "../../../../ipc/contract";
 
@@ -56,6 +58,7 @@ import { resolvePrChecks, type PrChecksView } from "@renderer/components/ticket/
 import { RAIL_CARD_ROW, RAIL_CARD_SEAM } from "@renderer/components/ticket/rail-panel-parts";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { MENU_SEPARATOR } from "@renderer/components/ui/menu-classes";
 import { cn } from "@renderer/lib/utils";
 
 /**
@@ -69,22 +72,18 @@ import { cn } from "@renderer/lib/utils";
  * earned, and amber is what asks for attention here. The dashed ring says
  * "unsettled" without pretending to animate the build.
  *
- * Outline throughout, per the icon convention; `fill` is reserved for the one
- * exceptional item and a check row is a list of peers.
+ * Outline throughout; each check's semantic ink carries its state.
  *
  * `word` is ONE check's state and is deliberately in a different tense from the
  * row's aggregate label: a single finished job "failed", while a suite with an
  * unresolved failure in it "is failing". The label counts an ongoing condition;
  * this names a settled outcome.
  */
-const STATE_STYLE: Record<
-  PrCheckState,
-  { Icon: typeof CheckCircleIcon; ink: string; word: string }
-> = {
-  passing: { Icon: CheckCircleIcon, ink: "text-positive", word: "passed" },
-  failing: { Icon: XCircleIcon, ink: "text-destructive", word: "failed" },
-  pending: { Icon: CircleDashedIcon, ink: "text-attention", word: "running" },
-  skipped: { Icon: MinusCircleIcon, ink: "text-muted-foreground", word: "skipped" },
+const STATE_STYLE: Record<PrCheckState, { Icon: typeof SuccessIcon; ink: string; word: string }> = {
+  passing: { Icon: SuccessIcon, ink: "text-positive", word: "passed" },
+  failing: { Icon: ErrorIcon, ink: "text-destructive", word: "failed" },
+  pending: { Icon: PendingIcon, ink: "text-attention", word: "running" },
+  skipped: { Icon: RemoveCircleIcon, ink: "text-muted-foreground", word: "skipped" },
 };
 
 function StateIcon({ state, className }: { state: PrCheckState; className?: string }) {
@@ -122,7 +121,7 @@ function CheckLine({ check }: { check: PrCheck }) {
   const body = (
     <>
       <StateIcon state={check.state} />
-      <span className="min-w-0 flex-1 truncate">
+      <span className="min-w-0 flex-1 wrap-anywhere">
         {check.workflow === null ? null : (
           <span className="text-muted-foreground">{check.workflow} / </span>
         )}
@@ -135,7 +134,7 @@ function CheckLine({ check }: { check: PrCheck }) {
     return (
       <div
         title={`${label} · ${word}`}
-        className="flex w-full items-center gap-2 rounded-control px-2 py-1 text-ui text-foreground"
+        className="flex w-full items-start gap-2 rounded-menu-item px-2 py-2 text-ui text-foreground"
       >
         {body}
       </div>
@@ -148,10 +147,10 @@ function CheckLine({ check }: { check: PrCheck }) {
       onClick={() => openExternal(url)}
       title={`${label} · ${word}`}
       aria-label={`${label}, ${word}. Open the run on GitHub`}
-      className="group/check flex w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+      className="group/check flex w-full cursor-default select-none items-start gap-2 rounded-menu-item px-2 py-2 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
       {body}
-      <ArrowSquareOutIcon
+      <ExternalIcon
         aria-hidden
         className="size-3 shrink-0 text-muted-foreground opacity-0 group-focus-visible/check:opacity-100 group-hover/check:opacity-100"
       />
@@ -174,16 +173,15 @@ export function ChecksDetail({ view }: { view: PrChecksView }) {
   return (
     <>
       <div className="flex items-center justify-between gap-2 px-2 pt-1">
-        <SectionHeading as="p">Checks</SectionHeading>
+        <SectionHeading>Checks</SectionHeading>
         {view.summary === null ? null : (
           <span className="truncate text-ui text-muted-foreground">{view.summary}</span>
         )}
       </div>
       {/* Capped and scrollable: a monorepo's matrix can publish thirty rows,
           and a popover as tall as the window is a panel that happens to float.
-          The `Checks` line above is a `<p>` (the card's popovers all are), so it
-          names nothing on its own — the list says what it is for a reader who
-          arrives inside it. */}
+          The heading names the section; the list also names its scope for
+          readers who arrive inside it. */}
       <ul
         aria-label="Checks on this pull request"
         className="flex max-h-64 flex-col overflow-y-auto"
@@ -198,13 +196,14 @@ export function ChecksDetail({ view }: { view: PrChecksView }) {
           </li>
         ))}
       </ul>
-      <div className="border-t border-border pt-1">
+      <div className={MENU_SEPARATOR} />
+      <div>
         <button
           type="button"
           onClick={() => openExternal(view.checksUrl)}
-          className="flex w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex w-full cursor-default select-none items-center gap-2 rounded-menu-item px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <ArrowSquareOutIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <ExternalIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           All checks on GitHub
         </button>
       </div>
@@ -243,11 +242,15 @@ export function PrChecksRow({ retention }: { retention: TicketRetentionState | n
           // got the one-line verdict and no way to reach the rest without
           // opening the popover. Same information, both ways in.
           aria-label={`${view.label}${view.summary === null ? "" : `, ${view.summary}`}. Show checks`}
-          className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent/50")}
+          className={cn(
+            RAIL_CARD_ROW,
+            RAIL_CARD_SEAM,
+            "min-h-8 bg-muted/30 py-2 hover:bg-accent/50",
+          )}
         >
           <StateIcon state={view.verdict} />
           <span className="min-w-0 flex-1 truncate text-ui font-medium">{view.label}</span>
-          <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+          <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <ChecksPopoverContent view={view} />

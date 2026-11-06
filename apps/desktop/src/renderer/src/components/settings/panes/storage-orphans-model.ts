@@ -110,7 +110,7 @@ export function isScanStale(scan: OrphansScan, retentionDays: number | null): bo
 
 /** The row that says why the list on screen may not be acted on. */
 export function staleScanNote(scan: OrphansScan, retentionDays: number): string {
-  return `The retention window changed from ${scan.retentionDays} to ${retentionDays} day(s) after this scan, so these dates were measured against the old one. Scan again to see what is eligible now.`;
+  return `Retention changed from ${scan.retentionDays} to ${retentionDays} day(s) after this scan`;
 }
 
 /** Local date, or `null` when there is no timestamp to show. */
@@ -179,7 +179,7 @@ export function describeKept(entry: KeptWorktreeOrphan): string {
 
 /** A prunable-metadata row: which project, a record rather than a directory, and it says so. */
 export function describeMetadata(entry: PrunableWorktreeMetadata): string {
-  return `${entry.projectName} — stale git record (${entry.reason}). Cleanup would prune the record; nothing on disk changes.`;
+  return `${entry.projectName} — stale git record (${entry.reason})`;
 }
 
 /** A stale record cleanup will NOT prune, and why (VC-284). */
@@ -253,21 +253,9 @@ function folderName(path: string): string {
   return segments.at(-1) ?? path;
 }
 
-/** The retention window Storage shows so an eligibility date can be understood. */
+/** The retention window every eligibility date on the orphan list was measured against. */
 export function retentionNote(retentionDays: number): string {
-  return `Unused folders become eligible after ${retentionDays} day(s).`;
-}
-
-/**
- * The policy row the list itself carries (VC-284): the configured
- * retention window, and the difference between an orphan and a ticket's
- * checkout. It is a ROW rather than prose under a control because the
- * acceptance asks Storage to SHOW the retention period — a summoned tooltip is
- * not shown — and because an orphan having no ticket to archive is the fact
- * that explains why this list's only verb is "remove the folder".
- */
-export function orphanPolicyNote(retentionDays: number): string {
-  return `${retentionNote(retentionDays)} An orphan has no ticket to archive, so a reviewed folder removal is all that can happen here; the branch stays in git. Archiving a ticket is a separate action.`;
+  return `Eligible after ${retentionDays} day(s)`;
 }
 
 /** One row of durable history: what was removed, by whom, and when. */
@@ -426,7 +414,7 @@ export function describeInterrupted(run: OrphanCleanupRun): string {
   if (failed > 0) parts.push(`${failed} failed`);
   if (uncertain > 0) parts.push(`${uncertain} may or may not have taken effect`);
   parts.push(`${pending} never attempted`);
-  return `A cleanup was interrupted on ${when}: ${parts.join(", ")}. Scan again to review what is left.`;
+  return `A cleanup was interrupted on ${when}: ${parts.join(", ")}`;
 }
 
 /**
@@ -474,7 +462,7 @@ export function describeRunFailures(run: OrphanCleanupRun): string {
   const parts: string[] = [];
   if (failed > 0) parts.push(`${failed} failed`);
   if (uncertain > 0) parts.push(`${uncertain} with an unknown outcome`);
-  return `${runHeading(run)} — ${parts.join(", ")}. Each one is listed below with its reason. Scan again to review what is left.`;
+  return `${runHeading(run)} — ${parts.join(", ")}`;
 }
 
 /** What a finished cleanup did, for the toast that follows it. */

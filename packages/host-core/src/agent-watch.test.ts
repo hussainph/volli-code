@@ -145,6 +145,7 @@ function harness(
   insertTicket(db, testTicket("project-one", { id: "ticket-two", ticketNumber: 14 }));
   const recorded = recordingWatches();
   const runtime = options.runtime ?? true;
+  const { roster, getSession } = engineFixture(options.projections);
   const ports: WatchToolPorts = {
     db,
     projects: () => listProjects(db),
@@ -152,52 +153,10 @@ function harness(
     sessions: () =>
       runtime
         ? {
+            // Rows as a listing hands them out, so nothing can lean on receipts.
             listSessions: async () =>
-              options.projections ?? [
-                projection("aaaaaaaa-1", { turnActive: true }),
-                projection("bbbbbbbb-1", { parentSessionId: TICKET.sessionId }),
-                projection("cccccccc-1", { terminal: true }),
-                projection("dddddddd-1"),
-                projection("dddddddd-2"),
-                projection(BOARD.sessionId),
-                projection("eeeeeeee-1", {
-                  detached: true,
-                  stopped: { at: 5, reason: null, by: { kind: "user" } },
-                }),
-                projection("ffffffff-1", {
-                  detached: true,
-                  stopped: {
-                    at: 5,
-                    reason: null,
-                    by: { kind: "session", sessionId: BOARD.sessionId },
-                  },
-                }),
-                projection("abababab-1", {
-                  detached: true,
-                  stopped: { at: 5, reason: null, by: { kind: "watchdog" } },
-                }),
-                projection("acacacac-1", {
-                  detached: true,
-                  stopped: {
-                    at: 5,
-                    reason: null,
-                    by: { kind: "session", sessionId: "bcbcbcbc-0000-0000-0000-000000000000" },
-                  },
-                }),
-                projection("12121212-1", { detached: true }),
-                projection("34343434-1", { detached: true, pendingStart: true }),
-                projection("78787878-1", {
-                  detached: true,
-                  pendingStart: true,
-                  startReceipt: "unreconciled",
-                }),
-                projection("9a9a9a9a-1", {
-                  detached: true,
-                  pendingStart: true,
-                  startReceipt: "accepted",
-                }),
-                projection("56565656-1", { archived: true, detached: true }),
-              ],
+              roster.map(({ commands: _commands, receipts: _receipts, ...row }) => row),
+            getSession,
           }
         : null,
     watches: () => (runtime ? recorded.watches : null),
@@ -208,6 +167,62 @@ function harness(
     caller: RuntimeSessionIdentity = BOARD,
   ) => tool(ports, caller, { verb: "watch", toolCallId: "tc", input } as never);
   return { ports, call, ...recorded };
+}
+
+/**
+ * The listing and its full projections. A listing row carries no receipts
+ * (VC-848), so the watch reads the whole projection of a target whose start is
+ * still pending; this answers both from the same fixtures.
+ */
+function engineFixture(projections: readonly SessionProjection[] | undefined) {
+  const roster = projections ?? [
+    projection("aaaaaaaa-1", { turnActive: true }),
+    projection("bbbbbbbb-1", { parentSessionId: TICKET.sessionId }),
+    projection("cccccccc-1", { terminal: true }),
+    projection("dddddddd-1"),
+    projection("dddddddd-2"),
+    projection(BOARD.sessionId),
+    projection("eeeeeeee-1", {
+      detached: true,
+      stopped: { at: 5, reason: null, by: { kind: "user" } },
+    }),
+    projection("ffffffff-1", {
+      detached: true,
+      stopped: {
+        at: 5,
+        reason: null,
+        by: { kind: "session", sessionId: BOARD.sessionId },
+      },
+    }),
+    projection("abababab-1", {
+      detached: true,
+      stopped: { at: 5, reason: null, by: { kind: "watchdog" } },
+    }),
+    projection("acacacac-1", {
+      detached: true,
+      stopped: {
+        at: 5,
+        reason: null,
+        by: { kind: "session", sessionId: "bcbcbcbc-0000-0000-0000-000000000000" },
+      },
+    }),
+    projection("12121212-1", { detached: true }),
+    projection("34343434-1", { detached: true, pendingStart: true }),
+    projection("78787878-1", {
+      detached: true,
+      pendingStart: true,
+      startReceipt: "unreconciled",
+    }),
+    projection("9a9a9a9a-1", {
+      detached: true,
+      pendingStart: true,
+      startReceipt: "accepted",
+    }),
+    projection("56565656-1", { archived: true, detached: true }),
+  ];
+  const getSession = async ({ sessionId }: { sessionId: string }) =>
+    roster.find((candidate) => candidate.session.id === sessionId) ?? null;
+  return { roster, getSession };
 }
 
 describe("watch", () => {
@@ -448,6 +463,40 @@ describe("watch", () => {
     expect(stuck.text).toContain("Session 78787878 has no live executor;");
     expect(stuck.text).toContain("`volli session peek 78787878`");
     expect(stuck.details).toMatchObject({ detached: ["78787878"] });
+  });
+
+  it("reads a target's receipts only for a pending start, as the Session stands then (VC-848)", async () => {
+    const h = harness();
+    // Listing rows carry no receipts, so the pending-start check reads the
+    // Session itself — and judges what it reads, not the listed row.
+    const listed = await h.ports
+      .sessions()!
+      .listSessions({ projectId: "project-one", scope: "all" });
+    const reads: string[] = [];
+    const current = new Map([
+      // Attached since the listing folded: live, not detached.
+      ["34343434-1", projection("34343434-1")],
+      // Its start settled with nothing attached: detached.
+      ["9a9a9a9a-1", projection("9a9a9a9a-1", { detached: true })],
+    ]);
+    h.ports.sessions = () => ({
+      listSessions: async () => listed,
+      getSession: async ({ sessionId }) => {
+        reads.push(sessionId);
+        return current.get(sessionId) ?? null;
+      },
+    });
+    const attached = await h.call(watchTool, { sessions: "34343434" });
+    expect(attached.details).toMatchObject({ detached: [] });
+    const settled = await h.call(watchTool, { sessions: "9a9a9a9a" });
+    expect(settled.details).toMatchObject({ detached: ["9a9a9a9a"] });
+    // Gone before it could be read: nothing to call detached.
+    const gone = await h.call(watchTool, { sessions: "78787878" });
+    expect(gone.details).toMatchObject({ detached: [] });
+    // No start pending, no read.
+    const idle = await h.call(watchTool, { sessions: "12121212" });
+    expect(idle.details).toMatchObject({ detached: ["12121212"] });
+    expect(reads).toEqual(["34343434-1", "9a9a9a9a-1", "78787878-1"]);
   });
 
   it("refuses an archived target and arms nothing (VC-825)", async () => {

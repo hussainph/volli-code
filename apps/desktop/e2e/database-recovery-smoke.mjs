@@ -33,9 +33,17 @@ import {
 import { installShutdownTrace, sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
 import { screenshotWithTrace } from "./lib/screenshot-trace.mjs";
 
-const RESTORE_LABEL = "Restore from the last backup that checks clean";
+const RESTORE_LABEL = "Restore latest clean backup";
+const RESTARTING = "Backup restored. Volli is restarting";
+// What the recovery panel says when nothing checks clean.
+const NO_CLEAN_NOTICE = "No clean backup available. Nothing restored.";
+const MANUAL_NOTICE = "Your database and backups are preserved for manual recovery.";
+// The refusal main itself returns over IPC for the same state (host-core's copy).
 const NO_CLEAN = "No local backup checks clean. Nothing was restored.";
 const MANUAL = "Your database and safety copies are preserved for manual recovery.";
+// The panel labels each listed copy's integrity in sentence case.
+const integrityLabel = (integrity) =>
+  integrity === "newer" ? "Newer version" : integrity.charAt(0).toUpperCase() + integrity.slice(1);
 const MARKER_KEY = "database-recovery-smoke";
 const MARKER_VALUE = "last-clean-saved-marker";
 // Cheap CI breadcrumbs are kept only on failure. Native sampling is intrusive
@@ -451,13 +459,13 @@ async function recoveryScenario() {
         ],
       );
       const items = first.page
-        .getByRole("list", { name: "Local safety copies", exact: true })
+        .getByRole("list", { name: "Local backups", exact: true })
         .getByRole("listitem");
       assert.equal(await items.count(), 3);
       for (let index = 0; index < backups.length; index++) {
         const text = await items.nth(index).innerText();
         assert.ok(text.includes(backups[index].name));
-        assert.ok(text.includes(backups[index].integrity));
+        assert.ok(text.includes(integrityLabel(backups[index].integrity)));
       }
       assert.equal(
         await first.page.getByRole("button", { name: RESTORE_LABEL, exact: true }).isEnabled(),
@@ -486,9 +494,7 @@ async function recoveryScenario() {
       await unchanged(durable);
       const clickedAt = Date.now();
       await first.page.getByRole("button", { name: RESTORE_LABEL, exact: true }).click();
-      await first.page
-        .getByText("Backup restored. Volli is restarting…", { exact: true })
-        .waitFor();
+      await first.page.getByText(RESTARTING, { exact: true }).waitFor();
       assert.equal(
         await first.page.getByRole("button", { name: RESTORE_LABEL, exact: true }).isDisabled(),
         true,
@@ -623,16 +629,14 @@ async function malformedHeaderScenario() {
     async () => {
       const actionRaw = await snapshot([...raw.keys()]);
       await run.page.getByRole("button", { name: RESTORE_LABEL, exact: true }).click();
+      await run.page.locator("details").getByText("Details", { exact: true }).click();
       await run.page
         .getByText(
           "Restore failed. Your original database and safety copies are preserved for manual recovery.",
           { exact: true },
         )
         .waitFor();
-      assert.equal(
-        await run.page.getByText("Backup restored. Volli is restarting…", { exact: true }).count(),
-        0,
-      );
+      assert.equal(await run.page.getByText(RESTARTING, { exact: true }).count(), 0);
       await expectFault(run);
       await unchanged(raw);
       await unchanged(copies);
@@ -689,7 +693,7 @@ async function interruptedSwitchScenario() {
     "explicit resume from a clean backup heals missing DB and clears marker",
     async () => {
       await run.page.getByRole("button", { name: RESTORE_LABEL, exact: true }).click();
-      await run.page.getByText("Backup restored. Volli is restarting…", { exact: true }).waitFor();
+      await run.page.getByText(RESTARTING, { exact: true }).waitFor();
       const calls = await waitUntil(
         "resumed restore restart",
         async () => {
@@ -755,8 +759,8 @@ async function noCleanScenario(includeDamagedCopy) {
     async () => {
       await expectFault(run);
       await unchanged(raw);
-      await run.page.getByText(NO_CLEAN, { exact: true }).waitFor();
-      await run.page.getByText(MANUAL, { exact: true }).waitFor();
+      await run.page.getByText(NO_CLEAN_NOTICE, { exact: true }).waitFor();
+      await run.page.getByText(MANUAL_NOTICE, { exact: true }).waitFor();
       assert.equal(
         await run.page.getByRole("button", { name: RESTORE_LABEL, exact: true }).isDisabled(),
         true,

@@ -77,6 +77,22 @@ describe("source-mode.css surface", () => {
     expect(rules).not.toContain("--vscode-editorGutter-deletedBackground:");
   });
 
+  it("uses accent selection and semantic diff washes in the workbench", () => {
+    const workbench = css.slice(css.indexOf("/* Workbench reading surfaces"));
+    expect(workbench).toContain("--vscode-editor-selectionBackground: var(--accent-selected)");
+    expect(workbench).toContain("--vscode-editor-lineHighlightBackground: var(--accent-tint)");
+    for (const property of [
+      "insertedLineBackground",
+      "insertedTextBackground",
+      "removedLineBackground",
+      "removedTextBackground",
+    ]) {
+      expect(workbench).toContain(`--vscode-diffEditor-${property}:`);
+    }
+    expect(workbench).toContain("color: var(--diff-added)");
+    expect(workbench).toContain("color: var(--diff-removed)");
+  });
+
   it("never selects a Document Mode editor", () => {
     // The two stylesheets describe mutually exclusive hosts. If this file could
     // reach a ticket body it would paint a ground under prose that is supposed

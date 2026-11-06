@@ -14,7 +14,7 @@ export interface SessionEnvironmentAlertState {
   /**
    * The app fault this notice reports, or `null` for the project-readiness
    * notice — a project's own onboarding shortfall, not a fault of the app, and
-   * dismissed for the view rather than durably.
+   * dismissed by measured identity durably in the project workspace.
    */
   fault: SessionEnvironmentFaultKind | null;
   /**
@@ -56,6 +56,7 @@ type SessionEnvironmentFaultNotice = SessionEnvironmentAlertState & {
 /** The one project fact the shared alert needs; Configure owns future repair UI. */
 export interface ProjectEnvironmentScope {
   name: string;
+  id?: string;
 }
 
 /**
@@ -113,7 +114,7 @@ function loginPathFault(
     fault: "login-path-unreadable",
     key: "login-path-unreadable",
     title: "Volli couldn't read your terminal's PATH",
-    detail: `Sessions can't find ${plainList(missing)}, so some commands may be missing. Fix now asks your terminal again — Sessions you start afterwards get the result.`,
+    detail: `Sessions can't find ${plainList(missing)}.`,
   };
 }
 
@@ -131,9 +132,9 @@ function loginPathFault(
 function readinessDetail(status: Pick<CliToolStatus, "environment">): string | null {
   const missingTools = missingSessionTools(status);
   if (missingTools.length === 0) return null;
-  // No CLI incantation: a first-run reader is pointed at the door that holds
-  // the evidence and the repair button, not handed a command to type.
-  return `Missing from the Session PATH: ${missingTools.join(", ")}. If they are installed, open Settings → CLI to repair the Session PATH.`;
+  // No CLI incantation and no instructions: the notice's Review action is the
+  // door to Settings → CLI, which holds the evidence and the repair button.
+  return `Missing from the Session PATH: ${missingTools.join(", ")}`;
 }
 
 /**
@@ -153,7 +154,7 @@ export function projectEnvironmentReadiness(
   return {
     fault: null,
     // The measured facts, not the sentence built from them.
-    key: `readiness:${project.name}:${missingSessionTools(status).join(",")}`,
+    key: `readiness:${project.id ?? project.name}:${missingSessionTools(status).join(",")}`,
     title: `Sessions aren't ready for ${project.name}`,
     detail,
   };

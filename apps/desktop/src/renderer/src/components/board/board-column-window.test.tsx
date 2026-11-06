@@ -152,7 +152,6 @@ async function render(tickets: Ticket[], options: RenderOptions = {}) {
                   onOpen={() => {}}
                   composerInitiallyOpen={false}
                   onComposerClose={() => {}}
-                  animateEnter={false}
                   dragActive={options.dragActive ?? false}
                 />
               </FlipObserver>
@@ -249,6 +248,21 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+describe("the virtual column's scroll geometry", () => {
+  it("never flex-shrinks the list or spacers into the viewport", async () => {
+    await mount(column(100));
+    expect(dropzone().classList.contains("shrink-0")).toBe(true);
+    expect(dropzone().classList.contains("min-h-full")).toBe(true);
+    for (const spacer of container!.querySelectorAll("[data-column-spacer]")) {
+      expect(spacer.classList.contains("shrink-0")).toBe(true);
+    }
+    await scrollTo(60 * COLUMN_ROW_STRIDE_FALLBACK);
+    for (const spacer of container!.querySelectorAll("[data-column-spacer]")) {
+      expect(spacer.classList.contains("shrink-0")).toBe(true);
+    }
+  });
+});
+
 describe("a column that fits", () => {
   it("mounts every card and renders no spacer", async () => {
     await mount(column(COLUMN_WINDOW_MINIMUM));
@@ -293,11 +307,11 @@ describe("a column that does not fit", () => {
 
     expect(first).toBeGreaterThan(0);
     expect(Number.parseFloat(leading?.style.height ?? "")).toBeCloseTo(
-      first * COLUMN_ROW_STRIDE_FALLBACK - 8,
+      first * COLUMN_ROW_STRIDE_FALLBACK - 6,
       0,
     );
     expect(Number.parseFloat(trailing?.style.height ?? "")).toBeCloseTo(
-      (500 - last) * COLUMN_ROW_STRIDE_FALLBACK - 8,
+      (500 - last) * COLUMN_ROW_STRIDE_FALLBACK - 6,
       0,
     );
   });

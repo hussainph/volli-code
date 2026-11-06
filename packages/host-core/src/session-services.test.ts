@@ -129,7 +129,8 @@ describe("host Session composition", () => {
 
     writeSessionUnread(ctx.db, sessionId, 5000);
     const failure = new Error("read unavailable");
-    vi.spyOn(engine, "getSession").mockRejectedValue(failure);
+    // The read row comes from the listing's one-row read (VC-1101).
+    vi.spyOn(engine, "getSessionListing").mockRejectedValue(failure);
     services.sessionReadWatch!.observeFocused(new Set([sessionId]));
     await vi.waitFor(() =>
       expect(sinks.log.warn).toHaveBeenCalledWith("could not publish the session's read row", {

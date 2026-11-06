@@ -1,5 +1,10 @@
 # @volli/host-install
 
+> **Superseded.** SSH host installation and enrollment are maintenance-only
+> compatibility surfaces, not the outbound Runner architecture. See
+> [Workspace authority and offline](../../docs/BOUNDARIES.md#workspace-authority-and-offline).
+> Retain these contracts while their callers exist; do not extend the host model.
+
 Add a host over SSH (VC-700, VC-615 flow 1). Electron-free: desktop main runs
 it today; a CLI or a control plane can run it unchanged.
 

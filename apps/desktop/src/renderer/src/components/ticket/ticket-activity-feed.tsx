@@ -1,27 +1,31 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { useCloudTeamStore, usePersonLabel } from "@renderer/lib/cloud-team";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
-import { GitMergeIcon } from "@phosphor-icons/react/dist/csr/GitMerge";
-import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
-import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
-import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
-import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
-import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
-import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
-import { SealCheckIcon } from "@phosphor-icons/react/dist/csr/SealCheck";
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { TrashSimpleIcon } from "@phosphor-icons/react/dist/csr/TrashSimple";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import {
+  ArchiveIcon,
+  UndoIcon,
+  ArrowRightIcon,
+  CleanIcon,
+  ChevronDownIcon,
+  ChatIcon,
+  FlagIcon,
+  BranchIcon,
+  CommitIcon,
+  MergeIcon,
+  PullRequestIcon,
+  ComposeIcon,
+  AttachmentIcon,
+  DispatchIcon,
+  EditIcon,
+  PlayCircleIcon,
+  AddCircleIcon,
+  AgentIcon,
+  VerifiedIcon,
+  LabelIcon,
+  DeleteIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   errorMessage,
   isAgentActor,
@@ -45,12 +49,15 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
 import { guardWrite, readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { Badge } from "@renderer/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+} from "@renderer/components/ui/dropdown-menu";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   buildActivityFeed,
   commentAuthorLabel,
@@ -67,33 +74,33 @@ import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { boardApi } from "@renderer/lib/board-api";
 
-type PhosphorIcon = typeof ChatCircleIcon;
+type IconComponent = typeof ChatIcon;
 
-/** One muted Phosphor glyph per property-change kind. `commented` never renders (it's dropped). */
-const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
-  created: PlusCircleIcon,
+/** One muted shared glyph per property-change kind. `commented` never renders (it's dropped). */
+const EVENT_ICON: Record<TicketEventKind, IconComponent> = {
+  created: AddCircleIcon,
   status_changed: ArrowRightIcon,
   priority_changed: FlagIcon,
-  harness_changed: RobotIcon,
-  retitled: PencilSimpleIcon,
-  body_edited: NotePencilIcon,
-  labels_changed: TagIcon,
+  harness_changed: AgentIcon,
+  retitled: EditIcon,
+  body_edited: ComposeIcon,
+  labels_changed: LabelIcon,
   archived: ArchiveIcon,
-  unarchived: ArrowCounterClockwiseIcon,
-  commented: ChatCircleIcon,
+  unarchived: UndoIcon,
+  commented: ChatIcon,
   // A verdict is a stamp, not a chat bubble: the glyph says the line was
   // recorded by a signer rather than written by a talker (VC-85).
-  signaled: SealCheckIcon,
-  worktree_changed: GitBranchIcon,
-  worktree_scope_changed: GitBranchIcon,
-  worktree_failed: WarningCircleIcon,
-  worktree_committed: GitCommitIcon,
-  worktree_reclaimed: GitBranchIcon,
-  worktree_trimmed: BroomIcon,
-  pr_opened: GitPullRequestIcon,
-  pr_merged: GitMergeIcon,
-  attachment_added: PaperclipIcon,
-  attachment_removed: TrashSimpleIcon,
+  signaled: VerifiedIcon,
+  worktree_changed: BranchIcon,
+  worktree_scope_changed: BranchIcon,
+  worktree_failed: WarningIcon,
+  worktree_committed: CommitIcon,
+  worktree_reclaimed: BranchIcon,
+  worktree_trimmed: CleanIcon,
+  pr_opened: PullRequestIcon,
+  pr_merged: MergeIcon,
+  attachment_added: AttachmentIcon,
+  attachment_removed: DeleteIcon,
   session_started: PlayCircleIcon,
   session_resumed: PlayCircleIcon,
 };
@@ -122,12 +129,12 @@ function EventLine({
     <div
       className={cn(
         "flex items-center gap-2 px-1 text-ui",
-        muted ? "text-muted-foreground/70" : "text-muted-foreground",
+        muted ? "text-tertiary-foreground" : "text-muted-foreground",
       )}
     >
       <Icon className={cn("shrink-0", muted ? "size-3" : "size-3.5")} />
       <span className="min-w-0 truncate">{sentence}</span>
-      <span className="shrink-0 text-muted-foreground/70">
+      <span className="shrink-0 text-tertiary-foreground">
         · {relativeTime(event.createdAt, now)}
       </span>
     </div>
@@ -183,15 +190,15 @@ function BunchRow({
             type="button"
             onClick={onToggle}
             aria-expanded={expanded}
-            className="flex shrink-0 items-center gap-1 rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+            className="flex shrink-0 items-center gap-1 rounded-sm text-tertiary-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           >
             {expanded ? "less" : `+${hidden} more`}
-            <CaretDownIcon
+            <ChevronDownIcon
               className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
             />
           </button>
         ) : null}
-        <span className="shrink-0 text-muted-foreground/70">· {relativeTime(at, now)}</span>
+        <span className="shrink-0 text-tertiary-foreground">· {relativeTime(at, now)}</span>
       </div>
       {expanded && hidden > 0 ? <BunchEventList events={events} now={now} /> : null}
     </li>
@@ -204,11 +211,11 @@ function AuthorChip({ actor, label }: { actor: string; label: string }) {
     <span
       className={cn(
         "inline-flex size-5 shrink-0 items-center justify-center rounded-full text-label font-semibold",
-        isAgentActor(actor) ? "bg-primary/10 text-primary" : "bg-accent text-foreground",
+        isAgentActor(actor) ? "bg-(--accent-tint) text-primary-text" : "bg-accent text-foreground",
       )}
       aria-hidden
     >
-      {label.charAt(0).toUpperCase()}
+      {isAgentActor(actor) ? <AgentIcon className="size-3" /> : label.charAt(0).toUpperCase()}
     </span>
   );
 }
@@ -273,14 +280,15 @@ function CommentBlock({
   return (
     <li
       className={cn(
-        "rounded-lg border border-border bg-card px-4 py-2",
+        "overflow-hidden rounded-container border border-border bg-card",
         optimistic && "opacity-60",
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-4 py-2">
         <AuthorChip actor={comment.actor} label={author} />
         <span className="text-ui font-medium text-foreground">{author}</span>
-        <span className="text-ui text-muted-foreground">
+        {isAgentActor(comment.actor) && <Badge variant="accent">Agent</Badge>}
+        <span className="text-label text-muted-foreground">
           {relativeTime(comment.createdAt, now)}
           {comment.updatedAt > comment.createdAt ? " · edited" : ""}
         </span>
@@ -295,12 +303,12 @@ function CommentBlock({
                 setEditing(true);
               }}
             >
-              <PencilSimpleIcon />
+              <EditIcon />
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="ghost" size="icon-xs" aria-label="Delete comment">
-                  <TrashSimpleIcon />
+                  <DeleteIcon />
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent size="sm">
@@ -321,7 +329,7 @@ function CommentBlock({
       </div>
 
       {editing ? (
-        <div className="mt-2 flex flex-col gap-2">
+        <div className="flex flex-col gap-2 p-4">
           <textarea
             autoFocus
             value={draft}
@@ -354,7 +362,7 @@ function CommentBlock({
       ) : (
         // Read view clamps (VC-99): a verbose agent comment collapses to the
         // policy cap with a fade + Show more, instead of stretching the feed.
-        <div className="mt-1">
+        <div className="p-4">
           <ClampedMarkdown source={comment.body} />
         </div>
       )}
@@ -392,38 +400,36 @@ function Composer({
   }
 
   return (
-    <div className={cn(PROMPT_SURFACE, "flex flex-col overflow-hidden")}>
-      <ReadOnlyNote projectId={projectId} className="px-4 pt-3" />
-      <textarea
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            void submit();
-          }
-        }}
-        placeholder="Add a comment…"
-        aria-label="Add a comment"
-        aria-keyshortcuts="Meta+Enter Control+Enter"
-        className="min-h-20 max-h-48 w-full resize-none bg-transparent px-4 py-4 text-sm text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
-      />
-      <div className="prompt-toolbar flex items-center justify-end gap-2 px-2 py-2">
+    <div>
+      <ReadOnlyNote projectId={projectId} className="px-4 pb-2" />
+      <div className="flex items-end gap-2 overflow-hidden rounded-floating border border-border bg-muted/30 px-3 py-1 focus-within:border-ring">
+        <textarea
+          rows={1}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              void submit();
+            }
+          }}
+          placeholder="Add a comment…"
+          aria-label="Add a comment"
+          aria-keyshortcuts="Meta+Enter Control+Enter"
+          className="min-h-8 max-h-48 min-w-0 flex-1 resize-none bg-transparent py-1.5 text-ui text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
+        />
         <Button
-          size="sm"
-          className="prompt-primary"
+          shape="circle"
+          size="icon-sm"
+          aria-label="Comment"
+          title="Comment (⌘Enter)"
           disabled={draft.trim() === "" || submitting || !canWrite}
           {...readOnlyMark(canWrite)}
           aria-keyshortcuts="Meta+Enter Control+Enter"
           onClick={() => void submit()}
         >
-          <PaperPlaneTiltIcon />
-          Comment
-          {/* Same shortcut-chip treatment as the workspace picker's tooltip
-              (project-tile.tsx), tinted for the ember primary surface. */}
-          <kbd className="rounded-sm bg-primary-foreground/10 px-1 py-1 text-label font-normal text-primary-foreground/70">
-            ⌘↵
-          </kbd>
+          <DispatchIcon />
+          <span className="sr-only">Comment</span>
         </Button>
       </div>
     </div>
@@ -444,10 +450,11 @@ function Composer({
  */
 export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const ticketId = ticket.id;
+  const [filter, setFilter] = React.useState("All");
+  React.useEffect(() => setFilter("All"), [ticketId]);
   const canWrite = useCanWrite(ticket.projectId);
   const entry = useTicketActivityStore((state) => state.byTicket[ticketId]);
   const listingState = useTicketActivityStore((state) => state.listingState[ticketId]);
-  const listingError = useTicketActivityStore((state) => state.listingError[ticketId] ?? null);
   const ensureActivity = useTicketActivityStore((state) => state.ensure);
   const refreshActivity = useTicketActivityStore((state) => state.refresh);
 
@@ -577,7 +584,20 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   // a failed one, and only the former earns the empty sentence.
   const pending = listingState === undefined || listingState === "loading";
   const failed = listingState === "failed";
-  const feed = buildActivityFeed(events, comments);
+  const filteredComments = comments.filter(
+    (comment) =>
+      filter === "All" ||
+      filter === "Comments" ||
+      (filter === "Agent" && isAgentActor(comment.actor)),
+  );
+  const filteredEvents = events.filter(
+    (event) =>
+      filter === "All" ||
+      (filter === "Agent" && isAgentActor(event.actor)) ||
+      (filter === "Status changes" && event.payload.kind === "status_changed") ||
+      (filter === "Commits" && event.payload.kind === "worktree_committed"),
+  );
+  const feed = buildActivityFeed(filteredEvents, filteredComments);
   const [expandedBunches, setExpandedBunches] = React.useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -595,37 +615,59 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
               ],
         ),
   );
+  const filters = [
+    { label: "All", icon: ChatIcon },
+    { label: "Comments", icon: ComposeIcon },
+    { label: "Agent", icon: AgentIcon },
+    { label: "Status changes", icon: ArrowRightIcon },
+    { label: "Commits", icon: CommitIcon },
+  ];
 
   return (
-    <section className="flex flex-col gap-4 border-t border-border pt-6">
-      <SectionHeading as="h3">Activity</SectionHeading>
+    <section className="flex flex-col gap-3 pt-4">
+      <div className="flex items-center justify-between gap-2">
+        <SectionHeading as="h2">Activity</SectionHeading>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="toolbar" size="icon-sm" aria-label={`Filter activity: ${filter}`}>
+              <ChatIcon />
+              <span className="sr-only">{filter}</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {filters.map(({ label, icon: Icon }) => (
+              <DropdownMenuCheckboxItem
+                key={label}
+                checked={filter === label}
+                onCheckedChange={() => setFilter(label)}
+              >
+                <Icon />
+                {label}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
-      {pending ? (
-        // The cache has no landed baseline for this ticket yet (VC-383). This
-        // used to be an empty list — not the empty sentence, not a placeholder,
-        // nothing between the heading and the composer — so the feed read as
-        // absent rather than as on its way. Two bunch rows' worth of the feed's
-        // own line: a glyph's slot and a sentence, at `text-ui`.
-        <ul
-          className="flex flex-col gap-2"
-          {...loadingRegionProps("activity")}
-          data-testid="ticket-activity-loading"
-        >
-          {["w-3/5", "w-2/5"].map((width) => (
-            <li key={width} aria-hidden className="flex items-center gap-2 px-1">
-              <Skeleton className="size-3.5 shrink-0 rounded-sm" />
-              <Skeleton className={cn("h-3.5", width)} />
-            </li>
-          ))}
-        </ul>
-      ) : failed ? (
+      {pending ? null : failed ? (
         // The toast owns the detail. This line only replaces the skeleton with
         // the concise truth that the activity baseline did not arrive.
-        <p className={EMPTY_INLINE} title={listingError ?? undefined}>
-          Couldn&apos;t load activity.
-        </p>
+        <PanelEmptyState
+          illustration="failed"
+          status="failed"
+          title="Couldn’t load activity"
+          action={{ label: "Try again", onAction: () => void refetch(true) }}
+        />
       ) : feed.length === 0 ? (
-        <p className={EMPTY_INLINE}>No activity yet.</p>
+        <PanelEmptyState
+          illustration="archive"
+          title={filter === "All" ? "No activity yet" : "No matching activity"}
+          action={
+            filter === "All"
+              ? undefined
+              : { label: "Clear filters", onAction: () => setFilter("All") }
+          }
+        />
       ) : (
         <ul className="flex flex-col gap-2">
           {feed.map((item) =>

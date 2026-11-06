@@ -21,22 +21,35 @@
  * build cannot read — torn by a crash, or written by a build that knew a
  * newer shape — is removed as it is listed, along with any half-written
  * `.tmp`, so nothing here can outgrow the store's bounds unseen.
+ *
+ * A trace grows by one step per browser call and was rewritten whole, on
+ * Electron main, every time. Writes now leave the caller's turn (VC-1082):
+ * each record is still written aside and renamed into place, through
+ * `fs.promises`, one write at a time per trace, and the steps that arrive
+ * while one is in flight coalesce into the next — only the newest trace is
+ * ever written, so a burst of steps costs one rewrite, not one per step.
+ * Until it lands, the newest record answers a listing from memory.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { readBrowserTrace, type BrowserTrace } from "@volli/shared";
 
-import { BROWSER_FILE_ID, browserPictureDisk } from "./picture-disk";
+import {
+  BROWSER_FILE_ID,
+  type BrowserPictureDisk,
+  browserPictureDisk,
+  diskQueue,
+} from "./picture-disk";
 import type { BrowserTracePersistence } from "./trace-store";
+
+/** A trace sink on disk, with the wait an orderly quit gives its writes. */
+export interface BrowserTraceDisk extends BrowserTracePersistence {
+  frames: BrowserPictureDisk;
+  /** Resolves once every trace and frame write asked of it so far is on disk. */
+  settled(): Promise<void>;
+}
 
 /** The traces directory under a given Electron `userData` path. */
 export function browserTracesRoot(userDataPath: string): string {
@@ -53,20 +66,43 @@ function readTrace(root: string, name: string): BrowserTrace | null {
   }
 }
 
-export function browserTraceDisk(root: string): BrowserTracePersistence {
+export function browserTraceDisk(root: string): BrowserTraceDisk {
+  const frames = browserPictureDisk(join(root, "frames"));
+  const queue = diskQueue("A Browser Trace");
+  /** The newest record of each trace that is not on disk yet; listings answer it from here. */
+  const newest = new Map<string, BrowserTrace>();
+  /** Traces with a write queued that has not started: it will take the newest record. */
+  const scheduled = new Set<string>();
+  /** Bumped by each removal, so a write queued before it never lands after it. */
+  const removals = new Map<string, number>();
+  /** Traces whose removal has not landed yet: no listing answers them. */
+  const removing = new Set<string>();
   return {
-    frames: browserPictureDisk(join(root, "frames")),
+    frames,
     writeTrace(trace) {
-      if (!BROWSER_FILE_ID.test(trace.traceId)) throw new Error("Browser Trace ids are UUIDs");
-      mkdirSync(root, { recursive: true });
-      // Rewritten on every step, so written aside and renamed into place: a
-      // crash mid-write leaves the previous record whole, never a torn one.
-      const path = join(root, `${trace.traceId}.json`);
-      writeFileSync(`${path}.tmp`, JSON.stringify(trace));
-      renameSync(`${path}.tmp`, path);
+      const { traceId } = trace;
+      if (!BROWSER_FILE_ID.test(traceId)) throw new Error("Browser Trace ids are UUIDs");
+      newest.set(traceId, trace);
+      removing.delete(traceId);
+      if (scheduled.has(traceId)) return;
+      scheduled.add(traceId);
+      const epoch = removals.get(traceId) ?? 0;
+      queue.run(traceId, async () => {
+        if ((removals.get(traceId) ?? 0) !== epoch) return;
+        scheduled.delete(traceId);
+        const record = newest.get(traceId);
+        if (record === undefined) return;
+        await mkdir(root, { recursive: true });
+        // Written aside and renamed into place: a crash mid-write leaves the
+        // previous record whole, never a torn one.
+        const path = join(root, `${traceId}.json`);
+        await writeFile(`${path}.tmp`, JSON.stringify(record));
+        await rename(`${path}.tmp`, path);
+        if (newest.get(traceId) === record) newest.delete(traceId);
+      });
     },
     listTraces() {
-      if (!existsSync(root)) return [];
+      if (!existsSync(root)) return [...newest.values()];
       const traces: BrowserTrace[] = [];
       for (const entry of readdirSync(root, { withFileTypes: true })) {
         if (!entry.isFile()) continue;
@@ -80,15 +116,30 @@ export function browserTraceDisk(root: string): BrowserTracePersistence {
           continue;
         }
         if (name !== `${id}.json`) continue;
+        if (newest.has(id) || removing.has(id)) continue;
         const trace = readTrace(root, name);
         if (trace === null) rmSync(join(root, name), { force: true });
         else traces.push(trace);
       }
-      return traces;
+      return [...traces, ...newest.values()];
     },
     removeTrace(traceId) {
       if (!BROWSER_FILE_ID.test(traceId)) return;
-      rmSync(join(root, `${traceId}.json`), { force: true });
+      newest.delete(traceId);
+      scheduled.delete(traceId);
+      const epoch = (removals.get(traceId) ?? 0) + 1;
+      removals.set(traceId, epoch);
+      removing.add(traceId);
+      queue.run(
+        traceId,
+        () => rm(join(root, `${traceId}.json`), { force: true }),
+        () => {
+          if (removals.get(traceId) === epoch) removing.delete(traceId);
+        },
+      );
+    },
+    async settled() {
+      await Promise.all([queue.settled(), frames.settled()]);
     },
   };
 }

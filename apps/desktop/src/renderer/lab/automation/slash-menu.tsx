@@ -8,7 +8,7 @@
  * motion so adjacent picks feel instant (Sonner / tooltip "instant" rule).
  */
 import * as React from "react";
-import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
+import { SparkleIcon } from "@renderer/components/ui/icon";
 
 import { cn } from "@renderer/lib/utils";
 
@@ -158,7 +158,6 @@ export function SlashMenu({
                   )}
                 >
                   <SparkleIcon
-                    weight="fill"
                     aria-hidden
                     className={cn(
                       "size-3.5 shrink-0",

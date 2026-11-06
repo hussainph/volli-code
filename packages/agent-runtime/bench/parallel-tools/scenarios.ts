@@ -9,8 +9,9 @@
  * difference between parallel mode mattering and parallel mode being
  * unreachable, so the bench states it per scenario rather than assuming it.
  *
- * Latencies come from {@link LatencyProfile}. The default is measured, not
- * guessed — see `probe.ts` and `profile.measured.json`.
+ * Latencies come from {@link LatencyProfile}. `probe.ts` can generate a local,
+ * gitignored `profile.measured.json`; without it the bench labels its fallback.
+ * The historical parked-wait scenario below is synthetic, not current tool behavior.
  */
 
 import type { BenchTool, ScriptedReply } from "./harness";
@@ -45,14 +46,14 @@ export interface LatencyProfile {
   provider: number;
 }
 
-/** Placeholder only; `report.ts` loads the measured profile and overrides it. */
+/** Fixed fallback inputs; `report.ts` uses a local measured profile when present. */
 export const FALLBACK_PROFILE: LatencyProfile = {
   localFile: 2,
   subprocess: 25,
   network: 400,
   browser: 900,
   sessionStart: 40,
-  // Measured: 130,600ms mean over 241 real calls (see the transcript audit).
+  // Representative long-wait input, not a measurement from this run.
   ticketAwait: 130_600,
   provider: 1_400,
 };
@@ -74,7 +75,7 @@ const done = (text: string): ScriptedReply => ({ text });
 /**
  * How much the one genuinely long wait is shrunk so the bench stays runnable.
  *
- * `ticket.await` really does park for ~131s. Three of them, twice per repeat,
+ * This synthetic historical wait uses ~131s. Three of them, twice per repeat,
  * is over half an hour of sleeping per bench run, which is not a benchmark
  * anyone runs. The sensitivity sweep establishes that the saving is exactly
  * `(n-1) x latency` at every latency tested, so scaling this scenario down and
@@ -135,7 +136,7 @@ export const SCENARIOS: Scenario[] = [
     id: "session-fanout",
     title: "Start three Sessions, then await their tickets",
     batched: true,
-    note: `Side-effecting fan-out, run at 1/${LONG_WAIT_SCALE} scale on the waits. The three starts are quick; the three waits are ~131s each in reality (measured over 241 real calls), so overlapping them would really save ~262s. Nearly all of this scenario's saving lands on calls Volli may not want overlapped at all.`,
+    note: `Side-effecting fan-out, run at 1/${LONG_WAIT_SCALE} scale on the waits. The three starts are quick; the three synthetic historical waits use ~131s each, so overlapping them would save ~262s under these inputs. Nearly all of this scenario's saving lands on calls Volli may not want overlapped at all.`,
     tools: (profile) => [
       { name: "session_start", latencyMs: profile.sessionStart },
       { name: "ticket_await", latencyMs: profile.ticketAwait / LONG_WAIT_SCALE },

@@ -125,7 +125,11 @@ function foundOf(id: ChecklistRowId, view: AddHostFlowView, host: RemoteHost | u
 /** One row's mark, from the steps under it. */
 function rowMark(statuses: readonly AddHostStepStatus[], view: AddHostFlowView): StepMarkStatus {
   if (statuses.includes("failed")) return "failed";
-  if (statuses.includes("running")) return view.status === "question" ? "attention" : "active";
+  if (statuses.includes("running")) {
+    if (view.status === "failed") return "failed";
+    if (view.status === "question") return "attention";
+    return view.status === "running" ? "active" : "pending";
+  }
   const finished = statuses.filter((status) => status === "done" || status === "skipped");
   if (finished.length === statuses.length) return "done";
   // Halfway through its steps (uploaded, not yet installing): still under way.
@@ -147,7 +151,7 @@ export function stepRows(view: AddHostFlowView, host?: RemoteHost): StepRow[] {
         : mark === "done"
           ? foundOf(id, view, host)
           : mark === "active"
-            ? `${verbOf(id, view.name)}…`
+            ? verbOf(id, view.name)
             : NOUNS[id];
     return {
       id,

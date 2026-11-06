@@ -290,9 +290,7 @@ describe("BrowserTraceDialog", () => {
 
   it("says when nothing was recorded", async () => {
     await open(api(() => []));
-    expect(document.querySelector("[data-trace-empty]")?.textContent).toBe(
-      "Nothing recorded for this Session",
-    );
+    expect(document.querySelector("[data-trace-empty]")?.textContent).toBe("Nothing recorded");
     expect(position()).toBe("");
   });
 

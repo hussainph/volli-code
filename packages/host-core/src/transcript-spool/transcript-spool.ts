@@ -63,8 +63,8 @@ import {
 } from "@volli/shared";
 import {
   INLINE_ARTIFACT_MAX_BYTES,
+  PI_LOG_LINE_MAX_BYTES,
   PI_LOG_SEGMENT_MAX_BYTES,
-  SESSION_OBJECT_MAX_BYTES,
   STAGE_ARTIFACTS_MAX_BATCH,
   TRANSCRIPT_PACK_MAX_ARTIFACTS,
   TRANSCRIPT_PACK_MAX_BYTES,
@@ -251,6 +251,9 @@ interface SegmentPlan {
   missing: string[];
 }
 
+/** A line that is not JSON is redacted this many bytes at a time. */
+const REDACT_PUSH_BYTES = 1024 * 1024;
+
 export class TranscriptSpool {
   readonly #artifacts: TranscriptSpoolOptions["artifacts"];
   readonly #objects: SessionObjectStore;
@@ -273,7 +276,7 @@ export class TranscriptSpool {
       packMaxArtifacts: TRANSCRIPT_PACK_MAX_ARTIFACTS,
       packMaxTurns: TRANSCRIPT_PACK_MAX_TURNS,
       piSegmentMaxBytes: PI_LOG_SEGMENT_MAX_BYTES,
-      piLineMaxBytes: SESSION_OBJECT_MAX_BYTES,
+      piLineMaxBytes: PI_LOG_LINE_MAX_BYTES,
       ...options.limits,
     };
   }
@@ -589,7 +592,9 @@ export class TranscriptSpool {
    * The next run of complete lines at `offset`: up to the segment cap, or one
    * longer line whole. `null` when there is no complete line yet (a line Pi is
    * still writing waits for the next pass), the file shrank below `offset`, or
-   * its next line is longer than one object may be (both reported).
+   * its next line is longer than one object may be (both reported). A longer
+   * line's end is found a segment's worth at a time, then the line is read
+   * once: never more than the line itself and one segment held.
    */
   async #completeLines(
     path: string,
@@ -606,38 +611,61 @@ export class TranscriptSpool {
         return null;
       }
       const available = info.size - offset;
-      const cap = this.#limits.piSegmentMaxBytes;
-      for (let window = Math.min(available, cap); window > 0;) {
-        const buffer = Buffer.alloc(window);
-        const { bytesRead } = await handle.read(buffer, 0, window, offset);
-        const read = buffer.subarray(0, bytesRead);
-        // Within the cap: every complete line. Past it: the one long line alone.
-        const end = (window > cap ? read.indexOf(NEWLINE) : read.lastIndexOf(NEWLINE)) + 1;
-        if (end > 0) return buffer.subarray(0, end);
-        if (window >= available) return null;
-        if (window >= this.#limits.piLineMaxBytes) {
+      if (available === 0) return null;
+      const window = Buffer.alloc(Math.min(available, this.#limits.piSegmentMaxBytes));
+      const first = await handle.read(window, 0, window.length, offset);
+      // Within the cap: every complete line.
+      const end = window.subarray(0, first.bytesRead).lastIndexOf(NEWLINE) + 1;
+      if (end > 0) return window.subarray(0, end);
+      // Past it: the one long line alone.
+      for (let scanned = first.bytesRead; ;) {
+        if (scanned >= available) return null;
+        if (scanned >= this.#limits.piLineMaxBytes) {
           report.oversized.push(piFileId);
           return null;
         }
-        window = Math.min(available, window * 2, this.#limits.piLineMaxBytes);
+        const length = Math.min(window.length, available - scanned);
+        const { bytesRead } = await handle.read(window, 0, length, offset + scanned);
+        const newline = window.subarray(0, bytesRead).indexOf(NEWLINE);
+        if (newline === -1) {
+          scanned += bytesRead;
+          if (bytesRead < length) return null;
+          continue;
+        }
+        const lineBytes = scanned + newline + 1;
+        if (lineBytes > this.#limits.piLineMaxBytes) {
+          report.oversized.push(piFileId);
+          return null;
+        }
+        const line = Buffer.alloc(lineBytes);
+        const read = await handle.read(line, 0, lineBytes, offset);
+        // Rewritten since its end was found: nothing is uploaded this pass.
+        return read.bytesRead === lineBytes && line[lineBytes - 1] === NEWLINE ? line : null;
       }
-      return null;
     } finally {
       await handle.close();
     }
   }
 
-  /** Each line redacted on its own: decoded JSON when it parses, its bytes when not. */
+  /**
+   * Each line redacted on its own: decoded JSON when it parses, its bytes when
+   * not. Nothing changed, the source itself: a long line is never copied for a no-op.
+   */
   #redactLines(source: Buffer): Buffer {
     const out: Buffer[] = [];
+    let changed = false;
     let start = 0;
     while (start < source.length) {
       const end = source.indexOf(NEWLINE, start);
+      // `#completeLines` only answers whole lines; never loop on a range that is not.
+      if (end === -1) throw new Error("A Pi log range must end in a newline");
       const line = source.subarray(start, end);
-      out.push(this.#redactLine(line), Buffer.from([NEWLINE]));
+      const redacted = this.#redactLine(line);
+      if (redacted !== line) changed = true;
+      out.push(redacted, Buffer.from([NEWLINE]));
       start = end + 1;
     }
-    return Buffer.concat(out);
+    return changed ? Buffer.concat(out) : source;
   }
 
   #redactLine(line: Buffer): Buffer {
@@ -646,8 +674,13 @@ export class TranscriptSpool {
     try {
       parsed = JSON.parse(line.toString("utf8"));
     } catch {
+      // In pieces, as `redactString` does: a step's memory grows with its window.
       const stream = new CredentialRedactionStream(this.#redaction.step);
-      return Buffer.concat([stream.push(line), stream.end()]);
+      const out: Uint8Array[] = [];
+      for (let at = 0; at < line.length; at += REDACT_PUSH_BYTES)
+        out.push(stream.push(line.subarray(at, at + REDACT_PUSH_BYTES)));
+      out.push(stream.end());
+      return Buffer.concat(out);
     }
     const { value, changed } = redactJsonValue(parsed, this.#redaction.step);
     return changed ? Buffer.from(JSON.stringify(value), "utf8") : line;

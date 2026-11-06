@@ -24,9 +24,9 @@
  * of the OS authorization state, so nothing here says "Allowed" or "Denied" —
  * a denied notification's `show()` succeeds in silence, and a page that
  * inferred permission from it would be confidently wrong in exactly the case
- * somebody came here to diagnose. So: the switches are Volli's answer, the
- * hint says the system owns the rest, and a reported failure is shown as the
- * fault it is with the one route that fixes it.
+ * somebody came here to diagnose. So: the switches are Volli's answer, and a
+ * reported failure is shown as the fault it is with the one route that fixes
+ * it.
  *
  * The view is only ever set from what main READ BACK — the answer to a write,
  * or a push after the view moved — so a switch on this page cannot show a
@@ -37,8 +37,8 @@
  * push that lands between the two is not lost.
  */
 import * as React from "react";
-import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import { NotificationIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, NOTIFICATION_EVENTS, type NotificationEvent } from "@volli/shared";
 
 import type { NotificationSettingsView } from "../../../../../ipc/contract";
@@ -51,40 +51,13 @@ import { toastError } from "@renderer/lib/toast";
  * How each category reads in a row. A total `Record`, so an event added to
  * {@link NOTIFICATION_EVENTS} fails to compile here until it has been given
  * words — the same mechanism that kept the preview honest, now guarding a page
- * whose switches do something.
- *
- * The hints name the PRODUCERS, because that is the only way a person can tell
- * what a category will cost them. They are the one exception CLAUDE.md's
- * "let controls talk" rule leaves room for: a mute switch's blast radius is not
- * visible in its label, and getting it wrong is silence.
+ * whose switches do something. The label is the whole row: it names the event.
  */
-const EVENT_ROWS: Record<NotificationEvent, { label: string; hint: React.ReactNode }> = {
-  "needs-you": {
-    label: "An agent needs my input",
-    hint: (
-      <>
-        An unattended Automation Run that stops to ask or breaks, a session the watchdog finds
-        wedged, and a terminal harness that reports it is waiting on a human.
-      </>
-    ),
-  },
-  finished: {
-    label: "A pull request merges",
-    hint: <>Volli watches the pull request on a ticket&rsquo;s branch and says when it lands.</>,
-  },
-  swept: {
-    label: "Volli reclaims a worktree",
-    hint: <>A ticket&rsquo;s folder removed after its time in Done. The branch is kept.</>,
-  },
-  update: {
-    label: "An update is ready",
-    hint: (
-      <>
-        Sent when a downloaded update is waiting to install. With a Volli window open, the
-        sidebar&rsquo;s update badge announces it instead.
-      </>
-    ),
-  },
+const EVENT_LABELS: Record<NotificationEvent, string> = {
+  "needs-you": "An agent needs my input",
+  finished: "A pull request merges",
+  swept: "Volli reclaims a worktree",
+  update: "An update is ready",
 };
 
 const SYSTEM_SETTINGS_ROUTE = "System Settings → Notifications → Volli Code";
@@ -142,36 +115,19 @@ export function NotificationsPane() {
   return (
     <>
       {view !== null && !view.supported ? (
-        <Notice
-          tone="error"
-          icon={WarningCircleIcon}
-          title="This system can't show notifications"
-          detail="Volli has nowhere to post these, so the switches below have no effect here."
-        />
+        <Notice tone="error" icon={WarningIcon} title="This system can't show notifications" />
       ) : null}
       {failure !== null ? (
         <Notice
           tone="error"
-          icon={WarningCircleIcon}
+          icon={WarningIcon}
           title="The system didn't deliver the last notification"
           detail={`${failure.message} Check that Volli Code is allowed to notify in ${SYSTEM_SETTINGS_ROUTE}.`}
         />
       ) : null}
 
-      <PrefSection title="Notifications" icon={BellIcon}>
-        <PrefRow
-          label="Notify me"
-          htmlFor="notify-me"
-          hint={
-            <>
-              Volli asks the system to show these; the system decides whether they appear, and{" "}
-              {SYSTEM_SETTINGS_ROUTE} is where that is allowed or refused. One isn&rsquo;t sent when
-              the exact question, failure, or ticket it is about is already in front of you in the
-              focused Volli window — a window behind another app, or one showing something else,
-              still gets it.
-            </>
-          }
-        >
+      <PrefSection title="Notifications" titleHidden icon={NotificationIcon}>
+        <PrefRow label="Notify me" htmlFor="notify-me">
           <Switch
             id="notify-me"
             checked={preferences?.enabled ?? false}
@@ -180,12 +136,7 @@ export function NotificationsPane() {
           />
         </PrefRow>
         {NOTIFICATION_EVENTS.map((event) => (
-          <PrefRow
-            key={event}
-            label={EVENT_ROWS[event].label}
-            htmlFor={`notify-${event}`}
-            hint={EVENT_ROWS[event].hint}
-          >
+          <PrefRow key={event} label={EVENT_LABELS[event]} htmlFor={`notify-${event}`}>
             <Switch
               id={`notify-${event}`}
               checked={preferences?.events[event] ?? false}

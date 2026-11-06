@@ -223,13 +223,11 @@ describe("compactionBoundaryCopy", () => {
       reason: "checkpoint",
     });
     expect(copy.headline).toBe("Compaction reverted");
-    expect(copy.note).toBe("The messages it had replaced are being sent to the model again.");
     expect(copy.before).toBeNull();
     expect(copy.description).toBe(
-      "Compaction reverted — the saved checkpoint could not be read. The messages it had replaced are being sent to the model again. The provider-native checkpoint could not be read.",
+      "Compaction reverted — the saved checkpoint could not be read. The provider-native checkpoint could not be read.",
     );
     // The ordinary failure still says the opposite thing.
-    expect(compactionBoundaryCopy(failed(1, "m1")).note).toBe("The context was left as it was.");
     expect(compactionBoundaryCopy(failed(1, "m1")).headline).toBe("Compaction failed");
   });
 
@@ -243,15 +241,19 @@ describe("compactionBoundaryCopy", () => {
     // The honesty rule, pinned: nothing on this row is an estimate, and the ~
     // that would mark one has nothing to mark.
     expect(copy.description).not.toContain("~");
-    expect(copy.description).toBe(
-      "Context compacted — the window filled. Older messages above are no longer sent to the model; a summary of them is. The context held 182k tokens before.",
-    );
+    expect(copy.description).toBe("Context compacted — the window filled. 182k tokens before.");
   });
 
-  it("says what a reader scrolling past the line is actually looking at", () => {
-    expect(compactionBoundaryCopy(compacted(1, "m1")).note).toBe(
-      "Older messages above are no longer sent to the model; a summary of them is.",
-    );
+  it("carries no explanatory note, on the row or in its hover", () => {
+    for (const copy of [
+      compactionBoundaryCopy(compacted(1, "m1")),
+      compactionBoundaryCopy(failed(1, "m1")),
+      compactionBoundaryCopy({ ...failed(1, "m1"), reason: "checkpoint" }),
+    ]) {
+      expect(copy).not.toHaveProperty("note");
+      expect(copy.description).not.toContain("sent to the model");
+      expect(copy.description).not.toContain("left as it was");
+    }
   });
 
   it("borrows no count for a compaction that never happened", () => {
@@ -259,10 +261,9 @@ describe("compactionBoundaryCopy", () => {
 
     expect(copy.headline).toBe("Compaction failed");
     expect(copy.before).toBeNull();
-    expect(copy.note).toBe("The context was left as it was.");
     expect(copy.detail).toBe("The summarizer refused the request.");
     expect(copy.description).toBe(
-      "Compaction failed — the provider refused this turn. The context was left as it was. The summarizer refused the request.",
+      "Compaction failed — the provider refused this turn. The summarizer refused the request.",
     );
   });
 
@@ -270,9 +271,7 @@ describe("compactionBoundaryCopy", () => {
     const copy = compactionBoundaryCopy(failed(1, "m1", "   "));
 
     expect(copy.detail).toBeNull();
-    expect(copy.description).toBe(
-      "Compaction failed — the provider refused this turn. The context was left as it was.",
-    );
+    expect(copy.description).toBe("Compaction failed — the provider refused this turn.");
   });
 });
 

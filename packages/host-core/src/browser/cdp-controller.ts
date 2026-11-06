@@ -41,6 +41,7 @@ import type { RuntimeWholeText } from "@volli/shared";
 
 import {
   axTreeDigest,
+  axTreeGaps,
   FIND_MAX_CHARS,
   FIND_MAX_QUERY_CHARS,
   formatAXFind,
@@ -159,6 +160,26 @@ const MAX_KNOWN_REFS = 10_000;
  */
 export const CDP_COMMAND_TIMEOUT_MS = 15_000;
 
+/**
+ * The largest page whose accessibility tree is read in one
+ * `Accessibility.getFullAXTree` answer (VC-1082), in the renderer's DOM node
+ * count (`Memory.getDOMCounters`; the AX tree runs about 1.2 nodes to each).
+ *
+ * That answer is one message, and Electron turns all of it into JavaScript
+ * objects on the main thread before anything can bound it: about 18µs a node
+ * measured on an M-series Mac, so 1.5 s of a frozen app for an 80,000-node
+ * page (37 MB of JSON) of which every print walks at most 20,000. Past this
+ * size the tree is read a piece at a time instead (the piecewise read below);
+ * at or under it the one answer is kept — atomic, and around 100 ms of main
+ * thread at most.
+ */
+const AX_FULL_READ_MAX_DOM_NODES = 5_000;
+/** How many `getChildAXNodes` calls one round of a piecewise read keeps in flight. */
+const AX_PIECE_BATCH = 128;
+/** The bounds on one piecewise read; past either, the read is partial and says so. */
+const AX_PIECE_MAX_ROUNDS = 512;
+const AX_PIECE_MAX_NODES = 80_000;
+
 /** The one error #bounded raises itself, so callers can tell clock from fault. */
 class CommandTimeoutError extends Error {}
 
@@ -183,6 +204,32 @@ function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string 
     case "action":
       return `The Browser Tab did not finish the requested action within ${timeoutMs}ms. The action may or may not have reached the page; check its current state before trying again.`;
   }
+}
+
+function noTreeError(): Error {
+  return new Error(
+    "The Browser Tab answered without an accessibility tree, so nothing was read. Try the read again, or take a screenshot.",
+  );
+}
+
+/**
+ * A piecewise read's nodes, root first in walk order: only what hangs from
+ * the root, so a stray answer can never become a second root for a print.
+ */
+function reachableFrom(byId: ReadonlyMap<string, AXNodeLike>, rootId: string): AXNodeLike[] {
+  const ordered: AXNodeLike[] = [];
+  const seen = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const nodeId = stack.pop()!;
+    const node = byId.get(nodeId);
+    if (node === undefined || seen.has(nodeId)) continue;
+    seen.add(nodeId);
+    ordered.push(node);
+    const children = node.childIds ?? [];
+    for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index]!);
+  }
+  return ordered;
 }
 
 function narrowedLimit(requested: number | undefined, maximum: number): number {
@@ -559,34 +606,134 @@ export class BrowserTabController {
     }
   }
 
-  /** A bounded structural read, independent of the compositor's frame cadence. */
-  async #readTree(operation: "snapshot" | "find", signal?: AbortSignal): Promise<AXNodeLike[]> {
+  /**
+   * A bounded structural read, independent of the compositor's frame cadence.
+   * `partial` is true only when a piecewise read stopped short of what the
+   * prints walk; the caller reports it as a cut.
+   */
+  async #readTree(
+    operation: "snapshot" | "find",
+    signal?: AbortSignal,
+  ): Promise<{ nodes: AXNodeLike[]; partial: boolean }> {
     const generation = this.#generation;
-    const answer = (await this.#command(
-      "Accessibility.getFullAXTree",
-      undefined,
-      signal,
-      operation,
-    )) as {
-      nodes?: AXNodeLike[];
-    };
-    signal?.throwIfAborted();
-    // An answer without a tree is a read that failed, not a page with nothing
-    // on it: Chromium always answers with at least the document's root. Read
-    // as empty, it would tell the model the page is blank (VC-277).
-    if (!Array.isArray(answer.nodes)) {
-      throw new Error(
-        "The Browser Tab answered without an accessibility tree, so nothing was read. Try the read again, or take a screenshot.",
-      );
+    let read: { nodes: AXNodeLike[]; partial: boolean };
+    if (await this.#isLargeDocument(operation, signal)) {
+      read = await this.#readTreeInPieces(operation, signal);
+    } else {
+      const answer = (await this.#command(
+        "Accessibility.getFullAXTree",
+        undefined,
+        signal,
+        operation,
+      )) as { nodes?: AXNodeLike[] };
+      // An answer without a tree is a failed read, not a blank page (VC-277).
+      if (!Array.isArray(answer.nodes)) throw noTreeError();
+      read = { nodes: answer.nodes, partial: false };
     }
+    signal?.throwIfAborted();
     if (generation !== this.#generation) {
       throw new BrowserRefusal(
         "browser.stale-ref",
         "The tab changed while its accessibility tree was being read: take a fresh snapshot.",
       );
     }
-    this.#treeDigest = axTreeDigest(answer.nodes);
-    return answer.nodes;
+    this.#treeDigest = axTreeDigest(read.nodes);
+    return read;
+  }
+
+  /**
+   * Whether the page is past {@link AX_FULL_READ_MAX_DOM_NODES}. The counter
+   * is the renderer's own, not page script, so a page cannot talk its way
+   * into either read. A renderer that cannot answer gets the one-answer read
+   * it always had.
+   */
+  async #isLargeDocument(operation: "snapshot" | "find", signal?: AbortSignal): Promise<boolean> {
+    try {
+      const counters = (await this.#command(
+        "Memory.getDOMCounters",
+        undefined,
+        signal,
+        operation,
+      )) as {
+        nodes?: unknown;
+      };
+      return typeof counters.nodes === "number" && counters.nodes > AX_FULL_READ_MAX_DOM_NODES;
+    } catch (error: unknown) {
+      if (signal?.aborted === true || isTimeout(error)) throw error;
+      return false;
+    }
+  }
+
+  /**
+   * The tree read a piece at a time (VC-1082): the root, then the children of
+   * every node the prints would walk to whose children are not yet here
+   * ({@link axTreeGaps}), a batch of `getChildAXNodes` calls per round, until
+   * nothing a print can reach is missing. Each answer is small, so the main
+   * thread is never held for the whole tree at once, and the part of a huge
+   * page no print walks is never read at all.
+   *
+   * For everything the prints walk, the result is the one-answer tree's own
+   * nodes — the same nodes in the same shape, measured identical on pages from
+   * 700 to 80,000 nodes — so the prints are too. What it gives up is
+   * atomicity: a page changing between rounds can be read half before and half
+   * after, and a node gone by its round is read as having no children. A read
+   * past its own round or node bound, or a node CDP would not answer for, is
+   * partial.
+   */
+  async #readTreeInPieces(
+    operation: "snapshot" | "find",
+    signal?: AbortSignal,
+  ): Promise<{ nodes: AXNodeLike[]; partial: boolean }> {
+    const rooted = (await this.#command(
+      "Accessibility.getRootAXNode",
+      undefined,
+      signal,
+      operation,
+    )) as { node?: AXNodeLike };
+    const root = rooted.node;
+    if (typeof root?.nodeId !== "string") throw noTreeError();
+    const byId = new Map<string, AXNodeLike>([[root.nodeId, root]]);
+    const asked = new Set<string>();
+    let partial = false;
+    for (let round = 0; ; round += 1) {
+      // A node asked once and still short of children is what CDP has: the
+      // one-answer read would hold no more for it either.
+      const gaps = axTreeGaps(byId, root.nodeId).filter((nodeId) => !asked.has(nodeId));
+      if (gaps.length === 0) break;
+      if (round === AX_PIECE_MAX_ROUNDS || byId.size >= AX_PIECE_MAX_NODES) {
+        partial = true;
+        break;
+      }
+      const answers = await Promise.all(
+        gaps.slice(0, AX_PIECE_BATCH).map(async (nodeId) => {
+          asked.add(nodeId);
+          try {
+            return (await this.#command(
+              "Accessibility.getChildAXNodes",
+              { id: nodeId },
+              signal,
+              operation,
+            )) as { nodes?: unknown };
+          } catch (error: unknown) {
+            if (signal?.aborted === true || isTimeout(error)) throw error;
+            // Gone between rounds: the page moved under the read.
+            partial = true;
+            return {};
+          }
+        }),
+      );
+      // An answer can carry descendants as well as children (Chromium splices
+      // through ignored nodes); every node is keyed by its own id, once.
+      for (const answer of answers) {
+        if (!Array.isArray(answer.nodes)) continue;
+        for (const node of answer.nodes as AXNodeLike[]) {
+          if (typeof node?.nodeId === "string" && !byId.has(node.nodeId))
+            byId.set(node.nodeId, node);
+        }
+      }
+    }
+    signal?.throwIfAborted();
+    return { nodes: reachableFrom(byId, root.nodeId), partial };
   }
 
   /** What the next print may draw on: this generation's ledger, if it has one. */
@@ -620,7 +767,7 @@ export class BrowserTabController {
 
   async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
     signal?.throwIfAborted();
-    const nodes = await this.#readTree("snapshot", signal);
+    const { nodes, partial } = await this.#readTree("snapshot", signal);
     const printed = formatAXSnapshot(nodes, {
       maxChars: this.#limits.maxSnapshotChars,
       ledger: this.#ledger(),
@@ -629,7 +776,7 @@ export class BrowserTabController {
     return {
       text: printed.text,
       generation: this.#generation,
-      truncated: printed.truncated,
+      truncated: printed.truncated || partial,
       empty: printed.empty,
       ...(printed.whole === undefined ? {} : { whole: printed.whole }),
     };
@@ -653,7 +800,7 @@ export class BrowserTabController {
         `browser_find needs literal text to search for, between 1 and ${FIND_MAX_QUERY_CHARS} characters.`,
       );
     }
-    const nodes = await this.#readTree("find", signal);
+    const { nodes, partial } = await this.#readTree("find", signal);
     const found = formatAXFind(nodes, needle, {
       maxChars: Math.min(FIND_MAX_CHARS, this.#limits.maxSnapshotChars),
       ledger: this.#ledger(),
@@ -665,7 +812,7 @@ export class BrowserTabController {
     return {
       text: found.text,
       generation: this.#generation,
-      truncated: found.truncated,
+      truncated: found.truncated || partial,
       matches: found.matches,
       shown: found.shown,
       empty: found.empty,

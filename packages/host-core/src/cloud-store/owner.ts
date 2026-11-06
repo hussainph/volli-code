@@ -1,11 +1,15 @@
 /** Account scoping over the one host writer; cursors and durable birth ownership must agree. */
 import type Database from "better-sqlite3";
-import type { CreateSessionRequest, SessionEngine } from "@volli/session-engine";
+import {
+  SESSION_LISTING_FOLD_CHUNK,
+  type CreateSessionRequest,
+  type SessionEngine,
+} from "@volli/session-engine";
 import {
   reportSessionUsage,
   type SessionLedger,
   type Session,
-  type SessionProjection,
+  type SessionListingProjection,
 } from "@volli/shared";
 import { setImmediate } from "node:timers/promises";
 import { prepared } from "../db/prepared";
@@ -169,6 +173,8 @@ function scopedEngine(
       (await visible(query.sessionId)) ? reader.getSession(query) : null,
     getBaseSession: async (query) =>
       (await visible(query.sessionId)) ? reader.getBaseSession(query) : null,
+    getSessionListing: async (query) =>
+      (await visible(query.sessionId)) ? reader.getSessionListing(query) : null,
     listSessions: (query) => reader.listSessions(query),
     countSessions: (query) => reader.countSessions(query),
     listAttachedSessions: () => reader.listAttachedSessions(),
@@ -192,6 +198,7 @@ type SessionReader = Pick<
   SessionEngine,
   | "getBaseSession"
   | "getSession"
+  | "getSessionListing"
   | "listSessions"
   | "countSessions"
   | "listAttachedSessions"
@@ -204,11 +211,23 @@ type SessionReader = Pick<
 >;
 
 function sessionReader(engine: SessionEngine, ledger: SessionLedger): SessionReader {
-  const project = async (sessions: readonly Session[]): Promise<SessionProjection[]> => {
-    const projections: SessionProjection[] = [];
+  const project = async (sessions: readonly Session[]): Promise<SessionListingProjection[]> => {
+    // Size the sole engine's listing cache from metadata, including other
+    // scopes sharing that cache. No foreign history is folded or returned.
+    // Point reads alone otherwise retain only the cache floor and thrash on
+    // a roster larger than it, even though the membership was selected here.
+    for (const projectId of new Set(sessions.map((session) => session.projectId))) {
+      await engine.countSessions({ projectId, scope: "all" });
+    }
+    const projections: SessionListingProjection[] = [];
     for (let index = 0; index < sessions.length; index += 1) {
-      if (index > 0 && index % 32 === 0) await setImmediate();
-      const projection = await engine.getSession({ sessionId: sessions[index]!.id });
+      if (index > 0 && index % SESSION_LISTING_FOLD_CHUNK === 0) await setImmediate();
+      // The old scoped listing was read-only. Building its in-memory cache
+      // must not add one checkpoint write/commit per cold Session to main.
+      const projection = await engine.getSessionListing({
+        sessionId: sessions[index]!.id,
+        persistCheckpoint: false,
+      });
       if (projection !== null) projections.push(projection);
     }
     return projections;
@@ -216,6 +235,7 @@ function sessionReader(engine: SessionEngine, ledger: SessionLedger): SessionRea
   return {
     getBaseSession: (query) => ledger.transaction((tx) => tx.getSession(query.sessionId)),
     getSession: (query) => engine.getSession(query),
+    getSessionListing: (query) => engine.getSessionListing(query),
     listSessions: async (query) =>
       project(await ledger.transaction((tx) => tx.listSessions(query))),
     countSessions: (query) => ledger.transaction((tx) => tx.countSessions(query)),

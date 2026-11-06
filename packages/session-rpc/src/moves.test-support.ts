@@ -5,6 +5,7 @@ export const MOVE_SNAPSHOT: CloudMoveSnapshot = {
   workspaces: [],
   moves: [],
   unavailable: null,
+  preflight: null,
 };
 export const MOVE_REARM_SNAPSHOT: CloudMoveSnapshot = {
   ...MOVE_SNAPSHOT,

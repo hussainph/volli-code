@@ -391,7 +391,7 @@ describe("browsableNavigationRows", () => {
       { key: "skills", label: "Skills" },
     ]);
     expect(browsableNavigationRows(pages, "").map((row) => row.title)).not.toContain(
-      "Configure → Skills",
+      "Settings → Skills",
     );
     expect(browsableNavigationRows(pages, "skills")).toBe(pages);
   });
@@ -466,7 +466,7 @@ describe("the palette's top results", () => {
 
   it('puts the Settings command first for "Settings", and Tickets first for half of it', () => {
     expect(top("Settings")[0]).toBe("Settings");
-    expect(top("configure skills")[0]).toBe("Configure → Skills");
+    expect(top("configure skills")[0]).toBe("Settings → Skills");
     expect(top("sett")[0]).toBe("ALP-10");
   });
 });

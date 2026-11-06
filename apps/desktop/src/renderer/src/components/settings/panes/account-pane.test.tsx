@@ -8,7 +8,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AccountGithubSnapshot, AccountSnapshot } from "@volli/shared";
 
-import { LOCAL_LAUNCH, PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
+import {
+  LOCAL_LAUNCH,
+  PREVIEW_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_URL,
+  PREVIEW_PRIVACY_URL,
+} from "@volli/shared";
 
 import { useExperimentsStore } from "@renderer/stores/experiments";
 import { adoptLaunch } from "@renderer/stores/launch";
@@ -156,24 +161,24 @@ describe("Settings → Account", () => {
   it("checks first, then offers GitHub and Google, and sends the one pressed", async () => {
     const tier = standIn();
     act(() => root.render(<AccountPane rpc={tier.rpc} />));
-    expect(container.textContent).toContain("Checking your sign-in…");
+    expect(container.textContent).toContain("Checking your sign-in");
     tier.push(SIGNED_OUT);
     expect(container.textContent).toContain("Continue with GitHub");
     acceptAgreement();
     act(() => button("Continue with Google").click());
     expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
       connection: "google",
-      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      acceptedAgreementVersion: PREVIEW_AGREEMENT_VERSION,
     });
 
     tier.push({ ...SIGNED_OUT, state: "signing-in", signingInWith: "google" });
-    expect(container.textContent).toContain("Waiting for the browser…");
+    expect(container.textContent).toContain("Waiting for the browser");
     expect(button("Continue with GitHub").disabled).toBe(true);
     act(() => button("Cancel").click());
     expect(tier.rpc.account.cancelSignIn.mutate).toHaveBeenCalledOnce();
 
     tier.push({ ...SIGNED_OUT, failure: "Sign-in was declined in the browser." });
-    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+    expect(container.querySelector("[role=status]")?.textContent).toBe(
       "Sign-in was declined in the browser.",
     );
   });
@@ -191,23 +196,41 @@ describe("Settings → Account", () => {
 
     act(() => button("Delete account…").click());
     expect(tier.rpc.account.requestDeletion.mutate).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Your account is deleted in 30 days.");
+    expect(document.body.textContent).toContain("Restorable for 30 days");
+    expect(document.body.textContent).toContain("to erase your data");
+    expect(document.body.textContent).toContain("privacy@volli.app");
+    expect(document.body.textContent).not.toContain("Your account is deleted in 30 days.");
     const confirm = [...document.querySelectorAll("[role=alertdialog] button")].find(
       (node) => node.textContent === "Delete account",
     ) as HTMLButtonElement;
     act(() => confirm.click());
     expect(tier.rpc.account.requestDeletion.mutate).toHaveBeenCalledOnce();
 
+    const cancellationDeadline = Date.now() + 86_400_000;
     tier.push({
       ...SIGNED_IN,
-      account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.UTC(2026, 10, 24) },
+      account: { ...SIGNED_IN.account!, deletionPurgeAfter: cancellationDeadline },
     });
-    expect(container.textContent).toContain("Scheduled");
+    expect(container.textContent).toContain("Cancel by");
+    expect(container.textContent).not.toContain("Scheduled");
     expect(container.textContent).toContain(
-      new Date(Date.UTC(2026, 10, 24)).getFullYear().toString(),
+      new Date(cancellationDeadline).getFullYear().toString(),
     );
     act(() => button("Restore account").click());
     expect(tier.rpc.account.cancelDeletion.mutate).toHaveBeenCalledOnce();
+  });
+
+  it("offers a privacy contact instead of restore after the cancellation window", () => {
+    const tier = standIn();
+    act(() => root.render(<AccountPane rpc={tier.rpc} />));
+    tier.push({
+      ...SIGNED_IN,
+      account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.now() - 1 },
+    });
+    expect(container.textContent).toContain("Window ended");
+    expect(container.textContent).toContain("privacy@volli.app");
+    expect(container.textContent).not.toContain("Restore account");
+    expect(tier.rpc.account.cancelDeletion.mutate).not.toHaveBeenCalled();
   });
 
   it("says when the backend is unreachable, and offers no deletion without one", async () => {
@@ -219,7 +242,7 @@ describe("Settings → Account", () => {
       failure: "Couldn't reach Volli Cloud. Your sign-in is kept.",
     });
     expect(container.textContent).toContain("Offline");
-    expect(container.querySelector("[role=alert]")).toBeNull();
+    expect(container.querySelector("[role=status]")).toBeNull();
     expect(button("Delete account…").disabled).toBe(true);
 
     tier.push({
@@ -228,7 +251,7 @@ describe("Settings → Account", () => {
       failure: "Volli Cloud didn't accept this sign-in. Sign out and sign in again.",
     });
     expect(container.textContent).toContain("Not accepted");
-    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+    expect(container.querySelector("[role=status]")?.textContent).toBe(
       "Volli Cloud didn't accept this sign-in. Sign out and sign in again.",
     );
 
@@ -242,14 +265,14 @@ describe("Settings → Account", () => {
     const tier = standIn();
     act(() => root.render(<AccountPane rpc={tier.rpc} />));
     tier.push({ ...SIGNED_OUT, state: "unconfigured", provider: null });
-    expect(container.textContent).toContain("This build has no Volli Cloud sign-in.");
+    expect(container.textContent).toContain("No Volli Cloud sign-in in this build");
 
     tier.fail(new Error("The subscription's source failed"));
     expect(container.textContent).toContain("The subscription's source failed");
-    act(() => button("Retry").click());
+    act(() => button("Try again").click());
     expect(tier.rpc.account.subscribe.subscribe).toHaveBeenCalledTimes(2);
     expect(tier.unsubscribe).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("Checking your sign-in…");
+    expect(container.textContent).toContain("Checking your sign-in");
   });
 
   it("surfaces a command that failed", async () => {
@@ -342,7 +365,7 @@ describe("Settings → Account → GitHub", () => {
     expect(tier.rpc.account.githubConnect.mutate).toHaveBeenCalledOnce();
 
     tier.github({ ...GITHUB_NONE, waiting: "connect" });
-    expect(button("Waiting for the browser…").disabled).toBe(true);
+    expect(button("Waiting for the browser").disabled).toBe(true);
     act(() => button("Cancel").click());
     expect(tier.rpc.account.githubCancel.mutate).toHaveBeenCalledOnce();
 
@@ -350,7 +373,7 @@ describe("Settings → Account → GitHub", () => {
       ...GITHUB_NONE,
       failure: "This GitHub account is connected to another Volli account.",
     });
-    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+    expect(container.querySelector("[role=status]")?.textContent).toBe(
       "This GitHub account is connected to another Volli account.",
     );
   });
@@ -384,18 +407,18 @@ describe("Settings → Account → GitHub", () => {
 
     // The control says it is waiting; no sentence under the list does.
     tier.github({ ...GITHUB_ACTIVE, waiting: "install" });
-    expect(button("Waiting for the browser…").disabled).toBe(true);
+    expect(button("Waiting for the browser").disabled).toBe(true);
     expect(container.querySelector("[role=status]")).toBeNull();
     act(() => button("Cancel").click());
     expect(tier.rpc.account.githubCancel.mutate).toHaveBeenCalledOnce();
 
     tier.github({ ...GITHUB_ACTIVE, requested: true });
     expect(container.querySelector("[role=status]")?.textContent).toBe(
-      "If you asked an organization owner to approve, Volli will show the account here once they do.",
+      "Owner approval may be pending",
     );
     expect(button("Install on an account").disabled).toBe(false);
     tier.github({ ...GITHUB_ACTIVE, installations: [] });
-    expect(container.textContent).toContain("No GitHub accounts yet.");
+    expect(container.textContent).toContain("No GitHub accounts");
     open.mockRestore();
   });
 
@@ -438,7 +461,7 @@ describe("Settings → Account → GitHub", () => {
     tier.push(SIGNED_IN);
     tier.githubFail(new Error("The GitHub stream closed."));
     expect(container.textContent).toContain("The GitHub stream closed.");
-    act(() => button("Retry").click());
+    act(() => button("Try again").click());
     expect(tier.rpc.account.githubSubscribe.subscribe).toHaveBeenCalledTimes(2);
     expect(container.textContent).not.toContain("The GitHub stream closed.");
 
@@ -480,7 +503,7 @@ describe("Settings → Account → GitHub", () => {
     tier.push(SIGNED_IN);
     tier.github({ ...GITHUB_NONE, state: "failed", failure: "Couldn't reach Volli Cloud." });
     expect(container.textContent).toContain("Couldn't reach Volli Cloud.");
-    act(() => button("Retry").click());
+    act(() => button("Try again").click());
     expect(tier.rpc.account.githubSubscribe.subscribe).toHaveBeenCalledTimes(2);
 
     tier.github(GITHUB_ACTIVE);
@@ -508,7 +531,7 @@ it("sends the optional preview invite code and leaves a waitlisted sign-in witho
   expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
     connection: "github",
     inviteCode: "preview-code-123456",
-    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    acceptedAgreementVersion: PREVIEW_AGREEMENT_VERSION,
   });
   tier.push({
     ...SIGNED_IN,
@@ -547,13 +570,27 @@ it("explains a short invite code before making an RPC call", () => {
   expect(tier.rpc.account.signIn.mutate).not.toHaveBeenCalled();
 });
 
-it("requires explicit agreement acceptance and links the legal pages before sign-in", () => {
+it("requires explicit 18+ agreement acceptance and links the legal pages before sign-in", () => {
   const tier = standIn();
   act(() => root.render(<AccountPane rpc={tier.rpc} />));
   tier.push(SIGNED_OUT);
   expect(button("Continue with GitHub").disabled).toBe(true);
-  expect(container.querySelector('a[href="https://volli.app/legal/preview/"]')).not.toBeNull();
-  expect(container.querySelector('a[href="https://volli.app/legal/privacy/"]')).not.toBeNull();
+  const links = container.querySelectorAll<HTMLAnchorElement>("[data-testid=account-sign-in] a");
+  expect([...links].map((link) => [link.textContent?.trim(), link.href])).toEqual([
+    ["Preview Agreement", PREVIEW_AGREEMENT_URL],
+    ["Privacy notice", PREVIEW_PRIVACY_URL],
+  ]);
+  for (const link of links) {
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener noreferrer");
+  }
+  expect(container.querySelectorAll('[aria-label="Accept Preview Agreement"]')).toHaveLength(1);
+  expect(container.querySelector("[data-testid=account-sign-in] label")?.textContent).toContain(
+    "I am at least 18 and agree to the",
+  );
+  expect(
+    container.querySelectorAll('[data-testid=account-sign-in] [role="checkbox"]'),
+  ).toHaveLength(1);
   acceptAgreement();
   expect(button("Continue with GitHub").disabled).toBe(false);
 });

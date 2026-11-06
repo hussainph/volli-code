@@ -118,6 +118,23 @@ async function openTicket(key) {
   await click("tab", key);
 }
 const press = (role, name, key, options) => action("press", role, name, { key }, options);
+/**
+ * Close the move sheet and wait out its exit. Until the modal unmounts, its
+ * `hideOthers` leaves the app behind it in the tree without accessible names,
+ * so the next control cannot be found by name yet.
+ */
+async function closeSheet(name) {
+  await click("button", name);
+  await waitUntil(
+    `the move sheet to close after ${name}`,
+    async () => !/heading "(?:Move|Moves) to Volli Cloud"/u.test((await drive("snapshot")).text),
+    { timeout: 10_000, interval: 100 },
+  );
+  // The move sheet has its own lifetime. Settings deliberately survives it;
+  // close that panel explicitly before returning to the underlying workspace.
+  if (visibleControls((await drive("snapshot")).text, "button", "Close Settings").length)
+    await click("button", "Close Settings");
+}
 async function assertPreflightCounts() {
   let prepared;
   await waitUntil(
@@ -231,7 +248,8 @@ try {
   await step("Local ticket Session and worktree", async () => {
     await wait(MOVE_PROJECT.name);
     await openTicket("MOV-1");
-    await click("button", "New chat", { first: true });
+    await click("button", "Open a tab", { first: true });
+    await click("menuitem", "Chat ⌘T");
     await send("Move proof before the move");
     const sessions = await sql("SELECT id, ticket_id FROM sessions WHERE role='ticket'");
     assert.equal(sessions.length, 1);
@@ -246,11 +264,14 @@ try {
     return { sessionId: sessions[0].id, hasWorktree: true };
   });
   await step("Quiet project-menu entry and single-project dry run", async () => {
-    await press("button", "MP", "Shift+F10", { first: true });
+    // The rail tile's accessible name is the project's name; its monogram is
+    // only painted text. dnd-kit's sortable wrapper snapshots unnamed, so the
+    // name matches the one tile button.
+    await press("button", MOVE_PROJECT.name, "Shift+F10");
     await click("menuitem", "Move to Volli Cloud…");
     await assertPreflightCounts();
     await drive("screenshot", { name: "project-menu-preflight" });
-    await click("button", "Cancel");
+    await closeSheet("Cancel");
     assert.deepEqual(
       await sql("SELECT move_id FROM cloud_moves"),
       [],
@@ -337,14 +358,14 @@ try {
       (row) => row.state === "history" || row.state === "checked",
       deadline,
     );
-    await click("button", "Close");
-    await wait("Move Project is read-only while it moves to Volli Cloud.");
+    await closeSheet("Close");
+    await wait("Moving Move Project to Volli Cloud · Read-only");
     await click("button", "Home", { first: true });
     const navigation = await drive("snapshot");
     assert.ok(
       visibleControls(navigation.text, "button", "Move to Volli Cloud progress").length === 1,
     );
-    assert.ok(navigation.text.includes("Move Project is read-only while it moves to Volli Cloud."));
+    assert.ok(navigation.text.includes("Moving Move Project to Volli Cloud · Read-only"));
     await drive("screenshot", { name: "read-only-banner-and-durable-row" });
     await click("button", "Move to Volli Cloud progress");
     await wait("Moves to Volli Cloud");
@@ -501,7 +522,8 @@ try {
       );
       assert.ok(before, "the moved Session is visible before resume");
       await send("Move proof after the move");
-      await click("button", "New chat", { first: true });
+      await click("button", "Open a tab", { first: true });
+      await click("menuitem", "Chat ⌘T");
       await send("New cloud Session after move");
       const sessions = await read("sessions:list", listing);
       assert.ok(
@@ -638,7 +660,7 @@ try {
     assert.equal(result.text.match(/Move personal proof · Not armed/gu)?.length, 1);
     assert.equal(visibleControls(result.text, "button", "Re-arm", { contains: true }).length, 0);
     await drive("screenshot", { name: "explicit-rearm-result-and-inert-personal-definition" });
-    await click("button", "Close");
+    await closeSheet("Close");
     return {
       runnerId: current.runnerId,
       columns,

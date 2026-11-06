@@ -456,6 +456,9 @@ export function registerFileIpcHandlers(
       return {
         ok: true,
         templates: [...loaded.templates],
+        ...(skills.omittedSkillDirectories
+          ? { omittedSkillDirectories: skills.omittedSkillDirectories }
+          : {}),
         skills:
           input.ruled === false
             ? [...skills.skills]

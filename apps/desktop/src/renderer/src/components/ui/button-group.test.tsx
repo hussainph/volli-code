@@ -32,6 +32,7 @@ import {
 /** One element on the way down from the group, as the facts these rules test. */
 interface GroupNode {
   slot?: string;
+  control?: string;
   first: boolean;
   last: boolean;
 }
@@ -76,8 +77,8 @@ function partHolds(part: string, node: GroupNode): boolean {
   if (part === ":first-child") return node.first;
   if (part === ":last-child") return node.last;
   if (part.startsWith(":not(")) return !partHolds(part.slice(5, -1), node);
-  const slot = /^\[data-slot=([\w-]+)\]$/.exec(part);
-  if (slot !== null) return node.slot === slot[1];
+  const attribute = /^\[data-(slot|control)=([\w-]+)\]$/.exec(part);
+  if (attribute !== null) return node[attribute[1] as "slot" | "control"] === attribute[2];
   throw new Error(`button-group.test: unsupported selector part \`${part}\``);
 }
 
@@ -167,7 +168,7 @@ const VERTICAL = groupClassList(renderToStaticMarkup(<ButtonGroup orientation="v
 
 /** The call site's shape: a trigger wrapper standing in front of a lone button. */
 function wrappedButton(position: { first: boolean; last: boolean }): GroupNode[] {
-  return [position, { slot: "button", first: true, last: true }];
+  return [position, { slot: "button", control: "button", first: true, last: true }];
 }
 
 describe("ButtonGroup fusion", () => {
@@ -188,10 +189,20 @@ describe("ButtonGroup fusion", () => {
     expect(paints(HORIZONTAL, trailing, "rounded-r-none")).toBe(false);
   });
 
+  it("recognizes a wrapped Radix trigger even when asChild replaces its data-slot", () => {
+    const trailing: GroupNode[] = [
+      { first: false, last: true },
+      { slot: "dropdown-menu-trigger", control: "button", first: true, last: true },
+    ];
+    expect(paints(HORIZONTAL, trailing, "rounded-l-none")).toBe(true);
+    expect(paints(HORIZONTAL, trailing, "border-l-0")).toBe(true);
+    expect(paints(HORIZONTAL, trailing, "focus-visible:z-10")).toBe(true);
+  });
+
   it("still collapses the seam of a button sitting straight in the group", () => {
     // The twins are additions, not replacements: an unwrapped child is reached
     // by exactly the rules it always was.
-    const trailing: GroupNode[] = [{ slot: "button", first: false, last: true }];
+    const trailing: GroupNode[] = [{ slot: "button", control: "button", first: false, last: true }];
     expect(paints(HORIZONTAL, trailing, "rounded-l-none")).toBe(true);
     expect(paints(HORIZONTAL, trailing, "border-l-0")).toBe(true);
     expect(paints(HORIZONTAL, trailing, "rounded-r-none")).toBe(false);
@@ -203,7 +214,7 @@ describe("ButtonGroup fusion", () => {
     // outer edge of buttons it has already fused for itself.
     const insideNested: GroupNode[] = [
       { slot: "button-group", first: false, last: true },
-      { slot: "button", first: true, last: false },
+      { slot: "button", control: "button", first: true, last: false },
     ];
     expect(paints(HORIZONTAL, insideNested, "rounded-l-none")).toBe(false);
     expect(paints(HORIZONTAL, insideNested, "border-l-0")).toBe(false);

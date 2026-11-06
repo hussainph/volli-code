@@ -1,0 +1,49 @@
+/* Main-card responsive navigation, independent of the app sidebar. */
+.automations-surface {
+  container: automations / inline-size;
+}
+.automation-master {
+  width: 300px;
+}
+.automation-back {
+  display: none;
+}
+.automation-master .list-row {
+  min-height: 60px;
+}
+.automation-groups [data-slot="pref-row"] {
+  min-height: 42px;
+  padding: 9px 14px;
+}
+.automation-groups [data-slot="pref-row"] > div:first-child {
+  min-width: 100px;
+}
+.automation-groups [data-slot="pref-row"] > div:last-child {
+  min-width: 0;
+  justify-content: flex-end;
+}
+@container automations (width < 800px) {
+  .automation-master {
+    width: 100%;
+    border-right: 0;
+  }
+  .automations-surface[data-detail="true"] .automation-master {
+    display: none;
+  }
+  .automations-surface[data-detail="false"] .automation-detail {
+    display: none;
+  }
+  .automation-back {
+    display: inline-flex;
+  }
+}
+@container automations (width < 540px) {
+  .automation-header-word {
+    display: none;
+  }
+}
+
+.automation-groups [data-slot="pref-section-title"] {
+  font-size: var(--text-ui);
+  line-height: var(--text-ui--line-height);
+}

@@ -8,11 +8,14 @@ import { describe, expect, it } from "vite-plus/test";
 import { hexToOklch } from "../color";
 import { addStop, moveStop, removeStop, withPrimaryHex, withPrimaryIndex } from "./edit";
 import { DEFAULT_CANVAS } from "./parse";
+import type { Canvas } from "./types";
 import { ARC_TUNING, MAX_STOPS } from "./tuning";
+
+const SINGLE_POOL: Canvas = { ...DEFAULT_CANVAS, stops: [{ hex: "#e8652a", x: 0.68, y: 0.3 }] };
 
 describe("harmony", () => {
   it("rotates every other stop by its offset and keeps the family's lightness", () => {
-    const three = addStop(addStop(DEFAULT_CANVAS));
+    const three = addStop(addStop(SINGLE_POOL));
     const primary = hexToOklch(three.stops[three.primaryIndex].hex);
     const offsets = ARC_TUNING.harmony[2];
     three.stops.forEach((stop, index) => {
@@ -26,7 +29,7 @@ describe("harmony", () => {
   });
 
   it("re-derives the whole family when the primary's colour changes", () => {
-    const three = withPrimaryHex(addStop(addStop(DEFAULT_CANVAS)), "#2e6f8e");
+    const three = withPrimaryHex(addStop(addStop(SINGLE_POOL)), "#2e6f8e");
     const primary = hexToOklch(three.stops[three.primaryIndex].hex);
     expect(primary.h).toBeCloseTo(hexToOklch("#2e6f8e").h, 1);
     for (const stop of three.stops.slice(1)) {
@@ -35,7 +38,7 @@ describe("harmony", () => {
   });
 
   it("promotes without touching a single color, because the sets are rotation-closed", () => {
-    for (const canvas of [addStop(DEFAULT_CANVAS), addStop(addStop(DEFAULT_CANVAS))]) {
+    for (const canvas of [addStop(SINGLE_POOL), addStop(addStop(SINGLE_POOL))]) {
       const promoted = withPrimaryIndex(canvas, canvas.stops.length - 1);
       expect(promoted.primaryIndex).toBe(canvas.stops.length - 1);
       // Every hue offset a family uses is present from ANY of its members, so
@@ -46,12 +49,12 @@ describe("harmony", () => {
   });
 
   it("round-trips a promotion losslessly — A→B→A is the canvas it started in", () => {
-    const three = addStop(addStop(DEFAULT_CANVAS));
+    const three = addStop(addStop(SINGLE_POOL));
     expect(withPrimaryIndex(withPrimaryIndex(three, 2), 0)).toEqual(three);
   });
 
   it("ignores a promotion that names no stop, rather than producing one that paints nothing", () => {
-    const three = addStop(addStop(DEFAULT_CANVAS));
+    const three = addStop(addStop(SINGLE_POOL));
     expect(withPrimaryIndex(three, -1)).toBe(three);
     expect(withPrimaryIndex(three, three.stops.length)).toBe(three);
     expect(withPrimaryIndex(three, three.primaryIndex)).toBe(three);
@@ -68,7 +71,7 @@ describe("harmony", () => {
 
   it("adds and removes stops within bounds, keeping the primary's own color", () => {
     const { newStop } = ARC_TUNING;
-    let canvas = DEFAULT_CANVAS;
+    let canvas = SINGLE_POOL;
     for (let i = 0; i < MAX_STOPS + 2; i += 1) canvas = addStop(canvas);
     expect(canvas.stops).toHaveLength(MAX_STOPS);
     expect(canvas.stops[canvas.primaryIndex].hex).toBe(DEFAULT_CANVAS.stops[0].hex);
@@ -95,7 +98,7 @@ describe("harmony", () => {
   it("drops the last stop and leaves the index alone when the primary is not it", () => {
     // The other arm of the same rule: with the primary at slot 0 the list
     // shortens from the end and nothing about the color on screen changes.
-    const three = addStop(addStop(DEFAULT_CANVAS));
+    const three = addStop(addStop(SINGLE_POOL));
     const shrunk = removeStop(three);
     expect(shrunk.primaryIndex).toBe(three.primaryIndex);
     expect(shrunk.stops[0]).toEqual(three.stops[0]);
@@ -105,7 +108,7 @@ describe("harmony", () => {
   it("places a new pool away from the ones already on the pad", () => {
     // The point of the diagonal search: two pools stacked on one another read as
     // one, so "+" has to land somewhere with room.
-    const two = addStop(DEFAULT_CANVAS);
+    const two = addStop(SINGLE_POOL);
     const [primary, added] = two.stops;
     expect(Math.hypot(primary.x - added.x, primary.y - added.y)).toBeGreaterThan(0.2);
   });
@@ -114,7 +117,7 @@ describe("harmony", () => {
 describe("moveStop", () => {
   it("moves the named stop only, clamped away from the very edges", () => {
     const { min, max } = ARC_TUNING.dragBounds;
-    const two = addStop(DEFAULT_CANVAS);
+    const two = addStop(SINGLE_POOL);
     const moved = moveStop(two, 1, 5, -5);
     expect(moved.stops[0]).toEqual(two.stops[0]);
     expect(moved.stops[1].x).toBe(max);

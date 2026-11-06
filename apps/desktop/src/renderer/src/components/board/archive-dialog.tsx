@@ -1,9 +1,12 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import {
+  UndoIcon,
+  ChevronLeftIcon,
+  PullRequestIcon,
+  DeleteIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   TICKET_STATUS_LABELS,
@@ -38,6 +41,7 @@ import {
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { resolveLabelColor } from "@renderer/lib/labels";
@@ -144,7 +148,7 @@ export function ArchiveRow({
               <>
                 <span aria-hidden>·</span>
                 <span className="inline-flex shrink-0 items-center gap-1">
-                  <GitPullRequestIcon className="size-3" />
+                  <PullRequestIcon className="size-3" />
                   PR
                 </span>
               </>
@@ -163,7 +167,7 @@ export function ArchiveRow({
                 void useBoardStore.getState().unarchiveTicket(project.id, ticket.id);
               }}
             >
-              <ArrowUUpLeftIcon />
+              <UndoIcon />
               Restore
             </Button>
             {/* A cloud ticket offers Archive only: deletion is retention's (VC-889). */}
@@ -178,7 +182,7 @@ export function ArchiveRow({
                     {...readOnlyControl(canWrite)}
                     onClick={() => onRequestDelete(ticket)}
                   >
-                    <TrashIcon />
+                    <DeleteIcon />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top">Delete permanently</TooltipContent>
@@ -226,7 +230,7 @@ function ArchiveInspect({
             className="-ml-2 text-muted-foreground"
             onClick={onBack}
           >
-            <CaretLeftIcon />
+            <ChevronLeftIcon />
             Archive
           </Button>
           <span className="font-mono text-ui text-muted-foreground">
@@ -249,14 +253,15 @@ function ArchiveInspect({
             </span>
           ) : null}
           {prUrl !== null ? (
-            <button
-              type="button"
+            <Button
+              variant="link"
+              size="xs"
+              className="shrink-0"
               onClick={() => openExternalUrl(prUrl)}
-              className="inline-flex shrink-0 items-center gap-1 text-primary-text hover:underline"
             >
-              <GitPullRequestIcon className="size-3" />
+              <PullRequestIcon />
               PR
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -363,7 +368,7 @@ function ArchiveList({
     <>
       <DialogHeader>
         <DialogTitle>Archive</DialogTitle>
-        <DialogDescription>Archived tickets in {project.name}</DialogDescription>
+        <DialogDescription className="text-ui">{project.name}</DialogDescription>
       </DialogHeader>
       {filterable ? (
         <Input
@@ -372,7 +377,6 @@ function ArchiveList({
           onChange={(event) => setQuery(event.target.value)}
           aria-label="Find an archived ticket"
           placeholder="Find an archived ticket…"
-          className="h-8 text-ui md:text-ui"
         />
       ) : null}
       {/* `undefined` = not loaded yet (a fetch is in flight); `[]` = loaded,
@@ -381,24 +385,33 @@ function ArchiveList({
       {loadFailed && archived === undefined ? (
         // All three states take the empty geometry: they hold the same slot in
         // turn, and a different one would jump the dialog as the read lands.
-        <div className={cn(EMPTY_PAGE, "gap-4 text-muted-foreground")}>
-          <p className="text-sm">Couldn’t load the archive.</p>
-          <Button variant="outline" size="xs" onClick={load}>
-            Retry
-          </Button>
+        <div className={EMPTY_PAGE}>
+          <EmptyState
+            tier="page"
+            illustration="failed"
+            status="failed"
+            title="Couldn’t load the archive"
+            action={{ label: "Try again", onAction: load }}
+          />
         </div>
       ) : archived === undefined ? (
         <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
-          <p className="text-sm">Loading…</p>
+          <p className="text-sm">
+            <LoadingLabel>Loading</LoadingLabel>
+          </p>
         </div>
       ) : archived.length === 0 ? (
-        <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
-          <ArchiveIcon className="size-6" />
-          <p className="text-sm">No archived tickets.</p>
+        <div className={EMPTY_PAGE}>
+          <EmptyState tier="page" illustration="archive" title="Nothing archived" />
         </div>
       ) : shown.length === 0 ? (
-        <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
-          <p className="text-sm">No matching tickets.</p>
+        <div className={EMPTY_PAGE}>
+          <EmptyState
+            tier="page"
+            illustration="search"
+            title="No matching tickets"
+            action={{ label: "Clear search", onAction: () => setQuery("") }}
+          />
         </div>
       ) : (
         <ul ref={list} className="-mx-2 max-h-[min(55vh,26rem)] overflow-y-auto">

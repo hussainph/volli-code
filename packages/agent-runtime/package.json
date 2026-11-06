@@ -9,6 +9,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./web-extract-worker": {
+      "types": "./src/web/extract-worker.ts",
+      "import": "./src/web/extract-worker.ts"
+    },
     "./bench/mcp-parallel": {
       "types": "./bench/mcp-parallel/driver.ts",
       "import": "./bench/mcp-parallel/driver.ts"
