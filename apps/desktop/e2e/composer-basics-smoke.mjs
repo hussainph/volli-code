@@ -44,7 +44,6 @@ import {
   assertProfileIsolated,
   columnHasCard,
   createRunner,
-  MONACO_EDITOR_SELECTOR,
   goToBoard,
   launch,
   makeGitRepo,
@@ -194,7 +193,9 @@ async function main() {
         const expandBtn = await composer(page).getByRole("button", { name: "Expand" }).count();
         const closeBtn = await composer(page).getByRole("button", { name: "Close" }).count();
         const title = await titleInput(page).count();
-        const desc = await composer(page).locator(MONACO_EDITOR_SELECTOR).count();
+        const desc = await composer(page)
+          .getByRole("textbox", { name: "Ticket description", exact: true })
+          .count();
         const statusChip = await composer(page).getByRole("button", { name: "Backlog" }).count();
         const priorityChip = await composer(page).getByRole("button", { name: "Medium" }).count();
         const labelsChip = await composer(page).getByRole("button", { name: "Labels" }).count();
@@ -537,11 +538,21 @@ async function main() {
         const attached = await waitUntil(
           "dropped screenshot to attach",
           async () =>
-            (await composer(page).getByRole("list", { name: "Attachments" }).count()) === 1,
+            (await composer(page)
+              .getByRole("button", { name: "Manage 1 attachments", exact: true })
+              .count()) === 1,
           { timeout: 4000 },
         )
           .then(() => true)
           .catch(() => false);
+        // Inspect the actual retained attachment through its bounded manager.
+        if (attached) {
+          await composer(page)
+            .getByRole("button", { name: "Manage 1 attachments", exact: true })
+            .click();
+          await page.getByRole("list", { name: "Attachments", exact: true }).waitFor();
+          await page.keyboard.press("Escape");
+        }
         // Monaco renders decorations after the event frame. Waiting a frame is
         // essential: the stale target was not present synchronously after drop.
         await sleep(100);

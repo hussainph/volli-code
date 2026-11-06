@@ -114,6 +114,7 @@ function GroupMemberRows<T extends { id: string }>({
     return (
       <ListRow
         key={tab.id}
+        data-tab-id={tab.id}
         density="two-line"
         leading={<Mark className="size-4 shrink-0" />}
         primary={label}
@@ -338,7 +339,10 @@ export function GroupedTabList<T extends { id: string }>({
     ordered.findIndex((tab) => tab.id === activeTabId),
   );
   const stopId = stop === null ? undefined : ordered[stop]?.id;
-  const target = (id: string) => (edgeTargets ? { "data-pair-target-id": id } : {});
+  const target = (id: string) => ({
+    "data-strip-tab-id": id,
+    ...(edgeTargets ? { "data-pair-target-id": id } : {}),
+  });
   return items.map((item) => {
     if (item.group === null) {
       const { tab } = item;

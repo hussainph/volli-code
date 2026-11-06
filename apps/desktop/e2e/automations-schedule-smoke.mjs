@@ -63,7 +63,7 @@ console.log("scratch:", scratch, "\n");
 const CURSOR_KEY = "volli:automation-schedule-cursors";
 const { schedule, cursor } = automationScheduleFixture(Date.now());
 // Independent expected copy, rather than comparing the UI's formatter to itself.
-const sentence = `Every day at ${String(schedule.hour).padStart(2, "0")}:30 ${schedule.timeZone}`;
+const frequencySentence = `Daily · ${String(schedule.hour).padStart(2, "0")}:30`;
 
 /** Reads the closed app's database directly — only ever between launches. */
 function withDb(work) {
@@ -115,7 +115,10 @@ try {
   }
 
   async function openAutomationsPage() {
-    await page.getByRole("button", { name: "Automations", exact: true }).first().click();
+    await page
+      .locator('[data-sidebar-presentation="expanded"]')
+      .getByRole("button", { name: "Automations", exact: true })
+      .click();
     await page
       .getByRole("heading", { name: "Automations", exact: true })
       .waitFor({ timeout: 15000 });
@@ -134,14 +137,16 @@ try {
       const form = page.locator('[data-slot="automation-editor"]');
       await form.waitFor({ timeout: 15000 });
       await form.getByLabel("Name").fill("Nightly sweep");
-      await form.getByLabel("Instructions").fill("/review the day");
+      await form
+        .getByRole("textbox", { name: "Instructions", exact: true })
+        .fill("/review the day");
 
       // The Trigger's third answer. Everything the schedule needs is a
       // CONTROL — there is no text field that takes an expression, which is
       // what "no cron expression is accepted anywhere in the UI" means at the
       // only surface that authors one.
-      await form.getByRole("radio", { name: "On a schedule" }).click();
-      const preset = form.getByRole("combobox", { name: "Schedule", exact: true });
+      await form.getByRole("tab", { name: "Schedule", exact: true }).click();
+      const preset = form.getByRole("combobox", { name: "Frequency", exact: true });
       await preset.waitFor({ timeout: 10000 });
       // Through the preset control both ways, so this asserts the control
       // DRIVES the record rather than agreeing with a default. An hourly
@@ -149,9 +154,9 @@ try {
       // different one — the form cannot spell "hourly, at 09:00".
       await preset.click();
       await page.getByRole("option", { name: "Hourly" }).click();
-      await form.getByLabel("Minutes past the hour").waitFor({ timeout: 10000 });
+      await form.getByLabel("Minute", { exact: true }).waitFor({ timeout: 10000 });
       await preset.click();
-      await page.getByRole("option", { name: "Every day" }).click();
+      await page.getByRole("option", { name: "Daily", exact: true }).click();
       await form.getByLabel("Time", { exact: true }).click();
       await page.getByLabel("Hour", { exact: true }).fill(String(schedule.hour));
       await page.getByLabel("Minute", { exact: true }).fill("30");
@@ -168,10 +173,9 @@ try {
       await page.getByRole("option", { name: "Europe/London" }).first().click();
 
       const textFields = await form.locator('input:not([inputmode="numeric"]), textarea').count();
-      await form.getByRole("button", { name: "Create automation" }).click();
-      await page
-        .locator("[data-automation-rail-row]")
-        .filter({ hasText: "Nightly sweep" })
+      await form.getByRole("button", { name: "Create", exact: true }).click();
+      await form
+        .getByRole("heading", { name: "Nightly sweep", exact: true })
         .waitFor({ timeout: 15000 });
 
       const listed = await listedSchedule();
@@ -191,9 +195,12 @@ try {
   );
 
   await must(3, "the row reads as its sentence, with the stored zone shown", async () => {
-    const row = page.getByText(sentence);
-    await row.waitFor({ timeout: 15000 });
-    return { ok: true, detail: sentence };
+    const trigger = page
+      .locator('[data-slot="automation-editor"]')
+      .getByRole("region", { name: "Trigger", exact: true });
+    await trigger.getByText(frequencySentence, { exact: true }).waitFor({ timeout: 15000 });
+    await trigger.getByText("Europe/London", { exact: true }).waitFor();
+    return { ok: true, detail: await trigger.innerText() };
   });
 
   const automation = await listedSchedule();
@@ -201,7 +208,7 @@ try {
   await must(4, "the machine-local switch turns the schedule on here", async () => {
     // A machine fires nothing until someone turns something on there (VC-112),
     // so the switch is what puts this schedule in front of the timer at all.
-    await page.getByLabel("Automatic triggers on this machine: Nightly sweep").click();
+    await page.getByLabel("Automatic triggers on this Mac: Nightly sweep").click();
     const on = await waitUntil(
       "the enabled set to name this schedule",
       async () => {
@@ -299,7 +306,7 @@ try {
     const copy = await skipped.textContent();
     return {
       ok:
-        (copy ?? "").includes("Skipped \u2014 Volli wasn\u2019t running") &&
+        (copy ?? "").includes("Skipped · Volli was closed") &&
         (copy ?? "").includes("3 occurrences"),
       detail: copy ?? "skip row had no text",
     };
@@ -329,9 +336,11 @@ try {
     // here would quietly make the by-hand Run a different piece of work from
     // the one the timer starts — on the very surface a person uses to check
     // what the schedule does.
-    await page.keyboard.press("Escape");
-    await openAutomationsPage();
-    await page.getByLabel("Run Nightly sweep", { exact: true }).click();
+    await page.getByRole("button", { name: "Close Settings", exact: true }).click();
+    await page
+      .locator('[data-slot="automation-editor"]')
+      .getByRole("button", { name: "Run Nightly sweep", exact: true })
+      .click();
     const asksForATicket = await page
       .getByText("Run \u201cNightly sweep\u201d on")
       .waitFor({ timeout: 3000 })

@@ -381,9 +381,23 @@ export function launch({ dbPath, userDataDir, extraEnv = {}, extraArgs = [], bef
   beforeLaunch?.();
   return _electron.launch({
     executablePath,
+    // A test profile is not permission to consult the person's OS keychain.
+    // volli-drive also installs fail-closed traps; these switches keep legacy
+    // single-smoke launches away from Chromium's native password backend.
     args: packagedBinary
-      ? [`--user-data-dir=${userDataDir}`, ...extraArgs]
-      : [APP_DIR, `--user-data-dir=${userDataDir}`, ...extraArgs],
+      ? [
+          `--user-data-dir=${userDataDir}`,
+          "--use-mock-keychain",
+          "--password-store=basic",
+          ...extraArgs,
+        ]
+      : [
+          APP_DIR,
+          `--user-data-dir=${userDataDir}`,
+          "--use-mock-keychain",
+          "--password-store=basic",
+          ...extraArgs,
+        ],
     env: environment,
   });
 }
@@ -1247,6 +1261,10 @@ export function monacoEditor(scope) {
  * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
  */
 export async function clickMonaco(scope) {
+  // New-ticket drafts arrive as a live native field; focus prepares its rich
+  // view. Wait for the lossless handover before typing into Monaco.
+  const draft = scope.locator('textarea[aria-label="Ticket description"]:visible');
+  if (await draft.count()) await draft.first().focus();
   const editor = monacoEditor(scope);
   await waitUntil("Monaco editor to be ready", async () => {
     try {
@@ -1513,9 +1531,11 @@ export function cardById(page, id) {
  */
 export async function columnCount(page, label) {
   return page.evaluate((columnLabel) => {
-    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-      (div) => div.getClientRects().length > 0,
-    );
+    const headers = Array.from(
+      document.querySelectorAll(
+        "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+      ),
+    ).filter((div) => div.getClientRects().length > 0);
     const header = headers.find((div) => {
       const first = div.children[0];
       return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -1531,9 +1551,11 @@ export async function columnCount(page, label) {
 export async function columnHasCard(page, label, id) {
   return page.evaluate(
     ({ columnLabel, cardId }) => {
-      const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2")).filter(
-        (div) => div.getClientRects().length > 0,
-      );
+      const headers = Array.from(
+        document.querySelectorAll(
+          "[data-board-column] > div:first-child, [data-list-section] > div:first-child",
+        ),
+      ).filter((div) => div.getClientRects().length > 0);
       const header = headers.find((div) => {
         const first = div.children[0];
         return first?.tagName === "SPAN" && first.textContent === columnLabel;
@@ -1595,7 +1617,7 @@ export async function goToBoard(page) {
  * `scope` is a Locator (a rail, a strip's container) or the Page itself.
  */
 export async function startTerminalSession(scope) {
-  await scope.getByRole("button", { name: "Other things to open", exact: true }).first().click();
+  await scope.getByRole("button", { name: "Open a tab", exact: true }).first().click();
   const page = scope.page?.() ?? scope;
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
 }
@@ -1636,10 +1658,10 @@ export function tabStrip(page, name) {
  * probe that means "the strip's control created this tab" would go on passing
  * with the strip's control gone.
  */
-export function tabStripNewChatButton(page, name) {
+export function tabStripChooser(page, name) {
   return tabStrip(page, name)
-    .locator('xpath=ancestor::*[.//button[@aria-label="New chat"]][1]')
-    .getByRole("button", { name: "New chat", exact: true });
+    .locator('xpath=ancestor::*[.//button[@aria-label="Open a tab"]][1]')
+    .getByRole("button", { name: "Open a tab", exact: true });
 }
 
 /** The `aria-label` of the tab currently front in one named strip, or null. */
@@ -1660,7 +1682,8 @@ export async function openNewChatTab(page, name) {
   const strip = tabStrip(page, name);
   const tabs = strip.getByRole("tab");
   const tabsBefore = await tabs.count();
-  await tabStripNewChatButton(page, name).click();
+  await tabStripChooser(page, name).click();
+  await page.getByRole("menuitem", { name: /^Chat(?:\s|$)/ }).click();
   await waitUntil("a new chat tab to appear", async () => (await tabs.count()) > tabsBefore);
   const label = await activeTabLabel(page, name);
   if (label === null) throw new Error("no tab became active after New chat");

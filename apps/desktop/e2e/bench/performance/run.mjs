@@ -16,7 +16,7 @@ import {
   launch,
   startTerminalSession,
   tabStrip,
-  tabStripNewChatButton,
+  openNewChatTab,
   TICKET_TAB_STRIP,
 } from "../../lib/smoke-kit.mjs";
 import { busyLoadName, startBusyLoad } from "./background-load.mjs";
@@ -718,7 +718,7 @@ async function measureNewChat(page, app, displayId) {
   return measured(
     page,
     app,
-    () => tabStripNewChatButton(page, TICKET_TAB_STRIP).click(),
+    () => openNewChatTab(page, TICKET_TAB_STRIP),
     async () => {
       await page.waitForFunction(
         ({ expected }) =>
@@ -1026,7 +1026,7 @@ async function measureChatTabSwitch(page, app, displayId, longChatTitle) {
   const longIndex = await selectedTicketTabIndex(page);
   if (longIndex < 0) throw new Error("chat_tab_switch: the long chat opened no tab");
   const before = await page.locator(TICKET_STRIP_TABS).count();
-  await tabStripNewChatButton(page, TICKET_TAB_STRIP).click();
+  await openNewChatTab(page, TICKET_TAB_STRIP);
   await page.waitForFunction(
     ({ selector, count, previous }) => {
       const tabs = Array.from(document.querySelectorAll(selector));

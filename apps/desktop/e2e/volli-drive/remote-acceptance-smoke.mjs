@@ -209,6 +209,7 @@ async function journey() {
     // Never click Forget: this is only a real UI scroll for the evidence frame.
     await action("scroll", "button", "Forget…", { direction: "down" });
     await shot("step-1-paired-device");
+    await click("button", "Close Settings");
     await click("button", "Home");
   });
 

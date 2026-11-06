@@ -239,7 +239,7 @@ async function waitForLiveTerminal(page, timeoutMs = 20000) {
  * create rather than a terminal an earlier tab painted.
  */
 async function startTerminalTab(page, expectedTabs) {
-  await page.getByLabel("Other things to open").first().click();
+  await page.getByLabel("Open a tab").first().click();
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
   await page.waitForFunction(
     (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,

@@ -306,6 +306,7 @@ try {
     await inspection().waitFor({ timeout: 15000 });
     await page.getByTestId("ticket-rail-automation-run").click();
     await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
+    await page.getByRole("button", { name: "Close Settings", exact: true }).click();
     await backToBoard();
     return { ok: true, detail: "ran the armed Automation, refused for the missing model" };
   });

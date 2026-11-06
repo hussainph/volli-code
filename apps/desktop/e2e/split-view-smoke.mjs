@@ -121,7 +121,7 @@ function readPanes(page) {
       })
       .map((cell) => {
         const empty = cell.querySelector('[data-slot="pane-empty-state"]') !== null;
-        const strip = cell.querySelector(':scope > [data-slot="tab-strip"]');
+        const strip = cell.querySelector('[data-slot="tab-strip"]');
         const tabs =
           strip === null
             ? empty || selected === null
@@ -163,7 +163,7 @@ async function hasOneTopStrip(page, label = "Ticket tabs") {
       document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]'),
     ).filter((cell) => cell.checkVisibility());
     const stripped = cells.filter(
-      (cell) => cell.querySelector(':scope > [data-slot="tab-strip"]') !== null,
+      (cell) => cell.querySelector('[data-slot="tab-strip"]') !== null,
     ).length;
     const empties = cells.filter(
       (cell) => cell.querySelector('[data-slot="pane-empty-state"]') !== null,
@@ -178,18 +178,28 @@ async function hasOneTopStrip(page, label = "Ticket tabs") {
 }
 
 /** Every group chip on the top strip: its id, whether it is shown, its segments. */
-function readGroups(page) {
-  return page.evaluate(() =>
-    Array.from(
-      document.querySelectorAll('[data-slot="split-view-tab-bar"] [data-slot="grouped-tab-chip"]'),
-    ).map((chip) => ({
-      id: chip.getAttribute("data-group-id"),
-      active: chip.getAttribute("data-active") === "true",
-      tabs: Array.from(chip.querySelectorAll('[data-slot="grouped-tab-member"] [role="tab"]')).map(
-        (tab) => (tab.getAttribute("aria-label") ?? "").trim(),
-      ),
-    })),
-  );
+async function readGroups(page) {
+  const chips = page.locator('[data-slot="split-view-tab-bar"] [data-slot="grouped-tab-chip"]');
+  const groups = [];
+  for (let i = 0; i < (await chips.count()); i++) {
+    const chip = chips.nth(i);
+    const id = await chip.getAttribute("data-group-id");
+    const active = (await chip.getAttribute("data-active")) === "true";
+    // A group is a summary, not hidden member tabs. Read its actual hover
+    // inventory without taking focus from the newly split pane's first row.
+    await chip.hover();
+    const card = page.locator('[aria-label="Tab group items"][data-slot="hover-card-content"]');
+    await card.waitFor({ state: "visible" });
+    const tabs = await card
+      .locator("[data-tab-id]")
+      .evaluateAll((rows) =>
+        rows.map((row) => row.querySelector(".truncate.text-ui")?.textContent?.trim() ?? ""),
+      );
+    groups.push({ id, active, tabs });
+    await page.mouse.move(0, 0);
+    await card.waitFor({ state: "detached" });
+  }
+  return groups;
 }
 
 /** A tab on the TOP strip — an ordinary tab, or a group chip's segment. */
@@ -204,11 +214,8 @@ function topTab(page, label) {
  * {@link topTab}, including a segment folded into a summarized chip's +n —
  * what {@link selectStripTab} needs to find the tab it will choose from the menu.
  */
-function topTabAny(page, label) {
-  return page
-    .locator('[data-slot="split-view-tab-bar"]')
-    .getByRole("tab", { name: label, exact: true, includeHidden: true })
-    .first();
+function topTabAny(_page, label) {
+  return { label };
 }
 
 /**
@@ -243,26 +250,22 @@ async function chipMenu(page, groupId, item) {
  * One row per tab (`data-pane`); its accessible name is `"<label>, pane <n>…"`.
  */
 async function readChipMenu(page, groupId) {
-  await page
-    .locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`)
-    .click({ button: "right" });
-  const rows = await waitUntil(
-    "the chip's menu",
-    async () => {
-      const seen = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('[data-slot="grouped-tab-menu"] [data-pane]')).map(
-          (row) => ({
-            label: (row.getAttribute("aria-label") ?? "").replace(/, pane \d+.*$/, ""),
-            checked: row.getAttribute("data-front") === "true",
-          }),
-        ),
-      );
-      return seen.length > 0 ? seen : null;
-    },
-    { timeout: 4000 },
-  );
-  await page.keyboard.press("Escape");
-  return rows;
+  const chip = page.locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`);
+  await chip.hover();
+  await chip.getByRole("button", { name: /^Actions for / }).click();
+  const menu = page.getByRole("menu").filter({ has: page.locator("[data-tab-id]") });
+  try {
+    await menu.waitFor({ state: "visible" });
+    return await menu.locator("[data-tab-id]").evaluateAll((rows) =>
+      rows.map((row) => ({
+        label: row.querySelector(".truncate.text-ui")?.textContent?.trim() ?? "",
+        id: row.getAttribute("data-tab-id"),
+      })),
+    );
+  } finally {
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+  }
 }
 
 async function groupAtTabEdge(page, movingLabel, targetLabel, edge) {
@@ -323,9 +326,13 @@ function readFocus(page) {
 
 /** A menu row inside the focused (empty) pane. */
 function paneMenuRow(page, label) {
-  return page.locator(
-    `[data-slot="split-view-pane"][data-focused="true"] [data-slot="pane-empty-row"][aria-label="${label}"]:visible`,
-  );
+  return {
+    async click(options = {}) {
+      const pane = page.locator('[data-slot="split-view-pane"][data-focused="true"]');
+      await pane.getByRole("button", { name: "Pane actions", exact: true }).click(options);
+      await page.getByRole("menuitem", { name: label, exact: true }).click(options);
+    },
+  };
 }
 
 /** The zone the pointer is currently in, per pane — the drag's own feedback. */
@@ -798,7 +805,7 @@ async function main() {
             after[0]?.front === SECOND_FILE &&
             after[0]?.focused === true &&
             after[1]?.paneId === before[2]?.paneId &&
-            (await readSurfaceStrip(page)).length === 2 &&
+            (await readSurfaceStrip(page)).length === 1 &&
             (await hasOneTopStrip(page)),
           detail: `centre=${JSON.stringify(centre)} panes=${JSON.stringify(after)}`,
         };
@@ -947,7 +954,8 @@ async function main() {
         const listed =
           JSON.stringify(menu.map((row) => row.label)) ===
             JSON.stringify(panes.flatMap((pane) => pane.tabs)) &&
-          menu.filter((row) => row.checked).length === panes.length;
+          new Set(menu.map((row) => row.id)).size === menu.length &&
+          panes.every((pane) => pane.tabs.includes(pane.front));
         await chipMenu(page, groupId, "Ungroup");
         const ungrouped = await waitUntil(
           "Ungroup to leave one plane and every tab open",
@@ -1042,9 +1050,13 @@ async function main() {
       const target = await topTab(page, leading).boundingBox();
       if (target === null) return { ok: false, detail: "no box for the leading tab" };
       // Drag the trailing tab onto the leading one: the two swap.
-      await dragTabTo(page, trailing, {
-        x: Math.round(target.x + target.width / 2),
-        y: Math.round(target.y + target.height / 2),
+      await dragTabTo(page, trailing, async () => {
+        const current = await topTab(page, leading).boundingBox();
+        if (!current) throw new Error("leading tab disappeared during reorder");
+        return {
+          x: Math.round(current.x + current.width / 2),
+          y: Math.round(current.y + current.height / 2),
+        };
       });
       const after = await waitUntil(
         "the strip to reorder",
@@ -1224,7 +1236,7 @@ async function main() {
           groups.length === 1 &&
           groups[0].id === groupId &&
           groups[0].active &&
-          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", "Chat"]) &&
+          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", terminal, "Chat"]) &&
           (await hasOneTopStrip(page, "Home tabs")),
         detail: `panes=${JSON.stringify(after)} groups=${JSON.stringify(groups)}`,
       };

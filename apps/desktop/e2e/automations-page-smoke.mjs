@@ -173,22 +173,27 @@ try {
       await page.getByRole("button", { name: "New Automation" }).first().click();
       const form = page.locator('[data-slot="automation-editor"]');
       await form.waitFor({ timeout: 15000 });
-      const instructions = form.getByLabel("Instructions");
+      const instructions = form.getByRole("textbox", { name: "Instructions", exact: true });
       const opensEmpty = (await instructions.inputValue()) === "";
       const placeholder = await instructions.getAttribute("placeholder");
       const body = await form.innerText();
       const ok =
         opensEmpty &&
         (placeholder ?? "").includes("/skill") &&
-        body.includes("Only when I run it") &&
+        (await form
+          .getByRole("tab", { name: "None", exact: true })
+          .getAttribute("aria-selected")) === "true" &&
         body.includes("Project default");
       if (ok) {
-        await form.getByLabel("Name").fill("Review sweep");
+        await form.getByRole("textbox", { name: "Name", exact: true }).fill("Review sweep");
         await instructions.fill("Review the change set");
-        await form.getByRole("button", { name: "Create automation" }).click();
-        await page
-          .locator("[data-automation-rail-row]")
-          .filter({ hasText: "Review sweep" })
+        // The default was None. Offer Doing explicitly so the later machine-local
+        // arming test acts on a trigger that can actually fire.
+        await form.getByRole("tab", { name: "Columns", exact: true }).click();
+        await form.getByRole("checkbox", { name: "Doing", exact: true }).click();
+        await form.getByRole("button", { name: "Create", exact: true }).click();
+        await form
+          .getByRole("heading", { name: "Review sweep", exact: true })
           .waitFor({ timeout: 15000 });
       }
       return {
@@ -201,25 +206,31 @@ try {
   await attempt(3, "the same form creates a global one, and the page lists both", async () => {
     await page.getByRole("button", { name: "New Automation" }).first().click();
     const form = page.locator('[data-slot="automation-editor"]');
-    await form.getByLabel("Name").fill("Nightly sweep");
-    await form.getByLabel("Instructions").fill("Run the nightly sweep");
+    await form.getByRole("textbox", { name: "Name", exact: true }).fill("Nightly sweep");
+    await form
+      .getByRole("textbox", { name: "Instructions", exact: true })
+      .fill("Run the nightly sweep");
     // Ownership decides WHERE it is listed, and is editable on create only.
-    await form.getByRole("combobox", { name: "Ownership", exact: true }).click();
+    await form.getByRole("combobox", { name: "Scope", exact: true }).click();
     await page.getByRole("option", { name: "All projects" }).click();
-    await form.getByRole("button", { name: "Create automation" }).click();
-    await page
-      .locator("[data-automation-rail-row]")
-      .filter({ hasText: "Nightly sweep" })
+    await form.getByRole("button", { name: "Create", exact: true }).click();
+    await form
+      .getByRole("heading", { name: "Nightly sweep", exact: true })
       .waitFor({ timeout: 15000 });
+    await form.getByRole("button", { name: "Automations", exact: true }).click();
+    await page.locator("[data-automation-rail-row]").filter({ hasText: "Nightly sweep" }).waitFor();
 
     // This probe is about which Automations are listed under which Ownership,
     // not about letter case.
     const body = (await page.locator("body").innerText()).toLowerCase();
     const ok =
-      body.includes("this project") &&
       body.includes("review sweep") &&
-      body.includes("all projects") &&
       body.includes("nightly sweep") &&
+      (await page
+        .locator("[data-automation-rail-row]")
+        .filter({ hasText: "Nightly sweep" })
+        .getByRole("img", { name: "All projects", exact: true })
+        .count()) === 1 &&
       // Its own first, the everywhere set after — main's order, on screen.
       body.indexOf("review sweep") < body.indexOf("nightly sweep");
     return { ok, detail: ok ? "both listed, own first" : body.slice(0, 400) };
@@ -238,7 +249,7 @@ try {
       // turns something on there, so the resting row says so.
       const ownId = await listedId("Review sweep");
       await page.locator("[data-automation-rail-row]").filter({ hasText: "Review sweep" }).click();
-      const control = page.getByLabel("Automatic triggers on this machine: Review sweep");
+      const control = page.getByLabel("Automatic triggers on this Mac: Review sweep");
       const restingState = await control.getAttribute("aria-checked");
 
       await control.click();
@@ -275,15 +286,23 @@ try {
       // (no default model on this profile), never be refused for being off.
       // The recovery for that reason is Model Access, so Settings opening on it
       // IS the evidence that the click reached the door.
-      await page.getByLabel("Run Review sweep").click();
+      await page
+        .locator('[data-slot="automation-editor"]')
+        .getByRole("button", { name: "Run Review sweep", exact: true })
+        .click();
       const chooser = page.getByRole("dialog");
       await chooser.getByText("Run \u201cReview sweep\u201d on").waitFor({ timeout: 10000 });
-      await chooser.getByRole("button", { name: /Probe ticket/ }).click();
+      await chooser.getByRole("option", { name: /Probe ticket/ }).click();
+      await chooser.getByRole("button", { name: /^Run on PRB-/ }).click();
       const settings = page.getByRole("navigation", { name: "Settings categories" });
       await settings.waitFor({ timeout: 20000 });
-      // Back to the page: Settings is a surface, not an overlay, and every nav
-      // click closes it.
-      await page.getByRole("button", { name: "Automations", exact: true }).first().click();
+      // The floating Settings panel leaves the workspace unchanged underneath.
+      await page.getByRole("button", { name: "Close Settings", exact: true }).click();
+      await chooser.waitFor({ state: "hidden", timeout: 10000 });
+      await page
+        .locator('[data-slot="automation-editor"]')
+        .getByRole("heading", { name: "Review sweep", exact: true })
+        .waitFor();
       await page
         .getByRole("heading", { name: "Automations", exact: true })
         .waitFor({ timeout: 15000 });
@@ -295,17 +314,39 @@ try {
     6,
     "Duplicate is one explicit click, and lands on the copy's own form",
     async () => {
-      await page.getByLabel("More for Review sweep").click();
+      await page
+        .locator('[data-slot="automation-editor"]')
+        .getByRole("button", { name: "More actions", exact: true })
+        .click();
       await page.getByRole("menuitem", { name: "Duplicate" }).click();
       // The copy's form opens on the copy: the reason to duplicate is to change
       // something, and the Trigger is what VC-112 expects to change next.
       const form = page.locator('[data-slot="automation-editor"]');
-      await form.getByLabel("Name").waitFor({ timeout: 10000 });
-      const named = await form.getByLabel("Name").inputValue();
-      const instructions = await form.getByLabel("Instructions").inputValue();
+      await form
+        .getByRole("heading", { name: "Review sweep (copy)", exact: true })
+        .waitFor({ timeout: 10000 });
+      const named = await form
+        .getByRole("heading", { name: "Review sweep (copy)", exact: true })
+        .innerText();
+      const instructions = await form
+        .getByRole("region", { name: "Instructions", exact: true })
+        .locator("p")
+        .innerText();
       const names = await listedNames();
+      // The duplicated work stays identical until this explicit trigger edit.
+      const copiedTrigger = await form
+        .getByRole("region", { name: "Trigger", exact: true })
+        .innerText();
+      await form.getByRole("button", { name: "Edit trigger", exact: true }).click();
+      await form.getByRole("tab", { name: "None", exact: true }).click();
+      await form.getByRole("button", { name: "Save trigger", exact: true }).click();
+      await form
+        .getByRole("region", { name: "Trigger", exact: true })
+        .getByText("Manual only", { exact: true })
+        .waitFor();
       return {
         ok:
+          copiedTrigger.includes("Doing") &&
           named === "Review sweep (copy)" &&
           instructions === "Review the change set" &&
           names.includes("Review sweep") &&
@@ -317,14 +358,24 @@ try {
 
   await attempt(7, "the row opens the one authoring form, and an edit sticks", async () => {
     const reviewId = await listedId("Review sweep");
+    await page
+      .locator('[data-slot="automation-editor"]')
+      .getByRole("button", { name: "Automations", exact: true })
+      .click();
     await page.locator(`[data-automation-rail-row="${reviewId}"]`).click();
     const form = page.locator('[data-slot="automation-editor"]');
-    const name = form.getByLabel("Name");
+    await form
+      .getByRole("heading", { name: "Review sweep", exact: true })
+      .getByRole("button")
+      .click();
+    const name = form.getByRole("textbox", { name: "Name", exact: true });
     await name.fill("Review sweep v2");
-    await form.getByRole("button", { name: "Save changes" }).click();
+    await form.getByRole("button", { name: "Save name", exact: true }).click();
     // `.first()`: the lanes above the list draw the same names, so a rename is
     // on screen twice — in its lane and in its row.
-    await page.getByText("Review sweep v2").first().waitFor({ timeout: 10000 });
+    await form
+      .getByRole("heading", { name: "Review sweep v2", exact: true })
+      .waitFor({ timeout: 10000 });
     const names = await listedNames();
     return { ok: names.includes("Review sweep v2"), detail: names.join(" | ") };
   });
@@ -355,8 +406,11 @@ try {
     9,
     "Delete asks once, then removes the record \u2014 there is no archive",
     async () => {
-      await page.getByLabel("More for Review sweep v2").click();
-      await page.getByRole("menuitem", { name: "Delete" }).click();
+      await page
+        .locator('[data-slot="automation-editor"]')
+        .getByRole("button", { name: "More actions", exact: true })
+        .click();
+      await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
       const confirm = page.getByRole("alertdialog");
       await confirm.getByText("Delete \u201cReview sweep v2\u201d?").waitFor({ timeout: 10000 });
       await confirm.getByRole("button", { name: "Delete" }).click();
@@ -372,6 +426,11 @@ try {
 
   /** Every row of one lane, in drawn order: what it answers to, and which record it is. */
   async function laneDigits(status) {
+    const names = { doing: "Doing", needs_review: "Needs Review", none: "Other" };
+    await page
+      .getByRole("tablist", { name: "Automation columns", exact: true })
+      .getByRole("tab", { name: names[status], exact: true })
+      .click();
     return page.locator(`[data-lane-row^="${status}:"]`).evaluateAll((rows) =>
       rows.map((row) => ({
         digit: row.getAttribute("data-lane-digit"),
@@ -418,15 +477,19 @@ try {
   await page.reload();
   await page.getByRole("button", { name: "Automations", exact: true }).first().click();
   await page.getByRole("heading", { name: "Automations", exact: true }).waitFor({ timeout: 15000 });
-  await page.getByRole("button", { name: "Lanes", exact: true }).click();
+  await page.getByRole("button", { name: "Columns", exact: true }).click();
 
   await must(10, "the page draws one lane per column, in digit order", async () => {
+    await page
+      .getByRole("tablist", { name: "Automation columns", exact: true })
+      .getByRole("tab", { name: "Doing", exact: true })
+      .click();
     await page.locator('[data-lane-row^="doing:"]').first().waitFor({ timeout: 15000 });
     const doing = await laneDigits("doing");
     const review = await laneDigits("needs_review");
     // Nothing has been arranged yet, so the digits read in the order main
     // listed the records — a stable 1…n for a project nobody has arranged.
-    const offBoard = await page.locator('[data-lane-row^="none:"]').count();
+    const offBoard = (await laneDigits("none")).length;
     return {
       ok:
         laneSeed.fail === undefined &&
@@ -498,7 +561,11 @@ try {
     }, seeded.projectId);
     await page.reload();
     await page.getByRole("button", { name: "Automations", exact: true }).first().click();
-    await page.getByRole("button", { name: "Lanes", exact: true }).click();
+    await page.getByRole("button", { name: "Columns", exact: true }).click();
+    await page
+      .getByRole("tablist", { name: "Automation columns", exact: true })
+      .getByRole("tab", { name: "Doing", exact: true })
+      .click();
     await page.locator('[data-lane-row^="doing:"]').first().waitFor({ timeout: 15000 });
     const reloaded = await laneDigits("doing");
     return {

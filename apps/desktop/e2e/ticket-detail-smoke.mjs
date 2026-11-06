@@ -921,7 +921,11 @@ async function main() {
         // next scenario's row does not depend on this move — it is here to
         // exercise the property UI on the way past.
         await aside.getByTestId("ticket-rail-tab-now").click();
-        await aside.getByRole("button", { name: "Status: Todo", exact: true }).click();
+        await page.getByRole("tab", { name: "VC-1", exact: true }).click();
+        await page
+          .getByTestId("ticket-rail-properties")
+          .getByRole("button", { name: "Status: Todo", exact: true })
+          .click();
         await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
         const doing = await waitUntil("ticket moves to Doing", async () => {
           const persisted = await readTicket(page, TICKET_ID);
@@ -1089,7 +1093,7 @@ async function main() {
     // ===================================================================
     await attempt(
       8,
-      "Rail: Now is the default page and folds sessions + status/priority in; no Harness row anywhere; board filter bar has no Harness chip",
+      "Now remains the default Session rail; document metadata stays editable beside the title; no Harness row or board filter",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         const aside = page.locator('[data-inspector-panel][data-shown="true"]');
@@ -1101,12 +1105,16 @@ async function main() {
 
         // Now folds status/priority in as pills, whose accessible names carry
         // the value ("Status: Todo") — the standalone captions are gone.
-        const propertiesShown = await waitUntil("Now page properties", async () => {
+        await page.getByRole("tab", { name: "VC-1", exact: true }).click();
+        const properties = page.locator('[data-testid="ticket-rail-properties"]');
+        const propertiesShown = await waitUntil("title-adjacent document properties", async () => {
           return (
-            (await aside.getByRole("button", { name: /^Status: / }).count()) >= 1 &&
-            (await aside.getByRole("button", { name: /^Priority: / }).count()) >= 1
+            (await properties.getByRole("button", { name: /^Status: / }).count()) === 1 &&
+            (await properties.getByRole("button", { name: /^Priority: / }).count()) === 1
           );
         });
+        if (await aside.locator('[data-testid="ticket-rail-properties"]').count())
+          throw new Error("metadata duplicated in Now");
 
         const noHarnessInRail = (await aside.getByText(/harness/i).count()) === 0;
         await escapeToBoard(page);
@@ -1261,7 +1269,7 @@ async function main() {
         const focusGeometry =
           focused.sidebarHidden &&
           focused.insetLeft === 0 &&
-          focused.chromeHeight === 36 &&
+          focused.chromeHeight === 46 &&
           focused.tablists === 0 &&
           focused.asides === 0 &&
           focused.terminalVisible;
@@ -1296,8 +1304,8 @@ async function main() {
         );
         const restoredGeometry =
           restored.insetLeft > 0 &&
-          // Two: the ticket's tab strip and the rail's own page tablist.
-          restored.tablists === 2 &&
+          // Ticket strip, inspector pages, and the fixed sidebar navigator.
+          restored.tablists === 3 &&
           restored.asides === 1 &&
           restored.terminalVisible;
 

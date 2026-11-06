@@ -103,8 +103,8 @@ const DARK = {
   "--sidebar-accent-veil": "rgb(255 50 0 / 0.1)",
   "--sidebar-border-veil": "rgb(255 255 255 / 0.1)",
   "--canvas-ink": "#fbf1ed",
-  "--canvas-ink-label": "#d9d0cc",
-  "--canvas-ink-muted": "#c2b9b5",
+  "--canvas-ink-label": "#ece2de",
+  "--canvas-ink-muted": "#e1d8d4",
   "--lift-1": "transparent",
   "--lift-2": "rgb(251 241 237 / 0.03)",
   "--label-ink": "#cecece",
@@ -140,15 +140,15 @@ const LIGHT = {
   "--sidebar-accent-veil": "rgb(255 196 146 / 0.1)",
   "--sidebar-border-veil": "rgb(16 16 16 / 0.1)",
   "--canvas-ink": "#1c110d",
-  "--canvas-ink-label": "#392c28",
-  "--canvas-ink-muted": "#4c3f3a",
+  "--canvas-ink-label": "#271b17",
+  "--canvas-ink-muted": "#2d211d",
   "--lift-1": "transparent",
   "--lift-2": "rgb(255 255 255 / 0.175)",
   "--label-ink": "#444444",
 };
 
 /** The default canvas's base fill per mode — what the WINDOW edge is painted. */
-const BASE_FILL = { dark: "#481600", light: "#ff9970" };
+const BASE_FILL = { dark: "#45291e", light: "#f6d4c6" };
 
 /**
  * Swatches from the editor's own palette.
@@ -198,7 +198,7 @@ const NO_SCOPE_CHANGE_OBSERVE_MS = 700;
  * instead of the shared one fails here.
  */
 const CROSSFADE = { ms: 300, css: "0.3s" };
-const REDUCED_MOTION_CROSSFADE = { ms: 120, css: "0.12s" };
+// Reduced motion bypasses snapshot capture entirely, rather than shortening it.
 
 /**
  * The user's own ghostty config — seeded, then asserted byte-identical (#67).
@@ -414,7 +414,8 @@ const settingsRail = (page) => page.getByRole("navigation", { name: "Settings ca
 
 /** Opens Settings → Appearance from the sidebar footer. */
 async function openAppearanceSettings(page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
+  if (!(await page.getByRole("button", { name: "Close Settings", exact: true }).isVisible()))
+    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   const nav = settingsRail(page);
   // Settings reopens on the last page shown, which can be a project's
   // Appearance; the app-wide one is in the other scope.
@@ -428,7 +429,8 @@ async function openAppearanceSettings(page) {
 
 /** Settings → Project → Appearance for whichever project is selected. */
 async function openProjectAppearance(page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
+  if (!(await page.getByRole("button", { name: "Close Settings", exact: true }).isVisible()))
+    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   const nav = settingsRail(page);
   await nav
     .locator('[aria-label="Settings scope"] button[aria-pressed]')
@@ -509,7 +511,17 @@ async function setSlider(page, label, value) {
  * the preview and the write land inside one style recalc — the same property a
  * single click on a colour has, which check 21's paint trace relies on.
  */
+async function openAccentEditor(page) {
+  const field = page.getByRole("textbox", { name: "Primary colour hex" });
+  if (await field.isVisible()) return;
+  if (await page.locator('[data-slot="popover-content"][data-state="open"]').count())
+    await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Custom accent colour", exact: true }).click();
+  await field.waitFor({ state: "visible" });
+}
+
 async function commitPrimaryHex(page, hex) {
+  await openAccentEditor(page);
   const field = page.getByRole("textbox", { name: "Primary colour hex" });
   await field.scrollIntoViewIfNeeded();
   await field.evaluate((element, next) => {
@@ -533,6 +545,7 @@ async function authorCanvas(page, { hex, vibrancy, grain }) {
     return stored?.stops[stored.primaryIndex]?.hex === hex;
   });
 
+  await page.keyboard.press("Escape"); // close Custom, not Settings
   await setSlider(page, "Vibrancy", vibrancy);
   await setSlider(page, "Grain", grain);
   await waitUntil("both controls to persist", async () => {
@@ -558,6 +571,8 @@ async function authorCanvas(page, { hex, vibrancy, grain }) {
  */
 async function dragPrimaryStop(page, { dx, dy }) {
   const orb = page.getByTestId("canvas-stop-orb-0");
+  if (!(await orb.isVisible()))
+    await page.getByRole("button", { name: "Edit canvas", exact: true }).click();
   await orb.scrollIntoViewIfNeeded();
   const box = await orb.boundingBox();
   if (box === null) throw new Error("the primary orb has no box");
@@ -861,7 +876,11 @@ const PROJECT_B = { id: "smoke-canvas-b", name: "Beta", prefix: "BET" };
 const projectTile = (page, project) =>
   page.getByRole("button", { name: project.name, exact: true }).and(page.locator("button"));
 
-const selectProject = (page, project) => projectTile(page, project).click();
+const selectProject = async (page, project) => {
+  const close = page.getByRole("button", { name: "Close Settings", exact: true });
+  if (await close.isVisible()) await close.click();
+  await projectTile(page, project).click();
+};
 
 // ---- run --------------------------------------------------------------------
 
@@ -1020,26 +1039,22 @@ try {
     };
   });
 
-  await attempt(8, "reduced motion collapses the crossfade to its short ease", async () => {
-    // HIG: nothing here translates or scales, so the accessible treatment is the
-    // shortest honest ease rather than a hard cut. The media query moves ONE
-    // custom property and every animation on the swap reads it — a duration of
-    // 300 on any of them means a half of the crossfade has a timing of its own.
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await watchScopeRepaint(page);
-    await segment(page, "appearance-mode", "light").click();
-    await waitForToken(page, "--background", LIGHT["--background"]);
-    const during = await observedScopeRepaint(page);
-    const after = await settledScopeRepaint(page);
-    await page.emulateMedia({ reducedMotion: null });
-    return {
-      ok:
-        crossfaded(during) &&
-        crossfadedOnce(after) &&
-        crossfadeRanFor(after, REDUCED_MOTION_CROSSFADE),
-      detail: `runs=${JSON.stringify(after.runs)} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)} expected=${JSON.stringify(REDUCED_MOTION_CROSSFADE)}`,
-    };
-  });
+  await attempt(
+    8,
+    "reduced motion repaints immediately without a snapshot or residual animation",
+    async () => {
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await watchScopeRepaint(page);
+      await segment(page, "appearance-mode", "light").click();
+      await waitForToken(page, "--background", LIGHT["--background"]);
+      const after = await settledScopeRepaint(page, { observeMs: NO_SCOPE_CHANGE_OBSERVE_MS });
+      await page.emulateMedia({ reducedMotion: null });
+      return {
+        ok: !crossfaded(after) && after.anims.length === 0 && after.active === false,
+        detail: `runs=${JSON.stringify(after.runs)} anims=${JSON.stringify(after.anims)} active=${after.active}`,
+      };
+    },
+  );
 
   // ---- 4. the ghostty surfaces, which were meant to survive untouched -------
   await attempt(9, "committing a terminal setting writes Volli's own overlay", async () => {
@@ -1127,6 +1142,7 @@ cursor-style = block
     // — the window has to return to what is stored, and what is stored must not
     // have moved. Only reachable from the real app: the renderer's unit tests
     // render to static markup and cannot press a key.
+    await openAccentEditor(page);
     const field = page.getByRole("textbox", { name: "Primary colour hex" });
     const before = await readAppliedTokens(page, ["--canvas"]);
     const storedBefore = await storedGlobalCanvas(page);
@@ -1146,6 +1162,9 @@ cursor-style = block
       return now["--canvas"] === before["--canvas"] ? now["--canvas"] : null;
     }).catch(async () => (await readAppliedTokens(page, ["--canvas"]))["--canvas"]);
     const storedAfter = await storedGlobalCanvas(page);
+    // Escape also dismisses the colour popover. Reopen it to check the
+    // restored field rather than waiting on a deliberately unmounted input.
+    await openAccentEditor(page);
 
     return {
       ok:

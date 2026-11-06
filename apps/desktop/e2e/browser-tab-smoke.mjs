@@ -37,6 +37,7 @@ import {
   makeScratch,
   REPO,
   tabStrip,
+  tabStripChooser,
   waitForChildExit,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -314,7 +315,7 @@ async function loadingSettled(page, title) {
  * one API the product got wrong is testing itself.
  */
 async function openBrowserTabFromMenu(page) {
-  await page.getByRole("button", { name: "Other things to open", exact: true }).click();
+  await tabStripChooser(page, HOME_TAB_STRIP).click();
   await page.getByRole("menuitem", { name: "Browser", exact: true }).click();
 }
 
@@ -782,7 +783,7 @@ async function main() {
 
     // Exercise a real Radix menu too: this is the everyday overlay path the
     // ticket reported, whereas the floating sidebar uses the explicit marker.
-    await page.getByRole("button", { name: "Other things to open", exact: true }).click();
+    await tabStripChooser(page, HOME_TAB_STRIP).click();
     await waitUntil(
       "the new-session menu to freeze the Browser plane over its last pixels",
       async () =>
@@ -996,7 +997,9 @@ async function main() {
         return !state.docked && state.toolsView === undefined ? state : null;
       }).catch(() => null);
       const windowsAfter = await osWindowCount(app);
-      const browserAlert = await page.getByRole("alert").count();
+      // Global live-region announcers can be present but empty. Every actual
+      // alert still fails this check, in addition to error toasts/page errors.
+      const browserAlert = await page.getByRole("alert").filter({ hasText: /\S/ }).count();
       const toastError = await page.getByText(/Could not toggle DevTools/i).count();
       return {
         ok:
@@ -1183,7 +1186,7 @@ async function main() {
         .locator(`[data-peek-row="chat:${OVERLAY_SESSION.id}"][data-peek-surface="nav"]`)
         .getByRole("button")
         .click();
-      const transcriptTab = tabStrip(page, "Home tabs").getByRole("tab", {
+      const transcriptTab = transcriptPane.getByRole("tab", {
         name: OVERLAY_SESSION.title,
         exact: true,
       });
