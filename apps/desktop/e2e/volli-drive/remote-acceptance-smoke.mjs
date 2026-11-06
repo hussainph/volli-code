@@ -256,6 +256,10 @@ async function journey() {
         async () => hasActionableControl((await snap()).text, "button", "Home"),
         { timeout: 10_000, interval: 100 },
       );
+      // The project sheet is nested in floating Settings. Closing the sheet
+      // does not dismiss its parent or make the sidebar pointer-actionable.
+      await click("button", "Close Settings");
+      await call("wait", { text: "Close Settings", gone: true, timeout: 10_000 });
       await click("button", "Home");
       await selectHost(REMOTE_HOST);
       const selected = await wait(REMOTE_PROJECT);

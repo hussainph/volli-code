@@ -176,7 +176,9 @@ describe("SessionsPane's model catalog", () => {
     );
     expect(trigger).not.toBeNull();
     await act(async () => trigger?.click());
-    const search = document.querySelector<HTMLInputElement>("[cmdk-input]");
+    const search = document.querySelector<HTMLInputElement>(
+      '[role="combobox"][placeholder="Model"]',
+    );
     expect(search).not.toBeNull();
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
@@ -185,10 +187,10 @@ describe("SessionsPane's model catalog", () => {
       );
       search!.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    const options = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")];
+    const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
     const codex = options.find(
       (option) =>
-        option.closest("[cmdk-group]")?.textContent?.includes("OpenAI Codex") &&
+        option.closest('[role="group"]')?.getAttribute("aria-label") === "OpenAI Codex" &&
         option.textContent?.includes("GPT-5"),
     );
     expect(codex).toBeDefined();

@@ -327,7 +327,12 @@ async function incompatibleScenario(seedPath, head, future) {
       await run.page.getByRole("button", { name: "Quit Volli", exact: true }).isEnabled(),
       true,
     );
-    await run.page.screenshot({ path: join(scratch, "newer-version-refusal.png"), timeout: 5000 });
+    await run.page.screenshot({
+      path: join(scratch, "newer-version-refusal.png"),
+      animations: "disabled",
+      caret: "hide",
+      timeout: 5000,
+    });
   });
 
   await check("the refused database file is byte-identical while the app runs", async () => {
@@ -392,7 +397,15 @@ async function compatibleScenario(seedPath, head, future) {
     await waitHealthy(run);
     assert.equal(await run.page.getByRole("heading", { name: NEWER_TITLE }).count(), 0);
     assert.equal(await run.page.getByRole("heading", { name: DAMAGED_TITLE }).count(), 0);
-    await run.page.screenshot({ path: join(scratch, "newer-compatible-boot.png"), timeout: 5000 });
+    // A successful main-process bootstrap is not a painted renderer. Capture
+    // the mounted app chrome, not the initial loading/appearance transition.
+    await run.page.locator('[data-slot="chrome-bar"]').waitFor({ state: "visible", timeout: 5000 });
+    await run.page.screenshot({
+      path: join(scratch, "newer-compatible-boot.png"),
+      animations: "disabled",
+      caret: "hide",
+      timeout: 5000,
+    });
   });
   await closeRun(run);
 
