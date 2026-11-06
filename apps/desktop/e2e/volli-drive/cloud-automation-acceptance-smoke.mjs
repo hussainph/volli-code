@@ -623,7 +623,8 @@ async function journey(fixture, store, evidenceDir) {
     // turn, so the reply queue's `automation_run` call lands here and nowhere
     // else. The tool turn carries no text; its continuation does.
     await openProjectHome(macA.drive, AUTOMATION_PROJECT.name);
-    await macA.drive.click("button", "New chat", { first: true });
+    await macA.drive.click("button", "Open a tab", { first: true });
+    await macA.drive.click("menuitem", "Chat ⌘T");
     await waitUntil(
       "Mac A: the Message box is ready",
       async () => hasActionableControl(await macA.drive.text(), "textbox", "Message"),

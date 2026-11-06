@@ -249,7 +249,7 @@ try {
     await wait(MOVE_PROJECT.name);
     await openTicket("MOV-1");
     await click("button", "Open a tab", { first: true });
-    await click("menuitem", "Chat");
+    await click("menuitem", "Chat ⌘T");
     await send("Move proof before the move");
     const sessions = await sql("SELECT id, ticket_id FROM sessions WHERE role='ticket'");
     assert.equal(sessions.length, 1);
@@ -523,7 +523,7 @@ try {
       assert.ok(before, "the moved Session is visible before resume");
       await send("Move proof after the move");
       await click("button", "Open a tab", { first: true });
-      await click("menuitem", "Chat");
+      await click("menuitem", "Chat ⌘T");
       await send("New cloud Session after move");
       const sessions = await read("sessions:list", listing);
       assert.ok(

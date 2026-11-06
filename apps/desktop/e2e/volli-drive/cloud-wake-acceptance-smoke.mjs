@@ -445,7 +445,8 @@ async function journey(fixture, store) {
 
   await step(8, async () => {
     await macB.chooseRunner(nameA);
-    await macB.click("button", "New chat", { first: true });
+    await macB.click("button", "Open a tab", { first: true });
+    await macB.click("menuitem", "Chat ⌘T");
     await macB.send(PICKED_RUNNER);
     await macB.wait(reply(PICKED_RUNNER), 90_000);
     await macB.wait(`Running on ${nameA}`, 30_000);
