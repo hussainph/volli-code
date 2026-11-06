@@ -173,7 +173,7 @@ describe("Configure → Skills", () => {
     // default 5s budget on a machine shared with other test runs.
   }, 20_000);
 
-  it("filters global and workspace skills in one pane without changing their rules", async () => {
+  it("filters global and project skills in one pane without changing their rules", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal(
       "ResizeObserver",
@@ -200,7 +200,7 @@ describe("Configure → Skills", () => {
       expect(pick("Global").getAttribute("aria-pressed")).toBe("true");
       expect(host.querySelector("tbody")?.textContent).toContain(skills[3]!.name);
       expect(host.querySelector("tbody")?.textContent).not.toContain(skills[0]!.name);
-      await act(async () => pick("This workspace").click());
+      await act(async () => pick("This project").click());
       expect(host.querySelector("tbody")?.textContent).toContain(skills[0]!.name);
       expect(host.querySelector("tbody")?.textContent).not.toContain(skills[3]!.name);
     } finally {
@@ -272,7 +272,7 @@ it("wraps scope controls and exposes Auto's token estimate on keyboard focus", a
       expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("tokens per turn"),
     );
     expect(container.querySelector('[aria-label="Skill scope"]')?.textContent).toContain(
-      "This workspace",
+      "This project",
     );
   } finally {
     act(() => root.unmount());

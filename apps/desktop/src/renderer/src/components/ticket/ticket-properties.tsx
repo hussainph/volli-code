@@ -94,14 +94,16 @@ function ValueTrigger({
   );
 }
 
-/** One applied label: a neutral name pill with its own Remove. */
+/** Neutral pill, stored label colour and its own Remove. */
 function LabelPill({
   name,
+  color,
   canWrite,
   removeRef,
   onRemove,
 }: {
   name: string;
+  color: string;
   /** Read-only (VC-576): the pill reads; its Remove stands down. */
   canWrite: boolean;
   removeRef: (node: HTMLButtonElement | null) => void;
@@ -113,6 +115,11 @@ function LabelPill({
       data-label={name}
       className="flex h-6 min-w-0 shrink items-center gap-1 rounded-control-small bg-(--fill-secondary) py-0 pr-0.5 pl-1.5 text-ui"
     >
+      <span
+        aria-hidden
+        className="size-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: color }}
+      />
       <span className="min-w-0 truncate">{name}</span>
       <button
         type="button"
@@ -285,6 +292,7 @@ function LabelRun({
   canWrite: boolean;
   onChange: (next: string[]) => void;
 }) {
+  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
   const removeRefs = React.useRef(new Map<string, HTMLButtonElement>());
   const addRef = React.useRef<HTMLButtonElement | null>(null);
   /** The pill to focus once the run has re-rendered, or `null` for Add. */
@@ -322,6 +330,7 @@ function LabelRun({
         <LabelPill
           key={name}
           name={name}
+          color={resolveLabelColor(projectLabels, name)}
           canWrite={canWrite}
           removeRef={(node) => {
             if (node === null) removeRefs.current.delete(name);

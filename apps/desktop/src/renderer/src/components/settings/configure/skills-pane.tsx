@@ -160,7 +160,7 @@ export function SkillsPane({
               options={[
                 { key: "all", label: "All" },
                 { key: "personal", label: "Global" },
-                { key: "project", label: "This workspace" },
+                { key: "project", label: "This project" },
               ]}
             />
             {/* What Auto costs every turn: the one number the mode column hides. */}
@@ -264,7 +264,7 @@ export function SkillsPane({
 
 /** Where a skill lives, as its preview's origin line: its tier, then its root. */
 function skillOrigin(skill: SkillReference): string {
-  return `${skillScope(skill) === "project" ? "This workspace" : "Global"} · ${skill.root}`;
+  return `${skillScope(skill) === "project" ? "This project" : "Global"} · ${skill.root}`;
 }
 
 /**
@@ -343,7 +343,7 @@ function SkillsTable({
 
   return (
     <DataTable
-      label="Skills available to this workspace"
+      label="Skills available to this project"
       items={shown}
       keyOf={(skill) => `${skillScope(skill)}/${skill.name}`}
       rows="fill"
@@ -396,7 +396,7 @@ function SkillsTable({
           header: "Source",
           width: "7rem",
           cell: (skill) => (
-            <Cell muted>{skillScope(skill) === "project" ? "This workspace" : "Global"}</Cell>
+            <Cell muted>{skillScope(skill) === "project" ? "This project" : "Global"}</Cell>
           ),
         },
         {

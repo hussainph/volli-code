@@ -255,6 +255,33 @@ describe("the property rows", () => {
 });
 
 describe("the label run", () => {
+  it("retains stored label colours on the neutral property pills", async () => {
+    useBoardStore.setState({
+      labelsByProject: {
+        p1: LABELS.map((label) =>
+          label.name === "UI" ? Object.assign({}, label, { color: "#123456" }) : label,
+        ),
+      },
+    });
+    await render();
+    const ui = pills().find((pill) => pill.dataset.label === "UI")!;
+    expect(ui.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.backgroundColor).toBe(
+      "rgb(18, 52, 86)",
+    );
+    await act(async () =>
+      useBoardStore.setState({
+        labelsByProject: {
+          p1: LABELS.map((label) =>
+            label.name === "UI" ? Object.assign({}, label, { color: "#abcdef" }) : label,
+          ),
+        },
+      }),
+    );
+    expect(ui.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.backgroundColor).toBe(
+      "rgb(171, 205, 239)",
+    );
+    expect(ui.querySelector('[aria-label="Remove UI"]')).not.toBeNull();
+  });
   it("draws one removable pill per label, in the ticket's own order", async () => {
     await render();
 
