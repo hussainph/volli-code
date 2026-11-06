@@ -1687,7 +1687,44 @@ describe("column arming trigger control", () => {
   });
 });
 
+function buttonsNamed(name: string): HTMLButtonElement[] {
+  return [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
+    (node) => (node.getAttribute("aria-label") ?? node.textContent?.trim()) === name,
+  );
+}
+
 describe("grouped reading navigation", () => {
+  it("keeps name-only primary rows unique and exposes the compact return to schedules", async () => {
+    await mount({
+      automations: [
+        automation({
+          id: "doing",
+          name: "Doing sweep",
+          trigger: { kind: "columns", columns: ["doing"] },
+        }),
+        automation({
+          id: "hourly",
+          name: "Hourly sweep",
+          trigger: {
+            kind: "schedule",
+            schedule: { preset: "hourly", minute: 17, timeZone: "UTC" },
+          },
+        }),
+      ],
+    });
+    await act(async () => railRow("doing").click());
+    expect(buttonsNamed("Doing sweep")).toHaveLength(1);
+    expect(buttonsNamed("Hourly sweep")).toHaveLength(1);
+    expect(buttonsNamed("Rename Doing sweep")).toHaveLength(1);
+    await act(async () => button("All automations").click());
+    expect(document.querySelector(".automations-surface")?.getAttribute("data-detail")).toBe(
+      "false",
+    );
+    await act(async () => buttonsNamed("Hourly sweep")[0]!.click());
+    expect(buttonsNamed("Hourly sweep")).toHaveLength(1);
+    expect(buttonsNamed("Rename Hourly sweep")).toHaveLength(1);
+  });
+
   it("keeps three recent occurrences and opens the real scoped All runs read", async () => {
     await mount({
       automations: [automation()],

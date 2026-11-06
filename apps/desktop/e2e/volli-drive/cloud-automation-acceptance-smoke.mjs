@@ -102,6 +102,7 @@ import {
   launchCloudInstance,
   openBoard,
   openProjectHome,
+  openAutomationDefinition,
   provenanceMarkCopy,
   runStatusCounts,
   runsOnRunner,
@@ -336,7 +337,7 @@ async function journey(fixture, store, evidenceDir) {
     // An empty board column is a pill; expanding it focuses its new-ticket
     // composer and blur collapses it again, so it is not a stable arming door.
     await macA.drive.click("button", "Automations", { first: true });
-    await macA.drive.click("button", DOING_AUTOMATION.name, { contains: true, first: true });
+    await openAutomationDefinition(macA.drive, DOING_AUTOMATION.name);
     await macA.drive.wait("Arm Doing", 30_000);
     // The person arms Doing on this Mac (the picker's default).
     await macA.drive.click("button", "Arm Doing");
@@ -346,8 +347,9 @@ async function journey(fixture, store, evidenceDir) {
     await macA.drive.click("button", `Arm Doing with ${DOING_AUTOMATION.name}`);
     await macA.drive.pressKey("Escape");
     await macA.drive.wait(`Doing runs ${DOING_AUTOMATION.name} on ${nameA}`, 30_000);
-    // Select the schedule in the same page's rail, then its own Armed switch.
-    await macA.drive.click("button", SCHEDULE_AUTOMATION.name, { contains: true, first: true });
+    // At compact widths the detail hides the rail. Go back to the real list,
+    // then choose the schedule's primary row before its own Armed switch.
+    await openAutomationDefinition(macA.drive, SCHEDULE_AUTOMATION.name);
     await macA.drive.wait(`Armed: ${SCHEDULE_AUTOMATION.name}`, 30_000);
     await macA.drive.click("switch", `Armed: ${SCHEDULE_AUTOMATION.name}`);
     // Armed and not paused: the editor's own next-occurrence line, from the

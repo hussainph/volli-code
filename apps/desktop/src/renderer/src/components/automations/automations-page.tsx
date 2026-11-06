@@ -470,7 +470,13 @@ function AutomationsSurface({
                 renameRequest={renameRequest}
                 readState={read}
                 back={
-                  <Button size="sm" variant="ghost" className="automation-back mb-4" onClick={back}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="automation-back mb-4"
+                    aria-label="All automations"
+                    onClick={back}
+                  >
                     <ArrowLeftIcon />
                     Automations
                   </Button>

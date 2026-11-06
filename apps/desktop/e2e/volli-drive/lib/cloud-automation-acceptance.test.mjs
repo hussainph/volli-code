@@ -24,6 +24,7 @@ import {
   ticketCardButtonRef,
   driveRequestBudget,
   driveInstance,
+  openAutomationDefinition,
   finishRunTurn,
   MINUTES,
   automationRunToolCall,
@@ -165,6 +166,48 @@ describe("opening the Run Session without a title race", () => {
     );
     assert.deepEqual(actions, ["home"]);
   });
+});
+
+describe("Automation definition navigation", () => {
+  for (const compact of [false, true])
+    for (const name of ["Doing sweep", "Hourly sweep"]) {
+      it(`selects the name-only ${name} row at ${compact ? "compact" : "wide"} width through the real drive codec`, async (t) => {
+        const dir = mkdtempSync(join(tmpdir(), "automation-definition-"));
+        const socket = join(dir, "drive.sock");
+        let detail = compact;
+        let generation = 0;
+        const actions = [];
+        const list =
+          '- button "Doing sweep" [ref=doing]\n- button "Hourly sweep" [ref=hourly]\n- button "Rename Doing sweep" [ref=rename]\n- button "Run Doing sweep" [ref=run]';
+        const server = await serve(socket, (cmd, args) => {
+          if (cmd === "act") {
+            assert.equal(args.gen, generation);
+            actions.push(args.ref);
+            if (args.ref === "back") detail = false;
+            else {
+              assert.equal(detail, false, "a hidden master row is not a control");
+              assert.equal(args.ref, name === "Doing sweep" ? "doing" : "hourly");
+            }
+          } else assert.ok(cmd === "snapshot" || cmd === "wait");
+          const snapshot = {
+            generation: ++generation,
+            text: detail
+              ? '- button "All automations" [ref=back]\n- button "Rename Doing sweep" [ref=rename]\n- button "Run Doing sweep" [ref=run]'
+              : list,
+          };
+          return cmd === "snapshot" ? snapshot : { snapshot };
+        });
+        t.after(async () => {
+          await new Promise((resolve) => server.close(resolve));
+          rmSync(dir, { recursive: true, force: true });
+        });
+        await openAutomationDefinition(driveInstance("A", socket), name);
+        assert.deepEqual(actions, [
+          ...(compact ? ["back"] : []),
+          name === "Doing sweep" ? "doing" : "hourly",
+        ]);
+      });
+    }
 });
 
 describe("hourlyBackdateAt", () => {

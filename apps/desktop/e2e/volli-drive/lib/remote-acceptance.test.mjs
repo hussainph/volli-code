@@ -591,6 +591,37 @@ function liftedKeepaliveRetirement(started, quitAttempted, tools) {
   `,
   )(tools);
 }
+test("the local keepalive opens Home's scoped tab chooser and waits for its real Message field", async () => {
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  const helper = smoke.slice(
+    smoke.indexOf("async function openHomeChat()"),
+    smoke.indexOf("async function hostChip()"),
+  );
+  const actions = [];
+  const run = new Function(
+    "tools",
+    `const { click, snap, waitUntil, hasActionableControl } = tools; return (${helper})();`,
+  );
+  await run({
+    click: async (...args) => actions.push(args),
+    snap: async () => ({ text: '- textbox "Message" [ref=message]' }),
+    waitUntil: async (_label, check) => assert.equal(await check(), true),
+    hasActionableControl,
+  });
+  assert.deepEqual(actions, [
+    ["button", "Open a tab", { scope: { role: "main", name: null } }],
+    ["menuitem", "Chat ⌘T"],
+  ]);
+  const bothDoors =
+    '- main [ref=main]:\n  - button "Open a tab" [ref=strip]\n- complementary [ref=sidebar]:\n  - button "Open a tab" [ref=nav]';
+  assert.equal(hasActionableControl(bothDoors, "button", "Open a tab"), false);
+  assert.equal(
+    hasActionableControl(snapshotSubtree(bothDoors, "main", null), "button", "Open a tab"),
+    true,
+  );
+  assert.match(smoke, /await openHomeChat\(\);\s*localKeepaliveStarted = true;/u);
+});
+
 test("keepalive retirement reopens normally and stops only the named local synthetic Session", async () => {
   const calls = [];
   const tools = Object.fromEntries(

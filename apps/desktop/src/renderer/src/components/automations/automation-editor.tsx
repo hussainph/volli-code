@@ -928,6 +928,7 @@ export function AutomationEditorPanel({
               <h2 className="text-heading font-semibold wrap-anywhere">
                 <button
                   className="w-full rounded-control text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`Rename ${automation.name}`}
                   disabled={disabled}
                   onClick={() => startEdit("name")}
                 >

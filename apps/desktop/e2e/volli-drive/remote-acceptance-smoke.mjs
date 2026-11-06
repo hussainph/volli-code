@@ -91,6 +91,17 @@ async function send(text) {
   await type("Message", text);
   await action("press", "textbox", "Message", { key: "Enter" });
 }
+async function openHomeChat() {
+  // Home's approved entry point is its tab chooser, not the removed empty-chat
+  // button. Scope the strip door to main; the sidebar has an equivalent +.
+  await click("button", "Open a tab", { scope: { role: "main", name: null } });
+  await click("menuitem", "Chat ⌘T");
+  await waitUntil(
+    "the local chat Message box is actionable",
+    async () => hasActionableControl((await snap()).text, "textbox", "Message"),
+    { timeout: 30_000, interval: 100 },
+  );
+}
 async function hostChip() {
   await click("button", "Host:", { contains: true });
   await wait("Switch host");
@@ -388,7 +399,7 @@ async function journey() {
       // scripted turn keeps the client alive while the remote question waits.
       await selectHost("This Mac");
       await click("button", "Home");
-      await click("button", "New chat", { first: true });
+      await openHomeChat();
       localKeepaliveStarted = true;
       await send(LOCAL_KEEPALIVE);
       await wait("Stop turn");
