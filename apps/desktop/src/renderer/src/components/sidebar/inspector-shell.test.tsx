@@ -99,7 +99,7 @@ async function setup(owner: "home" | "ticket") {
 }
 describe("resident inspector", () => {
   for (const owner of ["home", "ticket"] as const) {
-    it(`${owner}: mirrors pointer pour, dwell, suppression and pin without remounting its page`, async () => {
+    it(`${owner}: mirrors pointer push, dwell, suppression and pin without remounting its page`, async () => {
       await setup(owner);
       const child = host.querySelector("[data-live-child]");
       await click(1);
@@ -108,8 +108,10 @@ describe("resident inspector", () => {
       expect(panel.parentElement!.style.width).toBe("var(--right-pane-push, 0px)");
       expect(animate).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ duration: 110 }),
+        expect.objectContaining({ duration: 270 }),
       );
+      expect(animate).toHaveBeenCalledTimes(1);
+      expect(document.querySelector("[data-pane-pour-shell]")).toBeNull();
       expect(panel.dataset.glassBlur).toBeUndefined();
       expect(button.dataset.panePouring).toBeUndefined();
       // Settle via the same preference gate used when Motion is turned off live.
@@ -145,7 +147,7 @@ describe("resident inspector", () => {
     expect(panel.style.getPropertyValue("--reveal-duration")).toBe("0ms");
     expect(animate).not.toHaveBeenCalled();
   });
-  it("pours after pointer departure but preserves the selected page", async () => {
+  it("withdraws the peek after pointer departure but preserves the selected page", async () => {
     await setup("home");
     await click(0);
     await move(500, 300);

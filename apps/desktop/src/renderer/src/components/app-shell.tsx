@@ -205,7 +205,6 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       keyboardInstant ||
       reducedMotion,
     panelRef,
-    bandRef,
     geometryKey: sidebarWidth,
   });
   // Both divider edges read this one live value. React commits only intent;
@@ -592,7 +591,6 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             }}
           />
         </div>
-        {contentMotion.decoration}
         <Toaster />
         {/* The armed-column delay window (VC-128, main-owned in VC-226).
           Window-level beside the Toaster rather than inside the board: any

@@ -82,7 +82,6 @@ export function InspectorShell({
     instant:
       reduced || !enabled || panelRef.current?.hasAttribute("data-keyboard-dismiss") === true,
     panelRef,
-    triggerRef,
     contentElement,
     geometryKey: width,
   });
@@ -128,7 +127,6 @@ export function InspectorShell({
         className="pointer-events-none absolute"
         style={{ top: ZONE_TOP_DEAD_BAND, bottom: 0, right: -6, width: ZONE_WIDTH + 6 }}
       />
-      {pane.decoration}
     </aside>
   );
   return host === undefined ? dock : host === null ? null : createPortal(dock, host);

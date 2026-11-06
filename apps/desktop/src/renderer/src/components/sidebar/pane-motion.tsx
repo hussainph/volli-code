@@ -1,23 +1,10 @@
 import { beginPaneResize } from "@renderer/lib/pane-resize";
 import * as React from "react";
-import { createPortal } from "react-dom";
 import { GLASS_MOTION, springSamples } from "@renderer/lib/glass-motion";
-import { GlassSurface } from "@renderer/components/ui/surface";
-import { overlayLayer } from "@renderer/components/ui/overlay-layer";
 
 const pushOwners = new WeakMap<HTMLElement, Map<string, { owner: object; stop(): void }>>();
 
 export type PaneMode = "closed" | "peeking" | "pinned";
-interface PourGeometry {
-  box: DOMRect;
-  target: DOMRect;
-  opening: boolean;
-  background: string;
-  radius: string;
-  generation: number;
-  start?: { transform: string; opacity: number };
-}
-
 /** Both sides share semantic endpoints, transaction ownership and clocks.
  * One registered width value pushes both divider edges on every frame. Heavy
  * renderers defer their resize under a shared fence; live content never squashes. */
@@ -27,8 +14,6 @@ export function usePaneMotion({
   mode,
   instant,
   panelRef,
-  triggerRef,
-  bandRef,
   contentElement,
   geometryKey,
 }: {
@@ -37,13 +22,10 @@ export function usePaneMotion({
   enabled?: boolean;
   instant: boolean;
   panelRef: React.RefObject<HTMLDivElement | null>;
-  triggerRef?: React.RefObject<HTMLElement | null>;
-  bandRef?: React.RefObject<HTMLDivElement | null>;
   contentElement?: HTMLElement | null;
   geometryKey?: number;
 }) {
   const pinned = mode === "pinned";
-  const shown = mode !== "closed";
   const contentRef = React.useRef<HTMLElement | null>(null);
   if (contentElement !== undefined) contentRef.current = contentElement;
   const layoutPinned = pinned;
@@ -59,10 +41,6 @@ export function usePaneMotion({
   const releaseResize = React.useRef<(() => void) | null>(null);
   const resizeOwner = React.useRef({});
   const previousMode = React.useRef(mode);
-  const generation = React.useRef(0);
-  const [pour, setPour] = React.useState<PourGeometry | null>(null);
-  const shellAnimation = React.useRef<Animation | null>(null);
-  const shellRef = React.useRef<HTMLDivElement | null>(null);
   const initialized = React.useRef(false);
   const lastElement = React.useRef<HTMLElement | null>(null);
   const stopPush = React.useCallback(() => {
@@ -77,12 +55,6 @@ export function usePaneMotion({
     releaseResize.current = null;
     setMoving(false);
   }, [side]);
-  const stopPour = React.useCallback(() => {
-    shellAnimation.current?.cancel();
-    shellAnimation.current = null;
-    setPour(null);
-  }, []);
-
   // A portal can mount the panel only after its paper/host ref arrives.
   // contentElement therefore participates in the first real push commit even
   // when pin state and width did not change: pinned glass must reserve paper.
@@ -213,91 +185,18 @@ export function usePaneMotion({
   }, [side, enabled, mode, pinned, instant, geometryKey, panelRef, contentElement, stopPush]);
 
   React.useLayoutEffect(() => {
-    const previous = previousMode.current;
     previousMode.current = mode;
-    if (instant) {
-      stopPour();
-      return;
-    }
-    if (previous === mode || previous === "peeking" || mode === "peeking") return;
-    // Pinning an existing peek must not re-enter an already visible pane.
-    if (previous !== "closed" && shown) return;
-    const panel = panelRef.current;
-    const trigger =
-      triggerRef?.current ??
-      bandRef?.current?.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]');
-    if (!panel || !trigger || panel.hasAttribute("data-keyboard-dismiss")) {
-      stopPour();
-      return;
-    }
-    const material = panel.querySelector<HTMLElement>(".glass") ?? panel;
-    const box = material.getBoundingClientRect();
-    if (box.width <= 0 || box.height <= 0) return;
-    const currentShell = shellRef.current;
-    const currentBox = currentShell?.getBoundingClientRect();
-    const start =
-      currentBox && currentBox.width > 0
-        ? {
-            transform: `translate3d(${currentBox.left - box.left}px, ${currentBox.top - box.top}px, 0px) scale(${currentBox.width / box.width}, ${currentBox.height / box.height})`,
-            opacity: Number(getComputedStyle(currentShell!).opacity),
-          }
-        : undefined;
-    stopPour();
-    const style = getComputedStyle(material);
-    setPour({
-      start,
-      box,
-      target: trigger.getBoundingClientRect(),
-      opening: shown,
-      background: style.background,
-      radius: style.borderRadius,
-      generation: ++generation.current,
-    });
-  }, [mode, shown, instant, panelRef, triggerRef, bandRef, stopPour]);
-
-  const bindShell = React.useCallback(
-    (node: HTMLDivElement | null) => {
-      shellRef.current = node;
-      if (!node || !pour || typeof node.animate !== "function") return;
-      const { box, target, opening } = pour;
-      const folded = `translate3d(${target.left - box.left}px, ${target.top - box.top}px, 0px) scale(${target.width / box.width}, ${target.height / box.height})`;
-      const whole = "translate3d(0px, 0px, 0px) scale(1, 1)";
-      node.style.willChange = "transform, opacity";
-      const animation = node.animate(
-        opening
-          ? [pour.start ?? { transform: folded, opacity: 1 }, { transform: whole, opacity: 0 }]
-          : [pour.start ?? { transform: whole, opacity: 1 }, { transform: folded, opacity: 0 }],
-        {
-          duration: opening ? GLASS_MOTION.sheet : GLASS_MOTION.menuOut,
-          easing: GLASS_MOTION.easeOutCss,
-          fill: "both",
-        },
-      );
-      shellAnimation.current = animation;
-      animation.onfinish = () => {
-        if (shellAnimation.current === animation) stopPour();
-      };
-      return () => {
-        animation.cancel();
-        node.style.removeProperty("will-change");
-        if (shellRef.current === node) shellRef.current = null;
-      };
-    },
-    [pour, stopPour],
-  );
+  }, [mode]);
 
   React.useEffect(() => {
     const settle = () => {
-      ++generation.current;
       stopPush();
-      stopPour();
     };
     window.addEventListener("resize", settle);
     return () => window.removeEventListener("resize", settle);
-  }, [pinned, stopPush, stopPour]);
+  }, [pinned, stopPush]);
   React.useEffect(
     () => () => {
-      ++generation.current;
       const active = driver.current;
       driver.current = null;
       active?.animation.cancel();
@@ -306,32 +205,10 @@ export function usePaneMotion({
       const element = lastElement.current;
       const owners = element ? pushOwners.get(element) : undefined;
       if (owners?.get(side)?.owner === resizeOwner.current) owners.delete(side);
-      shellAnimation.current?.cancel();
     },
     [side],
   );
-  const layer = pour ? overlayLayer() : undefined;
-  const decoration =
-    pour && layer
-      ? createPortal(
-          <GlassSurface
-            ref={bindShell}
-            aria-hidden
-            data-pane-pour-shell=""
-            data-pane-side-decoration={side}
-            className="pointer-events-none fixed z-40"
-            style={{
-              left: pour.box.left,
-              top: pour.box.top,
-              width: pour.box.width,
-              height: pour.box.height,
-              borderRadius: pour.radius,
-              background: pour.background,
-              transformOrigin: "0 0",
-            }}
-          />,
-          layer,
-        )
-      : null;
-  return { contentRef, layoutPinned, moving, pouring: pour !== null, decoration };
+  // The resident pane is the one animated glass surface. A second empty glass
+  // shell would blur its live content and expose an opaque base pose on cancel.
+  return { contentRef, layoutPinned, moving };
 }

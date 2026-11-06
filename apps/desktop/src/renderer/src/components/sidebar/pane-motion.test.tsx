@@ -25,7 +25,7 @@ function Harness({
 }) {
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const pane = usePaneMotion({ side, mode, instant, panelRef, triggerRef });
+  const pane = usePaneMotion({ side, mode, instant, panelRef });
   return (
     <div data-volli-shell="">
       <button ref={triggerRef} data-trigger={side}>
@@ -42,7 +42,6 @@ function Harness({
         </div>
       </div>
       <span data-layout={pane.layoutPinned} data-moving={pane.moving} />
-      {pane.decoration}
     </div>
   );
 }
@@ -91,7 +90,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe.each(["left", "right"] as const)("%s pane transactions", (side) => {
-  it("preserves residency and material, with separate width and decorative owners", async () => {
+  it("animates the resident glass once without a second backdrop over its contents", async () => {
     await show(side, "pinned");
     const input = host.querySelector("input");
     await show(side, "closed");
@@ -104,9 +103,9 @@ describe.each(["left", "right"] as const)("%s pane transactions", (side) => {
         Object.keys(frame).every((key) => key === "offset" || key === `--${side}-pane-push`),
       ),
     ).toBe(true);
-    const shell = runs.find((run) => run.node.hasAttribute("data-pane-pour-shell"))!;
-    expect(shell.options.duration).toBe(110);
-    expect(shell.node.querySelector("input")).toBeNull();
+    expect(runs).toHaveLength(1);
+    expect(document.querySelectorAll(".glass")).toHaveLength(1);
+    expect(document.querySelector("[data-pane-pour-shell]")).toBeNull();
     expect(document.querySelector('[data-glass-blur="off"]')).toBeNull();
     expect(host.querySelector("button")?.hasAttribute("disabled")).toBe(false);
   });
