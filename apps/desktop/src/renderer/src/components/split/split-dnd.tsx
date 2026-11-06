@@ -32,6 +32,8 @@ import { GLASS_MOTION } from "@renderer/lib/glass-motion";
  * one flag either way.
  */
 import * as React from "react";
+import { createPortal } from "react-dom";
+import { useOverlayLayer } from "@renderer/components/ui/overlay-layer";
 import {
   closestCenter,
   defaultDropAnimationSideEffects,
@@ -239,6 +241,7 @@ export function SplitDnd({
     },
     [onGroupDrop],
   );
+  const overlayLayer = useOverlayLayer();
   const sensors = useSurfaceSensors();
   const reducedMotion = useReducedMotion();
   const [keyboardDrag, setKeyboardDrag] = React.useState(false);
@@ -309,15 +312,19 @@ export function SplitDnd({
           </div>
         </TabStripSurface>
       </SplitDndStateContext.Provider>
-      <DragOverlay
-        // The tab returns to its slot in the time a dropdown opens. `null`
-        // under reduced motion: a drop that lands is a state change, and the
-        // flight back is the decoration the flag turns off.
-        transition={instant ? "" : undefined}
-        dropAnimation={instant ? null : GHOST_DROP_ANIMATION}
-      >
-        {ghostLabel === null ? null : <TabDragGhost label={ghostLabel} />}
-      </DragOverlay>
+      {overlayLayer &&
+        createPortal(
+          <DragOverlay
+            // A glass surface is a fixed-position containing block. The overlay
+            // uses viewport coordinates for travel AND collision measurements,
+            // so it must escape that surface, like every other floating layer.
+            transition={instant ? "" : undefined}
+            dropAnimation={instant ? null : GHOST_DROP_ANIMATION}
+          >
+            {ghostLabel === null ? null : <TabDragGhost label={ghostLabel} />}
+          </DragOverlay>,
+          overlayLayer,
+        )}
     </DndContext>
   );
 }

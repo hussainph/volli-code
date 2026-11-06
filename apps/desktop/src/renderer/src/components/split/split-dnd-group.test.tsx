@@ -30,7 +30,7 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
     },
     DragOverlay: (props: DragOverlayProps) => {
       harness.overlay = props;
-      return null;
+      return <div data-testid="drag-overlay-host">{props.children}</div>;
     },
   };
 });
@@ -299,6 +299,14 @@ describe("the top strip as a drop target", () => {
 });
 
 describe("the ghost's flight home", () => {
+  it("escapes glass containing blocks so its measurements stay viewport-relative", () => {
+    host.style.backdropFilter = "blur(10px)";
+    mountPairSurface();
+    expect(host.querySelector('[data-testid="drag-overlay-host"]')).toBeNull();
+    const overlay = document.querySelector('[data-testid="drag-overlay-host"]')!;
+    expect(overlay.parentElement?.id).toBe("volli-overlays");
+    expect(overlay.parentElement?.parentElement).toBe(document.body);
+  });
   it("keeps keyboard ghost and sibling transitions instant through cancel, then restores pointer motion", () => {
     mountPairSurface();
     act(() =>
