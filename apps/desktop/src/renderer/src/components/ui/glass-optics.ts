@@ -151,16 +151,17 @@ function svg(doc: Document, name: string, attrs: Record<string, string | number>
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
   return node;
 }
-function acquire(el: HTMLElement): { key: string; release(): void } | null {
-  const doc = el.ownerDocument,
-    view = doc.defaultView;
-  if (!view) return null;
-  const w = el.offsetWidth,
-    h = el.offsetHeight;
+function acquire(
+  el: HTMLElement,
+  w: number,
+  h: number,
+  radius: number,
+  dpr: number,
+): { key: string; release(): void } | null {
+  const doc = el.ownerDocument;
   // Large reading surfaces stay pane-tier; bound per-overlay map memory/work.
   if (!w || !h || w * h > 350_000 || w > 800 || h > 800) return null;
-  const r = Math.min(parseFloat(view.getComputedStyle(el).borderRadius) || 0, w / 2, h / 2);
-  const dpr = Math.min(2, view.devicePixelRatio || 1);
+  const r = Math.min(radius, w / 2, h / 2);
   const scale = Math.max(8, Math.ceil((bend(Math.min(w, h), 0) * 2) / 8) * 8);
   const key = [w, h, r, dpr, scale].join("-");
   let cache = caches.get(doc);
@@ -290,23 +291,29 @@ export function attachGlassOptics(el: HTMLElement): () => void {
     return () => {};
   let current: ReturnType<typeof acquire> = null;
   let geometry = "";
-  const update = () => {
-    const next = [
-      el.offsetWidth,
-      el.offsetHeight,
-      view.getComputedStyle(el).borderRadius,
-      view.devicePixelRatio,
-    ].join("-");
+  let stopped = false;
+  const update = (entries?: readonly ResizeObserverEntry[]) => {
+    if (stopped) return;
+    const box = entries?.[0]?.borderBoxSize?.[0];
+    // Preserve offsetWidth's integer geometry/cache keys without forcing layout
+    // from a commit ref. ResizeObserver delivers this before the first paint,
+    // after Floating UI and focus have finished writing their initial geometry.
+    const w = box ? Math.round(box.inlineSize) : el.offsetWidth;
+    const h = box ? Math.round(box.blockSize) : el.offsetHeight;
+    const radius = parseFloat(view.getComputedStyle(el).borderRadius) || 0;
+    const dpr = Math.min(2, view.devicePixelRatio || 1);
+    const next = [w, h, radius, dpr].join("-");
     if (next === geometry) return;
     geometry = next;
     current?.release();
-    current = acquire(el);
+    current = acquire(el, w, h, radius, dpr);
     if (!current) el.style.removeProperty("--glass-refraction");
   };
-  update();
   const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
-  observer?.observe(el);
+  if (observer) observer.observe(el, { box: "border-box" });
+  else update();
   return () => {
+    stopped = true;
     observer?.disconnect();
     current?.release();
     el.style.removeProperty("--glass-refraction");

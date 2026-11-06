@@ -45,6 +45,8 @@ describe("bounded full-tier glass optics", () => {
     );
     const node = fixture();
     const stop = attachGlassOptics(node);
+    expect(make).not.toHaveBeenCalled();
+    callbacks[0](); // Initial pre-paint observer delivery, not a commit-time DOM read.
     const url = node.style.getPropertyValue("--glass-refraction");
     expect(url).toMatch(/^url\(#volli-glass-optic-/);
     expect(make).toHaveBeenCalledTimes(1);
@@ -55,6 +57,7 @@ describe("bounded full-tier glass optics", () => {
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(node.style.getPropertyValue("--glass-refraction")).toBe("");
     const stopAgain = attachGlassOptics(node);
+    callbacks[1]();
     expect(make).toHaveBeenCalledTimes(1);
     expect(node.style.getPropertyValue("--glass-refraction")).toBe(url);
     Object.defineProperty(node, "offsetWidth", { value: 62 });
@@ -62,6 +65,9 @@ describe("bounded full-tier glass optics", () => {
     expect(make).toHaveBeenCalledTimes(2);
     expect(node.style.getPropertyValue("--glass-refraction")).not.toBe(url);
     stopAgain();
+    Object.defineProperty(node, "offsetWidth", { value: 64 });
+    callbacks[1](); // A queued callback after disconnect cannot acquire a map.
+    expect(make).toHaveBeenCalledTimes(2);
     node.remove();
   });
   it("keeps oversized overlays and nested/reduced-transparency material out of SVG", () => {
@@ -95,6 +101,7 @@ describe("bounded full-tier glass optics", () => {
 });
 
 it("preserves the exact displacement bytes while skipping the neutral interior", () => {
+  vi.stubGlobal("ResizeObserver", undefined); // Synchronous compatibility path.
   const fixtures = [
     [71, 49, 12, 1, "042068e6bf63432028b4e1e6fb75a9f9aeeb547b47c2b65ddab4a58a91698ada"],
     [173, 217, 12, 2, "3d9f7e241314b89d98cee3086695bc27ab4014b25ba7e31ce2e20aee9dff606d"],
