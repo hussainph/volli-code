@@ -295,6 +295,7 @@ describe("the model pill's Defaults view", () => {
     });
     const toggle = document.querySelector('[data-testid="model-picker-view"]');
     expect(toggle).not.toBeNull();
+    expect(toggle?.closest("[cmdk-root]")).not.toBeNull();
     expect(toggle?.querySelector('[data-choice="defaults"]')?.getAttribute("aria-pressed")).toBe(
       "true",
     );
@@ -623,6 +624,7 @@ it("bounds the full model catalog while reaching and choosing its last provider 
   });
   expect(document.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(13);
   const input = document.querySelector<HTMLInputElement>('[data-slot="command-input"]')!;
+  expect(input.closest("[cmdk-root]")).toBeNull();
   await act(async () =>
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
   );

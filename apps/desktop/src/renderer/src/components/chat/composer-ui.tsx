@@ -1945,6 +1945,11 @@ export function ModelPill({
     );
   }
 
+  // Defaults uses cmdk's registered rows. All models owns a windowed combobox
+  // and its logical active descendant; a second command controller around it
+  // has no registered items and only adds mount/focus/layout work.
+  const PickerCommandRoot = showDefaults ? PromptInputCommand : "div";
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -2054,8 +2059,12 @@ export function ModelPill({
             />
           </div>
         ) : null}
-        <PromptInputCommand>
-          {/* Inside the command root, so arrow keys reach the list from the
+        <PickerCommandRoot
+          className={
+            showDefaults ? undefined : "flex min-h-0 min-w-0 w-full flex-col overflow-hidden"
+          }
+        >
+          {/* Inside the Defaults command root, so arrow keys reach its list from the
               toggle too; the search field keeps focus in the All view through
               its own `autoFocus`, which the popover's focus scope honours. No
               motion on the switch: a control used tens of times a day. */}
@@ -2136,7 +2145,7 @@ export function ModelPill({
               )}
             />
           )}
-        </PromptInputCommand>
+        </PickerCommandRoot>
       </PopoverContent>
     </Popover>
   );
