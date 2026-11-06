@@ -848,14 +848,17 @@ describe("ActiveSessions attention signals (VC-1078)", () => {
 });
 
 it("selects without navigation, ranges, selects all and clears, with existing read commands in bulk", async () => {
+  // Distinct activity times pin the row order (c1, c2, c3); identical timestamps
+  // could straddle a millisecond and reorder the shift-click range.
+  const now = Date.now();
   seedSessions(
-    ["c1", "c2", "c3"].map((sessionId) =>
+    ["c1", "c2", "c3"].map((sessionId, index) =>
       listingRow(
         chatRecord({
           sessionId,
           title: `Session ${sessionId}`,
-          lastActivityAt: Date.now(),
-          createdAt: Date.now(),
+          lastActivityAt: now - index * 1_000,
+          createdAt: now - index * 1_000,
         }),
       ),
     ),
