@@ -20,6 +20,7 @@ import {
   ModelPill,
   offerableModels,
   type ComposerModelSelection,
+  type ComposerModel,
 } from "./composer-ui";
 
 vi.mock("sonner", () => ({
@@ -233,6 +234,7 @@ async function renderPill(input: {
   view: ModelPickerView;
   defaults: ModelAccessDefaults;
   withTiers?: boolean;
+  catalog?: readonly ComposerModel[];
   selectionTier?: string | null;
   selectionAuto?: ModelAutoPick | null;
   onChange?: (next: ComposerModelSelection) => void;
@@ -242,7 +244,7 @@ async function renderPill(input: {
   containerKind?: string;
 }): Promise<ReturnType<typeof labClient>> {
   const client = labClient(input.view, input.defaults);
-  const models = offerableModels(MODELS, PROVIDERS, []);
+  const models = input.catalog ?? offerableModels(MODELS, PROVIDERS, []);
   const tiers = composerTierRows(input.defaults, MODELS, PROVIDERS, []);
   container = document.createElement("div");
   if (input.compactEffort !== undefined) {
@@ -448,12 +450,13 @@ describe("the compact model and effort control", () => {
 describe("reading the whole selected model without changing it", () => {
   it("renders provider group names with sentence-case section-heading type", async () => {
     await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS });
-    const heading = Array.from(document.querySelectorAll("[cmdk-group-heading]")).find(
-      (node) => node.textContent === "Anthropic",
-    );
+    const heading = Array.from(
+      document.querySelectorAll('[data-slot="command-group-heading"]'),
+    ).find((node) => node.textContent === "Anthropic");
     expect(heading).toBeDefined();
-    const classes = heading?.closest("[cmdk-group]")?.className ?? "";
-    expect(classes).toContain("[&_[cmdk-group-heading]]:text-ui");
+    expect(heading?.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Anthropic");
+    const classes = heading?.className ?? "";
+    expect(classes).toContain("text-ui");
     expect(classes).not.toContain("uppercase");
     expect(classes).not.toContain("tracking-");
   });
@@ -598,5 +601,40 @@ describe("reading it while the selection is frozen", () => {
     expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
       "Fast · sonnet · anthropic",
     );
+  });
+});
+
+it("bounds the full model catalog while reaching and choosing its last provider from the keyboard", async () => {
+  const picked = vi.fn();
+  const catalog = Array.from({ length: 1000 }, (_, i) => ({
+    id: `provider/model-${i}`,
+    providerId: i < 500 ? "first" : "last",
+    providerLabel: i < 500 ? "First provider" : "Last provider",
+    modelId: `model-${i}`,
+    label: `Model ${i}`,
+    reasoningLevels: ["low"],
+  }));
+  await renderPill({
+    view: "all",
+    defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+    withTiers: false,
+    catalog,
+    onChange: picked,
+  });
+  expect(document.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(13);
+  const input = document.querySelector<HTMLInputElement>('[data-slot="command-input"]')!;
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
+  );
+  const option = document.getElementById(input.getAttribute("aria-activedescendant")!)!;
+  expect(option.textContent).toContain("Model 999");
+  expect(option.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Last provider");
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  expect(picked).toHaveBeenCalledWith({
+    providerId: "last",
+    modelId: "model-999",
+    reasoningLevel: "low",
   });
 });

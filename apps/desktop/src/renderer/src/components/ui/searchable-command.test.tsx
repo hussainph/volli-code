@@ -40,7 +40,7 @@ it("bounds 1000 choices and reaches the last logical item from the keyboard", as
       />,
     ),
   );
-  expect(host.querySelectorAll('[role="option"]')).toHaveLength(20);
+  expect(host.querySelectorAll('[role="option"]')).toHaveLength(12);
   const input = host.querySelector("input")!;
   await act(async () =>
     input.dispatchEvent(
@@ -51,7 +51,7 @@ it("bounds 1000 choices and reaches the last logical item from the keyboard", as
   await act(async () =>
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
   );
-  expect(host.querySelectorAll('[role="option"]')).toHaveLength(20);
+  expect(host.querySelectorAll('[role="option"]')).toHaveLength(12);
   const current = host.querySelector('[role="option"][aria-selected="true"]');
   expect(current?.textContent).toBe("Choice 999");
   expect(input.getAttribute("aria-activedescendant")).toBe(current?.id);
@@ -77,4 +77,39 @@ it("reconciles a shortened query with no stale window and names an empty result"
   expect(host.querySelector('[role="option"]')?.textContent).toBe("Only");
   await act(async () => draw([], "missing"));
   expect(host.querySelector('[role="status"]')?.textContent).toBe("No results");
+});
+it("keeps group headings and keyboard order across an unmounted group boundary", async () => {
+  const choose = vi.fn();
+  const items = Array.from({ length: 1000 }, (_, i) => ({
+    name: `Model ${i}`,
+    provider: i < 500 ? "First" : "Last",
+  }));
+  await act(async () =>
+    root.render(
+      <SearchableCommand
+        items={items}
+        keyOf={(item) => item.name}
+        groupOf={(item) => item.provider}
+        renderItem={(item) => item.name}
+        onSelect={choose}
+        query=""
+        onQueryChange={() => {}}
+        placeholder="Model"
+      />,
+    ),
+  );
+  expect(host.querySelector('[role="group"][aria-label="First"]')).not.toBeNull();
+  const input = host.querySelector("input")!;
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
+  );
+  const selected = host.querySelector('[role="option"][aria-selected="true"]')!;
+  expect(selected.textContent).toBe("Model 999");
+  expect(selected.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Last");
+  expect(input.getAttribute("aria-activedescendant")).toBe(selected.id);
+  expect(host.querySelectorAll('[role="option"]')).toHaveLength(12);
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  expect(choose).toHaveBeenCalledWith(items[999]);
 });

@@ -36,6 +36,8 @@
  * hook reaching for `window.api`.
  */
 import * as React from "react";
+import { defaultFilter } from "cmdk";
+import { SearchableCommand } from "@renderer/components/ui/searchable-command";
 import {
   ReplyIcon,
   SendIcon,
@@ -52,9 +54,7 @@ import {
   PromptInput,
   PromptInputBody,
   PromptInputCommand,
-  PromptInputCommandEmpty,
   PromptInputCommandGroup,
-  PromptInputCommandInput,
   PromptInputCommandItem,
   PromptInputCommandList,
   PromptInputFooter,
@@ -1847,14 +1847,28 @@ export function ModelPill({
     onOpenChange?.(next);
   };
   const open = openProp ?? uncontrolledOpen;
-  // First-appearance order: the catalog's own ordering is the harness's answer
-  // to "which provider matters", and re-sorting it here would be our opinion.
-  const providers = models.reduce<Array<{ id: string; label: string }>>((result, model) => {
-    if (!result.some((provider) => provider.id === model.providerId)) {
-      result.push({ id: model.providerId, label: model.providerLabel });
+  const [modelQuery, setModelQuery] = React.useState("");
+  React.useEffect(() => {
+    if (!open) setModelQuery("");
+  }, [open]);
+  // Preserve cmdk's fuzzy ranking and first-appearance provider order, while
+  // mounting only the visible catalog rows (not every provider's full catalog).
+  const catalog = React.useMemo(() => {
+    const groups = new Map<string, { model: ComposerModel; score: number }[]>();
+    for (const model of models) {
+      const score = modelQuery
+        ? defaultFilter(`${model.providerId} ${model.modelId} ${model.label}`, modelQuery)
+        : 1;
+      if (score <= 0) continue;
+      const group = groups.get(model.providerId) ?? [];
+      group.push({ model, score });
+      groups.set(model.providerId, group);
     }
-    return result;
-  }, []);
+    return [...groups.values()]
+      .map((group) => group.sort((a, b) => b.score - a.score))
+      .sort((a, b) => b[0]!.score - a[0]!.score)
+      .flatMap((group) => group.map(({ model }) => model));
+  }, [models, modelQuery]);
   // Composed once and spent four times — the pill's name, its `title`, the line
   // the open list leads with, and the bubble a frozen pill reveals — so no two
   // of them can disagree about one selection.
@@ -2048,9 +2062,8 @@ export function ModelPill({
           ) : null}
           {/* No search box over the Defaults view: five rows, nothing to
               filter, and a field that filtered nothing would be a lie. */}
-          {showDefaults ? null : <PromptInputCommandInput placeholder="Model" autoFocus />}
-          <PromptInputCommandList>
-            {showDefaults ? (
+          {showDefaults ? (
+            <PromptInputCommandList>
               <PromptInputCommandGroup>
                 {tiers.map((row) => (
                   <TierRow
@@ -2076,58 +2089,43 @@ export function ModelPill({
                   />
                 ))}
               </PromptInputCommandGroup>
-            ) : null}
-            {showDefaults ? null : <PromptInputCommandEmpty>No match</PromptInputCommandEmpty>}
-            {showDefaults
-              ? null
-              : providers.map((provider) => (
-                  <PromptInputCommandGroup key={provider.id} heading={provider.label}>
-                    {models
-                      .filter((model) => model.providerId === provider.id)
-                      .map((model) => {
-                        const selected =
-                          model.providerId === selection.providerId &&
-                          model.modelId === selection.modelId;
-                        return (
-                          // A model row, and only a model row. It used to carry the
-                          // effort segment on whichever row was selected — up to
-                          // seven pressable buttons inside a listbox option, kept
-                          // from also picking the row by a `stopPropagation`. Effort
-                          // is a chip in the footer now, so the workaround and the
-                          // thing it worked around both left together.
-                          <PromptInputCommandItem
-                            key={model.id}
-                            value={`${model.providerId} ${model.modelId} ${model.label}`}
-                            onSelect={() => {
-                              onChange({
-                                ...selection,
-                                providerId: model.providerId,
-                                modelId: model.modelId,
-                                // The stop set changes under the effort chip when
-                                // the model does; a level the incoming model cannot
-                                // run is rewritten rather than held.
-                                reasoningLevel: reclampEffort(
-                                  model.reasoningLevels,
-                                  selection.reasoningLevel,
-                                ),
-                              });
-                              setOpen(false);
-                            }}
-                          >
-                            <CheckIcon
-                              className={cn("size-3.5 shrink-0", !selected && "invisible")}
-                              strokeWidth={2.25}
-                            />
-                            <ModelMark model={model} providerLabel={model.providerLabel} />
-                            <span className="min-w-0 flex-1 truncate tabular-nums">
-                              {model.label}
-                            </span>
-                          </PromptInputCommandItem>
-                        );
-                      })}
-                  </PromptInputCommandGroup>
-                ))}
-          </PromptInputCommandList>
+            </PromptInputCommandList>
+          ) : (
+            <SearchableCommand
+              items={catalog}
+              keyOf={(model) => model.id}
+              groupOf={(model) => model.providerLabel}
+              query={modelQuery}
+              onQueryChange={setModelQuery}
+              placeholder="Model"
+              empty="No match"
+              onSelect={(model) => {
+                onChange({
+                  ...selection,
+                  providerId: model.providerId,
+                  modelId: model.modelId,
+                  reasoningLevel: reclampEffort(model.reasoningLevels, selection.reasoningLevel),
+                });
+                setOpen(false);
+              }}
+              renderItem={(model) => (
+                <>
+                  <CheckIcon
+                    className={cn(
+                      "size-3.5 shrink-0",
+                      !(
+                        model.providerId === selection.providerId &&
+                        model.modelId === selection.modelId
+                      ) && "invisible",
+                    )}
+                    strokeWidth={2.25}
+                  />
+                  <ModelMark model={model} providerLabel={model.providerLabel} />
+                  <span className="min-w-0 flex-1 truncate tabular-nums">{model.label}</span>
+                </>
+              )}
+            />
+          )}
         </PromptInputCommand>
       </PopoverContent>
     </Popover>
