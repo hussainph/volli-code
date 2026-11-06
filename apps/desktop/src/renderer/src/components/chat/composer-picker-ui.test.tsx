@@ -49,3 +49,26 @@ describe("composer picker glyphs", () => {
     expect(html.match(/aria-hidden="true"/g)).toHaveLength(2);
   });
 });
+
+const drawDiscovery = (mode: "command" | "file", count: number) =>
+  renderToStaticMarkup(
+    <ComposerPicker
+      mode={mode}
+      rows={[]}
+      active=""
+      onActiveChange={vi.fn()}
+      onSelect={vi.fn()}
+      omittedSkillDirectories={count}
+      onOpenSkills={vi.fn()}
+    />,
+  );
+it("discloses skipped skill directories only in the slash picker, with a Skills recovery door", () => {
+  const html = drawDiscovery("command", 3);
+  expect(html).toContain("3 skill directories not read");
+  expect(html).toContain("Skills settings");
+  expect(html).toContain("<details");
+  expect(html).not.toContain("<details open");
+  expect(drawDiscovery("command", 1)).toContain("1 skill directory not read");
+  expect(drawDiscovery("file", 3)).not.toContain("<details");
+  expect(drawDiscovery("command", 0)).not.toContain("<details");
+});

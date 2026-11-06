@@ -213,6 +213,8 @@ export interface SessionComposerProps {
   promptTemplates?: readonly PromptTemplate[];
   /** The `/` picker's second supply: skills, delivered as message-scoped RESOURCE blocks. */
   skills?: readonly SkillReference[];
+  omittedSkillDirectories?: number;
+  onOpenSkills?(): void;
   /**
    * The verbs the `/` picker offers — the actions that run instead of
    * sending. Caller's supply, because the offer rule reads Session facts this
@@ -401,6 +403,8 @@ export const SessionComposer = React.memo(function SessionComposer({
   onStop,
   promptTemplates = NO_TEMPLATES,
   skills = NO_SKILLS,
+  omittedSkillDirectories = 0,
+  onOpenSkills,
   verbs,
   files = NO_FILES,
   onFilePickerOpen,
@@ -481,6 +485,8 @@ export const SessionComposer = React.memo(function SessionComposer({
       interactionOpen={interactionOpen}
       promptTemplates={promptTemplates}
       skills={skills}
+      omittedSkillDirectories={omittedSkillDirectories}
+      onOpenSkills={onOpenSkills}
       // The caller's supply, or the same offer rule with no reply behind it.
       // A verb RUNS — it is not queued and does not join a turn in flight —
       // so the verbs a live turn would refuse are already out of whichever
@@ -901,6 +907,8 @@ export function ComposerPickerStack({
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
+  omittedSkillDirectories?: number;
+  onOpenSkills?(): void;
   /** `flow` reserves height above the input; `overlay` covers it in place. */
   layout?: "flow" | "overlay";
 }>) {
@@ -912,6 +920,8 @@ export function ComposerPickerStack({
       active={picker.active}
       onActiveChange={picker.setActive}
       onSelect={picker.select}
+      omittedSkillDirectories={input.omittedSkillDirectories}
+      onOpenSkills={input.onOpenSkills}
     />
   );
 
@@ -1865,8 +1875,8 @@ export function ModelPill({
       groups.set(model.providerId, group);
     }
     return [...groups.values()]
-      .map((group) => group.sort((a, b) => b.score - a.score))
-      .sort((a, b) => b[0]!.score - a[0]!.score)
+      .map((group) => group.toSorted((a, b) => b.score - a.score))
+      .toSorted((a, b) => b[0]!.score - a[0]!.score)
       .flatMap((group) => group.map(({ model }) => model));
   }, [models, modelQuery]);
   // Composed once and spent four times — the pill's name, its `title`, the line

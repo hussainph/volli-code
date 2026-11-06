@@ -1669,6 +1669,7 @@ function ChatPlaneContent({
   const {
     templates: promptTemplates,
     skills,
+    omittedSkillDirectories,
     reload: reloadPromptSupply,
   } = usePromptTemplates(projectId);
 
@@ -2183,6 +2184,8 @@ function ChatPlaneContent({
                   // Skills, verbs and `@` files are this Mac's; a cloud
                   // Session's runner reads none of them (VC-895).
                   skills={cloudLaunch ? undefined : skills}
+                  omittedSkillDirectories={cloudLaunch ? 0 : omittedSkillDirectories}
+                  onOpenSkills={() => useUiStore.getState().requestConfigureCategory("skills")}
                   verbs={cloudLaunch ? undefined : verbSupply}
                   modelPickerOpen={modelPickerOpen}
                   onModelPickerOpenChange={setModelPickerOpen}

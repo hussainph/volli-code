@@ -461,8 +461,8 @@ export const MonacoDocumentEditor = React.forwardRef<
         if (liveRef.current.autoFocus) view.focus();
         const mountedView = view;
         readyRef.current?.({
-          adopt(value, start, end, focus) {
-            applyExternal(value, liveRef.current.revision ?? null);
+          adopt(nextValue, start, end, focus) {
+            applyExternal(nextValue, liveRef.current.revision ?? null);
             const first = model.getPositionAt(start);
             const last = model.getPositionAt(end);
             mountedView.setSelection({

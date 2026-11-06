@@ -20,6 +20,7 @@
  * is closed, decided one level up in `SessionComposer`.
  */
 import * as React from "react";
+import { Button } from "@renderer/components/ui/button";
 import {
   SyncIcon,
   CollapseVerticalIcon,
@@ -93,6 +94,8 @@ export const ComposerPicker = React.memo(function ComposerPicker({
   active,
   onActiveChange,
   onSelect,
+  omittedSkillDirectories = 0,
+  onOpenSkills,
   className,
 }: {
   /** The open picker's mode, or null for closed. Presence drives the animation. */
@@ -102,6 +105,8 @@ export const ComposerPicker = React.memo(function ComposerPicker({
   active: string;
   onActiveChange(value: string): void;
   onSelect(row: ComposerPickerRow): void;
+  omittedSkillDirectories?: number;
+  onOpenSkills?(): void;
   className?: string;
 }) {
   // Caret-driven lists are keyboard interactions: open and close immediately.
@@ -160,6 +165,20 @@ export const ComposerPicker = React.memo(function ComposerPicker({
           )}
         </PromptInputCommandList>
       </PromptInputCommand>
+      {mode === "command" && omittedSkillDirectories > 0 ? (
+        <details className="border-t px-3 py-2 text-ui text-muted-foreground">
+          <summary className="cursor-pointer">
+            {omittedSkillDirectories} skill{" "}
+            {omittedSkillDirectories === 1 ? "directory" : "directories"} not read
+          </summary>
+          {onOpenSkills ? (
+            <Button variant="ghost" size="sm" onClick={onOpenSkills}>
+              <SettingsIcon />
+              Skills settings
+            </Button>
+          ) : null}
+        </details>
+      ) : null}
     </div>
   );
 });

@@ -44,13 +44,13 @@ export function SearchableCommand<T>({
     const offsets: number[] = [];
     const groups: { label: string; top: number; from: number; to: number }[] = [];
     let height = 0;
-    items.forEach((item, index) => {
+    items.forEach((item, position) => {
       const label = groupOf?.(item) ?? "";
-      if (index === 0 || label !== groups.at(-1)?.label) {
-        groups.push({ label, top: height, from: index, to: index });
+      if (position === 0 || label !== groups.at(-1)?.label) {
+        groups.push({ label, top: height, from: position, to: position });
         if (label) height += ROW;
       }
-      groups.at(-1)!.to = index + 1;
+      groups.at(-1)!.to = position + 1;
       offsets.push(height);
       height += ROW;
     });
