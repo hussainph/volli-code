@@ -614,7 +614,7 @@ export function RailRowActions({
   return (
     <span
       className={cn(
-        "flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-(--duration-menu-out) group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none",
+        "pointer-events-none flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-(--duration-menu-out) group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 motion-reduce:transition-none",
         className,
       )}
     >

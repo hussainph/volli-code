@@ -379,6 +379,12 @@ describe("the Change Set list in the accessibility tree", () => {
     // A row is a button, which is what makes Enter and Space open a diff
     // without this list implementing a keyboard model of its own.
     expect(row(PAIR_TEST).tagName).toBe("BUTTON");
+    const actions = row(PAIR_TEST).nextElementSibling as HTMLElement;
+    expect(actions.className).not.toContain("absolute");
+    expect(actions.className).toContain("shrink-0");
+    expect(actions.className).toContain("pointer-events-none");
+    expect(actions.className).toContain("group-hover:pointer-events-auto");
+    expect(actions.className).toContain("group-focus-within:pointer-events-auto");
   });
 
   it("names every file with its status, its FULL path and its counts in words", () => {

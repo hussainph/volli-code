@@ -360,16 +360,9 @@ function ChangeRow({
                 )}
               </span>
             }
-            // Overlaid rather than parked after the counts: the actions only
-            // exist on hover, and a slot reserved for them would indent every
-            // row's counts for the one row a pointer is over.
-            actions={
-              <RailRowActions
-                path={row.path}
-                onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-control bg-(--accent-selected) px-1"
-              />
-            }
+            // A reserved sibling slot keeps hover actions out of the row's
+            // activation target, including its centre and truncated filename.
+            actions={<RailRowActions path={row.path} onOpen={onSelectRow} />}
           />
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-72 text-wrap font-mono">
