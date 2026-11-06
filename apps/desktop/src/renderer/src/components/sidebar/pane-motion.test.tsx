@@ -129,6 +129,54 @@ describe.each(["left", "right"] as const)("%s pane transactions", (side) => {
       expect(host.querySelector("[data-moving]")?.getAttribute("data-moving")).toBe("false");
     },
   );
+  it("keeps the push endpoint out of the peek transition until a real peek starts", async () => {
+    await show(side, "closed");
+    await show(side, "pinned");
+    const panel = host.querySelector<HTMLElement>("[data-side]")!;
+    expect(panel.hasAttribute("data-pane-pin-motion")).toBe(true);
+    await show(side, "closed");
+    const close = runs.findLast((run) => run.node.hasAttribute("data-volli-shell"))!;
+    await act(async () => close.animation.onfinish?.());
+    expect(panel.hasAttribute("data-pane-pin-motion")).toBe(true);
+    expect(
+      host.querySelector("[data-volli-shell]")?.hasAttribute(`data-${side}-pane-push-active`),
+    ).toBe(false);
+    await show(side, "peeking");
+    expect(panel.hasAttribute("data-pane-pin-motion")).toBe(false);
+    await show(side, "closed");
+    expect(panel.hasAttribute("data-pane-pin-motion")).toBe(false);
+  });
+  it("reserves paper without withdrawing an already visible peek", async () => {
+    await show(side, "closed");
+    await show(side, "peeking");
+    const input = host.querySelector("input");
+    await show(side, "pinned");
+    const panel = host.querySelector<HTMLElement>("[data-side]")!;
+    expect(Number(panel.style.getPropertyValue("--pane-push-factor"))).toBe(0);
+    expect(panel.style.getPropertyValue("--pane-push-offset")).toBe("0px");
+    expect(host.querySelector("input")).toBe(input);
+    expect(
+      runs.findLast((run) => run.node.hasAttribute("data-volli-shell"))?.options.duration,
+    ).toBe(270);
+    expect(runs.some((run) => run.node.hasAttribute("data-pane-pour-shell"))).toBe(false);
+  });
+  it("reverses a peek-to-pin push from the pane's own presentation", async () => {
+    await show(side, "closed");
+    await show(side, "peeking");
+    const panel = host.querySelector<HTMLElement>("[data-side]")!;
+    const shell = host.querySelector<HTMLElement>("[data-volli-shell]")!;
+    Object.defineProperties(panel, {
+      offsetParent: { value: shell },
+      offsetLeft: { value: side === "left" ? 60 : 700 },
+      offsetWidth: { value: 240 },
+    });
+    await show(side, "pinned");
+    shell.style.setProperty(`--${side}-pane-push`, "120px");
+    await show(side, "closed");
+    const direction = side === "left" ? 1 : -1;
+    expect(Number(panel.style.getPropertyValue("--pane-push-factor"))).toBe(2 * direction);
+    expect(panel.style.getPropertyValue("--pane-push-offset")).toBe(`${-240 * direction}px`);
+  });
   it("keyboard/reduced/native instant paths and resize cancel every transient owner", async () => {
     await show(side, "closed");
     await show(side, "pinned", true);

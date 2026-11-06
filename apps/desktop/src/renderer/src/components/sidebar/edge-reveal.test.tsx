@@ -154,6 +154,25 @@ describe("pane hover intent", () => {
     await move(250, 18, 140);
     expect(visible()).toBe(true);
   });
+  it("does not arm an edge peek during a pin push, then accepts a fresh edge arrival", async () => {
+    const shell = document.createElement("div");
+    shell.setAttribute("data-volli-shell", "ephemeral");
+    shell.append(panel);
+    document.body.append(shell);
+    try {
+      vi.advanceTimersByTime(300);
+      await move(500, 200);
+      shell.setAttribute("data-left-pane-push-active", "");
+      await move(64, 200, ENTER_DELAY_MS + 300);
+      expect(visible()).toBe(false);
+      shell.removeAttribute("data-left-pane-push-active");
+      await move(500, 200);
+      await move(64, 200, ENTER_DELAY_MS);
+      expect(visible()).toBe(true);
+    } finally {
+      shell.remove();
+    }
+  });
   it("dismisses from Escape with an immediate clock and no pour", async () => {
     vi.advanceTimersByTime(300);
     await move(64, 200, 140);

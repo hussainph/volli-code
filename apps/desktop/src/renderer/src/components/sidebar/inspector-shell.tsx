@@ -103,7 +103,7 @@ export function InspectorShell({
         data-inspector-panel=""
         data-pane-side="right"
         data-native-plane-overlay={collapsed && shown ? "" : undefined}
-        data-shown={shown || pane.moving || undefined}
+        data-shown={shown || undefined}
         aria-hidden={!shown || undefined}
         data-pane-withdrawn={!shown || undefined}
         inert={!shown}

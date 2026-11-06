@@ -3450,6 +3450,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   visibility: visible;
 }
 
+/* Push and peek are separate journeys. Keep the pin owner through its closed
+ * endpoint so releasing the width driver cannot start a second peek tween. */
+[data-pane-side][data-pane-pin-motion],
 [data-motion="instant"] [data-pane-side],
 [data-pin-motion="instant"] [data-pane-side] {
   transition: none;
@@ -3492,13 +3495,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   contain: layout paint;
 }
 [data-left-pane-push-active] [data-pane-side="left"] {
-  translate: calc(var(--left-pane-push) - var(--pane-full-width)) 0;
+  translate: calc(var(--left-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)) 0;
   opacity: 1;
   visibility: visible;
   transition: none;
 }
 [data-right-pane-push-active] [data-pane-side="right"] {
-  translate: calc(var(--pane-full-width) - var(--right-pane-push)) 0;
+  translate: calc(var(--right-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)) 0;
   opacity: 1;
   visibility: visible;
   transition: none;

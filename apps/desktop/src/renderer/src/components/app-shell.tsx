@@ -516,7 +516,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
               onFocus={reveal.onPanelFocus}
               onBlur={reveal.onPanelBlur}
               data-pane-side="left"
-              data-shown={panelShown || contentMotion.moving || undefined}
+              data-shown={panelShown || undefined}
               className={cn(
                 "absolute flex rounded-floating text-sidebar-foreground",
                 panelShown ? "pointer-events-auto" : "pointer-events-none",

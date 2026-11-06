@@ -342,7 +342,17 @@ export function useEdgeReveal({
       // pulling — including this sidebar's own, whose pointer travels far
       // outside the safe corridor while captured.
       if (pointerDownRef.current) return;
-      if (panelRef.current?.dataset.panePouring === "true") {
+      if (
+        panelRef.current?.dataset.panePouring === "true" ||
+        panelRef.current
+          ?.closest("[data-volli-shell]")
+          ?.hasAttribute(`data-${side}-pane-push-active`)
+      ) {
+        // The click's push still owns this pane. Crossing the edge during its
+        // withdrawal is not a second arrival; do not schedule a competing peek
+        // behind the spring. A fresh pointer sample after settling can arm it.
+        clearTimer();
+        if (phaseRef.current === "arming") enter("closed");
         triggerHoldRef.current = true;
         return;
       }
@@ -594,6 +604,7 @@ export function useEdgeReveal({
     zoneRef,
     bandRef,
     triggerRef,
+    side,
     clearTimer,
     closeNow,
     openNow,

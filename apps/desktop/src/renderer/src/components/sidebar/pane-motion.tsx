@@ -110,33 +110,66 @@ export function usePaneMotion({
     const width =
       panel.offsetWidth || Number.parseFloat(getComputedStyle(panel).width) || geometryKey || 0;
     const target = pinned ? width : 0;
+    const direction = side === "left" ? 1 : -1;
+    const resetMap = () => {
+      panel.style.setProperty("--pane-push-factor", String(direction));
+      panel.style.setProperty("--pane-push-offset", `${-direction * width}px`);
+    };
     panel.style.setProperty("--pane-full-width", `${width}px`);
     if (!initialized.current) {
       initialized.current = true;
+      resetMap();
       element.style.setProperty(property, `${target}px`);
       element.toggleAttribute(`data-${side}-pane-push-active`, pinned);
       return;
     }
     const old = driver.current;
     const from = Number.parseFloat(getComputedStyle(element).getPropertyValue(property)) || 0;
+    let paneFrom = direction * (from - width);
+    if (previousMode.current === "peeking" || old) {
+      // A peek is already on screen. Sample its own presentation before taking
+      // the transition owner, including a reversal of that peek-to-pin push.
+      const parent = panel.offsetParent;
+      if (parent instanceof HTMLElement) {
+        const box = panel.getBoundingClientRect();
+        const zoom = box.width / panel.offsetWidth || 1;
+        paneFrom = (box.left - parent.getBoundingClientRect().left) / zoom - panel.offsetLeft;
+      } else if (previousMode.current === "peeking") paneFrom = 0;
+    }
+    // A completed push must not hand its offscreen endpoint to the 12px peek
+    // transition: that would slide the withdrawn pane back over paper while
+    // fading out. Retain this owner until an actual peek takes over.
+    if (mode === "peeking") panel.removeAttribute("data-pane-pin-motion");
+    else if (pinned || previousMode.current === "pinned")
+      panel.setAttribute("data-pane-pin-motion", "");
     if (
       instant ||
       panel.hasAttribute("data-keyboard-dismiss") ||
       width <= 0 ||
       typeof element.animate !== "function"
     ) {
+      resetMap();
       stopPush();
       element.style.setProperty(property, `${target}px`);
       element.toggleAttribute(`data-${side}-pane-push-active`, pinned);
       return;
     }
     if (Math.abs(from - target) < 0.5) {
+      resetMap();
       stopPush();
       element.style.setProperty(property, `${target}px`);
       element.toggleAttribute(`data-${side}-pane-push-active`, pinned);
       return;
     }
     if (old?.to === target) return;
+    // Both use the same spring value. Usually this is a 1:1 divider; pinning
+    // an existing overlay instead keeps the pane in place while paper reserves
+    // its width. A reversal maps from that live presentation, never a teleport
+    // back to the closed entrance. These coefficients are fixed per journey.
+    const paneTo = pinned ? 0 : -direction * width;
+    const factor = (paneTo - paneFrom) / (target - from);
+    panel.style.setProperty("--pane-push-factor", String(factor));
+    panel.style.setProperty("--pane-push-offset", `${paneFrom - from * factor}px`);
     const omega = (2 * Math.PI) / 0.2;
     const elapsed = old
       ? (Math.min(1, (performance.now() - old.started) / GLASS_MOTION.pin) * 8.5) / omega
@@ -177,7 +210,7 @@ export function usePaneMotion({
       stopPush();
       element.toggleAttribute(`data-${side}-pane-push-active`, pinned);
     };
-  }, [side, enabled, pinned, instant, geometryKey, panelRef, contentElement, stopPush]);
+  }, [side, enabled, mode, pinned, instant, geometryKey, panelRef, contentElement, stopPush]);
 
   React.useLayoutEffect(() => {
     const previous = previousMode.current;
