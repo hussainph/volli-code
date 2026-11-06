@@ -474,8 +474,16 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
       expect(JSON.stringify(failed)).not.toContain("vc1127PrivateValue1234567890");
       // N−1's failed-part shape is unchanged: the new facet travels as input,
       // not as extra translator-derived metadata or a failed output field.
-      expect(Object.keys(failed).sort()).toEqual(
-        ["type", "toolName", "toolCallId", "toolMetadata", "state", "input", "errorText"].sort(),
+      expect(Object.keys(failed).toSorted()).toEqual(
+        [
+          "type",
+          "toolName",
+          "toolCallId",
+          "toolMetadata",
+          "state",
+          "input",
+          "errorText",
+        ].toSorted(),
       );
       expect(Object.keys(failed.toolMetadata ?? {})).toEqual(["volli.activity"]);
       const attachmentId = (await f.host.projection({ sessionId: f.sessionId })).projection
@@ -500,7 +508,9 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
       // Activity prose is deliberately redacted (including JSON parser text
       // that says "token:"); picture bytes must still match the provider.
       const safeContent = result.content.map((block) =>
-        block.type === "text" ? { ...block, text: redactPayloadSecrets(block.text) } : block,
+        block.type === "text"
+          ? { type: "text" as const, text: redactPayloadSecrets(block.text) }
+          : block,
       );
       expectSameContent(output, safeContent, f.pictures);
 

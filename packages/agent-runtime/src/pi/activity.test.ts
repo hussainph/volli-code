@@ -26,6 +26,19 @@ function activityContext(context: Omit<PiActivityContext, "turnId">): PiActivity
   return { turnId: "turn-1", ...context };
 }
 
+function project(value: unknown) {
+  return mapPiActivity(
+    {
+      type: "tool_execution_end",
+      toolName: "codemode",
+      toolCallId: "program",
+      isError: true,
+      result: { content: [], details: value },
+    },
+    { turnId: "turn" },
+  );
+}
+
 describe("mapPiActivity", () => {
   it("bounds and validates partial-completion metadata without trusting malformed nested records", () => {
     const details = {
@@ -33,17 +46,6 @@ describe("mapPiActivity", () => {
       errorCause: "parse failed",
       callCounts: { succeeded: 1, failed: 0, unfinished: 0, replayed: 0 },
     };
-    const project = (value: unknown) =>
-      mapPiActivity(
-        {
-          type: "tool_execution_end",
-          toolName: "codemode",
-          toolCallId: "program",
-          isError: true,
-          result: { content: [], details: value },
-        },
-        { turnId: "turn" },
-      );
     for (const succeeded of [-1, NaN, 20_001, "1"]) {
       const result = project({ ...details, callCounts: { ...details.callCounts, succeeded } });
       expect(result.state).toBe("failed");

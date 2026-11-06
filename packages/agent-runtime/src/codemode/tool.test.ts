@@ -353,11 +353,16 @@ describe("the sandbox", () => {
 });
 
 describe("limits", () => {
-  it("stops a program that spins past its running time", async () => {
-    const f = fixture({ tools: [textTool("echo", () => "hi")], limits: { timeoutMs: 1_000 } });
-    const { details, text, isError } = await run(f, "while (true) {}");
+  it("stops a program that spins past its running time after a completed mutation", async () => {
+    const effect = vi.fn(() => "created");
+    const f = fixture({ tools: [textTool("write", effect)], limits: { timeoutMs: 1_000 } });
+    const { details, text, isError } = await run(f, "await tools.write({}); while (true) {}");
     expect(isError).toBe(true);
+    expect(effect).toHaveBeenCalledOnce();
     expect(details.error).toBe("timeout");
+    expect(details.callCounts).toEqual({ succeeded: 1, failed: 0, unfinished: 0, replayed: 0 });
+    expect(text).toContain("Program failed after 1 successful call");
+    expect(text).toContain("Completed calls are not rolled back");
     expect(text).toContain("ran past its 1 s limit");
   });
 
