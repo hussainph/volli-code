@@ -114,6 +114,7 @@ describe("CanvasEditor", () => {
       'input[aria-label="Primary colour hex"]',
     );
     if (input === null) throw new Error("missing primary colour input");
+    await act(async () => input.focus());
     await typeInto(input, "#2ba39c");
     expect(useThemeStore.getState().preview?.stops[0].hex).toBe("#2ba39c");
 
@@ -121,6 +122,10 @@ describe("CanvasEditor", () => {
       input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(useThemeStore.getState().preview).toEqual(DEFAULT_CANVAS);
+    await openControl("Custom accent colour");
+    expect(
+      document.querySelector<HTMLInputElement>('input[aria-label="Primary colour hex"]')?.value,
+    ).toBe(DEFAULT_CANVAS.stops[DEFAULT_CANVAS.primaryIndex].hex);
   });
 
   it("restores a memory-only host's chosen canvas when the editor unmounts mid-edit", async () => {

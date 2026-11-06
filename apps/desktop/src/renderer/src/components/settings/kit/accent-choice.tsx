@@ -109,6 +109,9 @@ export function AccentChoice({
           align="end"
           className="flex w-64 flex-col gap-3"
           onEscapeKeyDown={() => {
+            // The field is about to unmount before blur can clear this flag.
+            // Let the restored accepted value replace its abandoned draft.
+            editingHex.current = false;
             cancelled.current = true;
             onCancel();
             setHex(value);
