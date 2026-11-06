@@ -201,10 +201,18 @@ afterEach(async () => {
  * The body's text lives in the draft cache from the keystroke it is typed in, so
  * its document must never count as unsaved, or ⌘Q asks about it (VC-1094).
  */
-it("arrives as an editable field and gives the rich view the draft save policy on focus", async () => {
+it("arrives as an editable field and prepares the rich draft view only during idle after focus", async () => {
+  let idle: IdleRequestCallback | undefined;
+  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+    idle = callback;
+    return 1;
+  });
+  vi.stubGlobal("cancelIdleCallback", vi.fn());
   const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Ticket description"]');
   expect(host.querySelector("[data-save-policy]")).toBeNull();
   await act(async () => body?.focus());
+  expect(host.querySelector("[data-save-policy]")).toBeNull();
+  await act(async () => idle?.({ didTimeout: false, timeRemaining: () => 8 }));
   expect(host.querySelector<HTMLElement>("[data-save-policy]")?.dataset["savePolicy"]).toBe(
     "draft",
   );

@@ -58,7 +58,13 @@ export interface MonacoDocumentEditorHandle {
 
 export interface DocumentEditorHandover {
   /** Adopt a still-editable stand-in's latest text and selection atomically. */
-  adopt(value: string, start: number, end: number, focus: boolean): void;
+  adopt(
+    value: string,
+    start: number,
+    end: number,
+    focus: boolean,
+    direction?: "forward" | "backward" | "none",
+  ): void;
 }
 
 export interface MonacoDocumentEditorProps {
@@ -461,15 +467,17 @@ export const MonacoDocumentEditor = React.forwardRef<
         if (liveRef.current.autoFocus) view.focus();
         const mountedView = view;
         readyRef.current?.({
-          adopt(nextValue, start, end, focus) {
+          adopt(nextValue, start, end, focus, direction = "none") {
             applyExternal(nextValue, liveRef.current.revision ?? null);
-            const first = model.getPositionAt(start);
-            const last = model.getPositionAt(end);
+            // A native selection's endpoints are ordered, but its caret can
+            // be at either end. ISelection preserves that backward anchor.
+            const anchor = model.getPositionAt(direction === "backward" ? end : start);
+            const caret = model.getPositionAt(direction === "backward" ? start : end);
             mountedView.setSelection({
-              startLineNumber: first.lineNumber,
-              startColumn: first.column,
-              endLineNumber: last.lineNumber,
-              endColumn: last.column,
+              selectionStartLineNumber: anchor.lineNumber,
+              selectionStartColumn: anchor.column,
+              positionLineNumber: caret.lineNumber,
+              positionColumn: caret.column,
             });
             if (focus) mountedView.focus();
           },

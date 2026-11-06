@@ -17,8 +17,8 @@ import { useUiStore } from "@renderer/stores/ui";
  * Escape and overlay-click close come free from Radix via `onOpenChange`.
  *
  * The chrome (breadcrumb project chip, title/description, chips, footer) lives
- * in {@link ComposerForm}, which Radix mounts fresh on each open — so every open
- * starts blank. The dialog owns only the Expand state (a wider centered sheet).
+ * in {@link ComposerForm}, which Radix mounts fresh on each open and restores
+ * from its durable draft. The dialog owns Expand (a wider centered sheet).
  */
 function closeComposer() {
   useUiStore.getState().setNewTicketOpen(false);

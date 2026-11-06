@@ -8,11 +8,20 @@ import {
 import { refInsertion } from "@renderer/editor/file-refs";
 import { cn } from "@renderer/lib/utils";
 
+function whenIdle(callback: () => void): () => void {
+  if (typeof requestIdleCallback === "function") {
+    const id = requestIdleCallback(callback);
+    return () => cancelIdleCallback(id);
+  }
+  const id = setTimeout(callback, 0);
+  return () => clearTimeout(id);
+}
+
 /**
- * A transient draft arrives as an immediately editable native field. Focus
- * prepares the rich view, but the field remains live until that view is ready;
- * typing, paste and IME never wait on a runtime import or a DOM font read.
- * Ticket/file documents keep the ordinary eager document view.
+ * First focus and typing belong to a real native field. Its rich view prepares
+ * behind it during idle, never from the focus/input dispatch. Adoption gets its
+ * own idle turn and waits through IME's final input. Ordinary ticket/file
+ * documents keep the eager document view.
  */
 export const DraftDocumentEditor = React.forwardRef<
   MonacoDocumentEditorHandle,
@@ -23,27 +32,51 @@ export const DraftDocumentEditor = React.forwardRef<
   const handover = React.useRef<DocumentEditorHandover | null>(null);
   const composing = React.useRef(false);
   const compositionFrame = React.useRef(0);
-  React.useEffect(() => () => cancelAnimationFrame(compositionFrame.current), []);
-  const focusOnHandover = React.useRef(false);
-  const [activated, setActivated] = React.useState(false);
+  const prepareIdle = React.useRef<(() => void) | null>(null);
+  const adoptIdle = React.useRef<(() => void) | null>(null);
+  const [seed, setSeed] = React.useState<string | null>(null);
   const [ready, setReady] = React.useState(false);
+  const focusOnHandover = React.useRef(false);
   const latest = React.useRef(props);
   latest.current = props;
   const complete = React.useCallback(() => {
-    if (!handover.current || composing.current) return;
-    focusOnHandover.current = document.activeElement === field.current;
-    setReady(true);
+    if (!handover.current || adoptIdle.current) return;
+    adoptIdle.current = whenIdle(() => {
+      adoptIdle.current = null;
+      const node = field.current;
+      if (!node || composing.current || compositionFrame.current) return;
+      focusOnHandover.current = document.activeElement === node;
+      setReady(true);
+    });
   }, []);
   React.useLayoutEffect(() => {
-    if (!ready) return;
     const node = field.current;
+    if (!ready || !node) return;
+    // The native buffer is authoritative until this commit. Make the rich
+    // view visible before focusing it, but adopt before the frame is painted.
     handover.current?.adopt(
-      latest.current.value,
-      node?.selectionStart ?? 0,
-      node?.selectionEnd ?? 0,
+      node.value,
+      node.selectionStart,
+      node.selectionEnd,
       focusOnHandover.current,
+      node.selectionDirection,
     );
   }, [ready]);
+  const prepare = React.useCallback(() => {
+    if (seed !== null || prepareIdle.current || handover.current) return;
+    prepareIdle.current = whenIdle(() => {
+      prepareIdle.current = null;
+      setSeed(field.current?.value ?? latest.current.value);
+    });
+  }, [seed]);
+  React.useEffect(
+    () => () => {
+      prepareIdle.current?.();
+      adoptIdle.current?.();
+      cancelAnimationFrame(compositionFrame.current);
+    },
+    [],
+  );
   React.useImperativeHandle(
     ref,
     () => ({
@@ -55,7 +88,7 @@ export const DraftDocumentEditor = React.forwardRef<
         if (ready) return editor.current?.insertAtCursor(text) ?? false;
         const node = field.current;
         if (!node) return false;
-        const value = latest.current.value;
+        const value = node.value;
         const start = node.selectionStart;
         const end = node.selectionEnd;
         const inserted = refInsertion({ precedingChar: value.slice(start - 1, start), text });
@@ -83,23 +116,30 @@ export const DraftDocumentEditor = React.forwardRef<
         placeholder={props.placeholder}
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
-        onFocus={() => setActivated(true)}
+        onFocus={prepare}
         onBlur={props.onBlur}
         onCompositionStart={() => {
           composing.current = true;
         }}
         onCompositionEnd={() => {
           composing.current = false;
-          // The final input can follow compositionend; keep the field alive
-          // through that dispatch before adopting its committed controlled text.
-          compositionFrame.current = requestAnimationFrame(complete);
+          // Some input methods commit their final input after compositionend.
+          // Keep the native field through that frame, then request idle again.
+          cancelAnimationFrame(compositionFrame.current);
+          compositionFrame.current = requestAnimationFrame(() => {
+            compositionFrame.current = 0;
+            complete();
+          });
         }}
         className="block field-sizing-content w-full resize-none border-0 bg-transparent py-2 text-body leading-6 text-foreground outline-none placeholder:text-muted-foreground"
         style={{ minHeight: "inherit" }}
       />
-      {activated ? (
+      {seed !== null ? (
         <MonacoDocumentEditor
           {...props}
+          // Do not reconcile every native IME update into a hidden rich view.
+          // The latest buffer is adopted once, at the actual handoff.
+          value={ready ? props.value : seed}
           ref={editor}
           autoFocus={false}
           savePolicy="draft"
