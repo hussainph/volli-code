@@ -1,3 +1,4 @@
+import { readInteractionResolutionContent } from "./interaction-receipt";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -13,7 +14,6 @@ import {
   createSubmissionLatch,
   describeInteractionSent,
   indexOpenedInteractions,
-  readInteractionResolutionMessage,
   describeInteractionResolution,
   emptyInteractionDraft,
   firstUnansweredPrompt,
@@ -1588,7 +1588,9 @@ describe("one press of the control that moves the flow on", () => {
   });
 });
 
-describe("the durable answer in scrollback", () => {
+// Shape decoding is intentionally separate from producer-gated receipt recognition.
+// RPC/fold authorship regressions live in interaction-receipt.test.ts.
+describe("stored answer content and opened-interaction indexing", () => {
   it("indexes every interaction the log recorded opening", () => {
     const interaction = permission();
     const index = indexOpenedInteractions([
@@ -1602,7 +1604,7 @@ describe("the durable answer in scrollback", () => {
 
   it("reads the resolution a user message carries", () => {
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: { kind: "interaction-resolution", interactionId: "permission:p1" },
         parts: [
           {
@@ -1619,7 +1621,7 @@ describe("the durable answer in scrollback", () => {
 
   it("skips a part that is not the resolution to reach the one that is", () => {
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: { interactionId: "permission:p1" },
         parts: [
           { type: "text", text: "some other part" },
@@ -1635,15 +1637,15 @@ describe("the durable answer in scrollback", () => {
   it("reads an ordinary message as not one", () => {
     // This crosses the RPC edge as JSON, so a shape we do not recognize reads
     // as "not a resolution" rather than throwing inside a render.
-    expect(readInteractionResolutionMessage({ parts: [{ type: "text" }] })).toBeNull();
+    expect(readInteractionResolutionContent({ parts: [{ type: "text" }] })).toBeNull();
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: { interactionId: "permission:p1" },
         parts: [{ type: "data-interaction-resolution" }],
       }),
     ).toBeNull();
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: {},
         parts: [{ type: "data-interaction-resolution", data: { optionIds: ["once"] } }],
       }),
@@ -1672,7 +1674,7 @@ describe("the durable answer in scrollback", () => {
     );
     // Exactly what `session-runtime` commits: the resolution, verbatim, as the
     // message's only part.
-    const read = readInteractionResolutionMessage({
+    const read = readInteractionResolutionContent({
       metadata: { kind: "interaction-resolution", interactionId: "question:q1" },
       parts: [{ type: "data-interaction-resolution", data: resolution }],
     });
@@ -1690,7 +1692,7 @@ describe("the durable answer in scrollback", () => {
     // Crossing the RPC edge as JSON, so an entry with no prompt id or no option
     // array is skipped rather than throwing inside a render.
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: { interactionId: "question:q1" },
         parts: [
           {
@@ -1712,7 +1714,7 @@ describe("the durable answer in scrollback", () => {
 
   it("keeps a stored answer's own free text, not just its selections", () => {
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: { interactionId: "question:q1" },
         parts: [
           {
@@ -1732,7 +1734,7 @@ describe("the durable answer in scrollback", () => {
     // Undefined, not an empty array: an empty one would read as an interaction
     // answered with nothing, which is how a refusal reads.
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: { interactionId: "permission:p1" },
         parts: [
           { type: "data-interaction-resolution", data: { optionIds: ["once"], answers: [] } },
@@ -1743,7 +1745,7 @@ describe("the durable answer in scrollback", () => {
 
   it("keeps a resolution with no text as one with no text", () => {
     expect(
-      readInteractionResolutionMessage({
+      readInteractionResolutionContent({
         metadata: { interactionId: "question:q1" },
         parts: [{ type: "data-interaction-resolution", data: { optionIds: [], response: null } }],
       }),

@@ -77,6 +77,7 @@ import {
   currentTurnReply,
   isDeliverable,
   readInteractionResolutionMessage,
+  indexInteractionResolutionMessages,
   segmentTurn,
   sessionContextUsage,
   projectTranscriptRows,
@@ -1908,6 +1909,10 @@ function ChatPlaneContent({
     () => transcriptMessageOrigins(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
     [transcriptFrames],
   );
+  const interactionReceipts = React.useMemo(
+    () => indexInteractionResolutionMessages(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
   const sourceIconsAvailable = sourceIconsFor(projectId) !== null;
   const mcpToolsKey = React.useMemo(
     () =>
@@ -1986,6 +1991,7 @@ function ChatPlaneContent({
       progressPaused,
       messageTimes,
       messageOrigins,
+      interactionReceipts,
       toolContext,
       sourceMessages,
       sourceIconPicture: pictureApi,
@@ -1999,6 +2005,7 @@ function ChatPlaneContent({
       progressPaused,
       messageTimes,
       messageOrigins,
+      interactionReceipts,
       toolContext,
       sourceMessages,
       pictureApi,
@@ -2698,6 +2705,7 @@ export interface TurnContext {
   progressPaused?: boolean;
   messageTimes?: ReadonlyMap<string, number>;
   messageOrigins?: ReturnType<typeof transcriptMessageOrigins>;
+  interactionReceipts?: ReturnType<typeof indexInteractionResolutionMessages>;
   toolContext?: ToolDisplayContext;
   sourceMessages?: ReadonlyMap<string, UIMessage>;
   sourceIconsApi?: TranscriptSourceIconsApi;
@@ -3396,12 +3404,14 @@ export const ChatTurn = React.memo(function ChatTurn({
   );
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
-  // it there — whether or not a tool row was ever correlated to the question. An
-  // interaction the log has no record of opening draws nothing rather than an id.
+  // it there only when the recorded resolve command proves its producer and
+  // the interaction is known. Missing history stays neutral, fully inspectable
+  // content; a caller's metadata/data part can never erase ordinary prose.
   const answered = React.useMemo(
-    () => (first !== null && role === "user" ? readInteractionResolutionMessage(first) : null),
-    [first, role],
+    () => (first !== null && role === "user" && messages.length === 1 ? readInteractionResolutionMessage(first, context.interactionReceipts?.get(first.id)) : null),
+    [first, role, messages.length, context.interactionReceipts],
   );
+  const hasResolutionContent = role === "user" && messages.some((message) => message.parts.some((part) => part.type === "data-interaction-resolution"));
   const segments = React.useMemo(
     () => (role === "assistant" ? segmentTurn(messages) : null),
     [messages, role],
@@ -3447,11 +3457,14 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (first === null || role === null) return null;
 
-  if (answered) {
-    const interaction = context.interactions.get(answered.interactionId);
-    return interaction ? (
-      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
-    ) : null;
+  const answeredInteraction = answered ? context.interactions.get(answered.interactionId) : undefined;
+  if (answered && answeredInteraction) {
+    return (
+      <div>
+        <InteractionReceiptLine interaction={answeredInteraction} resolution={answered.resolution} />
+        <OriginalOutput part={first} />
+      </div>
+    );
   }
 
   // Plan-only projections must not leave an empty bubble.
@@ -3500,7 +3513,8 @@ export const ChatTurn = React.memo(function ChatTurn({
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
-        {attribution?.sessionId ? <OriginalOutput part={first} /> : null}
+        {hasResolutionContent && prose.length === 0 ? <span className="text-ui text-muted-foreground">Interaction record</span> : null}
+        {attribution?.sessionId || hasResolutionContent ? <OriginalOutput part={first} /> : null}
         {skillChips.length > 0 ? (
           // A skill name is a mono outline Badge behind a book icon, wherever
           // it appears. This is the only place the transcript says one: the
