@@ -135,7 +135,8 @@ describe("TicketRail header", () => {
     // The global treatment the rest of the app keeps: a 10px bar with a token
     // thumb. If this ever stops matching, the rail's rule stopped being an
     // exception and became the policy.
-    expect(css).toMatch(/\*::-webkit-scrollbar \{\s*width: 10px/);
+    expect(css).toContain("--scrollbar-size: 10px");
+    expect(css).toMatch(/\*::-webkit-scrollbar \{\s*width: var\(--scrollbar-size\)/);
   });
 
   it("has no control that collapses the rail — that lives outside the panel", () => {

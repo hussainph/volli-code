@@ -1,11 +1,19 @@
 // @vitest-environment jsdom
 import { createElement, act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { ChatSessionRecord } from "@volli/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { EMPTY_SESSION_USAGE_SUMMARY, PERSON_STARTED, type ChatSessionRecord } from "@volli/shared";
+
+const projection = vi.hoisted(() => vi.fn());
+vi.mock("@renderer/chat/transport", () => ({
+  chatTransportFor: () => ({ rpc: { session: { projection: { query: projection } } } }),
+}));
 
 import type { SessionStartedNotice } from "../../../../ipc/contract";
-import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import {
+  createSessionActivityIntake,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { SessionStartToastTitle, sessionStartToastModel } from "./session-start-toast";
 
 function notice(overrides: Partial<SessionStartedNotice> = {}): SessionStartedNotice {
@@ -45,8 +53,12 @@ function byProject(chat: ChatSessionRecord[]) {
   return { "project-one": { terminal: [], chat, provenance: {}, read: {} } };
 }
 
+beforeEach(() => {
+  projection.mockReset().mockResolvedValue({ projection: {}, throughSequence: 0 });
+});
+
 afterEach(() => {
-  useProjectSessionsStore.setState({ byProject: {} });
+  useProjectSessionsStore.setState({ byProject: {}, listingState: {} });
   vi.unstubAllGlobals();
 });
 
@@ -85,12 +97,145 @@ describe("sessionStartToastModel", () => {
     },
   );
 
+  it("names an unhydrated project's Session through one exact read and the real activity intake", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const api = Object.getOwnPropertyDescriptor(window, "api");
+    const list = vi.fn().mockResolvedValue({ ok: true, sessions: [] });
+    Object.assign(window, { api: { sessions: { list } } });
+    // Project A has actually been visited; project B has no baseline. Pushed
+    // rows must not pretend that they are its complete project roster.
+    await useProjectSessionsStore.getState().ensure("visited-project");
+    const intake = createSessionActivityIntake(useProjectSessionsStore);
+    const publish = (title: string, sessionId = notice().sessionId, projectId = "project-one") => {
+      intake.push({
+        projectId,
+        ticketId: "ticket-one",
+        row: {
+          kind: "chat",
+          record: { ...record(title, sessionId), projectId },
+          usage: EMPTY_SESSION_USAGE_SUMMARY,
+          provenance: PERSON_STARTED,
+        },
+      });
+      intake.flush();
+    };
+    publish("Permanent title");
+    expect(useProjectSessionsStore.getState().byProject["project-one"]).toBeUndefined();
+    const read = Promise.withResolvers<{
+      projection: {
+        session: {
+          id: string;
+          projectId: string;
+          title: string;
+        };
+      };
+      throughSequence: number;
+    }>();
+    projection.mockReturnValueOnce(read.promise);
+    const host = document.createElement("div");
+    const input = document.createElement("input");
+    document.body.append(input, host);
+    input.focus();
+    const root = createRoot(host);
+    try {
+      await act(async () =>
+        root.render(createElement(SessionStartToastTitle, { notice: notice() })),
+      );
+      expect(projection).toHaveBeenCalledExactlyOnceWith({ sessionId: notice().sessionId });
+      expect(host.textContent).toBe("Session started");
+      await act(async () =>
+        read.resolve({
+          projection: {
+            session: {
+              id: notice().sessionId,
+              projectId: notice().projectId,
+              title: "Permanent title",
+            },
+          },
+          throughSequence: 1,
+        }),
+      );
+      expect(host.textContent).toBe("Permanent title");
+      await act(async () => publish("Refined title"));
+      expect(host.textContent).toBe("Refined title");
+      await act(async () => {
+        publish("Wrong Session", "other-id");
+        publish("Wrong project", notice().sessionId, "other-project");
+      });
+      expect(host.textContent).toBe("Refined title");
+      expect(document.activeElement).toBe(input);
+      expect(list).toHaveBeenCalledExactlyOnceWith({ projectId: "visited-project" });
+      expect(useProjectSessionsStore.getState().byProject["project-one"]).toBeUndefined();
+    } finally {
+      await act(async () => root.unmount());
+      intake.dispose();
+      input.remove();
+      host.remove();
+      if (api) Object.defineProperty(window, "api", api);
+      else Reflect.deleteProperty(window, "api");
+    }
+  });
+
+  it("keeps a newer intake title when the initial exact read completes late", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const read = Promise.withResolvers<{
+      projection: {
+        session: {
+          id: string;
+          projectId: string;
+          title: string;
+        };
+      };
+      throughSequence: number;
+    }>();
+    projection.mockReturnValueOnce(read.promise);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const intake = createSessionActivityIntake(useProjectSessionsStore);
+    try {
+      await act(async () =>
+        root.render(createElement(SessionStartToastTitle, { notice: notice() })),
+      );
+      await act(async () => {
+        intake.push({
+          projectId: notice().projectId,
+          ticketId: notice().ticketId,
+          row: {
+            kind: "chat",
+            record: record("Newer title"),
+            usage: EMPTY_SESSION_USAGE_SUMMARY,
+            provenance: PERSON_STARTED,
+          },
+        });
+        intake.flush();
+      });
+      await act(async () =>
+        read.resolve({
+          projection: {
+            session: {
+              id: notice().sessionId,
+              projectId: notice().projectId,
+              title: "Older title",
+            },
+          },
+          throughSequence: 1,
+        }),
+      );
+      expect(host.textContent).toBe("Newer title");
+    } finally {
+      await act(async () => root.unmount());
+      intake.dispose();
+      host.remove();
+    }
+  });
+
   it("preserves authored CJK, RTL, emoji and unbroken title text", () => {
     const title = `修正 היי 🧩 ${"x".repeat(1000)}`;
     expect(sessionStartToastModel(notice(), title).message).toBe(title);
   });
 
-  it("updates the title from the matching existing roster without fetching, navigation or focus theft", async () => {
+  it("updates the title from the matching existing roster without navigation or focus theft", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const host = document.createElement("div");
     const input = document.createElement("input");

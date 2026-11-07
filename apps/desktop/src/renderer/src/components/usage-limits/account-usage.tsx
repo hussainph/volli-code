@@ -118,6 +118,9 @@ function UsageWindowRow({
       : tone === "attention"
         ? "var(--attention)"
         : "var(--primary)";
+  // Arc colors carry state; small numeric text needs the scoped reading ink
+  // on both paper and transparent glass, including attention/critical quotas.
+  const textInk = "var(--foreground)";
   return (
     <div className="usage-instrument flex items-center gap-2 rounded-control border border-border/50 p-2">
       <span role="img" aria-label={summary} title={summary} className="relative size-12 shrink-0">
@@ -156,7 +159,7 @@ function UsageWindowRow({
         <span
           aria-hidden
           className="absolute inset-0 flex items-center justify-center text-ui tabular-nums"
-          style={{ color: ink }}
+          style={{ color: textInk }}
         >
           {remaining}%
         </span>
@@ -164,7 +167,7 @@ function UsageWindowRow({
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="text-ui font-medium break-words">{window.label}</span>
         {overage === null ? null : (
-          <span className="text-ui tabular-nums" style={{ color: ink }}>
+          <span className="text-ui tabular-nums" style={{ color: textInk }}>
             {overage}
           </span>
         )}

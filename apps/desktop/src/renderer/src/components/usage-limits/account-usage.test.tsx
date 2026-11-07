@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The usage row's notation, asserted where a screenshot cannot hold it still.
  *
@@ -16,7 +17,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import type { UsageLimits } from "@volli/shared";
+import { DEFAULT_CANVAS, deriveCanvasTokens, wcagContrast, type UsageLimits } from "@volli/shared";
 
 import { AccountUsage } from "./account-usage";
 
@@ -43,6 +44,33 @@ function withUsed(usedPercent: number): UsageLimits {
   return { ...LIMITS, windows: [{ ...LIMITS.windows[0]!, usedPercent }] };
 }
 
+describe("quota text contrast", () => {
+  it.each(["light", "dark"] as const)(
+    "keeps numeric percentages readable on %s usage surfaces",
+    (mode) => {
+      for (const hex of ["#e8652a", "#4653a2", "#18b6a4", "#f2d060", "#000000", "#ffffff"]) {
+        const tokens = deriveCanvasTokens(
+          { ...DEFAULT_CANVAS, stops: [{ hex, x: 0.3, y: 0.6 }] },
+          mode,
+        );
+        // Paper and the neutral floating-glass pools used by usage inspection;
+        // the row itself is transparent and must not borrow the arc's fill ink.
+        const surfaces = [
+          tokens["--card"],
+          tokens["--popover"],
+          ...(mode === "light" ? ["#e1e1e1", "#fbfbfb"] : ["#242424", "#3e3e3e"]),
+        ];
+        for (const surface of surfaces) {
+          expect(
+            wcagContrast(tokens["--foreground"], surface),
+            `${mode} ${hex} on ${surface}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    },
+  );
+});
+
 describe("AccountUsage", () => {
   it("states the remaining share and the anchored countdown, and no pace words", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW} />);
@@ -54,15 +82,28 @@ describe("AccountUsage", () => {
 
   it("prints the remaining percentage only in the ring, while preserving its accessible summary", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW} />);
-    const visible = html.replace(/<[^>]*>/g, "");
+    const visible = new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
     expect(visible.match(/40%/g)).toHaveLength(1);
     expect(visible).not.toContain("% left");
     expect(html).toContain('aria-label="Session: 40% left, 40% of the window left, resets in 2h"');
   });
 
+  it.each([
+    [40, "normal", "var(--primary)", "var(--foreground)"],
+    [70, "attention", "var(--attention)", "var(--foreground)"],
+    [90, "critical", "var(--destructive)", "var(--foreground)"],
+  ])("separates %s%% usage text ink from the %s arc fill", (used, tone, stroke, textInk) => {
+    const html = renderToStaticMarkup(<AccountUsage limits={withUsed(used)} now={NOW} />);
+    const fragment = new DOMParser().parseFromString(html, "text/html");
+    expect(fragment.querySelector(`[data-tone="${tone}"]`)?.getAttribute("stroke")).toBe(stroke);
+    expect(fragment.querySelector('span[aria-hidden="true"]')?.getAttribute("style")).toBe(
+      `color:${textInk}`,
+    );
+  });
+
   it("retains over-limit information because a zero ring cannot express the overage", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={withUsed(112)} now={NOW} />);
-    const visible = html.replace(/<[^>]*>/g, "");
+    const visible = new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
     expect(visible).toContain("0%");
     expect(visible).toContain("12% over");
     expect(visible).not.toContain("% left");
