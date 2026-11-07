@@ -135,6 +135,8 @@ export interface AccountServiceOptions {
 export interface AccountService {
   /** Fresh backend grant only, never a saved profile or launch marker. */
   previewUserId(): string | null;
+  /** In-memory authorization generation for local decoration; never restores credentials or performs I/O. */
+  sourceIconEpoch(): string;
   snapshot(): AccountSnapshot;
   subscribe(listener: (snapshot: AccountSnapshot) => void): () => void;
   signIn(
@@ -617,6 +619,9 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       return backendState === "synced" && viewer !== null && previewAccountGranted(viewer)
         ? viewer.userId
         : null;
+    },
+    sourceIconEpoch() {
+      return `${epoch}:${state}:${backendState}`;
     },
     snapshot() {
       requireCloud();

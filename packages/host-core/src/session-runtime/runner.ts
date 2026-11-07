@@ -43,6 +43,7 @@ import { BackgroundShellHost, type BackgroundShellHostPorts } from "../shell/bac
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostHandlerMap } from "../handlers/handler-map";
 import { createHostHandlers, type HostHandlerOptions } from "../handlers/host-handlers";
+import { SourceIconCache } from "../source-icons/cache";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
 import {
@@ -90,6 +91,7 @@ type RunnerHandlerServices =
   | "db"
   | "dataDir"
   | "pictures"
+  | "sourceIcons"
   | "runtime"
   | "sessions"
   | "submitSessionMessage"
@@ -140,6 +142,8 @@ export interface RunnerCompositionInput {
     browser?: RuntimeAssemblyOptions["browser"];
     /** The screenshot store, when the host shows pictures outside the runtime. */
     pictures?: BrowserPictureStore;
+    /** Desktop's live account epoch, without restoring tokens or acquiring credentials. */
+    sourceIconEpoch?(): string | null;
   };
   /** Before a Session command runs: desktop's login-PATH adoption. */
   beforeExecution(): Promise<unknown>;
@@ -258,6 +262,12 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           bindEnvironment: undefined,
           dispose: undefined,
         };
+  const sourceIcons = new SourceIconCache({
+    authorityForSession: (sessionId) =>
+      store.kind === "local" && !input.cloudLaunch?.() && product.ownsSession?.(sessionId) === true
+        ? (input.capabilities.sourceIconEpoch?.() ?? null)
+        : null,
+  });
   const sessionEngine = product.engine;
   // The local Automation service (its SQLite engine, scheduler and armed
   // timers) runs only over a local store. A cloud store's Automations live in
@@ -466,6 +476,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         ? {}
         : { refineAutoTitle: (request) => void autoTitler.refine(request) }),
       pictures: assembly.pictures,
+      sourceIcons,
       modelAccess: assembly.piRuntimeHost,
       environmentRecipes: () => input.cloudEnabled(),
       automations,
@@ -496,6 +507,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     try {
       input.stopProducers?.();
     } finally {
+      sourceIcons.close();
       automations.stop();
       agents.stop();
     }
@@ -586,6 +598,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
       await lifecycle.close();
       if (fullDrain) await automations.settled();
     } finally {
+      sourceIcons.close();
       product.dispose?.();
     }
   };

@@ -341,6 +341,7 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
       return () => void fixture.unsubscribed.push(key);
     };
   return {
+    "sourceIcons.watch": stream("sourceIcons.watch", { icons: [] }),
     "shells.moveToBackground": record("shells.moveToBackground", { shellId: "shell-1" }),
     "project.reorder": record("project.reorder", null),
     "project.remove": record("project.remove", null),
@@ -588,6 +589,52 @@ describeContract<Host, DesktopRouter>(
     webSocketContractLink({ router: createDesktopRouter(), createContext: context }),
   ],
   ({ connect }) => {
+    it("source icons carry complete snapshots and unsubscribe through the real codec", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const stream = collect((handlers) =>
+        client.sourceIcons.watch.subscribe(
+          { sessionId: "session", origins: ["https://example.com"] },
+          handlers,
+        ),
+      );
+      await vi.waitFor(() => expect(stream.values).toEqual([{ icons: [] }]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toContain("sourceIcons.watch"));
+      expect(fixture.calls).toContainEqual({
+        key: "sourceIcons.watch",
+        input: { sessionId: "session", origins: ["https://example.com"] },
+        call: WINDOW_CALL,
+      });
+    });
+
+    it("source icons reject invalid origins and all network callers before the handler", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      for (const origins of [
+        ["https://example.com/path"],
+        ["https://user:secret@example.com"],
+        Array(33).fill("https://example.com"),
+      ]) {
+        const stream = collect((handlers) =>
+          client.sourceIcons.watch.subscribe({ sessionId: "session", origins }, handlers),
+        );
+        expect(await expectHostError(stream.failed)).toMatchObject({ code: "BAD_REQUEST" });
+        stream.unsubscribe();
+      }
+      expect(fixture.calls).toEqual([]);
+      for (const caller of [device, session]) {
+        const denied = host(caller);
+        const remote = await connect(denied);
+        const stream = collect((handlers) =>
+          remote.sourceIcons.watch.subscribe({ sessionId: "session", origins: [] }, handlers),
+        );
+        expect(await expectHostError(stream.failed)).toMatchObject({ code: "FORBIDDEN" });
+        expect(denied.calls).toEqual([]);
+        stream.unsubscribe();
+      }
+    });
+
     it("serves the desktop's own window, as the person, through the host's map", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);
       const client = await connect(fixture);
