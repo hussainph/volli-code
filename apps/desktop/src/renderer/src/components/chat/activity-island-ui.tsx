@@ -502,7 +502,8 @@ function ClusterShell({
           sideOffset={10}
           collisionPadding={8}
           data-island-card={cluster}
-          className={cn("p-1", cardClassName ?? ISLAND_CARD_WIDTH)}
+          className={cn("flex flex-col p-1", cardClassName ?? ISLAND_CARD_WIDTH)}
+          bodyClassName="flex max-h-[calc(var(--radix-popover-content-available-height)-0.5rem)] flex-col overflow-hidden"
           style={
             measuredWidth === null
               ? undefined
@@ -608,8 +609,8 @@ function Card({
 }: React.PropsWithChildren<{ glyph: IconComponent; heading: string }>) {
   const frame = React.useContext(CardContext);
   return (
-    <div className="flex cursor-default flex-col select-none">
-      <div className="flex h-6 items-center gap-1.5 px-2">
+    <div className="flex min-h-0 cursor-default flex-col select-none">
+      <div className="flex h-6 shrink-0 items-center gap-1.5 px-2">
         <Glyph className="size-3.5 shrink-0 text-muted-foreground" />
         <h3 className="min-w-0 flex-1 truncate text-ui font-semibold text-foreground">{heading}</h3>
         <Tooltip>
@@ -647,7 +648,14 @@ function Card({
  * scrolls, low enough that nothing ever flips.
  */
 function CardRows({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn("flex max-h-72 flex-col overflow-y-auto", className)}>{children}</div>;
+  return (
+    <div
+      data-island-rows=""
+      className={cn("flex min-h-0 max-h-72 flex-col overflow-y-auto overscroll-contain", className)}
+    >
+      {children}
+    </div>
+  );
 }
 
 /** Data rows update immediately, preserving their actions and focus targets. */
@@ -917,7 +925,7 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
     <Card glyph={ChecklistIcon} heading={planHeading(plan)}>
       {/* Progress as a hairline under the header — the header's number says
           it, the bar lets a glance read it without parsing. */}
-      <div className="mx-2 mb-1 h-0.5 overflow-hidden rounded-full bg-border">
+      <div className="mx-2 mb-1 h-0.5 shrink-0 overflow-hidden rounded-full bg-border">
         <div
           data-island-progress=""
           className="h-full rounded-full bg-primary"

@@ -35,6 +35,7 @@ import {
 import { SearchableCommand } from "@renderer/components/ui/searchable-command";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 // Stable fallbacks: an inline `?? []` mints a fresh array identity per render,
@@ -133,6 +134,21 @@ export function LabelPickerContent({
   );
 }
 
+/** Keep search stationary and let the inner command list own all overflow.
+ * The surface has no padding; its border is the only height outside the body. */
+export function LabelPickerSurface({
+  className,
+  ...props
+}: React.ComponentProps<typeof PopoverContent>) {
+  return (
+    <PopoverContent
+      {...props}
+      className={cn("flex w-64 flex-col p-0", className)}
+      bodyClassName="max-h-[calc(var(--radix-popover-content-available-height)-2px)] overflow-hidden"
+    />
+  );
+}
+
 /**
  * The picker, wrapped around whatever opens it — `children` is the trigger,
  * rendered `asChild`, so each surface keeps its own control (the fold's `+`,
@@ -156,9 +172,9 @@ export function LabelPickerPopover({
   return (
     <Popover>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-0">
+      <LabelPickerSurface align="start">
         <LabelPickerContent projectId={projectId} value={value} onChange={onChange} />
-      </PopoverContent>
+      </LabelPickerSurface>
     </Popover>
   );
 }

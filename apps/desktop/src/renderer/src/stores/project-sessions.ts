@@ -267,6 +267,9 @@ interface ProjectSessionsState {
    * every identity, and a batch of nothing but those writes nothing at all.
    */
   applyActivities(notices: readonly SessionActivityNotice[]): void;
+  /** Ephemeral exact-Session views can follow the shared intake without
+   * manufacturing an incomplete project baseline or another host subscription. */
+  subscribeActivity(listener: (notice: SessionActivityNotice) => void): () => void;
   /**
    * Repoints one terminal row's running harness after a wrapper announce.
    *
@@ -461,6 +464,7 @@ export function createProjectSessionsStore() {
    * every consumer re-render twice per fetch for a fact none of them show.
    */
   const inFlight = new Map<string, Promise<void>>();
+  const activityObservers = new Set<(notice: SessionActivityNotice) => void>();
   /**
    * The newest read per project (VC-713). A remote listing is re-read on a
    * poll, a focus and a reconnect, and a read can land after a later one: only
@@ -563,6 +567,19 @@ export function createProjectSessionsStore() {
         }
         return byProject === null ? state : { byProject };
       });
+      // A toast can name a Session on an unvisited project. Its baseline must
+      // stay absent, but the already-received row is still authoritative for
+      // that one ephemeral view. This is the existing intake, not a new feed.
+      for (const notice of notices) {
+        for (const observer of activityObservers) observer(notice);
+      }
+    },
+
+    subscribeActivity(listener) {
+      activityObservers.add(listener);
+      return () => {
+        activityObservers.delete(listener);
+      };
     },
 
     setActiveHarness(projectId, sessionId, harnessId) {

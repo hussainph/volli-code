@@ -34,6 +34,7 @@ import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { MENU_SURFACE_PAD } from "@renderer/components/ui/menu-classes";
 import { cn } from "@renderer/lib/utils";
 import {
   projectCounts,
@@ -117,7 +118,11 @@ function EnabledHostChip() {
             <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" aria-label="Switch host" className="w-80">
+        <PopoverContent
+          align="start"
+          aria-label="Switch host"
+          className={cn("w-80", MENU_SURFACE_PAD)}
+        >
           <HostSwitcher current={host} view={view} onDone={() => setOpen(false)} />
         </PopoverContent>
       </Popover>

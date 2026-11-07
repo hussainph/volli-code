@@ -995,8 +995,8 @@ function TabShell({
   }, [inventory, inventoryId, label, leading, hint, status, onActivate]);
 
   return (
-    // A grouped tab already owns a rich member card on this anchor. Keep its
-    // ordinary tooltip suppressed rather than stacking two help surfaces.
+    // Group tabs already reveal a full-title member card. A second clipped-label
+    // or identity tooltip would open over that card (and its action dropdown).
     <Tooltip
       {...reveal}
       open={actionsContent ? false : reveal.open || identityHelp.visible}
