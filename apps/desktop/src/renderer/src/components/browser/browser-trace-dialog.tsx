@@ -139,7 +139,11 @@ function TraceReplay({
 
   React.useEffect(() => {
     let live = true;
+    let reading = false;
     const read = async (first: boolean): Promise<void> => {
+      // A slow read must not overlap a later poll and then roll it back.
+      if (reading) return;
+      reading = true;
       try {
         const result = await api.traces({ sessionId: request.sessionId });
         if (!result.ok) throw new Error(result.error);
@@ -170,6 +174,8 @@ function TraceReplay({
         } else {
           console.warn("[volli] Browser replay refresh failed:", reason);
         }
+      } finally {
+        reading = false;
       }
     };
     void read(true);
@@ -198,19 +204,19 @@ function TraceReplay({
   // the island's popover, be handed back to the island's anchor as the popover
   // closes. A key-per-element handler would go deaf in exactly that case.
   const count = timeline.length;
-  const currentIndex = React.useRef(at);
-  currentIndex.current = at;
-  React.useEffect(() => {
+  // Match the committed controls before they can receive input, not in a
+  // passive effect after the ready DOM is already visible.
+  React.useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      const next = traceIndexForKey(event.key, currentIndex.current, count);
+      const next = traceIndexForKey(event.key, at, count);
       if (next === null) return;
       event.preventDefault();
       setIndex(next);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [count]);
+  }, [at, count]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

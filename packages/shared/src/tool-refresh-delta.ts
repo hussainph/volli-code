@@ -12,6 +12,7 @@ export interface SessionToolRefreshDelta {
   /** The declaration on first acquisition; routes travel separately. */
   codeMode?: Omit<CodeModeSurface, "routes">;
   descriptionVersion?: 2;
+  mcpResultVersion?: 1;
   askUserQuestions?: true;
   refreshDescriptions?: true;
 }
@@ -36,6 +37,11 @@ export function createToolRefreshDelta(current: Surface, next: Surface): Session
     next.codeMode?.descriptionVersion === 2 &&
     current.codeMode.descriptionVersion !== 2
       ? { descriptionVersion: 2 as const }
+      : {}),
+    ...(current.codeMode !== undefined &&
+    next.codeMode?.mcpResultVersion === 1 &&
+    current.codeMode.mcpResultVersion !== 1
+      ? { mcpResultVersion: 1 as const }
       : {}),
     ...(current.askUserQuestions !== true && next.askUserQuestions === true
       ? { askUserQuestions: true as const }
@@ -97,6 +103,13 @@ export function applyToolRefreshDelta(
   )
     fail();
   if (
+    delta.mcpResultVersion !== undefined &&
+    (delta.mcpResultVersion !== 1 ||
+      current.codeMode === undefined ||
+      current.codeMode.mcpResultVersion === 1)
+  )
+    fail();
+  if (
     delta.codeMode !== undefined &&
     (current.codeMode !== undefined ||
       !added.includes("codemode") ||
@@ -122,6 +135,9 @@ export function applyToolRefreshDelta(
             ...(delta.descriptionVersion === undefined
               ? {}
               : { descriptionVersion: delta.descriptionVersion }),
+            ...(delta.mcpResultVersion === undefined
+              ? {}
+              : { mcpResultVersion: delta.mcpResultVersion }),
             routes: { ...current.codeMode?.routes, ...newRoutes },
           },
           tools,
