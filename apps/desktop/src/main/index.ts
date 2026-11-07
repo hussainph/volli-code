@@ -1595,6 +1595,7 @@ const appStartup = app.whenReady().then(async () => {
     }),
   );
   const browserTabs = new BrowserTabHost({
+    appVersion: app.getVersion(),
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
