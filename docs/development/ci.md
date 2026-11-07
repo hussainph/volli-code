@@ -34,3 +34,37 @@ unless it touches the data layer older builds read back (migrations, backup,
 ledger, blobs; the list is in `ci.yml`'s Scope) or the N-1 harness, which run every lane; main pushes and the nightly run always run every lane.
 Host development image, native ABI isolation and inventory commands:
 `docs/development/host-linux.md`.
+
+### Host-core worker exit evidence
+
+`Test (packages)` retains `host-core-worker-diagnostics-<attempt>` for 30 days,
+including failures. `coverage.log` preserves raw native stderr; the pipe keeps
+its failing exit status. The test-only Node preload writes synchronous JSONL
+files by PID and thread id, independently of Vitest's buffered output:
+
+- `test-start` / `test-finished` identify the test active through teardown.
+- `child-exit` records the child's PID, raw exit code and signal in its surviving
+  parent. Match that PID to the child's event file; nearby suite output is not
+  attribution.
+- `worker-start` / `worker-exit` identify nested threads and their resource
+  limits. Thread exit code 1 can be the expected result of `terminate()`, not a
+  crashed Vitest fork. Restore crash-proof and cancellation markers distinguish
+  those requests from spontaneous exits.
+- Memory samples include process RSS, the current isolate's heap and available
+  memory. Process start/exit also capture root cgroup memory counters where
+  available. A sample alone is not evidence of OOM.
+
+The JSONL contains only allowlisted metadata: no argv, environment, worker
+payloads or error messages. No heap dumps or cores are collected. Full Node fatal reports are deliberately
+not enabled: even excluding environment/network data leaves command-line and
+other metadata outside that allowlist. Native CHECKs and uncatchable signals
+cannot run JS exit hooks; use the raw stack in `coverage.log` and the surviving
+parent's signal record. No diagnostics handler consumes errors, changes
+cancellation, or retries tests.
+
+For a focused local capture, set `VOLLI_HOST_TEST_DIAGNOSTICS` to an absolute
+workspace-local directory under `.tmp/` and append
+`--require="<workspace>/scripts/host-test-diagnostics.cjs"` to `NODE_OPTIONS`,
+then run only the relevant host-core test file with coverage. The preload is
+inert outside host-core or without that variable. These captures are evidence,
+not public source; do not commit them.

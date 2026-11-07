@@ -370,7 +370,7 @@ jobs:
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
-          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs
+          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint. These source-specific guards run separately
@@ -759,10 +759,26 @@ jobs:
 
       # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
       - name: Test protected coverage surface
-        run: >-
-          vp run
-          --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
-          test:coverage --maxWorkers=$(nproc)
+        env:
+          VOLLI_HOST_TEST_DIAGNOSTICS: ${{ github.workspace }}/.tmp/host-core-diagnostics
+          NODE_OPTIONS: --require=${{ github.workspace }}/scripts/host-test-diagnostics.cjs
+        run: |
+          mkdir -p "$VOLLI_HOST_TEST_DIAGNOSTICS"
+          set -o pipefail
+          vp run \
+            --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop' \
+            test:coverage --maxWorkers=$(nproc) 2>&1 | tee "$VOLLI_HOST_TEST_DIAGNOSTICS/coverage.log"
+
+      # Keep the raw native stderr as well as PID/thread/test correlation even
+      # when a fork dies before Vitest can report its suite. Never retry here.
+      - name: Upload host-core worker diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-core-worker-diagnostics-${{ github.run_attempt }}
+          path: .tmp/host-core-diagnostics/
+          include-hidden-files: true
+          retention-days: 30
 
   # The Convex backend (VC-882), against the pinned local backend. Its own
   # Linux job so the ~64 MB fixture never lands in a desktop lane: it starts

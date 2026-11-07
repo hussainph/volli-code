@@ -9,6 +9,9 @@ export default defineConfig({
     ...SHARED_MACHINE_TEST_WORKERS,
     // Plain Node: this package runs in the Linux host lane, never in Electron.
     environment: "node",
+    setupFiles: process.env["VOLLI_HOST_TEST_DIAGNOSTICS"]
+      ? ["./src/test-diagnostics-setup.ts"]
+      : [],
     coverage: {
       // The protected surface moved here from apps/desktop's gate with its
       // covering tests, plus the composition entry. project-roots.ts remains

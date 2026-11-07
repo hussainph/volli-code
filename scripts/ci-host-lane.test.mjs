@@ -447,11 +447,30 @@ test("existing and future host packages cannot silently omit the coverage script
     jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").uses,
     "./.github/actions/setup-toolchain",
   );
-  const command = jobs["test-packages"].steps.at(-1).run;
+  const command = jobs["test-packages"].steps.find(
+    (step) => step.name === "Test protected coverage surface",
+  ).run;
   assert.ok(
     command.includes("--filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'"),
   );
   assert.ok(command.includes("test:coverage"));
+});
+
+test("host coverage retains raw native output and worker diagnostics without hiding the gate", () => {
+  const steps = jobs["test-packages"].steps;
+  const coverage = steps.find((step) => step.name === "Test protected coverage surface");
+  assert.match(coverage.env.NODE_OPTIONS, /--require=.*\/scripts\/host-test-diagnostics\.cjs/u);
+  assert.match(coverage.env.VOLLI_HOST_TEST_DIAGNOSTICS, /\/\.tmp\/host-core-diagnostics$/u);
+  assert.match(coverage.run, /set -o pipefail/u);
+  assert.match(coverage.run, /2>&1 \| tee/u);
+  assert.match(coverage.run, /test:coverage --maxWorkers=\$\(nproc\)/u);
+  assert.equal(coverage["continue-on-error"], undefined);
+  const upload = steps.find((step) => step.name === "Upload host-core worker diagnostics");
+  assert.ok(steps.indexOf(upload) > steps.indexOf(coverage));
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, ".tmp/host-core-diagnostics/");
+  assert.equal(upload.with["include-hidden-files"], true);
+  assert.equal(upload.with["retention-days"], 30);
 });
 
 test("workspace globs discover a newly added host package and require its coverage script", () => {
