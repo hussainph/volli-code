@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useState, useEffect } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vite-plus/test";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
@@ -17,22 +17,22 @@ vi.mock("@renderer/components/sidebar/update-button", () => ({ UpdateButton: () 
 vi.mock("./sidebar-files", () => ({
   SidebarFiles: () => <div data-testid="sidebar-files">Files tree</div>,
 }));
-const { mounts, listing } = vi.hoisted(() => ({ mounts: vi.fn(), listing: { count: 0 } }));
+const { mounts, listing, newChat, newTerminal } = vi.hoisted(() => ({
+  mounts: vi.fn(),
+  listing: { count: 0 },
+  newChat: vi.fn(),
+  newTerminal: vi.fn(),
+}));
+vi.mock("@renderer/components/sessions/session-create", () => ({
+  startProjectChat: newChat,
+  startProjectTerminal: newTerminal,
+}));
 vi.mock("@renderer/components/sidebar/active-sessions", () => ({
-  ActiveSessions: ({
-    visible,
-    onActiveCountChange,
-  }: {
-    visible: boolean;
-    onActiveCountChange?(count: number): void;
-  }) => {
-    const count = listing.count;
-    useEffect(() => {
-      onActiveCountChange?.(count);
-    }, [onActiveCountChange, count]);
+  ActiveSessions: ({ visible }: { visible: boolean }) => {
     useState(() => mounts());
     return (
       <div data-testid="sidebar-sessions" data-visible={visible}>
+        {listing.count > 0 ? <h3>Active{listing.count}</h3> : null}
         Sessions list
       </div>
     );
@@ -62,7 +62,7 @@ describe("primary sidebar content choice", () => {
       addEventListener() {},
       removeEventListener() {},
     }));
-    mounts.mockClear();
+    vi.clearAllMocks();
     listing.count = 0;
     container = document.createElement("div");
     document.body.append(container);
@@ -87,14 +87,13 @@ describe("primary sidebar content choice", () => {
   }
   it("places borderless icon-only choices below navigation, outside both scrollports", async () => {
     await show();
-    const switcher = container.querySelector('[aria-label="Sidebar content"]')!;
-    expect(switcher.getAttribute("data-slot")).toBe("navigator-selector");
-    expect(switcher.className).toContain("h-[22px]");
+    const chrome = container.querySelector('[data-slot="navigator-selector"]')!;
+    const switcher = chrome.querySelector('[aria-label="Sidebar content"]')!;
+    expect(chrome.className).toContain("h-[22px]");
     expect(switcher.textContent).toBe("");
+    expect(switcher.className).toContain("h-[22px]");
     expect(switcher.className).not.toContain("glass");
-    expect(container.querySelector('[data-testid="feature-nav"]')?.nextElementSibling).toBe(
-      switcher,
-    );
+    expect(container.querySelector('[data-testid="feature-nav"]')?.nextElementSibling).toBe(chrome);
     expect(container.querySelector('[data-slot="sidebar-header"]')?.textContent).toBe("ProjectVC");
     for (const tab of switcher.querySelectorAll("button")) {
       expect(tab.className).toContain("size-6");
@@ -176,27 +175,38 @@ describe("primary sidebar content choice", () => {
       expect(files.scrollTop).toBe(405);
     }
   });
-  it("restores the Active total inline without duplicating the header or counting Files", async () => {
+  it("keeps the accessible creation chooser outside the scrollport and tablist as Active changes", async () => {
     await show();
-    expect(container.querySelector("[data-band-count]")).toBeNull();
-    listing.count = 4;
-    await show();
-    const header = container.querySelector("h3")!.parentElement!;
-    expect(header.textContent).toContain("Active4");
-    expect(header.querySelector('[aria-label="Sidebar content"]')).toBeNull();
-    expect(
-      container.querySelector('[data-slot="sidebar-header"] [aria-label="Sidebar content"]'),
-    ).toBeNull();
-    expect(container.querySelectorAll("h3")).toHaveLength(1);
+    const plus = container.querySelector<HTMLButtonElement>('[aria-label="Open a tab"]')!;
+    expect(plus.disabled).toBe(false);
+    expect(plus.closest('[data-slot="navigator-selector"]')).not.toBeNull();
+    expect(plus.closest('[role="tablist"]')).toBeNull();
+    expect(plus.closest('[data-testid="session-scrollport"]')).toBeNull();
+    plus.focus();
+    for (const count of [1, 4, 0]) {
+      listing.count = count;
+      await show();
+      expect(container.querySelector('[aria-label="Open a tab"]')).toBe(plus);
+      expect(document.activeElement).toBe(plus);
+    }
+    for (const choice of ["files", "sessions"]) {
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>(`[data-choice="${choice}"]`)!.click(),
+      );
+      expect(container.querySelector('[aria-label="Open a tab"]')).toBe(plus);
+    }
+    expect(mounts).toHaveBeenCalledTimes(1);
     await act(async () =>
-      container.querySelector<HTMLButtonElement>('[data-choice="files"]')!.click(),
+      plus.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
     );
-    expect(header.querySelector("[data-band-count]")).toBeNull();
-    expect(container.querySelector('[data-choice="files"]')?.getAttribute("aria-selected")).toBe(
-      "true",
+    const chat = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (item) => item.textContent === "Chat",
+    )!;
+    const terminal = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (item) => item.textContent === "Terminal",
     );
-    listing.count = 0;
-    await show();
-    expect(container.querySelector("[data-band-count]")).toBeNull();
+    expect(terminal).toBeDefined();
+    await act(async () => chat.click());
+    expect(newChat).toHaveBeenCalledWith("p");
   });
 });
