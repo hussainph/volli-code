@@ -3464,10 +3464,12 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (first === null || role === null) return null;
 
+  // The cumulative opened map is only the question's wording; the receipt's
+  // own settled attachment must still be the one that asked it.
   const answeredInteraction = answered
     ? context.interactions.get(answered.interactionId)
     : undefined;
-  if (answered && answeredInteraction) {
+  if (answered && answeredInteraction?.attachmentId === answered.attachmentId) {
     return (
       <div>
         <InteractionReceiptLine

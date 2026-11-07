@@ -1,8 +1,13 @@
 import type { UIMessage } from "ai";
 import { expect, it } from "vite-plus/test";
 import {
+  cloudInteractionArtifact,
+  cloudInteractionResolve,
   scrubSessionEvent,
+  type CommandReceipt,
+  type RunnerIdentity,
   type SessionEvent,
+  type SessionInteractionResolution,
   type SessionPresentationProjection,
   type TranscriptReference,
 } from "@volli/shared";
@@ -53,12 +58,64 @@ const projection: SessionPresentationProjection = {
   bornTicketless: true,
   scheduledResume: null,
 };
+interface FrameOptions {
+  commandId?: string;
+  resolution?: SessionInteractionResolution;
+  attachmentId?: string;
+  routeAttachmentId?: string | null;
+  venue?: RunnerIdentity | null;
+}
+const LOCAL: RunnerIdentity = { id: "local", kind: "local" };
+function decode(
+  sequence: number,
+  payload: SessionEvent["payload"],
+  message: UIMessage | null,
+  envelope: {
+    source: "user" | "adapter";
+    venue?: RunnerIdentity | null;
+    attachmentId?: string | null;
+    commandId?: string;
+  },
+): ChatSessionFrame {
+  const event: SessionEvent = {
+    id: `event-${sequence}`,
+    sessionId: "session",
+    sequence,
+    occurredAt: sequence,
+    recordedAt: sequence,
+    ...(envelope.attachmentId == null ? {} : { attachmentId: envelope.attachmentId }),
+    ...(envelope.commandId === undefined ? {} : { commandId: envelope.commandId }),
+    provenance: {
+      source: {
+        kind: envelope.source,
+        id: envelope.source === "adapter" ? "pi" : "session-client",
+        detail: envelope.source === "adapter" ? null : { sessionOrigin: { kind: "user" } },
+      },
+      venue: envelope.venue ?? null,
+    },
+    payload,
+  };
+  const decoded = chatSessionFrame(
+    JSON.parse(
+      JSON.stringify({
+        sessionId: "session",
+        sequence,
+        event: scrubSessionEvent(event),
+        transcript: message ? { message } : null,
+      }),
+    ),
+  );
+  if (!decoded) throw new Error("Expected real RPC receipt-shaped frame");
+  return decoded;
+}
 function frame(
   sequence: number,
   message: UIMessage,
   kind: "resolve" | "submit" | "observation",
   ref = reference,
+  options: FrameOptions = {},
 ): ChatSessionFrame {
+  const attachmentId = options.attachmentId ?? "attachment";
   const payload: SessionEvent["payload"] =
     kind === "observation"
       ? {
@@ -70,56 +127,138 @@ function frame(
       : {
           kind: "command.recorded",
           command: {
-            id: kind === "resolve" ? message.id : `submit-${sequence}`,
+            id: kind === "resolve" ? (options.commandId ?? message.id) : `submit-${sequence}`,
             sessionId: "session",
             createdAt: sequence,
-            route: null,
+            route:
+              kind === "resolve" && options.routeAttachmentId !== null
+                ? { adapterId: "pi", attachmentId: options.routeAttachmentId ?? attachmentId }
+                : null,
             intent:
               kind === "resolve"
                 ? {
                     kind: "interaction.resolve",
-                    attachmentId: "attachment",
+                    attachmentId,
                     interactionId: "permission:p1",
-                    resolution,
+                    resolution: options.resolution ?? resolution,
                     reference: ref,
                   }
                 : { kind: "message.submit", reference: ref },
           },
         };
-  const event: SessionEvent = {
-    id: `event-${sequence}`,
-    sessionId: "session",
-    sequence,
-    occurredAt: sequence,
-    recordedAt: sequence,
-    provenance: {
-      source: {
-        kind: kind === "observation" ? "adapter" : "user",
-        id: kind === "observation" ? "pi" : "session-client",
-        detail: kind === "observation" ? null : { sessionOrigin: { kind: "user" } },
-      },
-      venue: null,
-    },
-    payload,
-  };
-  const decoded = chatSessionFrame(
-    JSON.parse(
-      JSON.stringify({
-        sessionId: "session",
-        sequence,
-        event: scrubSessionEvent(event),
-        transcript: { message },
-      }),
-    ),
-  );
-  if (!decoded) throw new Error("Expected real RPC receipt-shaped frame");
-  return decoded;
+  return decode(sequence, payload, message, {
+    source: kind === "observation" ? "adapter" : "user",
+    venue: options.venue,
+  });
 }
-function read(frames: readonly ChatSessionFrame[]) {
+function opened(sequence: number, attachmentId = "attachment", venue: RunnerIdentity | null = null) {
+  return decode(
+    sequence,
+    {
+      kind: "interaction.opened",
+      interaction: {
+        id: "permission:p1",
+        attachmentId,
+        kind: "permission",
+        title: "Read DESIGN.md",
+        detail: null,
+        options: [
+          { id: "once", label: "Allow once", description: null },
+          { id: "reject", label: "Deny", description: null },
+        ],
+        multiple: false,
+        native: { id: null, detail: null },
+      },
+    },
+    null,
+    { source: "adapter", venue, attachmentId },
+  );
+}
+function resolvedFact(
+  sequence: number,
+  answer: SessionInteractionResolution = resolution,
+  attachmentId = "attachment",
+  venue: RunnerIdentity | null = null,
+  commandId?: string,
+) {
+  return decode(
+    sequence,
+    { kind: "interaction.resolved", attachmentId, interactionId: "permission:p1", resolution: answer },
+    null,
+    { source: "adapter", venue, attachmentId, ...(commandId === undefined ? {} : { commandId }) },
+  );
+}
+function cancelledFact(sequence: number) {
+  return decode(
+    sequence,
+    {
+      kind: "interaction.cancelled",
+      attachmentId: "attachment",
+      interactionId: "permission:p1",
+      reason: "user",
+    },
+    null,
+    { source: "user", attachmentId: "attachment" },
+  );
+}
+type ReceiptStatus = "accepted" | "completed" | "rejected" | "unreconciled";
+function receiptFrame(
+  sequence: number,
+  commandId: string,
+  status: ReceiptStatus,
+  options: {
+    code?: string;
+    resultKind?: "interaction.resolved" | "message.submitted";
+    attachmentId?: string | null;
+    venue?: RunnerIdentity | null;
+  } = {},
+) {
+  const base = { id: `receipt-${sequence}`, commandId, sequence, recordedAt: sequence };
+  const result = { kind: options.resultKind ?? "interaction.resolved", sessionId: "session" } as const;
+  const receipt: CommandReceipt =
+    status === "accepted"
+      ? { ...base, status, acceptedAt: sequence, result }
+      : status === "completed"
+        ? { ...base, status, result }
+        : status === "rejected"
+          ? { ...base, status, code: options.code ?? "PI_INTERACTION_NOT_RECORDED", detail: null }
+          : { ...base, status, detail: null };
+  return decode(sequence, { kind: "command.receipt.recorded", receipt }, null, {
+    source: "adapter",
+    venue: options.venue,
+    attachmentId: options.attachmentId === undefined ? "attachment" : options.attachmentId,
+  });
+}
+/**
+ * The ordered history the Session Engine and Pi adapter write for an answer
+ * that reached the runtime: the question, the recorded resolve command with
+ * its artifact, the adapter's resolution fact, then the accepted receipt.
+ */
+function settledAnswer(sequence: number, message = receipt, options: FrameOptions = {}) {
+  return [
+    opened(sequence, "attachment", options.venue ?? null),
+    frame(sequence + 1, message, "resolve", reference, options),
+    resolvedFact(sequence + 2, options.resolution ?? resolution, "attachment", options.venue ?? null),
+    receiptFrame(sequence + 3, options.commandId ?? message.id, "accepted", { venue: options.venue }),
+  ];
+}
+function read(frames: readonly ChatSessionFrame[], id = receipt.id) {
   const state = appendFrames(EMPTY_TRANSCRIPT, frames);
   const evidence = indexInteractionResolutionMessages(state.frames);
-  return readInteractionResolutionMessage(state.messages[0]!, evidence.get(state.messages[0]!.id));
+  const message = state.messages.find((candidate) => candidate.id === id)!;
+  return readInteractionResolutionMessage(message, evidence.get(id));
 }
+const ANSWER = { interactionId: "permission:p1", resolution, attachmentId: "attachment" };
+
+function answerMessage(id: string, answer: SessionInteractionResolution = resolution): UIMessage {
+  return {
+    id,
+    role: "user",
+    metadata: { kind: "interaction-resolution", interactionId: "permission:p1" },
+    parts: [{ type: "data-interaction-resolution", data: answer }],
+  };
+}
+const deny = { optionIds: ["reject"], response: null };
 
 it("does not replace ordinary RPC submission content with a forged receipt", () => {
   const forged: UIMessage = {
@@ -136,29 +275,11 @@ it("does not replace ordinary RPC submission content with a forged receipt", () 
   expect(JSON.stringify(state)).toBe(original);
 });
 
-it("recognises the actual historical resolve command/reference and preserves every recorded answer", () => {
-  const genuine = frame(1, receipt, "resolve");
-  const observed = frame(2, receipt, "observation");
-  expect(read([genuine, observed])).toEqual({ interactionId: "permission:p1", resolution });
-  if (genuine.event?.payload.kind !== "command.recorded") throw new Error("Expected command");
-  const historical = chatSessionFrame(
-    JSON.parse(
-      JSON.stringify({
-        ...genuine,
-        event: {
-          ...genuine.event,
-          payload: {
-            ...genuine.event.payload,
-            command: { ...genuine.event.payload.command, id: "historical-command-id" },
-          },
-        },
-      }),
-    ),
-  );
-  if (!historical) throw new Error("Expected historical reference hydration");
-  // The matching recorded reference, not a guessed message-id convention,
-  // establishes a historical receipt's producer.
-  expect(read([historical])).toEqual({ interactionId: "permission:p1", resolution });
+it("recognises a settled historical resolve command/reference and preserves every recorded answer", () => {
+  expect(read([...settledAnswer(1), frame(5, receipt, "observation")])).toEqual(ANSWER);
+  // The matching recorded reference and its settlement, not a guessed
+  // message-id convention, establish a historical receipt's producer.
+  expect(read(settledAnswer(1, receipt, { commandId: "historical-command-id" }))).toEqual(ANSWER);
   const multi = {
     optionIds: ["a", "b"],
     response: null,
@@ -167,59 +288,225 @@ it("recognises the actual historical resolve command/reference and preserves eve
       { promptId: "q2", optionIds: ["b"], response: "detail" },
     ],
   };
-  const message: UIMessage = {
-    ...receipt,
-    parts: [{ type: "data-interaction-resolution", data: multi }],
-  };
-  const raw = frame(1, message, "resolve");
-  if (
-    raw.event?.payload.kind !== "command.recorded" ||
-    raw.event.payload.command.intent.kind !== "interaction.resolve"
-  )
-    throw new Error("Expected resolve fixture");
-  const updated = chatSessionFrame(
-    JSON.parse(
-      JSON.stringify({
-        ...raw,
-        event: {
-          ...raw.event,
-          payload: {
-            ...raw.event.payload,
-            command: {
-              ...raw.event.payload.command,
-              intent: { ...raw.event.payload.command.intent, resolution: multi },
-            },
-          },
-        },
+  const settled = read(settledAnswer(1, answerMessage(receipt.id, multi), { resolution: multi }));
+  expect(settled?.resolution.answers).toEqual(multi.answers);
+  // A fact that kept only the flat pair is not the per-question answer given.
+  expect(
+    read([
+      opened(1),
+      frame(2, answerMessage(receipt.id, multi), "resolve", reference, { resolution: multi }),
+      resolvedFact(3, { optionIds: ["a", "b"], response: null }),
+      receiptFrame(4, receipt.id, "accepted"),
+    ]),
+  ).toBeNull();
+});
+
+it("recognises the same ordered facts from a cloud runner's ledger", () => {
+  const cloud = cloudInteractionResolve({
+    sessionId: "session",
+    commandId: "cloud-answer",
+    attachmentId: "attachment",
+    interactionId: "permission:p1",
+    resolution,
+  });
+  const message = cloudInteractionArtifact({
+    sessionId: "session",
+    commandId: "cloud-answer",
+    interactionId: "permission:p1",
+    resolution,
+  }).message as UIMessage;
+  const venue: RunnerIdentity = { id: "runner-1", kind: "cloud" };
+  const frames = [
+    opened(1, "attachment", venue),
+    frame(2, message, "resolve", cloud.reference, { venue }),
+    resolvedFact(3, resolution, "attachment", venue),
+    receiptFrame(4, "cloud-answer", "accepted", { venue }),
+  ];
+  expect(read(frames, "cloud-answer")).toEqual(ANSWER);
+  // A queued cloud answer whose runner has not answered yet is not an answer.
+  expect(read(frames.slice(0, 2), "cloud-answer")).toBeNull();
+});
+
+it("never credits a refused first answer, whether the accepted retry chose differently or the same", () => {
+  const first = answerMessage("answer-a");
+  const history = (retry: SessionInteractionResolution) => [
+    opened(1),
+    frame(2, first, "resolve"),
+    receiptFrame(3, "answer-a", "rejected", { code: "PI_INTERACTION_NOT_RECORDED" }),
+    frame(4, answerMessage("answer-b", retry), "resolve", reference, { resolution: retry }),
+    resolvedFact(5, retry),
+    receiptFrame(6, "answer-b", "accepted"),
+  ];
+  expect(read(history(deny), "answer-a")).toBeNull();
+  expect(read(history(deny), "answer-b")).toEqual({ ...ANSWER, resolution: deny });
+  expect(read(history(resolution), "answer-a")).toBeNull();
+  expect(read(history(resolution), "answer-b")).toEqual(ANSWER);
+  // An earlier attempt with no receipt at all earns no credit from a later one.
+  const silent = [
+    opened(1),
+    frame(2, first, "resolve"),
+    frame(3, answerMessage("answer-b"), "resolve"),
+    resolvedFact(4),
+    receiptFrame(5, "answer-b", "accepted"),
+  ];
+  expect(read(silent, "answer-a")).toBeNull();
+  expect(read(silent, "answer-b")).toEqual(ANSWER);
+});
+
+it("keeps rejected, unknown, cancelled and delivery-uncertain answers neutral", () => {
+  // The withdrawal won the claim after the fact committed: recorded, not delivered.
+  expect(
+    read([
+      opened(1),
+      frame(2, receipt, "resolve"),
+      resolvedFact(3),
+      receiptFrame(4, receipt.id, "rejected", { code: "PI_INTERACTION_UNKNOWN" }),
+    ]),
+  ).toBeNull();
+  // Cancelled before it was answered: the engine refuses the late answer.
+  expect(
+    read([
+      opened(1),
+      cancelledFact(2),
+      frame(3, receipt, "resolve", reference, { routeAttachmentId: null }),
+      // The engine's own refusal: no route, so its receipt names no attachment.
+      receiptFrame(4, receipt.id, "rejected", {
+        code: "interaction_unavailable",
+        attachmentId: null,
       }),
-    ),
-  );
-  if (!updated) throw new Error("Expected decoded per-question resolution");
-  expect(read([updated])?.resolution.answers).toEqual(multi.answers);
+    ]),
+  ).toBeNull();
+  // A cancellation beside an apparently settled answer is a contradiction.
+  expect(read([...settledAnswer(1), cancelledFact(5)])).toBeNull();
+  expect(read([opened(1), cancelledFact(2), ...settledAnswer(2).slice(1)])).toBeNull();
+  // Uncertain delivery stays uncertain until a terminal receipt settles it.
+  const pending = [opened(1), frame(2, receipt, "resolve"), resolvedFact(3)];
+  expect(read([...pending, receiptFrame(4, receipt.id, "unreconciled")])).toBeNull();
+  expect(
+    read([
+      ...pending,
+      receiptFrame(4, receipt.id, "unreconciled"),
+      receiptFrame(5, receipt.id, "accepted"),
+    ]),
+  ).toEqual(ANSWER);
+  expect(
+    read([
+      ...pending,
+      receiptFrame(4, receipt.id, "unreconciled"),
+      receiptFrame(5, receipt.id, "rejected"),
+    ]),
+  ).toBeNull();
+  expect(read([...settledAnswer(1), receiptFrame(5, receipt.id, "rejected")])).toBeNull();
+  expect(read([...settledAnswer(1), receiptFrame(5, receipt.id, "completed")])).toEqual(ANSWER);
+});
+
+it("requires the question, fact, route and receipt on the command's own attachment", () => {
+  const [, command, fact, accepted] = settledAnswer(1);
+  expect(read([opened(1, "attachment-old"), command!, fact!, accepted!])).toBeNull();
+  expect(
+    read([opened(1), command!, resolvedFact(3, resolution, "attachment-old"), accepted!]),
+  ).toBeNull();
+  expect(
+    read([opened(1), command!, fact!, receiptFrame(4, receipt.id, "accepted", { attachmentId: "x" })]),
+  ).toBeNull();
+  expect(
+    read([
+      opened(1),
+      frame(2, receipt, "resolve", reference, { routeAttachmentId: "attachment-old" }),
+      fact!,
+      accepted!,
+    ]),
+  ).toBeNull();
+  expect(
+    read([
+      opened(1),
+      frame(2, receipt, "resolve", reference, { routeAttachmentId: null }),
+      fact!,
+      accepted!,
+    ]),
+  ).toBeNull();
+});
+
+it("keeps absent, partial, out-of-order and contradictory settlement neutral", () => {
+  const [open, command, fact, accepted] = settledAnswer(1);
+  expect(read([command!])).toBeNull();
+  expect(read([open!, command!])).toBeNull();
+  expect(read([open!, command!, fact!])).toBeNull();
+  expect(read([open!, command!, accepted!])).toBeNull();
+  // A tail window that starts after the question opened cannot prove it.
+  expect(read([command!, fact!, accepted!])).toBeNull();
+  // The fact must answer what the command said, after it was said.
+  expect(read([open!, command!, resolvedFact(3, deny), accepted!])).toBeNull();
+  expect(read([open!, resolvedFact(2), frame(3, receipt, "resolve"), accepted!])).toBeNull();
+  expect(read([...settledAnswer(1), resolvedFact(5, deny)])).toBeNull();
+  // A receipt for another verb, or recorded before the command, settles nothing.
+  expect(
+    read([
+      open!,
+      command!,
+      fact!,
+      receiptFrame(4, receipt.id, "accepted", { resultKind: "message.submitted" }),
+    ]),
+  ).toBeNull();
+  expect(read([open!, receiptFrame(2, receipt.id, "accepted"), frame(3, receipt, "resolve"), resolvedFact(4)])).toBeNull();
+  // A fact attributed to this command still settles it; to another, never.
+  expect(read([open!, command!, resolvedFact(3, resolution, "attachment", null, receipt.id), accepted!])).toEqual(ANSWER);
+  expect(read([open!, command!, resolvedFact(3, resolution, "attachment", null, "other"), accepted!])).toBeNull();
+  // A receipt with no attachment on its envelope is not a contradiction.
+  expect(
+    read([open!, command!, fact!, receiptFrame(4, receipt.id, "accepted", { attachmentId: null })]),
+  ).toEqual(ANSWER);
+  // A kind this build does not know is skipped, not read as settlement.
+  const future = chatSessionFrame({
+    sessionId: "session",
+    sequence: 5,
+    event: { ...JSON.parse(JSON.stringify(accepted!.event)), sequence: 5, id: "future", payload: { kind: "future.fact" } },
+    transcript: null,
+  });
+  expect(future?.event).toBeNull();
+  expect(read([...settledAnswer(1), future!])).toEqual(ANSWER);
+  // Two delivered answers to one question: neither is credited.
+  const twice = [
+    opened(1),
+    frame(2, answerMessage("answer-a"), "resolve"),
+    frame(3, answerMessage("answer-b"), "resolve"),
+    resolvedFact(4),
+    receiptFrame(5, "answer-a", "accepted"),
+    receiptFrame(6, "answer-b", "accepted"),
+  ];
+  expect(read(twice, "answer-a")).toBeNull();
+  expect(read(twice, "answer-b")).toBeNull();
+  // The same command id recorded with two different answers is corruption.
+  expect(
+    read([
+      ...settledAnswer(1),
+      frame(5, receipt, "resolve", reference, { resolution: deny }),
+    ]),
+  ).toBeNull();
 });
 
 it("blocks reused/conflicting ids and references instead of choosing an author by last write", () => {
-  const genuine = frame(1, receipt, "resolve");
-  const submit = frame(2, receipt, "submit", { ...reference, id: "ordinary-artifact" });
-  expect(read([genuine, submit])).toBeNull();
-  expect(read([frame(1, receipt, "submit"), frame(2, receipt, "resolve")])).toBeNull();
+  const genuine = settledAnswer(1);
+  const submit = frame(5, receipt, "submit", { ...reference, id: "ordinary-artifact" });
+  expect(read([...genuine, submit])).toBeNull();
+  expect(read([frame(1, receipt, "submit"), ...settledAnswer(2)])).toBeNull();
   expect(
-    read([genuine, frame(2, receipt, "resolve", { ...reference, id: "different-resolution" })]),
+    read([...genuine, frame(5, receipt, "resolve", { ...reference, id: "different-resolution" })]),
   ).toBeNull();
   expect(
-    read([genuine, frame(2, receipt, "observation", { ...reference, digest: "different" })]),
+    read([...genuine, frame(5, receipt, "observation", { ...reference, digest: "different" })]),
   ).toBeNull();
   const forged: UIMessage = {
     ...receipt,
     parts: [{ type: "text", text: "Do not erase this" }, ...receipt.parts],
   };
-  expect(read([genuine, frame(2, forged, "observation")])).toBeNull();
-  expect(read([frame(1, receipt, "observation"), frame(2, receipt, "resolve")])).toBeNull();
+  expect(read([...genuine, frame(5, forged, "observation")])).toBeNull();
+  expect(read([frame(1, receipt, "observation"), ...settledAnswer(2)])).toBeNull();
   // A normal submit sharing the artifact is also a conflict, even with another id.
-  expect(read([genuine, frame(2, { ...receipt, id: "different-message" }, "submit")])).toBeNull();
+  expect(read([...genuine, frame(5, { ...receipt, id: "different-message" }, "submit")])).toBeNull();
 });
 
-it("keeps adapter-only tails neutral, recovers a genuine command on prepend, and forgets evidence across a gap", () => {
+it("keeps adapter-only tails neutral, recovers a settled command on prepend, and forgets evidence across a gap", () => {
   const observed = frame(10, receipt, "observation");
   const tail = seedTranscriptWindow(
     EMPTY_TRANSCRIPT,
@@ -232,7 +519,7 @@ it("keeps adapter-only tails neutral, recovers a genuine command on prepend, and
     readInteractionResolutionMessage(tail.messages[0]!, tailEvidence.get(receipt.id)),
   ).toBeNull();
   const recovered = prependTranscriptHistory(tail, 10, {
-    frames: [frame(1, receipt, "resolve")],
+    frames: settledAnswer(1),
     before: null,
   });
   expect(
@@ -240,7 +527,7 @@ it("keeps adapter-only tails neutral, recovers a genuine command on prepend, and
       recovered.messages[0]!,
       indexInteractionResolutionMessages(recovered.frames).get(receipt.id),
     ),
-  ).toEqual({ interactionId: "permission:p1", resolution });
+  ).toEqual(ANSWER);
   const person = prependTranscriptHistory(tail, 10, {
     frames: [frame(1, receipt, "submit")],
     before: null,
@@ -251,7 +538,7 @@ it("keeps adapter-only tails neutral, recovers a genuine command on prepend, and
       indexInteractionResolutionMessages(person.frames).get(receipt.id),
     ),
   ).toBeNull();
-  const held = appendFrames(EMPTY_TRANSCRIPT, [frame(1, receipt, "resolve")]);
+  const held = appendFrames(EMPTY_TRANSCRIPT, settledAnswer(1));
   const gap = seedTranscriptWindow(held, { frames: [observed], before: 10 }, projection);
   expect(gap.frames).toEqual([observed]);
   expect(
@@ -264,26 +551,24 @@ it("keeps adapter-only tails neutral, recovers a genuine command on prepend, and
 });
 
 it("keeps idempotent reference hydration while ignoring unrelated assistant frames", () => {
-  const genuine = frame(1, receipt, "resolve");
+  const genuine = settledAnswer(1);
+  const command = genuine[1]!;
   const duplicate = chatSessionFrame(
     JSON.parse(
       JSON.stringify({
-        ...genuine,
-        sequence: 2,
-        event: { ...genuine.event, id: "replayed-command", sequence: 2 },
+        ...command,
+        sequence: 5,
+        event: { ...command.event, id: "replayed-command", sequence: 5 },
       }),
     ),
   );
   if (!duplicate) throw new Error("Expected duplicate hydration");
   const unrelated = frame(
-    3,
+    6,
     { id: "assistant", role: "assistant", parts: [{ type: "text", text: "Unrelated answer" }] },
     "observation",
   );
-  expect(read([genuine, duplicate, unrelated])).toEqual({
-    interactionId: "permission:p1",
-    resolution,
-  });
+  expect(read([...genuine, duplicate, unrelated])).toEqual(ANSWER);
 });
 
 it("fails closed for unserialisable direct-call content without replacing it", () => {
@@ -292,13 +577,14 @@ it("fails closed for unserialisable direct-call content without replacing it", (
   const cyclic: Record<string, unknown> = { interactionId: "permission:p1" };
   cyclic.self = cyclic;
   const malformed: UIMessage = { ...receipt, metadata: cyclic };
-  const genuine = frame(1, receipt, "resolve");
-  const evidence = indexInteractionResolutionMessages([genuine]).get(receipt.id);
+  const genuine = settledAnswer(1);
+  const evidence = indexInteractionResolutionMessages(genuine).get(receipt.id);
+  expect(evidence).not.toBeNull();
   expect(readInteractionResolutionMessage(malformed, evidence)).toBeNull();
   expect(
-    indexInteractionResolutionMessages([{ ...genuine, transcript: { message: malformed } }]).get(
-      receipt.id,
-    ),
+    indexInteractionResolutionMessages(
+      genuine.map((held) => (held.transcript ? { ...held, transcript: { message: malformed } } : held)),
+    ).get(receipt.id),
   ).toBeNull();
   expect(malformed.metadata).toBe(cyclic);
 });
@@ -313,21 +599,19 @@ it("requires the matching command body, target and resolution, not just a comman
       },
     ],
   };
-  expect(read([frame(1, data, "resolve")])).toBeNull();
+  expect(read(settledAnswer(1, data))).toBeNull();
   expect(
-    read([frame(1, { ...receipt, metadata: { interactionId: "different" } }, "resolve")]),
+    read(settledAnswer(1, { ...receipt, metadata: { interactionId: "different" } })),
   ).toBeNull();
   expect(
-    read([
-      frame(
-        1,
-        { ...receipt, parts: [{ type: "text", text: "Visible prose" }, ...receipt.parts] },
-        "resolve",
-      ),
-    ]),
+    read(
+      settledAnswer(1, {
+        ...receipt,
+        parts: [{ type: "text", text: "Visible prose" }, ...receipt.parts],
+      }),
+    ),
   ).toBeNull();
-  const genuine = frame(1, receipt, "resolve");
-  const evidence = indexInteractionResolutionMessages([genuine]).get(receipt.id);
+  const evidence = indexInteractionResolutionMessages(settledAnswer(1)).get(receipt.id);
   expect(readInteractionResolutionMessage({ ...receipt, id: "other" }, evidence)).toBeNull();
   expect(readInteractionResolutionMessage({ ...receipt, role: "assistant" }, evidence)).toBeNull();
 });
