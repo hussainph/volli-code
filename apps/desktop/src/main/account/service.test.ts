@@ -312,6 +312,10 @@ describe("the account service", () => {
     ["acquisition", "policy refusal"],
     ["foreground completion", "backend refusal"],
     ["acquisition", "backend refusal"],
+    ["foreground completion", "requestDeletion refusal"],
+    ["acquisition", "requestDeletion refusal"],
+    ["foreground completion", "cancelDeletion refusal"],
+    ["acquisition", "cancelDeletion refusal"],
   ] as const)(
     "rejects an icon %s held across %s and same-owner recovery",
     async (phase, refusal) => {
@@ -334,6 +338,8 @@ describe("the account service", () => {
         revocationGeneration: () => h.service.sourceIconRevocation(),
       });
       const stop = h.service.watchSourceIconAuthority(() => cache.invalidate());
+      const priorPicture = cache.put("session", oldGrant, "https://prior.example.com", ICON_PNG)!;
+      expect(cache.picture("session", priorPicture).data).not.toBeNull();
       const gate = Promise.withResolvers<{ bytes: Uint8Array; mime: "image/png" } | null>();
       // Queue/authority boundary only. Real transport and decoder tests remain separate.
       const acquire = vi.fn(() => gate.promise);
@@ -352,8 +358,23 @@ describe("the account service", () => {
       if (phase === "acquisition") {
         completion(candidate, signal);
         await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce());
+        refiner.beginRead("session", signal)!(
+          { origin: "https://queued.example.com", url: "https://queued.example.com/icon" },
+          signal,
+        );
       }
-      if (refusal === "backend refusal") {
+      if (refusal === "requestDeletion refusal" || refusal === "cancelDeletion refusal") {
+        const mutation =
+          refusal === "requestDeletion refusal" ? "requestDeletion" : "cancelDeletion";
+        const before = h.service.snapshot();
+        const error = new BackendRefusedError(
+          "Sign-in refused by account mutation",
+          "unauthenticated",
+        );
+        h.backend[mutation].mockRejectedValueOnce(error);
+        await expect(h.service[mutation]()).rejects.toBe(error);
+        expect(h.service.snapshot()).toEqual(before); // no canonical auth/snapshot rewrite on failed mutation
+      } else if (refusal === "backend refusal") {
         now += 20 * 60_000;
         refresh.mockRejectedValueOnce(new Error("temporarily offline"));
         await expect(h.service.accessToken()).rejects.toThrow("temporarily offline");
@@ -369,11 +390,17 @@ describe("the account service", () => {
       }
       expect(h.service.sourceIconRestoring()).toBe(false);
       expect(h.service.sourceIconEpoch()).toBeNull();
+      expect(cache.picture("session", priorPicture).data).toBeNull();
+      expect(cache.put("session", oldGrant, "https://prior.example.com", ICON_PNG)).toBeNull();
       await h.service.cancelDeletion();
       expect(h.service.sourceIconOwner()).toBe(owner);
       expect(h.service.sourceIconEpoch()).not.toBe(oldGrant);
+      expect(cache.picture("session", priorPicture).data).toBeNull();
       if (phase === "foreground completion") completion(candidate, signal);
       gate.resolve({ bytes: ICON_PNG, mime: "image/png" });
+      await refiner.settled();
+      // Let any old queued job reach its own grant check, not just the active job's settlement.
+      await new Promise<void>((resolve) => setImmediate(resolve));
       await refiner.settled();
       expect(acquire).toHaveBeenCalledTimes(phase === "acquisition" ? 1 : 0);
       expect(decode).not.toHaveBeenCalled();
@@ -383,6 +410,147 @@ describe("the account service", () => {
         expect(cache.has("session", h.service.sourceIconEpoch()!, ICON_ORIGIN)).toBe(true),
       );
       expect(acquire).toHaveBeenCalledTimes(phase === "acquisition" ? 2 : 1);
+    },
+  );
+
+  it.each(["requestDeletion", "cancelDeletion"] as const)(
+    "keeps current account B decoration when an old account A %s rejects",
+    async (mutation) => {
+      const h = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+      await h.service.signIn("github");
+      await h.service.settled();
+      const pending = Promise.withResolvers<never>();
+      const error = new BackendRefusedError("Old account refused", "unauthenticated");
+      h.backend[mutation].mockImplementationOnce(() => pending.promise);
+      const outcome = h.service[mutation]().catch((caught: unknown) => caught);
+      cleanups.push(async () => {
+        pending.reject(error);
+        await outcome;
+      });
+      await vi.waitFor(() => expect(h.backend[mutation]).toHaveBeenCalledOnce());
+      await h.service.signOut();
+      h.backend.ensureViewer.mockResolvedValueOnce({ ...VIEWER, userId: "account-b" });
+      await h.service.signIn("github");
+      await h.service.settled();
+      const before = h.service.snapshot();
+      expect(before.account?.userId).toBe("account-b");
+      const grant = h.service.sourceIconEpoch()!;
+      const generation = h.service.sourceIconRevocation();
+      const cache = new SourceIconCache({
+        authorityForSession: () => h.service.sourceIconEpoch(),
+        persistentAuthorityForSession: () => h.service.sourceIconOwner(),
+        restorationPendingForSession: () => h.service.sourceIconRestoring(),
+        revocationGeneration: () => h.service.sourceIconRevocation(),
+      });
+      const changed = vi.fn(() => cache.invalidate());
+      const stop = h.service.watchSourceIconAuthority(changed);
+      cleanups.push(() => {
+        stop();
+        cache.close();
+      });
+      const picture = cache.put("session-b", grant, ICON_ORIGIN, ICON_PNG)!;
+      pending.reject(error);
+      expect(await outcome).toBe(error);
+      expect(h.service.snapshot()).toEqual(before);
+      expect(h.service.sourceIconEpoch()).toBe(grant);
+      expect(h.service.sourceIconRevocation()).toBe(generation);
+      expect(changed).not.toHaveBeenCalled();
+      expect(cache.picture("session-b", picture).data).not.toBeNull();
+    },
+  );
+
+  it.each(["requestDeletion", "cancelDeletion"] as const)(
+    "preserves decoration and the original %s failure for transient/business-rule errors",
+    async (mutation) => {
+      const h = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+      await h.service.signIn("github");
+      await h.service.settled();
+      const before = h.service.snapshot();
+      const grant = h.service.sourceIconEpoch()!;
+      const generation = h.service.sourceIconRevocation();
+      const cache = new SourceIconCache({
+        authorityForSession: () => h.service.sourceIconEpoch(),
+        persistentAuthorityForSession: () => h.service.sourceIconOwner(),
+        restorationPendingForSession: () => h.service.sourceIconRestoring(),
+        revocationGeneration: () => h.service.sourceIconRevocation(),
+      });
+      const changed = vi.fn(() => cache.invalidate());
+      const stop = h.service.watchSourceIconAuthority(changed);
+      cleanups.push(() => {
+        stop();
+        cache.close();
+      });
+      const picture = cache.put("session", grant, ICON_ORIGIN, ICON_PNG)!;
+      for (const error of [
+        new Error("temporarily offline"),
+        new BackendRefusedError("Still an owner", "sole_owner"),
+        new BackendRefusedError("Purge already started", "purge_started"),
+        new BackendRefusedError("No typed authorization refusal", null),
+      ]) {
+        h.backend[mutation].mockRejectedValueOnce(error);
+        await expect(h.service[mutation]()).rejects.toBe(error);
+        expect(h.service.snapshot()).toEqual(before);
+        expect(h.service.sourceIconEpoch()).toBe(grant);
+        expect(h.service.sourceIconRevocation()).toBe(generation);
+        expect(changed).not.toHaveBeenCalled();
+        expect(cache.picture("session", picture).data).not.toBeNull();
+      }
+      // The same mutation can subsequently succeed without inventing a sign-in transition.
+      await h.service[mutation]();
+      expect(h.service.sourceIconEpoch()).toBe(grant);
+      expect(h.service.sourceIconRevocation()).toBe(generation);
+      expect(cache.picture("session", picture).data).not.toBeNull();
+      expect(h.service.snapshot().account?.deletionPurgeAfter).toBe(
+        mutation === "requestDeletion" ? 9_999 : null,
+      );
+    },
+  );
+
+  it.each(["requestDeletion", "cancelDeletion"] as const)(
+    "revokes decoration for current-epoch account authorization refusals from %s without changing auth snapshots",
+    async (mutation) => {
+      const h = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+      await h.service.signIn("github");
+      await h.service.settled();
+      const cache = new SourceIconCache({
+        authorityForSession: () => h.service.sourceIconEpoch(),
+        persistentAuthorityForSession: () => h.service.sourceIconOwner(),
+        restorationPendingForSession: () => h.service.sourceIconRestoring(),
+        revocationGeneration: () => h.service.sourceIconRevocation(),
+      });
+      const stop = h.service.watchSourceIconAuthority(() => cache.invalidate());
+      cleanups.push(() => {
+        stop();
+        cache.close();
+      });
+      for (const code of [
+        "account_deleted",
+        "no_viewer",
+        "identity_conflict",
+        "not_a_person",
+        "account_deletion_pending",
+        "forbidden",
+        "suspended",
+      ]) {
+        const before = h.service.snapshot();
+        const grant = h.service.sourceIconEpoch()!;
+        const generation = h.service.sourceIconRevocation();
+        const picture = cache.put("session", grant, ICON_ORIGIN, ICON_PNG)!;
+        const error = new BackendRefusedError(`Account refusal: ${code}`, code);
+        h.backend[mutation].mockRejectedValueOnce(error);
+        await expect(h.service[mutation]()).rejects.toBe(error);
+        expect(h.service.snapshot()).toEqual(before);
+        expect(h.service.sourceIconEpoch()).toBeNull();
+        expect(h.service.sourceIconRevocation()).not.toBe(generation);
+        expect(cache.picture("session", picture).data).toBeNull();
+        expect(cache.put("session", grant, ICON_ORIGIN, ICON_PNG)).toBeNull();
+        await h.service.cancelDeletion();
+        expect(h.service.sourceIconEpoch()).not.toBe(grant);
+        expect(cache.picture("session", picture).data).toBeNull();
+        expect(
+          cache.put("session", h.service.sourceIconEpoch()!, ICON_ORIGIN, ICON_PNG),
+        ).not.toBeNull();
+      }
     },
   );
 

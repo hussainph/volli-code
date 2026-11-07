@@ -107,6 +107,17 @@ const SIGN_IN_REFUSALS: ReadonlySet<string | null> = new Set([
   "suspended",
 ]);
 
+/** Account authorization failures, not deletion business rules or transport errors. */
+const ACCOUNT_AUTH_REFUSALS: ReadonlySet<string | null> = new Set([
+  "unauthenticated",
+  "no_viewer",
+  "account_deleted",
+  "account_deletion_pending",
+  "identity_conflict",
+  "not_a_person",
+  "forbidden",
+]);
+
 export interface AccountLogger {
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
@@ -317,6 +328,18 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     }
   };
 
+  const refuseDecorationForBackendError = (error: unknown): void => {
+    if (
+      !(error instanceof BackendRefusedError) ||
+      (!SIGN_IN_REFUSALS.has(error.code) && !ACCOUNT_AUTH_REFUSALS.has(error.code))
+    )
+      return;
+    // This boundary is decoration-only. The caller still owns the original
+    // account state transition or mutation failure, including its exact error.
+    revokeDecoration();
+    emitIconAuthority();
+  };
+
   const emit = (): void => {
     emitIconAuthority();
     const snapshot = current();
@@ -499,11 +522,11 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         acceptViewer(answered);
       } catch (error) {
         if (epoch !== startedIn) return;
+        refuseDecorationForBackendError(error);
         if (error instanceof BackendRefusedError && SIGN_IN_REFUSALS.has(error.code)) {
           pendingInviteCode = undefined;
           pendingAgreementVersion = undefined;
           backendState = "refused";
-          revokeDecoration();
           failure = error.message;
           options.marker?.clear();
           emit();
@@ -516,7 +539,6 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         if (session !== null) {
           const refused = error instanceof BackendRefusedError && error.code === "unauthenticated";
           backendState = refused ? "refused" : "unreachable";
-          if (refused) revokeDecoration();
           failure = refused ? NOT_ACCEPTED : OFFLINE;
           log.warn("account backend unreachable", { error: message(error, "unknown") });
         }
@@ -681,7 +703,14 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   ): Promise<void> => {
     const startedIn = epoch;
     const { backend: live, token } = await signedInBackend();
-    const answered = await call(live, token);
+    let answered: BackendViewer;
+    try {
+      answered = await call(live, token);
+    } catch (error) {
+      // A late refusal from an ended sign-in cannot revoke its replacement.
+      if (epoch === startedIn) refuseDecorationForBackendError(error);
+      throw error;
+    }
     if (epoch !== startedIn) return;
     acceptViewer(answered);
     emit();

@@ -1,5 +1,5 @@
 // Keep HTML extraction workers on this pure policy leaf, not the shared barrel.
-import { admitWebTarget } from "../../../shared/src/web-target-policy";
+import { admitWebTarget } from "@volli/shared/web-target-policy";
 
 /** An explicit same-origin subresource, not permission to read it. Ignores HTML base elements. */
 export function sameOriginIconUrl(href: string, finalPageUrl: string): string | null {
