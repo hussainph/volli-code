@@ -394,15 +394,7 @@ export function appendFrames(
     state.durableMessages,
     projectTranscriptMessages(fresh),
   );
-  const workPositions = foldWorkPositions(
-    state,
-    state.overlay,
-    overlay,
-    overlays,
-    fresh,
-    durableMessages,
-    last?.sequence ?? state.throughSequence,
-  );
+  const workPositions = foldWorkPositions(state, overlay, overlays, fresh, durableMessages);
   // A batch of nothing but stale or orphaned transient state folds to the state
   // it was handed, and a fresh object here would repaint the transcript for
   // nothing.

@@ -115,6 +115,9 @@ function harness() {
   };
   return {
     translator,
+    advance(count: number) {
+      for (let index = 0; index < count; index += 1) record({ kind: "session.retitled", title: "Audit" }, now++);
+    },
     get state() {
       return state;
     },
@@ -185,7 +188,7 @@ function work(state: ReturnType<typeof harness>["state"]) {
 }
 
 it.each(["coalesced", "separate"] as const)(
-  "keeps spanning reasoning through actual provisional -> entry ids in %s batches",
+  "keeps reasoning placement unknown across unlinked provisional -> entry ids in %s batches",
   async (batch) => {
     const host = harness();
     await host.translate({ kind: "turn", state: "started", turnId: "turn" });
@@ -218,15 +221,16 @@ it.each(["coalesced", "separate"] as const)(
     const settled = batch === "separate" ? host.flushRemoveBeforeSettle() : host.flush();
     expect(settled.durableMessages.at(-1)?.id).toBe("pi:attachment:entry:entry-7");
     expect(settled.overlay.size).toBe(0);
-    expect(rows(settled).map((row) => row.kind)).toEqual(["work", "host-notice", "turn"]);
-    expect(work(settled)[0]!.key).toBe(originalKey);
+    expect(rows(settled).map((row) => row.kind)).toEqual(["host-notice", "work", "turn"]);
+    expect(work(settled)[0]!.key).not.toBe(originalKey);
     expect(work(settled)[0]!.rows).toHaveLength(1);
     expect(work(settled)[0]!.rows[0]!.part).toMatchObject({
       type: "reasoning",
       text: "Checking contrast",
       state: "done",
     });
-    expect(settled.activityFirstOverlaySequence.size).toBe(1);
+    expect(settled.activityFirstOverlaySequence.size).toBe(0);
+    expect(settled.activityViewKeys.size).toBe(0);
     expect(
       [...settled.activityFirstOverlaySequence.keys()].some((key) => key.includes(streamingId)),
     ).toBe(false);
@@ -240,7 +244,7 @@ it.each(["coalesced", "separate"] as const)(
   },
 );
 
-it("retires unreachable reasoning after actual tool-only withdrawals and bounds pending handoffs", async () => {
+it("retires unreachable reasoning after actual tool-only withdrawals without speculative handoffs", async () => {
   const host = harness();
   await host.translate({ kind: "turn", state: "started", turnId: "turn" });
   host.flush();
@@ -261,7 +265,7 @@ it("retires unreachable reasoning after actual tool-only withdrawals and bounds 
     expect(host.state.overlay.size).toBe(0);
     expect(host.state.activityFirstOverlaySequence.size).toBe(0);
     expect(host.state.activityViewKeys.size).toBe(0);
-    expect(host.state.removedReasoning.length).toBeLessThanOrEqual(16);
+    expect(host.state.removedReasoning).toHaveLength(0);
   }
   expect(work(host.state)).toHaveLength(0);
   await host.translate({
@@ -279,10 +283,39 @@ it("retires unreachable reasoning after actual tool-only withdrawals and bounds 
     message: { entryId: "final", role: "assistant", text: "Done", reasoning: "Final thought" },
   });
   host.flush();
-  expect(work(host.state)[0]!.key).toBe(key);
+  expect(work(host.state)[0]!.key).not.toBe(key);
   expect(host.state.removedReasoning).toHaveLength(0);
   await host.translate({ kind: "turn", state: "completed", turnId: "turn" });
   host.flush();
   expect(host.state.removedReasoning).toHaveLength(0);
   expect(work(host.state)).toHaveLength(1);
+});
+
+it.each(["no-reset", "turn-close", "age-window"] as const)("never adopts a withdrawn thought for an unrelated entry across %s", async (barrier) => {
+  const host = harness();
+  await host.translate({ kind: "turn", state: "started", turnId: "turn" });
+  host.flush();
+  await host.translate({ kind: "delta", turnId: "turn", channel: "reasoning", text: "Withdrawn thought" });
+  host.flush();
+  const oldKey = work(host.state)[0]!.key;
+  host.notice();
+  await host.translate({ kind: "message-settled", turnId: "turn", message: { entryId: "withdrawn", role: "assistant", text: "" } });
+  host.flush();
+  expect(host.state.removedReasoning).toHaveLength(0);
+  expect(host.state.activityFirstOverlaySequence.size).toBe(0);
+  if (barrier === "turn-close") await host.translate({ kind: "turn", state: "completed", turnId: "turn" });
+  if (barrier === "age-window") host.advance(129);
+  // No new delta/reset. This is a separate settled thought, despite sharing
+  // the attachment and turn prefix. Barrier and settlement fold in one batch.
+  await host.translate({ kind: "message-settled", turnId: "turn", message: { entryId: "unrelated", role: "assistant", text: "New answer", reasoning: "Unrelated thought" } });
+  host.flush();
+  expect(rows(host.state).map((row) => row.kind)).toEqual(["host-notice", "work", "turn"]);
+  expect(work(host.state)[0]!.key).not.toBe(oldKey);
+  expect(work(host.state)[0]!.rows[0]!.part).toMatchObject({ type: "reasoning", text: "Unrelated thought" });
+  expect(work(host.state).map(workDurationLabel)).toEqual(["Work details"]);
+  expect(host.state.activityViewKeys.size).toBe(0);
+  expect(host.state.activityFirstOverlaySequence.size).toBe(0);
+  expect(host.state.removedReasoning).toHaveLength(0);
+  expect(host.state.messages.at(-1)?.id).toBe("pi:attachment:entry:unrelated");
+  expect(host.state.frames.map((frame) => frame.sequence)).toEqual(host.state.frames.map((frame) => frame.sequence).toSorted((left, right) => left - right));
 });
