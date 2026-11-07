@@ -14,24 +14,11 @@ export function workPositionKey(
       ? `reasoning:${messageId}:${index}`
       : null;
 }
-interface RemovedReasoning {
-  messageId: string;
-  key: string;
-  position: number;
-  viewKey: string;
-  removedThrough: number;
-}
 export interface WorkPositionState {
   activityFirstOverlaySequence: ReadonlyMap<string, number>;
-  /** Kept empty: the existing wire cannot prove a provisional-to-entry alias. */
-  activityViewKeys: ReadonlyMap<string, string>;
-  /** No unlinked withdrawn thought is retained as a potential future owner. */
-  removedReasoning: readonly RemovedReasoning[];
 }
 export const EMPTY_WORK_POSITIONS: WorkPositionState = {
   activityFirstOverlaySequence: new Map(),
-  activityViewKeys: new Map(),
-  removedReasoning: [],
 };
 
 /**
@@ -55,16 +42,12 @@ export function foldWorkPositions(
 ): WorkPositionState {
   if (
     frames.length === 0 &&
-    prior.activityViewKeys.size === 0 &&
-    prior.removedReasoning.length === 0 &&
     overlays.every(
       (emission) => emission.delta.op === "part.append" || emission.delta.op === "metadata",
     )
   )
     return prior;
   const positions = new Map(prior.activityFirstOverlaySequence);
-  // Revoke unsupported lineage if an already-resident view predates this fix.
-  for (const key of prior.activityViewKeys.keys()) positions.delete(key);
   for (const emission of overlays) {
     const entries =
       emission.delta.op === "reset"
@@ -96,13 +79,5 @@ export function foldWorkPositions(
   const samePositions =
     positions.size === prior.activityFirstOverlaySequence.size &&
     [...positions].every(([key, value]) => prior.activityFirstOverlaySequence.get(key) === value);
-  return samePositions && prior.activityViewKeys.size === 0 && prior.removedReasoning.length === 0
-    ? prior
-    : {
-        activityFirstOverlaySequence: samePositions
-          ? prior.activityFirstOverlaySequence
-          : positions,
-        activityViewKeys: EMPTY_WORK_POSITIONS.activityViewKeys,
-        removedReasoning: EMPTY_WORK_POSITIONS.removedReasoning,
-      };
+  return samePositions ? prior : { activityFirstOverlaySequence: positions };
 }

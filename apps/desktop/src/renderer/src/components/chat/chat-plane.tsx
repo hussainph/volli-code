@@ -1896,11 +1896,6 @@ function ChatPlaneContent({
       state.sessions[sessionId]?.transcript.activityFirstOverlaySequence ??
       EMPTY_TRANSCRIPT.activityFirstOverlaySequence,
   );
-  const activityViewKeys = useStore(
-    sessionsStore,
-    (state) =>
-      state.sessions[sessionId]?.transcript.activityViewKeys ?? EMPTY_TRANSCRIPT.activityViewKeys,
-  );
   const messageTimes = React.useMemo(
     () => transcriptMessageTimes(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
     [transcriptFrames],
@@ -2040,7 +2035,6 @@ function ChatPlaneContent({
           {
             frames: transcriptFrames ?? EMPTY_TRANSCRIPT.frames,
             activityFirstOverlaySequence,
-            activityViewKeys,
           },
         ),
       [
@@ -2053,7 +2047,6 @@ function ChatPlaneContent({
         turnActive,
         transcriptFrames,
         activityFirstOverlaySequence,
-        activityViewKeys,
       ],
     ),
     samePresentedRow,

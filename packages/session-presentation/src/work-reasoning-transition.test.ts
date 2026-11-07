@@ -231,11 +231,9 @@ it.each(["coalesced", "separate"] as const)(
       state: "done",
     });
     expect(settled.activityFirstOverlaySequence.size).toBe(0);
-    expect(settled.activityViewKeys.size).toBe(0);
     expect(
       [...settled.activityFirstOverlaySequence.keys()].some((key) => key.includes(streamingId)),
     ).toBe(false);
-    expect(settled.removedReasoning).toHaveLength(0);
     // Cold history cannot recreate an unrecorded reasoning start. It preserves
     // full content and canonical order, but does not claim an active duration.
     const cold = appendFrames(EMPTY_TRANSCRIPT, settled.frames);
@@ -265,8 +263,6 @@ it("retires unreachable reasoning after actual tool-only withdrawals without spe
     host.flush();
     expect(host.state.overlay.size).toBe(0);
     expect(host.state.activityFirstOverlaySequence.size).toBe(0);
-    expect(host.state.activityViewKeys.size).toBe(0);
-    expect(host.state.removedReasoning).toHaveLength(0);
   }
   expect(work(host.state)).toHaveLength(0);
   await host.translate({
@@ -285,60 +281,9 @@ it("retires unreachable reasoning after actual tool-only withdrawals without spe
   });
   host.flush();
   expect(work(host.state)[0]!.key).not.toBe(key);
-  expect(host.state.removedReasoning).toHaveLength(0);
   await host.translate({ kind: "turn", state: "completed", turnId: "turn" });
   host.flush();
-  expect(host.state.removedReasoning).toHaveLength(0);
   expect(work(host.state)).toHaveLength(1);
-});
-
-it("revokes already-resident unsupported aliases and pending handoffs without adopting them", async () => {
-  const host = harness();
-  await host.translate({ kind: "turn", state: "started", turnId: "turn" });
-  host.flush();
-  await host.translate({
-    kind: "message-settled",
-    turnId: "turn",
-    message: {
-      entryId: "resident",
-      role: "assistant",
-      text: "Answer",
-      reasoning: "Recorded thought",
-    },
-  });
-  const before = host.flush();
-  const key = "reasoning:pi:attachment:entry:resident:0";
-  const oldKey = "reasoning:pi:attachment:turn:0:0";
-  host.advance(1);
-  const fresh = host.flush().frames.at(-1)!;
-  const aliased = appendFrames(
-    {
-      ...before,
-      activityFirstOverlaySequence: new Map([[key, 1]]),
-      activityViewKeys: new Map([[key, oldKey]]),
-    },
-    [fresh],
-  );
-  expect(aliased.activityFirstOverlaySequence.size).toBe(0);
-  expect(aliased.activityViewKeys.size).toBe(0);
-  const pending = appendFrames(
-    {
-      ...before,
-      removedReasoning: [
-        {
-          messageId: "pi:attachment:turn:0",
-          key: oldKey,
-          position: 1,
-          viewKey: oldKey,
-          removedThrough: 1,
-        },
-      ],
-    },
-    [fresh],
-  );
-  expect(pending.activityFirstOverlaySequence).toBe(before.activityFirstOverlaySequence);
-  expect(pending.removedReasoning).toHaveLength(0);
-  expect(pending.messages).toEqual(before.messages);
 });
 
 it.each(["no-reset", "turn-close", "age-window"] as const)(
@@ -362,7 +307,6 @@ it.each(["no-reset", "turn-close", "age-window"] as const)(
       message: { entryId: "withdrawn", role: "assistant", text: "" },
     });
     host.flush();
-    expect(host.state.removedReasoning).toHaveLength(0);
     expect(host.state.activityFirstOverlaySequence.size).toBe(0);
     if (barrier === "turn-close")
       await host.translate({ kind: "turn", state: "completed", turnId: "turn" });
@@ -387,9 +331,7 @@ it.each(["no-reset", "turn-close", "age-window"] as const)(
       text: "Unrelated thought",
     });
     expect(work(host.state).map(workDurationLabel)).toEqual(["Work details"]);
-    expect(host.state.activityViewKeys.size).toBe(0);
     expect(host.state.activityFirstOverlaySequence.size).toBe(0);
-    expect(host.state.removedReasoning).toHaveLength(0);
     expect(host.state.messages.at(-1)?.id).toBe("pi:attachment:entry:unrelated");
     expect(host.state.frames.map((frame) => frame.sequence)).toEqual(
       host.state.frames.map((frame) => frame.sequence).toSorted((left, right) => left - right),

@@ -69,10 +69,7 @@ export function projectWorkWindows(
   source: readonly TranscriptRow[],
   messageTimes: ReadonlyMap<string, number>,
   active: boolean,
-  evidence?: Pick<
-    ChatTranscriptState,
-    "frames" | "activityFirstOverlaySequence" | "activityViewKeys"
-  >,
+  evidence?: Pick<ChatTranscriptState, "frames" | "activityFirstOverlaySequence">,
 ): readonly WorkTranscriptRow[] {
   const sequences = new Map<string, number>();
   const updateSequences = new Map<string, number>();
@@ -163,8 +160,7 @@ export function projectWorkWindows(
       }
       for (const original of segment.rows) {
         const { message, index } = byPart.get(original.key)!;
-        const rawKey = workPositionKey(original.part, message.id, index)!;
-        const key = evidence?.activityViewKeys.get(rawKey) ?? rawKey;
+        const key = workPositionKey(original.part, message.id, index)!;
         if (owned.has(key)) continue;
         owned.add(key);
         const activity: BundleRow =
