@@ -343,7 +343,8 @@ export function deriveCanvasPaint(
         : "0 1px 2px rgb(0 0 0 / .35), 0 0 0 .5px rgb(255 255 255 / .06)",
       "--control-face": light ? raisedFace : translucent(fillInk, controlAlpha),
       "--glass-outline-pressed": translucent(outlinePressedInk, SECONDARY_FILL_ALPHA),
-      // Outline/secondary faces in writing popovers. Light keeps the opaque
+      // Outline/secondary faces on floating writing glass (popovers, floating
+      // dialogs and alerts, the palette). Light keeps the opaque
       // control face and shared press. Dark shades toward the pole opposite
       // the light body ink at the same 14%/7.8% coverage, so neither face can
       // fall below the bare writing glass the body ink already clears.

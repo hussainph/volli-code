@@ -159,7 +159,7 @@ const NOTES = {
     "   to follow its own ink polarity; bare canvas substitutes the adaptive\n" +
     "   --canvas-ink. Body foreground remains neutral.",
   "--writing-control-face":
-    "Outline/secondary buttons in writing popovers: light keeps the opaque\n" +
+    "Outline/secondary buttons on floating writing glass: light keeps the opaque\n" +
     "   control face and shared press; dark shades opposite the body ink.",
   "--glass-outline-pressed":
     "Navigation outline press only: 7.8% optical shade/highlight opposite\n" +

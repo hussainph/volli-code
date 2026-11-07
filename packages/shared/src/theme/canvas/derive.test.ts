@@ -53,6 +53,42 @@ describe("neutral paper and canvas-tinted materials", () => {
     );
   });
 
+  // The chroma search falls back toward the neutral endpoint. That endpoint
+  // must itself clear the pair on every canvas, or the fallback would return a
+  // failing grey silently; and the result only ever trades chroma.
+  it.each(["light", "dark"] as const)(
+    "%s: writing glass is the full tint or a feasible chroma cut toward neutral",
+    (mode) => {
+      for (const hex of hues) {
+        for (const vibrancy of [0, 0.6, 1]) {
+          const canvas = { ...DEFAULT_CANVAS, stops: [{ hex, x: 0.3, y: 0.6 }], vibrancy };
+          const tokens = deriveCanvasTokens(canvas, mode);
+          const full = hexToOklch(
+            tintCanvasNeutral(mode === "dark" ? "#282828" : "#fafafa", canvas, mode),
+          );
+          const fill = tintCanvasNeutral(tokens["--foreground"], canvas, mode);
+          const clears = (popover: string) =>
+            writingGlass(popover, mode).pools.every(
+              (pool) =>
+                wcagContrast(tokens["--foreground"], pool) >= 4.5 &&
+                wcagContrast(
+                  tokens["--foreground"],
+                  compositeHex(fill, SECONDARY_FILL_ALPHA, pool),
+                ) >= 4.5,
+            );
+          const context = `${mode}/${hex}/v${vibrancy}`;
+          // An achromatic seed has no defined hue; the zero-chroma endpoint needs none.
+          const neutral = oklchToHex(full.L, 0, Number.isFinite(full.h) ? full.h : 0);
+          expect(clears(neutral), `${context}/neutral endpoint`).toBe(true);
+          expect(clears(tokens["--popover"]), `${context}/popover`).toBe(true);
+          const popover = hexToOklch(tokens["--popover"]);
+          expect(popover.C, context).toBeLessThanOrEqual(full.C + 1e-3);
+          expect(popover.L, context).toBeCloseTo(full.L, 2);
+        }
+      }
+    },
+  );
+
   for (const mode of ["light", "dark"] as const) {
     it.each(hues)(`${mode}/%s: secondary and labels clear AA on reading pools`, (hex) => {
       for (const vibrancy of [0, 0.6, 1]) {

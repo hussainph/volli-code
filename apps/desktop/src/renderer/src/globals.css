@@ -372,7 +372,7 @@
   /* Navigation outline press only: 7.8% optical shade/highlight opposite
    the navigation ink. Paper and other control variants retain their fills. */
   --glass-outline-pressed: rgb(0 0 0 / 0.078);
-  /* Outline/secondary buttons in writing popovers: light keeps the opaque
+  /* Outline/secondary buttons on floating writing glass: light keeps the opaque
    control face and shared press; dark shades opposite the body ink. */
   --writing-control-face: rgb(0 0 0 / 0.14);
   --writing-control-pressed: rgb(0 0 0 / 0.078);
@@ -540,7 +540,7 @@
   /* Navigation outline press only: 7.8% optical shade/highlight opposite
    the navigation ink. Paper and other control variants retain their fills. */
   --glass-outline-pressed: rgb(255 255 255 / 0.078);
-  /* Outline/secondary buttons in writing popovers: light keeps the opaque
+  /* Outline/secondary buttons on floating writing glass: light keeps the opaque
    control face and shared press; dark shades opposite the body ink. */
   --writing-control-face: #fff9f6;
   --writing-control-pressed: rgb(52 34 28 / 0.078);
@@ -3168,12 +3168,12 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 }
 /* Only navigation outline controls need the adaptive optical press. This
  * unlayered image also wins during hover+press; the shared control face still
- * wins over the layered hover fill. Paper descendants and portalled reading
+ * wins over the layered hover fill. Paper descendants and floating writing
  * surfaces keep their own material, as do secondary/inspector/toolbar buttons. */
 :is([data-volli-sidebar].glass, [data-volli-rail].glass)
   [data-control="button"][data-variant="outline"].control-material:active:not(:disabled):not(
     [data-material="paper"] *
-  ):not([data-slot="popover-content"] *) {
+  ):not(.material-floating *):not([cmdk-dialog] *) {
   background-image: linear-gradient(var(--glass-outline-pressed), var(--glass-outline-pressed));
 }
 [data-control="button"].glass-control {
@@ -3192,20 +3192,33 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-color: var(--control-face);
   border-color: transparent;
 }
-/* Writing popovers: outline/secondary faces and presses use their generated
- * writing-control pair. Paper descendants, other variants and navigation keep
- * their own material; the inspector's resting fill is unaffected. */
-[data-slot="popover-content"]
+/* Floating writing glass (popovers, menus, floating dialogs and alerts, the
+ * palette): outline/secondary faces and presses use the generated
+ * writing-control pair, only where the nearest material is that glass. Inside
+ * a canvas-sampling float (data-tint), a DOM-nested float (opaque popover fill
+ * or, tinted, pane veil) or opaque paper/solid/thick content, Buttons keep the
+ * shared face. The inspector's resting fill is unaffected. */
+:is(.material-floating, [cmdk-dialog]):not([data-tint="true"])
   [data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]):not(
     [data-material="paper"] *
+  ):not(.material-solid *):not(.material-thick *):not([data-volli-surface] *):not(
+    .material-floating[data-tint="true"] *
+  ):not(.material-floating .material-floating *):not([cmdk-dialog] .material-floating *):not(
+    .material-floating [cmdk-dialog] *
   ) {
   background-color: var(--writing-control-face);
 }
-[data-slot="popover-content"]
+:is(.material-floating, [cmdk-dialog]):not([data-tint="true"])
   [data-control="button"]:is(
     [data-variant="outline"],
     [data-variant="secondary"]
-  ).control-material:active:not(:disabled):not([data-material="paper"] *) {
+  ).control-material:active:not(:disabled):not([data-material="paper"] *):not(
+    .material-solid *
+  ):not(.material-thick *):not([data-volli-surface] *):not(
+    .material-floating[data-tint="true"] *
+  ):not(.material-floating .material-floating *):not([cmdk-dialog] .material-floating *):not(
+    .material-floating [cmdk-dialog] *
+  ) {
   background-image: linear-gradient(var(--writing-control-pressed), var(--writing-control-pressed));
 }
 .inspector-popup {
