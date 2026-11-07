@@ -75,6 +75,7 @@ export class BrowserAgentCoordinator {
     const controller = new BrowserTabController(
       {
         send: async (method, params) => await transport.send(method, params),
+        ...(transport.sendGuarded === undefined ? {} : { sendGuarded: transport.sendGuarded }),
         ...(factory.currentGeneration === undefined
           ? {}
           : { currentGeneration: factory.currentGeneration }),

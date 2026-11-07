@@ -2935,10 +2935,20 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     },
   );
 
+  it("refuses to relabel an older screenshot at the persistence boundary", () => {
+    const tab = agentTab();
+    host.navigate(tab.tabId, "https://example.com/replacement");
+
+    expect(() => host.keepScreenshot(tab.tabId, Buffer.from("old-pixels").toString("base64"), tab.generation))
+      .toThrow("changed before its screenshot could be kept");
+    expect(persisted.size).toBe(0);
+    expect(pictures.describe("picture-1")).toBeNull();
+  });
+
   it("refuses to keep a screenshot with no pixels, at the store's door too", () => {
     const tab = agentTab();
 
-    expect(() => host.keepScreenshot(tab.tabId, "")).toThrow(
+    expect(() => host.keepScreenshot(tab.tabId, "", tab.generation)).toThrow(
       "Refusing to keep an empty Browser Tab screenshot",
     );
     expect(persisted.size).toBe(0);
@@ -2948,7 +2958,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     const tab = agentTab();
     const png = Buffer.from("png-bytes").toString("base64");
 
-    const pictureId = host.keepScreenshot(tab.tabId, png);
+    const pictureId = host.keepScreenshot(tab.tabId, png, tab.generation);
 
     expect(pictureId).toBe("picture-1");
     expect(persisted.get("picture-1")).toEqual({
@@ -2973,17 +2983,107 @@ describe("BrowserTabHost pictures (VC-238)", () => {
       createdBy: "user",
     });
 
-    host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"));
+    host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"), tab.generation);
 
     expect(persisted.get("picture-1")?.record.ownerSessionId).toBeNull();
   });
 
   it("resolves a picture for the renderer, or nothing for an id it never minted", () => {
     const tab = agentTab();
-    const id = host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"));
+    const id = host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"), tab.generation);
 
     expect(host.pictureOf(id)).toMatch(/^data:image\/png;base64,/);
     expect(host.pictureOf("missing")).toBeNull();
+  });
+});
+
+describe("BrowserTabHost agent dispatch and capture boundaries", () => {
+  const tree = { nodes: [{ nodeId: "1", role: { value: "button" }, name: { value: "Save" }, backendDOMNodeId: 77, childIds: [] }] };
+  const png = "iVBORw0KGgoAAAANSUhEUgAABkAAAASw";
+  const signal = new AbortController().signal;
+  const open = () => host.open({ url: "https://example.com/first", projectId: "project-1", ticketId: null, createdBy: "user" });
+  const port = (cursorFor?: Parameters<typeof browserAgentPort>[0]["cursorFor"]) => browserAgentPort({
+    backend: host,
+    scope: { projectId: "project-1", ticketId: null },
+    session: { sessionId: "boundary-session", attachmentId: "boundary-attachment" },
+    cursorFor,
+  });
+
+  it("sends no input when navigation occurs during the real debugger transport's reinitialization", async () => {
+    const tab = open();
+    const domain = Promise.withResolvers<object>();
+    const initializing = Promise.withResolvers<void>();
+    let attached = false;
+    let reinitializing = false;
+    const sendCommand = vi.fn(async (method: string) => {
+      if (reinitializing && method === "Accessibility.enable") { initializing.resolve(); return await domain.promise; }
+      if (method === "Accessibility.getFullAXTree") return tree;
+      if (method === "Page.captureScreenshot") return { data: png };
+      return {};
+    });
+    Object.assign(views[0]!.webContents, { debugger: {
+      isAttached: () => attached,
+      attach: () => { attached = true; },
+      detach: () => { attached = false; },
+      sendCommand,
+    } });
+    const browser = port();
+    try {
+      const read = await browser.snapshot({ tabId: tab.tabId, signal });
+      // Cache the generation's frame first, so it is the INPUT command, not
+      // the frame evaluation, that must await debugger reinitialization.
+      await browser.screenshot({ tabId: tab.tabId, signal });
+      attached = false;
+      reinitializing = true;
+      const acting = browser.act({ tabId: tab.tabId, generation: read.generation, kind: "press", key: "Enter", signal });
+      await initializing.promise;
+      host.navigate(tab.tabId, "https://example.com/replacement");
+      domain.resolve({});
+      await expect(acting).rejects.toMatchObject({ rule: "browser.stale-ref" });
+      expect(sendCommand.mock.calls.filter(([method]) => method.startsWith("Input."))).toEqual([]);
+    } finally { browser.dispose(); }
+  });
+
+  it("sends neither a press nor a cleanup release after navigation during the cursor glide", async () => {
+    const tab = open();
+    const sendCommand = vi.fn(async (method: string) => {
+      if (method === "Accessibility.getFullAXTree") return tree;
+      if (method === "DOM.getBoxModel") return { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } };
+      return {};
+    });
+    Object.assign(views[0]!.webContents, { debugger: { isAttached: () => true, sendCommand, detach: () => undefined } });
+    const browser = port(() => ({
+      moveTo: async () => { host.navigate(tab.tabId, "https://example.com/replacement"); },
+      gesture: () => undefined,
+    }));
+    try {
+      const read = await browser.snapshot({ tabId: tab.tabId, signal });
+      await expect(browser.act({ tabId: tab.tabId, generation: read.generation, kind: "click", ref: "e1", signal }))
+        .rejects.toMatchObject({ rule: "browser.stale-ref" });
+      expect(sendCommand.mock.calls.filter(([method]) => method.startsWith("Input."))).toEqual([]);
+    } finally { browser.dispose(); }
+  });
+
+  it("does not return or persist old pixels when navigation occurs during capture", async () => {
+    const tab = open();
+    const capture = Promise.withResolvers<object>();
+    const capturing = Promise.withResolvers<void>();
+    const sendCommand = vi.fn(async (method: string) => {
+      if (method === "Page.captureScreenshot") { capturing.resolve(); return await capture.promise; }
+      return {};
+    });
+    Object.assign(views[0]!.webContents, { debugger: { isAttached: () => true, sendCommand, detach: () => undefined } });
+    const keep = vi.spyOn(host, "keepScreenshot");
+    const browser = port();
+    try {
+      const shooting = browser.screenshot({ tabId: tab.tabId, signal });
+      await capturing.promise;
+      host.navigate(tab.tabId, "https://example.com/replacement");
+      capture.resolve({ data: png });
+      await expect(shooting).rejects.toMatchObject({ rule: "browser.stale-ref" });
+      expect(keep).not.toHaveBeenCalled();
+      expect(persisted.size).toBe(0);
+    } finally { browser.dispose(); }
   });
 });
 

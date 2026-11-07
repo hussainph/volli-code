@@ -56,6 +56,12 @@ import {
 /** One CDP wire. Production may re-establish and initialize its attachment. */
 export interface CdpTransport {
   send: (method: string, params?: object) => Promise<unknown>;
+  /**
+   * Deferred transports run this guard AFTER initialization, immediately before
+   * dispatch. Without this member `send` must dispatch synchronously. The guard
+   * may throw, in which case no command is sent.
+   */
+  sendGuarded?: (method: string, params: object | undefined, beforeDispatch: () => void) => Promise<unknown>;
   ensureReady?: () => Promise<void>;
   /** Host generation, re-read after awaits and before input, never page script. */
   currentGeneration?: () => number;
@@ -348,6 +354,7 @@ const PRINTABLE_CODES: Readonly<Record<string, { code: string; keyCode: number }
 
 export class BrowserTabController {
   readonly #send: CdpTransport["send"];
+  readonly #sendGuarded: CdpTransport["sendGuarded"];
   readonly #ensureReady: CdpTransport["ensureReady"];
   readonly #disposeTransport: CdpTransport["dispose"];
   readonly #onTimeout: CdpTransport["onTimeout"];
@@ -372,6 +379,7 @@ export class BrowserTabController {
 
   constructor(transport: CdpTransport, limits: ControllerLimits = {}, cursor?: TabCursorDriver) {
     this.#send = transport.send;
+    this.#sendGuarded = transport.sendGuarded;
     this.#ensureReady = transport.ensureReady;
     this.#disposeTransport = transport.dispose;
     this.#onTimeout = transport.onTimeout;
@@ -390,6 +398,7 @@ export class BrowserTabController {
     // debugger as a side effect, and a turn that is already withdrawn must not
     // leave one attached behind it.
     signal?.throwIfAborted();
+    this.#syncCurrentGeneration();
     if (this.#ensureReady !== undefined) {
       await this.#bounded(this.#ensureReady(), "readiness", signal);
       return;
@@ -464,19 +473,40 @@ export class BrowserTabController {
     params?: object,
     signal?: AbortSignal,
     operation: TimeoutOperation = "action",
-    timeoutMs?: number,
+    options: { timeoutMs?: number; generation?: number; onDispatch?: () => void } = {},
   ): Promise<unknown> {
     signal?.throwIfAborted();
-    if (this.#actingGeneration !== null) {
-      this.#syncCurrentGeneration();
-      if (this.#actingGeneration !== this.#generation) {
-        throw new BrowserRefusal(
-          "browser.stale-ref",
-          "The tab changed before the input could be sent: take a fresh snapshot.",
-        );
+    // Pin intent, not mutable controller state: the operation may end while a
+    // transport is still awaiting reinitialization. A late guard must neither
+    // inherit the next action's generation nor send the abandoned command.
+    const generation = options.generation ?? this.#actingGeneration;
+    let active = true;
+    const beforeDispatch = (): void => {
+      signal?.throwIfAborted();
+      if (!active) throw new Error("The Browser command ended before transport dispatch");
+      if (generation !== null) {
+        this.#syncCurrentGeneration();
+        if (generation !== this.#generation) {
+          throw new BrowserRefusal(
+            "browser.stale-ref",
+            "The tab changed before the command could be sent: take a fresh snapshot.",
+          );
+        }
       }
+      options.onDispatch?.();
+    };
+    try {
+      let answer: Promise<unknown>;
+      if (this.#sendGuarded === undefined) {
+        beforeDispatch();
+        answer = this.#send(method, params);
+      } else {
+        answer = this.#sendGuarded(method, params, beforeDispatch);
+      }
+      return await this.#bounded(answer, operation, signal, method, options.timeoutMs);
+    } finally {
+      active = false;
     }
-    return await this.#bounded(this.#send(method, params), operation, signal, method, timeoutMs);
   }
 
   /**
@@ -597,7 +627,7 @@ export class BrowserTabController {
       { expression: RENDERED_FRAME_EXPRESSION, awaitPromise: true, returnByValue: true },
       signal,
       "frame-fence",
-      timeoutMs,
+      { timeoutMs },
     )) as { exceptionDetails?: unknown };
     this.#syncCurrentGeneration();
     if (rendered.exceptionDetails !== undefined)
@@ -981,14 +1011,23 @@ export class BrowserTabController {
   ): Promise<{ base64Png: string; width: number; height: number }> {
     signal?.throwIfAborted();
     await this.#ensureRendered(signal);
+    const generation = this.#generation;
     const captured = (await this.#command(
       "Page.captureScreenshot",
       { format: "png" },
       signal,
       "screenshot",
+      { generation },
     )) as {
       data?: string;
     };
+    this.#syncCurrentGeneration();
+    if (generation !== this.#generation) {
+      throw new BrowserRefusal(
+        "browser.stale-ref",
+        "The tab changed while its screenshot was being captured: take a new screenshot.",
+      );
+    }
     if (typeof captured.data !== "string" || captured.data.length === 0) {
       throw new Error("The Browser Tab's page produced no screenshot pixels to return");
     }
@@ -1074,17 +1113,20 @@ export class BrowserTabController {
       return;
     }
     let pressed = false;
+    let dispatched = false;
     try {
       await this.#command(
         "Input.dispatchMouseEvent",
         { type: "mousePressed", x, y, button: "left", clickCount: 1 },
         signal,
+        "action",
+        { onDispatch: () => { dispatched = true; } },
       );
       pressed = true;
     } finally {
-      // The press may have reached the page and only failed to answer, so the
-      // page gets its mouse-up either way and no tab is left mid-click.
-      await this.#releaseHalf(
+      // A dispatched press may only have failed to answer. A pre-dispatch
+      // refusal owes no mouse-up: even cleanup would be input on another page.
+      if (dispatched) await this.#releaseHalf(
         "Input.dispatchMouseEvent",
         {
           type: "mouseReleased",
@@ -1152,6 +1194,7 @@ export class BrowserTabController {
     // silently doing nothing. This fixed editing command touches no clipboard.
     const selectAll = (modifiers === 2 || modifiers === 4) && keyPart.toLowerCase() === "a";
     let pressed = false;
+    let dispatched = false;
     try {
       await this.#command(
         "Input.dispatchKeyEvent",
@@ -1165,6 +1208,8 @@ export class BrowserTabController {
           ...(selectAll ? { commands: ["selectAll"] } : {}),
         },
         signal,
+        "action",
+        { onDispatch: () => { dispatched = true; } },
       );
       // A printable single character also produces its char event, so text
       // inputs actually receive it the way a keyboard would deliver it.
@@ -1180,7 +1225,7 @@ export class BrowserTabController {
     } finally {
       // A key down with no key up is a key the page believes is still held —
       // modifiers latch, and every later keystroke arrives wearing them.
-      await this.#releaseHalf("Input.dispatchKeyEvent", keyUp, !pressed);
+      if (dispatched) await this.#releaseHalf("Input.dispatchKeyEvent", keyUp, !pressed);
     }
   }
 

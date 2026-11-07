@@ -687,6 +687,29 @@ describe("BrowserTabController", () => {
     );
   });
 
+  it("never dispatches abandoned input when deferred transport initialization answers after timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const initialized = Promise.withResolvers<void>();
+      const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+      const controller = new BrowserTabController({
+        ...page.transport,
+        sendGuarded: async (method, params, beforeDispatch) => {
+          if (method.startsWith("Input.")) await initialized.promise;
+          beforeDispatch();
+          return await page.transport.send(method, params);
+        },
+      }, { maxCommandMs: 20 });
+      await controller.snapshot();
+      const acting = expect(controller.act({ generation: 0, kind: "press", key: "Enter" })).rejects.toThrow("did not finish the requested action");
+      await vi.advanceTimersByTimeAsync(20);
+      await acting;
+      initialized.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.sent.filter(({ method }) => method.startsWith("Input."))).toEqual([]);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("withdraws an unanswered command as soon as its call is aborted", async () => {
     const controller = new BrowserTabController({
       send: () => new Promise<never>(() => undefined),
@@ -699,22 +722,26 @@ describe("BrowserTabController", () => {
     await expect(pending).rejects.toThrow("withdrawn");
   });
 
-  it("releases the mouse button even when the press itself times out", async () => {
-    // The bound can fall between the two halves of one click. A page left
-    // holding a button down selects text on every move and starts drags, and
-    // the next Session to reach the tab inherits it (VC-252).
+  it.each([false, true])("releases the mouse button after an unanswered dispatched press (guarded=%s)", async (guarded) => {
+    // A dispatched press may have applied even when its answer never arrived.
     const sent: { method: string; params?: object }[] = [];
+    const send: CdpTransport["send"] = async (method, params) => {
+      sent.push({ method, ...(params === undefined ? {} : { params }) });
+      if ((params as { type?: string } | undefined)?.type === "mousePressed") {
+        return await new Promise<never>(() => undefined);
+      }
+      if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+      if (method === "DOM.getBoxModel") return BUTTON_BOX;
+      return {};
+    };
     const controller = new BrowserTabController(
       {
-        send: async (method, params) => {
-          sent.push({ method, ...(params === undefined ? {} : { params }) });
-          if ((params as { type?: string } | undefined)?.type === "mousePressed") {
-            return await new Promise<never>(() => undefined);
-          }
-          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
-          if (method === "DOM.getBoxModel") return BUTTON_BOX;
-          return {};
-        },
+        send,
+        ...(guarded ? { sendGuarded: async (method: string, params: object | undefined, beforeDispatch: () => void) => {
+          await Promise.resolve();
+          beforeDispatch();
+          return await send(method, params);
+        } } : {}),
       },
       { maxCommandMs: 20 },
     );

@@ -67,6 +67,12 @@ export function debuggerTransport(
       );
     }
   };
+  const send = async (method: string, params?: object, beforeDispatch?: () => void): Promise<unknown> => {
+    await ensureReady();
+    assertLive();
+    beforeDispatch?.();
+    return wire.sendCommand(method, params);
+  };
   return {
     ensureReady,
     onTimeout: (diagnostic) => {
@@ -79,11 +85,8 @@ export function debuggerTransport(
         generation: diagnostic.generation,
       });
     },
-    send: async (method, params) => {
-      await ensureReady();
-      assertLive();
-      return wire.sendCommand(method, params);
-    },
+    send,
+    sendGuarded: send,
     dispose: () => {
       // Attachment, not initialization, is what has to be given back. An
       // `ensureReady` that attached and then failed or was withdrawn leaves
