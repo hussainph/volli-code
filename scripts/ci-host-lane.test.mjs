@@ -447,11 +447,72 @@ test("existing and future host packages cannot silently omit the coverage script
     jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").uses,
     "./.github/actions/setup-toolchain",
   );
-  const command = jobs["test-packages"].steps.at(-1).run;
+  const command = jobs["test-packages"].steps.find(
+    (step) => step.name === "Test protected coverage surface",
+  ).run;
   assert.ok(
     command.includes("--filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'"),
   );
   assert.ok(command.includes("test:coverage"));
+});
+
+test("host coverage retains raw native output and worker diagnostics without hiding the gate", () => {
+  const steps = jobs["test-packages"].steps;
+  const coverage = steps.find((step) => step.name === "Test protected coverage surface");
+  assert.match(coverage.env.NODE_OPTIONS, /--require=.*\/scripts\/host-test-diagnostics\.cjs/u);
+  assert.match(coverage.env.VOLLI_TEST_DIAGNOSTICS, /\/\.tmp\/host-core-diagnostics$/u);
+  assert.match(coverage.run, /set -o pipefail/u);
+  assert.match(coverage.run, /2>&1/u);
+  assert.match(coverage.run, /node scripts\/capture-test-output\.cjs/u);
+  assert.doesNotMatch(coverage.run, /\| tee/u);
+  assert.match(coverage.run, /test:coverage --maxWorkers=\$\(nproc\)/u);
+  assert.equal(coverage["continue-on-error"], undefined);
+  const upload = steps.find((step) => step.name === "Upload host-core worker diagnostics");
+  assert.ok(steps.indexOf(upload) > steps.indexOf(coverage));
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, ".tmp/host-core-diagnostics/");
+  assert.equal(upload.with["include-hidden-files"], true);
+  assert.equal(upload.with["retention-days"], 30);
+});
+
+test("desktop shards use the same bounded worker diagnostics without altering coverage policy", () => {
+  const steps = jobs["test-desktop"].steps;
+  const shard = steps.find((step) => step.name.startsWith("Run shard "));
+  assert.match(shard.env.NODE_OPTIONS, /--require=.*\/scripts\/host-test-diagnostics\.cjs/u);
+  assert.match(shard.env.VOLLI_TEST_DIAGNOSTICS, /\/\.tmp\/desktop-diagnostics$/u);
+  assert.match(shard.run, /set -o pipefail/u);
+  assert.match(shard.run, /node \.\.\/\.\.\/scripts\/capture-test-output\.cjs/u);
+  assert.doesNotMatch(shard.run, /\| tee/u);
+  for (const metric of ["statements", "branches", "functions", "lines"]) {
+    assert.ok(shard.run.includes(`--coverage.thresholds.${metric}=0`));
+  }
+  assert.match(shard.run, /--reporter=default --reporter=blob/u);
+  assert.equal(shard["continue-on-error"], undefined);
+  const upload = steps.find((step) => step.name === "Upload desktop worker diagnostics");
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, ".tmp/desktop-diagnostics/");
+  assert.equal(upload.with["retention-days"], 30);
+  assert.ok(upload.with.name.includes("${{ matrix.shard }}"));
+  const config = readFileSync(join(root, "apps/desktop/vite.config.ts"), "utf8");
+  assert.ok(config.includes('setupFiles: [...diagnosticSetup, "test-setup.ts"]'));
+  assert.ok(config.includes('setupFiles: [...diagnosticSetup, "src/main/test-setup.ts"]'));
+});
+
+test("symbolization runs in the existing Linux job without consuming diagnostic or test failures", () => {
+  const steps = jobs["test-packages"].steps;
+  const symbols = steps.find((step) => step.id === "worker_symbols");
+  const coverage = steps.find((step) => step.name === "Test protected coverage surface");
+  assert.ok(steps.indexOf(symbols) > steps.findIndex((step) => step.name === "Setup Vite+"));
+  assert.ok(steps.indexOf(symbols) < steps.indexOf(coverage));
+  assert.match(symbols.run, /bash scripts\/symbolize-worker-stack\.sh/u);
+  assert.match(symbols.run, /set -o pipefail/u);
+  assert.match(symbols.run, /symbolization\.log" 65536/u);
+  assert.equal(symbols["continue-on-error"], undefined);
+  assert.equal(
+    coverage.if,
+    "${{ !cancelled() && (success() || steps.worker_symbols.outcome == 'failure') }}",
+  );
+  assert.equal(coverage["continue-on-error"], undefined);
 });
 
 test("workspace globs discover a newly added host package and require its coverage script", () => {

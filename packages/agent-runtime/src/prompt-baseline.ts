@@ -75,7 +75,7 @@ export const PROMPT_BASELINE_CHARS_PER_TOKEN = 4;
  * - `per-turn`: recomposed while the Session runs. Nothing carries this class
  *   today, and the emptiness is the finding rather than an oversight — see
  *   {@link WORKSPACE_ENVIRONMENT_REMINDER_ID}. The class stays named because a
- *   Turn Reminder is DEFINED by per-turn delivery (CONTEXT.md), and the next
+ *   Turn Reminder is DEFINED by per-turn delivery (CONTEXT.md#turn-reminder), and the next
  *   one — live ticket state — will be one.
  */
 export type PromptCacheClass = "role-static" | "project-static" | "session-static" | "per-turn";

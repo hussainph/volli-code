@@ -945,7 +945,7 @@ describe("agent command service", () => {
 
       await exec("ticket.move", { id: "VC-1", to: "doing" });
 
-      // CONTEXT.md: an explicit `volli ticket move` is a Deliberate move with
+      // CONTEXT.md#deliberate-move: an explicit `volli ticket move` is a Deliberate move with
       // the same semantics as a drag, so an armed destination column must be
       // able to tell this was an ARRIVAL — which needs the previous status.
       expect(moves).toEqual([

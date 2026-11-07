@@ -5,7 +5,7 @@
  * comment's, its ticket's; a label's, its own. Any other kind, or an absent
  * id, answers null, which the router refuses exactly as it refuses a foreign
  * one. The port keeps the host protocol's name, where a project was a
- * "Workspace"; that word now names the team container (CONTEXT.md).
+ * "Workspace"; that word now names the team container (CONTEXT.md#workspace).
  */
 import type Database from "better-sqlite3";
 import { BOARD_RESOURCE_KINDS } from "@volli/shared";

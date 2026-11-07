@@ -171,9 +171,8 @@ export interface SessionToolSurfacePorts {
    * Session carries project-wide control; a Ticket Role carries
    * delegation-scoped steering.
    * The separate `grants` argument is the durable birth exception, which keeps
-   * availability-as-enforcement without turning it into a bundle edit. Before
-   * this argument existed every Session resolved the same list, and "Role
-   * determines the tool bundle" was true only in `CONTEXT.md`.
+   * availability-as-enforcement without turning it into a bundle edit
+   * (CONTEXT.md#agent-tool-surface).
    *
    * `within` is a Subagent Session's bound (VC-9): its parent's own frozen
    * surface. A child cannot get a port its parent lacked, and the parent's
