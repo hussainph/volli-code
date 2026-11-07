@@ -16,8 +16,10 @@ already follows it.
 
 The reading paper stays **`#1e1e1e` in dark appearance and white in light appearance**,
 independent of the canvas. Colour belongs to the objects around and on that reading plane:
-raised cards, user bubbles, under-page fills, controls, edges and muted icon ink inherit the
+raised cards, under-page fills, controls, edges and muted icon ink inherit the
 **first authored canvas stop's hue**, like the accent, not the mesh's `primaryIndex`.
+User bubbles and some existing washes remain neutral; this is not a completed tint sweep
+of every consumer.
 One neutral chroma budget is tuned per appearance (`ARC_TUNING.neutralTint`: .035 light /
 .032 dark). Seed chroma and vibrancy modulate it; near-grey canvases stay near-grey. Rung
 lightness stays independent of canvas luminance. Gamut mapping reduces chroma where needed,
@@ -86,8 +88,9 @@ substitute for making covered text reachable.
   sheen. `--accent-tint` is 10%, `--accent-selected` 18%. The legacy `--primary` opaque pair
   still exists; it is not the tonal label token.
 - Colour earns its place on identity/state icons, selected and hover fills, prominent text
-  and the board Session ring. User bubbles and cards carry the quieter generated neutral
-  tint, not a raw accent fill. Reading paper remains neutral.
+  and the board Session ring. Raised cards carry the quieter generated neutral tint, not
+  a raw accent fill. User bubbles and some existing washes still use neutral fills;
+  reading paper remains neutral.
 - `--foreground` is body ink; `--muted-foreground` is opaque secondary;
   `--tertiary-foreground` is the third tier; `--label-ink` sits between body and secondary.
   Do not dilute reading ink with `/50`, `/70` or inherited opacity.
