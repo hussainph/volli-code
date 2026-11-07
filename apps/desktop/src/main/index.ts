@@ -1088,6 +1088,7 @@ const appStartup = app.whenReady().then(async () => {
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     // web_fetch parses HTML in this worker rather than on Electron main.
     webExtractWorker: join(__dirname, "web-extract-worker.cjs"),
+    usageReportWorker: join(__dirname, "usage-report-worker.cjs"),
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {

@@ -46,6 +46,7 @@ import { PtyManager, type PtyManagerOptions } from "./pty/manager";
 import { blobsRoot } from "./blob-store";
 import { runAutomaticBackupWorker } from "./backup/automatic-worker";
 import { sessionTranscriptsRoot } from "./session-runtime/transcript-artifacts";
+import { installSqliteUsageWorker } from "./session-control/usage-reports";
 export type { HostSessionPorts, HostSessionServices } from "./session-services";
 export type { DbOpenFailure } from "./db-open-failure";
 export {
@@ -99,6 +100,8 @@ export interface HostCoreOptions {
    * off the thread this host serves from. Absent, it parses on that thread.
    */
   readonly webExtractWorker?: string | URL;
+  /** Bundled read-only usage reporter; desktop keeps large reports off main. */
+  readonly usageReportWorker?: string | URL;
   readonly venue?: (db: Database.Database) => RunnerIdentity;
   readonly secretStore?: SecretStore;
   readonly secretKey?: SecretKeyPort;
@@ -193,6 +196,10 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
       ...owner,
     };
   }
+  const stopUsageReader =
+    options.usageReportWorker === undefined
+      ? undefined
+      : installSqliteUsageWorker(db, options.usageReportWorker);
   const {
     sessionLedger: _ledger,
     hostNoticeOutbox: _outbox,
@@ -261,6 +268,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
         await maintenance.settled();
         await detachedWork.drain();
       },
+      closeReaders: stopUsageReader,
       stopActivity: sessionServices.sessionActivityWatch.stop,
       stampCleanClose: () => stampFollowUpCleanClose(db, Date.now()),
       closeDatabase: () => checkpointAndCloseDatabase(db),
@@ -333,6 +341,7 @@ function lifecycleOwner(
     stopMaintenance?(): void;
     drainDetached?(): Promise<void>;
     stopActivity?(): void;
+    closeReaders?(): Promise<void>;
     closeDatabase?(): void;
     stampCleanClose?(): void;
   },
@@ -346,7 +355,11 @@ function lifecycleOwner(
       stopProducers: () => runtime?.stopProducers(),
       stopMaintenance: () => services.stopMaintenance?.(),
       closeRuntime: async () => {
-        await runtime?.close();
+        try {
+          await runtime?.close();
+        } finally {
+          await services.closeReaders?.();
+        }
       },
       closeSocket: async () => {
         return await runtime?.closeSocket?.();

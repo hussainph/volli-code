@@ -1,4 +1,6 @@
-import { readSessionOrigin } from "@volli/shared";
+import { readSessionOrigin, reportSessionUsage } from "@volli/shared";
+import type { ReportSessionUsageQuery } from "@volli/session-engine";
+import { sqliteUsageReporter } from "./usage-reports";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
@@ -138,6 +140,14 @@ export class SqliteSessionLedger implements SessionLedger {
     private readonly scope?: SqliteSessionLedgerScope,
   ) {}
 
+  reportUsage(query: ReportSessionUsageQuery) {
+    const report = sqliteUsageReporter(this.db);
+    if (report !== undefined && !this.db.inTransaction) return report(query, this.scope);
+    return this.transaction((tx) =>
+      reportSessionUsage(tx.listUsage(query), { ...query, meteredFrom: tx.usageMeteredFrom() }),
+    );
+  }
+
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
     let appended: readonly SessionEvent[] = [];
     // Only a top-level transaction's reads may be memoized: a nested one's
@@ -179,7 +189,7 @@ export class SqliteSessionLedger implements SessionLedger {
 export function createSqliteSessionLedger(
   db: Database.Database,
   scope?: SqliteSessionLedgerScope,
-): SessionLedger {
+): SqliteSessionLedger {
   return new SqliteSessionLedger(db, scope);
 }
 

@@ -25,6 +25,7 @@ import { insertProject } from "./db/projects-repo";
 import { testProject } from "./db/test-helpers";
 import type { SessionLedger } from "@volli/shared";
 import * as sessionLedgerModule from "./session-control/sqlite-ledger";
+import { sqliteUsageReporter } from "./session-control/usage-reports";
 import { SESSION_RUNTIME } from "./session-services";
 import * as sessionControl from "./session-control";
 import { createHostSessionRuntime, type HostSessionRuntimeOptions } from "./session-runtime";
@@ -211,6 +212,32 @@ function writeDamagedDatabase(root: string): string {
 }
 
 describe("createHostCore", () => {
+  it("composes one usage reader and stops it on desktop quit as well as full shutdown", async () => {
+    for (const stopPolicy of ["desktop-quit", "drain-and-close"] as const) {
+      const core = live(
+        compose(
+          { log: { error: vi.fn() } },
+          {
+            ...headlessOptions(dataDir()),
+            stopPolicy,
+            usageReportWorker: new URL(
+              "./session-control/test-support/usage-worker-under-node.mjs",
+              import.meta.url,
+            ),
+          },
+        ),
+      );
+      const db = core.database.db;
+      expect(sqliteUsageReporter(db)).toBeTypeOf("function");
+      expect(
+        (await core.sessionEngine.reportUsage({ scope: { kind: "all" } })).total.requestCount,
+      ).toBe(0);
+      await core.start(recordingRuntime());
+      await core.stop("usage-test");
+      expect(sqliteUsageReporter(db)).toBeUndefined();
+    }
+  });
+
   it("keeps construction private and every composed consumer on one Session writer", async () => {
     expect(runtimeRequiresEngine).toBe(true);
     expect(terminalRequiresEngine).toBe(true);
