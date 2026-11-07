@@ -3192,12 +3192,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-color: var(--control-face);
   border-color: transparent;
 }
-/* Floating writing glass (popovers, menus, floating dialogs and alerts, the
- * palette): outline/secondary faces and presses use the generated
- * writing-control pair, only where the nearest material is that glass. Inside
- * a canvas-sampling float (data-tint), a DOM-nested float (opaque popover fill
- * or, tinted, pane veil) or opaque paper/solid/thick content, Buttons keep the
- * shared face. The inspector's resting fill is unaffected. */
+/* Outline/secondary Buttons inside an untinted .material-floating or
+ * [cmdk-dialog] (popovers, floating dialogs and alerts, the palette) use the
+ * generated writing-control pair. Listed exceptions keep the shared face:
+ * inside a tinted float, a float nested in a float or palette (either order),
+ * or [data-material="paper"], .material-solid, .material-thick or
+ * [data-volli-surface] content. Other materials are not covered by this
+ * rule. The inspector's resting fill is unaffected. */
 :is(.material-floating, [cmdk-dialog]):not([data-tint="true"])
   [data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]):not(
     [data-material="paper"] *

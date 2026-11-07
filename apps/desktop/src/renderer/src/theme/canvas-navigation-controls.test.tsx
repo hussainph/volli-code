@@ -78,6 +78,13 @@ function inScope(scope: string, button: ReactNode): ReactNode {
       </GlassSurface>
     );
   if (scope === "inspector-pane") return <GlassSurface data-inspector-panel>{button}</GlassSurface>;
+  // Structural stand-in for a palette root DOM-nested in navigation glass.
+  if (scope === "nested-palette")
+    return (
+      <GlassSurface data-volli-rail>
+        <div cmdk-dialog="">{button}</div>
+      </GlassSurface>
+    );
   if (scope === "paper") return <PaperSurface>{button}</PaperSurface>;
   if (scope === "nested-paper")
     return (
@@ -131,6 +138,7 @@ describe("navigation outline pressed material", () => {
     ["nested-paper", "outline", false, false],
     ["portal", "outline", false, false],
     ["nested-popover", "outline", false, false],
+    ["nested-palette", "outline", false, false],
     ["bare-sidebar", "outline", false, false],
     ["sidebar", "inspector", false, false],
     ["rail", "secondary", false, false],
@@ -155,7 +163,7 @@ describe("navigation outline pressed material", () => {
         expect(selector).not.toContain(":hover");
       // Floating writing glass owns outline/secondary presses inside it only.
       const writing =
-        (scope === "portal" || scope === "nested-popover") &&
+        (scope === "portal" || scope === "nested-popover" || scope === "nested-palette") &&
         (variant === "outline" || variant === "secondary") &&
         !disabled;
       button.setAttribute("data-test-active", "false");

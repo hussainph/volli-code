@@ -24,6 +24,7 @@ import {
   AlertDialogContent,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { Command } from "cmdk";
 import { deriveCanvasPaint, type CanvasTokenName } from "./canvas-paint";
 
 const css = readFileSync(resolve(import.meta.dirname, "../globals.css"), "utf8").replace(
@@ -235,6 +236,52 @@ describe("floating writing-glass outline and secondary controls", () => {
       "Surface",
     ])
       expectWriting(buttons.get(name), false);
+  });
+
+  // The palette is cmdk's own Command.Dialog with the production props: its
+  // content is both [cmdk-dialog] and .material-floating over a bg-scrim overlay.
+  it("reaches the real palette root, not a float nested inside it", async () => {
+    const palette = source("../components/command-palette.tsx");
+    expect(palette).toContain('overlayClassName="fixed inset-0 z-50 bg-scrim"');
+    expect(palette).toContain('contentClassName={cn(COMMAND_OVERLAY_FRAME, "material-floating")}');
+    const buttons = await rendered(
+      <Command.Dialog
+        open
+        label="Palette"
+        overlayClassName="fixed inset-0 z-50 bg-scrim"
+        contentClassName="material-floating"
+      >
+        <Button variant="outline">Palette outline</Button>
+        {/* Structural stand-in: a DOM-nested float inside the palette. */}
+        <div className="material-floating">
+          <Button variant="outline">Float inside palette</Button>
+        </div>
+      </Command.Dialog>,
+    );
+    const content = document.querySelector("[cmdk-dialog]")!;
+    expect(content.classList.contains("material-floating")).toBe(true);
+    const overlay = document.querySelector("[cmdk-overlay]")!;
+    expect(overlay.classList.contains("bg-scrim")).toBe(true);
+    expect(
+      overlay.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expectWriting(buttons.get("Palette outline"), true);
+    expectWriting(buttons.get("Float inside palette"), false);
+  });
+
+  it("keeps the shared face on a palette nested inside a popover", async () => {
+    const buttons = await rendered(
+      <Popover open>
+        <PopoverTrigger>Open</PopoverTrigger>
+        <PopoverContent>
+          {/* Structural stand-in: a [cmdk-dialog] DOM-nested in a real popover. */}
+          <div cmdk-dialog="">
+            <Button variant="outline">Palette inside float</Button>
+          </div>
+        </PopoverContent>
+      </Popover>,
+    );
+    expectWriting(buttons.get("Palette inside float"), false);
   });
 
   it("leaves a canvas-sampling (tint) popover on the shared face", async () => {
