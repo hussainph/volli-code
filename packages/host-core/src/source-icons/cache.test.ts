@@ -96,6 +96,78 @@ describe("separate source icon cache", () => {
     expect(cache.put("missing-session", epoch(), "https://example.com", PNG)).toBeNull();
   });
 
+  it.each(["same grant", "different grant", "refusal"] as const)(
+    "keeps a known watch inert during uncertainty and handles recovery to %s without rebinding",
+    async (recovery) => {
+      vi.useFakeTimers();
+      let authority: string | null = "grant-a";
+      let pending = false;
+      let generation = "generation-1";
+      let id = 0;
+      const cache = new SourceIconCache({
+        authorityForSession: () => authority,
+        persistentAuthorityForSession: () => "same-owner",
+        restorationPendingForSession: () => pending,
+        revocationGeneration: () => generation,
+        now: () => 0,
+        createId: () => `00000000-0000-4000-8000-${String(++id).padStart(12, "0")}`,
+      });
+      caches.push(cache);
+      const { latest, snapshots, stop } = observe(cache);
+      const original = cache.put("session", "grant-a", "https://docs.example.co.uk", PNG)!;
+      expect(latest()[0]!.pictureId).toBe(original);
+      pending = true;
+      authority = null;
+      cache.invalidate();
+      expect(latest()[0]!.pictureId).toBeNull();
+      expect(cache.picture("session", original).data).toBeNull();
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(latest()[0]!.pictureId).toBeNull();
+      if (recovery === "refusal") {
+        pending = false;
+        generation = "generation-2";
+        cache.invalidate();
+        // Even an accidentally repeated raw grant string cannot erase revocation.
+        authority = "grant-a";
+      } else authority = recovery === "same grant" ? "grant-a" : "grant-b";
+      pending = false;
+      cache.invalidate();
+      if (recovery === "same grant") {
+        expect(latest()[0]!.pictureId).toBe(original);
+        expect(cache.picture("session", original).data).not.toBeNull();
+      } else {
+        expect(cache.picture("session", original).data).toBeNull();
+        const count = snapshots.length;
+        const fresh = cache.put("session", authority!, "https://docs.example.co.uk", PNG);
+        expect(fresh).not.toBeNull();
+        expect(fresh).not.toBe(original);
+        expect(snapshots).toHaveLength(count);
+        expect(latest()[0]!.pictureId).toBeNull();
+      }
+      stop();
+    },
+  );
+
+  it("terminates an initially unresolved watch if refusal occurs before its first grant", () => {
+    let pending = true;
+    let generation = "generation-1";
+    const cache = new SourceIconCache({
+      authorityForSession: () => "grant-a",
+      restorationPendingForSession: () => pending,
+      revocationGeneration: () => generation,
+    });
+    caches.push(cache);
+    const { snapshots, latest } = observe(cache);
+    generation = "generation-2";
+    cache.invalidate();
+    pending = false;
+    cache.invalidate();
+    const count = snapshots.length;
+    expect(cache.put("session", "grant-a", "https://docs.example.co.uk", PNG)).not.toBeNull();
+    expect(snapshots).toHaveLength(count);
+    expect(latest()[0]!.pictureId).toBeNull();
+  });
+
   it("expires without refreshing TTL on a read, and removes every timer/listener on unsubscribe", () => {
     vi.useFakeTimers();
     const { cache, epoch, advance } = setup();

@@ -101,6 +101,8 @@ export {
 } from "./web/source-icon-decoder";
 export {
   createSafeWebFetch,
+  createSourceIconFetch,
+  type ReadSourceIconCandidate,
   WEB_FETCH_LIMITS,
   WEB_FETCH_RULE_IDS,
   WEB_FETCH_USER_AGENT,

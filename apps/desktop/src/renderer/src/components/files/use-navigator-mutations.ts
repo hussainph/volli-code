@@ -29,7 +29,7 @@
  * ONE ACCEPTED LIMIT, recorded rather than built (plan §4.5): a rename can leave
  * a Ticket Body pointing at a path that no longer exists. That is a Dangling
  * Reference — a concept the product already has and already renders honestly
- * (CONTEXT.md) — so v1 lets it dangle instead of rewriting other people's prose
+ * (CONTEXT.md#dangling-reference) — so v1 lets it dangle instead of rewriting other people's prose
  * behind their back. Reference rewriting is a separate decision with its own
  * failure modes (a body an agent is mid-edit on, a ref inside a code fence),
  * and it is not this ticket's.

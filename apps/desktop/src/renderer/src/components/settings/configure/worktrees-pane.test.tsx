@@ -50,6 +50,9 @@ it("reads real refs, keeps the stored branch visible and explicitly saves the sc
     expect(branches).toHaveBeenCalledWith("p1");
     expect(host.querySelector("#project-base-branch")!.textContent).toBe("trunk");
     const field = host.querySelector<HTMLTextAreaElement>("#project-setup-command")!;
+    expect(field.getAttribute("placeholder")).toBeNull();
+    // Authored commands stay intact; only Volli's manager-specific example goes.
+    expect(field.value).toBe("pnpm install");
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
         field,

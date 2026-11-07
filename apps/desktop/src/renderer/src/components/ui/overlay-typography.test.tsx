@@ -263,6 +263,27 @@ describe("overlay layout contracts", () => {
     expect(content.querySelector('[data-slot="dialog-header"]')?.className).toContain("shrink-0");
     expect(content.querySelector('[data-slot="dialog-footer"]')?.className).toContain("shrink-0");
   });
+  it("lets a bounded inner list own overflow without changing ordinary popover scrolling", async () => {
+    await act(async () =>
+      root.render(
+        <Popover open>
+          <PopoverTrigger>Plan</PopoverTrigger>
+          <PopoverContent
+            className="flex flex-col p-1"
+            bodyClassName="max-h-[calc(var(--radix-popover-content-available-height)-0.5rem)] overflow-hidden"
+          >
+            <div className="min-h-0 overflow-y-auto">Plan rows</div>
+          </PopoverContent>
+        </Popover>,
+      ),
+    );
+    const body = document.querySelector<HTMLElement>('[data-slot="popover-body"]')!;
+    expect(body.classList.contains("overflow-hidden")).toBe(true);
+    expect(body.classList.contains("overflow-y-auto")).toBe(false);
+    expect(body.className).toContain("available-height)-0.5rem");
+    expect(document.querySelector("[bodyClassName]")).toBeNull();
+  });
+
   it("gives unsized popovers a reading inset and an edge-aligned capped scroll body", async () => {
     await act(async () =>
       root.render(

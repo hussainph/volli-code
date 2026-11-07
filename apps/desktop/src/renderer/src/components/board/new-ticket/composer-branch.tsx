@@ -220,7 +220,7 @@ export function BaseBranchChip({
           <span className="min-w-0 truncate" title={label.text}>
             {label.text}
           </span>
-          <ChevronDownIcon strokeWidth={2.25} className="size-3" />
+          <ChevronDownIcon strokeWidth={2.25} className="ml-auto size-3" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-0">

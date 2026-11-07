@@ -91,7 +91,7 @@ describe("agent-runtime cost profile", () => {
   });
 
   it("assembles a system prompt that is a pure function of its inputs", () => {
-    // CONTEXT.md, "Context Assembly": the system prompt is a pure function of
+    // CONTEXT.md#context-assembly: the system prompt is a pure function of
     // Role, bundle, product version and resource set — same inputs, same
     // string. Precomputing the role-static layers must not have broken that.
     const spec = {

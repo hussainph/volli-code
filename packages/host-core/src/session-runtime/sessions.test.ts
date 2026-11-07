@@ -642,9 +642,8 @@ describe("Sessions", () => {
   });
 
   it("resolves the surface for the Role the mint is creating (VC-162)", async () => {
-    // Role determines the tool bundle, and `ticketId !== null` IS the Role on
-    // start. Before this argument existed every Session resolved the same list
-    // and Role-scoped availability was true only in CONTEXT.md.
+    // Session Role determines the tool bundle (CONTEXT.md#session-role);
+    // minting must resolve the surface for the Role it will record.
     const roles: string[] = [];
     const door = () =>
       sessions({

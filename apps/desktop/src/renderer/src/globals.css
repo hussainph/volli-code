@@ -44,6 +44,14 @@
     background-color: var(--card);
   }
 
+  /* A draft file is an object on the chat writing rail, not another footer
+   * action. Keep this face local to chat; ticket capture owns its own layout.
+   * Component-layer paint lets the shared button's hover/focus states win. */
+  .session-prompt [data-slot="composer-attachments"] > button {
+    border: 1px solid var(--border);
+    background-color: var(--card);
+  }
+
   .prompt-primary {
     /* Keep the solved foreground/fill pair intact; only the bevel takes ink. */
     box-shadow:
@@ -1458,15 +1466,11 @@
  * is affordable for this one mark and nowhere else, are in LIGHT IS SOLVED,
  * NOT THICKENED below.
  *
- * Reduced motion parks the travelling ring rather than dropping it, because
- * here the mark IS the information: a card with an agent on it must still be
- * findable when the travelling is gone. That does collapse `working` and
- * `waiting` onto one drawing separated only by hue — the same thing
- * `status-dot-live` already accepts when its breath stops, and the right trade,
- * since the alternative is a card that stops saying anything at all. The two
- * sweeps above drop themselves instead, and correctly — a frozen highlight
- * halfway along a word reads as a bug, while a still outline reads as an
- * outline. */
+ * Reduced motion keeps the whole perimeter visible, not a travelling arc
+ * frozen in a corner. On the board both states use the canvas accent, so a
+ * dashed working outline and a solid waiting outline preserve state without
+ * motion or a second colour. The two text sweeps above drop themselves instead
+ * — a frozen highlight halfway along a word reads as a bug. */
 @keyframes session-ring-sweep {
   from {
     transform: translate(-50%, -50%) rotate(0turn);
@@ -1646,18 +1650,39 @@
   --session-ring-color: var(--canvas-accent);
 }
 
-/* Motion off freezes a working arc; waiting still fills the whole ring. */
-:root[data-motion="off"] .board-session-ring[data-activity="working"]::before {
-  animation: none;
+/* A parked conic arc looks like a dead animation. Both motion preferences
+ * use complete outlines instead: dashed working, solid waiting. The border
+ * itself owns the static state, so no oversized rotating layer is needed. */
+:root[data-motion="off"] .board-session-ring[data-activity="working"],
+:root[data-motion="off"] .board-session-ring[data-activity="waiting"] {
+  padding: 0;
+  mask: none;
+  -webkit-mask: none;
+  border: 1.5px solid var(--session-ring-color);
+  transition: none;
 }
-:root[data-motion="off"] .board-session-ring[data-activity="waiting"]::before {
+:root[data-motion="off"] .board-session-ring[data-activity="working"] {
+  border-style: dashed;
+}
+:root[data-motion="off"] .board-session-ring::before {
+  content: none;
   animation: none;
-  background: var(--session-ring-color);
 }
 @media (prefers-reduced-motion: reduce) {
-  .session-ring.board-session-ring[data-activity="working"]::before {
-    background: conic-gradient(var(--session-ring-color) 0deg 96deg, transparent 96deg 360deg);
-    opacity: 1;
+  .session-ring.board-session-ring[data-activity="working"],
+  .session-ring.board-session-ring[data-activity="waiting"] {
+    padding: 0;
+    mask: none;
+    -webkit-mask: none;
+    border: 1.5px solid var(--session-ring-color);
+    transition: none;
+  }
+  .session-ring.board-session-ring[data-activity="working"] {
+    border-style: dashed;
+  }
+  .session-ring.board-session-ring::before {
+    content: none;
+    animation: none;
   }
 }
 
@@ -2040,9 +2065,12 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
  * invisible at rest, visible while the scroll container is hovered, bright
  * while the thumb itself is grabbed. Chromium-only app, so the -webkit
  * pseudo-elements are authoritative (no scrollbar-width/color needed). */
+:root {
+  --scrollbar-size: 10px;
+}
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 *::-webkit-scrollbar-track,
 *::-webkit-scrollbar-corner {
@@ -2847,11 +2875,36 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   transition-duration: var(--duration-menu-out);
 }
 
-/* Detached writing glass. Nested input groups never add a second material. */
+/* One spacing owner for the Session composer. The shell and nested content
+ * each spend one 8px step: draft ink, attachment edges and queued ink share
+ * the 16px rail. Controls hang half a step out for optical glyph alignment;
+ * their targets keep the shared control sizes. No primitive adds a gutter. */
 .session-prompt {
+  --composer-gap: calc(var(--spacing) * 2);
+  --composer-gutter: calc(var(--composer-gap) * 2);
+  --composer-control-outset: var(--spacing);
   border-radius: var(--radius-composer);
   border: 0;
-  padding: 12px 10px 10px 16px;
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-queue {
+  gap: var(--composer-gap);
+  padding: 0;
+}
+.session-prompt .composer-queue::after {
+  content: "";
+  align-self: stretch;
+  margin-inline: var(--composer-gap);
+  border-bottom: 1px solid var(--border);
+}
+.session-prompt .composer-queued-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-draft-attachments {
+  padding: var(--composer-gap) var(--composer-gap) 0;
 }
 .session-prompt:has(textarea:focus-visible) {
   border-color: var(--ring);
@@ -2955,7 +3008,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   box-shadow: none !important;
 }
 
-/* Portaled primitives retain activation provenance through their closing Presence. */
+/* Portaled primitives retain activation provenance through their closing Presence.
+ * A Session ring is a persistent working-state signal, not an entrance: a
+ * keyboard-opened pane must not freeze its descendant card rings in a corner. */
 [data-motion-origin="keyboard"],
 [data-motion-origin="instant"],
 [data-motion-origin="keyboard"] *,
@@ -2964,9 +3019,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-motion-origin="keyboard"]::after,
 [data-motion-origin="instant"]::before,
 [data-motion-origin="instant"]::after,
-[data-motion-origin="keyboard"] *::before,
+[data-motion-origin="keyboard"] *:not(.session-ring)::before,
 [data-motion-origin="keyboard"] *::after,
-[data-motion-origin="instant"] *::before,
+[data-motion-origin="instant"] *:not(.session-ring)::before,
 [data-motion-origin="instant"] *::after {
   animation: none !important;
   transition: none !important;
@@ -3022,13 +3077,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border: 0;
 }
 .session-prompt textarea {
-  min-height: 38px;
-  padding: 0;
+  min-height: calc(var(--spacing) * 10);
+  padding: var(--composer-gap);
   font-size: var(--text-ui);
 }
 .session-prompt .prompt-toolbar {
-  padding: 0;
-  margin-left: -6px;
+  padding: 0 calc(var(--composer-gutter) - var(--composer-gap) - var(--composer-control-outset));
+  margin: 0;
 }
 .is-user > .message-content {
   max-width: 420px;
@@ -3415,16 +3470,28 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px);
 }
 /* The mask owns a bounded, non-scrolling viewport, never the full scrollback.
- * The detached affordance has its own clear band rather than covering a line. */
+ * The detached affordance has its own clear band rather than covering a line.
+ * A second opaque mask keeps the native scrollbar lane outside the text fade:
+ * masking the whole viewport made the thumb disappear beneath the composer. */
 .chat-transcript [data-conversation-viewport] {
   --scroll-edge-clearance: 8px;
-  mask-image: linear-gradient(
-    to bottom,
-    transparent,
-    black 12px,
-    black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
-    transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
-  );
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent,
+      black 12px,
+      black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
+      transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
+    ),
+    linear-gradient(black, black);
+  mask-size:
+    100% 100%,
+    var(--scrollbar-size) 100%;
+  mask-position:
+    center,
+    right top;
+  mask-repeat: no-repeat;
+  mask-composite: add;
 }
 .chat-transcript:has([data-slot="conversation-scroll-button"]) [data-conversation-viewport] {
   --scroll-edge-clearance: 48px;

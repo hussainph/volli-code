@@ -906,7 +906,7 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
       waitForLoad: async () => undefined,
       holdAwake: () => () => undefined,
     });
-    return { port: browser, tabs: fake.tabs };
+    return { port: browser, tabs: fake.tabs, navigated: fake.navigated };
   }
 
   it("says a page with no accessible structure is empty, on a read and on a navigation", async () => {
@@ -948,6 +948,129 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
       );
       await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
       await shot;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["click", "press"] as const)(
+    "never replays %s after its follow-up AX read times out, and releases the queue",
+    async (kind) => {
+      vi.useFakeTimers();
+      try {
+        const late = Promise.withResolvers<object>();
+        let reads = 0;
+        let clicks = 0;
+        const { port: browser } = over(
+          { tree: () => (++reads === 2 ? late.promise : BUTTON_TREE) },
+          () => {
+            clicks += 1;
+          },
+        );
+        const read = await browser.snapshot({ tabId: "mine", signal });
+        const acting = browser.act({
+          tabId: "mine",
+          generation: read.generation,
+          kind,
+          ref: "e1",
+          key: "Enter",
+          signal,
+        });
+        const failed = expect(acting).rejects.toThrow("did not finish taking a snapshot");
+        await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
+        await failed;
+        late.resolve(BUTTON_TREE);
+        const fresh = await browser.snapshot({ tabId: "mine", signal });
+        expect(fresh.snapshotText).toContain("Save");
+        expect(reads).toBe(3);
+        expect(clicks).toBe(kind === "click" ? 1 : 0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("never replays navigation after its follow-up snapshot times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const late = Promise.withResolvers<object>();
+      let reads = 0;
+      const { port: browser, navigated } = over({
+        tree: () => (++reads === 1 ? late.promise : BUTTON_TREE),
+      });
+      const failed = expect(
+        browser.navigate({
+          tabId: "mine",
+          navigation: { kind: "url", url: "https://example.com/once" },
+          signal,
+        }),
+      ).rejects.toThrow("did not finish taking a snapshot");
+      await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
+      await failed;
+      expect(navigated).toEqual([{ tabId: "mine", url: "https://example.com/once" }]);
+      late.resolve(BUTTON_TREE);
+      await browser.snapshot({ tabId: "mine", signal });
+      expect(navigated).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("revalidates the live host generation during a frame wait, without manually syncing the controller", async () => {
+    const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
+    const frame = Promise.withResolvers<object>();
+    const waiting = Promise.withResolvers<void>();
+    const input = vi.fn();
+    const browser = createAgentBrowserPort({
+      host: fake.host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor: () => ({
+        send: async (method) => {
+          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+          if (method === "Runtime.evaluate") {
+            waiting.resolve();
+            return await frame.promise;
+          }
+          if (method.startsWith("Input.")) input(method);
+          return {};
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    const read = await browser.snapshot({ tabId: "mine", signal });
+    const acting = browser.act({
+      tabId: "mine",
+      generation: read.generation,
+      kind: "press",
+      key: "Enter",
+      signal,
+    });
+    await waiting.promise;
+    const tab = fake.tabs.get("mine")!;
+    fake.tabs.set("mine", { ...tab, generation: tab.generation + 1 });
+    frame.resolve({});
+    await expect(acting).rejects.toMatchObject({ rule: "browser.stale-ref" });
+    expect(input).not.toHaveBeenCalled();
+    expect((await browser.snapshot({ tabId: "mine", signal })).generation).toBe(tab.generation + 1);
+  });
+
+  it("returns a structural navigation result without a photo when frames stall", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port: browser } = over({ tree: () => BUTTON_TREE, hang: "Runtime.evaluate" });
+      const navigation = browser.navigate({
+        tabId: "mine",
+        navigation: { kind: "reload" },
+        signal,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await navigation).toMatchObject({
+        snapshotText: expect.stringContaining("Save"),
+        picture: null,
+      });
+      expect((await browser.find({ tabId: "mine", query: "Save", signal })).matches).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -1042,6 +1165,40 @@ describe("Browser port concurrent calls and teardown", () => {
     });
     return { port: browser, ready, disposed, createTransport, send, host };
   }
+
+  it("reports the live nonzero generation on the first debugger-enable timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const shared = fakeHost([state({ tabId: "one", generation: 7 })]);
+      const onTimeout = vi.fn();
+      const browser = createAgentBrowserPort({
+        host: shared.host,
+        scope: { projectId: "p1", ticketId: null },
+        session: ME,
+        transportFor: () => ({
+          send: async () => ({}),
+          ensureReady: () => new Promise<never>(() => undefined),
+          onTimeout,
+        }),
+        waitForLoad: async () => undefined,
+        holdAwake: () => () => undefined,
+      });
+      const reading = expect(browser.snapshot({ tabId: "one", signal })).rejects.toThrow(
+        "did not become ready",
+      );
+      await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
+      await reading;
+      expect(onTimeout).toHaveBeenCalledWith({
+        phase: "readiness",
+        method: null,
+        elapsedMs: CDP_COMMAND_TIMEOUT_MS,
+        generation: 7,
+      });
+      browser.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("serializes one tab's snapshots through one controller and one ref ledger", async () => {
     const h = harness();

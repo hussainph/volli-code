@@ -13,15 +13,18 @@ export interface SourceIconRaster {
 }
 
 /** The cache owns the cancellation signal; no caller can widen these limits. */
-export type SourceIconDecoder = (
-  input: SourceIconRaster,
-  signal: AbortSignal,
-) => Promise<Uint8Array | null>;
+export interface SourceIconDecoder {
+  (input: SourceIconRaster, signal: AbortSignal): Promise<Uint8Array | null>;
+  /** Physical thread teardown, not just logical result/cancellation. */
+  settled?(): Promise<void>;
+}
 
 /** All outcomes are optional decoration. No worker error crosses into a tool. */
 export function createWorkerSourceIconDecoder(entry: string | URL): SourceIconDecoder {
-  return async (input, signal) => {
+  let physical: Promise<void> | undefined;
+  const decode: SourceIconDecoder = async (input, signal) => {
     if (
+      physical !== undefined ||
       signal.aborted ||
       input.bytes.byteLength === 0 ||
       input.bytes.byteLength > MAX_INPUT_BYTES
@@ -35,6 +38,14 @@ export function createWorkerSourceIconDecoder(entry: string | URL): SourceIconDe
     } catch {
       return null;
     }
+    const exited = Promise.withResolvers<void>();
+    const held = exited.promise;
+    physical = held;
+    void held.then(() => {
+      if (physical === held) physical = undefined;
+    });
+    // Observe exit even after the logical result's listeners have been removed.
+    worker.once("exit", () => exited.resolve());
     return await new Promise<Uint8Array | null>((resolve) => {
       let finished = false;
       const finish = (bytes: Uint8Array | null): void => {
@@ -48,7 +59,13 @@ export function createWorkerSourceIconDecoder(entry: string | URL): SourceIconDe
         // Keep a rejection observer until the thread is gone. A late startup
         // error must not become an unhandled EventEmitter error after abort.
         worker.on("error", ignored);
-        void worker.terminate().catch(ignored);
+        // A rejected termination request does NOT release the physical slot;
+        // only confirmed termination or the actual exit event may do that.
+        try {
+          void worker.terminate().then(() => exited.resolve(), ignored);
+        } catch {
+          /* Await exit. */
+        }
         resolve(bytes);
       };
       const abort = (): void => finish(null);
@@ -83,4 +100,8 @@ export function createWorkerSourceIconDecoder(entry: string | URL): SourceIconDe
       }
     });
   };
+  decode.settled = async () => {
+    await physical;
+  };
+  return decode;
 }

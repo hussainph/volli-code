@@ -59,6 +59,53 @@ describe("source icon parent gate", () => {
     await Promise.all(terminate.mock.results.map((result) => result.value));
   });
 
+  it.each(["cancellation", "deadline"] as const)(
+    "retains the physical slot after %s until delayed termination settles",
+    async (reason) => {
+      const gate = Promise.withResolvers<void>();
+      const originalTerminate = Worker.prototype.terminate;
+      const originalPost = Worker.prototype.postMessage;
+      let abort = new AbortController();
+      const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        ...args
+      ) {
+        const result = originalPost.apply(this, args);
+        if (reason === "cancellation") abort.abort();
+        return result;
+      });
+      const terminate = vi
+        .spyOn(Worker.prototype, "terminate")
+        .mockImplementation(function (this: Worker) {
+          return gate.promise.then(() => originalTerminate.call(this));
+        });
+      const decode = createWorkerSourceIconDecoder(HUNG);
+      const input = { bytes: await png(), mime: "image/png" as const };
+      try {
+        expect(await decode(input, abort.signal)).toBeNull();
+        let settled = false;
+        const settling = decode.settled!().then(() => {
+          settled = true;
+        });
+        expect(await decode(input, live())).toBeNull();
+        expect(post).toHaveBeenCalledTimes(1);
+        expect(terminate).toHaveBeenCalledTimes(1);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        gate.resolve();
+        await settling;
+        abort = new AbortController();
+        expect(await decode(input, abort.signal)).toBeNull();
+        await decode.settled!();
+        expect(post).toHaveBeenCalledTimes(2);
+        expect(terminate).toHaveBeenCalledTimes(2);
+      } finally {
+        gate.resolve();
+        await decode.settled!();
+      }
+    },
+  );
+
   it("falls back on startup failure, unsupported content and worker exit", async () => {
     const missing = createWorkerSourceIconDecoder(new URL("./no-such-worker.cjs", import.meta.url));
     expect(await missing({ bytes: await png(), mime: "image/png" }, live())).toBeNull();

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { Tab, TabStrip } from "./tab-strip";
 import { TabActionScope } from "./tab-actions";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
 import { MinusIcon } from "./icon";
 
 const TAB_WIDTH = 100;
@@ -792,6 +793,61 @@ describe("TabStrip overflow", () => {
     });
 
     expect(revealText()).toBe(label);
+  });
+
+  it("lets a group member card and dropdown own the reveal for a clipped title", async () => {
+    const label = "Hi! I have the following design follow up questions";
+    const rows = (
+      <div>
+        {label}
+        <button type="button">Second member</button>
+      </div>
+    );
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <HoverCard openDelay={250}>
+            <HoverCardTrigger asChild>
+              <div data-slot="grouped-tab-chip">
+                <Tab
+                  label={label}
+                  active
+                  tabStop
+                  closable={false}
+                  onActivate={() => {}}
+                  actionsContent={rows}
+                />
+              </div>
+            </HoverCardTrigger>
+            <HoverCardContent>{rows}</HoverCardContent>
+          </HoverCard>
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+    clipLabel(tab!);
+    act(() => tab?.focus());
+    expect(tab?.getAttribute("aria-label")).toBe(label);
+    expect(revealText()).toBeNull();
+
+    await act(async () => {
+      tab?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      tab?.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    });
+    expect(document.querySelector('[data-slot="hover-card-content"]')?.textContent).toContain(
+      label,
+    );
+    expect(revealText()).toBeNull();
+
+    const trigger = tab!.querySelector<HTMLButtonElement>('[data-slot="tab-menu"]')!;
+    await act(async () =>
+      trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')?.textContent).toContain(
+      "Second member",
+    );
+    expect(revealText()).toBeNull();
   });
 
   it("stays quiet for a label the tab draws whole", () => {

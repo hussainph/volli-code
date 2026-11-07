@@ -370,7 +370,7 @@ jobs:
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
-          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs
+          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint. These source-specific guards run separately
@@ -570,15 +570,30 @@ jobs:
       # not against this directory.
       - name: Run shard ${{ matrix.shard }} of ${{ strategy.job-total }}
         working-directory: apps/desktop
-        run: >-
-          vp test run
-          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
-          --maxWorkers=$(nproc)
-          --reporter=default --reporter=blob
-          --outputFile.blob="$RUNNER_TEMP/desktop-blobs/desktop-${{ matrix.shard }}-of-${{ strategy.job-total }}.json"
-          --coverage --coverage.reporter=json-summary
-          --coverage.thresholds.statements=0 --coverage.thresholds.branches=0
-          --coverage.thresholds.functions=0 --coverage.thresholds.lines=0
+        env:
+          VOLLI_TEST_DIAGNOSTICS: ${{ github.workspace }}/.tmp/desktop-diagnostics
+          NODE_OPTIONS: --require=${{ github.workspace }}/scripts/host-test-diagnostics.cjs
+        run: |
+          mkdir -p "$VOLLI_TEST_DIAGNOSTICS"
+          set -o pipefail
+          vp test run \
+            --shard=${{ matrix.shard }}/${{ strategy.job-total }} \
+            --maxWorkers=$(nproc) \
+            --reporter=default --reporter=blob \
+            --outputFile.blob="$RUNNER_TEMP/desktop-blobs/desktop-${{ matrix.shard }}-of-${{ strategy.job-total }}.json" \
+            --coverage --coverage.reporter=json-summary \
+            --coverage.thresholds.statements=0 --coverage.thresholds.branches=0 \
+            --coverage.thresholds.functions=0 --coverage.thresholds.lines=0 2>&1 \
+            | node ../../scripts/capture-test-output.cjs "$VOLLI_TEST_DIAGNOSTICS/coverage.log"
+
+      - name: Upload desktop worker diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-worker-diagnostics-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .tmp/desktop-diagnostics/
+          include-hidden-files: true
+          retention-days: 30
 
       # `overwrite` so "Re-run all jobs" replaces this shard's blob instead
       # of failing on the name it left last attempt.
@@ -757,12 +772,42 @@ jobs:
       - name: Probe Chromium's sandbox under the hostd unit
         run: sudo apps/hostd/scripts/probe-chromium-sandbox.sh /usr/lib/volli-chromium/chrome "$(id -un)"
 
+      - name: Symbolize retained worker frames (read-only)
+        id: worker_symbols
+        env:
+          VOLLI_TEST_DIAGNOSTICS: ${{ github.workspace }}/.tmp/host-core-diagnostics
+        run: |
+          mkdir -p "$VOLLI_TEST_DIAGNOSTICS"
+          set -o pipefail
+          bash scripts/symbolize-worker-stack.sh "$VOLLI_TEST_DIAGNOSTICS" 2>&1 \
+            | node scripts/capture-test-output.cjs "$VOLLI_TEST_DIAGNOSTICS/symbolization.log" 65536
+
+      # A diagnostic failure stays red, but must not prevent the actual tests
+      # from running or hide their exit status. Earlier setup failures still skip.
       # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
       - name: Test protected coverage surface
-        run: >-
-          vp run
-          --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
-          test:coverage --maxWorkers=$(nproc)
+        if: ${{ !cancelled() && (success() || steps.worker_symbols.outcome == 'failure') }}
+        env:
+          VOLLI_TEST_DIAGNOSTICS: ${{ github.workspace }}/.tmp/host-core-diagnostics
+          NODE_OPTIONS: --require=${{ github.workspace }}/scripts/host-test-diagnostics.cjs
+        run: |
+          mkdir -p "$VOLLI_TEST_DIAGNOSTICS"
+          set -o pipefail
+          vp run \
+            --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop' \
+            test:coverage --maxWorkers=$(nproc) 2>&1 \
+            | node scripts/capture-test-output.cjs "$VOLLI_TEST_DIAGNOSTICS/coverage.log"
+
+      # Keep the raw native stderr as well as PID/thread/test correlation even
+      # when a fork dies before Vitest can report its suite. Never retry here.
+      - name: Upload host-core worker diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-core-worker-diagnostics-${{ github.run_attempt }}
+          path: .tmp/host-core-diagnostics/
+          include-hidden-files: true
+          retention-days: 30
 
   # The Convex backend (VC-882), against the pinned local backend. Its own
   # Linux job so the ~64 MB fixture never lands in a desktop lane: it starts

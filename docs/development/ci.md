@@ -34,3 +34,66 @@ unless it touches the data layer older builds read back (migrations, backup,
 ledger, blobs; the list is in `ci.yml`'s Scope) or the N-1 harness, which run every lane; main pushes and the nightly run always run every lane.
 Host development image, native ABI isolation and inventory commands:
 `docs/development/host-linux.md`.
+
+### Worker exit evidence
+
+`Test (packages)` retains `host-core-worker-diagnostics-<attempt>` and each
+`Test (desktop i/3)` shard retains `desktop-worker-diagnostics-<shard>-<attempt>`
+for 30 days, including failures. Both lanes opt into the same Node preload and
+active-test hook; both desktop projects (main and renderer) participate.
+`coverage.log` retains a byte-bounded raw-output tail including native stderr;
+`pipefail` preserves the producer's failing exit status or signal status.
+The preload writes synchronous JSONL by PID and thread id, independently of
+Vitest's buffered output:
+
+- `test-start` / `test-finished` identify the test active through teardown.
+- `child-exit` records the child's PID, raw exit code and signal in its surviving
+  parent. Match that PID to the child's event file; nearby suite output is not
+  attribution. A parent-local `childId` also correlates spawn failures where no
+  PID exists.
+- `worker-start` / `worker-exit` identify nested threads and their resource
+  limits. Thread exit code 1 can be the expected result of `terminate()`, not a
+  crashed Vitest fork. Restore crash-proof and cancellation markers distinguish
+  those requests from spontaneous exits.
+- Memory samples include process RSS, the current isolate's heap and available
+  memory. Process start/exit also capture root cgroup memory counters where
+  available. A sample alone is not evidence of OOM.
+
+Each observer keeps at most two 1 MiB JSONL generations; the raw coverage
+capture keeps at most two 8 MiB generations per job. The older generation has
+`.previous` appended to its filename. Rotation writes an explicit truncation
+marker and retains the useful tail; an oversized JSONL record is omitted whole
+rather than leaving invalid JSON. These are per-observer/job limits, not a
+single aggregate budget across every process. The coverage sink keeps draining
+and forwarding input after truncation or capture failure; a closed console does
+not give the producer EPIPE. Forwarding observes backpressure rather than
+building an unbounded stdout buffer.
+
+The JSONL contains only allowlisted metadata: no argv, environment, worker
+payloads or error messages. No heap dumps or cores are collected. Full Node
+fatal reports are deliberately not enabled: even excluding environment/network data leaves command-line and
+other metadata outside that allowlist. Native CHECKs and uncatchable signals
+cannot run JS exit hooks; use the raw stack in `coverage.log` and the surviving
+parent's signal record. No test/host error is consumed, cancellation changed,
+or test retried. Synchronous writes and memory sampling can
+perturb test timing; this is observation, not a timing-neutral experiment.
+Upload is best-effort: job timeout or cancellation can prevent the artifact
+step from running, so preserve the job's console log while it is available.
+
+The package job also attempts read-only symbolization of the retained Node
+24.22.1 Linux frames. It verifies the pinned setup-node archive checksum and
+requires its extracted binary to match the job's Node byte-for-byte before
+using preinstalled `readelf`, `addr2line` and `nm`. Hashes, build-id and bounded
+symbol output are retained; the extracted binary is never executed or uploaded.
+Nearest preceding symbols and stripped binaries are explicitly not treated as
+cause attribution. A diagnostic failure keeps the job red while still allowing
+the real coverage step to run and report its own result. The pin is specific
+to those retained frames, not a promise that addresses survive a Node update.
+
+For a focused local capture, set `VOLLI_TEST_DIAGNOSTICS` to an absolute
+workspace-local directory under `.tmp/` and append
+`--require="<workspace>/scripts/host-test-diagnostics.cjs"` to `NODE_OPTIONS`,
+then run only the relevant test file with coverage **from `packages/host-core`
+or `apps/desktop`**. The preload is inert outside those working directories or
+without that variable. These captures are evidence, not public source; do not
+commit them.
