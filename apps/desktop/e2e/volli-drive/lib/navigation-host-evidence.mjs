@@ -134,6 +134,10 @@ export function settledSpans(artifacts) {
         tool: descriptor?.nativeToolName,
         ok: part.state === "output-available",
         tabId: typeof part.input?.tabId === "string" ? part.input.tabId : null,
+        // An act's own request (normalized input): what it acted at and on.
+        kind: typeof part.input?.kind === "string" ? part.input.kind : null,
+        ref: typeof part.input?.ref === "string" ? part.input.ref : null,
+        generation: Number.isInteger(part.input?.generation) ? part.input.generation : null,
         startedAt: descriptor?.startedAt,
         endedAt: descriptor?.endedAt,
       };
@@ -207,6 +211,11 @@ export function nestedSpanTiming({ spans, metrics }) {
   const shot = one(onTab("browser_screenshot"), "timing:screenshot-span", fact);
   const read = one(onTab("browser_snapshot"), "timing:snapshot-span", fact);
   const act = one(onTab("browser_act"), "timing:act-span", fact);
+  // The click the program made, at the generation of the fresh snapshot it
+  // read: the request's own fields, never the navigation's generation.
+  if (act.kind !== "click" || !act.ref || !Number.isInteger(act.generation)) {
+    fail("timing:act-input", fact);
+  }
   const tabs = one(
     nested.filter((span) => span.tool === "browser_tabs" && span.n > act.n),
     "timing:following-tabs-span",
@@ -227,10 +236,13 @@ export function nestedSpanTiming({ spans, metrics }) {
  * Stage 2: this tab's trace steps against those spans. Production records
  * (host-core browser/trace-steps.ts): `open` and `read` carry the generation
  * their answer reported, `click` its answer's (else the request's), and a
- * `screenshot` step NONE (`generation: null`). So the screenshot is pinned to
- * its span by time, and generation continuity by the open, the read just
- * after the screenshot and the click all reporting the navigation's own
- * generation. `steps` are {action, generation, at, outcome}.
+ * `screenshot` step NONE (`generation: null`, never invented here). So:
+ * the open carries the navigation answer's generation (the program's
+ * `m.generation`); the read just after the screenshot carries the generation
+ * the program then acted at; the click carries that same generation — the
+ * recorded act request's, NOT the navigation's, which a second navigation
+ * bump may already have moved past. The screenshot is pinned by time.
+ * `steps` are {action, generation, at, outcome}.
  */
 export function navigationTiming({ timing, steps, metrics }) {
   const fact = { nested: timing.nested, steps: steps.length };
@@ -247,8 +259,8 @@ export function navigationTiming({ timing, steps, metrics }) {
   };
   step("open", timing.navigate, metrics.generation, "open");
   const shotStep = step("screenshot", timing.shot, null, "screenshot");
-  step("read", timing.read, metrics.generation, "read");
-  const clickStep = step("click", timing.act, metrics.generation, "click");
+  step("read", timing.read, timing.act.generation, "read");
+  const clickStep = step("click", timing.act, timing.act.generation, "click");
   return {
     requestedAt: timing.shot.startedAt,
     answeredAt: timing.shot.endedAt,
@@ -259,6 +271,8 @@ export function navigationTiming({ timing, steps, metrics }) {
     clickTraceAt: clickStep.at,
     tabsRequestedAt: timing.tabs.startedAt,
     tabsAnsweredAt: timing.tabs.endedAt,
+    navigationGeneration: metrics.generation,
+    actionGeneration: timing.act.generation,
     nestedSpans: timing.nested,
   };
 }

@@ -7,10 +7,16 @@
  * SQLite ledger, the file transcript artifact store (gzip + digest names), and
  * the probe's read-only SELECT run against that ledger. Scripted: only the
  * model's replies (the existing fixture, whose tool calls carry non-empty
- * `scripted-call-N` ids). Stand-in: the Browser port, at its runtime boundary,
- * answering in the exported `RuntimeBrowserPort` shapes; it records no trace,
- * so trace correlation is not covered here (browser/trace-steps.ts is).
+ * `scripted-call-N` ids). The Browser port is the REAL agent port
+ * (`browserAgentPort`, whose `traced.*` wrappers write every trace step) into a
+ * real `BrowserTraceStore`. Stand-ins: only the engine under it — a backend
+ * holding one tab and a scripted CDP transport — and a SIMULATED second
+ * navigation bump (cf. chromium-backend `frameStartedNavigating`) that moves
+ * the tab past the navigate answer's generation once the screenshot is kept,
+ * so the snapshot and the click run at a generation the navigation never
+ * reported.
  */
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
@@ -21,19 +27,23 @@ import {
 } from "@volli/host-core/session-runtime";
 import { insertProject } from "@volli/host-core/db";
 import {
+  browserAgentPort,
+  BrowserTraceStore,
+  type BrowserBackend,
+  type CdpTransport,
+} from "@volli/host-core/browser";
+// Internal to host-core (no entry exports it); the agent port's own queues.
+import { BrowserAgentCoordinator } from "../../../../../packages/host-core/src/browser/agent-coordinator";
+import {
   createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
 } from "@volli/session-engine";
-import {
-  codeModeSurfaceFor,
-  type RuntimeBrowserPort,
-  type RuntimeBrowserSnapshot,
-  type SessionToolId,
-} from "@volli/shared";
+import { codeModeSurfaceFor, type BrowserTabState, type SessionToolId } from "@volli/shared";
 import { scriptedOpusProvider } from "../../../../../packages/agent-runtime/test-fixtures/code-mode-images-provider";
 import {
+  navigationTiming,
   nestedSpanTiming,
   readTranscriptArtifact,
   settledSpans,
@@ -68,52 +78,157 @@ const TOOLS: SessionToolId[] = [
   "browser_act",
   "browser_screenshot",
   "browser_console",
+  "browser_acquire",
+  "browser_release",
+  "browser_find",
   "codemode",
 ];
 
-/** A Browser port at the runtime boundary, in the exported answer shapes. */
-function fixturePort(sessionId: () => string): RuntimeBrowserPort & { turnEnded: () => void } {
+/** The one-button page every AX read answers with. */
+const PAGE_TREE = {
+  nodes: [
+    {
+      nodeId: "1",
+      ignored: false,
+      role: { value: "RootWebArea" },
+      name: { value: "Fixture" },
+      childIds: ["2"],
+    },
+    {
+      nodeId: "2",
+      ignored: false,
+      role: { value: "button" },
+      name: { value: "Press me" },
+      backendDOMNodeId: 77,
+      childIds: [],
+    },
+  ],
+};
+
+/** A backend door the navigation program never reaches. */
+const unused = (): never => {
+  throw new Error("The navigation program never reaches this backend door");
+};
+
+/**
+ * The engine under the real agent port: one headless Session tab and a
+ * scripted CDP wire. Everything the trace records is decided by the port.
+ */
+function fixtureBackend(traces: BrowserTraceStore): BrowserBackend {
+  const agentOperations = new BrowserAgentCoordinator();
+  const tabs = new Map<string, BrowserTabState>();
+  const holds = new Set<string>();
   let clicked = 0;
-  const page = () => ({
-    tabId: TAB,
-    url: FIXTURE_URL,
-    title: `vc278 phase=compiling clicked=${clicked} nodes=903`,
-    ownerSessionId: sessionId(),
-    error: null,
-  });
-  const snapshot = (): RuntimeBrowserSnapshot => ({
-    ...page(),
-    snapshotText: '- button "Press me" [ref=e1]',
-    generation: 1,
-    truncated: false,
-    empty: false,
-    picture: null,
-  });
+  let bumped = false;
+  const view = (tabId: string): BrowserTabState => {
+    const tab = tabs.get(tabId);
+    if (tab === undefined) throw new Error("Unknown Browser Tab");
+    return {
+      ...tab,
+      title: `vc278 phase=compiling clicked=${clicked} nodes=903`,
+      heldBy: holds.has(tabId)
+        ? {
+            kind: "session",
+            sessionId: tab.ownerSessionId ?? "",
+            name: "Fixture",
+            color: "#123456",
+          }
+        : null,
+    };
+  };
+  const transport: CdpTransport = {
+    send: async (method, params) => {
+      if (method === "Accessibility.getFullAXTree") return PAGE_TREE;
+      if (method === "DOM.getBoxModel")
+        return { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } };
+      if (method === "Page.getLayoutMetrics") {
+        return {
+          cssVisualViewport: {
+            clientWidth: PNG.readUInt32BE(16),
+            clientHeight: PNG.readUInt32BE(20),
+          },
+        };
+      }
+      if (method === "Page.captureScreenshot") return { data: PNG.toString("base64") };
+      if (
+        method === "Input.dispatchMouseEvent" &&
+        (params as { type?: string })?.type === "mouseReleased"
+      ) {
+        clicked = 1;
+      }
+      return {};
+    },
+  };
   return {
-    tabs: async () => ({
-      tabs: [{ ...page(), createdBy: "session", heldBy: null }],
-    }),
-    navigate: async () => ({ ...snapshot(), picture: "nav-picture" }),
-    snapshot: async () => snapshot(),
-    act: async () => {
-      clicked = 1;
-      return {
-        ...snapshot(),
-        target: { ref: "e1", name: "Press me" },
-        changed: { url: false, generation: false, tree: true },
-      };
+    agentOperations,
+    list: (scope) =>
+      [...tabs.keys()].filter((id) => tabs.get(id)?.projectId === scope.projectId).map(view),
+    open: (input) => {
+      tabs.set(TAB, {
+        tabId: TAB,
+        projectId: input.projectId,
+        ticketId: input.ticketId,
+        createdBy: input.createdBy,
+        ownerSessionId: input.createdBy === "session" ? input.ownerSessionId : null,
+        presentation: "headless",
+        url: input.url,
+        title: "",
+        loading: false,
+        error: null,
+        canGoBack: false,
+        canGoForward: false,
+        generation: 1,
+        heldBy: null,
+      });
+      return view(TAB);
     },
-    screenshot: async () => ({
-      ...page(),
-      base64Png: PNG.toString("base64"),
-      picture: "shot-picture",
-      width: PNG.readUInt32BE(16),
-      height: PNG.readUInt32BE(20),
-    }),
-    console: async () => {
-      throw new Error("The navigation program never reads the console");
+    navigate: unused,
+    back: unused,
+    forward: unused,
+    reload: unused,
+    consoleOf: () => ({ messages: [], truncated: false }),
+    capturePicture: async () => "navigation-picture",
+    keepScreenshot: () => {
+      // SIMULATED second navigation bump, landing just after the screenshot
+      // was kept. Not during the capture: the real port refuses a screenshot
+      // whose tab moved mid-capture (browser.stale-ref, cdp-controller.ts),
+      // and that refusal is what an earlier version of this fixture hit.
+      const tab = tabs.get(TAB);
+      if (!bumped && tab !== undefined) tabs.set(TAB, { ...tab, generation: tab.generation + 1 });
+      bumped = true;
+      return "screenshot-picture";
     },
-    turnEnded: () => undefined,
+    closeHeadlessOwnedBy: () => [],
+    hold: (tabId) => {
+      holds.add(tabId);
+      return { kind: "held", tab: view(tabId) };
+    },
+    releaseHold: (tabId) => {
+      holds.delete(tabId);
+    },
+    releaseAllHeldBy: () => {
+      const released = [...holds];
+      holds.clear();
+      return released;
+    },
+    forgetSession: () => holds.clear(),
+    recordTraceStep: (step) => traces.record(step),
+    close: unused,
+    setPresentation: unused,
+    closeHeadlessForTicket: () => [],
+    closeAll: () => undefined,
+    transportFor: () => transport,
+    waitForLoad: async () => undefined,
+    setBounds: () => undefined,
+    pictureOf: () => null,
+    holdAwake: () => () => undefined,
+    takeOver: unused,
+    handBack: unused,
+    askToLeave: () => null,
+    isHeldBy: (tabId) => holds.has(tabId),
+    heldBy: (tabId) => view(tabId).heldBy,
+    onHoldChange: () => () => undefined,
+    tracesOf: (sessionId) => traces.tracesOf(sessionId),
   };
 }
 
@@ -131,6 +246,12 @@ describe("navigation probe host evidence through the real writer path (VC-1150)"
       ]);
       let clock = 1_000;
       let sessionId = "";
+      const traces = new BrowserTraceStore({
+        createId: randomUUID,
+        now: Date.now,
+        frameOf: () => null,
+      });
+      const backend = fixtureBackend(traces);
       const engine = createSessionEngine({
         ledger: createSqliteSessionLedger(database.db),
         clock: { now: () => clock++ },
@@ -157,7 +278,13 @@ describe("navigation probe host evidence through the real writer path (VC-1150)"
           codeMode,
           promptResources: [],
         }),
-        resolveBrowserPort: () => fixturePort(() => sessionId),
+        resolveBrowserPort: (scope) =>
+          browserAgentPort({
+            backend,
+            scope: { projectId: scope.projectId, ticketId: scope.ticketId },
+            session: { sessionId: scope.sessionId, attachmentId: scope.attachmentId },
+            cursorFor: undefined,
+          }),
       });
       const transcripts = join(root, "session-transcripts");
       const artifacts = createFileTranscriptArtifactStore(transcripts);
@@ -267,6 +394,28 @@ describe("navigation probe host evidence through the real writer path (VC-1150)"
         }
         expect(timing.shot.endedAt).toBeLessThanOrEqual(timing.act.startedAt);
         expect(new Set([metrics.requestedAt, metrics.clickAnsweredAt]).size).toBe(1);
+
+        // The REAL trace writer's steps for this tab, read as the probe reads
+        // them (by the trace's tab; steps carry none), then correlated.
+        const steps = traces
+          .tracesOf(sessionId)
+          .filter((trace) => trace.tabId === TAB)
+          .flatMap((trace) => trace.steps)
+          .map(({ action, generation, at, outcome }) => ({ action, generation, at, outcome }));
+        expect(steps.map((step) => step.action)).toEqual(["open", "screenshot", "read", "click"]);
+        // The writer's contract: a screenshot step has no generation.
+        expect(steps.find((step) => step.action === "screenshot")?.generation).toBeNull();
+        // The bump moved the tab past the navigate answer: the act's own
+        // recorded request, not the navigation, is the click's generation.
+        expect(metrics.generation).toBe(1);
+        expect(timing.act.generation).toBe(2);
+        expect(timing.act.kind).toBe("click");
+        const hostTiming = navigationTiming({ timing, steps, metrics });
+        expect(hostTiming.navigationGeneration).toBe(1);
+        expect(hostTiming.actionGeneration).toBe(2);
+        expect(hostTiming.screenshotMs).toBe(timing.shot.endedAt - timing.shot.startedAt);
+        expect(hostTiming.screenshotTraceAt).toBeGreaterThanOrEqual(timing.shot.startedAt);
+        expect(hostTiming.screenshotTraceAt).toBeLessThanOrEqual(timing.shot.endedAt);
       } finally {
         await host.close();
       }

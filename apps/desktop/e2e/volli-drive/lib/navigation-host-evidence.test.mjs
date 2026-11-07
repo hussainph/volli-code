@@ -27,7 +27,16 @@ const directory = mkdtempSync(join(tmpdir(), "vc1150-evidence-"));
 after(() => rmSync(directory, { recursive: true, force: true }));
 
 /** A settled activity part in session-engine `activityPart` shape. */
-function part({ id, tool, startedAt, endedAt, tabId, state = "output-available", preliminary }) {
+function part({
+  id,
+  tool,
+  startedAt,
+  endedAt,
+  tabId,
+  input,
+  state = "output-available",
+  preliminary,
+}) {
   return {
     type: "dynamic-tool",
     toolName: "volli.activity",
@@ -43,7 +52,7 @@ function part({ id, tool, startedAt, endedAt, tabId, state = "output-available",
       },
     },
     state,
-    input: tabId === undefined ? {} : { tabId },
+    input: input ?? (tabId === undefined ? {} : { tabId }),
     ...(state === "output-error" ? { errorText: "x" } : { output: { content: [] } }),
     ...(preliminary === undefined ? {} : { preliminary }),
   };
@@ -66,13 +75,17 @@ function store(parts, { turnId = "turn-1", plain = false } = {}) {
   return { sequence: 1, turnId, id: `sha256:${hex}`, digest: `sha256:${hex}`, mediaType: MEDIA };
 }
 
-const nested = (n, tool, startedAt, endedAt, tabId) => ({
+const nested = (n, tool, startedAt, endedAt, tabId, input) => ({
   id: `${OUTER}:d1g35t:${n}`,
   tool,
   startedAt,
   endedAt,
   tabId,
+  input,
 });
+// The program clicks at the generation of the snapshot it just read; here a
+// second navigation bump moved the tab past the navigate answer's (1 -> 2).
+const CLICK = { tabId: TAB, generation: 2, kind: "click", ref: "e1" };
 const CALLS = [
   { id: OUTER, tool: "codemode", startedAt: 1000, endedAt: 2000 },
   nested(0, "browser_navigate", 1010, 1100),
@@ -80,7 +93,7 @@ const CALLS = [
   nested(2, "browser_tabs", 1110, 1120),
   nested(3, "browser_screenshot", 1120, 1300, TAB),
   nested(4, "browser_snapshot", 1300, 1320, TAB),
-  nested(5, "browser_act", 1320, 1350, TAB),
+  nested(5, "browser_act", 1320, 1350, TAB, CLICK),
   nested(6, "browser_tabs", 1350, 1360),
 ];
 // Production trace semantics (host-core browser/trace-steps.ts): a screenshot
@@ -88,8 +101,8 @@ const CALLS = [
 const STEPS = [
   { action: "open", generation: 1, at: 1099, outcome: "ok" },
   { action: "screenshot", generation: null, at: 1290, outcome: "ok" },
-  { action: "read", generation: 1, at: 1319, outcome: "ok" },
-  { action: "click", generation: 1, at: 1349, outcome: "ok" },
+  { action: "read", generation: 2, at: 1319, outcome: "ok" },
+  { action: "click", generation: 2, at: 1349, outcome: "ok" },
 ];
 // The program's record: its clock fields are the one pinned run epoch.
 const METRICS = {
@@ -137,6 +150,8 @@ test("host spans and trace replace every program clock read", () => {
     clickTraceAt: 1349,
     tabsRequestedAt: 1350,
     tabsAnsweredAt: 1360,
+    navigationGeneration: 1,
+    actionGeneration: 2,
     nestedSpans: 7,
   });
 });
@@ -291,8 +306,16 @@ test("exact correlation: one call per role, this tab, this generation, in order"
   // Continuity: the open, the read after the screenshot and the click.
   assert.equal(timing(CALLS, step(0, { generation: 2 })), "timing:open-trace-span");
   assert.equal(timing(CALLS, step(0, { at: 1101 })), "timing:open-trace-span");
-  assert.equal(timing(CALLS, step(2, { generation: 2 })), "timing:read-trace-span");
-  assert.equal(timing(CALLS, step(3, { generation: 2 })), "timing:click-trace-span");
+  // The read and the click carry the ACT's generation, not the navigation's.
+  assert.equal(timing(CALLS, step(2, { generation: 1 })), "timing:read-trace-span");
+  assert.equal(timing(CALLS, step(3, { generation: 1 })), "timing:click-trace-span");
+  assert.equal(timing(CALLS, step(3, { generation: 3 })), "timing:click-trace-span");
+  // The recorded act request itself must be a click with a ref at a generation.
+  const act = (input) => replace(6, nested(5, "browser_act", 1320, 1350, TAB, input));
+  assert.equal(timing(act({ ...CLICK, kind: "type" })), "timing:act-input");
+  assert.equal(timing(act({ ...CLICK, ref: undefined })), "timing:act-input");
+  assert.equal(timing(act({ ...CLICK, generation: 2.5 })), "timing:act-input");
+  assert.equal(timing(act({ tabId: TAB })), "timing:act-input");
   assert.equal(
     timing(
       CALLS,
