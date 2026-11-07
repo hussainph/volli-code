@@ -63,7 +63,7 @@ const FILTER_GLYPH_NUDGE = (TRIGGER_BOX_PX - GLYPH_PX) / 2;
  *
  * Both bands expose their total next to the label. Previous counts Sessions,
  * not ticket envelopes; its filters never change Active. Zero is quiet and
- * an empty section keeps its heading without placeholder rows.
+ * Previous retains its filter at zero; a successfully empty Active group hides.
  */
 export function SessionBandHeader({
   label,

@@ -167,6 +167,49 @@ async function showBeside(page, tabId, label) {
   if (label === "Show tab") await row.click();
   else await reveal.click();
   await page.keyboard.press("Escape");
+  await page.mouse.move(0, 0);
+  await waitUntil(
+    "the reveal card to leave the screen",
+    async () => (await tabsCard(page).filter({ visible: true }).count()) === 0,
+  );
+}
+
+/** Keep the failing transition's evidence, before another action changes it. */
+async function waitForReveal(label, page, app, predicate) {
+  try {
+    return await waitUntil(label, predicate);
+  } catch (error) {
+    const renderer = await page.evaluate(() => ({
+      activeGroups: Array.from(
+        document.querySelectorAll('[data-slot="grouped-tab-chip"][data-active="true"]'),
+        (node) => node.getAttribute("data-group-id"),
+      ),
+      selectedTabs: Array.from(
+        document.querySelectorAll('[data-strip-tab-id]:has([role="tab"][aria-selected="true"])'),
+        (node) => node.getAttribute("data-strip-tab-id"),
+      ),
+      panes: Array.from(document.querySelectorAll('[data-slot="split-view-pane"]'), (node) => ({
+        id: node.getAttribute("data-pane-id"),
+        focused: node.getAttribute("data-focused"),
+      })),
+      focus: document.activeElement?.outerHTML.slice(0, 500),
+      overlays: Array.from(
+        document.querySelectorAll(
+          '[data-slot="hover-card-content"], [data-slot="popover-content"], [role="dialog"], [role="menu"], [role="tooltip"]',
+        ),
+      )
+        .filter((node) => node.checkVisibility())
+        .map((node) => ({
+          slot: node.getAttribute("data-slot"),
+          state: node.getAttribute("data-state"),
+          bounds: node.getBoundingClientRect().toJSON(),
+        })),
+    }));
+    throw new Error(
+      `${error.message}; renderer=${JSON.stringify(renderer)}; attached=${JSON.stringify(await attachedViews(app))}`,
+      { cause: error },
+    );
+  }
 }
 
 /** The reveal the tab's Island row offers right now, read from a pinned card. */
@@ -530,12 +573,14 @@ async function main() {
       // Close and Undo kept the tab in its pane beside the chat: Show tab shows
       // that group, with the browser's pane in focus.
       await showBeside(page, agentTabId, "Show tab");
-      const grouped = await waitUntil(
+      const grouped = await waitForReveal(
         "Show tab to show the browser's group",
+        page,
+        app,
         async () =>
           (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
           (await attachedViews(app)).includes(agentUrl),
-      ).catch(() => false);
+      );
       // Dragged from its pane's strip up to the top strip, it leaves the group;
       // Show tab now SELECTS it full width and never pulls it back in. The
       // Island lives above its chat's composer, so the chat's segment is what
@@ -543,13 +588,28 @@ async function main() {
       await ungroupByDrag(page, agentPaneTab(page));
       await showOwningChat(page, sessionId);
       await showBeside(page, agentTabId, "Show tab");
-      const selected = await waitUntil(
-        "Show tab to bring the ordinary browser forward full width",
-        async () =>
-          (await activeGroup(page).count()) === 0 &&
-          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
-          (await attachedViews(app)).includes(agentUrl),
-      ).catch(() => false);
+      // Selection and native attachment are different receipts. A correctly
+      // selected Browser may still be yielding its native plane to an overlay;
+      // do not collapse both into selected=false and then destroy the evidence
+      // by carrying on with the next drag.
+      const ordinarySelected = async () =>
+        (await activeGroup(page).count()) === 0 &&
+        (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
+        (await browserStripTabs(page)
+          .filter({ has: page.locator('[data-browser-tab-mark="session"]') })
+          .getAttribute("aria-selected")) === "true";
+      const selected = await waitForReveal(
+        "Show tab to select the ordinary browser full width",
+        page,
+        app,
+        ordinarySelected,
+      );
+      await waitForReveal(
+        "the selected ordinary browser's native plane to attach",
+        page,
+        app,
+        async () => (await ordinarySelected()) && (await attachedViews(app)).includes(agentUrl),
+      );
       // The person's browser is folded into its group's summary while the
       // agent tab is full width. Its real member menu, not hidden tab DOM,
       // proves it still belongs to that group before the edge drop.

@@ -191,6 +191,8 @@ export function describeCodeMode(input: {
   tools: readonly CallableTool[];
   /** A pre-0.2.2 record keeps its original provider-visible wording. */
   legacy?: boolean;
+  /** Frozen separately: old declarations stay byte-identical on reattachment. */
+  mcpResultVersion?: 1 | undefined;
   /**
    * Wire names of the tools declared to the model that a program may NOT
    * call. When they are fewer than the ones it may, the description names
@@ -239,6 +241,11 @@ export function describeCodeMode(input: {
           `Results: ${has("bash") ? "`bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; " : ""}MCP tools → { text, structuredContent?, isError, images, omittedImages }; Volli verbs → { text, details? }; schema-bearing Session tools → their structured answers; Browser screenshots and other image-bearing text tools → { text, images, omittedImages }; other tools → their text.`,
           "Nested images are opaque handles (bytes stay outside the program); image(handle) or handles inside a returned value send bounded images after the text, with source framing; the header names any left out.",
         ]),
+    ...(input.mcpResultVersion === 1
+      ? [
+          "MCP results also carry result: { version: 1, truncated, output?, structuredContentOmittedBytes? }. Prefer structuredContent when present; text is display text, not guaranteed JSON. Check result.truncated and result.output.fullOutputPath before processing cut text; saved output is bounded and may be unavailable. A failed program does not roll back completed calls; inspect partial completion before retrying changes.",
+        ]
+      : []),
     `Per run: ${input.limits.maxNestedCalls} calls, ${seconds} s of running time (waiting on a person is free), ${formatBytes(input.limits.maxOutputBytes)} of output (the rest is saved). A first line \`// @options: {"timeout_ms": 30000, "max_output_tokens": 2000}\` lowers them. The program is checked whole before anything runs.`,
     "A run that called a web, Browser or MCP tool, or read another agent's words, returns its output inside untrusted-content markers.",
     ...(input.legacy
