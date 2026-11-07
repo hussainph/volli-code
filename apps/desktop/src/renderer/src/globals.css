@@ -44,6 +44,14 @@
     background-color: var(--card);
   }
 
+  /* A draft file is an object on the chat writing rail, not another footer
+   * action. Keep this face local to chat; ticket capture owns its own layout.
+   * Component-layer paint lets the shared button's hover/focus states win. */
+  .session-prompt [data-slot="composer-attachments"] > button {
+    border: 1px solid var(--border);
+    background-color: var(--card);
+  }
+
   .prompt-primary {
     /* Keep the solved foreground/fill pair intact; only the bevel takes ink. */
     box-shadow:
@@ -2847,11 +2855,36 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   transition-duration: var(--duration-menu-out);
 }
 
-/* Detached writing glass. Nested input groups never add a second material. */
+/* One spacing owner for the Session composer. The shell and nested content
+ * each spend one 8px step: draft ink, attachment edges and queued ink share
+ * the 16px rail. Controls hang half a step out for optical glyph alignment;
+ * their targets keep the shared control sizes. No primitive adds a gutter. */
 .session-prompt {
+  --composer-gap: calc(var(--spacing) * 2);
+  --composer-gutter: calc(var(--composer-gap) * 2);
+  --composer-control-outset: var(--spacing);
   border-radius: var(--radius-composer);
   border: 0;
-  padding: 12px 10px 10px 16px;
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-queue {
+  gap: var(--composer-gap);
+  padding: 0;
+}
+.session-prompt .composer-queue::after {
+  content: "";
+  align-self: stretch;
+  margin-inline: var(--composer-gap);
+  border-bottom: 1px solid var(--border);
+}
+.session-prompt .composer-queued-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-draft-attachments {
+  padding: var(--composer-gap) var(--composer-gap) 0;
 }
 .session-prompt:has(textarea:focus-visible) {
   border-color: var(--ring);
@@ -3022,13 +3055,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border: 0;
 }
 .session-prompt textarea {
-  min-height: 38px;
-  padding: 0;
+  min-height: calc(var(--spacing) * 10);
+  padding: var(--composer-gap);
   font-size: var(--text-ui);
 }
 .session-prompt .prompt-toolbar {
-  padding: 0;
-  margin-left: -6px;
+  padding: 0 calc(var(--composer-gutter) - var(--composer-gap) - var(--composer-control-outset));
+  margin: 0;
 }
 .is-user > .message-content {
   max-width: 420px;
