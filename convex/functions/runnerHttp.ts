@@ -9,6 +9,10 @@
  * - `POST /runner/token` — the refresh credential becomes a 15-minute runner
  *   token and its own successor (rotation with reuse detection,
  *   `runners.rotateCredential`).
+ * - `POST /runner/github-token` — the one door here a runner calls WITH its
+ *   runner token (`Authorization: Bearer …`): its owner's GitHub user token
+ *   for a Session or job it holds (`runnerGithub.ts`). Its refusals use
+ *   `RUNNER_GITHUB_TOKEN_ERROR_CODES`.
  *
  * The three linking doors are rate-limited before they do any work
  * (`runnerLinkRateLimit.ts`): per network, per code, and for device-code
@@ -22,12 +26,19 @@
  * reading these replies.
  */
 
+import { ConvexError } from "convex/values";
+
 import {
+  RUNNER_GITHUB_TOKEN_ERROR_CODES,
   RUNNER_LINK_POLL_INTERVAL_MS,
   RUNNER_SECRET_PREFIXES,
   RUNNER_TOKEN_TTL_MS,
   RunnerWireError,
   formatUserCode,
+  githubInstalledOn,
+  githubNoreplyEmail,
+  githubRepoOfRemote,
+  parseRunnerGithubTokenRequest,
   parseRunnerDeviceLinkPollRequest,
   parseRunnerDeviceLinkStartRequest,
   parseRunnerLinkRequest,
@@ -35,6 +46,8 @@ import {
   secretHash,
   type RunnerDeviceLinkPoll,
   type RunnerDeviceLinkStart,
+  type RunnerGithubTokenErrorCode,
+  type RunnerGithubTokenGrant,
   type RunnerHttpErrorBody,
   type RunnerHttpErrorCode,
   type RunnerLinkGrant,
@@ -43,6 +56,10 @@ import {
 
 import { internal } from "./_generated/api";
 import { httpAction, type ActionCtx } from "./_generated/server";
+import { mintGithubToken, type GithubMint } from "./githubTokens";
+import { githubClient } from "./lib/github/client";
+import { readGithubConfig } from "./lib/github/config";
+import { githubRemoteHost } from "./lib/runnerContext";
 import { mintSecret, mintUserCode, runnerSigningKey, signRunnerToken } from "./lib/runnerSecrets";
 
 const STATUS_OF: Record<RunnerHttpErrorCode, number> = {
@@ -240,6 +257,168 @@ export const token = httpAction(async (ctx, request) => {
     serverTime,
     credential,
     generation: result.generation,
+  };
+  return reply(200, grant);
+});
+
+const GITHUB_TOKEN_STATUS_OF: Record<RunnerGithubTokenErrorCode, number> = {
+  invalid_request: 400,
+  unauthenticated: 401,
+  not_a_runner: 403,
+  revoked: 403,
+  preview_access_required: 403,
+  not_claimed: 403,
+  not_your_runner: 403,
+  not_found: 404,
+  not_a_member: 403,
+  invalid_repo: 400,
+  github_not_connected: 409,
+  github_needs_reconnect: 409,
+  github_unavailable: 503,
+  github_rate_limited: 429,
+  github_not_installed: 409,
+};
+
+const GITHUB_MINT_REFUSAL: Record<
+  Extract<GithubMint, { ok: false }>["code"],
+  { code: RunnerGithubTokenErrorCode; message: string }
+> = {
+  not_connected: {
+    code: "github_not_connected",
+    message: "This runner's owner hasn't connected GitHub to Volli.",
+  },
+  needs_reconnect: {
+    code: "github_needs_reconnect",
+    message: "Connect GitHub to Volli again in Settings.",
+  },
+  github_unavailable: { code: "github_unavailable", message: "GitHub is unavailable." },
+  github_rate_limited: { code: "github_rate_limited", message: "GitHub is rate limiting Volli." },
+};
+
+function githubTokenFailure(
+  code: RunnerGithubTokenErrorCode,
+  message: string,
+  resetAt: number | null = null,
+  account?: string,
+): Response {
+  const seconds = resetAt === null ? null : Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+  return reply(
+    GITHUB_TOKEN_STATUS_OF[code],
+    { error: { code, message, resetAt, ...(account === undefined ? {} : { account }) } },
+    seconds === null ? {} : { "retry-after": String(seconds) },
+  );
+}
+
+/** How long the installation check may add to a grant before it is skipped. */
+const INSTALLATION_CHECK_MS = 3_000;
+
+/**
+ * The GitHub account a repository needs Volli installed on, when the person's
+ * token reaches no installation there; `null` when it does, when the remote is
+ * not a GitHub repository, or when GitHub could not say in time. Only a
+ * definite "not installed" refuses: any doubt hands the token out, and GitHub
+ * decides. A recorded remote may name an old owner (GitHub redirects git after
+ * a rename or transfer), so before refusing, the repository's current owner is
+ * asked for and checked too.
+ */
+async function missingInstallation(
+  remoteUrl: string | null,
+  userToken: string,
+): Promise<string | null> {
+  const app = readGithubConfig();
+  const repo = remoteUrl === null ? null : githubRepoOfRemote(remoteUrl, githubRemoteHost());
+  if (app === null || repo === null) return null;
+  const client = githubClient(app);
+  const check = async (): Promise<string | null> => {
+    const listed = await client.userInstallationList(userToken);
+    if (!listed.complete || githubInstalledOn(listed.installations, repo.owner)) return null;
+    const current = await client.userRepository(userToken, repo.owner, repo.name);
+    const owner = current?.owner ?? repo.owner;
+    return githubInstalledOn(listed.installations, owner) ? null : owner;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      check(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), INSTALLATION_CHECK_MS);
+      }),
+    ]);
+  } catch (error) {
+    console.warn("runner github-token: installation check failed; granting", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A refusal thrown by the authorization read, if it is one of this route's codes. */
+function knownRefusal(
+  error: unknown,
+): { code: RunnerGithubTokenErrorCode; message: string } | null {
+  if (!(error instanceof ConvexError)) return null;
+  const data: unknown = error.data;
+  if (data === null || typeof data !== "object") return null;
+  const { code, message } = data as { code?: unknown; message?: unknown };
+  if (!(RUNNER_GITHUB_TOKEN_ERROR_CODES as readonly unknown[]).includes(code)) return null;
+  return {
+    code: code as RunnerGithubTokenErrorCode,
+    message: typeof message === "string" ? message : String(code),
+  };
+}
+
+export const githubToken = httpAction(async (ctx, request) => {
+  const body = await bodyOf(request, parseRunnerGithubTokenRequest);
+  if (body instanceof Response) return body;
+  // An expired or foreign token is as good as none: the runner refreshes and retries.
+  const identity = await ctx.auth.getUserIdentity().catch(() => null);
+  if (identity === null) {
+    return githubTokenFailure("unauthenticated", "Send this runner's token as a Bearer token.");
+  }
+  let authorized: {
+    ownerUserId: string;
+    identity: { name: string; email: string } | null;
+    remoteUrl: string | null;
+  };
+  try {
+    authorized = await ctx.runQuery(internal.runnerGithub.authorizeToken, body);
+  } catch (error) {
+    const refusal = knownRefusal(error);
+    if (refusal === null) throw error;
+    return githubTokenFailure(refusal.code, refusal.message);
+  }
+  let mint: GithubMint;
+  try {
+    mint = await mintGithubToken(ctx, authorized.ownerUserId);
+  } catch (error) {
+    // A refresh with the App's configuration gone (`github_not_configured`).
+    if (!(error instanceof ConvexError)) throw error;
+    return githubTokenFailure("github_unavailable", GITHUB_MINT_REFUSAL.github_unavailable.message);
+  }
+  if (!mint.ok) {
+    const refusal = GITHUB_MINT_REFUSAL[mint.code];
+    return githubTokenFailure(refusal.code, refusal.message, mint.resetAt);
+  }
+  const account = await missingInstallation(authorized.remoteUrl, mint.token);
+  if (account !== null) {
+    return githubTokenFailure(
+      "github_not_installed",
+      `Install Volli on ${account} on GitHub.`,
+      null,
+      account,
+    );
+  }
+  const grant: RunnerGithubTokenGrant = {
+    token: mint.token,
+    useUntil: mint.useUntil,
+    host: githubRemoteHost(),
+    login: mint.login,
+    identity: authorized.identity ?? {
+      name: mint.login,
+      email: githubNoreplyEmail(mint.githubUserId, mint.login),
+    },
   };
   return reply(200, grant);
 });

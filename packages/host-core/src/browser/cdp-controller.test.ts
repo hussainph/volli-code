@@ -86,43 +86,42 @@ describe("BrowserTabController", () => {
     expect(snapshot.truncated).toBe(false);
   });
 
-  it("waits for rendering before reading a new generation, without depending on a preview", async () => {
-    const rendered = Promise.withResolvers<object>();
+  it("reads structure without running or awaiting frame callbacks", async () => {
     const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController({
+      send: async (method, params) =>
+        method === "Runtime.evaluate"
+          ? await new Promise<never>(() => undefined)
+          : await page.transport.send(method, params),
+    });
+    expect((await controller.snapshot()).text).toContain('button "Save"');
+    expect((await controller.find("Save")).matches).toBe(1);
+    controller.syncGeneration(2);
+    expect((await controller.snapshot()).generation).toBe(2);
+    expect(page.sent.map((call) => call.method)).toEqual(
+      Array.from({ length: 3 }, () => [
+        "Memory.getDOMCounters",
+        "Accessibility.getFullAXTree",
+      ]).flat(),
+    );
+  });
+
+  it("requires two frame callbacks before visual input, independently of structural reads", async () => {
+    const rendered = Promise.withResolvers<object>();
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
     const controller = new BrowserTabController({
       send: async (method, params) => {
         const answer = page.transport.send(method, params);
         return method === "Runtime.evaluate" ? rendered.promise : answer;
       },
     });
-    const reading = controller.snapshot();
-    expect(page.sent).toEqual([
-      {
-        method: "Runtime.evaluate",
-        params: {
-          expression: expect.stringContaining("requestAnimationFrame"),
-          awaitPromise: true,
-          returnByValue: true,
-        },
-      },
-    ]);
-    rendered.resolve({});
-    expect((await reading).text).toContain('button "Save"');
     await controller.snapshot();
-    await controller.find("Save");
-    expect(page.sent.filter((call) => call.method === "Runtime.evaluate")).toHaveLength(1);
-
-    controller.syncGeneration(2);
-    await controller.snapshot();
-    controller.syncGeneration(1);
-    await controller.snapshot();
-    expect(page.sent.filter((call) => call.method === "Runtime.evaluate")).toHaveLength(2);
-  });
-
-  it("requires a completed rendering opportunity between two frame callbacks, not a timer", async () => {
-    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
-    await new BrowserTabController(page.transport).snapshot();
-    const params = page.sent[0]!.params as { expression: string };
+    const acting = controller.act({ generation: 0, kind: "hover", ref: "e1" });
+    const params = page.sent.at(-1)!.params as { expression: string };
+    expect(page.sent.at(-1)!.method).toBe("Runtime.evaluate");
     const frames: (() => void)[] = [];
     const rendering = runInNewContext(params.expression, {
       requestAnimationFrame: (frame: () => void) => frames.push(frame),
@@ -131,25 +130,36 @@ describe("BrowserTabController", () => {
     void rendering.then(() => {
       completed = true;
     });
-    expect(frames).toHaveLength(1);
     frames.shift()!();
     await Promise.resolve();
     expect(completed).toBe(false);
     expect(frames).toHaveLength(1);
+    expect(page.sent.some((call) => call.method === "Input.dispatchMouseEvent")).toBe(false);
     frames.shift()!();
     await rendering;
-    expect(completed).toBe(true);
-    expect(frames).toHaveLength(0);
+    rendered.resolve({});
+    await acting;
+    await controller.act({ generation: 0, kind: "hover", ref: "e1" });
+    expect(page.sent.filter((call) => call.method === "Runtime.evaluate")).toHaveLength(1);
+    controller.syncGeneration(2);
+    await controller.snapshot();
+    await controller.act({ generation: 2, kind: "hover", ref: "e1" });
+    expect(page.sent.filter((call) => call.method === "Runtime.evaluate")).toHaveLength(2);
   });
 
-  it("bounds rendering readiness and does not cache a late frame after timeout", async () => {
+  it("bounds visual readiness, keeps structural reads working, and never caches a late frame", async () => {
     vi.useFakeTimers();
     try {
       const rendered = Promise.withResolvers<object>();
-      const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+      const onTimeout = vi.fn();
+      const page = wire({
+        "Accessibility.getFullAXTree": BUTTON_TREE,
+        "DOM.getBoxModel": BUTTON_BOX,
+      });
       let evaluations = 0;
       const controller = new BrowserTabController(
         {
+          onTimeout,
           send: async (method, params) => {
             const answer = page.transport.send(method, params);
             if (method === "Runtime.evaluate" && evaluations++ === 0) return rendered.promise;
@@ -158,15 +168,23 @@ describe("BrowserTabController", () => {
         },
         { maxCommandMs: 20 },
       );
-      const reading = expect(controller.snapshot()).rejects.toThrow(
-        "The Browser Tab did not become ready within 20ms",
-      );
+      await controller.snapshot();
+      const failed = expect(
+        controller.act({ generation: 0, kind: "click", ref: "e1" }),
+      ).rejects.toThrow("did not produce a rendered frame within 20ms");
       await vi.advanceTimersByTimeAsync(20);
-      await reading;
-      expect(page.sent.map((call) => call.method)).toEqual(["Runtime.evaluate"]);
+      await failed;
+      expect(onTimeout).toHaveBeenCalledWith({
+        phase: "frame-fence",
+        method: "Runtime.evaluate",
+        elapsedMs: 20,
+        generation: 0,
+      });
+      expect(page.sent.some((call) => call.method === "Input.dispatchMouseEvent")).toBe(false);
+      expect((await controller.find("Save")).matches).toBe(1);
       rendered.resolve({});
       await Promise.resolve();
-      await controller.snapshot();
+      await controller.act({ generation: 0, kind: "hover", ref: "e1" });
       expect(evaluations).toBe(2);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -174,9 +192,12 @@ describe("BrowserTabController", () => {
     }
   });
 
-  it("withdraws a rendering wait without minting refs or caching its late answer", async () => {
+  it("withdraws a frame wait without dispatching input or caching its late answer", async () => {
     const rendered = Promise.withResolvers<object>();
-    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
     let evaluations = 0;
     const controller = new BrowserTabController({
       send: async (method, params) => {
@@ -185,21 +206,29 @@ describe("BrowserTabController", () => {
         return answer;
       },
     });
+    await controller.snapshot();
     const abort = new AbortController();
-    const reading = controller.snapshot(abort.signal);
+    const acting = controller.act({ generation: 0, kind: "hover", ref: "e1" }, abort.signal);
     const failure = new Error("withdrawn before rendering");
     abort.abort(failure);
-    await expect(reading).rejects.toBe(failure);
+    await expect(acting).rejects.toBe(failure);
     rendered.resolve({});
     await Promise.resolve();
-    expect(page.sent.map((call) => call.method)).toEqual(["Runtime.evaluate"]);
-    await controller.snapshot();
+    expect(page.sent.map((call) => call.method)).toEqual([
+      "Memory.getDOMCounters",
+      "Accessibility.getFullAXTree",
+      "Runtime.evaluate",
+    ]);
+    await controller.act({ generation: 0, kind: "hover", ref: "e1" });
     expect(evaluations).toBe(2);
   });
 
-  it("does not cache failed rendering or relabel an older generation's frame", async () => {
+  it("does not cache failed rendering or use an older generation's frame for input", async () => {
     const rendered = Promise.withResolvers<object>();
-    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
     let evaluations = 0;
     const controller = new BrowserTabController({
       send: async (method, params) => {
@@ -212,14 +241,83 @@ describe("BrowserTabController", () => {
         return answer;
       },
     });
-    await expect(controller.snapshot()).rejects.toThrow("could not finish rendering");
-    expect(page.sent.map((call) => call.method)).toEqual(["Runtime.evaluate"]);
-    const reading = controller.snapshot();
+    await controller.snapshot();
+    await expect(controller.act({ generation: 0, kind: "click", ref: "e1" })).rejects.toThrow(
+      "could not finish rendering",
+    );
+    const acting = controller.act({ generation: 0, kind: "click", ref: "e1" });
     controller.syncGeneration(2);
     rendered.resolve({});
-    await reading;
+    await expect(acting).rejects.toMatchObject({ rule: "browser.stale-ref" });
+    expect(page.sent.some((call) => call.method === "Input.dispatchMouseEvent")).toBe(false);
     await controller.snapshot();
+    await controller.act({ generation: 2, kind: "hover", ref: "e1" });
     expect(evaluations).toBe(3);
+  });
+
+  it("omits optional photos when the frame fence stalls, without certifying late pixels", async () => {
+    vi.useFakeTimers();
+    try {
+      const frame = Promise.withResolvers<object>();
+      const send = vi.fn(async (method: string) =>
+        method === "Runtime.evaluate" ? await frame.promise : BUTTON_TREE,
+      );
+      const controller = new BrowserTabController({ send });
+      const preview = controller.preparePreview();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await preview).toBe(false);
+      expect((await controller.snapshot()).text).toContain("Save");
+      frame.resolve({});
+      await Promise.resolve();
+      expect(await controller.preparePreview()).toBe(true);
+      expect(send.mock.calls.filter(([method]) => method === "Runtime.evaluate")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports only fixed timeout metadata, even when the diagnostic sink fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const onTimeout = vi.fn(() => {
+        throw new Error("diagnostic sink failed");
+      });
+      const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+      const controller = new BrowserTabController(
+        {
+          onTimeout,
+          send: async (method, params) =>
+            method === "Input.insertText"
+              ? await new Promise<never>(() => undefined)
+              : await page.transport.send(method, params),
+        },
+        { maxCommandMs: 20 },
+      );
+      controller.syncGeneration(7);
+      await controller.snapshot();
+      const failed = expect(
+        controller.act({ generation: 7, kind: "type", ref: "e1", text: "private page text" }),
+      ).rejects.toThrow("may or may not have reached the page");
+      await vi.advanceTimersByTimeAsync(20);
+      await failed;
+      expect(onTimeout.mock.calls).toEqual([
+        [{ phase: "action", method: "Input.insertText", elapsedMs: 20, generation: 7 }],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not mint current refs from an older generation's late AX tree", async () => {
+    const lateTree = Promise.withResolvers<object>();
+    const controller = new BrowserTabController({ send: () => lateTree.promise });
+    const reading = controller.snapshot();
+    controller.syncGeneration(1);
+    lateTree.resolve(BUTTON_TREE);
+    await expect(reading).rejects.toMatchObject({ rule: "browser.stale-ref" });
+    await expect(controller.act({ generation: 1, kind: "click", ref: "e1" })).rejects.toMatchObject(
+      { rule: "browser.stale-ref" },
+    );
   });
 
   it("clicks a ref by dispatching real input at the element the snapshot named", async () => {
@@ -558,7 +656,10 @@ describe("BrowserTabController", () => {
 
   it("gives a timed-out screenshot accurate recovery guidance", async () => {
     const controller = new BrowserTabController(
-      { send: () => new Promise<never>(() => undefined) },
+      {
+        send: async (method) =>
+          method === "Runtime.evaluate" ? {} : await new Promise<never>(() => undefined),
+      },
       { maxCommandMs: 20 },
     );
 
@@ -586,6 +687,36 @@ describe("BrowserTabController", () => {
     );
   });
 
+  it("never dispatches abandoned input when deferred transport initialization answers after timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const initialized = Promise.withResolvers<void>();
+      const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+      const controller = new BrowserTabController(
+        {
+          ...page.transport,
+          sendGuarded: async (method, params, beforeDispatch) => {
+            if (method.startsWith("Input.")) await initialized.promise;
+            beforeDispatch();
+            return await page.transport.send(method, params);
+          },
+        },
+        { maxCommandMs: 20 },
+      );
+      await controller.snapshot();
+      const acting = expect(
+        controller.act({ generation: 0, kind: "press", key: "Enter" }),
+      ).rejects.toThrow("did not finish the requested action");
+      await vi.advanceTimersByTimeAsync(20);
+      await acting;
+      initialized.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.sent.filter(({ method }) => method.startsWith("Input."))).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("withdraws an unanswered command as soon as its call is aborted", async () => {
     const controller = new BrowserTabController({
       send: () => new Promise<never>(() => undefined),
@@ -598,40 +729,55 @@ describe("BrowserTabController", () => {
     await expect(pending).rejects.toThrow("withdrawn");
   });
 
-  it("releases the mouse button even when the press itself times out", async () => {
-    // The bound can fall between the two halves of one click. A page left
-    // holding a button down selects text on every move and starts drags, and
-    // the next Session to reach the tab inherits it (VC-252).
-    const sent: { method: string; params?: object }[] = [];
-    const controller = new BrowserTabController(
-      {
-        send: async (method, params) => {
-          sent.push({ method, ...(params === undefined ? {} : { params }) });
-          if ((params as { type?: string } | undefined)?.type === "mousePressed") {
-            return await new Promise<never>(() => undefined);
-          }
-          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
-          if (method === "DOM.getBoxModel") return BUTTON_BOX;
-          return {};
+  it.each([false, true])(
+    "releases the mouse button after an unanswered dispatched press (guarded=%s)",
+    async (guarded) => {
+      // A dispatched press may have applied even when its answer never arrived.
+      const sent: { method: string; params?: object }[] = [];
+      const send: CdpTransport["send"] = async (method, params) => {
+        sent.push({ method, ...(params === undefined ? {} : { params }) });
+        if ((params as { type?: string } | undefined)?.type === "mousePressed") {
+          return await new Promise<never>(() => undefined);
+        }
+        if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+        if (method === "DOM.getBoxModel") return BUTTON_BOX;
+        return {};
+      };
+      const controller = new BrowserTabController(
+        {
+          send,
+          ...(guarded
+            ? {
+                sendGuarded: async (
+                  method: string,
+                  params: object | undefined,
+                  beforeDispatch: () => void,
+                ) => {
+                  await Promise.resolve();
+                  beforeDispatch();
+                  return await send(method, params);
+                },
+              }
+            : {}),
         },
-      },
-      { maxCommandMs: 20 },
-    );
-    const snapshot = await controller.snapshot();
+        { maxCommandMs: 20 },
+      );
+      const snapshot = await controller.snapshot();
 
-    await expect(
-      controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
-    ).rejects.toHaveProperty(
-      "message",
-      "The Browser Tab did not finish the requested action within 20ms. The action may or may not have reached the page; check its current state before trying again.",
-    );
+      await expect(
+        controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
+      ).rejects.toHaveProperty(
+        "message",
+        "The Browser Tab did not finish the requested action within 20ms. The action may or may not have reached the page; check its current state before trying again.",
+      );
 
-    // The caller still hears the press failure, and the page still gets its up.
-    const types = sent
-      .filter((call) => call.method === "Input.dispatchMouseEvent")
-      .map((call) => (call.params as { type?: string }).type);
-    expect(types).toEqual(["mousePressed", "mouseReleased"]);
-  });
+      // The caller still hears the press failure, and the page still gets its up.
+      const types = sent
+        .filter((call) => call.method === "Input.dispatchMouseEvent")
+        .map((call) => (call.params as { type?: string }).type);
+      expect(types).toEqual(["mousePressed", "mouseReleased"]);
+    },
+  );
 
   it("lifts the key even when the turn is withdrawn mid-press", async () => {
     // A key down with no key up latches on the page: every later keystroke
@@ -664,7 +810,7 @@ describe("BrowserTabController", () => {
     expect(types).toEqual(["rawKeyDown", "keyUp"]);
   });
 
-  it("reports readiness timeouts without suggesting a snapshot the tab cannot take yet", async () => {
+  it("reports domain readiness timeouts without inviting replay of a mutation", async () => {
     const controller = new BrowserTabController(
       {
         send: async () => ({}),
@@ -675,7 +821,7 @@ describe("BrowserTabController", () => {
 
     await expect(controller.enable()).rejects.toHaveProperty(
       "message",
-      "The Browser Tab did not become ready within 20ms. Try the Browser Tab command again.",
+      "The Browser Tab did not become ready within 20ms. Check the tab with a fresh snapshot before repeating any navigation or action; it may already have happened.",
     );
   });
 
@@ -890,11 +1036,12 @@ describe("BrowserTabController.find (VC-364)", () => {
       truncated: false,
       empty: false,
     });
-    // Rendering readiness once, then two AX reads: the search itself executes
-    // no page script and never passes the query to Runtime.evaluate.
+    // Structural reads execute no page script, including no frame fence;
+    // each AX read is first sized by the renderer's own counter (VC-1082).
     expect(page.sent.map((call) => call.method)).toEqual([
-      "Runtime.evaluate",
+      "Memory.getDOMCounters",
       "Accessibility.getFullAXTree",
+      "Memory.getDOMCounters",
       "Accessibility.getFullAXTree",
     ]);
     await expect(
@@ -1155,5 +1302,207 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
     // A new generation forgets the old page's digest with its refs.
     controller.syncGeneration(1);
     expect(controller.treeDigest).toBeNull();
+  });
+});
+
+/**
+ * A page's whole AX tree, flat in document order the way `getFullAXTree`
+ * answers it: nested sections of ignored wrappers, headings, links, buttons
+ * and text leaves whose inline-text-box children no print walks, `size`
+ * sections wide, plus one chain deeper than the prints' depth bound.
+ */
+function bigTree(size: number, chainDepth = 0): { nodes: AXNodeShape[] } {
+  const nodes: AXNodeShape[] = [];
+  let next = 0;
+  const add = (node: Omit<AXNodeShape, "nodeId">): AXNodeShape => {
+    const made = { nodeId: `ax${next++}`, ...node };
+    nodes.push(made);
+    return made;
+  };
+  const root = add({ role: { value: "RootWebArea" }, name: { value: "Big" }, childIds: [] });
+  const text = (name: string): string => {
+    const leaf = add({ role: { value: "StaticText" }, name: { value: name }, childIds: [] });
+    leaf.childIds = [
+      add({ role: { value: "InlineTextBox" }, name: { value: name }, childIds: [] }).nodeId,
+    ];
+    return leaf.nodeId;
+  };
+  for (let index = 0; index < size; index += 1) {
+    const wrapper = add({ ignored: true, role: { value: "none" }, childIds: [] });
+    const section = add({ role: { value: "region" }, name: { value: `S${index}` }, childIds: [] });
+    wrapper.childIds = [section.nodeId];
+    section.childIds = [
+      add({ role: { value: "heading" }, name: { value: `Heading ${index}` }, childIds: [] }).nodeId,
+      text(`Body ${index}`),
+      add({
+        role: { value: "link" },
+        name: { value: `Link ${index}` },
+        backendDOMNodeId: 10_000 + index,
+        childIds: [text(`Link ${index}`)],
+      }).nodeId,
+      add({
+        role: { value: "button" },
+        name: { value: `Go ${index}` },
+        backendDOMNodeId: 50_000 + index,
+        childIds: [],
+      }).nodeId,
+    ];
+    root.childIds!.push(wrapper.nodeId);
+  }
+  let parent = root;
+  for (let depth = 0; depth < chainDepth; depth += 1) {
+    const child = add({
+      role: { value: "group" },
+      name: { value: `Level ${depth}` },
+      childIds: [],
+    });
+    parent.childIds!.push(child.nodeId);
+    parent = child;
+  }
+  return { nodes };
+}
+
+interface AXNodeShape {
+  nodeId: string;
+  ignored?: boolean;
+  role?: { value: string };
+  name?: { value: string };
+  backendDOMNodeId?: number;
+  childIds?: string[];
+}
+
+/**
+ * A wire that answers the piecewise read from a whole tree the way Chromium
+ * does: a node's children, spliced through ignored ones (their children come
+ * with them), and the full tree to anyone who still asks for it.
+ */
+function piecewiseWire(
+  whole: { nodes: AXNodeShape[] },
+  domNodes: number,
+  fail: (nodeId: string) => boolean = () => false,
+): ReturnType<typeof wire> {
+  const byId = new Map(whole.nodes.map((node) => [node.nodeId, node]));
+  const page = wire({
+    "Memory.getDOMCounters": { documents: 1, nodes: domNodes, jsEventListeners: 0 },
+    "Accessibility.getFullAXTree": whole,
+    "Accessibility.getRootAXNode": { node: whole.nodes[0] },
+  });
+  const send = page.transport.send;
+  page.transport = {
+    send: async (method, params) => {
+      if (method !== "Accessibility.getChildAXNodes") return send(method, params);
+      page.sent.push({ method, params });
+      const { id } = params as { id: string };
+      if (fail(id)) throw new Error("Could not find node with given id");
+      const answer: AXNodeShape[] = [];
+      const spliced = (nodeId: string): void => {
+        const node = byId.get(nodeId);
+        if (node === undefined) return;
+        answer.push(node);
+        if (node.ignored === true) for (const child of node.childIds ?? []) spliced(child);
+      };
+      for (const child of byId.get(id)?.childIds ?? []) spliced(child);
+      return { nodes: answer };
+    },
+  };
+  return page;
+}
+
+describe("BrowserTabController piecewise tree reads (VC-1082)", () => {
+  async function readBoth(
+    whole: { nodes: AXNodeShape[] },
+    read: (controller: BrowserTabController) => Promise<unknown>,
+  ): Promise<{ full: unknown; pieces: unknown; page: ReturnType<typeof wire> }> {
+    const fullPage = piecewiseWire(whole, 5_000);
+    const piecePage = piecewiseWire(whole, 5_001);
+    const full = await read(new BrowserTabController(fullPage.transport));
+    const pieces = await read(new BrowserTabController(piecePage.transport));
+    expect(fullPage.sent.map((call) => call.method)).toContain("Accessibility.getFullAXTree");
+    return { full, pieces, page: piecePage };
+  }
+
+  it("reads a page at the size bound in one answer, and past it a piece at a time", async () => {
+    const { page } = await readBoth(bigTree(3), (controller) => controller.snapshot());
+    const methods = page.sent.map((call) => call.method);
+    expect(methods).not.toContain("Accessibility.getFullAXTree");
+    expect(methods).toContain("Accessibility.getRootAXNode");
+    expect(methods).toContain("Accessibility.getChildAXNodes");
+  });
+
+  it("prints a normal page past the size bound exactly as the one-answer read does", async () => {
+    const { full, pieces } = await readBoth(bigTree(40), async (controller) => [
+      await controller.snapshot(),
+      await controller.find("go 3"),
+      controller.treeDigest !== null,
+    ]);
+    expect(pieces).toEqual(full);
+    expect((full as [{ truncated: boolean }])[0].truncated).toBe(false);
+  });
+
+  it("cuts a huge page where the prints' own bounds cut it, whole print included, without reading the rest", async () => {
+    const whole = bigTree(4_000, 140);
+    const { full, pieces, page } = await readBoth(whole, async (controller) => [
+      await controller.snapshot(),
+      await controller.find("Go 3999"),
+      await controller.find("Level 120"),
+    ]);
+    expect(pieces).toEqual(full);
+    const [snapshot] = full as [{ truncated: boolean; whole?: { bounded: boolean } }];
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.whole?.bounded).toBe(true);
+    // The walk stops at its node bound; the far end of the page is never asked for.
+    const asked = new Set(
+      page.sent
+        .filter((call) => call.method === "Accessibility.getChildAXNodes")
+        .map((call) => (call.params as { id: string }).id),
+    );
+    expect(asked.size).toBeLessThan(whole.nodes.length / 3);
+  });
+
+  it("reports a read whose node vanished between rounds as cut, and still prints the rest", async () => {
+    const whole = bigTree(5);
+    const section = whole.nodes.find((node) => node.name?.value === "S2")!;
+    const page = piecewiseWire(whole, 9_000, (nodeId) => nodeId === section.nodeId);
+    const controller = new BrowserTabController(page.transport);
+
+    const snapshot = await controller.snapshot();
+    const found = await controller.find("Go 4");
+
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.text).toContain('button "Go 4"');
+    expect(snapshot.text).not.toContain('button "Go 2"');
+    expect(found).toMatchObject({ matches: 1, truncated: true });
+  });
+
+  it("keeps the one-answer read when the renderer cannot count its nodes", async () => {
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController({
+      send: async (method, params) => {
+        if (method === "Memory.getDOMCounters")
+          throw new Error("'Memory.getDOMCounters' wasn't found");
+        return page.transport.send(method, params);
+      },
+    });
+    expect((await controller.snapshot()).text).toContain('button "Save"');
+    expect(page.sent.map((call) => call.method)).toContain("Accessibility.getFullAXTree");
+  });
+
+  it("fails a piecewise read with no root rather than calling the page empty", async () => {
+    const page = wire({ "Memory.getDOMCounters": { nodes: 9_000 } });
+    const controller = new BrowserTabController(page.transport);
+    await expect(controller.snapshot()).rejects.toThrow("without an accessibility tree");
+  });
+
+  it("stops a piecewise read the moment its turn is withdrawn", async () => {
+    const whole = bigTree(50);
+    const page = piecewiseWire(whole, 9_000);
+    const withdraw = new AbortController();
+    const controller = new BrowserTabController({
+      send: async (method, params) => {
+        if (method === "Accessibility.getChildAXNodes") withdraw.abort(new Error("withdrawn"));
+        return page.transport.send(method, params);
+      },
+    });
+    await expect(controller.snapshot(withdraw.signal)).rejects.toThrow("withdrawn");
   });
 });

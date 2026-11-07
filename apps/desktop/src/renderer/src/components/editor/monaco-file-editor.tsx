@@ -1,3 +1,4 @@
+import { observePaneLayout } from "@renderer/lib/pane-resize";
 import * as React from "react";
 import type * as Monaco from "monaco-editor";
 import type { editor } from "monaco-editor";
@@ -108,7 +109,7 @@ const SURFACE_CLASS: Record<FileEditorSurface, string> = {
 
 /** The source-mode look: a code file, with its gutter and monospace measure. */
 const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
-  automaticLayout: true,
+  automaticLayout: false,
   fontFamily: "var(--font-mono)",
   fontSize: 13,
   lineHeight: 21,
@@ -467,6 +468,7 @@ export function MonacoFileEditor({
     let contribution: { dispose(): void } | null = null;
     let goToLine: { dispose(): void } | null = null;
     let revealSubscription: (() => void) | null = null;
+    let resizeSubscription: (() => void) | null = null;
     host.dataset.monacoStatus = "loading";
 
     void loadMonacoRuntime()
@@ -509,7 +511,9 @@ export function MonacoFileEditor({
             overrides: liveRef.current.options,
           }),
           model: lease.model,
+          automaticLayout: false,
         });
+        resizeSubscription = observePaneLayout(host, () => editorView?.layout());
         editorRef.current = editorView;
 
         // ⌃G, and the editor a palette row means (editor/go-to-line.ts).
@@ -605,6 +609,8 @@ export function MonacoFileEditor({
         goToLine = null;
         revealSubscription?.();
         revealSubscription = null;
+        resizeSubscription?.();
+        resizeSubscription = null;
         changeSubscription?.dispose();
         changeSubscription = null;
         editorView?.dispose();
@@ -626,6 +632,7 @@ export function MonacoFileEditor({
       contribution?.dispose();
       goToLine?.dispose();
       revealSubscription?.();
+      resizeSubscription?.();
       changeSubscription?.dispose();
       if (leaseRef.current?.key === key) leaseRef.current = null;
       editorRef.current = null;
@@ -760,7 +767,14 @@ export function MonacoFileEditor({
       <div
         ref={hostRef}
         data-monaco-status="loading"
-        className={cn(SURFACE_CLASS[surface], "min-h-0 w-full flex-1 overflow-hidden")}
+        className={cn(
+          SURFACE_CLASS[surface],
+          "min-h-0 w-full flex-1 overflow-hidden",
+          // Monaco emits literal current-line fills after theme application;
+          // the source plane must use the semantic alias, not that literal.
+          surface === "source" &&
+            "[&_.current-line]:!bg-[var(--vscode-editor-lineHighlightBackground)]",
+        )}
       />
     </div>
   );

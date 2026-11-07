@@ -22,11 +22,11 @@
  * order so the two can be judged side by side in the Lab.
  *
  * These are the vendors' real marks, lifted verbatim (paths and viewBox) from
- * simple-icons (CC0 1.0), the same source `harness-identity.tsx` uses. The
+ * simple-icons (CC0 1.0) and lobe-icons (MIT), with provenance beside each mark. The
  * trademarks remain their owners'; they identify a model the user chose.
  * Nothing here is drawn by hand — except the FALLBACK, which is not a logo: a
  * lettermark in a muted rounded square, so a family with no mark in this file
- * (Grok, GLM, DeepSeek, the long tail of 39 providers) still occupies the same
+ * (the unavailable provider assets and custom providers) still occupies the same
  * footprint on the same axis as its neighbours and the column stays a column.
  *
  * The tints are `MODEL_MARK_TINTS` in `@volli/shared`, where CLAUDE.md keeps
@@ -69,6 +69,9 @@ export interface Mark {
   paths: readonly string[];
   viewBox: string;
   tint: string;
+  /** Source SVG winding rules, never inferred from the artwork. */
+  fillRule?: "evenodd" | "nonzero";
+  clipRules?: readonly ("evenodd" | "nonzero" | undefined)[];
 }
 
 /** Families a model id or label can be read as. */
@@ -135,6 +138,79 @@ const FAMILY_MARK: Record<Family, Mark> = {
 
 /** Providers with a mark of their own. First-party vendors reuse the family's. */
 const PROVIDER_MARK: Record<string, Mark> = {
+  nvidia: {
+    // nvidia: simple-icons (CC0 1.0), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/simple-icons/simple-icons/blob/develop/icons/nvidia.svg
+    paths: [
+      "M8.948 8.798v-1.43a6.7 6.7 0 0 1 .424-.018c3.922-.124 6.493 3.374 6.493 3.374s-2.774 3.851-5.75 3.851c-.398 0-.787-.062-1.158-.185v-4.346c1.528.185 1.837.857 2.747 2.385l2.04-1.714s-1.492-1.952-4-1.952a6.016 6.016 0 0 0-.796.035m0-4.735v2.138l.424-.027c5.45-.185 9.01 4.47 9.01 4.47s-4.08 4.964-8.33 4.964c-.37 0-.733-.035-1.095-.097v1.325c.3.035.61.062.91.062 3.957 0 6.82-2.023 9.593-4.408.459.371 2.34 1.263 2.73 1.652-2.633 2.208-8.772 3.984-12.253 3.984-.335 0-.653-.018-.971-.053v1.864H24V4.063zm0 10.326v1.131c-3.657-.654-4.673-4.46-4.673-4.46s1.758-1.944 4.673-2.262v1.237H8.94c-1.528-.186-2.730 1.245-2.730 1.245s.68 2.412 2.739 3.11M2.456 10.9s2.164-3.197 6.5-3.533V6.201C4.153 6.59 0 10.653 0 10.653s2.35 6.802 8.948 7.42v-1.237c-4.84-.6-6.492-5.936-6.492-5.936z",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.nvidia,
+  },
+  minimax: {
+    // minimax: simple-icons (CC0 1.0), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/simple-icons/simple-icons/blob/develop/icons/minimax.svg
+    paths: [
+      "M11.43 3.92a.86.86 0 1 0-1.718 0v14.236a1.999 1.999 0 0 1-3.997 0V9.022a.86.86 0 1 0-1.718 0v3.87a1.999 1.999 0 0 1-3.997 0V11.49a.57.57 0 0 1 1.139 0v1.404a.86.86 0 0 0 1.719 0V9.022a1.999 1.999 0 0 1 3.997 0v9.134a.86.86 0 0 0 1.719 0V3.92a1.998 1.998 0 1 1 3.996 0v11.788a.57.57 0 1 1-1.139 0zm10.572 3.105a2 2 0 0 0-1.999 1.997v7.63a.86.86 0 0 1-1.718 0V3.923a1.999 1.999 0 0 0-3.997 0v16.16a.86.86 0 0 1-1.719 0V18.08a.57.57 0 1 0-1.138 0v2a1.998 1.998 0 0 0 3.996 0V3.92a.86.86 0 0 1 1.719 0v12.73a1.999 1.999 0 0 0 3.996 0V9.023a.86.86 0 1 1 1.72 0v6.686a.57.57 0 0 0 1.138 0V9.022a2 2 0 0 0-1.998-1.997",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.minimax,
+  },
+  groq: {
+    // groq: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (groq SVG)
+    paths: [
+      "M12.036 2c-3.853-.035-7 3-7.036 6.781-.035 3.782 3.055 6.872 6.908 6.907h2.42v-2.566h-2.292c-2.407.028-4.38-1.866-4.408-4.23-.029-2.362 1.901-4.298 4.308-4.326h.1c2.407 0 4.358 1.915 4.365 4.278v6.305c0 2.342-1.944 4.25-4.323 4.279a4.375 4.375 0 01-3.033-1.252l-1.851 1.818A7 7 0 0012.029 22h.092c3.803-.056 6.858-3.083 6.879-6.816v-6.5C18.907 4.963 15.817 2 12.036 2z",
+    ],
+    viewBox: "0 0 24 24",
+    fillRule: "evenodd",
+    tint: MODEL_MARK_TINTS.groq,
+  },
+  xai: {
+    // xai: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (grok SVG)
+    paths: [
+      "M6.469 8.776L16.512 23h-4.464L2.005 8.776H6.47zm-.004 7.9l2.233 3.164L6.467 23H2l4.465-6.324zM22 2.582V23h-3.659V7.764L22 2.582zM22 1l-9.952 14.095-2.233-3.163L17.533 1H22z",
+    ],
+    viewBox: "0 0 24 24",
+    fillRule: "evenodd",
+    tint: MODEL_MARK_TINTS.monochrome,
+  },
+  together: {
+    // together: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (together SVG)
+    paths: [
+      "M23.197 4.503A6 6 0 0015 2.307a5.973 5.973 0 00-2.995 4.933l5.996.008v.515h-5.996c.039.937.298 1.87.8 2.74a6 6 0 1010.39-6z",
+      "M.805 4.5A6 6 0 003 12.697a5.972 5.972 0 005.77.127L5.779 7.627l.446-.257 2.997 5.192A6 6 0 10.804 4.5z",
+      "M12 23.894a6 6 0 005.999-6c0-2.13-1.1-3.996-2.775-5.060l-3.005 5.189-.444-.258 2.997-5.192A6 6 0 1012 23.894z",
+    ],
+    viewBox: "0 0 24 24",
+    fillRule: "evenodd",
+    tint: MODEL_MARK_TINTS.together,
+  },
+  cerebras: {
+    // cerebras: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (cerebras SVG)
+    paths: [
+      "M14.121 2.701a9.299 9.299 0 000 18.598V22.7c-5.91 0-10.7-4.791-10.7-10.701S8.21 1.299 14.12 1.299V2.7zm4.752 3.677A7.353 7.353 0 109.42 17.643l-.901 1.074a8.754 8.754 0 01-1.08-12.334 8.755 8.755 0 0112.335-1.08l-.901 1.075zm-2.255.844a5.407 5.407 0 00-5.048 9.563l-.656 1.24a6.81 6.81 0 016.358-12.043l-.654 1.24zM14.12 8.539a3.46 3.46 0 100 6.922v1.402a4.863 4.863 0 010-9.726v1.402z",
+      "M15.407 10.836a2.24 2.24 0 00-.51-.409 1.084 1.084 0 00-.544-.152c-.255 0-.483.047-.684.14a1.58 1.58 0 00-.84.912c-.074.203-.11.416-.11.631 0 .218.036.43.11.631a1.594 1.594 0 00.84.913c.2.093.43.14.684.14.216 0 .417-.046.602-.135.188-.09.35-.225.475-.392l.928 1.006c-.14.14-.3.261-.482.363a3.367 3.367 0 01-1.083.38c-.17.026-.317.04-.44.04a3.315 3.315 0 01-1.182-.21 2.825 2.825 0 01-.961-.597 2.816 2.816 0 01-.644-.929 2.987 2.987 0 01-.238-1.21c0-.444.08-.847.238-1.21.15-.35.368-.666.643-.929.278-.261.605-.464.962-.596a3.315 3.315 0 011.182-.21c.355 0 .712.068 1.072.204.361.138.685.36.944.649l-.962.97z",
+    ],
+    viewBox: "0 0 24 24",
+    fillRule: "evenodd",
+    clipRules: ["evenodd", undefined],
+    tint: MODEL_MARK_TINTS.cerebras,
+  },
+  fireworks: {
+    // fireworks: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (fireworks SVG)
+    paths: [
+      "M14.8 5l-2.801 6.795L9.195 5H7.397l3.072 7.428a1.64 1.64 0 003.038.002L16.598 5H14.8zm1.196 10.352l5.124-5.244-.699-1.669-5.596 5.739a1.664 1.664 0 00-.343 1.807 1.642 1.642 0 001.516 1.012L16 17l8-.02-.699-1.669-7.303.041h-.002zM2.88 10.104l.699-1.669 5.596 5.739c.468.479.603 1.189.343 1.807a1.643 1.643 0 01-1.516 1.012l-8-.018-.002.002.699-1.669 7.303.042-5.122-5.246z",
+    ],
+    viewBox: "0 0 24 24",
+    fillRule: "evenodd",
+    clipRules: ["evenodd"],
+    tint: MODEL_MARK_TINTS.fireworks,
+  },
   anthropic: {
     // Anthropic's A (simple-icons `anthropic`) — the company, not the model.
     paths: [
@@ -160,6 +236,14 @@ const PROVIDER_MARK: Record<string, Mark> = {
     // takes the neutral rather than a colour invented for it.
     paths: [
       "M21.765.351C22.998.351 24 1.353 24 2.586S22.998 4.82 21.765 4.82h-1.974c-.15 0-.26-.12-.26-.26V2.586A2.237 2.237 0 0 1 21.765.35M9.41 13.388l8.447-8.377c.16-.16.07-.471-.14-.471h-4.55s-.1.02-.14.06l-9.099 9.029c-.14.14-.35.02-.35-.21V4.81c0-.15-.1-.27-.221-.27H.22c-.12 0-.22.12-.22.27v18.57c0 .15.1.27.22.27h3.137c.12 0 .22-.12.22-.27v-3.79c0-.08.03-.16.08-.21l2.826-2.796c.07-.07.16-.08.241-.03l7.546 5.551a8.9 8.9 0 0 0 4.018 1.493c.12.01.23-.11.23-.27V19.76c0-.14-.08-.25-.19-.26a5.8 5.8 0 0 1-2.355-.942l-6.533-4.73c-.14-.09-.15-.32-.03-.441",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.monochrome,
+  },
+  cursor: {
+    // Cursor's published cube (simple-icons `cursor`, CC0 1.0).
+    paths: [
+      "M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23",
     ],
     viewBox: "0 0 24 24",
     tint: MODEL_MARK_TINTS.monochrome,
@@ -219,6 +303,36 @@ const PROVIDER_MARK: Record<string, Mark> = {
     viewBox: "0 0 24 24",
     tint: MODEL_MARK_TINTS.xiaomi,
   },
+  "amazon-bedrock": {
+    // amazon-bedrock: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (bedrock SVG)
+    paths: [
+      "M13.05 15.513h3.08c.214 0 .389.177.389.394v1.82a1.704 1.704 0 011.296 1.661c0 .943-.755 1.708-1.685 1.708-.931 0-1.686-.765-1.686-1.708 0-.807.554-1.484 1.297-1.662v-1.425h-2.69v4.663a.395.395 0 01-.188.338l-2.69 1.641a.385.385 0 01-.405-.002l-4.926-3.086a.395.395 0 01-.185-.336V16.3L2.196 14.87A.395.395 0 012 14.555L2 14.528V9.406c0-.14.073-.27.192-.34l2.465-1.462V4.448c0-.129.062-.249.165-.322l.021-.014L9.77 1.058a.385.385 0 01.407 0l2.69 1.675a.395.395 0 01.185.336V7.6h3.856V5.683a1.704 1.704 0 01-1.296-1.662c0-.943.755-1.708 1.685-1.708.931 0 1.685.765 1.685 1.708 0 .807-.553 1.484-1.296 1.662v2.311a.391.391 0 01-.389.394h-4.245v1.806h6.624a1.69 1.69 0 011.64-1.313c.93 0 1.685.764 1.685 1.707 0 .943-.754 1.708-1.685 1.708a1.69 1.69 0 01-1.64-1.314H13.05v1.937h4.953l.915 1.18a1.66 1.66 0 01.84-.227c.931 0 1.685.764 1.685 1.707 0 .943-.754 1.708-1.685 1.708-.93 0-1.685-.765-1.685-1.708 0-.346.102-.668.276-.937l-.724-.935H13.05v1.806zM9.973 1.856L7.93 3.122V6.09h-.778V3.604L5.435 4.669v2.945l2.11 1.36L9.712 7.61V5.334h.778V7.83c0 .136-.07.263-.184.335L7.963 9.638v2.081l1.422 1.009-.446.646-1.406-.998-1.53 1.005-.423-.66 1.605-1.055v-1.99L5.038 8.29l-2.26 1.34v1.676l1.972-1.189.398.677-2.37 1.429V14.3l2.166 1.258 2.27-1.368.397.677-2.176 1.311V19.3l1.876 1.175 2.365-1.426.398.678-2.017 1.216 1.918 1.201 2.298-1.403v-5.78l-4.758 2.893-.4-.675 5.158-3.136V3.289L9.972 1.856zM16.13 18.47a.913.913 0 00-.908.92c0 .507.406.918.908.918a.913.913 0 00.907-.919.913.913 0 00-.907-.92zm3.63-3.81a.913.913 0 00-.908.92c0 .508.406.92.907.92a.913.913 0 00.908-.92.913.913 0 00-.908-.92zm1.555-4.99a.913.913 0 00-.908.92c0 .507.407.918.908.918a.913.913 0 00.907-.919.913.913 0 00-.907-.92zM17.296 3.1a.913.913 0 00-.907.92c0 .508.406.92.907.92a.913.913 0 00.908-.92.913.913 0 00-.908-.92z",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.bedrock,
+    fillRule: "evenodd",
+  },
+  baseten: {
+    // baseten: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (baseten SVG)
+    paths: [
+      "M2.316 4.8h14.682v4.8H7.31a.302.302 0 00-.308.3v4.2c0 .171.14.3.308.3h9.688v4.8h-4.686a.302.302 0 00-.308.3v4.2c0 .171.141.3.308.3h4.378a.297.297 0 00.308-.3v-4.5h4.694a.302.302 0 00.308-.3v-4.2c0-.171-.14-.3-.308-.3h-4.694V9.6h4.694A.302.302 0 0022 9.3V5.1c0-.171-.14-.3-.308-.3h-4.694V.3c0-.171-.14-.3-.308-.3H2.316A.31.31 0 002 .3v4.2c0 .171.14.3.316.3z",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.baseten,
+    fillRule: "evenodd",
+  },
+  "ant-ling": {
+    // Ant Group, which publishes Ling: lobe-icons (MIT), vetted SVG; paths and viewBox verbatim.
+    // Source: https://github.com/lobehub/lobe-icons (antgroup SVG)
+    paths: [
+      "M15.984 1.383c-.259.593-.877.914-1.334 1.348-.702.669-.998 1.726-1.218 2.682 3.37.775 5.995 3.532 6.486 7.025.566 4.016-1.85 7.859-5.744 9.134-3.894 1.276-8.153-.38-10.126-3.935A8.339 8.339 0 016.457 6.833a18.703 18.703 0 01-.376-.802l-.174-.408a8.698 8.698 0 01-.618-1.987 7.523 7.523 0 01-.051-.37 3.717 3.717 0 01-.024-.34 2.506 2.506 0 01.132-.872 1.26 1.26 0 01.384-.594.842.842 0 011.165.11c.694.82.169 2.078.142 3.02.009.575.111 1.144.301 1.684l-.103.052a8.404 8.404 0 001.318-.79c.28-.243.45-.742.781-.864.33-.121.682.146.946.297.278.145.587.219.901.214l.462.007c.076.002.152.005.226.011.212.01.422.026.63.05l.196-1.08c.04-.216.082-.43.126-.645l.141-.641c.14-.7.42-1.367.823-1.96.305-.431.75-.746 1.262-.89.877-.217 1.24.629.937 1.348zm-2.244 5.44c-2.841.002-4.898 2.532-4.628 5.64.27 3.11 2.781 5.642 5.613 5.666 2.832.024 4.932-2.512 4.658-5.644-.273-3.133-2.802-5.666-5.643-5.663zm.357.57a4.707 4.707 0 013.304 1.445 5.703 5.703 0 011.643 3.49 4.841 4.841 0 01-1.141 3.705v.015a3.923 3.923 0 01-2.808 1.303 4.664 4.664 0 01-3.367-1.387 5.678 5.678 0 01-1.71-3.518 4.832 4.832 0 011.14-3.753 3.923 3.923 0 012.813-1.3h.126z",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.antgroup,
+    fillRule: "evenodd",
+  },
   openrouter: {
     // OpenRouter's routed arrow (simple-icons `openrouter`).
     paths: [
@@ -231,6 +345,11 @@ const PROVIDER_MARK: Record<string, Mark> = {
 
 // First-party services and regional twins wear the parent's mark.
 Object.assign(PROVIDER_MARK, {
+  meta: FAMILY_MARK.llama,
+  moonshotai: PROVIDER_MARK["kimi-coding"],
+  "moonshotai-cn": PROVIDER_MARK["kimi-coding"],
+  "minimax-cn": PROVIDER_MARK.minimax,
+  opencode: PROVIDER_MARK["opencode-go"],
   "google-vertex": PROVIDER_MARK.google,
   "cloudflare-ai-gateway": PROVIDER_MARK.cloudflare,
   "cloudflare-workers-ai": PROVIDER_MARK.cloudflare,
@@ -281,12 +400,9 @@ export function modelFamily(model: Pick<ModelAccessModel, "modelId" | "label">):
  *
  * So this exposes the registry and nothing else. Callers that want the
  * standard treatment must keep using `ModelMark`; callers drawing their own
- * must handle `null` themselves. That is now rare among the metered accounts
- * — every one of them has a mark except `xai`, which simple-icons does not
- * carry and will not, since its forbidden-brands rule reaches X Corp and its
- * subsidiaries. A hand-drawn approximation would be someone else's logo redrawn
- * by us, so xAI keeps the lettermark: a capital X is legible at any size here
- * and is close to what the vendor's own wordmark shows anyway.
+ * must handle `null` themselves. Providers without vetted artwork keep the
+ * lettermark; no logo is approximated by hand. Regional twins reuse the same
+ * vendor mark, and custom provider ids remain honest fallbacks.
  */
 export function providerMark(providerId: string): Mark | null {
   return PROVIDER_MARK[providerId] ?? null;
@@ -344,10 +460,11 @@ export function ModelMark({
       aria-hidden
       viewBox={mark.viewBox}
       fill={mark.tint}
+      fillRule={mark.fillRule}
       className={cn("size-3.5 shrink-0", className)}
     >
-      {mark.paths.map((path) => (
-        <path key={path.slice(0, 24)} d={path} />
+      {mark.paths.map((path, index) => (
+        <path key={path.slice(0, 24)} d={path} clipRule={mark.clipRules?.[index]} />
       ))}
     </svg>
   );

@@ -20,7 +20,7 @@ describe("compact Session provenance", () => {
       expect(markup).toContain("inline-flex size-3 shrink-0 items-center text-primary");
       expect(markup).toContain('aria-hidden="true"');
       expect(markup).toContain("size-3 shrink-0");
-      // Phosphor's bold path is the only visible content. No glyph title or
+      // The shared set's heavier stroke is the only visible content. No glyph title or
       // extra name span can consume the Session title's width.
       const content = new DOMParser().parseFromString(markup, "text/html").body;
       expect(content.textContent).toBe("");

@@ -1,3 +1,11 @@
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@renderer/components/ui/dialog";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Settings → Storage: what Volli keeps on disk, and for how long.
  *
@@ -19,22 +27,23 @@
  * is a reviewed, confirmed folder removal.
  */
 import * as React from "react";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  SyncIcon,
+  CleanIcon,
+  CheckIcon,
+  CopyIcon,
+  DatabaseIcon,
+  FolderOpenIcon,
+  TicketIcon,
+  DeleteIcon,
+  TreeIcon,
+} from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import {
   DATA_EXPORT_ACTION_LABEL,
   DATA_EXPORT_CONFIRM_TITLE,
-  DATA_EXPORT_CONTENTS,
   DATA_EXPORT_LIMITS,
 } from "../../../../../data-export-copy";
 import type {
@@ -56,7 +65,6 @@ import {
   dirtyOrphanRow,
   historyRows,
   isScanStale,
-  orphanPolicyNote,
   planCleanup,
   preservationHistoryRows,
   retentionNote,
@@ -88,6 +96,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { Notice } from "@renderer/components/ui/notice";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Separator } from "@renderer/components/ui/separator";
@@ -111,29 +121,125 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 const CONFIRM_BELOW_DAYS = 7;
 const RETENTION_DAYS_ERROR = "Enter a whole number of days, at least 1.";
 
-export function StoragePane() {
+/**
+ * Settings → Storage. The page keeps the cleanup details behind a reviewed
+ * maintenance sheet. The database and its export are not here: Settings
+ * mounts them under Privacy & data (`PrivacyDataPane`).
+ */
+export function StorageOverviewPane() {
   // The retention window is what every eligibility date in the orphan list was
-  // measured against, so the two halves of this pane are not independent
+  // measured against, so retention and the orphan list are not independent
   // (VC-284): committing a new window makes the list on screen a
   // statement about a policy that no longer exists. Retention says so, and the
   // orphan list refuses to act on a stale proposal until it has been scanned
   // again — main supersedes the revision from its own side at the same moment.
   const [retentionDays, setRetentionDays] = React.useState<number | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const [summary, setSummary] = React.useState<string | null>(null);
+  const [scanError, setScanError] = React.useState<string | null>(null);
+  const [scanning, setScanning] = React.useState(false);
+  const reads = useLatestAsync();
+  React.useEffect(() => () => reads.invalidate(), [reads]);
+  React.useEffect(() => {
+    reads.invalidate();
+    setSummary(null);
+    setScanning(false);
+  }, [retentionDays, reads]);
+  async function scan() {
+    if (scanning) return;
+    const token = reads.claim();
+    setScanning(true);
+    setScanError(null);
+    try {
+      const [artifacts, logs, worktrees] = await Promise.all([
+        window.api.worktree.trimScan(),
+        window.api.piSessions.scanOrphans(),
+        window.api.worktree.orphans({ refresh: true }),
+      ]);
+      if (!reads.isCurrent(token)) return;
+      if (!artifacts.ok) throw new Error(artifacts.error);
+      if (!logs.ok) throw new Error(logs.error);
+      if (!worktrees.ok) throw new Error(worktrees.error);
+      const output = artifacts.worktrees.filter(
+        (entry) => entry.artifactCount > 0 && entry.activeReason === null,
+      ).length;
+      setSummary(
+        `${worktrees.removable.length} unused worktree${worktrees.removable.length === 1 ? "" : "s"} · ${logs.inventory.candidateCount} log file${logs.inventory.candidateCount === 1 ? "" : "s"} · build output in ${output} checkout${output === 1 ? "" : "s"}`,
+      );
+    } catch (cause) {
+      if (reads.isCurrent(token)) setScanError(errorMessage(cause));
+    } finally {
+      if (reads.isCurrent(token)) setScanning(false);
+    }
+  }
   return (
     <>
       <RetentionSection onDays={setRetentionDays} />
-      {/* Processes come before the two file sweeps: a running `next dev` is
+      <PrefSection
+        title="Clean up"
+        icon={CleanIcon}
+        action={
+          <SectionIconAction label="Scan unused files" busy={scanning} onAct={() => void scan()} />
+        }
+      >
+        <PrefRow label="Unused files">
+          {summary === null ? null : (
+            <span className="text-ui text-muted-foreground">{summary}</span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={scanning}
+            onClick={() => {
+              setSummary(null);
+              setOpen(true);
+            }}
+          >
+            <CleanIcon />
+            Review cleanup
+          </Button>
+        </PrefRow>
+        {scanError && (
+          <Notice
+            announce
+            tone="error"
+            title="Couldn't scan unused files"
+            detail={scanError}
+            actions={
+              <Button size="sm" onClick={() => void scan()}>
+                Retry
+              </Button>
+            }
+          />
+        )}
+      </PrefSection>
+      {/* Processes come before the file sweeps: a running `next dev` is
           costing memory right now, while an orphaned folder is costing disk
           nobody is waiting on (VC-341). */}
       <RunningProcessesSection />
-      {/* Then the artifacts a finished worktree is still carrying (VC-340):
-          bigger than the orphan list and cheaper to act on, since a trim keeps
-          every checkout where it is. */}
-      <BuildArtifactsSection />
-      <PiSessionLogsSection />
-      <OrphansSection retentionDays={retentionDays} />
+      {/* Local profile backups and their restore. */}
       <ProfileBackupsSection />
-      <DatabaseSection />
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setSummary(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-3xl" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>Review cleanup</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="flex flex-col gap-4">
+            {/* The artifacts a finished worktree is still carrying come first
+                (VC-340): bigger than the orphan list and cheaper to act on,
+                since a trim keeps every checkout where it is. */}
+            <BuildArtifactsSection />
+            <PiSessionLogsSection />
+            <OrphansSection retentionDays={retentionDays} />
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -179,16 +285,13 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
   }, [onDays]);
 
   return (
-    <PrefSection title="Retention" icon={TreeStructureIcon}>
+    <PrefSection title="Retention" icon={TreeIcon}>
       <PrefRow
         label="Keep Done worktrees for"
         htmlFor="done-ttl-days"
-        // The sanctioned trust-boundary exception, and the reason it stays
-        // prose rather than becoming a hint: this governs an automatic
-        // deletion, and what gets deleted must not sit behind a disclosure.
-        // It names Keep because the exemption is only reachable from a ticket,
-        // and a policy whose opt-out is invisible here reads as unconditional.
-        description="Volli removes the folder and keeps the branch, its commits, the pull-request link, and the ticket. Keep on a ticket holds its folder."
+        // The one-line trust boundary: this governs an automatic deletion, so
+        // what it deletes, and what it never touches, stays on screen.
+        description="Removes the folder; keeps the branch, commits, PR link and ticket. Keep on a ticket holds its folder."
       >
         <CommitField
           id="done-ttl-days"
@@ -337,7 +440,7 @@ function BuildArtifactsSection() {
 
   const summary =
     state.status === "loading"
-      ? "Scanning…"
+      ? "Scanning"
       : worktrees === null
         ? "Not scanned"
         : carrying.length === 0
@@ -348,21 +451,14 @@ function BuildArtifactsSection() {
     <>
       <AsyncSection
         title="Build artifacts"
-        icon={BroomIcon}
-        hint={
-          <>
-            A trim removes what git ignores — dependencies, build output, caches — and keeps .env,
-            keys, and other local configuration. Keeping a file keeps the folders around it, so a
-            folder that held one can stay behind part-emptied. One install puts a worktree back.
-          </>
-        }
+        icon={CleanIcon}
         action={
           <SectionIconAction
             // "Scan", never "Rescan": VC-284 found that word on a button that
             // pruned metadata and deleted directories, and the label a person
             // reads before pressing is part of that fix. This one only reads.
             label="Scan for build artifacts"
-            icon={ArrowsClockwiseIcon}
+            icon={SyncIcon}
             busy={scanning}
             onAct={() => void scan()}
           />
@@ -378,14 +474,16 @@ function BuildArtifactsSection() {
               />
             </PrefRow>
             <PrefRow label="Carrying artifacts">
-              <span className="text-ui text-muted-foreground">{summary}</span>
+              <span className="text-ui text-muted-foreground">
+                {state.status === "loading" ? <LoadingLabel>{summary}</LoadingLabel> : summary}
+              </span>
               <Button
                 size="xs"
                 variant="outline"
                 disabled={trimmable.length === 0 || scanning || trimming}
                 onClick={() => setConfirmOpen(true)}
               >
-                <BroomIcon />
+                <CleanIcon />
                 Trim…
               </Button>
             </PrefRow>
@@ -394,7 +492,8 @@ function BuildArtifactsSection() {
         }
         state={state}
         isEmpty={(entries) => entries !== null && entries.length === 0}
-        empty="No worktrees to trim."
+        empty="No worktrees"
+        emptyIllustration="folder"
       >
         {(entries) =>
           entries === null
@@ -406,8 +505,8 @@ function BuildArtifactsSection() {
                   meta={
                     entry.activeReason ??
                     (entry.artifactCount === 0
-                      ? "No ignored files."
-                      : `${entry.artifactCount} ignored path(s).`)
+                      ? "No ignored files"
+                      : `${entry.artifactCount} ignored path(s)`)
                   }
                   badges={
                     entry.artifactCount > 0 ? <Badge variant="outline">Artifacts</Badge> : null
@@ -436,11 +535,8 @@ function BuildArtifactsSection() {
             <AlertDialogTitle>Trim build artifacts?</AlertDialogTitle>
             <AlertDialogDescription>
               <span className="block">
-                Removes the git-ignored files in {trimmable.length} worktree(s) — dependencies,
-                build output, caches. Tracked files, uncommitted work, .env files, and keys stay,
-                and so do the folders around anything kept, so a folder holding one can remain
-                part-emptied. Volli re-checks every worktree before touching it and skips any with a
-                running agent, an open terminal, or uncommitted changes.
+                Removes git-ignored files in {trimmable.length} worktree(s). Tracked files,
+                uncommitted work, .env files and keys stay.
               </span>
               <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
                 {trimmable.map((entry) => entry.path).join("\n")}
@@ -456,7 +552,7 @@ function BuildArtifactsSection() {
                 void trim();
               }}
             >
-              {trimming ? "Trimming…" : "Trim"}
+              {trimming ? <LoadingLabel>Trimming</LoadingLabel> : "Trim"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -519,7 +615,7 @@ function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
         <ItemRow key={`kept:${entry.path}`} name={entry.path} meta={`Kept — ${entry.reason}`} />
       ))}
       {keptCount > kept.length ? (
-        <ItemRow name={`… and ${keptCount - kept.length} more kept`} meta="Ignored, but kept." />
+        <ItemRow name={`… and ${keptCount - kept.length} more kept`} />
       ) : null}
       {report.skipped.map((skipped) => (
         <ItemRow
@@ -603,7 +699,7 @@ function PiSessionLogsSection() {
 
   const summary =
     state.status === "loading"
-      ? "Scanning…"
+      ? "Scanning"
       : inventory === null
         ? "Not scanned"
         : `${inventory.candidateCount} file(s), ${formatFileSize(inventory.candidateBytes)}`;
@@ -611,7 +707,7 @@ function PiSessionLogsSection() {
   // past which the oldest are removed first. Measured by the same scan.
   const savedOutput =
     state.status === "loading"
-      ? "Scanning…"
+      ? "Scanning"
       : inventory === null
         ? "Not scanned"
         : `${formatFileSize(inventory.toolOutput.bytes)} of ${formatFileSize(inventory.toolOutput.limitBytes)}`;
@@ -624,7 +720,7 @@ function PiSessionLogsSection() {
         action={
           <SectionIconAction
             label="Scan for orphaned Pi logs"
-            icon={ArrowsClockwiseIcon}
+            icon={SyncIcon}
             busy={scanning}
             onAct={() => void scan()}
           />
@@ -632,18 +728,18 @@ function PiSessionLogsSection() {
         before={
           <>
             <PrefRow label="Saved tool output">
-              <span className="text-ui text-muted-foreground">{savedOutput}</span>
+              <span className="text-ui text-muted-foreground">
+                {state.status === "loading" ? (
+                  <LoadingLabel>{savedOutput}</LoadingLabel>
+                ) : (
+                  savedOutput
+                )}
+              </span>
             </PrefRow>
-            <PrefRow
-              label="Orphaned logs"
-              hint={
-                <>
-                  Only logs not referenced by any Volli session are candidates. Scanning never
-                  deletes files.
-                </>
-              }
-            >
-              <span className="text-ui text-muted-foreground">{summary}</span>
+            <PrefRow label="Orphaned logs">
+              <span className="text-ui text-muted-foreground">
+                {state.status === "loading" ? <LoadingLabel>{summary}</LoadingLabel> : summary}
+              </span>
               <Button
                 size="xs"
                 variant="outline"
@@ -652,7 +748,7 @@ function PiSessionLogsSection() {
                 }
                 onClick={() => setConfirmOpen(true)}
               >
-                <TrashIcon />
+                <DeleteIcon />
                 Clean up…
               </Button>
             </PrefRow>
@@ -693,9 +789,8 @@ function PiSessionLogsSection() {
             <AlertDialogTitle>Clean up orphaned Pi session logs?</AlertDialogTitle>
             <AlertDialogDescription>
               <span className="block">
-                Permanently deletes {inventory?.candidateCount ?? 0} confirmed orphan file(s) (
-                {formatFileSize(inventory?.candidateBytes ?? 0)}). Main checks every file and the
-                attachment set again before removal. This can&rsquo;t be undone.
+                Permanently deletes {inventory?.candidateCount ?? 0} file(s) (
+                {formatFileSize(inventory?.candidateBytes ?? 0)}). Can&rsquo;t be undone.
               </span>
               <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
                 {inventory?.candidates.map((candidate) => candidate.path).join("\n")}
@@ -712,7 +807,7 @@ function PiSessionLogsSection() {
                 void reclaim();
               }}
             >
-              {cleaning ? "Cleaning up…" : "Delete orphaned logs"}
+              {cleaning ? <LoadingLabel>Cleaning up</LoadingLabel> : "Delete orphaned logs"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -721,32 +816,41 @@ function PiSessionLogsSection() {
   );
 }
 
-function DatabaseSection() {
+/**
+ * The local database: its size, where it lives, and the JSON data export.
+ *
+ * A failed size read stays on the section as an error with its retry rather
+ * than a toast, so "Unavailable" is never left without a reason or a way back.
+ */
+export function DatabaseSection() {
   const [sizeBytes, setSizeBytes] = React.useState<number | null>(null);
   const [sizeLoaded, setSizeLoaded] = React.useState(false);
+  const [sizeError, setSizeError] = React.useState<string | null>(null);
   const [revealing, setRevealing] = React.useState(false);
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
+  const reads = useLatestAsync();
+
+  const loadSize = React.useCallback(async () => {
+    const token = reads.claim();
+    setSizeLoaded(false);
+    setSizeError(null);
+    try {
+      const result = await window.api.database();
+      if (!reads.isCurrent(token)) return;
+      if (result.ok) setSizeBytes(result.sizeBytes);
+      else setSizeError(result.error);
+    } catch (error) {
+      if (reads.isCurrent(token)) setSizeError(errorMessage(error));
+    } finally {
+      if (reads.isCurrent(token)) setSizeLoaded(true);
+    }
+  }, [reads]);
 
   React.useEffect(() => {
-    let cancelled = false;
-    void window.api
-      .database()
-      .then((result) => {
-        if (cancelled) return;
-        if (result.ok) setSizeBytes(result.sizeBytes);
-        else toastError(`Couldn't load database size: ${result.error}`);
-        setSizeLoaded(true);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        toastError(`Couldn't load database size: ${errorMessage(error)}`);
-        setSizeLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void loadSize();
+    return () => reads.invalidate();
+  }, [loadSize, reads]);
 
   async function revealDatabase(): Promise<void> {
     if (revealing) return;
@@ -757,7 +861,9 @@ function DatabaseSection() {
         toastError(`Couldn't reveal database: ${result.error}`);
         return;
       }
+      reads.invalidate();
       setSizeBytes(result.sizeBytes);
+      setSizeError(null);
       setSizeLoaded(true);
     } catch (error) {
       toastError(`Couldn't reveal database: ${errorMessage(error)}`);
@@ -775,7 +881,9 @@ function DatabaseSection() {
         toastError(`Couldn't export data: ${result.error}`);
         return;
       }
+      reads.invalidate();
       setSizeBytes(result.sizeBytes);
+      setSizeError(null);
       setSizeLoaded(true);
     } catch (error) {
       toastError(`Couldn't export data: ${errorMessage(error)}`);
@@ -801,13 +909,29 @@ function DatabaseSection() {
       >
         <PrefRow label="Size">
           <span className="text-ui text-muted-foreground">
-            {sizeLoaded
-              ? sizeBytes === null
-                ? "Unavailable"
-                : formatFileSize(sizeBytes)
-              : "Loading…"}
+            {!sizeLoaded ? (
+              <LoadingLabel>Loading</LoadingLabel>
+            ) : sizeError !== null || sizeBytes === null ? (
+              "Unavailable"
+            ) : (
+              formatFileSize(sizeBytes)
+            )}
           </span>
         </PrefRow>
+        {sizeError === null ? null : (
+          <Notice
+            tone="error"
+            title="Couldn't read the database size"
+            detail={sizeError}
+            announce
+            className="m-4"
+            actions={
+              <Button size="xs" variant="outline" onClick={() => void loadSize()}>
+                Try again
+              </Button>
+            }
+          />
+        )}
         <PrefRow label={DATA_EXPORT_ACTION_LABEL}>
           <Button size="xs" variant="outline" onClick={() => setExportOpen(true)}>
             Export…
@@ -837,7 +961,7 @@ function DatabaseSection() {
                 void exportDatabase();
               }}
             >
-              {exporting ? "Exporting…" : "Choose location…"}
+              {exporting ? <LoadingLabel>Exporting</LoadingLabel> : "Choose location…"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -847,23 +971,13 @@ function DatabaseSection() {
 }
 
 /**
- * What the export is, said before it runs.
- *
- * A named component rather than inline JSX because the sentence is the
- * feature: the dialog it sits in only mounts when opened, so this is what a
- * test can hold, and the limits cannot quietly drift back into a promise of
- * "every project, ticket, comment, session, label, and setting" (VC-283).
- *
- * The exported/limited split is deliberate — the limits come FIRST, because a
- * person skimming reads one sentence and the one that matters is the one that
- * says a rescue is not possible from this file.
+ * What the export is not, said before it runs: the one caution at the moment of
+ * the choice. A named component so a test can hold it — the dialog only mounts
+ * when opened — and the limits cannot drift back into a promise of "every
+ * project, ticket, comment, session, label, and setting" (VC-283).
  */
 export function DataExportConfirmBody() {
-  return (
-    <>
-      {DATA_EXPORT_LIMITS} {DATA_EXPORT_CONTENTS}
-    </>
-  );
+  return <>{DATA_EXPORT_LIMITS}</>;
 }
 
 /** Truncates a long path to `start…end`, keeping both ends identifiable. */
@@ -1029,22 +1143,11 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
   // it may be READ but not acted on (VC-284).
   const stale = state.status === "ready" && isScanStale(state.data, setting);
   const plan = state.status === "ready" && !stale ? planCleanup(state.data) : null;
-  // The window every eligibility date on this list was measured against, read
-  // from the scan rather than re-fetched: the two must be the same number.
-  const retentionDays = state.status === "ready" ? state.data.retentionDays : null;
-
   return (
     <>
       <AsyncSection
         title="Orphaned worktrees"
-        icon={TreeStructureIcon}
-        hint={
-          <>
-            Scanning only looks. Cleanup removes folders you confirm and keeps their branches;
-            anything with uncommitted work, recent use, or a live terminal or agent is left alone.
-            {retentionDays === null ? null : ` ${retentionNote(retentionDays)}`}
-          </>
-        }
+        icon={TreeIcon}
         // One header action, per the kit's header grammar — and it is the SAFE
         // one. The destructive act is a row below, attached to the summary of
         // what a scan actually found, so it cannot be pressed by muscle memory
@@ -1052,7 +1155,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
         action={
           <SectionIconAction
             label="Scan for orphaned worktrees"
-            icon={ArrowsClockwiseIcon}
+            icon={SyncIcon}
             busy={busy}
             onAct={() => void load(true)}
           />
@@ -1070,7 +1173,8 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
           unfinishedRuns(report.runs).length === 0 &&
           runsWithFailures(report.runs).length === 0
         }
-        empty="No orphaned worktrees."
+        empty="No orphaned worktrees"
+        emptyIllustration="folder"
       >
         {(report) => (
           <>
@@ -1080,7 +1184,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * section's summoned hint, because an eligibility date nobody can
              * check against a policy is a date nobody can argue with.
              */}
-            <ItemRow name="Retention" meta={orphanPolicyNote(report.retentionDays)} />
+            <ItemRow name="Retention" meta={retentionNote(report.retentionDays)} />
 
             {/*
              * The retention window moved after this scan ran, so every date
@@ -1089,11 +1193,14 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * main refuses the old revision from its own side.
              */}
             {stale && setting !== null ? (
-              <ItemRow name="Scan is out of date" meta={staleScanNote(report, setting)}>
-                <Button size="xs" variant="outline" disabled={busy} onClick={() => void load(true)}>
-                  Scan again
-                </Button>
-              </ItemRow>
+              <Notice
+                tone="warning"
+                title="Scan is out of date"
+                detail={staleScanNote(report, setting)}
+                expandable
+                className="m-2"
+                actions={<ScanAgain busy={busy} onScan={() => void load(true)} />}
+              />
             ) : null}
 
             {/*
@@ -1104,11 +1211,15 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * sentence.
              */}
             {unfinishedRuns(report.runs).map((run) => (
-              <ItemRow key={run.id} name="Interrupted cleanup" meta={describeInterrupted(run)}>
-                <Button size="xs" variant="outline" disabled={busy} onClick={() => void load(true)}>
-                  Scan again
-                </Button>
-              </ItemRow>
+              <Notice
+                key={run.id}
+                tone="warning"
+                title="Interrupted cleanup"
+                detail={describeInterrupted(run)}
+                expandable
+                className="m-2"
+                actions={<ScanAgain busy={busy} onScan={() => void load(true)} />}
+              />
             ))}
 
             {/*
@@ -1117,21 +1228,21 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * path and its reason are named, with the same recovery.
              */}
             {runsWithFailures(report.runs).map((run) => (
-              <ItemRow
+              <Notice
                 key={`failures:${run.id}`}
-                name="Cleanup finished with problems"
-                meta={describeRunFailures(run)}
-              >
-                <Button size="xs" variant="outline" disabled={busy} onClick={() => void load(true)}>
-                  Scan again
-                </Button>
-              </ItemRow>
+                tone="error"
+                title="Cleanup finished with problems"
+                detail={describeRunFailures(run)}
+                announce
+                className="m-2"
+                actions={<ScanAgain busy={busy} onScan={() => void load(true)} />}
+              />
             ))}
 
             {plan === null || plan.isEmpty ? null : (
               <ItemRow
                 name="Ready to clean up"
-                meta={`${plan.worktrees.length} folder(s) and ${plan.metadata.length} stale git record(s). Branches are kept.`}
+                meta={`${plan.worktrees.length} folder(s) · ${plan.metadata.length} stale git record(s)`}
               >
                 <Button
                   size="xs"
@@ -1139,7 +1250,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
                   disabled={busy || cleaning}
                   onClick={() => setConfirmCleanup(true)}
                 >
-                  <TrashIcon />
+                  <DeleteIcon />
                   Clean up…
                 </Button>
               </ItemRow>
@@ -1147,10 +1258,13 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
 
             {/* A project whose worktree listing couldn't even be read — said outright, not hidden. */}
             {report.unreadableProjects.map((entry) => (
-              <ItemRow
+              <Notice
                 key={`unreadable:${entry.projectId}`}
-                name={entry.projectName}
-                meta={describeUnreadableProject(entry)}
+                tone="error"
+                title={describeUnreadableProject(entry)}
+                announce
+                className="m-2"
+                actions={<ScanAgain busy={busy} onScan={() => void load(true)} />}
               />
             ))}
 
@@ -1289,7 +1403,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
                 if (plan !== null) void runCleanup(plan);
               }}
             >
-              {cleaning ? "Cleaning up…" : "Clean up"}
+              {cleaning ? <LoadingLabel>Cleaning up</LoadingLabel> : "Clean up"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1316,7 +1430,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
               disabled={deleting}
               onClick={() => void confirmDelete()}
             >
-              {deleting ? "Deleting…" : "Delete"}
+              {deleting ? <LoadingLabel>Deleting</LoadingLabel> : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1342,14 +1456,24 @@ async function revealPath(path: string): Promise<string | null> {
 
 /**
  * A clipped path that still holds the whole one (VC-292): the row shows
- * `start…end`, and hovering it shows the path in full, so nothing on this list
- * has to be decoded to be identified.
+ * `start…end`, and the shared `ValueReveal` gives the path back in full on
+ * hover and on keyboard focus, so nothing on this list has to be decoded to be
+ * identified.
  */
 function PathName({ path }: { path: string }) {
   return (
-    <span className="min-w-0 truncate text-ui font-medium" title={path}>
+    <ValueReveal term="Path" full={path} className="min-w-0 truncate text-left text-ui font-medium">
       {truncateMiddle(path)}
-    </span>
+    </ValueReveal>
+  );
+}
+
+/** The recovery every scan-reported problem on this list shares: read again. */
+function ScanAgain({ busy, onScan }: { busy: boolean; onScan: () => void }) {
+  return (
+    <Button size="xs" variant="outline" disabled={busy} onClick={onScan}>
+      Scan again
+    </Button>
   );
 }
 
@@ -1377,8 +1501,9 @@ const COPIED_FLASH_MS = 900;
  * last, inked as destructive and set apart — and offered only where this list
  * may act at all, since main refuses to delete a folder a ticket claims.
  *
- * A failed act stays on screen as the row under it, with a Retry, instead of
- * a toast that is gone before it can be acted on.
+ * A failed act stays on screen as an error `Notice` under the row, announced,
+ * with a Retry and a dismissal, instead of a toast that is gone before it can
+ * be acted on. The notice clamps a long reason and offers it whole.
  */
 function DirtyOrphanItem({
   orphan,
@@ -1439,12 +1564,18 @@ function DirtyOrphanItem({
     <>
       <ItemRow
         name={
-          <span className="flex min-w-0 items-center gap-1 text-ui font-medium" title={orphan.path}>
+          // The name is the ticket (or folder) the row is about; the reveal
+          // pairs it with the full path, which the row no longer prints.
+          <ValueReveal
+            term={row.displayId === null ? row.title : `${row.displayId} ${row.title}`}
+            full={orphan.path}
+            className="flex min-w-0 items-center gap-1 text-left text-ui font-medium"
+          >
             {row.displayId === null ? null : (
               <span className="shrink-0 font-mono">{row.displayId}</span>
             )}
             <span className="min-w-0 truncate">{row.title}</span>
-          </span>
+          </ValueReveal>
         }
         badges={row.notices.map((notice) => (
           <Badge key={notice} variant="outline">
@@ -1478,7 +1609,7 @@ function DirtyOrphanItem({
             <RowAction
               label={`Delete ${orphan.path}`}
               hint="Delete worktree"
-              icon={TrashIcon}
+              icon={DeleteIcon}
               destructive
               onAct={onDelete}
             />
@@ -1486,25 +1617,22 @@ function DirtyOrphanItem({
         ) : null}
       </ItemRow>
       {failure === null ? null : (
-        <ItemRow
-          name={
-            <span className="min-w-0 truncate text-ui font-medium text-destructive">
-              {FAILURE_TITLES[failure.action]}
-            </span>
+        <Notice
+          tone="error"
+          title={FAILURE_TITLES[failure.action]}
+          detail={failure.message}
+          announce
+          className="m-2"
+          data-testid="orphan-failure"
+          actions={
+            <Button size="xs" variant="outline" onClick={() => retry(failure.action)}>
+              Retry
+            </Button>
           }
-          meta={failure.message}
-          testId="orphan-failure"
-        >
-          <Button size="xs" variant="outline" onClick={() => retry(failure.action)}>
-            Retry
-          </Button>
-          <RowAction
-            label={`Dismiss: ${FAILURE_TITLES[failure.action]}`}
-            hint="Dismiss"
-            icon={XIcon}
-            onAct={() => onFailure(null)}
-          />
-        </ItemRow>
+          // Caller-owned: the failure is this row's state, and a later act on
+          // the row clears or replaces it, so no run-wide dismissal key.
+          onDismiss={() => onFailure(null)}
+        />
       )}
     </>
   );

@@ -14,8 +14,8 @@
  * ticket whose worktree row is `null` resolves to the main checkout, exactly as
  * a read of that path would.
  */
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { CopySimpleIcon } from "@phosphor-icons/react/dist/csr/CopySimple";
+import { CopyIcon } from "@renderer/components/ui/icon";
+
 import { absoluteFilePath, errorMessage } from "@volli/shared";
 
 import { ContextMenuItem } from "@renderer/components/ui/context-menu";
@@ -106,7 +106,7 @@ export async function copyPathToClipboard(
   }
 }
 
-const ENTRY_ICONS = { absolute: CopyIcon, relative: CopySimpleIcon } as const;
+const ENTRY_ICONS = { absolute: CopyIcon, relative: CopyIcon } as const;
 
 /**
  * The pair of items. Rendered inside a `ContextMenuContent`, so it is a fragment

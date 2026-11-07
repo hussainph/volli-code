@@ -43,10 +43,13 @@
  * **`checkpoint` is the failure that went the OTHER way.** Nothing was
  * summarized there either, but the context did not stay as it was: a compaction
  * that had already happened stopped being usable, and the Session restored the
- * messages that summary had replaced. So it says the opposite thing on the same
- * arm — the context grew back rather than held still — because telling a person
- * "the context was left as it was" while their window refills is the sentence
- * they would act on and be wrong about.
+ * messages that summary had replaced. So it has its own headline — "reverted",
+ * not "failed" — because "failed" reads as "nothing changed" while the window
+ * refills.
+ *
+ * **No explanatory note.** The row is its headline, its count and, on a
+ * failure, the executor's own words. A sentence explaining what a compaction
+ * means is onboarding copy on a transcript row, and it is not drawn or hovered.
  *
  * Pure over its arguments, like every other chat projection: the words and the
  * placement are testable without mounting a session.
@@ -74,8 +77,6 @@ export interface CompactionBoundaryCopy {
    * borrow one.
    */
   before: string | null;
-  /** The one line that explains what the reader is looking at. */
-  note: string;
   /** The executor's own sanitized words, when it had any. Failures only. */
   detail: string | null;
   /** The whole row as one sentence, for assistive technology and for hover. */
@@ -93,22 +94,6 @@ const REASON_PHRASE: Record<CompactionReason, string> = {
   checkpoint: "the saved checkpoint could not be read",
 };
 
-/**
- * What a compaction summarized is no longer sent as itself. Said in the
- * present tense because it is a standing fact about the Session, not something
- * that happened once — and about "older messages" rather than "everything
- * above", because a compaction keeps a tail of recent messages verbatim and
- * that tail is above this line too.
- */
-const COMPACTED_NOTE =
-  "Older messages above are no longer sent to the model; a summary of them is.";
-
-/** The fact a failed attempt actually leaves behind: nothing moved. */
-const FAILED_NOTE = "The context was left as it was.";
-
-/** The fact a lost checkpoint leaves behind: the opposite one. */
-const RESTORED_NOTE = "The messages it had replaced are being sent to the model again.";
-
 export function compactionBoundaryCopy(compaction: TranscriptCompaction): CompactionBoundaryCopy {
   const reason = REASON_PHRASE[compaction.reason];
   if (compaction.outcome === "failed") {
@@ -117,14 +102,12 @@ export function compactionBoundaryCopy(compaction: TranscriptCompaction): Compac
     const detail = compaction.detail.trim() === "" ? null : compaction.detail;
     const restored = compaction.reason === "checkpoint";
     const headline = restored ? "Compaction reverted" : "Compaction failed";
-    const note = restored ? RESTORED_NOTE : FAILED_NOTE;
     return {
       headline,
       reason,
       before: null,
-      note,
       detail,
-      description: sentence([`${headline} — ${reason}.`, note, detail]),
+      description: sentence([`${headline} — ${reason}.`, detail]),
     };
   }
   const before = formatTokens(compaction.tokensBefore);
@@ -132,13 +115,8 @@ export function compactionBoundaryCopy(compaction: TranscriptCompaction): Compac
     headline: "Context compacted",
     reason,
     before: `${before} before`,
-    note: COMPACTED_NOTE,
     detail: null,
-    description: sentence([
-      `Context compacted — ${reason}.`,
-      COMPACTED_NOTE,
-      `The context held ${before} tokens before.`,
-    ]),
+    description: `Context compacted — ${reason}. ${before} tokens before.`,
   };
 }
 

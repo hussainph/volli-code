@@ -142,9 +142,10 @@ describe("renderCliSuccess", () => {
     expect(exitCodeForError("APP_UNREACHABLE")).toBe(3);
     expect(exitCodeForError("INVALID_REQUEST")).toBe(2);
     expect(exitCodeForError("BODY_MATCH_FAILED")).toBe(1);
-    // Volli Cloud was unreachable or behind, and nothing was written (EX_TEMPFAIL).
+    // Volli Cloud was unreachable, behind or busy, and nothing was written (EX_TEMPFAIL).
     expect(exitCodeForError("OFFLINE")).toBe(75);
     expect(exitCodeForError("NOT_YET_SYNCED")).toBe(75);
+    expect(exitCodeForError("BUSY")).toBe(75);
     expect(exitCodeForError("SIGN_IN_REQUIRED")).toBe(1);
   });
 
@@ -2421,6 +2422,23 @@ describe("renderCliSuccess — prompt.baseline", () => {
     expect(() => renderCliSuccess("prompt.baseline", null, { json: false })).not.toThrow();
   });
 
+  it("names the repository instructions' share of the total when there is one", () => {
+    const text = renderCliSuccess(
+      "prompt.baseline",
+      { ...data, repoInstructions: { chars: 46000, tokens: 11500 } },
+      { json: false },
+    );
+    expect(text?.split("\n")[1]).toBe(
+      "of which repository instructions  ~11500 tokens  46000 chars",
+    );
+    // A measured zero, or an older reply without the field, says nothing.
+    for (const repoInstructions of [{ chars: 0, tokens: 0 }, undefined]) {
+      expect(
+        renderCliSuccess("prompt.baseline", { ...data, repoInstructions }, { json: false }),
+      ).not.toContain("repository instructions");
+    }
+  });
+
   it("omits the excluded line when the server names no exclusions", () => {
     const { excluded: _excluded, ...withoutExcluded } = data;
     const text = renderCliSuccess("prompt.baseline", withoutExcluded, { json: false });
@@ -3153,5 +3171,165 @@ describe("renderCliSuccess — runtime facts on a chat peek (VC-758)", () => {
     expect(text).toContain("  | Ship\\x1bit");
     // --json keeps the values exactly as the host sent them.
     expect(JSON.parse(renderCliSuccess("session.peek", data, { json: true }))).toEqual(data);
+  });
+});
+
+/** One side of a `perf compare` answer, for the renderer's test. */
+function perfCompareSide(version: string) {
+  return {
+    version,
+    matched: [version],
+    runs: 1,
+    observedMs: 3_600_000,
+    stalls: 2,
+    stallMs: 900,
+    stallsPerHour: 2,
+    stallMsPerHour: 900,
+  };
+}
+
+describe("volli perf rendering (VC-1092)", () => {
+  const top = {
+    since: Date.UTC(2026, 10, 1, 9),
+    until: Date.UTC(2026, 10, 1, 10),
+    process: "main",
+    by: "operation",
+    observedMs: 3_720_000,
+    stalls: 3,
+    stallMs: 1_800,
+    stallsPerHour: 2.9,
+    stallMsPerHour: 1_741.94,
+    groupCount: 3,
+    groups: [
+      {
+        key: "socket/ticket.list",
+        count: 1,
+        totalMs: 1_000,
+        maxMs: 1_000,
+        p50Ms: 1_000,
+        p95Ms: 1_000,
+        share: 0.556,
+        stallMsPerHour: 967.74,
+      },
+      {
+        key: null,
+        count: 2,
+        totalMs: 800,
+        maxMs: 500,
+        p50Ms: 300,
+        p95Ms: 500,
+        share: 0.444,
+        stallMsPerHour: null,
+      },
+    ],
+  };
+
+  it("renders top as the window, the totals and one row per group", () => {
+    expect(renderCliSuccess("perf.top", top, { json: false })).toBe(
+      [
+        "since 2026-11-01T09:00:00.000Z  observed 1h 2m  3 stalls, 1,800 ms  1,741.94 ms/h  main",
+        "  socket/ticket.list  ×1  total 1,000 ms  p50 1,000  p95 1,000  max 1,000  967.74 ms/h",
+        "  -  ×2  total 800 ms  p50 300  p95 500  max 500  -",
+        "  1 more groups (--limit)",
+      ].join("\n") + "\n",
+    );
+    expect(JSON.parse(renderCliSuccess("perf.top", top, { json: true }))).toEqual(top);
+    expect(
+      renderCliSuccess(
+        "perf.top",
+        { ...top, since: null, process: null, observedMs: null, groups: [], groupCount: 0 },
+        { json: false },
+      ),
+    ).toBe("since all time  observed -  3 stalls, 1,800 ms  1,741.94 ms/h\n");
+    expect(renderCliSuccess("perf.top", { ...top, observedMs: 22_477 }, { json: false })).toContain(
+      "observed 22s",
+    );
+  });
+
+  it("renders stalls one per line, naming what each one knows", () => {
+    const stalls = {
+      stalls: [
+        {
+          at: Date.UTC(2026, 10, 1, 10),
+          process: "renderer",
+          kind: "input",
+          door: "renderer",
+          operation: "keydown",
+          label: "draft-typing",
+          session: null,
+          window: 1,
+          durationMs: 240,
+          hint: null,
+          version: "0.3.0",
+        },
+        {
+          at: Date.UTC(2026, 10, 1, 9),
+          process: "main",
+          kind: "unattributed",
+          door: "unattributed",
+          operation: "unattributed",
+          label: null,
+          session: "0123abcd",
+          window: null,
+          durationMs: 410,
+          hint: "socket/ticket.list",
+          version: "0.3.0+fix",
+        },
+      ],
+    };
+    expect(renderCliSuccess("perf.stalls", stalls, { json: false })).toBe(
+      [
+        "2026-11-01T10:00:00.000Z  renderer  renderer/keydown  240 ms  input  label draft-typing  0.3.0",
+        "2026-11-01T09:00:00.000Z  main  unattributed/unattributed  410 ms  unattributed  session 0123abcd  after socket/ticket.list  0.3.0+fix",
+      ].join("\n") + "\n",
+    );
+    expect(renderCliSuccess("perf.stalls", { stalls: [] }, { json: false })).toBe(
+      "no stalls recorded\n",
+    );
+  });
+
+  it("renders compare as both sides, then each group a to b with its move", () => {
+    const cell = {
+      count: 2,
+      totalMs: 900,
+      maxMs: 500,
+      p50Ms: 400,
+      p95Ms: 500,
+      stallMsPerHour: 900,
+    };
+    const compare = {
+      since: null,
+      until: 0,
+      process: null,
+      by: "operation",
+      a: perfCompareSide("0.3.0"),
+      b: perfCompareSide("fix"),
+      groupCount: 2,
+      groups: [
+        { key: "ipc/x", a: cell, b: null, deltaStallMsPerHour: -900, deltaTotalMs: -900 },
+        { key: "timer/y", a: null, b: cell, deltaStallMsPerHour: null, deltaTotalMs: 900 },
+      ],
+    };
+    expect(renderCliSuccess("perf.compare", compare, { json: false })).toBe(
+      [
+        "a  0.3.0  observed 1h 0m  2 stalls  900 ms/h",
+        "b  fix  observed 1h 0m  2 stalls  900 ms/h",
+        "  ipc/x  a 900 ms/h (×2, p95 500)  b -  Δ -900 ms/h",
+        "  timer/y  a -  b 900 ms/h (×2, p95 500)  Δ 900 ms total",
+      ].join("\n") + "\n",
+    );
+    expect(
+      renderCliSuccess(
+        "perf.compare",
+        { ...compare, a: null, groups: [{ ...compare.groups[0], deltaStallMsPerHour: 12 }] },
+        { json: false },
+      ),
+    ).toContain("Δ +12 ms/h");
+  });
+
+  it("falls back to the generic rendering for a shape it does not know", () => {
+    for (const command of ["perf.top", "perf.stalls", "perf.compare"]) {
+      expect(() => renderCliSuccess(command, { unexpected: true }, { json: false })).not.toThrow();
+    }
   });
 });

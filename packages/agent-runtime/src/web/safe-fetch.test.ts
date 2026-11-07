@@ -23,6 +23,7 @@ import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as extract from "./extract";
+import { WebExtractError, type WebExtractor } from "./extract-worker";
 
 import {
   createSafeWebFetch,
@@ -54,7 +55,11 @@ afterEach(async () => {
 });
 
 /** A fetcher wired to a real server on loopback, plus the options it sent. */
-async function fetcherFor(handler: http.RequestListener, limits: Partial<WebFetchLimits> = {}) {
+async function fetcherFor(
+  handler: http.RequestListener,
+  limits: Partial<WebFetchLimits> = {},
+  extractor?: WebExtractor,
+) {
   const server = http.createServer(handler);
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -63,6 +68,7 @@ async function fetcherFor(handler: http.RequestListener, limits: Partial<WebFetc
   const sent: WebRequestOptions[] = [];
   const fetcher = createSafeWebFetch({
     limits: { ...WEB_FETCH_LIMITS, ...limits },
+    ...(extractor === undefined ? {} : { extract: extractor }),
     resolve: async () => [{ address: PUBLIC_V4, family: 4 }],
     open: (_scheme, options) => {
       sent.push(options);
@@ -1144,6 +1150,56 @@ describe("safe web fetch", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toMatchObject({ rule: "fetch.unreadable" });
+  });
+
+  it("hands HTML to the host's extractor, with the decoded page and the read's own signal", async () => {
+    const seen: Array<{ html: string; url: string; signal: AbortSignal }> = [];
+    const extractor: WebExtractor = async (request) => {
+      seen.push(request);
+      return { text: "# From the extractor", extracted: true, truncated: false };
+    };
+    const { fetcher } = await fetcherFor(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end("<p>caf\u00e9</p>");
+      },
+      {},
+      extractor,
+    );
+    const signal = new AbortController().signal;
+
+    const page = await fetcher.fetch({ url: "http://docs.example.com/page", signal });
+
+    expect(page.text).toBe("# From the extractor");
+    expect(seen).toEqual([
+      { html: "<p>caf\u00e9</p>", url: "http://docs.example.com/page", signal },
+    ]);
+  });
+
+  it.each([
+    ["timeout", "fetch.timeout", /took too long to read/],
+    ["cancelled", "fetch.cancelled", /was cancelled/],
+    ["failed", "fetch.unreadable", /could not read/],
+  ] as const)("refuses an extraction that ended as %s with %s", async (reason, rule, words) => {
+    const { fetcher } = await fetcherFor(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end("<p>a page</p>");
+      },
+      {},
+      async () => {
+        throw new WebExtractError(reason, "the worker's own words, never the caller's");
+      },
+    );
+
+    const refusal = await fetcher
+      .fetch({ url: "http://docs.example.com/slow", signal: new AbortController().signal })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(WebFetchRefusal);
+    expect(refusal).toMatchObject({ rule });
+    expect((refusal as WebFetchRefusal).message).toMatch(words);
+    expect((refusal as WebFetchRefusal).message).not.toContain("worker's own words");
   });
 
   it("does not open a socket for a fetch withdrawn while its host was resolving", async () => {

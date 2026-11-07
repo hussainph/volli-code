@@ -18,27 +18,46 @@ describe("nextRevealState", () => {
 
   it("reveals a replacement of an already-visible label", () => {
     const first = nextRevealState(INITIAL_REVEAL_STATE, "Fix the parser");
-    const second = nextRevealState(first, "Parser fix");
+    const second = nextRevealState(first, "Parser fix", true);
     expect(second).toEqual({ seen: "Parser fix", revealing: "Parser fix" });
     expect(isRevealing(second, "Parser fix")).toBe(true);
   });
 
   it("holds the reveal across re-renders that did not change the text", () => {
-    const landed = nextRevealState(nextRevealState(INITIAL_REVEAL_STATE, "Chat"), "Parser fix");
+    const landed = nextRevealState(
+      nextRevealState(INITIAL_REVEAL_STATE, "Chat"),
+      "Parser fix",
+      true,
+    );
     // The regression this file exists for: a tab strip re-renders constantly
     // while the chat streams. Every one of those must agree the reveal is on,
     // or React strips the animation class off nodes it is reusing.
     let state = landed;
-    for (let i = 0; i < 5; i += 1) state = nextRevealState(state, "Parser fix");
+    for (let i = 0; i < 5; i += 1) state = nextRevealState(state, "Parser fix", true);
     expect(state).toBe(landed);
     expect(isRevealing(state, "Parser fix")).toBe(true);
   });
 
   it("re-arms for a second landing — heuristic, then the model's title", () => {
-    const heuristic = nextRevealState(nextRevealState(INITIAL_REVEAL_STATE, "Chat"), "Fix parser");
-    const model = nextRevealState(heuristic, "Parser crash fix");
+    const heuristic = nextRevealState(
+      nextRevealState(INITIAL_REVEAL_STATE, "Chat"),
+      "Fix parser",
+      true,
+    );
+    const model = nextRevealState(heuristic, "Parser crash fix", true);
     expect(isRevealing(model, "Parser crash fix")).toBe(true);
     expect(isRevealing(model, "Fix parser")).toBe(false);
+  });
+  it("renders manual and unknown-origin changes immediately", () => {
+    const first = nextRevealState(INITIAL_REVEAL_STATE, "Chat");
+    expect(nextRevealState(first, "Manual rename").revealing).toBeNull();
+    expect(nextRevealState(first, "CLI rename", false).revealing).toBeNull();
+  });
+
+  it("keeps the one-shot latch after its automatic provenance is consumed", () => {
+    const first = nextRevealState(INITIAL_REVEAL_STATE, "Chat");
+    const revealing = nextRevealState(first, "Automatic title", true);
+    expect(nextRevealState(revealing, "Automatic title", false)).toBe(revealing);
   });
 });
 

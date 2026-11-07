@@ -1,9 +1,12 @@
-import { ArrowsInIcon } from "@phosphor-icons/react/dist/csr/ArrowsIn";
-import { ArrowsOutIcon } from "@phosphor-icons/react/dist/csr/ArrowsOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  CollapseIcon,
+  ExpandIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CheckIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import type { Project } from "@volli/shared";
 
 import { ProjectMonogram } from "@renderer/components/board/new-ticket/project-monogram";
@@ -45,11 +48,11 @@ export function ComposerBreadcrumb({
           <button
             type="button"
             data-testid="composer-project-chip"
-            className="flex min-w-0 max-w-64 items-center gap-1 rounded-md px-1 py-1 text-ui font-medium text-foreground transition-colors duration-150 ease-out outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-w-0 max-w-64 items-center gap-1 rounded-md px-1 py-1 text-ui font-medium text-foreground transition-colors duration-(--duration-menu-in) ease-out outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ProjectMonogram project={target} />
             <span className="truncate">{target.name}</span>
-            <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
+            <ChevronDownIcon strokeWidth={2.25} className="size-3 text-muted-foreground" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="max-h-72 min-w-52">
@@ -58,34 +61,34 @@ export function ComposerBreadcrumb({
               <ProjectMonogram project={project} />
               <span className="truncate">{project.name}</span>
               {project.id === target.id ? (
-                <CheckIcon weight="bold" className="ml-auto size-3.5" />
+                <CheckIcon strokeWidth={2.25} className="ml-auto size-3.5" />
               ) : null}
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <CaretRightIcon weight="bold" className="size-3 shrink-0 text-muted-foreground/50" />
+      <ChevronRightIcon strokeWidth={2.25} className="size-3 shrink-0 text-muted-foreground" />
       <span className="shrink-0 text-ui text-muted-foreground">New ticket</span>
 
       <div className="ml-auto flex shrink-0 items-center gap-1">
         <Button
           variant="ghost"
-          size="icon-xs"
+          size="icon"
           aria-label={expanded ? "Collapse" : "Expand"}
           onClick={onToggleExpand}
           className="text-muted-foreground hover:text-foreground"
         >
-          {expanded ? <ArrowsInIcon /> : <ArrowsOutIcon />}
+          {expanded ? <CollapseIcon /> : <ExpandIcon />}
         </Button>
         <Button
           variant="ghost"
-          size="icon-xs"
+          size="icon"
           aria-label="Close"
           onClick={onClose}
           className="text-muted-foreground hover:text-foreground"
         >
-          <XIcon weight="bold" />
+          <CloseIcon strokeWidth={2.25} />
         </Button>
       </div>
     </div>

@@ -41,6 +41,7 @@ import type { RuntimeWholeText } from "@volli/shared";
 
 import {
   axTreeDigest,
+  axTreeGaps,
   FIND_MAX_CHARS,
   FIND_MAX_QUERY_CHARS,
   formatAXFind,
@@ -55,8 +56,29 @@ import {
 /** One CDP wire. Production may re-establish and initialize its attachment. */
 export interface CdpTransport {
   send: (method: string, params?: object) => Promise<unknown>;
+  /**
+   * Deferred transports run this guard AFTER initialization, immediately before
+   * dispatch. Without this member `send` must dispatch synchronously. The guard
+   * may throw, in which case no command is sent.
+   */
+  sendGuarded?: (
+    method: string,
+    params: object | undefined,
+    beforeDispatch: () => void,
+  ) => Promise<unknown>;
   ensureReady?: () => Promise<void>;
+  /** Host generation, re-read after awaits and before input, never page script. */
+  currentGeneration?: () => number;
   dispose?: () => void;
+  /** Host-only diagnostics: never receives command parameters or page content. */
+  onTimeout?: (diagnostic: CdpTimeoutDiagnostic) => void;
+}
+
+export interface CdpTimeoutDiagnostic {
+  phase: TimeoutOperation;
+  method: string | null;
+  elapsedMs: number;
+  generation: number;
 }
 
 /** What the cursor is told a Session is doing at a point, in page CSS pixels. */
@@ -150,6 +172,26 @@ const MAX_KNOWN_REFS = 10_000;
  */
 export const CDP_COMMAND_TIMEOUT_MS = 15_000;
 
+/**
+ * The largest page whose accessibility tree is read in one
+ * `Accessibility.getFullAXTree` answer (VC-1082), in the renderer's DOM node
+ * count (`Memory.getDOMCounters`; the AX tree runs about 1.2 nodes to each).
+ *
+ * That answer is one message, and Electron turns all of it into JavaScript
+ * objects on the main thread before anything can bound it: about 18µs a node
+ * measured on an M-series Mac, so 1.5 s of a frozen app for an 80,000-node
+ * page (37 MB of JSON) of which every print walks at most 20,000. Past this
+ * size the tree is read a piece at a time instead (the piecewise read below);
+ * at or under it the one answer is kept — atomic, and around 100 ms of main
+ * thread at most.
+ */
+const AX_FULL_READ_MAX_DOM_NODES = 5_000;
+/** How many `getChildAXNodes` calls one round of a piecewise read keeps in flight. */
+const AX_PIECE_BATCH = 128;
+/** The bounds on one piecewise read; past either, the read is partial and says so. */
+const AX_PIECE_MAX_ROUNDS = 512;
+const AX_PIECE_MAX_NODES = 80_000;
+
 /** The one error #bounded raises itself, so callers can tell clock from fault. */
 class CommandTimeoutError extends Error {}
 
@@ -157,12 +199,14 @@ function isTimeout(error: unknown): boolean {
   return error instanceof CommandTimeoutError;
 }
 
-type TimeoutOperation = "readiness" | "snapshot" | "find" | "screenshot" | "action";
+type TimeoutOperation = "readiness" | "frame-fence" | "snapshot" | "find" | "screenshot" | "action";
 
 function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string {
   switch (operation) {
     case "readiness":
-      return `The Browser Tab did not become ready within ${timeoutMs}ms. Try the Browser Tab command again.`;
+      return `The Browser Tab did not become ready within ${timeoutMs}ms. Check the tab with a fresh snapshot before repeating any navigation or action; it may already have happened.`;
+    case "frame-fence":
+      return `The Browser Tab did not produce a rendered frame within ${timeoutMs}ms. A snapshot or find can still read its structure. Check its state before repeating any navigation or action.`;
     case "snapshot":
       return `The Browser Tab did not finish taking a snapshot within ${timeoutMs}ms. Wait for the page to settle, then try the snapshot again.`;
     case "find":
@@ -172,6 +216,32 @@ function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string 
     case "action":
       return `The Browser Tab did not finish the requested action within ${timeoutMs}ms. The action may or may not have reached the page; check its current state before trying again.`;
   }
+}
+
+function noTreeError(): Error {
+  return new Error(
+    "The Browser Tab answered without an accessibility tree, so nothing was read. Try the read again, or take a screenshot.",
+  );
+}
+
+/**
+ * A piecewise read's nodes, root first in walk order: only what hangs from
+ * the root, so a stray answer can never become a second root for a print.
+ */
+function reachableFrom(byId: ReadonlyMap<string, AXNodeLike>, rootId: string): AXNodeLike[] {
+  const ordered: AXNodeLike[] = [];
+  const seen = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const nodeId = stack.pop()!;
+    const node = byId.get(nodeId);
+    if (node === undefined || seen.has(nodeId)) continue;
+    seen.add(nodeId);
+    ordered.push(node);
+    const children = node.childIds ?? [];
+    for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index]!);
+  }
+  return ordered;
 }
 
 function narrowedLimit(requested: number | undefined, maximum: number): number {
@@ -288,8 +358,12 @@ const PRINTABLE_CODES: Readonly<Record<string, { code: string; keyCode: number }
 
 export class BrowserTabController {
   readonly #send: CdpTransport["send"];
+  readonly #sendGuarded: CdpTransport["sendGuarded"];
   readonly #ensureReady: CdpTransport["ensureReady"];
   readonly #disposeTransport: CdpTransport["dispose"];
+  readonly #onTimeout: CdpTransport["onTimeout"];
+  readonly #currentGeneration: CdpTransport["currentGeneration"];
+  #actingGeneration: number | null = null;
   readonly #limits: Required<ControllerLimits>;
   readonly #cursor: TabCursorDriver | undefined;
   #generation = 0;
@@ -309,8 +383,11 @@ export class BrowserTabController {
 
   constructor(transport: CdpTransport, limits: ControllerLimits = {}, cursor?: TabCursorDriver) {
     this.#send = transport.send;
+    this.#sendGuarded = transport.sendGuarded;
     this.#ensureReady = transport.ensureReady;
     this.#disposeTransport = transport.dispose;
+    this.#onTimeout = transport.onTimeout;
+    this.#currentGeneration = transport.currentGeneration;
     this.#cursor = cursor;
     this.#limits = {
       maxSnapshotChars: Math.floor(narrowedLimit(limits.maxSnapshotChars, SNAPSHOT_MAX_CHARS)),
@@ -325,6 +402,7 @@ export class BrowserTabController {
     // debugger as a side effect, and a turn that is already withdrawn must not
     // leave one attached behind it.
     signal?.throwIfAborted();
+    this.#syncCurrentGeneration();
     if (this.#ensureReady !== undefined) {
       await this.#bounded(this.#ensureReady(), "readiness", signal);
       return;
@@ -344,7 +422,11 @@ export class BrowserTabController {
     answer: Promise<T>,
     operation: TimeoutOperation,
     signal?: AbortSignal,
+    method: string | null = null,
+    timeoutMs = this.#limits.maxCommandMs,
   ): Promise<T> {
+    const started = performance.now();
+    const generation = this.#generation;
     // An already-aborted signal never dispatches `abort` to a listener added
     // after the fact, so the race below would wait out the whole clock for a
     // turn that is already gone. Answer it here instead.
@@ -367,10 +449,20 @@ export class BrowserTabController {
         finish(() => reject(signal?.reason ?? new Error("Browser action cancelled")));
       };
       const timer = setTimeout(() => {
-        finish(() =>
-          reject(new CommandTimeoutError(timeoutMessage(operation, this.#limits.maxCommandMs))),
-        );
-      }, this.#limits.maxCommandMs);
+        finish(() => {
+          try {
+            this.#onTimeout?.({
+              phase: operation,
+              method,
+              elapsedMs: Math.round(performance.now() - started),
+              generation,
+            });
+          } catch {
+            // Diagnostics must never mask the deadline or wedge the tab queue.
+          }
+          reject(new CommandTimeoutError(timeoutMessage(operation, timeoutMs)));
+        });
+      }, timeoutMs);
       signal?.addEventListener("abort", abort, { once: true });
       answer.then(
         (value) => finish(() => resolve(value)),
@@ -385,9 +477,40 @@ export class BrowserTabController {
     params?: object,
     signal?: AbortSignal,
     operation: TimeoutOperation = "action",
+    options: { timeoutMs?: number; generation?: number; onDispatch?: () => void } = {},
   ): Promise<unknown> {
     signal?.throwIfAborted();
-    return await this.#bounded(this.#send(method, params), operation, signal);
+    // Pin intent, not mutable controller state: the operation may end while a
+    // transport is still awaiting reinitialization. A late guard must neither
+    // inherit the next action's generation nor send the abandoned command.
+    const generation = options.generation ?? this.#actingGeneration;
+    let active = true;
+    const beforeDispatch = (): void => {
+      signal?.throwIfAborted();
+      if (!active) throw new Error("The Browser command ended before transport dispatch");
+      if (generation !== null) {
+        this.#syncCurrentGeneration();
+        if (generation !== this.#generation) {
+          throw new BrowserRefusal(
+            "browser.stale-ref",
+            "The tab changed before the command could be sent: take a fresh snapshot.",
+          );
+        }
+      }
+      options.onDispatch?.();
+    };
+    try {
+      let answer: Promise<unknown>;
+      if (this.#sendGuarded === undefined) {
+        beforeDispatch();
+        answer = this.#send(method, params);
+      } else {
+        answer = this.#sendGuarded(method, params, beforeDispatch);
+      }
+      return await this.#bounded(answer, operation, signal, method, options.timeoutMs);
+    } finally {
+      active = false;
+    }
   }
 
   /**
@@ -439,7 +562,7 @@ export class BrowserTabController {
    */
   async #releaseHalf(method: string, params: object, alreadyFailed: boolean): Promise<void> {
     try {
-      await this.#bounded(this.#send(method, params), "action");
+      await this.#bounded(this.#send(method, params), "action", undefined, method);
     } catch (error) {
       // Preserve an earlier fault, but never report a successful click when
       // mouse-up (the event that actually clicks) failed to reach the page.
@@ -456,6 +579,10 @@ export class BrowserTabController {
     if (generation <= this.#generation) return;
     this.#generation = generation;
     this.#forget();
+  }
+
+  #syncCurrentGeneration(): void {
+    if (this.#currentGeneration !== undefined) this.syncGeneration(this.#currentGeneration());
   }
 
   /** Drop every ref and the whole ledger: nothing printed before names anything now. */
@@ -490,39 +617,179 @@ export class BrowserTabController {
     this.#forget();
   }
 
-  /** One fresh read of the page's accessibility tree, as CDP answers it. */
-  async #readTree(operation: "snapshot" | "find", signal?: AbortSignal): Promise<AXNodeLike[]> {
-    if (this.#renderedGeneration !== this.#generation) {
-      const generation = this.#generation;
-      const rendered = (await this.#command(
-        "Runtime.evaluate",
-        { expression: RENDERED_FRAME_EXPRESSION, awaitPromise: true, returnByValue: true },
-        signal,
-        "readiness",
-      )) as { exceptionDetails?: unknown };
-      if (rendered.exceptionDetails !== undefined)
-        throw new Error("The Browser Tab could not finish rendering its document");
-      this.#renderedGeneration = generation;
+  /**
+   * Only visual work waits for a compositor opportunity. AX reads are structural:
+   * hidden/background pages can answer them even while animation frames stall.
+   * A late or older frame never certifies this generation's pixels or hit tests.
+   */
+  async #ensureRendered(signal?: AbortSignal, timeoutMs?: number): Promise<void> {
+    this.#syncCurrentGeneration();
+    if (this.#renderedGeneration === this.#generation) return;
+    const generation = this.#generation;
+    const rendered = (await this.#command(
+      "Runtime.evaluate",
+      { expression: RENDERED_FRAME_EXPRESSION, awaitPromise: true, returnByValue: true },
+      signal,
+      "frame-fence",
+      { timeoutMs },
+    )) as { exceptionDetails?: unknown };
+    this.#syncCurrentGeneration();
+    if (rendered.exceptionDetails !== undefined)
+      throw new Error("The Browser Tab could not finish rendering its document");
+    if (generation !== this.#generation) {
+      throw new BrowserRefusal(
+        "browser.stale-ref",
+        "The tab changed while waiting for its rendered frame: take a fresh snapshot.",
+      );
     }
-    const answer = (await this.#command(
-      "Accessibility.getFullAXTree",
+    this.#renderedGeneration = generation;
+  }
+
+  /**
+   * Optional transcript photos still owe the old first-frame safeguard, but
+   * cannot hold a successful structural read behind a stalled compositor.
+   * No frame means no photo, not permission to capture an older surface.
+   */
+  async preparePreview(signal?: AbortSignal): Promise<boolean> {
+    try {
+      await this.#ensureRendered(signal, Math.min(500, this.#limits.maxCommandMs));
+      return true;
+    } catch {
+      signal?.throwIfAborted();
+      return false;
+    }
+  }
+
+  /**
+   * A bounded structural read, independent of the compositor's frame cadence.
+   * `partial` is true only when a piecewise read stopped short of what the
+   * prints walk; the caller reports it as a cut.
+   */
+  async #readTree(
+    operation: "snapshot" | "find",
+    signal?: AbortSignal,
+  ): Promise<{ nodes: AXNodeLike[]; partial: boolean }> {
+    this.#syncCurrentGeneration();
+    const generation = this.#generation;
+    let read: { nodes: AXNodeLike[]; partial: boolean };
+    if (await this.#isLargeDocument(operation, signal)) {
+      read = await this.#readTreeInPieces(operation, signal);
+    } else {
+      const answer = (await this.#command(
+        "Accessibility.getFullAXTree",
+        undefined,
+        signal,
+        operation,
+      )) as { nodes?: AXNodeLike[] };
+      // An answer without a tree is a failed read, not a blank page (VC-277).
+      if (!Array.isArray(answer.nodes)) throw noTreeError();
+      read = { nodes: answer.nodes, partial: false };
+    }
+    signal?.throwIfAborted();
+    this.#syncCurrentGeneration();
+    if (generation !== this.#generation) {
+      throw new BrowserRefusal(
+        "browser.stale-ref",
+        "The tab changed while its accessibility tree was being read: take a fresh snapshot.",
+      );
+    }
+    this.#treeDigest = axTreeDigest(read.nodes);
+    return read;
+  }
+
+  /**
+   * Whether the page is past {@link AX_FULL_READ_MAX_DOM_NODES}. The counter
+   * is the renderer's own, not page script, so a page cannot talk its way
+   * into either read. A renderer that cannot answer gets the one-answer read
+   * it always had.
+   */
+  async #isLargeDocument(operation: "snapshot" | "find", signal?: AbortSignal): Promise<boolean> {
+    try {
+      const counters = (await this.#command(
+        "Memory.getDOMCounters",
+        undefined,
+        signal,
+        operation,
+      )) as {
+        nodes?: unknown;
+      };
+      return typeof counters.nodes === "number" && counters.nodes > AX_FULL_READ_MAX_DOM_NODES;
+    } catch (error: unknown) {
+      if (signal?.aborted === true || isTimeout(error)) throw error;
+      return false;
+    }
+  }
+
+  /**
+   * The tree read a piece at a time (VC-1082): the root, then the children of
+   * every node the prints would walk to whose children are not yet here
+   * ({@link axTreeGaps}), a batch of `getChildAXNodes` calls per round, until
+   * nothing a print can reach is missing. Each answer is small, so the main
+   * thread is never held for the whole tree at once, and the part of a huge
+   * page no print walks is never read at all.
+   *
+   * For everything the prints walk, the result is the one-answer tree's own
+   * nodes — the same nodes in the same shape, measured identical on pages from
+   * 700 to 80,000 nodes — so the prints are too. What it gives up is
+   * atomicity: a page changing between rounds can be read half before and half
+   * after, and a node gone by its round is read as having no children. A read
+   * past its own round or node bound, or a node CDP would not answer for, is
+   * partial.
+   */
+  async #readTreeInPieces(
+    operation: "snapshot" | "find",
+    signal?: AbortSignal,
+  ): Promise<{ nodes: AXNodeLike[]; partial: boolean }> {
+    const rooted = (await this.#command(
+      "Accessibility.getRootAXNode",
       undefined,
       signal,
       operation,
-    )) as {
-      nodes?: AXNodeLike[];
-    };
-    signal?.throwIfAborted();
-    // An answer without a tree is a read that failed, not a page with nothing
-    // on it: Chromium always answers with at least the document's root. Read
-    // as empty, it would tell the model the page is blank (VC-277).
-    if (!Array.isArray(answer.nodes)) {
-      throw new Error(
-        "The Browser Tab answered without an accessibility tree, so nothing was read. Try the read again, or take a screenshot.",
+    )) as { node?: AXNodeLike };
+    const root = rooted.node;
+    if (typeof root?.nodeId !== "string") throw noTreeError();
+    const byId = new Map<string, AXNodeLike>([[root.nodeId, root]]);
+    const asked = new Set<string>();
+    let partial = false;
+    for (let round = 0; ; round += 1) {
+      // A node asked once and still short of children is what CDP has: the
+      // one-answer read would hold no more for it either.
+      const gaps = axTreeGaps(byId, root.nodeId).filter((nodeId) => !asked.has(nodeId));
+      if (gaps.length === 0) break;
+      if (round === AX_PIECE_MAX_ROUNDS || byId.size >= AX_PIECE_MAX_NODES) {
+        partial = true;
+        break;
+      }
+      const answers = await Promise.all(
+        gaps.slice(0, AX_PIECE_BATCH).map(async (nodeId) => {
+          asked.add(nodeId);
+          try {
+            return (await this.#command(
+              "Accessibility.getChildAXNodes",
+              { id: nodeId },
+              signal,
+              operation,
+            )) as { nodes?: unknown };
+          } catch (error: unknown) {
+            if (signal?.aborted === true || isTimeout(error)) throw error;
+            // Gone between rounds: the page moved under the read.
+            partial = true;
+            return {};
+          }
+        }),
       );
+      // An answer can carry descendants as well as children (Chromium splices
+      // through ignored nodes); every node is keyed by its own id, once.
+      for (const answer of answers) {
+        if (!Array.isArray(answer.nodes)) continue;
+        for (const node of answer.nodes as AXNodeLike[]) {
+          if (typeof node?.nodeId === "string" && !byId.has(node.nodeId))
+            byId.set(node.nodeId, node);
+        }
+      }
     }
-    this.#treeDigest = axTreeDigest(answer.nodes);
-    return answer.nodes;
+    signal?.throwIfAborted();
+    return { nodes: reachableFrom(byId, root.nodeId), partial };
   }
 
   /** What the next print may draw on: this generation's ledger, if it has one. */
@@ -556,7 +823,7 @@ export class BrowserTabController {
 
   async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
     signal?.throwIfAborted();
-    const nodes = await this.#readTree("snapshot", signal);
+    const { nodes, partial } = await this.#readTree("snapshot", signal);
     const printed = formatAXSnapshot(nodes, {
       maxChars: this.#limits.maxSnapshotChars,
       ledger: this.#ledger(),
@@ -565,7 +832,7 @@ export class BrowserTabController {
     return {
       text: printed.text,
       generation: this.#generation,
-      truncated: printed.truncated,
+      truncated: printed.truncated || partial,
       empty: printed.empty,
       ...(printed.whole === undefined ? {} : { whole: printed.whole }),
     };
@@ -589,7 +856,7 @@ export class BrowserTabController {
         `browser_find needs literal text to search for, between 1 and ${FIND_MAX_QUERY_CHARS} characters.`,
       );
     }
-    const nodes = await this.#readTree("find", signal);
+    const { nodes, partial } = await this.#readTree("find", signal);
     const found = formatAXFind(nodes, needle, {
       maxChars: Math.min(FIND_MAX_CHARS, this.#limits.maxSnapshotChars),
       ledger: this.#ledger(),
@@ -601,7 +868,7 @@ export class BrowserTabController {
     return {
       text: found.text,
       generation: this.#generation,
-      truncated: found.truncated,
+      truncated: found.truncated || partial,
       matches: found.matches,
       shown: found.shown,
       empty: found.empty,
@@ -616,13 +883,22 @@ export class BrowserTabController {
    */
   async act(request: TabActRequest, signal?: AbortSignal): Promise<TabActResult> {
     signal?.throwIfAborted();
+    this.#syncCurrentGeneration();
     if (request.generation !== this.#generation || this.#snapshotGeneration !== this.#generation) {
       throw new BrowserRefusal(
         "browser.stale-ref",
         `The tab is at generation ${this.#generation}, and refs from generation ${request.generation} no longer name what the page shows: take a fresh snapshot.`,
       );
     }
-    await this.#perform(request, signal);
+    // Reads mint structural refs without promising pixels are ready. Preserve
+    // the old stale-surface/hit-test guard at the point input actually needs it.
+    this.#actingGeneration = request.generation;
+    try {
+      if (request.kind !== "wait") await this.#ensureRendered(signal);
+      await this.#perform(request, signal);
+    } finally {
+      this.#actingGeneration = null;
+    }
     // Resolved AFTER the action so a refused ref reports nothing; the maps are
     // untouched by acting, so the name is the one the model was shown.
     const ref = request.ref;
@@ -738,14 +1014,24 @@ export class BrowserTabController {
     signal?: AbortSignal,
   ): Promise<{ base64Png: string; width: number; height: number }> {
     signal?.throwIfAborted();
+    await this.#ensureRendered(signal);
+    const generation = this.#generation;
     const captured = (await this.#command(
       "Page.captureScreenshot",
       { format: "png" },
       signal,
       "screenshot",
+      { generation },
     )) as {
       data?: string;
     };
+    this.#syncCurrentGeneration();
+    if (generation !== this.#generation) {
+      throw new BrowserRefusal(
+        "browser.stale-ref",
+        "The tab changed while its screenshot was being captured: take a new screenshot.",
+      );
+    }
     if (typeof captured.data !== "string" || captured.data.length === 0) {
       throw new Error("The Browser Tab's page produced no screenshot pixels to return");
     }
@@ -831,27 +1117,35 @@ export class BrowserTabController {
       return;
     }
     let pressed = false;
+    let dispatched = false;
     try {
       await this.#command(
         "Input.dispatchMouseEvent",
         { type: "mousePressed", x, y, button: "left", clickCount: 1 },
         signal,
+        "action",
+        {
+          onDispatch: () => {
+            dispatched = true;
+          },
+        },
       );
       pressed = true;
     } finally {
-      // The press may have reached the page and only failed to answer, so the
-      // page gets its mouse-up either way and no tab is left mid-click.
-      await this.#releaseHalf(
-        "Input.dispatchMouseEvent",
-        {
-          type: "mouseReleased",
-          x,
-          y,
-          button: "left",
-          clickCount: 1,
-        },
-        !pressed,
-      );
+      // A dispatched press may only have failed to answer. A pre-dispatch
+      // refusal owes no mouse-up: even cleanup would be input on another page.
+      if (dispatched)
+        await this.#releaseHalf(
+          "Input.dispatchMouseEvent",
+          {
+            type: "mouseReleased",
+            x,
+            y,
+            button: "left",
+            clickCount: 1,
+          },
+          !pressed,
+        );
     }
   }
 
@@ -909,6 +1203,7 @@ export class BrowserTabController {
     // silently doing nothing. This fixed editing command touches no clipboard.
     const selectAll = (modifiers === 2 || modifiers === 4) && keyPart.toLowerCase() === "a";
     let pressed = false;
+    let dispatched = false;
     try {
       await this.#command(
         "Input.dispatchKeyEvent",
@@ -922,6 +1217,12 @@ export class BrowserTabController {
           ...(selectAll ? { commands: ["selectAll"] } : {}),
         },
         signal,
+        "action",
+        {
+          onDispatch: () => {
+            dispatched = true;
+          },
+        },
       );
       // A printable single character also produces its char event, so text
       // inputs actually receive it the way a keyboard would deliver it.
@@ -937,7 +1238,7 @@ export class BrowserTabController {
     } finally {
       // A key down with no key up is a key the page believes is still held —
       // modifiers latch, and every later keystroke arrives wearing them.
-      await this.#releaseHalf("Input.dispatchKeyEvent", keyUp, !pressed);
+      if (dispatched) await this.#releaseHalf("Input.dispatchKeyEvent", keyUp, !pressed);
     }
   }
 

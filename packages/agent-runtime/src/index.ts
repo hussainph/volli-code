@@ -93,6 +93,7 @@ export {
   type ShellToolDetails,
   type ShellToolId,
 } from "./pi/shell-tools";
+export { createWorkerWebExtractor, type WebExtractor } from "./web/extract-worker";
 export {
   createSafeWebFetch,
   WEB_FETCH_LIMITS,

@@ -194,6 +194,26 @@ function monacoPresentation(): string | null {
   );
 }
 
+it("retries only this diff after a failed read", async () => {
+  const original = window.api.worktree.changeSet;
+  const read = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: false, error: "Worktree temporarily unavailable" })
+    .mockImplementation(original);
+  window.api.worktree.changeSet = read;
+  await mountDiff();
+  expect(container?.textContent).toContain("Couldn't load diff");
+  expect(container?.textContent).toContain("Worktree temporarily unavailable");
+  const retry = [...container!.querySelectorAll("button")].find(
+    (button) => button.textContent === "Retry",
+  );
+  expect(retry).toBeDefined();
+  await act(async () => retry!.click());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(monacoPresentation()).not.toBeNull();
+  expect(container?.textContent).not.toContain("Couldn't load diff");
+});
+
 describe("a side-by-side diff in a pane that cannot hold two columns", () => {
   it("falls back at 320 and at 480, restores at 720, and says so in the band each time", async () => {
     useUiStore.setState({ diffPresentation: "side-by-side" });

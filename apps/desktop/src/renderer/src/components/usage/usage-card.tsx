@@ -1,39 +1,7 @@
-/**
- * The rail's usage surface — one framed card wearing the repository card's own
- * frame, with a hero figure and rows that reveal the rest on demand (VC-203).
- *
- * WHY THIS FILE EXISTS. The two usage blocks were drawn as `rounded-row border-
- * border bg-card` panels under a section heading, which is the treatment
- * the old checkout card used for a single fact — while the repository card one block up
- * the same rail is a `rounded-xl` framed surface of seamed rows on the sidebar's
- * own border and background. Two containers, two radii, two border tokens and
- * two background tokens for two blocks that sit ten pixels apart, and the usage
- * one blended into the rail while the repository one read as an object. The
- * frame here is the repository card's, spelled from the same constants, so the
- * rail has two surfaces that are plainly the same kind of thing.
- *
- * WHY EVERY ROW IS A POPOVER TRIGGER. The blocks used to print everything they
- * knew: a hero figure, a basis sentence, a bar, a caption, three ranked model
- * names, a "+N more", and a session tally — eight lines before the reader has
- * asked anything, of which one is the number they came for. That is the bulk
- * complaint, and a collapse would only have hidden the good line along with the
- * rest. So the card keeps the three things that are worth unprompted pixels —
- * the figure, the picture, and the one caption that reads the picture — and
- * every other fact moves behind the row it belongs to. Model names, operation
- * counts, cost basis and per-session rankings are all answers to a question,
- * and a question needs somewhere to be asked rather than a line to sit on.
- *
- * The caret is the affordance, and it is the repository branch row's caret at
- * the same size in the same ink: a reader who has opened that row already knows
- * what this one does.
- *
- * NOTHING HERE READS A STORE. Same reason the blocks beside it do not — see
- * `usage-rail.tsx`. These are props-in drawings so the UI lab can mount the
- * real card against fixture operations.
- */
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
+/** Cost leads the glance; exact tokens and attribution stay available on demand. */
 import type * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { type IconComponent, ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
@@ -48,13 +16,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { UsageBar, UsageClassRows } from "@renderer/components/usage/usage-bar";
-import { formatTokens } from "@volli/session-presentation";
+import { UsageTokenCount, tokenCountLabel } from "./usage-token-count";
 import { cn } from "@renderer/lib/utils";
 import {
   formatCachedShare,
   formatUsageCost,
   totalUsageTokens,
-  usageBasisLine,
   usageCostParts,
   type UsageGroupRow,
 } from "@renderer/usage/usage-format";
@@ -66,7 +33,7 @@ import {
  * than a row, so it cannot take that constant and takes this half of it.
  */
 const USAGE_CARD_PRESSABLE =
-  "outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
+  "outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
 
 /** The width every one of the card's popovers opens at, matching the rail's others. */
 const USAGE_POPOVER = "w-72 p-4";
@@ -122,93 +89,21 @@ export function UsageCostFigure({
   );
 }
 
-/**
- * The card's face at ONE ROW: the figure at the left, a caption that gives
- * way, and the caret (VC-406).
- *
- * The Ticket rail's card used to open with the hero below — an 18px figure, the
- * bar and a caption, then a seamed row for the Sessions — and at ~120px it was
- * the tallest object on a page whose most-read block is a list of Sessions.
- * Cost is a fact the user glances at, not a surface they work in, so the
- * face is now the height of any other row in the rail and everything the hero
- * carried (the bar, its legend, the cached share, the basis sentence, the
- * per-Session ranking) is one press behind it, in one popover rather than two.
- *
- * The figure leads and never truncates; the caption is the elastic member and
- * gives way first — a price losing a digit is a worse loss than a token count
- * losing its last letters, and at the rail's 240px floor one of them has to.
- */
-export function UsageCardFace({
-  name,
-  summary,
-  icon: Icon,
-  testId,
-  children,
-}: {
-  /** What the figure is about, for the accessible name — never drawn. */
-  name: string;
-  summary: SessionUsageSummary;
-  icon: PhosphorIcon;
-  testId?: string;
-  /** The popover body: everything the figure is made of. */
-  children: React.ReactNode;
-}) {
-  const cost = formatUsageCost(summary);
-  const tokens = totalUsageTokens(summary);
+/** Spend answers the decision; tokens are the quiet measure of workload. */
+export function UsageSummaryFigure({ summary }: { summary: SessionUsageSummary }) {
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-testid={testId}
-          aria-label={`${name} ${cost ?? ""} — open breakdown`}
-          className={cn(RAIL_CARD_ROW, "min-h-8 py-2 hover:bg-accent/50")}
-        >
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <UsageCostFigure
-            summary={summary}
-            className="shrink-0 text-ui font-medium text-foreground"
-          />
-          {/* Tokens, never cost — a second dollar figure on the face would be
-              a second total, and the cached share stays behind the row so a
-              reader cannot set it beside the money and read it as a share of
-              spend (`usage/usage-format.ts`). */}
-          <span className="min-w-0 flex-1 truncate text-right text-ui text-muted-foreground tabular-nums">
-            {tokens > 0 ? `${formatTokens(tokens)} tokens` : ""}
-          </span>
-          <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent aria-label={name} align="start" side="left" className={USAGE_POPOVER}>
-        {children}
-      </PopoverContent>
-    </Popover>
+    <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+      <UsageCostFigure summary={summary} className="text-ui font-semibold text-foreground" />
+      <UsageTokenCount
+        tokens={totalUsageTokens(summary)}
+        unit
+        className="whitespace-nowrap text-label text-muted-foreground"
+      />
+    </span>
   );
 }
 
-/**
- * The card's face: the figure, the picture, and the one line that reads it.
- *
- * THREE THINGS, and the order is the reading order — what it cost, how the
- * tokens divided, what that division was made of. The basis sentence that used
- * to sit between the first two is gone from the face and lives in this row's own
- * popover: it qualifies the figure rather than adding to it, the tilde on the
- * figure already carries the consequence, and at rail width it wrapped to two
- * lines more often than not.
- *
- * The bar and the caption both drop when nothing carried tokens — a provider can
- * price a call without breaking it down, and an empty track is a picture of
- * nothing.
- *
- * THE CARET RIDES THE CAPTION, not the figure's line. Parked opposite the money
- * it sat at the far end of an otherwise empty row, reading as a stray glyph
- * rather than as this block's affordance; and a caret set immediately beside a
- * price reads as a value you can change, which this one is not. On the caption
- * line it is the same size and the same ink as the words it ends, which is what
- * a quiet "there is more behind this" should look like. It stays when the
- * caption does not, so the affordance never depends on a provider having broken
- * its tokens down.
- */
+/** One cost-led inspection target, without a meter that implies an allowance. */
 export function UsageCardHero({
   name,
   cost,
@@ -226,40 +121,41 @@ export function UsageCardHero({
   children: React.ReactNode;
 }) {
   const tokens = totalUsageTokens(summary);
-  const cached = formatCachedShare(summary);
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
           data-testid={testId}
-          aria-label={`${name} ${cost} — open breakdown`}
+          aria-label={`${name} ${tokenCountLabel(tokens)}, ${cost} — open breakdown`}
           className={cn(
             "flex w-full flex-col gap-2 px-4 pt-4 pb-2 text-left",
             USAGE_CARD_PRESSABLE,
           )}
         >
-          {/* text-heading, not text-title: the rail's widest content box is
-              268px and the ticket title is the only 24px text in the app. */}
-          <UsageCostFigure summary={summary} className="text-heading text-foreground" />
-          {tokens > 0 ? <UsageBar summary={summary} /> : null}
-          <span className="flex w-full items-center justify-between gap-2">
-            {/* Tokens and cache, never cost — the bar divides tokens, and a
-                dollar figure on this line would invite reading the cached share
-                as a share of spend. It is close to the opposite. */}
-            <span className="min-w-0 truncate text-ui text-muted-foreground tabular-nums">
-              {tokens > 0
-                ? `${formatTokens(tokens)} tokens${cached === null ? "" : ` · ${cached} cached`}`
-                : ""}
-            </span>
-            <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+          <span className="flex w-full flex-wrap items-baseline gap-2">
+            <UsageCostFigure
+              summary={summary}
+              className="text-heading font-semibold text-foreground"
+            />
+            <UsageTokenCount
+              tokens={tokens}
+              unit
+              className="flex-1 text-label text-muted-foreground"
+            />
+            <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
           </span>
         </button>
       </PopoverTrigger>
       {/* Radix gives its content `role="dialog"`, and a dialog with no
           accessible name is announced as an unnamed one — the heading inside is
           not associated with it. The trigger's own subject names it. */}
-      <PopoverContent aria-label={name} align="start" side="left" className={USAGE_POPOVER}>
+      <PopoverContent
+        aria-label={name}
+        align="start"
+        side="left"
+        className={cn(USAGE_POPOVER, "max-h-96 overflow-y-auto overscroll-contain")}
+      >
         {children}
       </PopoverContent>
     </Popover>
@@ -282,7 +178,7 @@ export function UsageCardRow({
   testId,
   children,
 }: {
-  icon: PhosphorIcon;
+  icon: IconComponent;
   label: string;
   /** A figure parked before the caret — a cost (drawn, so its hedge is set right), a count. */
   trailing?: React.ReactNode;
@@ -297,37 +193,32 @@ export function UsageCardRow({
           type="button"
           data-testid={testId}
           aria-label={ariaLabel}
-          className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent/50")}
+          className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent")}
         >
           <Icon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{label}</span>
           {trailing === null || trailing === undefined ? null : (
-            <span className="shrink-0 text-ui tabular-nums text-muted-foreground">{trailing}</span>
+            <span className="shrink-0 text-right text-ui tabular-nums text-muted-foreground">
+              {trailing}
+            </span>
           )}
-          <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+          <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent aria-label={label} align="start" side="left" className={USAGE_POPOVER}>
+      <PopoverContent
+        aria-label={label}
+        align="start"
+        side="left"
+        className={cn(USAGE_POPOVER, "max-h-96 overflow-y-auto overscroll-contain")}
+      >
         {children}
       </PopoverContent>
     </Popover>
   );
 }
 
-/**
- * What a figure IS, in words — the popover body behind a hero or a scoped row.
- *
- * The basis sentence, the bar's legend at full precision, the total those
- * classes add up to, and the cached share named rather than abbreviated. This is
- * where the notation stops being one glyph of hedge and becomes a claim someone
- * can check (`usage/usage-format.ts` carries the reasoning for the glyph).
- *
- * THE TOTAL IS A ROW, not a sum the reader is left to do. The face carries it in
- * the caption, but a row's popover has no face above it — and the Session block
- * this replaced reported `Tokens 610k` as one of its three lines, so dropping it
- * here would have retired a fact rather than progressively revealing it. Under
- * the legend rather than over it: it is what those four rows come to.
- */
+/** Class counts, their total, cached share and any scope-specific attribution.
+ * Cost retains its coverage qualifier; exact token counts remain on each value. */
 export function UsageBreakdown({
   title,
   summary,
@@ -336,19 +227,13 @@ export function UsageBreakdown({
 }: {
   title: string;
   summary: SessionUsageSummary;
-  /**
-   * Draw the token bar above its legend. ON where the face does not already
-   * show it (the Ticket rail's one-row card, VC-406), OFF where the popover
-   * opens off a face that does (Home's hero) — the same picture twice, ten
-   * pixels apart, is not a breakdown.
-   */
+  /** Draw the class bar only when the containing face does not already show it. */
   picture?: boolean;
   /** Anything this scope adds under the legend — a ranking, a tally. */
   children?: React.ReactNode;
 }) {
   const cost = formatUsageCost(summary);
   const cached = formatCachedShare(summary);
-  const basis = usageBasisLine(summary);
   const tokens = totalUsageTokens(summary);
   return (
     <div className="flex flex-col gap-4">
@@ -359,14 +244,13 @@ export function UsageBreakdown({
             <UsageCostFigure summary={summary} className="text-ui text-foreground" />
           )}
         </div>
-        {basis === null ? null : <p className="text-ui text-muted-foreground">{basis}</p>}
       </div>
 
       <div className="flex flex-col gap-2">
         {picture ? <UsageBar summary={summary} /> : null}
         <UsageClassRows summary={summary} />
         {tokens > 0 ? (
-          <UsageBreakdownFact label="Total tokens" value={formatTokens(tokens)} />
+          <UsageBreakdownFact label="Total tokens" value={<UsageTokenCount tokens={tokens} />} />
         ) : null}
         {cached === null ? null : <UsageBreakdownFact label="Cached input share" value={cached} />}
       </div>
@@ -394,14 +278,16 @@ export function UsageRankList({
 }) {
   if (rows.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2">
-      <SectionHeading as="p">{heading}</SectionHeading>
-      <dl className="flex flex-col gap-2">
-        {rows.map((row) => (
-          <UsageRankRow key={row.key} row={row} />
+    <section className="usage-rank-list shrink-0" aria-label={heading}>
+      <SectionHeading as="h3" className="sr-only">
+        {heading}
+      </SectionHeading>
+      <dl>
+        {rows.map((row, index) => (
+          <UsageRankRow key={row.key} row={row} heading={index === 0 ? heading : undefined} />
         ))}
       </dl>
-    </div>
+    </section>
   );
 }
 
@@ -412,14 +298,19 @@ export function UsageRankList({
  * version suffix is a smaller loss than a price losing a digit, and the figure
  * is the column the eye is scanning down.
  */
-export function UsageRankRow({ row }: { row: UsageGroupRow }) {
+export function UsageRankRow({ row, heading }: { row: UsageGroupRow; heading?: string }) {
   const cost = formatUsageCost(row.usage);
   return (
-    <div className="flex items-center justify-between gap-2">
+    <div className="flex min-h-7 items-center justify-between gap-2">
       <dt className="flex min-w-0 items-center gap-2 text-ui text-foreground">
+        {/* Attribution shares its first row: a bounded scroller can never leave
+            a standalone heading cut off against the pinned total. */}
+        {heading ? (
+          <span className="shrink-0 text-label text-muted-foreground">{heading}</span>
+        ) : null}
         <UsageRowSubject row={row} />
       </dt>
-      <dd className="shrink-0 text-ui tabular-nums text-muted-foreground">
+      <dd className="shrink-0 text-right text-ui tabular-nums text-muted-foreground">
         {cost === null ? "—" : <UsageCostFigure summary={row.usage} />}
       </dd>
     </div>
@@ -443,7 +334,17 @@ export function UsageRankRow({ row }: { row: UsageGroupRow }) {
  */
 export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
   const model = row.model ?? null;
-  if (model === null) return <span className="min-w-0 truncate">{row.label}</span>;
+  if (model === null)
+    return (
+      <ValueReveal
+        term="Session"
+        full={row.label}
+        side="left"
+        className="min-h-6 min-w-0 truncate rounded-sm text-left"
+      >
+        {row.label}
+      </ValueReveal>
+    );
   return (
     <>
       <ModelMark model={model.model} providerLabel={model.providerLabel} />
@@ -451,7 +352,7 @@ export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
         term="Model"
         full={`${row.label} · ${model.providerLabel}`}
         side="left"
-        className="min-w-0 truncate rounded-sm text-left"
+        className="min-h-6 min-w-0 truncate rounded-sm text-left"
       >
         {row.label}
       </ValueReveal>
@@ -468,7 +369,7 @@ export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
  */
 export function UsageBreakdownFact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
+    <div className="flex min-h-7 shrink-0 items-center justify-between gap-2 border-t border-border">
       <span className="shrink-0 text-ui text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center justify-end gap-2 text-ui tabular-nums text-foreground">
         {/* A drawn value brings its own parts — a model's mark and its name; a
@@ -490,7 +391,7 @@ export function UsageBreakdownFact({ label, value }: { label: string; value: Rea
 export function UsageCardEmptyFace({ detail }: { detail?: string | null }) {
   return (
     <div className="flex flex-col gap-2 px-4 py-4">
-      <p className="text-ui text-muted-foreground">No metered model calls yet</p>
+      <PanelEmptyState illustration="board" title="No metered calls yet" />
       {detail === null || detail === undefined ? null : (
         <p className="text-ui text-muted-foreground tabular-nums">{detail}</p>
       )}

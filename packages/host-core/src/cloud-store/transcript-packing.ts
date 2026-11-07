@@ -6,6 +6,7 @@ import { ObjectUploadError } from "../transcript-spool/object-store";
 import type { BackendLink } from "../cloud-runner/backend-link";
 import type { DrainCursorStore, DrainLedger } from "../cloud-runner/drain";
 import type { createCloudTranscriptPublisher } from "./transcripts";
+import { withMainSpan } from "../log/context";
 
 const RETRY_MS = 5_000;
 const STOP_MS = 2_000;
@@ -198,8 +199,10 @@ export function createTranscriptPacking(options: {
       kick();
       interval = setInterval(() => {
         if (!closing) {
-          all();
-          kick();
+          withMainSpan({ door: "timer", operation: "transcript-pack-poll" }, () => {
+            all();
+            kick();
+          });
         }
       }, TRANSCRIPT_PACK_INTERVAL_MS);
       interval.unref?.();

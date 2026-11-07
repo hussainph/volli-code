@@ -14,7 +14,6 @@ import {
   searchQuery,
   searchRevealTarget,
   searchSummary,
-  searchTruncationNote,
 } from "./search-model";
 
 function match(over: Partial<FileSearchMatch> = {}): FileSearchMatch {
@@ -87,19 +86,6 @@ describe("searchSummary", () => {
   it("says a search that ran out of time did", () => {
     expect(searchSummary({ matches: 12, files: ["a"], limit: "time" })).toBe(
       "12 matches in 1 file before the search ran out of time",
-    );
-  });
-});
-
-describe("searchTruncationNote", () => {
-  it("says nothing when nothing was cut", () => {
-    expect(searchTruncationNote("none")).toBeNull();
-  });
-
-  it("names the consequence rather than the constant", () => {
-    expect(searchTruncationNote("matches")).toBe("There may be more matches than these.");
-    expect(searchTruncationNote("time")).toBe(
-      "The search stopped early; there may be more matches.",
     );
   });
 });

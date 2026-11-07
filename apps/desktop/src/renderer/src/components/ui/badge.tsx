@@ -30,7 +30,8 @@ const badgeVariants = cva("inline-flex w-fit shrink-0 items-center gap-1 whitesp
   variants: {
     variant: {
       outline: "rounded-full border border-border px-2 py-1 text-label text-muted-foreground",
-      secondary: "rounded-full bg-muted px-2 py-1 text-label text-foreground",
+      secondary:
+        "rounded-full border border-border-strong bg-control-secondary px-2 py-1 text-label font-medium text-foreground",
       // The chip that IS the answer rather than a fact about it. The border
       // stays on `--primary` (a fill) while the ink drops to `--primary-text`,
       // the accent solved for text — `theme/theme-combo-box.tsx` worked that
@@ -66,21 +67,13 @@ const badgeVariants = cva("inline-flex w-fit shrink-0 items-center gap-1 whitesp
 function Badge({
   className,
   variant,
-  mono = false,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> &
-  VariantProps<typeof badgeVariants> & {
-    /**
-     * For a chip whose content is an identifier the machine chose — a hook
-     * event name, a path, a hash. The count variants are mono already.
-     */
-    mono?: boolean;
-  }) {
+}: React.HTMLAttributes<HTMLSpanElement> & VariantProps<typeof badgeVariants>) {
   return (
     <span
       data-slot="badge"
       data-variant={variant ?? "outline"}
-      className={cn(badgeVariants({ variant }), mono && "font-mono", className)}
+      className={cn(badgeVariants({ variant }), className)}
       {...props}
     />
   );

@@ -30,11 +30,13 @@ import { join, relative } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { createSessionEngine } from "@volli/session-engine";
 import { blobsRoot } from "../blob-store";
 import { MIGRATIONS } from "../db/migrations";
 import { openRawDb } from "../db/test-helpers";
 import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { SECRET_STORE_FILE_NAME } from "../secrets";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
 import { packArchive, unpackArchive } from "./archive";
 import { createBackupBundle, DATA_PATH, MANIFEST_PATH } from "./bundle";
@@ -136,6 +138,10 @@ function dumpDatabase(path: string): Record<string, unknown[]> {
  * The two restored databases hold the same tables, rows and schema. The mapped
  * project directories differ only because each target has its own checkout.
  */
+function birthOwners(db: Database.Database): unknown[] {
+  return db.prepare("SELECT * FROM session_birth_owners ORDER BY session_id").all();
+}
+
 function expectSameDatabase([memoryRoot, fileRoot]: [string, string]): void {
   const normalize = (root: string): Record<string, unknown> =>
     JSON.parse(
@@ -277,6 +283,47 @@ describe("restoreBackupBundleFile — the same restore as restoreBackupBundle", 
     }
   });
 
+  it("refills the birth-owner cache from the events it restores (VC-1097)", async () => {
+    const source = fixture();
+    const project = source.db.prepare("SELECT id FROM projects ORDER BY id LIMIT 1").get() as {
+      id: string;
+    };
+    let id = 0;
+    const engine = createSessionEngine({
+      ledger: createSqliteSessionLedger(source.db),
+      clock: { now: () => 500 },
+      ids: { next: (kind) => `${kind}-vc1097-${++id}` },
+    });
+    for (const ownerUserId of ["owner-a", undefined]) {
+      await engine.createSession({
+        commandId: `birth-${ownerUserId ?? "local"}`,
+        projectId: project.id,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+        ...(ownerUserId === undefined ? {} : { ownerUserId }),
+        provenance: {
+          source: { kind: "system", id: "desktop", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+    }
+    expect(birthOwners(source.db)).toHaveLength(2);
+
+    const { memory, file, roots } = await restoreBothWays(bundleOf(source));
+    expect(memory.ok, JSON.stringify(memory)).toBe(true);
+    expect(file.ok, JSON.stringify(file)).toBe(true);
+    for (const root of roots) {
+      const restored = new Database(join(root, "volli.db"), { readonly: true });
+      try {
+        expect(birthOwners(restored)).toEqual(birthOwners(source.db));
+      } finally {
+        restored.close();
+      }
+    }
+  });
+
   it("matches the source profile's counts and digests after the round trip", async () => {
     const source = fixture();
     addEvents(source, 50);
@@ -375,6 +422,11 @@ describe("restoreBackupBundleFile — the same restore as restoreBackupBundle", 
       )
       .map((trigger) => `${trigger.tbl_name}:${trigger.name}`);
     expect(insertTriggers).toEqual([
+      // Writes only `session_birth_owners`, a rebuilt cache the bundle never
+      // carries, from rows already loaded: the event table loads before its
+      // sequence table in both restores, and clearing the trigger-filled
+      // sequence rows clears the cache with them (VC-1097).
+      "session_event_sequence:session_birth_owner_recorded",
       "session_events:session_event_sequence_insert",
       "ticket_events:ticket_event_sequence_insert",
       // Same-table, row order only: the document carries rows in key order.

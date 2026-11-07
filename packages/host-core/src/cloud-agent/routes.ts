@@ -132,6 +132,10 @@ const ROUTES = {
   hook: ledger,
   doctor: machine,
   "prompt.baseline": machine,
+  // This machine's own perf store (VC-1092): its stalls, never another runner's.
+  "perf.top": machine,
+  "perf.stalls": machine,
+  "perf.compare": machine,
   "ticket.await": watches,
   // The backend queues the Run for the owner's runner; that runner's
   // `automation.run` executor starts its Session (`cloud-store/automation-jobs.ts`).

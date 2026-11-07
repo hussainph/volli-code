@@ -1,11 +1,20 @@
 # Runbook: a Volli host on Ubuntu
 
-> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
-> process: the backend is the single authority and Runners execute
+> **Superseded (VC-869, VC-1048).** Volli Cloud is moving to a design with no
+> host process: the backend is the single authority and Runners execute
 > ([Workspace authority and offline](../BOUNDARIES.md#workspace-authority-and-offline)).
 > This document still describes code in this repository. It is kept for
 > maintenance only and goes when that code is deleted or renamed; don't build
 > new work on it.
+>
+> **For a Linux box, use a runner instead.** A box is now added from the app in
+> one command: [Add a Linux runner](https://docs.volli.app/runners/linux/) and
+> [Run a runner on a VPS](https://docs.volli.app/runners/vps/). A runner links
+> itself outbound, has no listener, no operator token and no board of its own,
+> and updates itself from [a runner release](runner-release.md). Everything
+> below — the `volli` group, the operator token, the socket unit, the manual
+> artifact install and the SSH tunnel — belongs to hostd, which ships frozen
+> until it retires.
 
 Install `volli-hostd` on a fresh Ubuntu server and verify a Session
 over SSH with the `volli` CLI: register a small test repository, create a

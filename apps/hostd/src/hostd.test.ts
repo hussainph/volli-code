@@ -1323,6 +1323,19 @@ describe("the host protocol listener (VC-663)", () => {
     expect(existsSync(join(faults.fallbackHome, "volli"))).toBe(false);
   });
 
+  it("hands the host its bundled HTML extraction worker", async () => {
+    const webExtractWorker = join(root, "web-extract-worker.cjs");
+    await boot({
+      runtime: { binDir: root, venue: { kind: "remote", id: "fixture" }, webExtractWorker },
+    });
+    expect(faults.hostOptions!.webExtractWorker).toBe(webExtractWorker);
+  });
+
+  it("names no extraction worker when its runtime has none", async () => {
+    await boot();
+    expect(faults.hostOptions!).not.toHaveProperty("webExtractWorker");
+  });
+
   it("preserves an explicitly composed projects root", async () => {
     const projectsRoot = join(root, "custom-projects");
     await boot({

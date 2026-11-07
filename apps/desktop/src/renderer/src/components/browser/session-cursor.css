@@ -299,11 +299,10 @@
 /* The reduced-motion contract is also reachable by attribute, so the lab can
  * flip it without touching the OS setting and the overlay can be told by main.
  * Both spellings drop the same things: the glide, the ring, the nudge, the
- * scale and rise. Opacity keeps easing — a cursor that pops into being is
- * more startling than one that fades, and fading moves nothing. */
+ * scale, rise and opacity easing. Semantic states remain visible, static. */
 @media (prefers-reduced-motion: reduce) {
   .session-cursor-body {
-    transition: opacity 150ms var(--ease-out);
+    transition: none;
   }
   .session-cursor[data-present="false"] .session-cursor-body {
     scale: 1;
@@ -316,7 +315,7 @@
   }
   .session-cursor-label {
     translate: 0 0;
-    transition: opacity 150ms var(--ease-out);
+    transition: none;
   }
 }
 
@@ -324,7 +323,7 @@
   transition: none;
 }
 .session-cursor[data-reduced-motion="true"] .session-cursor-body {
-  transition: opacity 150ms var(--ease-out);
+  transition: none;
 }
 .session-cursor[data-reduced-motion="true"][data-present="false"] .session-cursor-body {
   scale: 1;
@@ -339,5 +338,5 @@
 }
 .session-cursor[data-reduced-motion="true"] .session-cursor-label {
   translate: 0 0;
-  transition: opacity 150ms var(--ease-out);
+  transition: none;
 }

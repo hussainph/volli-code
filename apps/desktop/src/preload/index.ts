@@ -50,6 +50,7 @@ import type {
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
   RendererLogEntry,
+  RendererStallBatch,
   TerminalBusyResult,
   TerminalCommandResult,
   TerminalDataEvent,
@@ -293,7 +294,7 @@ const invoke = <C extends keyof VolliInvokeContract>(
   ...args: IpcArgs<C>
 ): Promise<IpcResult<C>> => ipcRenderer.invoke(channel, ...args);
 
-/** Typed `ipcRenderer.send` for the 2 fire-and-forget channels, bound the same way. */
+/** Typed `ipcRenderer.send` for the fire-and-forget channels, bound the same way. */
 const send = <C extends keyof VolliSendContract>(
   channel: C,
   ...args: VolliSendContract[C]["args"]
@@ -853,6 +854,14 @@ const api = {
   log: {
     write: (entry: RendererLogEntry): void => {
       send("volli:renderer-log", entry);
+    },
+    /**
+     * This window's long frames and slow inputs (VC-1091), batched and
+     * fire-and-forget. Main checks each against the closed stall vocabulary
+     * and bounds how many a window may send.
+     */
+    stalls: (batch: RendererStallBatch): void => {
+      send("volli:renderer-stalls", batch);
     },
   },
   /**

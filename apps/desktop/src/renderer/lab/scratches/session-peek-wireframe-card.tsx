@@ -1,15 +1,17 @@
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
-import { CircleNotchIcon } from "@phosphor-icons/react/dist/csr/CircleNotch";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  ExternalIcon,
+  ChatIcon,
+  SuccessIcon,
+  CircleIcon,
+  SpinnerIcon,
+  HistoryIcon,
+  DispatchIcon,
+  HelpIcon,
+  TicketIcon,
+  WarningIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
 
 import { ModelMark } from "@renderer/components/models/model-identity";
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
@@ -57,9 +59,9 @@ const STATE_INK: Record<FixtureState, string> = {
 export function SessionGlyph({ fixture, state }: { fixture: SessionFixture; state: FixtureState }) {
   const State =
     state === "active"
-      ? CircleNotchIcon
+      ? SpinnerIcon
       : state === "waiting"
-        ? QuestionIcon
+        ? HelpIcon
         : state === "failed"
           ? WarningIcon
           : CircleIcon;
@@ -81,7 +83,7 @@ export function SessionGlyph({ fixture, state }: { fixture: SessionFixture; stat
         className={cn("absolute -right-1 -bottom-1 rounded-full bg-popover p-px", STATE_INK[state])}
       >
         <State
-          weight="bold"
+          strokeWidth={2.25}
           className={cn("size-3", state === "active" && "motion-safe:animate-spin")}
         />
       </span>
@@ -172,11 +174,11 @@ function Identity({
         </span>
       </div>
       <Button size="icon-sm" variant="ghost" aria-label="Open session" onClick={onOpen}>
-        <ArrowSquareOutIcon />
+        <ExternalIcon />
       </Button>
       {pinned ? (
         <Button size="icon-sm" variant="ghost" aria-label="Close reply" onClick={onClose}>
-          <XIcon />
+          <CloseIcon />
         </Button>
       ) : null}
     </header>
@@ -212,7 +214,7 @@ function Summary({
   summaryState: SummaryState;
 }) {
   return (
-    <CardBlock icon={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}>
+    <CardBlock icon={<HistoryIcon className="size-4 text-muted-foreground" />}>
       <div
         className="text-muted-foreground"
         data-summary-state={summaryState}
@@ -290,7 +292,7 @@ function AnswerForm({
       }}
     >
       {pendingQuestion && prompt ? (
-        <CardBlock icon={<QuestionIcon className="size-4 text-attention" />}>
+        <CardBlock icon={<HelpIcon className="size-4 text-attention" />}>
           <fieldset
             key={prompt.id}
             ref={questionRef}
@@ -528,7 +530,7 @@ export const SessionPeekCard = React.forwardRef<
           </CardBlock>
         )}
         {pendingQuestion && !pinned ? (
-          <CardBlock icon={<QuestionIcon className="size-4 text-attention" />}>
+          <CardBlock icon={<HelpIcon className="size-4 text-attention" />}>
             <p
               data-peek-question=""
               className="font-medium text-foreground [overflow-wrap:anywhere]"
@@ -560,7 +562,7 @@ export const SessionPeekCard = React.forwardRef<
       {sent && pinned ? (
         <CardBlock
           role="status"
-          icon={<CheckCircleIcon className="size-4" />}
+          icon={<SuccessIcon className="size-4" />}
           className="shrink-0 border-t border-border py-2 text-positive"
         >
           Sent
@@ -577,7 +579,7 @@ export const SessionPeekCard = React.forwardRef<
               className={GHOST_ON_LEAD}
               onClick={onLook}
             >
-              <ChatCircleIcon />
+              <ChatIcon />
               View conversation
             </Button>
           ) : (
@@ -629,7 +631,7 @@ export const SessionPeekCard = React.forwardRef<
                   (pendingQuestion && state.questionIndex !== prompts.length - 1)
                 }
               >
-                <PaperPlaneTiltIcon />
+                <DispatchIcon />
                 {state.send.kind === "sending"
                   ? "Sending…"
                   : state.send.kind === "failed"
@@ -639,7 +641,7 @@ export const SessionPeekCard = React.forwardRef<
             </div>
           ) : (
             <Button type="button" size="sm" variant="secondary" onClick={onPin}>
-              {pendingQuestion ? <QuestionIcon /> : <PaperPlaneTiltIcon />}
+              {pendingQuestion ? <HelpIcon /> : <DispatchIcon />}
               {pendingQuestion ? "Answer" : "Send"}
             </Button>
           )}

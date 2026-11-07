@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 /**
  * The lane view (VC-112, VC-132): one lane per board column, holding that
  * column's **Offered list in digit order**, arranged by dragging. Every offered
@@ -42,6 +43,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  useDndMonitor,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import {
@@ -51,8 +53,8 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { DotsSixVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsSixVertical";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { DragIcon, AutomationIcon } from "@renderer/components/ui/icon";
+
 import {
   armedAutomationFor,
   MAX_OFFERED_DIGITS,
@@ -64,6 +66,9 @@ import {
 
 import { laneDropRank, laneRowId, SWITCHED_OFF_NOTE } from "./automations-page-model";
 import { ColumnArmingButton } from "@renderer/components/board/column-arming";
+import { ViewSwitcher } from "@renderer/components/ui/view-switcher";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { toastError } from "@renderer/lib/toast";
@@ -79,7 +84,7 @@ import {
 } from "@renderer/stores/automations";
 
 /** Sibling shift while a lane is arranged — the board card's own number, copied deliberately. */
-const LANE_SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
+const LANE_SORT_TRANSITION = { duration: GLASS_MOTION.menuIn, easing: "var(--ease-out)" };
 
 /** One lane's whole content, composed once for both the drawing and the drop. */
 interface Lane {
@@ -97,7 +102,18 @@ interface Lane {
   pinnedId: string | null;
 }
 
-export function AutomationLanes({ projectId }: { projectId: string }) {
+export function AutomationLanes({
+  projectId,
+  onSelect,
+  disabled = false,
+}: {
+  projectId: string;
+  onSelect?(automation: Automation): void;
+  disabled?: boolean;
+}) {
+  const [column, setColumn] = React.useState<TicketStatus | "other">(TICKET_STATUSES[2]);
+  const [pending, setPending] = React.useState(false);
+  const lock = React.useRef(false);
   const automations = useAutomationsStore((state) => selectAutomations(state, projectId));
   const armings = useAutomationsStore((state) => selectArmings(state, projectId));
   const orders = useAutomationsStore((state) => selectColumnOrders(state, projectId));
@@ -144,6 +160,7 @@ export function AutomationLanes({ projectId }: { projectId: string }) {
   );
 
   function handleDragEnd({ active, over }: DragEndEvent) {
+    if (disabled || lock.current || !guardWrite(projectId)) return;
     const lane = lanes.find((candidate) =>
       candidate.rows.some(
         (automation) => laneRowId(candidate.status, automation.id) === String(active.id),
@@ -157,32 +174,120 @@ export function AutomationLanes({ projectId }: { projectId: string }) {
       overId: over === null ? null : String(over.id),
     });
     if (drop === null) return;
+    lock.current = true;
+    setPending(true);
     void setColumnOrder({
       projectId,
       status: drop.status,
       rankedAutomationIds: drop.rankedAutomationIds,
-    }).then((refusal) => {
-      // The lane is still on screen, but a refusal here is not a correction to
-      // anything a person can retype — it is a write that did not happen, so it
-      // toasts like every other failed mutation.
-      if (refusal !== null) toastError(`Couldn't reorder this column: ${refusal}`);
-    });
+    })
+      .then((refusal) => {
+        // The lane is still on screen, but a refusal here is not a correction to
+        // anything a person can retype — it is a write that did not happen, so it
+        // toasts like every other failed mutation.
+        if (refusal !== null) toastError(`Couldn't reorder this column: ${refusal}`);
+      })
+      .finally(() => {
+        lock.current = false;
+        setPending(false);
+      });
   }
 
   return (
     <section className="flex flex-col gap-2">
       <SectionHeading className="h-6 leading-6">Columns</SectionHeading>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <div className="flex gap-2 overflow-x-auto pb-2">
-          {lanes.map((lane) => (
-            <LaneColumn
-              key={lane.status}
-              projectId={projectId}
-              lane={lane}
-              reducedMotion={reducedMotion}
-            />
-          ))}
-          <OffBoardLane automations={offBoard} />
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+        accessibility={{
+          announcements: {
+            onDragStart({ active }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              return lane && row
+                ? `Picked up ${row.name} in ${TICKET_STATUS_LABELS[lane.status]}`
+                : undefined;
+            },
+            onDragOver({ active, over }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              const rank = lane?.rows.findIndex(
+                (a) => laneRowId(lane.status, a.id) === String(over?.id),
+              );
+              return lane && row && rank !== undefined && rank >= 0
+                ? `${row.name}, ${TICKET_STATUS_LABELS[lane.status]}, rank ${rank + 1}`
+                : undefined;
+            },
+            onDragEnd({ active }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              return lane && row
+                ? `Dropped ${row.name} in ${TICKET_STATUS_LABELS[lane.status]}`
+                : undefined;
+            },
+            onDragCancel({ active }) {
+              const lane = lanes.find((l) =>
+                l.rows.some((a) => laneRowId(l.status, a.id) === String(active.id)),
+              );
+              const row = lane?.rows.find(
+                (a) => laneRowId(lane.status, a.id) === String(active.id),
+              );
+              return lane && row
+                ? `Cancelled reordering ${row.name} in ${TICKET_STATUS_LABELS[lane.status]}`
+                : undefined;
+            },
+          },
+        }}
+      >
+        <div className="max-w-full overflow-x-auto pb-4">
+          <ViewSwitcher<TicketStatus | "other">
+            variant="text"
+            label="Automation columns"
+            idPrefix="automation-columns"
+            active={column}
+            modes={[
+              ...TICKET_STATUSES.map((status) => ({
+                key: status,
+                label: TICKET_STATUS_LABELS[status],
+              })),
+              { key: "other", label: "Other" },
+            ]}
+            onSelect={setColumn}
+          />
+        </div>
+        <div
+          role="tabpanel"
+          id={`automation-columns-page-${column}`}
+          aria-labelledby={`automation-columns-tab-${column}`}
+        >
+          {column === "other" ? (
+            <OffBoardLane automations={offBoard} onSelect={onSelect} />
+          ) : (
+            lanes
+              .filter((lane) => lane.status === column)
+              .map((lane) => (
+                <LaneColumn
+                  key={lane.status}
+                  projectId={projectId}
+                  lane={lane}
+                  reducedMotion={reducedMotion}
+                  disabled={disabled || pending}
+                />
+              ))
+          )}
         </div>
       </DndContext>
     </section>
@@ -198,14 +303,16 @@ function LaneColumn({
   projectId,
   lane,
   reducedMotion,
+  disabled,
 }: {
   projectId: string;
   lane: Lane;
   reducedMotion: boolean;
+  disabled: boolean;
 }) {
   const movable = draggableRows(lane);
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-lg bg-muted/30 p-2">
+    <div className="flex min-w-0 flex-col gap-1 rounded-container border border-border bg-card p-3">
       {/* `group/column-header` is what the bolt's hover reveal reads: the same
           control as the board's, so arming a column from the page and arming it
           from the board are provably one act (and one store door). */}
@@ -217,11 +324,11 @@ function LaneColumn({
           {lane.rows.length === 0 ? "" : lane.rows.length}
         </span>
         <div className="flex-1" />
-        <ColumnArmingButton projectId={projectId} status={lane.status} />
+        <fieldset disabled={disabled}>
+          <ColumnArmingButton projectId={projectId} status={lane.status} />
+        </fieldset>
       </div>
-      {lane.rows.length === 0 ? (
-        <p className="px-1 py-1 text-ui text-muted-foreground">Nothing offered here</p>
-      ) : null}
+      {lane.rows.length === 0 ? <p className="sr-only">No automations offered</p> : null}
       <SortableContext
         items={movable.map((automation) => laneRowId(lane.status, automation.id))}
         strategy={verticalListSortingStrategy}
@@ -233,6 +340,7 @@ function LaneColumn({
             automation={automation}
             digit={index < MAX_OFFERED_DIGITS ? index + 1 : null}
             pinned={automation.id === lane.pinnedId}
+            disabled={disabled}
             switchedOff={automation.id === lane.armedId && automation.id !== lane.pinnedId}
             reducedMotion={reducedMotion}
           />
@@ -248,6 +356,7 @@ function LaneRow({
   digit,
   pinned,
   switchedOff,
+  disabled,
   reducedMotion,
 }: {
   status: TicketStatus;
@@ -256,16 +365,23 @@ function LaneRow({
   digit: number | null;
   pinned: boolean;
   switchedOff: boolean;
+  disabled: boolean;
   reducedMotion: boolean;
 }) {
+  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
+  useDndMonitor({
+    onDragStart: ({ activatorEvent }) => setKeyboardDrag(activatorEvent.type === "keydown"),
+    onDragEnd: () => setKeyboardDrag(false),
+    onDragCancel: () => setKeyboardDrag(false),
+  });
   // Two components would need two hook orders; one component with a disabled
   // sortable keeps dnd-kit's own opt-out where it belongs.
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: laneRowId(status, automation.id),
-    disabled: pinned,
+    disabled: pinned || disabled,
     // `null` is dnd-kit's own "do not animate": under reduced motion the
     // siblings jump to their new places instead of sliding.
-    transition: reducedMotion ? null : LANE_SORT_TRANSITION,
+    transition: reducedMotion || keyboardDrag ? null : LANE_SORT_TRANSITION,
   });
 
   return (
@@ -281,36 +397,37 @@ function LaneRow({
       data-lane-dragging={isDragging ? "true" : undefined}
       style={{ transform: CSS.Transform.toString(transform), transition: transition ?? undefined }}
       className={cn(
-        "flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1",
+        "flex min-h-11 items-center gap-3 border-t border-border px-2 py-2 first:border-t-0",
         isDragging && "z-10 opacity-50",
         pinned ? "cursor-default" : "cursor-grab",
       )}
-      {...(pinned ? {} : attributes)}
-      {...(pinned ? {} : listeners)}
+      {...(pinned || disabled ? {} : attributes)}
+      {...(pinned || disabled ? {} : listeners)}
     >
       {pinned ? (
         // The bolt stands in for the grip on the one row that does not move:
         // it is armed and switched on here, so it IS digit 1 — and its stored
         // rank is waiting underneath for the day the effective pin lets go.
-        <LightningIcon weight="fill" className="size-3 shrink-0 text-foreground" />
+        <AutomationIcon className="size-3 shrink-0 text-foreground" />
       ) : (
-        <DotsSixVerticalIcon className="size-3 shrink-0 text-muted-foreground" />
+        <DragIcon className="size-3 shrink-0 text-muted-foreground" />
       )}
       {/* Past the ninth the key cap keeps its width but not its ink, so the
           name stays in the column of names above it while no digit is claimed. */}
       <kbd
         aria-hidden={digit === null ? true : undefined}
         className={cn(
-          "shrink-0 rounded-sm border border-border px-1 font-mono text-label text-muted-foreground",
+          "shrink-0 rounded-keycap border border-border px-1 font-mono text-label text-muted-foreground",
           digit === null && "invisible",
         )}
       >
         {digit ?? "\u00a0"}
       </kbd>
       <span className="min-w-0 flex-1 truncate text-ui text-foreground">{automation.name}</span>
+      {pinned ? <span className="shrink-0 text-label text-muted-foreground">Armed</span> : null}
       {switchedOff ? (
         <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-          <LightningIcon weight="bold" className="size-3" />
+          <AutomationIcon strokeWidth={2.25} className="size-3" />
           Armed · {SWITCHED_OFF_NOTE}
         </span>
       ) : null}
@@ -325,30 +442,24 @@ function LaneRow({
  * complete. No digits: a digit is a column's row number, and these answer to no
  * column.
  */
-function OffBoardLane({ automations }: { automations: readonly Automation[] }) {
+function OffBoardLane({
+  automations,
+  onSelect,
+}: {
+  automations: readonly Automation[];
+  onSelect?(row: Automation): void;
+}) {
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1 rounded-lg border border-dashed border-border p-2">
-      <div className="flex items-center gap-2 px-1">
-        <span className="text-ui font-medium text-muted-foreground">No column</span>
-        <span className="text-label text-muted-foreground tabular-nums">
-          {automations.length === 0 ? "" : automations.length}
-        </span>
-      </div>
-      {automations.length === 0 ? (
-        <p className="px-1 py-1 text-ui text-muted-foreground">Every automation has a column.</p>
-      ) : (
-        automations.map((automation) => (
-          <div
-            key={automation.id}
-            data-lane-row={`none:${automation.id}`}
-            className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1"
-          >
-            <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
-              {automation.name}
-            </span>
-          </div>
-        ))
-      )}
+    <div className="rounded-container border border-border bg-card p-3">
+      <SectionHeading>Other</SectionHeading>
+      {automations.map((automation) => (
+        <ListRow
+          key={automation.id}
+          data-lane-row={`none:${automation.id}`}
+          primary={automation.name}
+          onActivate={onSelect ? () => onSelect(automation) : null}
+        />
+      ))}
     </div>
   );
 }

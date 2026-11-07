@@ -1,9 +1,6 @@
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowsDownUpIcon } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { ArchiveIcon, SortIcon, BoardIcon, ListIcon, AddIcon } from "@renderer/components/ui/icon";
+
 import {
   DEFAULT_SORT_DIRECTION,
   TICKET_SORT_KEYS,
@@ -15,12 +12,9 @@ import {
 import { ArchiveDialog } from "@renderer/components/board/archive-dialog";
 import { boardSummary } from "@renderer/components/board/board-summary";
 import { FilterBar } from "@renderer/components/board/filter-bar";
-import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { PageHeader } from "@renderer/components/layout/page-header";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import { StatusDot } from "@renderer/components/ui/status-dot";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,9 +24,9 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { cn } from "@renderer/lib/utils";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_PROJECT_UI, useProjectUiStore, type BoardView } from "@renderer/stores/project-ui";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 interface BoardHeaderProps {
   projectId: string;
@@ -58,11 +52,8 @@ function OrderingMenu({ projectId }: { projectId: string }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className="gap-1 border border-border px-2 text-ui text-muted-foreground"
-        >
-          <ArrowsDownUpIcon className="size-3.5" />
+        <Button variant="toolbar" className="gap-1 px-2 text-ui text-muted-foreground">
+          <SortIcon className="size-3.5" />
           {TICKET_SORT_LABELS[sort.key]}
         </Button>
       </DropdownMenuTrigger>
@@ -108,30 +99,19 @@ function ViewToggle({ projectId }: { projectId: string }) {
   );
   const setBoardView = useProjectUiStore((state) => state.setBoardView);
 
-  const segment = (value: BoardView, label: string, Icon: typeof KanbanIcon) => (
-    <button
-      type="button"
-      aria-label={label}
-      aria-pressed={view === value}
-      onClick={() => setBoardView(projectId, value)}
-      className={cn(
-        // Button-primitive idiom (ui/button.tsx): press/focus feedback for a
-        // hand-rolled control, segmented look unchanged at rest. `scale` is
-        // named in the transition list and cancelled by `scale-100!` under
-        // reduced motion for the reason spelled out there.
-        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,scale,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring",
-        view === value && "bg-accent text-foreground",
-      )}
-    >
-      <Icon className="size-3.5" />
-    </button>
-  );
-
   return (
-    <div className="flex items-center gap-1 rounded-lg border border-border p-1">
-      {segment("board", "Board view", KanbanIcon)}
-      {segment("list", "List view", ListBulletsIcon)}
-    </div>
+    <Segmented
+      ariaLabel="Board layout"
+      className="h-control-default [&>[data-control=button]]:size-control-sm"
+      value={view}
+      size="sm"
+      iconOnly
+      options={[
+        { key: "board", label: "Board view", icon: BoardIcon },
+        { key: "list", label: "List view", icon: ListIcon },
+      ]}
+      onChange={(next) => setBoardView(projectId, next)}
+    />
   );
 }
 
@@ -154,21 +134,25 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
   return (
     <PageHeader
       title="Board"
+      className="min-h-13 px-3 py-2"
       // Named by the permanent tab directly above this row (VC-54), so the word
       // stays in the outline and leaves the screen — the two are one object at
       // one scope, and it only has one name.
       titleHidden
+      actionsLabel="Board actions"
+      actionsClassName="max-w-full flex-wrap"
       actions={
         <>
+          <FilterBar projectId={projectId} tickets={tickets} filter={filter} />
           <OrderingMenu projectId={projectId} />
           <ViewToggle projectId={projectId} />
           {/* The Archive is a per-project view, not a sixth column (CONCEPT #92) —
               reached from here and only here. */}
           <Button
-            variant="ghost"
+            variant="toolbar"
             size="icon"
             aria-label="Archive"
-            className="border border-border text-muted-foreground"
+            className="text-muted-foreground"
             onClick={() => setArchiveOpen(true)}
           >
             <ArchiveIcon className="size-3.5" />
@@ -186,14 +170,13 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
             {...readOnlyControl(canWrite)}
             onClick={() => useUiStore.getState().setNewTicketOpen(true)}
           >
-            <PlusIcon className="size-3.5" />
+            <AddIcon className="size-3.5" />
             New ticket
           </Button>
         </>
       }
     >
       <BoardSummary visible={ticketCount} total={tickets.length} />
-      <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
     </PageHeader>
   );
 }
@@ -208,53 +191,13 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
  * something when they do appear.
  */
 function BoardSummary({ visible, total }: { visible: number; total: number }) {
-  // Read here rather than taken as a prop from `BoardHeader`, so an agent's
-  // output re-renders this one span instead of the whole header row — and, far
-  // more importantly, never the board. See session-activity-context.tsx.
-  const activityByTicket = useBoardSessionActivityMap();
-  const summary = boardSummary({ visible, total, activityByTicket });
-  const live = summary.working + summary.waiting > 0;
-  if (summary.count === null && !live) return null;
-
+  // Live state belongs only to each card's ring. A filter count remains a
+  // separate query fact; total count is accessible but visually quiet.
+  const summary = boardSummary({ visible, total, activityByTicket: {} });
+  if (summary.count === null) return null;
   return (
-    <span className="flex items-center gap-2">
-      {summary.count === null ? null : <Badge variant="count">{summary.count}</Badge>}
-      {live ? (
-        <span className="flex items-center gap-2 text-ui text-muted-foreground">
-          <span aria-hidden>·</span>
-          {/* Waiting leads working, the precedence every surface in the app
-              gives it: an agent that has stopped to ask something is the one
-              thing here a person can act on. */}
-          {summary.waiting > 0 ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="flex cursor-default items-center gap-1 tabular-nums">
-                  <StatusDot state="waiting" />
-                  {summary.waiting} needs you
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                {summary.waiting} {summary.waiting === 1 ? "ticket needs" : "tickets need"} your
-                input
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-          {summary.working > 0 ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="flex cursor-default items-center gap-1 tabular-nums">
-                  <StatusDot state="working" />
-                  {summary.working} working
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                {summary.working} {summary.working === 1 ? "ticket has" : "tickets have"} an active
-                agent
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-        </span>
-      ) : null}
+    <span className={visible === total ? "sr-only" : undefined}>
+      <Badge variant="count">{summary.count}</Badge>
     </span>
   );
 }

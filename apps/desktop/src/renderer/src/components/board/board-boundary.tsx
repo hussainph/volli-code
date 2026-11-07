@@ -31,9 +31,7 @@
  */
 import * as React from "react";
 
-import { Button } from "@renderer/components/ui/button";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
-import { cn } from "@renderer/lib/utils";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 
 interface BoardBoundaryProps {
   /** Resets the verdict when it changes — a different project is a different board. */
@@ -84,20 +82,18 @@ export class BoardBoundary extends React.Component<BoardBoundaryProps, BoardBoun
     }
 
     return (
-      <div className={cn("min-h-0 flex-1", EMPTY_PAGE)} data-board-boundary-fallback>
-        <p className="text-sm text-muted-foreground">The board stopped responding.</p>
-        <Button
-          variant="ghost"
-          className="border border-border"
-          onClick={() =>
-            this.setState((current) => ({
-              failed: false,
-              attempt: current.attempt + 1,
-            }))
-          }
-        >
-          Reload the board
-        </Button>
+      <div className={"min-h-0 flex-1"} data-board-boundary-fallback>
+        <EmptyState
+          tier="page"
+          illustration="failed"
+          status="failed"
+          title="Board unavailable"
+          action={{
+            label: "Reload the board",
+            onAction: () =>
+              this.setState((current) => ({ failed: false, attempt: current.attempt + 1 })),
+          }}
+        />
       </div>
     );
   }

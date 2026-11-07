@@ -69,7 +69,7 @@
  */
 
 import { shortSessionId } from "@volli/shared";
-import type { CommandReceipt, SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionListingProjection } from "@volli/shared";
 import type { SessionEngine, SessionRuntime, StopSessionOutcome } from "@volli/session-engine";
 import { stopResolvedSession, SuperviseSessionError } from "@volli/session-engine";
 export { stopSessionById, SuperviseSessionError } from "@volli/session-engine";
@@ -108,7 +108,7 @@ export interface SuperviseTargetInput {
 async function resolveTarget(
   ports: SuperviseSessionPorts,
   input: SuperviseTargetInput,
-): Promise<SessionProjection> {
+): Promise<SessionListingProjection> {
   const handle = input.handle.trim();
   if (handle.length === 0) {
     throw new SuperviseSessionError(

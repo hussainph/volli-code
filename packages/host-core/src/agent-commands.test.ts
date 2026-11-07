@@ -945,7 +945,7 @@ describe("agent command service", () => {
 
       await exec("ticket.move", { id: "VC-1", to: "doing" });
 
-      // CONTEXT.md: an explicit `volli ticket move` is a Deliberate move with
+      // CONTEXT.md#deliberate-move: an explicit `volli ticket move` is a Deliberate move with
       // the same semantics as a drag, so an armed destination column must be
       // able to tell this was an ARRIVAL — which needs the previous status.
       expect(moves).toEqual([
@@ -7142,6 +7142,43 @@ describe("prompt.baseline", () => {
       "brief",
       "reminder:session-tools",
     ]);
+  });
+
+  it("prices the repository instructions a start would record, first and as their own slice", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", ticketNumber: 12, title: "Ship CLI" }));
+    const asked: [string, string | null][] = [];
+    const service = baselineService({
+      repoInstructions: async (projectId, ticketId) => {
+        asked.push([projectId, ticketId]);
+        return { name: "repository instructions", text: "house rules" };
+      },
+    });
+    const board = await service({ project: "/repo/volli" });
+    const ticket = await service({ ticket: "VC-12" });
+    expect(asked).toEqual([
+      ["p1", null],
+      ["p1", "t1"],
+    ]);
+    if (!board.ok) throw new Error("expected success");
+    const data = board.data as Record<string, unknown>;
+    const ids = (data["sections"] as { id: string }[]).map((section) => section.id);
+    expect(ids.slice(ids.indexOf("resources-header") + 1, ids.indexOf("brief"))).toEqual([
+      "resource:repository instructions",
+      "resource:skills index",
+    ]);
+    expect((data["repoInstructions"] as { chars: number }).chars).toBeGreaterThan(0);
+    expect(ticket.ok).toBe(true);
+    // No file, no slice: a measured zero.
+    const none = await baselineService({ repoInstructions: async () => null })({
+      project: "/repo/volli",
+    });
+    if (!none.ok) throw new Error("expected success");
+    expect((none.data as Record<string, unknown>)["repoInstructions"]).toEqual({
+      chars: 0,
+      tokens: 0,
+    });
   });
 
   it("--ticket prices a Ticket Session in its stamped worktree, Brief included", async () => {

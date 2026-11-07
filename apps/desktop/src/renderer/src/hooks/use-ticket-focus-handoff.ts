@@ -9,11 +9,12 @@
  * "here" left to Tab from, and the board's fifty cards start again at the top.
  *
  * Neither half can be a React ref handed between the two surfaces, because they
- * are never mounted at the same time: `home-surface.tsx` swaps the board for
- * the detail view, and the board is rebuilt from scratch on the way back
- * (`column-window.ts` says so in as many words). So the journey is carried as
- * module state — an ORIGIN, recorded by identity plus its neighbourhood — and
- * each surface claims its half on mount:
+ * are never live at the same time: `home-surface.tsx` hides the board behind
+ * `<Activity mode="hidden">` while the detail view is up (VC-1080), which tears
+ * down every effect of the board, and its effects come back on the way out as
+ * a mount's would. So the journey is carried as module state — an ORIGIN,
+ * recorded by identity plus its neighbourhood — and each surface claims its
+ * half when its effects (re)start:
  *
  *   • the ticket view takes the ENTRY request and puts focus on the primary
  *     tab strip's selected tab: a real control, with the ring every other tab

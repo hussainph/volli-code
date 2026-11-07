@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// @ts-expect-error — this test only uses the typed-at-runtime JSDOM parser.
+import { JSDOM } from "jsdom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { Ticket } from "@volli/shared";
@@ -77,22 +79,12 @@ describe("TicketRail header", () => {
     expect(html.match(/tabindex="0"/g)?.length).toBe(1);
   });
 
-  // The design of record shows exactly one word in the pill; the other pages
-  // are bare glyphs until selected. That is what lets four of them fit the
-  // rail's narrowest width, so the unselected labels are genuinely absent from
-  // the DOM — every tab still carries its name for assistive tech through
-  // `aria-label`.
-  it("labels only the selected page, and names the others for screen readers", () => {
+  it("keeps compact icon tabs named for screen readers", () => {
     const html = render();
-
-    expect(html).toContain(">Now<");
-    expect(html).not.toContain(">Diffs<");
-    expect(html).not.toContain(">Files<");
-    expect(html).not.toContain(">Search<");
-    expect(html).toContain('aria-label="Now"');
-    expect(html).toContain('aria-label="Diffs"');
-    expect(html).toContain('aria-label="Files"');
-    expect(html).toContain('aria-label="Search"');
+    for (const label of ["Now", "Diffs", "Files", "Search"]) {
+      expect(html).toContain(`aria-label="${label}"`);
+      if (label === "Now") expect(html).toContain(`>${label}</span>`);
+    }
   });
 
   it("retires the vertical icon-mode strip and its Properties page", () => {
@@ -118,11 +110,11 @@ describe("TicketRail header", () => {
     const root = html.indexOf('data-volli-rail="ticket"');
     expect(root).toBeGreaterThan(-1);
     expect(root).toBeLessThan(html.indexOf('role="tablist"'));
-    expect(root).toBeLessThan(html.indexOf("overflow-y-auto"));
+    expect(root).toBeLessThan(html.indexOf("ticket-inspector-now"));
     expect([...html.matchAll(/data-volli-rail=/g)]).toHaveLength(1);
-    // The page still scrolls — only the bar is gone, so the overflow the
-    // scroller declares is untouched by the marker beside it.
-    expect(html).toContain("overflow-y-auto");
+    // Now keeps each roster bounded independently; host-supplied Diffs/Files
+    // retain their own overflow under this same rail marker.
+    expect(html).toContain("ticket-inspector-now");
   });
 
   // The stylesheet half of the same contract, read off the file rather than
@@ -143,7 +135,8 @@ describe("TicketRail header", () => {
     // The global treatment the rest of the app keeps: a 10px bar with a token
     // thumb. If this ever stops matching, the rail's rule stopped being an
     // exception and became the policy.
-    expect(css).toMatch(/\*::-webkit-scrollbar \{\s*width: 10px/);
+    expect(css).toContain("--scrollbar-size: 10px");
+    expect(css).toMatch(/\*::-webkit-scrollbar \{\s*width: var\(--scrollbar-size\)/);
   });
 
   it("has no control that collapses the rail — that lives outside the panel", () => {
@@ -161,13 +154,13 @@ describe("TicketRail header", () => {
 // which drives the real tabs; what is left to prove here is that Now is that
 // default and that it is one page holding all three blocks.
 describe("TicketRail's Now page", () => {
-  it("is the default page, and folds properties, automations and sessions into it", () => {
+  it("is the default working-set page, with metadata beside the document title", () => {
     expect(useUiStore.getInitialState().railMode).toBe("now");
     const html = render();
 
     expect(html).toContain('id="ticket-rail-page-now"');
     expect(html).toContain('aria-labelledby="ticket-rail-tab-now"');
-    expect(html).toContain('data-testid="ticket-rail-properties"');
+    expect(html).not.toContain('data-testid="ticket-rail-properties"');
     expect(html).toContain('data-testid="ticket-rail-automations"');
     expect(html).toContain("Sessions");
   });
@@ -197,7 +190,7 @@ describe("TicketRail's Now page", () => {
   // every few minutes, then the list they press now and again. Asserted on the
   // markup's own sequence because a reorder in the composition is a one-line
   // change that no other test would notice.
-  it("opens with the facts, then the roster, then the acts", () => {
+  it("opens with the roster before the acts", () => {
     const html = render();
     const at = (needle: string) => {
       const index = html.indexOf(needle);
@@ -205,36 +198,34 @@ describe("TicketRail's Now page", () => {
       return index;
     };
 
-    const properties = at('data-testid="ticket-rail-properties"');
-    const sessions = at('aria-label="New chat"');
+    const sessions = at('aria-label="Open a tab"');
     const automations = at('data-testid="ticket-rail-automations"');
 
-    expect(properties).toBeLessThan(sessions);
     expect(sessions).toBeLessThan(automations);
   });
 
-  it("draws every block on Now as a section — an eyebrow over rows, no card, no act button", () => {
+  it("draws peer group headings over flat rows without a duplicate properties title", () => {
     const html = render();
     const page = html.slice(
       html.indexOf('id="ticket-rail-page-now"'),
       html.indexOf('data-testid="ticket-repository-summary"'),
     );
 
-    // Three eyebrows, in order.
-    const eyebrows = [
-      ...page.matchAll(/<h2[^>]*>(?:<button[^>]*>)?(Properties|Sessions|Automations)/g),
-    ].map((match) => match[1]);
-    expect(eyebrows).toEqual(["Properties", "Sessions", "Automations"]);
-    // No framed card, and no ACT the page offers: `Run once` is gone. The
-    // `RAIL_CONTROL` recipe survives on Now in exactly one place — the two
-    // Properties dropdowns, which are a row's VALUE rather than something the
-    // page does, and are the app's own pickers rather than a rail-local
-    // control. Counted, so a third raised button cannot appear unnoticed.
+    const fragment = JSDOM.fragment(page) as DocumentFragment;
+    const headings = [...fragment.querySelectorAll("h3")].map((heading) => heading.textContent);
+    expect(headings).toEqual(["Sessions", "Automations"]);
+    expect(page).not.toMatch(/<h[1-6][^>]*>Properties/);
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
     expect(page).not.toContain("Run once");
-    expect([...page.matchAll(/shadow-raised/g)]).toHaveLength(2);
+    for (const field of ["Status", "Priority", "Labels"]) {
+      expect(page).not.toContain(`aria-label="${field}:`);
+    }
+    // The compact plus opens the same chooser as the strip, without an outlined
+    // split control. Rail geometry must not silently become strip-sized.
+    expect(page).toMatch(/data-size="icon-xs"[^>]*aria-label="Open a tab"/);
+    expect(page).not.toContain("bg-card shadow-raised");
     for (const field of ["status", "priority"]) {
-      expect(page).toContain(`data-testid="ticket-rail-property-${field}"`);
+      expect(page).not.toContain(`data-testid="ticket-rail-property-${field}"`);
     }
   });
 
@@ -245,7 +236,7 @@ describe("TicketRail's Now page", () => {
   // the scroller is not the page's only child.
   it("hangs its usage footer outside the scrolling column", () => {
     const page = render().slice(render().indexOf('id="ticket-rail-page-now"'));
-    const scroller = page.indexOf("overflow-y-auto pb-8");
+    const scroller = page.indexOf("ticket-inspector-now");
 
     expect(scroller).toBeGreaterThan(-1);
     expect(page.indexOf("</section>", scroller)).toBeGreaterThan(scroller);
@@ -255,7 +246,7 @@ describe("TicketRail's Now page", () => {
     const html = render();
     const page = html.slice(html.indexOf('id="ticket-rail-page-now"'));
 
-    expect(page).toContain("gap-4 overflow-y-auto");
+    expect(page).toContain("gap-4 overflow-hidden");
     // A block that carried its own `pt-4` would double the rhythm against its
     // neighbours and leave a hole when absent.
     expect(page).not.toContain("pt-4 px-4");
@@ -273,15 +264,13 @@ describe("TicketRail's Now page", () => {
     expect(html).not.toContain('id="ticket-rail-page-search"');
   });
 
-  it("keeps the ticket's repository facts out of the properties section", () => {
+  it("keeps repository facts in the pinned repository footer", () => {
     const html = render();
-    const properties = html.slice(
-      html.indexOf('data-testid="ticket-rail-properties"'),
-      html.indexOf('data-testid="ticket-sessions"'),
+    const footer = html.slice(html.indexOf('data-testid="ticket-repository-summary"'));
+    expect(footer).toContain("volli/VC-6-calm-stack");
+    expect(html.slice(0, html.indexOf('data-testid="ticket-repository-summary"'))).not.toContain(
+      "volli/VC-6-calm-stack",
     );
-
-    expect(properties).not.toContain("volli/VC-6-calm-stack");
-    expect(properties).not.toContain("/worktrees/");
   });
 });
 

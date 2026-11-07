@@ -1,12 +1,12 @@
 import * as React from "react";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
+import { SidebarIcon } from "@renderer/components/ui/icon";
+
 import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
 import { Button } from "@renderer/components/ui/button";
 import { Separator } from "@renderer/components/ui/separator";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   Tooltip,
   TooltipContent,
@@ -20,29 +20,13 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
 
-/*
- * There WAS a keyboard-instant mode here: ⌘B passed `{ instant: true }`, which
- * flipped a local `motionMode` onto the wrapper's `data-motion` for two frames
- * so the collapse snapped instead of animating. It is gone, because it never
- * ran. `AppShell` also writes `data-motion` on this same element, and it spreads
- * its props AFTER this component's own attributes — so its `undefined` cleared
- * the flag on every render this primitive tried to set it. The escape hatch was
- * dead in the shipped app from the day the shell claimed the attribute, and ⌘B
- * has always animated exactly like the chrome-band trigger.
- *
- * Removed rather than repaired, and that is the decision, not an accident of
- * deleting the easier half: ⌘B and the trigger agreeing is the behaviour the app
- * has, the one the hover-sidebar scratch settled, and the one the shell's own
- * `data-motion` (terminal focus, rail geometry) is built to interrupt. A second
- * writer for the same attribute, whose whole contract is "the other writer must
- * not be saying anything right now", is a race waiting for a reason to happen.
- * The shell is the single writer.
- */
+/** Input modality is carried to the shell; keyboard toggles never animate. */
+type SidebarToggleOptions = { instant?: boolean };
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
   open: boolean;
   setOpen: (open: boolean) => void;
-  toggleSidebar: () => void;
+  toggleSidebar: (options?: SidebarToggleOptions) => void;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -67,17 +51,17 @@ function SidebarProvider({
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
   open?: boolean;
-  onOpenChange?: (open: boolean) => void;
+  onOpenChange?: (open: boolean, options?: SidebarToggleOptions) => void;
 }) {
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(defaultOpen);
   const open = openProp ?? _open;
   const setOpen = React.useCallback(
-    (value: boolean | ((value: boolean) => boolean)) => {
+    (value: boolean | ((value: boolean) => boolean), options?: SidebarToggleOptions) => {
       const openState = typeof value === "function" ? value(open) : value;
       if (setOpenProp) {
-        setOpenProp(openState);
+        setOpenProp(openState, options);
       } else {
         _setOpen(openState);
       }
@@ -88,9 +72,12 @@ function SidebarProvider({
     [setOpenProp, open],
   );
 
-  const toggleSidebar = React.useCallback(() => {
-    setOpen((previous) => !previous);
-  }, [setOpen]);
+  const toggleSidebar = React.useCallback(
+    (options?: SidebarToggleOptions) => {
+      setOpen((previous) => !previous, options);
+    },
+    [setOpen],
+  );
 
   // Adds a keyboard shortcut to toggle the sidebar. `event.repeat` is still
   // excluded: a held ⌘B should toggle once, not strobe the shell. ⌘ only, like
@@ -105,7 +92,7 @@ function SidebarProvider({
         !event.altKey
       ) {
         event.preventDefault();
-        if (!event.repeat) toggleSidebar();
+        if (!event.repeat) toggleSidebar({ instant: true });
       }
     };
 
@@ -142,10 +129,10 @@ function SidebarProvider({
               ...style,
             } as React.CSSProperties
           }
-          className={cn(
-            "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
-            className,
-          )}
+          // Shell paint is explicit at the caller. A root-level :has() over
+          // arbitrary descendants makes every portaled overlay insertion
+          // invalidate the whole app; the canvas must not depend on that scan.
+          className={cn("group/sidebar-wrapper flex min-h-svh w-full", className)}
           {...props}
         >
           {children}
@@ -204,7 +191,7 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-[180ms] ease-swift",
+          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-(--duration-menu-in) ease-swift",
           // Instant tracking while the resize grip is dragged (AppShell sets
           // data-resizing on the provider) — a timed transition would rubber-band.
           "group-data-[resizing]/sidebar-wrapper:transition-none",
@@ -219,7 +206,7 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) transition-[left,right,width] duration-[180ms] ease-swift",
+          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) transition-[left,right,width] duration-(--duration-menu-in) ease-swift",
           "group-data-[resizing]/sidebar-wrapper:transition-none",
           "group-data-[motion=instant]/sidebar-wrapper:transition-none",
           side === "left"
@@ -253,23 +240,19 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
   return (
     <Button
       data-sidebar="trigger"
+      data-sidebar-trigger=""
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon"
       className={className}
       onClick={(event) => {
         onClick?.(event);
-        toggleSidebar();
+        toggleSidebar({ instant: event.detail === 0 });
       }}
       {...props}
     >
-      {/* Outline, the baseline. `fill` marks the one item that is the EXCEPTION
-          among its neighbours (CLAUDE.md), and a control's own noun is never
-          that — this glyph is the trigger, not the odd one out in a list of
-          them. The audit measures SidebarSimple's fill at 1.34x regular's ink
-          anyway: too weak to carry a state even if there were one to carry, and
-          this control has no visual on-state at all (a separate sweep). */}
-      <SidebarSimpleIcon />
+      {/* A shared outline symbol; the trigger is not a state badge. */}
+      <SidebarIcon />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
@@ -367,7 +350,7 @@ function SidebarGroupLabel({
       data-slot="sidebar-group-label"
       data-sidebar="group-label"
       className={cn(
-        "flex h-8 shrink-0 items-center rounded-md px-2 text-ui font-medium text-sidebar-foreground/70 ring-ring outline-hidden transition-[margin,opacity] duration-300 ease-swift focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
+        "flex h-8 shrink-0 items-center rounded-md px-2 text-ui font-medium text-sidebar-foreground/70 ring-ring outline-hidden transition-[margin,opacity] duration-(--duration-sheet) ease-swift focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         "group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0",
         className,
       )}
@@ -425,7 +408,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
  * press note in `ui/button.tsx` for why those are two different properties.
  */
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-ring outline-hidden transition-[transform,scale,background-color,color] duration-100 ease-out group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent-veil active:text-foreground motion-reduce:scale-100! disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-ring outline-hidden transition-[transform,scale,background-color,color] duration-(--duration-menu-out) ease-out group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent-veil active:text-foreground motion-reduce:scale-100! disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -491,37 +474,6 @@ function SidebarMenuButton({
   );
 }
 
-function SidebarMenuSkeleton({
-  className,
-  showIcon = false,
-  ...props
-}: React.ComponentProps<"div"> & {
-  showIcon?: boolean;
-}) {
-  // Random width between 50 to 90%, drawn once when the skeleton mounts.
-  const [width] = React.useState(() => `${Math.floor(Math.random() * 40) + 50}%`);
-
-  return (
-    <div
-      data-slot="sidebar-menu-skeleton"
-      data-sidebar="menu-skeleton"
-      className={cn("flex h-8 items-center gap-2 rounded-md px-2", className)}
-      {...props}
-    >
-      {showIcon && <Skeleton className="size-4 rounded-md" data-sidebar="menu-skeleton-icon" />}
-      <Skeleton
-        className="h-4 max-w-(--skeleton-width) flex-1"
-        data-sidebar="menu-skeleton-text"
-        style={
-          {
-            "--skeleton-width": width,
-          } as React.CSSProperties
-        }
-      />
-    </div>
-  );
-}
-
 function SidebarMenuSub({ className, ...props }: React.ComponentProps<"ul">) {
   return (
     <ul
@@ -551,7 +503,6 @@ export {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSkeleton,
   SidebarMenuSub,
   SidebarProvider,
   SidebarSeparator,

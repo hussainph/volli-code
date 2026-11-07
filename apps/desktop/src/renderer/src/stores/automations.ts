@@ -170,15 +170,15 @@ interface AutomationsState {
    */
   refresh(projectId: string): Promise<boolean>;
   /** Re-fetches one project's Run history, newest first. Toasts on failure. */
-  refreshRuns(projectId: string): Promise<void>;
+  refreshRuns(projectId: string): Promise<boolean>;
   /** Re-fetches one project's Skipped occurrences, newest due first. Toasts on failure. */
-  refreshSkips(projectId: string): Promise<void>;
+  refreshSkips(projectId: string): Promise<boolean>;
   /**
    * Re-fetches ONE Automation's Runs and Skipped occurrences in one project
    * (VC-297). Both doors at once, because the editor draws one interleaved
    * list and two sequential round trips would show it half-built.
    */
-  refreshAutomationHistory(projectId: string, automationId: string): Promise<void>;
+  refreshAutomationHistory(projectId: string, automationId: string): Promise<boolean>;
   /** Re-reads the machine-local enabled set. Resolves whether it landed. */
   refreshEnablement(): Promise<boolean>;
   /** Re-fetches one project's armed columns. Resolves whether the read landed. */
@@ -412,22 +412,24 @@ export function createAutomationsStore() {
     },
 
     async refreshRuns(projectId) {
-      if (!automationsAvailable(projectId)) return;
+      if (!automationsAvailable(projectId)) return false;
       try {
         const result = await automationSource().runsForProject({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load run history: ${result.error}`);
-          return;
+          return false;
         }
         set((state) => ({ runsByProject: { ...state.runsByProject, [projectId]: result.runs } }));
+        return true;
       } catch (error) {
         toastError(`Couldn't load run history: ${errorMessage(error)}`);
+        return false;
       }
     },
 
     async refreshAutomationHistory(projectId, automationId) {
       const key = automationHistoryKey(projectId, automationId);
-      if (!automationsAvailable(projectId)) return;
+      if (!automationsAvailable(projectId)) return false;
       try {
         const [runs, skips] = await Promise.all([
           automationSource().runsForAutomation({ projectId, automationId }),
@@ -435,11 +437,11 @@ export function createAutomationsStore() {
         ]);
         if (!runs.ok) {
           toastError(`Couldn't load run history: ${runs.error}`);
-          return;
+          return false;
         }
         if (!skips.ok) {
           toastError(`Couldn't load skipped occurrences: ${skips.error}`);
-          return;
+          return false;
         }
         // One write for both halves: the editor interleaves them by time, and a
         // render between two writes would draw a list that was never true.
@@ -447,24 +449,28 @@ export function createAutomationsStore() {
           runsByAutomation: { ...state.runsByAutomation, [key]: runs.runs },
           skipsByAutomation: { ...state.skipsByAutomation, [key]: skips.skips },
         }));
+        return true;
       } catch (error) {
         toastError(`Couldn't load run history: ${errorMessage(error)}`);
+        return false;
       }
     },
 
     async refreshSkips(projectId) {
-      if (!automationsAvailable(projectId)) return;
+      if (!automationsAvailable(projectId)) return false;
       try {
         const result = await automationSource().skipsForProject({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load skipped occurrences: ${result.error}`);
-          return;
+          return false;
         }
         set((state) => ({
           skipsByProject: { ...state.skipsByProject, [projectId]: result.skips },
         }));
+        return true;
       } catch (error) {
         toastError(`Couldn't load skipped occurrences: ${errorMessage(error)}`);
+        return false;
       }
     },
 

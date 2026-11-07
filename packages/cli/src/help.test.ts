@@ -27,8 +27,13 @@ describe("bareHelpText", () => {
     // a Ticket Session does NOT hold these verbs and so has no schema to read,
     // which is exactly the reader "a wrong door beats no door" is written for.
     // VC-485 adds session show and discoverable fleet/body flags.
-    expect(text.length).toBeLessThanOrEqual(3500);
-    expect(estTokens(text)).toBeLessThanOrEqual(875);
+    //
+    // Raised from 3,500 by VC-1092 for the perf store's three read verbs
+    // (`perf top`, `perf stalls`, `perf compare`), on the same ruling: they
+    // are a CLI-only read tier with no tool schema, so an agent hill-climbing
+    // performance that cannot see them here greps log files instead.
+    expect(text.length).toBeLessThanOrEqual(3850);
+    expect(estTokens(text)).toBeLessThanOrEqual(962);
     for (const group of ["Read", "Write", "Session", "App"]) {
       expect(text).toContain(`${group}\n`);
     }

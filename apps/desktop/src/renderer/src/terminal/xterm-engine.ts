@@ -1,3 +1,4 @@
+import { paneResizeActive } from "@renderer/lib/pane-resize";
 /**
  * xterm.js-backed `TerminalEngine`, rendered by xterm's DOM renderer.
  *
@@ -372,6 +373,10 @@ export class XtermEngine implements TerminalEngine {
 
   fit(): void {
     if (this.disposed || this.term === null) return;
+    if (paneResizeActive()) {
+      this.pendingFit = true;
+      return;
+    }
     this.fitNow();
     // Chromium can hand out geometry one frame before layout and the display
     // association settle (reveal, monitor move, font load). One coalesced
@@ -386,6 +391,10 @@ export class XtermEngine implements TerminalEngine {
 
   private fitNow(): void {
     if (this.disposed || this.fitAddon === null) return;
+    if (paneResizeActive()) {
+      this.pendingFit = true;
+      return;
+    }
     const bounds = this.hostEl.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) {
       // A hidden host measures as zero here while its COMPUTED height is still

@@ -3,16 +3,14 @@
  * The island as a person meets it (VC-256): nothing when there is nothing to
  * model, clusters that come and go with their subjects, a card that pins and
  * releases, destructive actions that arm before they fire, and verbs that name
- * the right subject. Feel is not judged here — that is the lab harness's job —
- * so animations are skipped wholesale and reduced motion is forced, which
- * leaves AnimatePresence's mount/unmount as the only motion fact under test.
+ * the right subject. Recurring updates are static; the real popover primitive
+ * retains ownership of occasional pointer disclosure motion.
  *
  * jsdom rather than static markup: the cards are Radix popovers portalled to
  * the body, and every promise here is an interaction.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -182,7 +180,6 @@ beforeEach(() => {
     addEventListener: () => {},
     removeEventListener: () => {},
   }));
-  MotionGlobalConfig.skipAnimations = true;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -195,9 +192,30 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
-  MotionGlobalConfig.skipAnimations = false;
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+it("gives a long plan one bounded row scrollport, not a second scrolling popover", async () => {
+  const steps = Array.from({ length: 60 }, (_, i) => ({
+    id: `step-${i}`,
+    title: `${i}: ${"Long plan title / 日本語 / مرحبا ".repeat(4)}`,
+    state: "pending" as const,
+  }));
+  await render({ ...EMPTY_ACTIVITY_ISLAND, plan: { id: "long-plan", steps, done: 0 } });
+  click(cluster("plan"));
+  const panel = card("plan")!;
+  const body = panel.querySelector<HTMLElement>('[data-slot="popover-body"]')!;
+  expect(panel.classList.contains("flex-col")).toBe(true);
+  expect(body.classList.contains("overflow-hidden")).toBe(true);
+  expect(body.classList.contains("overflow-y-auto")).toBe(false);
+  expect(body.className).toContain("available-height)-0.5rem");
+  const rows = panel.querySelector<HTMLElement>("[data-island-rows]")!;
+  expect(rows.classList.contains("overflow-y-auto")).toBe(true);
+  expect(rows.classList.contains("min-h-0")).toBe(true);
+  expect(panel.querySelectorAll("[data-island-row]")).toHaveLength(60);
+  expect(rowIn("plan", "step-59").textContent).toContain("59:");
+  expect(panel.querySelector("h3")?.parentElement?.classList.contains("shrink-0")).toBe(true);
 });
 
 describe("the empty rule", () => {
@@ -369,6 +387,40 @@ describe("the card", () => {
     await settle();
     expect(card("tabs")).toBeNull();
     expect(document.activeElement).toBe(cluster("tabs"));
+  });
+
+  it("does not refocus the still-visible owning pane after Show tab selects another pane", async () => {
+    const actions = actionsSpy();
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actions);
+    const anchor = cluster("tabs");
+    act(() => anchor.focus());
+    press(anchor, "Enter");
+    await settle();
+    click(rowIn("tabs", "t1"));
+    expect(actions.promoteTab).toHaveBeenCalledWith("t1");
+    act(() =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    await settle();
+    expect(card("tabs")).toBeNull();
+    expect(document.activeElement).not.toBe(anchor);
+  });
+
+  it("does not focus a hidden owning pane after a card action reveals another tab", async () => {
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    const anchor = cluster("tabs");
+    act(() => anchor.focus());
+    press(anchor, "Enter");
+    await settle();
+    expect(document.activeElement).toBe(rowIn("tabs", "t1"));
+    // The resident chat becomes hidden as the revealed tab takes the surface.
+    anchor.checkVisibility = () => false;
+    act(() =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    await settle();
+    expect(card("tabs")).toBeNull();
+    expect(document.activeElement).not.toBe(anchor);
   });
 
   it("leaves focus where a pointer put it when an outside click closes the card", async () => {
@@ -794,6 +846,28 @@ describe("destructive actions", () => {
 });
 
 describe("the now channel", () => {
+  it("replaces frequent announcements immediately without retaining an exiting copy", async () => {
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      tabs: [tab()],
+      flash: { id: "old", event: "Opened", payload: "github.com" },
+    });
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      tabs: [tab()],
+      flash: { id: "new", event: "Opened", payload: "example.com" },
+    });
+    expect(container?.querySelectorAll("[data-island-flash]")).toHaveLength(1);
+    expect(container?.querySelector("[data-island-flash]")?.textContent).toBe(
+      "Opened · example.com",
+    );
+    expect(container?.querySelector("[data-activity-island]")?.getAttribute("style")).toBeNull();
+    expect(container?.querySelector("[data-activity-island]")?.classList.contains("isolate")).toBe(
+      true,
+    );
+    expect(container?.querySelector('[role="status"]')).not.toBeNull();
+  });
+
   it("shows a flash for the hold and reabsorbs it", async () => {
     vi.useFakeTimers();
     await render({

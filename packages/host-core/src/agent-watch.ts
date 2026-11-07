@@ -59,6 +59,7 @@ import {
   type RuntimeVerbResult,
   type Session,
   type SessionAwaitKind,
+  type SessionListingProjection,
   type SessionProjection,
   type TicketAwaitKind,
 } from "@volli/shared";
@@ -72,7 +73,7 @@ export interface WatchToolPorts {
   projects: () => readonly Project[];
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   /** The Session read handles resolve through; null when the runtime never came up. */
-  sessions: () => Pick<SessionEngine, "listSessions"> | null;
+  sessions: () => Pick<SessionEngine, "listSessions" | "getSession"> | null;
   /** The watch registry; null when the runtime never came up. */
   watches: () => Watches | null;
 }
@@ -97,12 +98,22 @@ interface SessionTarget {
  * Whether a target has no live executor and no start still under way. A start
  * whose receipt came back rejected or unreconciled is not under way, even
  * though the fold keeps it pending (the VC-799 needs-recovery shape).
+ *
+ * Only that last question needs receipts, which a listing row does not carry
+ * (VC-848), so only a target with a start pending reads its whole projection.
  */
-function isDetached(target: SessionProjection): boolean {
+async function isDetached(
+  engine: Pick<SessionEngine, "getSession">,
+  target: SessionListingProjection,
+): Promise<boolean> {
   if (target.stopped !== null || target.liveExecutor !== null) return false;
-  const start = target.pendingExecutorStart;
+  if (target.pendingExecutorStart === null) return true;
+  const full = await engine.getSession({ sessionId: target.session.id });
+  if (full === null) return false;
+  if (full.stopped !== null || full.liveExecutor !== null) return false;
+  const start = full.pendingExecutorStart;
   if (start === null) return true;
-  return target.receipts.some(
+  return full.receipts.some(
     (receipt) =>
       receipt.commandId === start.id &&
       (receipt.status === "rejected" || receipt.status === "unreconciled"),
@@ -185,7 +196,7 @@ async function resolveSessions(
       handle,
       title: target.session.title,
       stopped: target.stopped,
-      detached: isDetached(target),
+      detached: await isDetached(engine, target),
       archived,
     });
   }

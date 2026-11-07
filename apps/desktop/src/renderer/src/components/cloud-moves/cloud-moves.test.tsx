@@ -179,7 +179,7 @@ describe("move entry and persistent surfaces", () => {
   it("frozen and archived local copies name their move; cloud launches never show a local read-only banner", async () => {
     useCloudMovesStore.setState({ snapshot: { ...snapshot, moves: [move] } });
     await render(<CloudMoveReadOnlyBanner />);
-    expect(container.textContent).toContain("read-only while it moves");
+    expect(container.textContent).toContain("to Volli Cloud · Read-only");
     await act(async () =>
       useCloudMovesStore.setState({
         snapshot: {

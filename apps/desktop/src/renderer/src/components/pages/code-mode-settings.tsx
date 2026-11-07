@@ -26,12 +26,10 @@
  * said what it holds: a switch drawn from a default after a failed read would
  * show a value nothing stored.
  */
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { ChevronDownIcon, CodeIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import {
-  CODE_MODE_MODEL_DEFAULTS,
   CODE_MODE_MODES,
   CODE_MODE_POLICY_MODELS_MAX,
   codeModeModelKey,
@@ -189,8 +187,8 @@ export function CodeModeSettings({
     <PrefSection title="Code Mode" icon={CodeIcon}>
       {/* The control is the explanation (AGENTS.md, "let controls talk"):
           what each mode does, which models get which, and that the switch
-          also governs large-server deferral are in Advanced's (i) and in
-          the Code Mode guide, not under the switch. */}
+          also governs large-server deferral are in the Code Mode guide, not
+          on this page. */}
       <PrefRow label="Code Mode" testId="code-mode">
         <Switch
           aria-label="Code Mode for new Sessions"
@@ -210,7 +208,7 @@ export function CodeModeSettings({
               aria-label={`${advancedOpen ? "Hide" : "Show"} advanced Code Mode settings`}
               data-testid="code-mode-advanced"
             >
-              <CaretDownIcon
+              <ChevronDownIcon
                 aria-hidden
                 className={cn("transition-transform", advancedOpen && "rotate-180")}
               />
@@ -225,14 +223,13 @@ export function CodeModeSettings({
               {loaded && !current.enabled ? (
                 // A blocked state with one recovery — the switch above.
                 <p className="text-ui text-muted-foreground" data-testid="code-mode-off-note">
-                  Code Mode is off, so no new Session uses these. They&rsquo;re kept for when
-                  it&rsquo;s back on.
+                  Code Mode is off
                 </p>
               ) : null}
               {/* Its own box, so the row's `first:`/`last:` rules hold and it
                   draws no hairline against the note above it. */}
               <div>
-                <PrefRow label="Pin a model" hint={<ModesHint />} testId="code-mode-pin">
+                <PrefRow label="Pin a model" testId="code-mode-pin">
                   <PinPicker
                     pickable={pickable}
                     providers={providers}
@@ -312,7 +309,7 @@ export function CodeModeSettings({
                         <RowAction
                           label={`Unpin ${pin.model.label}`}
                           hint="Unpin"
-                          icon={XIcon}
+                          icon={CloseIcon}
                           disabled={!pinsEditable}
                           onAct={() => setPin(pin.key, null)}
                         />
@@ -384,50 +381,6 @@ function PinPicker({
       </SelectContent>
     </Select>
   );
-}
-
-/**
- * The `(i)` on "Pin a model": what each mode does, and which models get which
- * without a pin. The defaults are read off the shared table, so a benchmark
- * that moves a family moves this sentence with it.
- */
-function ModesHint() {
-  return (
-    <span className="flex flex-col gap-1">
-      <span>
-        <strong className="font-medium text-foreground">Off</strong> &mdash; no Code Mode, except to
-        keep a very large MCP server out of the prompt.
-      </span>
-      <span>
-        <strong className="font-medium text-foreground">Both</strong> &mdash; Code Mode beside every
-        tool; the model chooses.
-      </span>
-      <span>
-        <strong className="font-medium text-foreground">Only</strong> &mdash; tools a program can
-        call are reached only through Code Mode. Smallest prompt.
-      </span>
-      <span>{builtInDefaultsSentence()}</span>
-      <span>
-        Turning Code Mode off also declares every tool of a large MCP server again. Changes apply to
-        new Sessions.
-      </span>
-    </span>
-  );
-}
-
-/** `Default: Both for Claude Haiku and Claude Sonnet; Off for every other model.` */
-export function builtInDefaultsSentence(): string {
-  const parts = CODE_MODE_MODES.filter((mode) => mode !== "off").flatMap((mode) => {
-    const families = CODE_MODE_MODEL_DEFAULTS.filter((row) => row.mode === mode).map(
-      (row) => row.family,
-    );
-    return families.length === 0 ? [] : [`${CODE_MODE_MODE_LABELS[mode]} for ${listOf(families)}`];
-  });
-  return `Default: ${[...parts, `${CODE_MODE_MODE_LABELS.off} for every other model`].join("; ")}.`;
-}
-
-function listOf(words: readonly string[]): string {
-  return words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
 }
 
 /**

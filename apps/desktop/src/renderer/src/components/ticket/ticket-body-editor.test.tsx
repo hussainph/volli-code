@@ -29,13 +29,19 @@ vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
     value,
     onChange,
     ariaLabel,
+    className,
+    compact,
   }: {
     value: string;
     onChange(next: string): void;
     ariaLabel?: string;
+    className?: string;
+    compact?: boolean;
   }) => (
     <textarea
       aria-label={ariaLabel}
+      className={className}
+      data-compact={compact}
       value={value}
       onChange={(event) => onChange(event.target.value)}
     />
@@ -205,5 +211,18 @@ describe("TicketBodyEditor autosave ownership — the conflict exception", () =>
     // Nothing was written for either ticket — and in particular the paused
     // draft was not quietly resolved in favour of the person's version.
     expect(updateTicket).not.toHaveBeenCalled();
+  });
+});
+
+it("keeps the empty document compact until its existing editor takes focus", () => {
+  act(() => root.render(<TicketBodyEditor ticket={ticket({ body: "" })} />));
+  const editor = container.querySelector("textarea");
+  expect(editor?.className).toBe("min-h-7 focus-within:min-h-32");
+  expect(editor?.dataset.compact).toBe("true");
+  type("The same editor still autosaves");
+  act(() => vi.advanceTimersByTime(2000));
+  expect(updateTicket).toHaveBeenCalledWith({
+    ticketId: "ticket-a",
+    body: "The same editor still autosaves",
   });
 });

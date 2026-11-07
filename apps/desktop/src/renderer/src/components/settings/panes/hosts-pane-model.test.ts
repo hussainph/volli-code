@@ -39,7 +39,7 @@ describe("a host's health in Settings", () => {
   it("reads the engine-projected host link without needing projects", () => {
     expect(hostHealth(remote({}))).toEqual({ state: "ready", label: "Online" });
     expect(hostHealth(remote({ link: { status: "connecting" } }))).toEqual({
-      state: "working",
+      state: "starting",
       label: "Connecting",
     });
     expect(hostHealth(remote({ link: { status: "reconnecting" } })).label).toBe("Connecting");

@@ -21,23 +21,27 @@
  * renamable.
  */
 import * as React from "react";
+import { useAutomaticTitleChange } from "@renderer/chat/title-change";
 import { launchStore } from "@renderer/stores/launch";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
-import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import {
+  BrowserIcon,
+  ChatIcon,
+  FileIcon,
+  DocumentIcon,
+  DiffIcon,
+  MoonIcon,
+  EditIcon,
+  PinIcon,
+  UnpinIcon,
+  SunIcon,
+  TerminalIcon,
+  CloseIcon,
+  ExternalIcon,
+  MinusIcon,
+} from "@renderer/components/ui/icon";
 
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
 import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
@@ -45,8 +49,8 @@ import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-m
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
-import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
-import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
+import { hidesToIsland, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 import {
   GroupedTabList,
@@ -65,7 +69,6 @@ import {
   terminalTabState,
   type TerminalTabState,
 } from "@renderer/components/sessions/terminal-tab-state";
-import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -220,6 +223,8 @@ export interface TicketTabListProps {
   shownGroupId?: string | null;
   /** Dissolve a group from its chip's menu; every tab stays open. */
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tab: TicketTabDescriptor): void;
   /** The ticket's owning project, used to resolve file tabs in main. */
   projectId: string;
   ticketId: string;
@@ -322,6 +327,7 @@ function TicketTab({
   // answer — one frozen shared constant — for every tab that is not a Session
   // and every Session no Automation started.
   const sessionId = tabSessionId(tab);
+  const automaticLabelChange = useAutomaticTitleChange(sessionId, tab.label);
   const liveProvider = useChatSessionsStore((state) =>
     sessionId === null
       ? null
@@ -385,7 +391,7 @@ function TicketTab({
         exited
           ? `Exited (${terminal?.exitCode ?? "?"})`
           : parked
-            ? "Terminal is parked to save memory. Select to wake it."
+            ? `${tab.label}\nParked`
             : tab.status === "waiting"
               ? `${tab.label}\nWaiting for you`
               : tab.label,
@@ -397,6 +403,7 @@ function TicketTab({
       // A landing auto-title reveals here word by word (VC-81); file and
       // terminal tabs stay static.
       revealLabel={tab.kind === "chat"}
+      automaticLabelChange={automaticLabelChange}
       status={
         tab.kind === "chat"
           ? undefined
@@ -416,7 +423,11 @@ function TicketTab({
         ) : tab.kind === "browser" ? (
           <BrowserTabMark driven={tab.driven === true} />
         ) : terminalDot === null && terminal !== null ? (
-          <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+          <MoonIcon
+            aria-hidden
+            strokeWidth={2.25}
+            className="size-3 shrink-0 text-muted-foreground"
+          />
         ) : null
       }
       badge={
@@ -467,6 +478,7 @@ function TicketTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <TabContextActions />
         <SessionShare sessionId={sessionId} projectId={projectId} />
         {fileTarget !== null ? (
           <>
@@ -481,11 +493,11 @@ function TicketTab({
           </>
         ) : null}
         {renamable ? (
-          <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
+          <ContextMenuItem icon={EditIcon} onSelect={onStartRename}>
             Rename
           </ContextMenuItem>
         ) : preview ? (
-          <ContextMenuItem icon={PushPinIcon} onSelect={onPin}>
+          <ContextMenuItem icon={PinIcon} onSelect={onPin}>
             Keep Open
           </ContextMenuItem>
         ) : null}
@@ -517,7 +529,7 @@ function TicketTab({
               </ContextMenuItem>
             )}
             <ContextMenuItem
-              icon={terminal.keptAwake ? PushPinSlashIcon : PushPinIcon}
+              icon={terminal.keptAwake ? UnpinIcon : PinIcon}
               onSelect={() =>
                 runOnLivePanes(
                   terminal.livePaneIds,
@@ -536,7 +548,7 @@ function TicketTab({
         {sessionTab ? (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem icon={XIcon} variant="destructive" onSelect={onClose}>
+            <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={onClose}>
               Close
             </ContextMenuItem>
           </>
@@ -553,8 +565,8 @@ export function TicketTabStrip({
   onNewSession,
   onNewChat,
   onNewBrowser,
-  railCollapsed,
-  onToggleRail,
+  railCollapsed: _railCollapsed,
+  onToggleRail: _onToggleRail,
   ...list
 }: TicketTabStripProps) {
   return (
@@ -581,31 +593,6 @@ export function TicketTabStrip({
               onNewTerminal={onNewSession}
             />
           </div>
-          {/* The details rail's collapse control, and the reason this corner has
-              no `disabled` state, no reserved slot and no fade: the strip spans
-              both columns, so its right corner sits directly on top of the pane
-              this button collapses, and that pane is always there to collapse. It
-              keeps its full-height rectangular hover (h-full over size-5's height,
-              rounded-none) so it reads as a corner REGION rather than a tall pill —
-              which is also what tells it apart from the pill beside it.
-              (Terminal focus, which WAS conditional on the active tab's kind and
-              then briefly lived on the chrome band, is now drawn on the terminal
-              pane itself — see `session-split-layout.tsx`.) */}
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="ml-1 h-full rounded-none"
-            onClick={onToggleRail}
-            // No `aria-pressed`: the label below already carries the state, and
-            // the button has no pressed appearance for it to describe — the same
-            // call the band's own panel toggles make.
-            aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
-            title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
-          >
-            {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
-                RIGHT panel; each caret points toward the rail it toggles. */}
-            <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
-          </Button>
         </>
       }
     >
@@ -626,12 +613,11 @@ export function TicketPaneTabStrip({
   ...list
 }: TicketTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip
-      label={label}
-      reorder={reorderFor(list)}
-      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
-    >
-      <TicketTabList {...list} />
+    <TabStrip label={label} reorder={reorderFor(list)}>
+      <TicketTabList
+        {...list}
+        onTakeOutTab={list.onTakeOutTab ?? (onTakeOut ? () => onTakeOut() : undefined)}
+      />
     </TabStrip>
   );
 }
@@ -655,11 +641,11 @@ function reorderFor({ tabs, groups, onReorderTabs }: TicketTabListProps) {
 }
 
 const TICKET_TAB_ICONS = {
-  body: FileTextIcon,
-  session: TerminalWindowIcon,
+  body: DocumentIcon,
+  session: TerminalIcon,
   file: FileIcon,
-  diff: GitDiffIcon,
-  chat: ChatCircleIcon,
+  diff: DiffIcon,
+  chat: ChatIcon,
   browser: BrowserIcon,
 } as const;
 
@@ -675,7 +661,7 @@ function ticketTabMenuLabel(tab: TicketTabDescriptor): TabMenuLabel {
     const slash = tab.relPath.lastIndexOf("/");
     return { label: tab.label, icon, detail: slash <= 0 ? null : tab.relPath.slice(0, slash) };
   }
-  return { label: tab.label, icon };
+  return { label: tab.label, icon, status: tab.status };
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */
@@ -687,6 +673,8 @@ function TicketTabList({
   groups,
   shownGroupId,
   onUngroup,
+  onTakeOutTab,
+  onHideBrowser,
   onSelectTab,
   onCloseTab,
   onPinFileTab,
@@ -703,6 +691,26 @@ function TicketTabList({
       describe={ticketTabMenuLabel}
       onSelect={(tab) => onSelectTab(tab.id)}
       onUngroup={onUngroup}
+      onClose={onCloseTab}
+      actionsFor={(tab) => {
+        const actions: TabAction[] = [];
+        if (
+          onTakeOutTab &&
+          (groups === undefined ||
+            groups.some((group) => group.panes.some((pane) => pane.tabIds.includes(tab.id))))
+        )
+          actions.push({
+            label: "Take out of group",
+            icon: ExternalIcon,
+            run: () => onTakeOutTab(tab.id),
+          });
+        const browser = tab.browserTabId
+          ? useBrowserTabsStore.getState().byId[tab.browserTabId]
+          : undefined;
+        if (browser && hidesToIsland(browser) && onHideBrowser)
+          actions.push({ label: "Hide to Island", icon: MinusIcon, run: () => onHideBrowser(tab) });
+        return actions;
+      }}
     >
       {(tab, { active, tabStop, grouped }) => (
         <TicketTab

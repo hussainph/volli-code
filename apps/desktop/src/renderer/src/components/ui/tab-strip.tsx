@@ -1,3 +1,7 @@
+import { TabCascadeContext, useTabCascade } from "./tab-cascade";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from "./dropdown-menu";
+import { ListRow } from "./list-row";
+import { TabActionDropdown, TabActionsContext } from "./tab-actions";
 /**
  * The app's one tab strip.
  *
@@ -15,15 +19,10 @@
  * `h-7 text-ui`, which is what a tab actually is. This file is the third one's
  * size, drawn twice.
  *
- * TWO DRAWINGS, one object:
- *
- *  - **folder** — the Chrome-browser tab. Rounded top corners, and the active
- *    tab bleeds 1px past the strip's bottom border (`-mb-px`) so its fill
- *    covers that seam and the tab reads as physically joined to the plane
- *    below. For a strip that IS the top edge of the thing it switches.
- *  - **pill** — the inline tab. A rounded rectangle floating in a centred band,
- *    active by fill rather than by fusing with anything. For a strip that sits
- *    above a surface it does not own.
+ * Both legacy variant names now use Rex-style capsule anatomy. The variant
+ * remains a compatible caller contract; it owns no tab or group semantics.
+ * Selection, hover and keyboard navigation are immediate. Explicit pointer
+ * opens/closes cascade real widths; pointer dragging keeps its sorting clock.
  *
  * WHAT STAYS WITH THE CALLER: which tabs exist, their order, what a selection
  * means, what a close guards, and every context menu. This file owns the
@@ -48,14 +47,18 @@
  * its own; a strip with no surface above it is exactly the strip it was.
  */
 import * as React from "react";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import "./tab-strip.css";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
-import { CircleNotchIcon } from "@phosphor-icons/react/dist/csr/CircleNotch";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  ChevronDownIcon,
+  CircleIcon,
+  SpinnerIcon,
+  HelpIcon,
+  WarningIcon,
+  CloseIcon,
+  MinusIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   closestCenter,
   DndContext,
@@ -91,18 +94,22 @@ import {
   TooltipTrigger,
 } from "@renderer/components/ui/tooltip";
 import { useClippedReveal } from "@renderer/components/ui/value-reveal";
-import { prefersReducedMotion, useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
 import { tabDropOrder } from "./tab-reorder";
-import {
-  scrollTabsWithWheel,
-  tabOverflow,
-  tabScrollLeftFor,
-  tabScrollStep,
-  type TabOverflow,
-} from "./tab-scroll";
+import { scrollTabsWithWheel, tabOverflow, tabScrollLeftFor, type TabOverflow } from "./tab-scroll";
+
+interface TabInventoryEntry {
+  id: string;
+  label: string;
+  leading: React.ReactNode;
+  detail?: string;
+  status?: StatusDotState | null;
+  activate(): void;
+}
+const TabInventoryContext = React.createContext<Map<HTMLElement, TabInventoryEntry> | null>(null);
 
 export type TabVariant = "folder" | "pill";
 
@@ -140,13 +147,28 @@ const TabReorderContext = React.createContext(false);
  * fixture) keeps its own context and its own axis modifiers, unchanged.
  */
 const TabStripSurfaceContext = React.createContext(false);
+// Retain the last activation through drop/cancel so settling never adds a
+// keyboard timeline after dnd-kit clears its active event.
+const TabKeyboardDragContext = React.createContext(false);
 
 /**
  * Marks the subtree whose strips register into the caller's own `DndContext`.
  * Rendered by `split/split-dnd.tsx`, which is also what supplies that context.
  */
-export function TabStripSurface({ children }: { children: React.ReactNode }) {
-  return <TabStripSurfaceContext.Provider value>{children}</TabStripSurfaceContext.Provider>;
+export function TabStripSurface({
+  children,
+  keyboardDrag = false,
+}: {
+  children: React.ReactNode;
+  keyboardDrag?: boolean;
+}) {
+  return (
+    <TabStripSurfaceContext.Provider value>
+      <TabKeyboardDragContext.Provider value={keyboardDrag}>
+        {children}
+      </TabKeyboardDragContext.Provider>
+    </TabStripSurfaceContext.Provider>
+  );
 }
 
 /** Whether a strip drawn here belongs to a surface-level drag context. */
@@ -222,6 +244,11 @@ function revealCurrentTab(scroller: HTMLElement): void {
     focused instanceof HTMLElement && scroller.contains(focused)
       ? focused.closest<HTMLElement>('[role="tab"]')
       : null;
+  // A nested close/menu/minimise control may have received pointer focus
+  // between down and up. Revealing its whole (partly clipped) capsule would
+  // move that control away from the pending release. The browser has already
+  // revealed the focused control itself; keep its position until focus leaves.
+  if (focusedTab !== null && focused !== focusedTab) return;
   const tab =
     focusedTab ?? scroller.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   if (tab !== null) revealTab(tab, false);
@@ -313,7 +340,8 @@ export function TabStrip({
   children,
   ...props
 }: TabStripProps) {
-  const folder = variant === "folder";
+  const inventory = React.useRef(new Map<HTMLElement, TabInventoryEntry>());
+  const [inventoryRows, setInventoryRows] = React.useState<TabInventoryEntry[]>([]);
   // A surface above us already owns the gesture — see TabStripSurfaceContext.
   const inSurface = React.useContext(TabStripSurfaceContext);
   const scrollerRef = React.useRef<HTMLDivElement>(null);
@@ -321,6 +349,7 @@ export function TabStrip({
   // the scroller because the scroller's width is something the chevrons change
   // — see {@link TabOverflowMeasure}.
   const areaRef = React.useRef<HTMLDivElement>(null);
+  const cascade = useTabCascade(areaRef, scrollerRef, inventory.current);
 
   React.useEffect(() => {
     const scroller = scrollerRef.current;
@@ -415,16 +444,6 @@ export function TabStrip({
     if (scroller !== null) revealCurrentTab(scroller);
   }, [overflow.overflowing]);
 
-  // The motion preference is read at the press rather than during the render
-  // (`prefersReducedMotion`): this strip is drawn to a string by a good deal of
-  // the test suite, and `matchMedia` does not exist there — a flag a component
-  // only needs while it is moving has no business being a subscription.
-  const travel = (towards: "prev" | "next") => {
-    const scroller = scrollerRef.current;
-    if (scroller === null) return;
-    scrollTabsTo(scroller, tabScrollStep(scroller, towards), !prefersReducedMotion());
-  };
-
   const strip = (
     // A PROVIDER OF ITS OWN, so a tab's label reveal works wherever a strip is
     // drawn (VC-288 review). `SidebarProvider` mounts one around the whole app,
@@ -441,14 +460,22 @@ export function TabStrip({
           // `@container/tab-strip`: what a tab may stop drawing is decided by the
           // width of THIS strip, never the window's. A split puts two of these in
           // one window, and a media query cannot tell them apart.
-          "@container/tab-strip flex shrink-0 border-b border-border bg-rail",
+          "@container/tab-strip flex min-h-11 shrink-0 items-center gap-2 bg-background",
           // A folder strip is only as tall as its tabs plus the 8px above them,
           // because the tabs ARE its bottom edge. A pill strip centres its tabs
           // in a band of its own.
-          folder ? "items-end pt-2" : "h-9 items-center gap-1 px-2",
+          "py-1",
           className,
         )}
         {...props}
+        onPointerLeave={(event) => {
+          props.onPointerLeave?.(event);
+          cascade.release();
+        }}
+        onPointerMove={(event) => {
+          props.onPointerMove?.(event);
+          cascade.activity();
+        }}
       >
         {/* THE ROOM THE TABS HAVE, and the one box in here whose width does not
           answer to what is drawn inside it. `flex-1 min-w-0` against the actions
@@ -459,80 +486,99 @@ export function TabStrip({
         <div
           ref={areaRef}
           data-slot="tab-scroll-area"
-          className={cn("flex min-w-0 flex-1 self-stretch", folder ? "items-end" : "items-center")}
+          className="tab-track relative flex h-8 min-w-0 flex-1 items-center self-center overflow-hidden rounded-full p-0.5"
         >
-          {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
-            gesture was Shift+wheel and nothing else: a convention a mouse user
-            has to already know, on a strip whose scrollbar is deliberately
-            hidden. The keyboard's way is the arrows it always had — what VC-288
-            added there is that focus now drags the strip along with it.
-
-            Both ends stay mounted while the strip overflows, with the arrived
-            one disabled rather than removed: a chevron that vanishes at the end
-            of a travel re-lays the tabs out under the pointer pressing it. */}
-          {overflow.overflowing ? (
-            <TabScrollAffordance
-              towards="prev"
-              folder={folder}
-              disabled={overflow.atStart}
-              onTravel={() => travel("prev")}
-            />
-          ) : null}
+          {/* The clip contains wheel/keyboard travel and its edge fades. One
+            trailing inventory chevron exposes every tab; there are no scroll
+            arrows or extra icon previews competing with the captions. */}
           <div
             ref={scrollerRef}
             data-slot="tab-scroll"
+            data-overflow-left={(overflow.overflowing && !overflow.atStart) || undefined}
+            data-overflow-right={(overflow.overflowing && !overflow.atEnd) || undefined}
             className={cn(
               "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-              folder ? "items-end px-2" : "items-center",
+              "items-center",
             )}
           >
             <div
               role="tablist"
               aria-label={label}
               aria-orientation="horizontal"
-              className={cn("flex gap-1", folder ? "items-end" : "items-center")}
+              className="tab-items flex min-w-full items-center gap-0.5"
             >
-              <TabVariantContext.Provider value={variant}>
-                {reorder === undefined ? (
-                  children
-                ) : (
-                  // Inside the tablist, where the tabs are; the sensors and the
-                  // DndContext sit outside it (below) so dnd-kit's two hidden
-                  // announcement nodes are not children of a `role="tablist"`.
-                  <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
-                )}
-              </TabVariantContext.Provider>
+              <TabCascadeContext.Provider value={cascade.api}>
+                <TabInventoryContext.Provider value={inventory.current}>
+                  <TabVariantContext.Provider value={variant}>
+                    {reorder === undefined ? (
+                      children
+                    ) : (
+                      // Inside the tablist, where the tabs are; the sensors and the
+                      // DndContext sit outside it (below) so dnd-kit's two hidden
+                      // announcement nodes are not children of a `role="tablist"`.
+                      <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
+                    )}
+                  </TabVariantContext.Provider>
+                </TabInventoryContext.Provider>
+              </TabCascadeContext.Provider>
             </div>
           </div>
           {overflow.overflowing ? (
-            <TabScrollAffordance
-              towards="next"
-              folder={folder}
-              disabled={overflow.atEnd}
-              onTravel={() => travel("next")}
-            />
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (open)
+                  setInventoryRows(
+                    Array.from(
+                      scrollerRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
+                    ).flatMap((node) => {
+                      const row = inventory.current.get(node);
+                      return row ? [row] : [];
+                    }),
+                  );
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="All tabs"
+                  className="shrink-0 rounded-full"
+                >
+                  <ChevronDownIcon className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80" aria-label="All tabs">
+                {inventoryRows.map((row) => (
+                  <ListRow
+                    key={row.id}
+                    density="two-line"
+                    leading={row.leading}
+                    primary={row.label}
+                    secondary={row.detail === row.label ? undefined : row.detail}
+                    trailing={
+                      row.status ? (
+                        <span className="text-label text-muted-foreground">{row.status}</span>
+                      ) : undefined
+                    }
+                    onActivate={row.activate}
+                  />
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          {actions !== undefined ? (
+            <div
+              // Named because it is the one part of a strip that does NOT belong
+              // to the strip's own pane: these controls act on the surface, so a
+              // split main bar has to be able to exclude them when it decides
+              // whether a press landed "in" a pane (`split-view-tab-bar.tsx`).
+              data-slot="tab-actions"
+              className="flex shrink-0 items-center pl-1"
+            >
+              <TabCascadeContext.Provider value={cascade.api}>{actions}</TabCascadeContext.Provider>
+            </div>
           ) : null}
         </div>
-        {actions !== undefined ? (
-          // The divider is half the separation; vertical alignment is the rest.
-          // Tabs sit on the strip's bottom edge because they fuse with the plane
-          // below, so a control spanning the band's full height cannot be
-          // mistaken for one however it is styled. `-mt-2` cancels the strip's
-          // own top pad so the column reaches the true top edge.
-          <div
-            // Named because it is the one part of a strip that does NOT belong
-            // to the strip's own pane: these controls act on the surface, so a
-            // split main bar has to be able to exclude them when it decides
-            // whether a press landed "in" a pane (`split-view-tab-bar.tsx`).
-            data-slot="tab-actions"
-            className={cn(
-              "flex shrink-0 border-l border-border/70",
-              folder ? "-mt-2 items-stretch self-stretch pr-1 pl-2" : "items-center pl-2",
-            )}
-          >
-            {actions}
-          </div>
-        ) : null}
       </div>
     </TooltipProvider>
   );
@@ -556,41 +602,6 @@ const NO_TAB_OVERFLOW: TabOverflow = { overflowing: false, atStart: true, atEnd:
  * Outside the `role="tablist"`, deliberately: inside it these would join the
  * roving tabindex and be counted by every arrow key as two more tabs.
  */
-function TabScrollAffordance({
-  towards,
-  folder,
-  disabled,
-  onTravel,
-}: {
-  towards: "prev" | "next";
-  folder: boolean;
-  disabled: boolean;
-  onTravel(): void;
-}) {
-  const Icon = towards === "prev" ? CaretLeftIcon : CaretRightIcon;
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      data-slot="tab-scroll-affordance"
-      data-towards={towards}
-      aria-label={towards === "prev" ? "Earlier tabs" : "Later tabs"}
-      disabled={disabled}
-      onClick={onTravel}
-      // Edge-to-edge travel targets, not tabs or round floating buttons. Cancel
-      // the folder strip's top pad so the caret centres on the complete band.
-      className={cn(
-        "h-auto w-control-default shrink-0 self-stretch rounded-none border-border text-foreground disabled:text-muted-foreground disabled:opacity-100",
-        towards === "prev" ? "border-r" : "border-l",
-        folder && "-mt-2",
-      )}
-    >
-      <Icon className="size-4" />
-    </Button>
-  );
-}
-
 /** The sortable list itself, and the flag that tells a tab it may register. */
 function SortableTabs({ ids, children }: { ids: TabOrder; children: React.ReactNode }) {
   return (
@@ -647,6 +658,7 @@ function TabStripDnd({
   reorder: TabStripReorder;
   children: React.ReactNode;
 }) {
+  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -666,9 +678,12 @@ function TabStripDnd({
       sensors={sensors}
       collisionDetection={closestCenter}
       modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+      onDragStart={(event) => setKeyboardDrag(event.activatorEvent.type === "keydown")}
       onDragEnd={handleDragEnd}
     >
-      {children}
+      <TabKeyboardDragContext.Provider value={keyboardDrag}>
+        {children}
+      </TabKeyboardDragContext.Provider>
     </DndContext>
   );
 }
@@ -691,9 +706,8 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
    */
   label: string;
   /**
-   * A quieter line after the label, IN the tab — the Project Files strip's
-   * parent-directory disambiguator for two tabs that share a basename. Not a
-   * tooltip: `title` (a plain div prop) is the tooltip.
+   * Details for the clipped-title reveal — the Project Files strip's
+   * parent-directory disambiguator for two tabs that share a basename. Never shown in the tab name; its caption stays the pane name alone.
    */
   hint?: string;
   active: boolean;
@@ -711,6 +725,8 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   badge?: React.ReactNode;
   /** Whether this tab shows a close affordance at all. */
   closable?: boolean;
+  /** A permanent minimal tab keeps its accessible name but shows its icon only. */
+  iconOnly?: boolean;
   /**
    * Unsaved work. The close control becomes the dot — always visible, because
    * a draft has to be findable from across the strip — and turns back into an ×
@@ -720,12 +736,13 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   /** Treatments on the label itself: italic for a preview, struck for an exit. */
   labelClassName?: string;
   /**
-   * Reveal the label word by word when it CHANGES (VC-81's landing-title
-   * motion). Opt-in: only chat Session tabs carry it — a file tab's label
-   * swaps on every save and a reveal there would read as the strip stuttering.
-   * Never animates on first mount, and never under reduced motion.
+   * Keep a landing-title label mounted across changes. Only chat Session tabs
+   * use it; automaticLabelChange separately grants animation for an explicitly
+   * automatic replacement. First mount, rename and unknown changes stay static.
    */
   revealLabel?: boolean;
+  /** Only an explicitly automatic title replacement may reveal. */
+  automaticLabelChange?: boolean;
   /** Non-null while this tab is being renamed in place. */
   renaming?: TabRenaming | null;
   /**
@@ -738,6 +755,10 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   /** Not `onSelect`, which a div already owns as a DOM event. */
   onActivate(): void;
   onClose?(): void;
+  /** Rich member rows for a group tab; ordinary tabs use their action list. */
+  actionsContent?: React.ReactNode;
+  /** A group's hover inspection steps aside while its command menu is open. */
+  onActionsOpenChange?(open: boolean): void;
 }
 
 /**
@@ -757,7 +778,7 @@ interface TabDrag {
  * have it without moving the other. dnd-kit's own 250ms default reads floaty
  * for both.
  */
-const TAB_SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
+const TAB_SORT_TRANSITION = { duration: GLASS_MOTION.menuIn, easing: "var(--ease-out)" };
 
 export function Tab({ dragId, ...props }: TabProps) {
   const arranges = React.useContext(TabReorderContext);
@@ -779,13 +800,15 @@ export function Tab({ dragId, ...props }: TabProps) {
  */
 function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
   const reducedMotion = useReducedMotion();
+  const keyboardDrag = React.useContext(TabKeyboardDragContext);
+  const instant = reducedMotion || keyboardDrag;
   const inSurface = React.useContext(TabStripSurfaceContext);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: dragId,
     // `null` is dnd-kit's own "do not animate": under reduced motion the
     // siblings jump to their new places instead of sliding (same gate the board
     // card takes).
-    transition: reducedMotion ? null : TAB_SORT_TRANSITION,
+    transition: instant ? null : TAB_SORT_TRANSITION,
     // What the surface's `DragOverlay` ghost draws (VC-202). The label rather
     // than the descriptor: the ghost is the tab's own drawing, and the tab's
     // own drawing is what this component already is.
@@ -814,7 +837,7 @@ function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
         // Surface strips use fixed tab-edge pairing targets. Moving siblings
         // during a drag would separate the visible edge from its hit box.
         transform: inSurface ? undefined : CSS.Transform.toString(transform),
-        transition: transition ?? undefined,
+        transition: instant ? "none" : (transition ?? undefined),
       }}
       // Above its neighbours while it travels, so the tab being dragged is not
       // drawn under the ones it is passing, and the hand closes on it while it
@@ -860,16 +883,22 @@ function TabShell({
   leading,
   badge,
   closable = true,
+  iconOnly = false,
   dirty = false,
   labelClassName,
   revealLabel = false,
+  automaticLabelChange = false,
   renaming = null,
   drag = null,
   onActivate,
   onClose,
+  actionsContent,
+  onActionsOpenChange,
   className,
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
+  const extraActions = React.useContext(TabActionsContext);
+  const cascade = React.useContext(TabCascadeContext);
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
@@ -893,37 +922,79 @@ function TabShell({
   React.useLayoutEffect(() => {
     if (!active) return;
     const shell = shellRef.current;
-    if (shell !== null) revealTab(shell, !prefersReducedMotion());
+    if (shell === null) return;
+    const focused = document.activeElement;
+    if (focused !== shell && focused !== null && shell.contains(focused)) return;
+    revealTab(shell, false);
   }, [active]);
   // The close is hidden mid-rename on purpose: the only two exits from an
   // inline edit are commit and cancel, and an × that blurs (committing) and
   // then closes is a destructive answer to a control reached for to dismiss.
   const showClose = closable && onClose !== undefined && !renamingNow;
+  const menuActions = [
+    ...extraActions,
+    ...(showClose
+      ? [
+          {
+            label: "Close",
+            icon: CloseIcon,
+            run: (pointer?: boolean) => {
+              cascade?.close(shellRef.current, pointer === true);
+              onClose!();
+            },
+            destructive: true,
+          },
+        ]
+      : []),
+  ];
+  const hide = extraActions.find((action) => action.label === "Hide to Island");
   // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288 review). The name below is
   // capped at `max-w-40` and truncates, and until now the rest of it lived in
   // `aria-label` alone — an answer for a screen reader and for nothing else,
   // on tabs that do not all carry a `title` either. The reveal rides the tab
   // itself rather than bringing a stop of its own, because a tab IS focusable
   // and a control nested in one is a second press between a person and the
-  // place they were going. It opens only when the run is actually clipped:
-  // over a strip of short names it would be noise.
+  // place they were going. Short names stay quiet unless they have a location
+  // qualifier: basename twins need that detail even when neither name clips.
   const labelRef = React.useRef<HTMLSpanElement>(null);
-  const reveal = useClippedReveal(labelRef);
-  const name = hint === undefined ? label : `${label} · ${hint}`;
+  const hasDetail = Boolean(hint);
+  const reveal = useClippedReveal(labelRef, { hasDetail });
+  const detail = hasDetail ? `${label} · ${hint}` : label;
+  const inventory = React.useContext(TabInventoryContext);
+  const inventoryId = React.useId();
+  React.useLayoutEffect(() => {
+    const node = shellRef.current;
+    if (!inventory || !node) return;
+    inventory.set(node, {
+      id: inventoryId,
+      label,
+      leading,
+      detail: hint || undefined,
+      status,
+      activate: () => {
+        onActivate();
+        revealTab(node, false);
+      },
+    });
+    return () => {
+      inventory.delete(node);
+    };
+  }, [inventory, inventoryId, label, leading, hint, status, onActivate]);
 
   return (
-    <Tooltip {...reveal}>
+    // Group tabs already reveal a full-title member card. A second clipped-label
+    // tooltip would open over that card (and its action dropdown).
+    <Tooltip {...reveal} open={actionsContent ? false : reveal.open}>
       <TooltipTrigger asChild>
         <div
           {...props}
           ref={setShell}
           data-slot="tab"
+          data-icon-only={iconOnly || undefined}
           role="tab"
-          // The hint rides the NAME as well as the row (VC-288). It is the
-          // disambiguator between two tabs called `app.ts`, and a narrow strip
-          // stops drawing it — so a name that was the basename alone would leave
-          // both the screen reader and the collapsed strip with two identical tabs.
-          aria-label={name}
+          // Equal file basenames remain distinct to assistive technology and
+          // to sighted readers through the same hover/keyboard reveal.
+          aria-label={detail}
           aria-selected={active}
           tabIndex={tabStop ? 0 : -1}
           onClick={onActivate}
@@ -934,7 +1005,10 @@ function TabShell({
           // `.focus()`.
           onFocus={(event) => {
             props.onFocus?.(event);
-            revealTab(event.currentTarget, !prefersReducedMotion());
+            // A close button receives pointer focus between down and up. Do
+            // not reveal its whole (partly clipped) tab then: moving the close
+            // out from under the pointer turns that click into tab activation.
+            if (event.target === event.currentTarget) revealTab(event.currentTarget, false);
           }}
           // dnd-kit's pointer activator, composed over whatever the caller already
           // listens for here (Radix's context menu uses this event for its
@@ -991,19 +1065,10 @@ function TabShell({
             // instead of answering the click. Every other clickable row has
             // said this since `menu-classes.ts` (VC-381); this was the one
             // row that never did.
-            "group relative flex h-7 shrink-0 cursor-default select-none items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out motion-reduce:transition-[color,background-color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring",
-            folder ? "workspace-folder-tab rounded-t-lg" : "rounded-md",
-            // A closable tab pays its right inset in the × instead of in padding.
-            folder ? (closable ? "pr-1 pl-3" : "px-3") : closable ? "pr-1 pl-2" : "px-2.5",
-            active
-              ? folder
-                ? // -mb-px pulls the active tab 1px past the strip's bottom border
-                  // so its content-coloured fill covers that seam. The reverse
-                  // corners in tab-strip.css complete the joined silhouette;
-                  // no lower shadow redraws the seam it is meant to cover.
-                  "-mb-px bg-background text-foreground"
-                : "bg-accent text-foreground shadow-raised"
-              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+            "workspace-capsule-tab group relative flex h-7 min-w-0 shrink-0 cursor-default select-none items-center gap-1 text-ui font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            folder && "workspace-folder-tab",
+            closable ? "pr-1 pl-3" : "px-3",
+            active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
             className,
           )}
         >
@@ -1038,36 +1103,58 @@ function TabShell({
             <span
               ref={labelRef}
               data-slot="tab-label"
-              className={cn("max-w-40 truncate", labelClassName)}
+              className={cn("min-w-0 flex-1 truncate", iconOnly && "sr-only", labelClassName)}
             >
-              {revealLabel ? <TitleReveal text={label} /> : label}
+              {revealLabel ? <TitleReveal text={label} automatic={automaticLabelChange} /> : label}
             </span>
           )}
-          {hint !== undefined && !renamingNow ? (
-            // Dimmer than the tab's own muted ink so it stays subordinate on an
-            // ACTIVE tab too, where the label is at full strength. It used to be a
-            // step smaller instead; at one type size for the whole tab, weight of
-            // colour is what is left to say it with.
-            // AND IT GIVES WAY BY THE STRIP'S WIDTH, not the window's (VC-288):
-            // `@container/tab-strip` is on the strip itself, so a pane narrow
-            // enough to be clipping tabs spends its room on the labels rather than
-            // on the qualifier after them. The word survives in the tab's own
-            // accessible name, which is the whole reason it may be dropped here.
-            <span
-              data-testid="tab-hint"
-              className="hidden max-w-28 shrink-0 truncate text-muted-foreground/70 @min-[420px]/tab-strip:inline"
+          {!renamingNow && (menuActions.length > 0 || actionsContent) ? (
+            <TabActionDropdown
+              label={detail}
+              actions={menuActions}
+              onOpenChange={onActionsOpenChange}
             >
-              {hint}
-            </span>
+              {actionsContent}
+            </TabActionDropdown>
           ) : null}
-          {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}
+          {!renamingNow && hide ? (
+            <button
+              type="button"
+              data-slot="tab-minimise"
+              aria-label="Hide to Island"
+              title="Hide to Island"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                // Focusing a partly clipped capsule can scroll its strip
+                // between down/up. Keep this press on the actual control,
+                // without starting the capsule's drag sensor.
+                if (event.button === 0) event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                focusSuccessorTab(event.currentTarget);
+                hide.run();
+              }}
+              className="flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 hover:bg-border hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+            >
+              <MinusIcon className="size-3" strokeWidth={2.25} />
+            </button>
+          ) : null}
+          {showClose ? (
+            <TabClose
+              label={detail}
+              dirty={dirty}
+              onClose={(pointer) => {
+                cascade?.close(shellRef.current, pointer);
+                onClose();
+              }}
+            />
+          ) : null}
         </div>
       </TooltipTrigger>
-      {/* The hint travels with it: on a strip narrow enough to be clipping the
-          label, the qualifier that tells two `app.ts` apart has already been
-          collapsed by the container query below, so a reveal without it would
-          answer half the question. */}
-      <TooltipContent side="bottom">{name}</TooltipContent>
+      {/* File-location qualifiers are readable on hover/focus even when a
+          short basename fits; the caption itself keeps the compact tab shape. */}
+      <TooltipContent side="bottom">{detail}</TooltipContent>
     </Tooltip>
   );
 }
@@ -1077,9 +1164,9 @@ function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?:
   const busy = state === "working" || state === "setup" || state === "starting";
   const failed = state === "error" || state === "interrupted";
   const Icon = busy
-    ? CircleNotchIcon
+    ? SpinnerIcon
     : state === "waiting"
-      ? QuestionIcon
+      ? HelpIcon
       : failed
         ? WarningIcon
         : CircleIcon;
@@ -1103,7 +1190,7 @@ function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?:
       )}
     >
       <Icon
-        weight="bold"
+        strokeWidth={2.25}
         className={cn(badge ? "size-2.5" : "size-3", busy && "motion-safe:animate-spin")}
       />
     </span>
@@ -1163,25 +1250,34 @@ function noop(): void {}
  * so there was never a call site that wanted to position it itself. `onClose`
  * on {@link Tab} is the whole surface area.
  */
-function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; onClose(): void }) {
+function TabClose({
+  label,
+  dirty,
+  onClose,
+}: {
+  label: string;
+  dirty: boolean;
+  onClose(pointer: boolean): void;
+}) {
   return (
     <button
       type="button"
       data-slot="tab-close"
       data-testid="tab-close"
+      onPointerDown={(event) => event.stopPropagation()}
       aria-label={`Close ${label}`}
       // Stop the click from reaching the tab's own select handler, and pass the
       // keyboard on to a tab that will still be here afterwards.
       onClick={(event) => {
         event.stopPropagation();
         focusSuccessorTab(event.currentTarget);
-        onClose();
+        onClose(event.detail > 0);
       }}
       className={cn(
         // The house hover-reveal contract in full (`ticket/rail-panel-parts.tsx`
         // is the reference): the duration and the reduced-motion escape are
         // part of it, and every tab copy had dropped both.
-        "group/close flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity duration-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+        "group/close flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
         dirty
           ? "opacity-100"
           : "opacity-0 group-aria-selected:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
@@ -1195,9 +1291,11 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
           className="size-2 rounded-full bg-primary group-hover/close:hidden"
         />
       ) : null}
-      {/* `bold` is the ≤12px tier (CLAUDE.md): at 12px regular draws lighter
-          than the label beside it, and coverage is scale-invariant. */}
-      <XIcon weight="bold" className={cn("size-3", dirty && "hidden group-hover/close:block")} />
+      {/* The heavier stroke is the ≤12px tier, not a larger drawing. */}
+      <CloseIcon
+        strokeWidth={2.25}
+        className={cn("size-3", dirty && "hidden group-hover/close:block")}
+      />
     </button>
   );
 }

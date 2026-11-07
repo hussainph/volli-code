@@ -62,12 +62,20 @@ function navButton(page, label) {
     .getByRole("button", { name: label, exact: true });
 }
 
-/** One row in the Home Files navigator's current folder — `relPath` is always
- * the full project-relative path (`ticket-files-panel.tsx`'s `FileRow`). */
+/** One row in the Home Files tree — `relPath` is always the full
+ * project-relative path (`files/file-tree.tsx`). */
 function fileRow(page, relPath) {
   return page
     .getByTestId("home-files-panel")
     .locator(`[data-testid="ticket-files-row"][data-path="${relPath}"]`);
+}
+
+/** Open a folder in the Home Files tree; a click on an open folder folds it. */
+async function openFolder(page, relPath) {
+  await waitUntil(`${relPath}/ row`, async () => (await fileRow(page, relPath).count()) === 1);
+  if ((await fileRow(page, relPath).getAttribute("aria-expanded")) !== "true") {
+    await fileRow(page, relPath).click();
+  }
 }
 
 /** The whole strip band that holds one named tablist — actions cluster included. */
@@ -192,21 +200,16 @@ try {
     async () => (await page.getByTestId("home-files-panel").count()) === 1,
     { timeout: 15000 },
   );
-  await waitUntil("src/ row", async () => (await fileRow(page, "src").count()) === 1);
-  await fileRow(page, "src").click();
+  await openFolder(page, "src");
   // Two pinned tabs sharing a basename (the hints), then one preview tab.
   await waitUntil("src/app.ts row", async () => (await fileRow(page, "src/app.ts").count()) === 1);
   await fileRow(page, "src/app.ts").dblclick();
   await sleep(600);
-  await page.getByTestId("home-files-up").click();
-  await waitUntil("lib/ row", async () => (await fileRow(page, "lib").count()) === 1);
-  await fileRow(page, "lib").click();
+  await openFolder(page, "lib");
   await waitUntil("lib/app.ts row", async () => (await fileRow(page, "lib/app.ts").count()) === 1);
   await fileRow(page, "lib/app.ts").dblclick();
   await sleep(600);
-  await page.getByTestId("home-files-up").click();
-  await waitUntil("src/ row again", async () => (await fileRow(page, "src").count()) === 1);
-  await fileRow(page, "src").click();
+  await openFolder(page, "src");
   await waitUntil(
     "src/util.ts row",
     async () => (await fileRow(page, "src/util.ts").count()) === 1,

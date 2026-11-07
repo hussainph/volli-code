@@ -473,10 +473,9 @@ export type AccentTokens = Pick<ThemeTokens, "--primary" | "--primary-foreground
  * read of {@link generateThemeTokens}'s output. That function clamps the accent
  * into {@link ACCENT_CHROMA_RANGE} because a *seed* is a color a person picked
  * and a floor is what stops a nearly-grey pick producing a washed-out accent.
- * The canvas layer's accent is not picked, it is COMPUTED — from the gradient's
- * own chroma, scaled by vibrancy — so a floor there would put a hard bottom under
- * the one slider whose bottom end is supposed to mean "near-neutral chrome"
- * (`canvas/gradient.ts`'s `accentChroma`).
+ * The canvas layer uses its first authored stop verbatim, without the seed
+ * generator's chroma floor or ceiling. Pool vibrancy changes mesh opacity,
+ * not the person's accent colour.
  *
  * The muddy-black guard is not needed either, and for a reason rather than by
  * omission: it exists to stop the FLOOR being forced onto a hue that is float

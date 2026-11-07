@@ -1,9 +1,10 @@
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
+import { LabelIcon } from "@renderer/components/ui/icon";
+
 import type { Label } from "@volli/shared";
 
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { LabelPickerPopover } from "@renderer/components/ticket/label-picker";
-import { Button } from "@renderer/components/ui/button";
+import { InspectorPopup } from "@renderer/components/ui/inspector";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -32,12 +33,16 @@ export function ComposerLabels({
 
   return (
     <LabelPickerPopover projectId={projectId} value={value} onChange={onChange}>
-      <Button variant="ghost" size="sm" className={composerChipClass()}>
-        <TagIcon />
+      <InspectorPopup className={composerChipClass()}>
+        <LabelIcon />
         {value.length === 0 ? (
           "Labels"
         ) : (
-          <span className="flex items-center gap-1">
+          <span
+            className="flex items-center gap-1"
+            aria-label={value.join(", ")}
+            title={value.join(", ")}
+          >
             {value.slice(0, 3).map((label) => (
               <span
                 key={label}
@@ -49,7 +54,7 @@ export function ComposerLabels({
             {value.length} {value.length === 1 ? "label" : "labels"}
           </span>
         )}
-      </Button>
+      </InspectorPopup>
     </LabelPickerPopover>
   );
 }
