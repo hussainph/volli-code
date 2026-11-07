@@ -27,6 +27,12 @@ const isWatchMode = process.argv.some(
 );
 const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && isWatchMode;
 
+// Test-only, opt-in in CI: both projects report active tests through the same
+// preload as host-core. Nothing in the product imports this setup module.
+const diagnosticSetup = process.env["VOLLI_TEST_DIAGNOSTICS"]
+  ? [fileURLToPath(new URL("../../scripts/test-active-diagnostics.ts", import.meta.url))]
+  : [];
+
 // Bundle workspace TS source (`@volli/shared` exports raw .ts) into the CJS
 // main/preload artifacts instead of leaving a runtime require() behind.
 //
@@ -184,7 +190,10 @@ export default defineConfig(({ mode, command }) => ({
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
-      { extends: true, test: { name: "renderer", setupFiles: ["test-setup.ts"] } },
+      {
+        extends: true,
+        test: { name: "renderer", setupFiles: [...diagnosticSetup, "test-setup.ts"] },
+      },
       // NOT extends: main tests need no plugins; a fresh entry avoids
       // inheriting root src/renderer. It takes the renderer's alias alone
       // (below). @volli/shared resolves via workspace link.
@@ -210,7 +219,7 @@ export default defineConfig(({ mode, command }) => ({
           // that outlives the test that filled it is delivered into the next
           // one's window mock otherwise; see the file for why it disposes
           // rather than flushes.
-          setupFiles: ["src/main/test-setup.ts"],
+          setupFiles: [...diagnosticSetup, "src/main/test-setup.ts"],
           // Stated again here, and it is not redundant: `renderer` above
           // INHERITS this cap through `extends: true` while this project
           // inherits nothing, and vitest refuses a run whose projects disagree
