@@ -130,7 +130,7 @@ function readAcceptRefusal(
 }
 
 /** One event as `sessions.accept` reads it: the ledger codec's JSON text. */
-function encodeDrainEvent(event: SessionEvent): string {
+export function encodeDrainEvent(event: SessionEvent): string {
   return encodeSessionJson({
     id: event.id,
     sessionId: event.sessionId,
