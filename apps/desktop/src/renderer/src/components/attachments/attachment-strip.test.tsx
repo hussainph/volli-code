@@ -103,6 +103,23 @@ describe("attachment tile contract", () => {
 });
 
 describe("bounded composer attachments", () => {
+  it("gives a long filename one bounded card edge without shrinking its hit target", async () => {
+    await act(async () =>
+      root.render(<AttachmentStrip presentation="composer" attachments={[pdf]} />),
+    );
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Manage 1 attachments"]')!;
+    expect(trigger.dataset.size).toBe("sm");
+    expect(trigger.classList.contains("max-w-full")).toBe(true);
+    // The chat-only CSS owns its face; this shared token also serves ticket capture.
+    expect(trigger.classList.contains("border-border")).toBe(false);
+    expect(trigger.classList.contains("bg-card")).toBe(false);
+    expect(trigger.textContent).toBe(pdf.originalName);
+    expect(trigger.querySelector(".truncate")).not.toBeNull();
+    await act(async () => trigger.click());
+    const manager = document.querySelector('[data-slot="attachment-manager"]')!;
+    expect(manager.querySelector(".sr-only")!.textContent).toBe(pdf.originalName);
+  });
+
   it.each([0, 3, 50])(
     "keeps %i files in one token row and makes every removal reachable in the manager",
     async (count) => {
