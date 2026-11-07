@@ -104,7 +104,13 @@ function UsageWindowRow({
   const evenAt = elapsed === null ? null : (1 - elapsed) * 100;
   const tone = usageTone(window, now);
   const resetsIn = formatResetsIn(window, now);
-  const summary = usageWindowSummary(window.label, remaining, evenAt, resetsIn);
+  const overage = window.usedPercent > 100 ? `${Math.round(window.usedPercent - 100)}% over` : null;
+  const summary = usageWindowSummary(
+    window.label,
+    overage ?? `${remaining}% left`,
+    evenAt,
+    resetsIn,
+  );
 
   const ink =
     tone === "critical"
@@ -150,19 +156,18 @@ function UsageWindowRow({
         <span
           aria-hidden
           className="absolute inset-0 flex items-center justify-center text-ui tabular-nums"
+          style={{ color: ink }}
         >
-          {remaining}
+          {remaining}%
         </span>
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
-          <span className="text-ui font-medium break-words">{window.label}</span>
+        <span className="text-ui font-medium break-words">{window.label}</span>
+        {overage === null ? null : (
           <span className="text-ui tabular-nums" style={{ color: ink }}>
-            {window.usedPercent > 100
-              ? `${Math.round(window.usedPercent - 100)}% over`
-              : `${remaining}% left`}
+            {overage}
           </span>
-        </span>
+        )}
         {resetsIn === null ? null : (
           <span className="text-ui tabular-nums text-muted-foreground">{resetsIn}</span>
         )}
@@ -221,11 +226,11 @@ function PinButton({
 /** The row's facts as one sentence, in the order the drawing states them. */
 function usageWindowSummary(
   label: string,
-  remaining: number,
+  quota: string,
   evenAt: number | null,
   resetsIn: string | null,
 ): string {
-  const parts = [`${label}: ${remaining}% left`];
+  const parts = [`${label}: ${quota}`];
   if (evenAt !== null) parts.push(`${Math.round(evenAt)}% of the window left`);
   if (resetsIn !== null) parts.push(resetsIn);
   return parts.join(", ");

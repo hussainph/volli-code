@@ -52,6 +52,23 @@ describe("AccountUsage", () => {
     expect(html).not.toContain("pace");
   });
 
+  it("prints the remaining percentage only in the ring, while preserving its accessible summary", () => {
+    const html = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW} />);
+    const visible = html.replace(/<[^>]*>/g, "");
+    expect(visible.match(/40%/g)).toHaveLength(1);
+    expect(visible).not.toContain("% left");
+    expect(html).toContain('aria-label="Session: 40% left, 40% of the window left, resets in 2h"');
+  });
+
+  it("retains over-limit information because a zero ring cannot express the overage", () => {
+    const html = renderToStaticMarkup(<AccountUsage limits={withUsed(112)} now={NOW} />);
+    const visible = html.replace(/<[^>]*>/g, "");
+    expect(visible).toContain("0%");
+    expect(visible).toContain("12% over");
+    expect(visible).not.toContain("% left");
+    expect(html).toContain('aria-label="Session: 12% over,');
+  });
+
   it("fills the ring with what is left and marks even spending at the time left", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW} />);
     // On pace: the fill's edge and the hairline coincide at 40%.

@@ -1,26 +1,27 @@
 /**
- * Pure model for the `session started` toast (VC-13 decision 2). A start that
- * lands over the agent socket must never navigate or steal focus — main pushes
- * a `volli:session-started` notice, the renderer shows a sonner toast naming
- * the actor and ticket, and the toast's action is the ONLY door into the new
- * session's chat tab. This module only shapes the announcement; the
- * subscription + sonner call live in `main.tsx` (bootstrap glue), matching
- * `interrupt-toast.ts`.
+ * The `session started` toast (VC-13 decision 2). A start that lands over the
+ * agent socket must never navigate or steal focus. The title names the launched
+ * Session; its description identifies the ticket and door-derived starter.
+ * Only the action in `main.tsx` opens the Session. A live roster selector lets
+ * a title arriving after the notice update in place, without another toast,
+ * fetch, adoption or new subscription to the host.
  */
 import type { SessionStartedNotice } from "../../../../ipc/contract";
+import { sessionTitleOf, useProjectSessionsStore } from "@renderer/stores/project-sessions";
 
 export interface SessionStartToastModel {
   message: string;
+  description: string;
   /** Where the toast's "Open session" action goes. Always present — main resolved the ticket. */
   target: { projectId: string; ticketId: string; sessionId: string };
 }
 
 /**
- * The actor phrase is door-derived provenance, worded exactly as the event log
- * attributes it: the human is "You", a driving session is named by its own
- * ticket when main could resolve one, and automation is automation.
+ * The actor phrase preserves door-derived provenance: the human is "you", a
+ * driving Session is named by its own ticket when main could resolve one, and
+ * automation is automation. A launched Session's title never names its starter.
  *
- * Exhaustive over the actor kinds rather than defaulting to "You" (VC-163).
+ * Exhaustive over the actor kinds rather than defaulting to "you" (VC-163).
  * `unauthenticated` cannot reach this toast today — the two remaining
  * `session.start` doors produce a Session or the person at the keyboard — but
  * the type permits it, and a default branch would have announced a caller Volli
@@ -30,24 +31,39 @@ export interface SessionStartToastModel {
 function actorPhrase(notice: SessionStartedNotice): string {
   switch (notice.actor) {
     case "session":
-      return notice.actorTicket === null ? "Another Session" : notice.actorTicket;
+      return notice.actorTicket === null ? "another Session" : notice.actorTicket;
     case "automation":
-      return "Automation";
+      return "automation";
     case "unauthenticated":
-      return "An unauthenticated caller";
+      return "an unauthenticated caller";
     case "user":
-      return "You";
+      return "you";
   }
 }
 
-/** Shapes one `volli:session-started` push into its toast. */
-export function sessionStartToastModel(notice: SessionStartedNotice): SessionStartToastModel {
+/** Shapes a notice and the matching roster title; never infers caller identity from the title. */
+export function sessionStartToastModel(
+  notice: SessionStartedNotice,
+  title?: string | null,
+): SessionStartToastModel {
   return {
-    message: `Session started on ${notice.ticketDisplayId} · ${actorPhrase(notice)}`,
+    message: title?.trim() ? title : "Session started",
+    description: `Started on ${notice.ticketDisplayId} by ${actorPhrase(notice)}`,
     target: {
       projectId: notice.projectId,
       ticketId: notice.ticketId,
       sessionId: notice.sessionId,
     },
   };
+}
+
+/** The existing project roster owns identity, including late/renamed titles.
+ * Main renders this as the toast title; the notice's authenticated provenance
+ * and exact action target stay in the model, independent of the roster.
+ */
+export function SessionStartToastTitle({ notice }: { notice: SessionStartedNotice }): string {
+  const title = useProjectSessionsStore((state) =>
+    sessionTitleOf(state.byProject[notice.projectId], notice.sessionId),
+  );
+  return sessionStartToastModel(notice, title).message;
 }

@@ -63,15 +63,15 @@ describe("Glass board", () => {
       expect(button?.getAttribute("data-size")).toBe("icon");
     }
   });
-  it("scopes accent rings to the board and keeps a distinct resting arc with Motion off", () => {
+  it("scopes accent rings to the board and keeps complete distinct outlines with Motion off", () => {
     const css = readFileSync(resolve(import.meta.dirname, "../../globals.css"), "utf8");
     expect(css).toContain(":root .session-ring.board-session-ring");
     expect(css).toContain("--session-ring-seed: var(--canvas-accent)");
     expect(css).toContain("--session-ring-color: var(--canvas-accent)");
-    expect(css).toContain(
-      ':root[data-motion="off"] .board-session-ring[data-activity="working"]::before',
-    );
-    expect(css).toContain('.session-ring.board-session-ring[data-activity="working"]::before');
+    expect(css).toContain(':root[data-motion="off"] .board-session-ring[data-activity="working"]');
+    expect(css).toContain('.session-ring.board-session-ring[data-activity="working"]');
+    expect(css).toContain("border: 1.5px solid var(--session-ring-color)");
+    expect(css).toContain("border-style: dashed");
   });
   it.each([null, "working", "waiting"] as const)(
     "carries %s activity on the accent ring alone, keeping priority and key",
