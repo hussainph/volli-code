@@ -48,7 +48,7 @@ describe("a Subagent Session notice row", () => {
     (state) => {
       const html = renderToStaticMarkup(<SubagentNoticeRow notice={{ ...completed, state }} />);
       expect(html).not.toContain("<p ");
-      expect(html).toContain('class="sr-only"');
+      expect(html).toContain(state);
       expect(html).toContain("<svg");
       if (state === "failed") expect(html).toContain("text-destructive");
       if (state === "interrupted") expect(html).toContain("text-attention");
@@ -60,19 +60,21 @@ describe("a Subagent Session notice row", () => {
 
     expect(html).toContain("Find artifact conventions");
     expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<TeamIcon />)));
-    expect(html).toContain("done");
+    expect(html).toContain("finished");
     expect(html).not.toContain('<p class="truncate text-ui text-muted-foreground/70">');
     expect(html).toContain('data-slot="separator"');
     expect(html).not.toContain('aria-label="Copy"');
   });
 
-  it("puts the complete title and state in the row's hover text", () => {
+  it("keeps the complete title and state without a hover popup", () => {
     const longTitle = "A title long enough to be truncated in a narrow Pane";
     const html = renderToStaticMarkup(
       <SubagentNoticeRow notice={{ ...completed, title: longTitle }} />,
     );
 
-    expect(html).toContain(`title="${longTitle} — done"`);
+    expect(html).toContain(longTitle);
+    expect(html).not.toContain("title=");
+    expect(html).toContain("finished");
   });
 
   it("opens the durable child id from its real button", async () => {
@@ -97,7 +99,8 @@ describe("a Subagent Session notice row", () => {
     );
 
     expect(html).not.toContain("<button");
-    expect(html).toContain("Answer: volli session answer ses-chil");
+    expect(html).not.toContain("ses-chil");
+    expect(html).not.toContain("title=");
   });
 
   it("preserves relaunch context in the visible receipt", () => {
@@ -107,7 +110,8 @@ describe("a Subagent Session notice row", () => {
       />,
     );
 
-    expect(html).toContain('title="Find artifact conventions — interrupted · Volli relaunched"');
+    expect(html).toContain("interrupted · Volli relaunched");
+    expect(html).not.toContain("title=");
     expect(html).not.toContain("before it answered");
   });
 });
@@ -143,13 +147,14 @@ describe("a background shell notice row (VC-495)", () => {
     expect(html).not.toContain('aria-label="Copy"');
   });
 
-  it("puts the complete label and note in the row's hover text, and says a match is a match", () => {
+  it("keeps the complete label and note without a hover popup, and says a match is a match", () => {
     const html = renderToStaticMarkup(<ShellNoticeRow notice={matched} />);
 
     expect(html).toContain("dev server");
     expect(firstGlyph(html)).toBe(firstGlyph(renderToStaticMarkup(<TerminalIcon />)));
     expect(html).toContain("matched");
-    expect(html).toContain('title="dev server — matched. Printed &quot;listening on&quot;."');
+    expect(html).toContain("Printed &quot;listening on&quot;.");
+    expect(html).not.toContain("title=");
   });
 
   it("is what the portable row model dispatches to", () => {
@@ -174,7 +179,8 @@ describe("other host-notice rows", () => {
     expect(html).toContain(">GitHub</span>");
     expect(html).toContain(">You took control</span>");
     expect(html).not.toContain("Session writes are refused");
-    expect(html).toContain("Browser Tab long-opaque-tab-id — GitHub");
+    expect(html).toContain("GitHub");
+    expect(html).not.toContain("long-opaque-tab-id");
     expect(html).not.toContain('aria-label="Copy"');
   });
 

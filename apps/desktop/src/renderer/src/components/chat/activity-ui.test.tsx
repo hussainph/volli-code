@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { ACTIVITY_METADATA_KEY, type ActivityDescriptor } from "@volli/shared";
+import type { BundleRow } from "@volli/session-presentation";
 import type { DynamicToolUIPart } from "ai";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -241,6 +242,91 @@ describe("ActivityBundle scroll window", () => {
     // `pointer-events-none` would match the button primitive's `[&_svg]:` rule.)
     expect(html).not.toContain("pointer-events-none absolute");
     expect(html).not.toContain("gradient");
+  });
+});
+
+function thinkingPart(key: string, text: string, streaming = false): BundleRow {
+  return {
+    kind: "reasoning",
+    key,
+    streaming,
+    part: { type: "reasoning", text, state: streaming ? "streaming" : "done" },
+  };
+}
+
+describe("single Thinking row", () => {
+  const render = (rows: readonly BundleRow[], progressEnabled = true) =>
+    act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={progressEnabled} />));
+
+  it("updates one stable row and keeps all original summaries and reasoning inspectable", () => {
+    const first = thinkingPart("first", "**Checking contrast**\n\nOriginal reasoning.");
+    render([first]);
+    const node = container!.querySelector('[data-slot="thinking-row"]');
+    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="Show details"]')!.click());
+    const next = [first, thinkingPart("second", "**Checking dark mode**\n\nNext reasoning.", true)];
+    const original = JSON.stringify(next);
+    render(next);
+    expect(container!.querySelectorAll('[data-slot="thinking-row"]')).toHaveLength(1);
+    expect(container!.querySelector('[data-slot="thinking-row"]')).toBe(node);
+    expect(container!.querySelector('[aria-expanded="true"]')).not.toBeNull();
+    expect(container!.textContent).toContain("Thinking · Checking dark mode");
+    const audit = container!.querySelector('[aria-label="Reasoning history"]')!;
+    expect(audit.textContent).toContain("Checking contrast");
+    expect(audit.textContent).toContain("Original reasoning.");
+    expect(audit.textContent).toContain("Checking dark mode");
+    expect(audit.textContent).toContain("Next reasoning.");
+    expect(JSON.stringify(next)).toBe(original);
+    expect(node!.querySelector("[aria-live]")).toBeNull();
+    expect(node!.querySelector("[title]")).toBeNull();
+  });
+
+  it("coalesces summaries across intervening tools within the same bundle", () => {
+    render([
+      thinkingPart("first", "**First summary**"),
+      { kind: "tool", key: "tool", part: row },
+      thinkingPart("last", "**Latest summary**", true),
+    ]);
+    act(() =>
+      container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!.click(),
+    );
+    expect(container!.querySelectorAll('[data-slot="thinking-row"]')).toHaveLength(1);
+    expect(container!.textContent).toContain("Thinking · Latest summary");
+    expect(container!.querySelectorAll('[aria-label="Show details"]')).toHaveLength(2);
+  });
+
+  it("keeps the last complete provider heading during an unfinished update", () => {
+    render([
+      thinkingPart("first", "**Complete summary**"),
+      thinkingPart("last", "**Unfinished", true),
+    ]);
+    expect(container!.textContent).toContain("Thinking · Complete summary");
+    expect(container!.textContent).not.toContain("Unfinished");
+  });
+
+  it("uses neutral labels for freeform reasoning and historical playback, without mount-time clocks", () => {
+    render([thinkingPart("free", "ordinary **inline emphasis**", true)]);
+    expect(container!.textContent).toBe("Thinking");
+    render([thinkingPart("free", "**Recorded summary**", true)], false);
+    expect(container!.textContent).toBe("Thought");
+    expect(container!.querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("does not draw an empty settled thought or merge independent windows", () => {
+    render([thinkingPart("empty", "  ")]);
+    expect(container!.querySelector('[data-slot="thinking-row"]')).toBeNull();
+    act(() =>
+      root!.render(
+        <>
+          <ActivityBundle rows={[thinkingPart("before", "**Before commentary**")]} />
+          <p>Visible commentary</p>
+          <ActivityBundle rows={[thinkingPart("after", "**After commentary**", true)]} />
+        </>,
+      ),
+    );
+    expect(container!.querySelectorAll('[data-slot="thinking-row"]')).toHaveLength(2);
+    expect(container!.textContent).toContain(
+      "ThoughtVisible commentaryThinking · After commentary",
+    );
   });
 });
 
@@ -722,7 +808,7 @@ describe("ToolRow copy control", () => {
     expect(html).toContain('class="min-w-0 truncate font-mono text-ui text-foreground"');
     expect(html).toContain("cursor-default hover:bg-muted/30 hover:text-foreground");
     expect(html).toContain('aria-label="Show details"');
-    expect(html).toContain('title="Show details"');
+    expect(html).not.toContain('title="Show details"');
     expect(html).toContain("size-5");
     expect(html).toContain("motion-reduce:transition-none opacity-100");
   });

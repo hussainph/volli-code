@@ -92,10 +92,10 @@ describe("the desktop transcript-row mapping", () => {
       <ChatTranscriptRow row={row} context={context} live={false} />,
     );
     expect(html).toContain("Review tests");
-    expect(html).toContain("done");
+    expect(html).toContain("finished");
     expect(html).not.toContain(modelText);
     expect(html).not.toContain("is-user");
-    expect(html).not.toContain('aria-label="Copy"');
+    expect(html).not.toContain('aria-label="Copy message"');
   });
 });
 
@@ -147,11 +147,11 @@ describe("ChatTurn copy control", () => {
       parts: [{ type: "text", text: `${role} message` }],
     });
 
-    expect(html).toContain('aria-label="Copy"');
+    expect(html).toContain('aria-label="Copy message"');
     expect(html).toContain('data-size="icon-sm"');
     expect(html).toContain('data-message-copy=""');
     expect(html).toContain("size-3.5");
-    expect(html).toContain('title="Copy"');
+    expect(html).not.toContain('title="Copy"');
     expect(html).not.toContain("left-[calc(100%");
     expect(html).not.toContain("pointer-events-none absolute top-0");
   });
