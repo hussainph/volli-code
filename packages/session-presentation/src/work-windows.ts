@@ -173,7 +173,7 @@ export function projectWorkWindows(
           positionKey: key,
           order: order++,
           slot: boundaries.length,
-          sequence: evidence?.activityFirstOverlaySequence.get(rawKey) ?? null,
+          sequence: evidence?.activityFirstOverlaySequence.get(key) ?? null,
           start:
             activity.kind === "tool" ? clock(activityDescriptor(activity.part).startedAt) : null,
         });
