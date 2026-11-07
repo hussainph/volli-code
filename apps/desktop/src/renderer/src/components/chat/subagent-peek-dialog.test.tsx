@@ -181,6 +181,8 @@ describe("SubagentPeekDialog", () => {
     const identity = node.querySelector("[data-agent-model]");
     expect(identity?.textContent).toContain("Claude Sonnet 4.5");
     expect(identity?.textContent).not.toContain("anthropic");
+    expect(identity?.textContent).not.toContain("Anthropic");
+    expect(identity?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Anthropic");
     expect(identity?.className).toContain("flex-wrap");
     expect(identity?.querySelector('[data-slot="model-name"]')?.closest("[data-agent-model]")).toBe(
       identity,
@@ -261,8 +263,10 @@ describe("SubagentPeekDialog", () => {
     const policy = dialog()?.querySelector("[data-agent-model]");
     expect(policy?.textContent).toContain("o5-mini");
     expect(policy?.textContent).toContain("Extra high");
-    // Unknown durable IDs retain their provider instead of guessing a label.
-    expect(policy?.textContent).toContain("openai");
+    // Unknown durable IDs keep the provider accessible without printing it
+    // beside its mark in the narrow peek header.
+    expect(policy?.textContent).not.toContain("openai");
+    expect(policy?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("openai");
   });
 
   it("draws no policy in the header for a child that has not recorded one", async () => {
@@ -357,6 +361,15 @@ describe("SubagentPeekDialog", () => {
     const home = document.createElement("button");
     document.body.append(home);
     await render({ ...props(agent(), onClose), returnFocus: () => home, store });
+    // A focused identity tag is the top layer. Escape dismisses that label
+    // first, without closing the conversation underneath it.
+    if (document.body.querySelector('[data-slot="tooltip-content"]')) {
+      await act(async () =>
+        dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+      );
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.body.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+    }
     await act(async () =>
       dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
     );

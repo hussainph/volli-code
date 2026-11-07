@@ -474,15 +474,9 @@ function CatalogSection({
             header: "Model",
             cell: (model) => (
               <Cell strong>
-                <ModelName model={model} models={[]} providers={providers} />
+                <ModelName model={model} models={offerable} providers={providers} />
               </Cell>
             ),
-          },
-          {
-            key: "provider",
-            header: "Provider",
-            width: "10rem",
-            cell: (model) => <Cell muted>{providerLabelFor(providers, model.providerId)}</Cell>,
           },
           // The Reserve column that sat here was retired with per-model
           // compaction reserves (VC-155) — a ladder of numbers nobody could
@@ -588,7 +582,7 @@ function DefaultModelRow({
               {inherit !== null ? <SelectItem value={INHERIT_VALUE}>{inherit}</SelectItem> : null}
               {availableModelsByProvider(offerable, providers).map((group) => (
                 <SelectGroup key={group.providerId}>
-                  <SelectLabel>{group.providerLabel}</SelectLabel>
+                  <SelectLabel className="sr-only">{group.providerLabel}</SelectLabel>
                   {group.models.map((model) => (
                     <SelectItem key={modelKey(model)} value={modelKey(model)}>
                       <ModelName model={model} models={offerable} providers={providers} />

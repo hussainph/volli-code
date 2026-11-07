@@ -94,6 +94,7 @@ import {
   TooltipTrigger,
 } from "@renderer/components/ui/tooltip";
 import { useClippedReveal } from "@renderer/components/ui/value-reveal";
+import { useHelpTagDetail } from "@renderer/components/ui/help-tag";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
@@ -710,6 +711,8 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
    * parent-directory disambiguator for two tabs that share a basename. Never shown in the tab name; its caption stays the pane name alone.
    */
   hint?: string;
+  /** Provider identity shares this tab's help anchor, never a nested popup. */
+  identity?: string;
   active: boolean;
   /**
    * This tab holds the strip's single entry point in the document's tab order.
@@ -877,6 +880,8 @@ function useComposedTabRef(
 function TabShell({
   label,
   hint,
+  identity,
+  title,
   active,
   tabStop,
   status,
@@ -957,9 +962,17 @@ function TabShell({
   // place they were going. Short names stay quiet unless they have a location
   // qualifier: basename twins need that detail even when neither name clips.
   const labelRef = React.useRef<HTMLSpanElement>(null);
+  const identityHelp = useHelpTagDetail(
+    shellRef,
+    "[data-session-glyph]",
+    Boolean(identity) && !actionsContent,
+  );
   const hasDetail = Boolean(hint);
-  const reveal = useClippedReveal(labelRef, { hasDetail });
   const detail = hasDetail ? `${label} · ${hint}` : label;
+  // A provider-bearing tab migrates its native title into the same help
+  // surface. Title help stays fast; only the supplemental identity waits.
+  const ordinaryHelp = identity && title ? title : detail;
+  const reveal = useClippedReveal(labelRef, { hasDetail: hasDetail || Boolean(identity && title) });
   const inventory = React.useContext(TabInventoryContext);
   const inventoryId = React.useId();
   React.useLayoutEffect(() => {
@@ -983,18 +996,26 @@ function TabShell({
 
   return (
     // Group tabs already reveal a full-title member card. A second clipped-label
-    // tooltip would open over that card (and its action dropdown).
-    <Tooltip {...reveal} open={actionsContent ? false : reveal.open}>
+    // or identity tooltip would open over that card (and its action dropdown).
+    <Tooltip
+      {...reveal}
+      open={actionsContent ? false : reveal.open || identityHelp.visible}
+      onOpenChange={(next) => {
+        reveal.onOpenChange(next);
+        if (!next) identityHelp.dismiss();
+      }}
+    >
       <TooltipTrigger asChild>
         <div
           {...props}
           ref={setShell}
+          title={identity ? undefined : title}
           data-slot="tab"
           data-icon-only={iconOnly || undefined}
           role="tab"
           // Equal file basenames remain distinct to assistive technology and
           // to sighted readers through the same hover/keyboard reveal.
-          aria-label={detail}
+          aria-label={identity ? `${detail} · ${identity}` : detail}
           aria-selected={active}
           tabIndex={tabStop ? 0 : -1}
           onClick={onActivate}
@@ -1154,7 +1175,15 @@ function TabShell({
       </TooltipTrigger>
       {/* File-location qualifiers are readable on hover/focus even when a
           short basename fits; the caption itself keeps the compact tab shape. */}
-      <TooltipContent side="bottom">{detail}</TooltipContent>
+      <TooltipContent side="bottom">
+        {ordinaryHelp}
+        {identityHelp.visible ? (
+          <>
+            {" "}
+            · <bdi>{identity}</bdi>
+          </>
+        ) : null}
+      </TooltipContent>
     </Tooltip>
   );
 }

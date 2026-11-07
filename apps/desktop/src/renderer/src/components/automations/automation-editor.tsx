@@ -348,7 +348,7 @@ function RuntimeFields({
               name alone is ambiguous. */}
           {unavailableValue === null || pin === null ? null : (
             <SelectItem value={unavailableValue}>
-              <ResolvedModelName selection={pin} alwaysProvider />
+              <ResolvedModelName selection={pin} />
             </SelectItem>
           )}
           {models.map((model) => (

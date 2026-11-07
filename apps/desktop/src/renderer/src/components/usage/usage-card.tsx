@@ -350,7 +350,7 @@ export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
       <ModelMark model={model.model} providerLabel={model.providerLabel} />
       <ValueReveal
         term="Model"
-        full={`${row.label} · ${model.providerLabel}`}
+        full={row.label}
         side="left"
         className="min-h-6 min-w-0 truncate rounded-sm text-left"
       >

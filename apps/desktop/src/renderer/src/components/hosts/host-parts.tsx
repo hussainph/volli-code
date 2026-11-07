@@ -1,3 +1,4 @@
+import { HelpTag } from "@renderer/components/ui/help-tag";
 import { Progress } from "@renderer/components/ui/progress";
 import { Spinner } from "@renderer/components/ui/spinner";
 /**
@@ -204,15 +205,17 @@ const PROVIDER_TINT: Record<string, string> = {
 /** A monogram, not a logo: no third-party marks are redistributed. */
 export function ProviderMark({ id, name }: { id: string; name: string }) {
   return (
-    <span
-      aria-hidden
-      className={cn(
-        "grid size-6 shrink-0 place-items-center rounded-sm font-mono text-ui font-semibold",
-        PROVIDER_TINT[id] ?? "bg-muted text-foreground",
-      )}
-    >
-      {name.slice(0, 1)}
-    </span>
+    <HelpTag label={name === id ? name : `${name} · ${id}`}>
+      <span
+        aria-hidden
+        className={cn(
+          "grid size-6 shrink-0 place-items-center rounded-sm font-mono text-ui font-semibold",
+          PROVIDER_TINT[id] ?? "bg-muted text-foreground",
+        )}
+      >
+        {name.slice(0, 1)}
+      </span>
+    </HelpTag>
   );
 }
 
