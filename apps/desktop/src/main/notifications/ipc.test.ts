@@ -208,7 +208,10 @@ it("Settings can read notification preferences without consuming the workbench's
     mayActivate: () => false,
   });
   expect(await invoke("volli:notifications-get")).toMatchObject({ ok: true });
-  expect(await invoke("volli:notifications-pending-activation")).toEqual({ ok: true, target: null });
+  expect(await invoke("volli:notifications-pending-activation")).toEqual({
+    ok: true,
+    target: null,
+  });
   expect(pending.calls).toBe(0);
   expect(ready).toEqual([]);
 });

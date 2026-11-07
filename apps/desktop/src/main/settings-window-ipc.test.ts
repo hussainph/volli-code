@@ -66,7 +66,12 @@ const NAVIGATION: SettingsWindowNavigation = {
 };
 
 const WORKSPACE_NAVIGATIONS: WorkspaceWindowNavigation[] = [
-  { kind: "file", projectId: "project-id", relPath: ".volli/settings.json", workspaceId: "workspace-id" },
+  {
+    kind: "file",
+    projectId: "project-id",
+    relPath: ".volli/settings.json",
+    workspaceId: "workspace-id",
+  },
   { kind: "ticket", projectId: "project-id", ticketId: "ticket-id", workspaceId: "workspace-id" },
   { kind: "file", projectId: "local-project", relPath: ".volli/settings.json" },
   { kind: "ticket", projectId: "local-project", ticketId: "local-ticket" },
@@ -327,19 +332,22 @@ describe("Settings window guarded desktop transport", () => {
     });
   });
 
-  it.each(WORKSPACE_NAVIGATIONS)("targets one workspace renderer for a $kind reveal", (navigation) => {
-    const target = {
-      id: 82,
-      send(channel: string, payload: unknown) {
-        sent.push({ target: this.id, channel, payload: wire(payload) });
-      },
-    } as WebContents;
-    sendWorkspaceWindowNavigation(target, navigation);
-    expect(sent).toEqual([
-      { target: 82, channel: "volli:workspace-window-navigate", payload: navigation },
-    ]);
-    expect(sent[0]!.payload).not.toBe(navigation);
-  });
+  it.each(WORKSPACE_NAVIGATIONS)(
+    "targets one workspace renderer for a $kind reveal",
+    (navigation) => {
+      const target = {
+        id: 82,
+        send(channel: string, payload: unknown) {
+          sent.push({ target: this.id, channel, payload: wire(payload) });
+        },
+      } as WebContents;
+      sendWorkspaceWindowNavigation(target, navigation);
+      expect(sent).toEqual([
+        { target: 82, channel: "volli:workspace-window-navigate", payload: navigation },
+      ]);
+      expect(sent[0]!.payload).not.toBe(navigation);
+    },
+  );
 
   it("sends navigation to only the chosen target through the V8 codec", () => {
     const target = {
@@ -387,16 +395,19 @@ describe("Settings preload contract through the real registry and V8 codec", () 
     expect(ports.ready).toHaveBeenCalledWith(NAVIGATION.revision, rendererSender);
   });
 
-  it.each(WORKSPACE_NAVIGATIONS)("routes a workspace $kind reveal through preload", async (input) => {
-    const ports = register({ pendingWorkspaceNavigation: vi.fn(() => input) });
-    await expect(api.settingsWindow.openWorkspace(input)).resolves.toEqual({ ok: true });
-    expect(ports.openWorkspace).toHaveBeenCalledWith(input, rendererSender);
-    await expect(api.settingsWindow.pendingWorkspaceNavigation()).resolves.toEqual({
-      ok: true,
-      navigation: input,
-    });
-    expect(ports.pendingWorkspaceNavigation).toHaveBeenCalledWith(rendererSender);
-  });
+  it.each(WORKSPACE_NAVIGATIONS)(
+    "routes a workspace $kind reveal through preload",
+    async (input) => {
+      const ports = register({ pendingWorkspaceNavigation: vi.fn(() => input) });
+      await expect(api.settingsWindow.openWorkspace(input)).resolves.toEqual({ ok: true });
+      expect(ports.openWorkspace).toHaveBeenCalledWith(input, rendererSender);
+      await expect(api.settingsWindow.pendingWorkspaceNavigation()).resolves.toEqual({
+        ok: true,
+        navigation: input,
+      });
+      expect(ports.pendingWorkspaceNavigation).toHaveBeenCalledWith(rendererSender);
+    },
+  );
 
   it("subscribes to workspace reveals without leaking Electron events or other listeners", () => {
     const callback = vi.fn();

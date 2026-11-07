@@ -20,7 +20,14 @@ import {
   MENU_BAR_FLUSH_OVERDUE_MS,
 } from "../../../main/client-state-flush";
 
-const setMock = vi.fn<(key: string, value: string, baseValue?: string) => Promise<{ ok: boolean; error?: string; value?: string }>>();
+const setMock =
+  vi.fn<
+    (
+      key: string,
+      value: string,
+      baseValue?: string,
+    ) => Promise<{ ok: boolean; error?: string; value?: string }>
+  >();
 
 // setItem/removeItem debounce the write-through (~200ms) before touching the
 // bridge, so tests run on fake timers and advance past the debounce window to
@@ -395,16 +402,27 @@ describe("shared preferences in separate windows", () => {
   it("retains a newer local edit while an earlier snapshot's merge is acknowledged", async () => {
     seedAppStateCache({ "volli:ui": base });
     let finish!: (value: { ok: true; value: string }) => void;
-    setMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    setMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     appStateStorage.setItem("volli:ui", local);
     const older = flushPendingAppStateKey("volli:ui");
     const newest = '{"state":{"sidebarWidth":300,"costVisible":false,"uiScale":1.25}}';
     appStateStorage.setItem("volli:ui", newest);
     finish({ ok: true, value: accepted });
     await older;
-    expect(JSON.parse(appStateStorage.getItem("volli:ui")!)).toEqual({ state: { sidebarWidth: 420, costVisible: false, uiScale: 1.25 } });
+    expect(JSON.parse((await appStateStorage.getItem("volli:ui"))!)).toEqual({
+      state: { sidebarWidth: 420, costVisible: false, uiScale: 1.25 },
+    });
     await flushPendingAppStateKey("volli:ui");
-    expect(setMock).toHaveBeenLastCalledWith("volli:ui", '{"state":{"sidebarWidth":420,"costVisible":false,"uiScale":1.25}}', accepted);
+    expect(setMock).toHaveBeenLastCalledWith(
+      "volli:ui",
+      '{"state":{"sidebarWidth":420,"costVisible":false,"uiScale":1.25}}',
+      accepted,
+    );
   });
   it("never replaces local pending intent with an event; the accepted merge reconciles it", async () => {
     seedAppStateCache({ "volli:ui": base });

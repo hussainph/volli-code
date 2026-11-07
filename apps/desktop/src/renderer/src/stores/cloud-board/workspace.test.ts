@@ -369,7 +369,9 @@ describe("joining and leaving a Workspace", () => {
     const cancelled = new Error("Navigation superseded");
     request.abort(cancelled);
 
-    await expect(selectCloudWorkspace("w2", h.cloud.session, request.signal)).rejects.toBe(cancelled);
+    await expect(selectCloudWorkspace("w2", h.cloud.session, request.signal)).rejects.toBe(
+      cancelled,
+    );
     expect(query).not.toHaveBeenCalled();
     expect(h.cloud.watchers("projects:list", { workspaceId: "w2" })).toBe(0);
     h.stop();
@@ -379,7 +381,13 @@ describe("joining and leaving a Workspace", () => {
     h.connect();
     h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
     let answer!: (row: typeof W2) => void;
-    h.cloud.queries.set("workspaces:get", () => new Promise<typeof W2>((resolve) => { answer = resolve; }));
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((resolve) => {
+          answer = resolve;
+        }),
+    );
     const request = new AbortController();
     const selecting = selectCloudWorkspace("w2", h.cloud.session, request.signal);
     const timedOut = new Error("Navigation timed out");
@@ -396,7 +404,13 @@ describe("joining and leaving a Workspace", () => {
     h.connect();
     h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
     let answer!: (row: typeof W2) => void;
-    h.cloud.queries.set("workspaces:get", () => new Promise<typeof W2>((resolve) => { answer = resolve; }));
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((resolve) => {
+          answer = resolve;
+        }),
+    );
     const request = new AbortController();
     const first = selectCloudWorkspace("w2", h.cloud.session, request.signal);
     const cancelled = new Error("Navigation superseded");

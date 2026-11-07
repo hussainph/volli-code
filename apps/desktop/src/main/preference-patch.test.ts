@@ -8,7 +8,8 @@ describe("concurrent presentation preference snapshots", () => {
     const current = { ...base, state: { ...base.state, sidebarWidth: 420 } };
     const next = { ...base, state: { ...base.state, costVisible: false } };
     expect(JSON.parse(mergePreferenceSnapshot(json(current), json(base), json(next)))).toEqual({
-      state: { sidebarWidth: 420, costVisible: false }, version: 1,
+      state: { sidebarWidth: 420, costVisible: false },
+      version: 1,
     });
   });
   it("merges separate project style overrides and retains intentional deletions", () => {
@@ -20,13 +21,18 @@ describe("concurrent presentation preference snapshots", () => {
     });
   });
   it("uses last explicit intent on one field and treats arrays atomically", () => {
-    expect(mergePreferenceSnapshot('{"a":3,"b":[1,2]}', '{"a":1,"b":[1]}', '{"a":2,"b":[3]}')).toBe('{"a":2,"b":[3]}');
+    expect(mergePreferenceSnapshot('{"a":3,"b":[1,2]}', '{"a":1,"b":[1]}', '{"a":2,"b":[3]}')).toBe(
+      '{"a":2,"b":[3]}',
+    );
   });
   it("does not resurrect unchanged fields after another writer removed them", () => {
-    expect(mergePreferenceSnapshot('{"state":{}}', '{"state":{"a":1,"b":1}}', '{"state":{"a":1,"b":2}}')).toBe('{"state":{"b":2}}');
+    expect(
+      mergePreferenceSnapshot('{"state":{}}', '{"state":{"a":1,"b":1}}', '{"state":{"a":1,"b":2}}'),
+    ).toBe('{"state":{"b":2}}');
   });
   it("preserves string storage for missing, cleared, or malformed snapshots", () => {
-    for (const current of [undefined, "corrupt"]) expect(mergePreferenceSnapshot(current, "{}", '{"a":1}')).toBe('{"a":1}');
+    for (const current of [undefined, "corrupt"])
+      expect(mergePreferenceSnapshot(current, "{}", '{"a":1}')).toBe('{"a":1}');
     expect(mergePreferenceSnapshot("{}", undefined, "raw")).toBe("raw");
     expect(mergePreferenceSnapshot("{}", "bad", "raw")).toBe("raw");
     expect(mergePreferenceSnapshot("{}", "{}", "")).toBe("");

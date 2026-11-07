@@ -92,12 +92,14 @@ export function recordUnsavedBoardWrites(count: unknown, rendererId?: number): v
 
 /** A window close reads only its own work; app quit omits the id to aggregate every renderer. */
 export function unsavedDocumentNames(rendererId?: number): readonly string[] {
-  const names = rendererId === undefined
-    ? [...unsavedNames.values()].flat()
-    : (unsavedNames.get(rendererId) ?? []);
-  const boardWrites = rendererId === undefined
-    ? [...unsavedBoardWrites.values()].reduce((sum, count) => sum + count, 0)
-    : (unsavedBoardWrites.get(rendererId) ?? 0);
+  const names =
+    rendererId === undefined
+      ? [...unsavedNames.values()].flat()
+      : (unsavedNames.get(rendererId) ?? []);
+  const boardWrites =
+    rendererId === undefined
+      ? [...unsavedBoardWrites.values()].reduce((sum, count) => sum + count, 0)
+      : (unsavedBoardWrites.get(rendererId) ?? 0);
   if (boardWrites === 0) return names;
   const board = `Volli Cloud board (${boardWrites} ${boardWrites === 1 ? "change" : "changes"})`;
   return [...names, board];

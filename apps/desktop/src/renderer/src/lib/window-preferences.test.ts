@@ -1,23 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 const spies = vi.hoisted(() => ({
-  accept: vi.fn(() => true), ui: vi.fn(), style: vi.fn(), hydrate: vi.fn(),
+  accept: vi.fn(() => true),
+  ui: vi.fn(),
+  style: vi.fn(),
+  hydrate: vi.fn(),
   accepted: null as ((key: string) => void) | null,
   stopAccepted: vi.fn(),
 }));
 vi.mock("./app-state-storage", () => ({
   acceptAppStateValue: spies.accept,
-  onPreferenceValueAccepted: (listener: (key: string) => void) => { spies.accepted = listener; return spies.stopAccepted; },
+  onPreferenceValueAccepted: (listener: (key: string) => void) => {
+    spies.accepted = listener;
+    return spies.stopAccepted;
+  },
 }));
-vi.mock("@renderer/stores/ui", () => ({ UI_APP_STATE_KEY: "volli:ui", useUiStore: { persist: { rehydrate: spies.ui } } }));
-vi.mock("@renderer/stores/style", () => ({ useStyleStore: { persist: { rehydrate: spies.style } } }));
-vi.mock("@renderer/stores/theme", () => ({ useThemeStore: { getState: () => ({ globalCanvas: { stops: [] }, globalAppearance: "dark", hydrateGlobal: spies.hydrate }) } }));
+vi.mock("@renderer/stores/ui", () => ({
+  UI_APP_STATE_KEY: "volli:ui",
+  useUiStore: { persist: { rehydrate: spies.ui } },
+}));
+vi.mock("@renderer/stores/style", () => ({
+  useStyleStore: { persist: { rehydrate: spies.style } },
+}));
+vi.mock("@renderer/stores/theme", () => ({
+  useThemeStore: {
+    getState: () => ({
+      globalCanvas: { stops: [] },
+      globalAppearance: "dark",
+      hydrateGlobal: spies.hydrate,
+    }),
+  },
+}));
 import { startWindowPreferenceSync } from "./window-preferences";
 let event: (change: { key: string; value: string }) => void;
 const unsubscribe = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   spies.accept.mockReturnValue(true);
-  vi.stubGlobal("window", { api: { appState: { onChanged: (listener: typeof event) => { event = listener; return unsubscribe; } } } });
+  vi.stubGlobal("window", {
+    api: {
+      appState: {
+        onChanged: (listener: typeof event) => {
+          event = listener;
+          return unsubscribe;
+        },
+      },
+    },
+  });
 });
 describe("window preference synchronization", () => {
   it("buffers changes during bootstrap, replaying the latest accepted value after hydration", () => {
@@ -28,7 +56,10 @@ describe("window preference synchronization", () => {
     expect(spies.hydrate).not.toHaveBeenCalled();
     expect(spies.ui).not.toHaveBeenCalled();
     sync.activate();
-    expect(spies.hydrate).toHaveBeenCalledExactlyOnceWith({ theme: '{"stops":[]}', appearance: "light" }, { live: true });
+    expect(spies.hydrate).toHaveBeenCalledExactlyOnceWith(
+      { theme: '{"stops":[]}', appearance: "light" },
+      { live: true },
+    );
     expect(spies.ui).toHaveBeenCalledOnce();
     sync.stop();
     expect(unsubscribe).toHaveBeenCalledOnce();

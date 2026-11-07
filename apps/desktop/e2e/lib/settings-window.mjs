@@ -102,12 +102,7 @@ async function nativeWindowState(app) {
  * reading when any part is false — a smoke should fail on the cause, not on a
  * later locator timeout.
  */
-export async function assertSettingsWindow(
-  app,
-  mainPage,
-  settingsPage,
-  { timeout = 10_000 } = {},
-) {
+export async function assertSettingsWindow(app, mainPage, settingsPage, { timeout = 10_000 } = {}) {
   if (mainPage.isClosed()) throw new Error("the workbench page is closed");
   if (settingsPage.isClosed()) throw new Error("the Settings page is closed");
 
@@ -118,8 +113,8 @@ export async function assertSettingsWindow(
   );
 
   const [mainApiKeys, settingsApiKeys] = await Promise.all([
-    mainPage.evaluate(() => Object.keys(window.api ?? {}).sort()),
-    settingsPage.evaluate(() => Object.keys(window.api ?? {}).sort()),
+    mainPage.evaluate(() => Object.keys(window.api ?? {}).toSorted()),
+    settingsPage.evaluate(() => Object.keys(window.api ?? {}).toSorted()),
   ]);
   const samePreloadHydration =
     mainApiKeys.length > 0 &&

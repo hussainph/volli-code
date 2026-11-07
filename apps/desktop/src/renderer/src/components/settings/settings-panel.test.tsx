@@ -9,7 +9,9 @@ vi.mock("@renderer/components/pages/settings-page", () => ({
   SettingsPage: () => <input type="search" aria-label="Search settings" />,
 }));
 vi.mock("@renderer/components/ui/sonner", () => ({ Toaster: () => null }));
-vi.mock("@renderer/components/update/update-install-dialog", () => ({ UpdateInstallDialog: () => null }));
+vi.mock("@renderer/components/update/update-install-dialog", () => ({
+  UpdateInstallDialog: () => null,
+}));
 vi.mock("@renderer/components/cloud-moves/cloud-moves", () => ({ CloudMovesRoot: () => null }));
 vi.mock("@renderer/components/hosts/hosts-chrome", () => ({ HostsChrome: () => null }));
 vi.mock("@renderer/components/rail/folder-claim-dialog", () => ({ FolderClaimDialog: () => null }));
@@ -42,7 +44,10 @@ afterEach(async () => {
 it("repeated Command-comma opens or raises Settings without blocking the workspace", async () => {
   await act(async () => root.render(<ShortcutHost />));
   await act(async () => {
-    for (let i = 0; i < 2; i++) window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true, cancelable: true }));
+    for (let i = 0; i < 2; i++)
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: ",", metaKey: true, cancelable: true }),
+      );
   });
   expect(open).toHaveBeenCalledTimes(2);
   expect(useUiStore.getState().settingsOpen).toBe(false);
@@ -51,16 +56,21 @@ it("routes pane and provider intents through the same native opener", () => {
   useUiStore.getState().setSettingsOpen(true, "models", "openai");
   useUiStore.getState().requestConfigureCategory("worktrees");
   useUiStore.getState().setSettingsOpen(false);
-  expect(open.mock.calls).toEqual([[{ category: "models", signInProviderId: "openai" }], [{ configureCategory: "worktrees" }]]);
+  expect(open.mock.calls).toEqual([
+    [{ category: "models", signInProviderId: "openai" }],
+    [{ configureCategory: "worktrees" }],
+  ]);
   expect(useUiStore.getState().configureCategory).toBeNull();
 });
 it("renders a window root without modal semantics or Escape dismissal", async () => {
   await act(async () => root.render(<SettingsPanel />));
-  expect(host.querySelector('[data-settings-panel]')).not.toBeNull();
+  expect(host.querySelector("[data-settings-panel]")).not.toBeNull();
   expect(host.querySelector('[role="dialog"]')).toBeNull();
   expect(host.querySelector('[data-slot="dialog-overlay"]')).toBeNull();
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Search settings");
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  expect(host.querySelector('[data-settings-panel]')).not.toBeNull();
+  await act(async () =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+  );
+  expect(host.querySelector("[data-settings-panel]")).not.toBeNull();
   expect(open).not.toHaveBeenCalled();
 });

@@ -118,7 +118,8 @@ export function driveRequestBudget(command, timeout) {
  */
 export function driveInstance(label, socket) {
   const windows = windowTargeting((cmd, args = {}) =>
-    request(socket, cmd, args, { timeoutMs: driveRequestBudget(cmd, args.timeout) }));
+    request(socket, cmd, args, { timeoutMs: driveRequestBudget(cmd, args.timeout) }),
+  );
   const call = windows.call;
   const snap = () => call("snapshot");
   const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;

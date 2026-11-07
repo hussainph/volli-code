@@ -299,15 +299,31 @@ describe("registerSessionRpcIpcHandlers", () => {
     let releaseSecond!: () => void;
     let firstEntered!: () => void;
     let secondEntered!: () => void;
-    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
-    const firstStarted = new Promise<void>((resolve) => { firstEntered = resolve; });
-    const secondStarted = new Promise<void>((resolve) => { secondEntered = resolve; });
-    const observed: Array<{ sessionId: string; phase: "start" | "effect"; rendererId: number | undefined }> = [];
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      firstEntered = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      secondEntered = resolve;
+    });
+    const observed: Array<{
+      sessionId: string;
+      phase: "start" | "effect";
+      rendererId: number | undefined;
+    }> = [];
     const runtime: SessionRuntime = {
       ...fixture.runtime,
       snapshot: async (input) => {
-        observed.push({ sessionId: input.sessionId, phase: "start", rendererId: currentRendererId() });
+        observed.push({
+          sessionId: input.sessionId,
+          phase: "start",
+          rendererId: currentRendererId(),
+        });
         if (input.sessionId === "session-1") {
           firstEntered();
           await firstGate;
@@ -317,7 +333,11 @@ describe("registerSessionRpcIpcHandlers", () => {
         }
         // Device-local effects read the transport identity after asynchronous
         // work too, rather than accepting a renderer id in the request body.
-        observed.push({ sessionId: input.sessionId, phase: "effect", rendererId: currentRendererId() });
+        observed.push({
+          sessionId: input.sessionId,
+          phase: "effect",
+          rendererId: currentRendererId(),
+        });
         return fixture.runtime.snapshot(input);
       },
     };

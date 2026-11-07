@@ -96,11 +96,14 @@ afterEach(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
 
-function handlers(options: Partial<HostHandlerOptions> = {}): HostHandlers {
+function handlers(
+  options: Partial<HostHandlerOptions> = {},
+  publishToPeers?: (topic: string, change: unknown) => void,
+): HostHandlers {
   return admittedHandlers(
     createHostHandlers(
       {
-        events: { publish },
+        events: { publish, ...(publishToPeers === undefined ? {} : { publishToPeers }) },
         attention: {
           deliver: vi.fn(() => ({ delivered: true })),
           focusedSessionIds: () => new Set(),
@@ -1708,4 +1711,17 @@ describe("worktree scope", () => {
     expect(again.ticket.usesWorktree).toBe(true);
     expect(ensure).toHaveBeenCalledTimes(1);
   });
+});
+
+it("announces desktop Settings project writes to peer clients, not back to the requester", async () => {
+  const peers = vi.fn();
+  const map = handlers({}, peers);
+  const answer = await map["board.updateProject"](
+    { projectId: PROJECT, baseBranch: "peer-branch" },
+    WINDOW,
+  );
+  expect(answer.project.baseBranch).toBe("peer-branch");
+  expect(publish).not.toHaveBeenCalled();
+  expect(peers).toHaveBeenCalledExactlyOnceWith("data-changed", { projectId: PROJECT });
+  expect(batches).toHaveLength(1);
 });

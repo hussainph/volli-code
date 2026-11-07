@@ -21,15 +21,36 @@ export function useSettingsShortcut() {
   React.useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
-        event.defaultPrevented || event.repeat || !(event.metaKey || event.ctrlKey) ||
-        event.altKey || event.shiftKey || event.key !== ","
-      ) return;
+        event.defaultPrevented ||
+        event.repeat ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.key !== ","
+      )
+        return;
       event.preventDefault();
       useUiStore.getState().setSettingsOpen(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+}
+
+function retrySettings() {
+  const state = useUiStore.getState();
+  void window.api.settingsWindow
+    .open({
+      workspaceId: state.settingsWorkspaceId,
+      projectId: state.settingsProjectId,
+      category: state.settingsCategory ?? "general",
+      configureCategory: state.configureCategory ?? undefined,
+      signInProviderId: state.settingsSignInProviderId ?? undefined,
+    })
+    .then((result) => {
+      if (!result.ok) toastError(`Couldn't open Settings: ${result.error}`);
+    })
+    .catch((error: unknown) => toastError(`Couldn't open Settings: ${errorMessage(error)}`));
 }
 
 export function SettingsPanel() {
@@ -46,7 +67,8 @@ export function SettingsPanel() {
   const [scopeReadyRevision, setScopeReadyRevision] = React.useState<number | null>(null);
   const onScopeReady = React.useCallback((appliedRevision: number, error?: string) => {
     const state = useUiStore.getState();
-    if (state.settingsNavigationRevision !== appliedRevision || state.settingsNavigationPending) return;
+    if (state.settingsNavigationRevision !== appliedRevision || state.settingsNavigationPending)
+      return;
     if (error !== undefined) useUiStore.setState({ settingsNavigationError: error });
     setScopeReadyRevision(appliedRevision);
   }, []);
@@ -59,29 +81,25 @@ export function SettingsPanel() {
     const frame = requestAnimationFrame(() => {
       committedFrame = requestAnimationFrame(() => {
         if (!active || useUiStore.getState().settingsNavigationRevision !== revision) return;
-        void window.api.settingsWindow.ready(revision).then((result) => {
-          if (!active) return;
-          if (!result.ok) toastError(`Couldn't open Settings: ${result.error}`);
-          else if (result.navigation !== null) acceptSettingsNavigation(result.navigation);
-        }).catch((error: unknown) => {
-          if (active) toastError(`Couldn't open Settings: ${errorMessage(error)}`);
-        });
+        void window.api.settingsWindow
+          .ready(revision)
+          .then((result) => {
+            if (!active) return;
+            if (!result.ok) toastError(`Couldn't open Settings: ${result.error}`);
+            else if (result.navigation !== null) acceptSettingsNavigation(result.navigation);
+          })
+          .catch((error: unknown) => {
+            if (active) toastError(`Couldn't open Settings: ${errorMessage(error)}`);
+          });
       });
     });
-    return () => { active = false; cancelAnimationFrame(frame); cancelAnimationFrame(committedFrame); };
+    return () => {
+      active = false;
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(committedFrame);
+    };
   }, [revision, pending, failure, scopeReadyRevision]);
-  const retry = () => {
-    const state = useUiStore.getState();
-    void window.api.settingsWindow.open({
-      workspaceId: state.settingsWorkspaceId,
-      projectId: state.settingsProjectId,
-      category: state.settingsCategory ?? "general",
-      configureCategory: state.configureCategory ?? undefined,
-      signInProviderId: state.settingsSignInProviderId ?? undefined,
-    }).then((result) => {
-      if (!result.ok) toastError(`Couldn't open Settings: ${result.error}`);
-    }).catch((error: unknown) => toastError(`Couldn't open Settings: ${errorMessage(error)}`));
-  };
+
   React.useEffect(() => {
     document.querySelector<HTMLInputElement>('[data-settings-panel] input[type="search"]')?.focus();
   }, []);
@@ -92,13 +110,31 @@ export function SettingsPanel() {
       </header>
       <div className="flex min-h-0 flex-1" style={{ zoom: scale }}>
         {pending ? (
-          <div role="status" className="m-auto text-ui text-muted-foreground"><LoadingLabel>Settings</LoadingLabel></div>
+          <div role="status" className="m-auto text-ui text-muted-foreground">
+            <LoadingLabel>Settings</LoadingLabel>
+          </div>
         ) : failure !== null ? (
-          <Notice tone="error" title="Couldn't open Settings" detail={failure} className="m-4 self-start" announce
-            actions={<Button size="xs" variant="outline" onClick={retry}>Try again</Button>} />
+          <Notice
+            tone="error"
+            title="Couldn't open Settings"
+            detail={failure}
+            className="m-4 self-start"
+            announce
+            actions={
+              <Button size="xs" variant="outline" onClick={retrySettings}>
+                Try again
+              </Button>
+            }
+          />
         ) : (
-          <SettingsPage key={revision} initialCategoryKey={category ?? undefined} initialSignInProviderId={provider ?? undefined}
-            navigationRevision={revision} initialProjectId={projectId} onScopeReady={onScopeReady} />
+          <SettingsPage
+            key={revision}
+            initialCategoryKey={category ?? undefined}
+            initialSignInProviderId={provider ?? undefined}
+            navigationRevision={revision}
+            initialProjectId={projectId}
+            onScopeReady={onScopeReady}
+          />
         )}
       </div>
       <Toaster />

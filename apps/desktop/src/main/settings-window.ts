@@ -24,7 +24,11 @@ export function createSettingsWindowOwner<W extends SettingsNativeWindow>(ports:
       }
       // Ordinary Settings entries and ⌘, raise the existing view, retaining
       // search, scope, drafts and scroll. Only an explicit pane is navigation.
-      if (navigation.category !== undefined || navigation.configureCategory !== undefined || navigation.signInProviderId !== undefined) {
+      if (
+        navigation.category !== undefined ||
+        navigation.configureCategory !== undefined ||
+        navigation.signInProviderId !== undefined
+      ) {
         ports.navigate(window, navigation);
       }
       ports.reveal(window);
@@ -58,15 +62,27 @@ export function restoreSettingsFrame(
 ): Partial<SettingsFrame> {
   if (typeof value !== "object" || value === null) return {};
   const frame = value as Partial<SettingsFrame>;
-  if (![frame.x, frame.y, frame.width, frame.height].every((n) => typeof n === "number" && Number.isFinite(n))) return {};
+  if (
+    ![frame.x, frame.y, frame.width, frame.height].every(
+      (n) => typeof n === "number" && Number.isFinite(n),
+    )
+  )
+    return {};
   const { x, y, width, height } = frame as SettingsFrame;
   const size = {
-    width: Math.round(Math.max(SETTINGS_WINDOW_SIZE.minWidth, Math.min(SETTINGS_WINDOW_SIZE.maxWidth, width))),
-    height: Math.round(Math.max(SETTINGS_WINDOW_SIZE.minHeight, Math.min(SETTINGS_WINDOW_SIZE.maxHeight, height))),
+    width: Math.round(
+      Math.max(SETTINGS_WINDOW_SIZE.minWidth, Math.min(SETTINGS_WINDOW_SIZE.maxWidth, width)),
+    ),
+    height: Math.round(
+      Math.max(SETTINGS_WINDOW_SIZE.minHeight, Math.min(SETTINGS_WINDOW_SIZE.maxHeight, height)),
+    ),
   };
-  const visible = displays.some((display) =>
-    x + 80 <= display.x + display.width && x + size.width - 80 >= display.x &&
-    y >= display.y && y + 46 <= display.y + display.height,
+  const visible = displays.some(
+    (display) =>
+      x + 80 <= display.x + display.width &&
+      x + size.width - 80 >= display.x &&
+      y >= display.y &&
+      y + 46 <= display.y + display.height,
   );
   return visible ? { ...size, x: Math.round(x), y: Math.round(y) } : size;
 }

@@ -14,7 +14,10 @@ import { errorMessage } from "@volli/shared";
 import type { StateStorage } from "zustand/middleware";
 
 import { toastError } from "@renderer/lib/toast";
-import { isSharedPreferenceKey as isSharedPreference, mergePreferenceSnapshot } from "../../../preference-patch";
+import {
+  isSharedPreferenceKey as isSharedPreference,
+  mergePreferenceSnapshot,
+} from "../../../preference-patch";
 
 const cache = new Map<string, string>();
 // Only shared presentation preferences suppress identical writes. Drafts retain
@@ -24,7 +27,9 @@ const preferenceListeners = new Set<(key: string) => void>();
 /** Accepted merged preferences repaint their writer as well as other windows. */
 export function onPreferenceValueAccepted(listener: (key: string) => void): () => void {
   preferenceListeners.add(listener);
-  return () => { preferenceListeners.delete(listener); };
+  return () => {
+    preferenceListeners.delete(listener);
+  };
 }
 
 /**
@@ -44,11 +49,17 @@ export function seedAppStateCache(entries: Record<string, string>): void {
 }
 
 /** Writes through to main and reports whether SQLite acknowledged the value. */
-async function persist(key: string, value: string, failureVerb: string, baseValue?: string): Promise<boolean> {
+async function persist(
+  key: string,
+  value: string,
+  failureVerb: string,
+  baseValue?: string,
+): Promise<boolean> {
   try {
-    const result = isSharedPreference(key) && baseValue !== undefined && value !== ""
-      ? await window.api.appState.set(key, value, baseValue)
-      : await window.api.appState.set(key, value);
+    const result =
+      isSharedPreference(key) && baseValue !== undefined && value !== ""
+        ? await window.api.appState.set(key, value, baseValue)
+        : await window.api.appState.set(key, value);
     if (result.ok) {
       if (isSharedPreference(key) && result.value !== undefined) {
         const accepted = result.value;
@@ -96,7 +107,12 @@ const acknowledgedValues = new Map<string, string>();
  * Serializes writes to one key, so an older bridge call can never settle after
  * and overwrite a value whose durability a caller already observed.
  */
-function persistInOrder(key: string, value: string, failureVerb: string, baseValue?: string): Promise<boolean> {
+function persistInOrder(
+  key: string,
+  value: string,
+  failureVerb: string,
+  baseValue?: string,
+): Promise<boolean> {
   acknowledgedValues.delete(key);
   const previous = writesInFlight.get(key);
   const write =
@@ -108,7 +124,7 @@ function persistInOrder(key: string, value: string, failureVerb: string, baseVal
     if (writesInFlight.get(key) !== write) return;
     writesInFlight.delete(key);
     if (ok && !pendingWrites.has(key)) {
-      const accepted = isSharedPreference(key) ? cache.get(key) ?? value : value;
+      const accepted = isSharedPreference(key) ? (cache.get(key) ?? value) : value;
       acknowledgedValues.set(key, accepted);
       if (isSharedPreference(key)) sharedPreferenceValues.set(key, accepted);
     }
@@ -116,19 +132,37 @@ function persistInOrder(key: string, value: string, failureVerb: string, baseVal
   return write;
 }
 
-function persistDebounced(key: string, value: string, failureVerb: string, baseValue?: string): void {
+function persistDebounced(
+  key: string,
+  value: string,
+  failureVerb: string,
+  baseValue?: string,
+): void {
   // Zustand persist runs on transient navigation too. An unchanged preference
   // must not overwrite another window's newer accepted value.
-  if (isSharedPreference(key) && sharedPreferenceValues.get(key) === value && !pendingWrites.has(key) && !writesInFlight.has(key)) return;
+  if (
+    failureVerb === "save" &&
+    isSharedPreference(key) &&
+    sharedPreferenceValues.get(key) === value &&
+    !pendingWrites.has(key) &&
+    !writesInFlight.has(key)
+  )
+    return;
   acknowledgedValues.delete(key);
   const existing = pendingWrites.get(key);
   if (existing !== undefined) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     const pending = pendingWrites.get(key);
     pendingWrites.delete(key);
-    if (pending !== undefined) void persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
+    if (pending !== undefined)
+      void persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
   }, PERSIST_DEBOUNCE_MS);
-  pendingWrites.set(key, { value, baseValue: existing === undefined ? baseValue : existing.baseValue, failureVerb, timer });
+  pendingWrites.set(key, {
+    value,
+    baseValue: existing === undefined ? baseValue : existing.baseValue,
+    failureVerb,
+    timer,
+  });
 }
 
 /**

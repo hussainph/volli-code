@@ -183,7 +183,12 @@ import {
   type SessionListingSources,
   type SessionPeekContentPorts,
 } from "@volli/host-core/sessions";
-import { broadcastAppStateChanged, broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
+import {
+  broadcastAppStateChanged,
+  broadcastDataChanged,
+  broadcastSessionActivity,
+  windowEventBus,
+} from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
 import { exportDatabase } from "./menu";
 import {
@@ -1146,7 +1151,9 @@ export function registerDataIpcHandlers(
       }
       assertRendererAppStateKey(key);
       const previous = getAppState(db, key);
-      const accepted = isSharedPreferenceKey(key) ? mergePreferenceSnapshot(previous ?? undefined, baseValue, value) : value;
+      const accepted = isSharedPreferenceKey(key)
+        ? mergePreferenceSnapshot(previous ?? undefined, baseValue, value)
+        : value;
       setAppState(db, key, accepted, Date.now());
       try {
         const acknowledged = options.onAppStateSet?.(key, accepted);
@@ -1161,7 +1168,9 @@ export function registerDataIpcHandlers(
       // Device preferences are shared; per-window navigation and drafts remain
       // renderer-owned views. Other pages choose which preference keys to adopt.
       broadcastAppStateChanged(key, accepted, sender.id);
-      return isSharedPreferenceKey(key) && baseValue !== undefined ? { ok: true, value: accepted } : { ok: true };
+      return isSharedPreferenceKey(key) && baseValue !== undefined
+        ? { ok: true, value: accepted }
+        : { ok: true };
     },
 
     "volli:worktree-remove": async (input: WorktreeRemoveInput): Promise<WorktreeRemoveResult> => {

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SettingsWindowNavigation, SettingsWindowOpenInput } from "../../../ipc/settings-window";
+import type {
+  SettingsWindowNavigation,
+  SettingsWindowOpenInput,
+} from "../../../ipc/settings-window";
 
 const seams = vi.hoisted(() => ({
   ui: {
@@ -16,13 +19,23 @@ const seams = vi.hoisted(() => ({
   projects: { selectedProjectId: "main-project" as string | null },
   workspace: { workspace: { id: "main-workspace", name: "Main" } },
   opener: null as ((navigation: SettingsWindowOpenInput) => void) | null,
-  prepare: vi.fn<(navigation: { workspaceId?: string; projectId?: string | null }, signal: AbortSignal) => Promise<void>>(),
-  open: vi.fn<(navigation: SettingsWindowOpenInput) => Promise<{ ok: true } | { ok: false; error: string }>>(),
+  prepare:
+    vi.fn<
+      (
+        navigation: { workspaceId?: string; projectId?: string | null },
+        signal: AbortSignal,
+      ) => Promise<void>
+    >(),
+  open: vi.fn<
+    (navigation: SettingsWindowOpenInput) => Promise<{ ok: true } | { ok: false; error: string }>
+  >(),
   toastError: vi.fn(),
 }));
 
 vi.mock("@renderer/stores/ui", () => ({
-  setSettingsWindowOpener: (opener: (navigation: SettingsWindowOpenInput) => void) => { seams.opener = opener; },
+  setSettingsWindowOpener: (opener: (navigation: SettingsWindowOpenInput) => void) => {
+    seams.opener = opener;
+  },
   useUiStore: {
     getState: () => seams.ui,
     setState: (patch: Partial<typeof seams.ui>) => Object.assign(seams.ui, patch),
@@ -43,7 +56,10 @@ vi.mock("./toast", () => ({ toastError: seams.toastError }));
 function deferred() {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<void>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 
@@ -62,17 +78,27 @@ beforeEach(async () => {
   seams.open.mockReset().mockResolvedValue({ ok: true });
   seams.opener = null;
   Object.assign(seams.ui, {
-    settingsOpen: false, settingsNavigationRevision: 0,
-    settingsProjectId: undefined, settingsWorkspaceId: undefined,
-    settingsNavigationPending: false, settingsNavigationError: null,
-    settingsCategory: null, configureCategory: null, settingsSignInProviderId: null,
+    settingsOpen: false,
+    settingsNavigationRevision: 0,
+    settingsProjectId: undefined,
+    settingsWorkspaceId: undefined,
+    settingsNavigationPending: false,
+    settingsNavigationError: null,
+    settingsCategory: null,
+    configureCategory: null,
+    settingsSignInProviderId: null,
   });
   seams.projects.selectedProjectId = "main-project";
   seams.workspace.workspace = { id: "main-workspace", name: "Main" };
-  vi.stubGlobal("window", { location: { hash: "#settings" }, api: { settingsWindow: { open: seams.open } } });
+  vi.stubGlobal("window", {
+    location: { hash: "#settings" },
+    api: { settingsWindow: { open: seams.open } },
+  });
   routing = await import("./settings-window");
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("native Settings renderer routing", () => {
   it("recognizes only the standalone Settings entry", () => {
@@ -89,7 +115,9 @@ describe("native Settings renderer routing", () => {
     await settle();
 
     expect(seams.open).toHaveBeenCalledExactlyOnceWith({
-      configureCategory: "skills", projectId: "new-project", workspaceId: "new-workspace",
+      configureCategory: "skills",
+      projectId: "new-project",
+      workspaceId: "new-workspace",
     });
     expect(seams.prepare).not.toHaveBeenCalled();
     expect(seams.ui.settingsOpen).toBe(false);
@@ -112,16 +140,23 @@ describe("native Settings renderer routing", () => {
     const preparation = deferred();
     seams.prepare.mockReturnValueOnce(preparation.promise);
     const navigation: SettingsWindowNavigation = {
-      revision: 1, workspaceId: "team", projectId: "team-project",
-      configureCategory: "skills", signInProviderId: "provider",
+      revision: 1,
+      workspaceId: "team",
+      projectId: "team-project",
+      configureCategory: "skills",
+      signInProviderId: "provider",
     };
     routing.acceptSettingsNavigation(navigation);
 
     expect(seams.ui).toMatchObject({
-      settingsOpen: true, settingsNavigationRevision: 1,
-      settingsWorkspaceId: "team", settingsProjectId: "team-project",
-      settingsNavigationPending: true, settingsNavigationError: null,
-      configureCategory: "skills", settingsSignInProviderId: "provider",
+      settingsOpen: true,
+      settingsNavigationRevision: 1,
+      settingsWorkspaceId: "team",
+      settingsProjectId: "team-project",
+      settingsNavigationPending: true,
+      settingsNavigationError: null,
+      configureCategory: "skills",
+      settingsSignInProviderId: "provider",
     });
     expect(seams.prepare).toHaveBeenCalledWith(navigation, expect.any(AbortSignal));
     expect(seams.projects.selectedProjectId).toBe("main-project");
@@ -132,7 +167,12 @@ describe("native Settings renderer routing", () => {
   });
 
   it("does not replay consumed sign-in/configure intent from duplicate or stale revisions", async () => {
-    const navigation = { revision: 3, projectId: "p3", configureCategory: "skills", signInProviderId: "provider" };
+    const navigation = {
+      revision: 3,
+      projectId: "p3",
+      configureCategory: "skills",
+      signInProviderId: "provider",
+    };
     routing.acceptSettingsNavigation(navigation);
     await settle();
     Object.assign(seams.ui, { configureCategory: null, settingsSignInProviderId: null });
@@ -171,7 +211,8 @@ describe("native Settings renderer routing", () => {
     routing.acceptSettingsNavigation({ revision: 1, workspaceId: "removed", projectId: "p1" });
     await settle();
     expect(seams.ui).toMatchObject({
-      settingsNavigationRevision: 1, settingsNavigationPending: false,
+      settingsNavigationRevision: 1,
+      settingsNavigationPending: false,
       settingsNavigationError: "You are no longer a member.",
     });
     expect(seams.projects.selectedProjectId).toBe("main-project");

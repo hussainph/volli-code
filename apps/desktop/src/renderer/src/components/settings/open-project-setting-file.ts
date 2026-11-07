@@ -8,8 +8,16 @@ import { errorMessage } from "@volli/shared";
 import { useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
 export function openProjectSettingFile(projectId: string, relPath: string) {
   if (isSettingsWindow()) {
-    void window.api.settingsWindow.openWorkspace({ kind: "file", projectId, relPath, workspaceId: useCloudWorkspaceStore.getState().workspace?.id })
-      .then((result) => { if (!result.ok) toastError(`Couldn't open file: ${result.error}`); })
+    void window.api.settingsWindow
+      .openWorkspace({
+        kind: "file",
+        projectId,
+        relPath,
+        workspaceId: useCloudWorkspaceStore.getState().workspace?.id,
+      })
+      .then((result) => {
+        if (!result.ok) toastError(`Couldn't open file: ${result.error}`);
+      })
       .catch((error: unknown) => toastError(`Couldn't open file: ${errorMessage(error)}`));
     return;
   }

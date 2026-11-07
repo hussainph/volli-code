@@ -1533,8 +1533,16 @@ function DirtyOrphanItem({
     }
     onFailure(null);
     if (isSettingsWindow()) {
-      void window.api.settingsWindow.openWorkspace({ kind: "ticket", projectId, ticketId, workspaceId: useCloudWorkspaceStore.getState().workspace?.id })
-        .then((result) => { if (!result.ok) onFailure({ action: "open", message: result.error }); })
+      void window.api.settingsWindow
+        .openWorkspace({
+          kind: "ticket",
+          projectId,
+          ticketId,
+          workspaceId: useCloudWorkspaceStore.getState().workspace?.id,
+        })
+        .then((result) => {
+          if (!result.ok) onFailure({ action: "open", message: result.error });
+        })
         .catch((error: unknown) => onFailure({ action: "open", message: errorMessage(error) }));
       return;
     }

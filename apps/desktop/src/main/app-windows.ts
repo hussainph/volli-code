@@ -134,7 +134,12 @@ export function createAppWindows<W extends AppWindow>(ports: AppWindowsPorts<W>)
       open: () => {
         const retained = ports
           .all()
-          .find((window) => !window.isDestroyed() && retiring.has(window) && (ports.isWorkspace?.(window) ?? true));
+          .find(
+            (window) =>
+              !window.isDestroyed() &&
+              retiring.has(window) &&
+              (ports.isWorkspace?.(window) ?? true),
+          );
         if (retained === undefined) {
           ports.create();
           return;

@@ -15,24 +15,34 @@ export function windowTargeting(request) {
     call(command, args = {}) {
       if (command === "restart" || command === "native-reopen") window = "main";
       // Preserve the supervisor's default-main wire shape for existing callers.
-      return request(command, WINDOW_COMMANDS.has(command) && window !== "main"
-        ? { ...args, window: args.window ?? window }
-        : args);
+      return request(
+        command,
+        WINDOW_COMMANDS.has(command) && window !== "main"
+          ? { ...args, window: args.window ?? window }
+          : args,
+      );
     },
     useMainWindow() {
       window = "main";
     },
     async useSettingsWindow() {
       let settings;
-      await waitUntil("the native Settings renderer to open", async () => {
-        const matches = (await request("windows")).filter((candidate) => {
-          try { return new URL(candidate.url).hash === "#settings"; }
-          catch { return false; }
-        });
-        assert.ok(matches.length <= 1, "More than one native Settings renderer is open");
-        settings = matches[0];
-        return settings !== undefined;
-      }, { timeout: 30_000, interval: 100 });
+      await waitUntil(
+        "the native Settings renderer to open",
+        async () => {
+          const matches = (await request("windows")).filter((candidate) => {
+            try {
+              return new URL(candidate.url).hash === "#settings";
+            } catch {
+              return false;
+            }
+          });
+          assert.ok(matches.length <= 1, "More than one native Settings renderer is open");
+          settings = matches[0];
+          return settings !== undefined;
+        },
+        { timeout: 30_000, interval: 100 },
+      );
       window = settings.name;
       return settings;
     },

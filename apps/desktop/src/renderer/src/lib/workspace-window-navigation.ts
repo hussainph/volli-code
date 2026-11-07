@@ -4,7 +4,10 @@ import type { WorkspaceWindowNavigation } from "../../../ipc/settings-window";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { launchStore } from "@renderer/stores/launch";
-import { selectCloudWorkspace, useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
+import {
+  selectCloudWorkspace,
+  useCloudWorkspaceStore,
+} from "@renderer/stores/cloud-board/workspace";
 import { CLOUD_READ_ONLY } from "@renderer/stores/cloud-board/source";
 import { useCloudLinkInputs } from "@renderer/stores/cloud-link";
 import { cloudSession, followCloudSession } from "./cloud-client";
@@ -30,10 +33,16 @@ function waitForNavigationState(ready: () => boolean, signal: AbortSignal): Prom
       try {
         signal.throwIfAborted();
         if (ready()) finish();
-      } catch (error) { finish(error); }
+      } catch (error) {
+        finish(error);
+      }
     };
     signal.addEventListener("abort", aborted, { once: true });
-    stops.push(useProjectsStore.subscribe(check), useCloudWorkspaceStore.subscribe(check), useCloudLinkInputs.subscribe(check));
+    stops.push(
+      useProjectsStore.subscribe(check),
+      useCloudWorkspaceStore.subscribe(check),
+      useCloudLinkInputs.subscribe(check),
+    );
     const stopSession = followCloudSession(check);
     if (finished) stopSession();
     else stops.push(stopSession);
@@ -50,17 +59,23 @@ export async function prepareWindowNavigation(
   const abort = () => controller.abort(signal.reason);
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) abort();
-  const timeout = setTimeout(() => controller.abort(new Error("Couldn't open the project. Check the connection and try again.")), 10_000);
+  const timeout = setTimeout(
+    () =>
+      controller.abort(new Error("Couldn't open the project. Check the connection and try again.")),
+    10_000,
+  );
   const current = controller.signal;
   try {
     if (
-      launchStore() === "cloud" && navigation.workspaceId !== undefined &&
+      launchStore() === "cloud" &&
+      navigation.workspaceId !== undefined &&
       useCloudWorkspaceStore.getState().workspace?.id !== navigation.workspaceId
     ) {
       await waitForNavigationState(() => {
         const input = useCloudLinkInputs.getState().input;
         if (!input.online || input.snapshotAt !== null) throw new Error(CLOUD_READ_ONLY);
-        if (input.client === "closed" || input.authenticated === false) throw new Error(input.account?.failure ?? NOT_CONNECTED);
+        if (input.client === "closed" || input.authenticated === false)
+          throw new Error(input.account?.failure ?? NOT_CONNECTED);
         return cloudSession()?.client.connectionState().isWebSocketConnected === true;
       }, current);
       current.throwIfAborted();
@@ -71,18 +86,27 @@ export async function prepareWindowNavigation(
         const aborted = () => reject(current.reason);
         current.addEventListener("abort", aborted, { once: true });
         if (current.aborted) aborted();
-        void selection.then(resolve, reject).finally(() => current.removeEventListener("abort", aborted));
+        void selection
+          .then(resolve, reject)
+          .finally(() => current.removeEventListener("abort", aborted));
       });
     }
     await waitForNavigationState(() => {
       const cloud = launchStore() === "cloud";
       const workspace = useCloudWorkspaceStore.getState();
       const input = useCloudLinkInputs.getState().input;
-      const hasProject = navigation.projectId == null || useProjectsStore.getState().projects.some(({ id }) => id === navigation.projectId);
+      const hasProject =
+        navigation.projectId == null ||
+        useProjectsStore.getState().projects.some(({ id }) => id === navigation.projectId);
       if (!cloud) return hasProject;
       if (navigation.workspaceId === undefined && navigation.projectId == null) return true;
-      if (input.client === "closed" || input.authenticated === false) throw new Error(input.account?.failure ?? NOT_CONNECTED);
-      if (navigation.workspaceId !== undefined && workspace.workspace?.id !== navigation.workspaceId) return false;
+      if (input.client === "closed" || input.authenticated === false)
+        throw new Error(input.account?.failure ?? NOT_CONNECTED);
+      if (
+        navigation.workspaceId !== undefined &&
+        workspace.workspace?.id !== navigation.workspaceId
+      )
+        return false;
       const rosterReady = workspace.projectsReady || input.snapshotAt !== null;
       if (!rosterReady || cloudSession() === null) return false;
       if (!hasProject) throw new Error("The project is no longer available in this Workspace.");
@@ -99,19 +123,25 @@ export function acceptWorkspaceNavigation(navigation: WorkspaceWindowNavigation)
   pendingNavigation?.abort();
   const request = new AbortController();
   pendingNavigation = request;
-  void prepareWindowNavigation(navigation, request.signal).then(() => {
-    if (request.signal.aborted) return;
-    useProjectsStore.getState().select(navigation.projectId);
-    const workspace = useProjectUiStore.getState();
-    if (navigation.kind === "ticket") {
-      workspace.openTicketView(navigation.projectId, navigation.ticketId, { tabId: TICKET_BODY_TAB_ID });
-    } else {
-      workspace.setNav(navigation.projectId, "home");
-      workspace.pinHomeFile(navigation.projectId, navigation.relPath);
-    }
-  }).catch((error: unknown) => {
-    if (!request.signal.aborted) toastError(`Couldn't open the workspace: ${errorMessage(error)}`);
-  }).finally(() => {
-    if (pendingNavigation === request) pendingNavigation = null;
-  });
+  void prepareWindowNavigation(navigation, request.signal)
+    .then(() => {
+      if (request.signal.aborted) return;
+      useProjectsStore.getState().select(navigation.projectId);
+      const workspace = useProjectUiStore.getState();
+      if (navigation.kind === "ticket") {
+        workspace.openTicketView(navigation.projectId, navigation.ticketId, {
+          tabId: TICKET_BODY_TAB_ID,
+        });
+      } else {
+        workspace.setNav(navigation.projectId, "home");
+        workspace.pinHomeFile(navigation.projectId, navigation.relPath);
+      }
+    })
+    .catch((error: unknown) => {
+      if (!request.signal.aborted)
+        toastError(`Couldn't open the workspace: ${errorMessage(error)}`);
+    })
+    .finally(() => {
+      if (pendingNavigation === request) pendingNavigation = null;
+    });
 }

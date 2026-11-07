@@ -1,7 +1,11 @@
 import { PACKAGED_RENDERER_ENTRY_URL } from "../app-protocol";
 
 /** Match the entry actually loaded by createWindow, including built unpackaged apps. */
-export function isSecretRenderer(url: string, devRendererUrl?: string, role?: "main" | "settings"): boolean {
+export function isSecretRenderer(
+  url: string,
+  devRendererUrl?: string,
+  role?: "main" | "settings",
+): boolean {
   const renderer = devRendererUrl || PACKAGED_RENDERER_ENTRY_URL;
   if (!URL.canParse(renderer) || !URL.canParse(url)) return false;
   const actual = new URL(url);

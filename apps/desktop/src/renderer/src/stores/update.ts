@@ -49,7 +49,8 @@ export function createUpdateStore() {
       const { promptedVersions, dialogOpen } = get();
       const ready = state.phase === "downloaded" && state.targetVersion !== null;
       if (
-        ready && prompt &&
+        ready &&
+        prompt &&
         state.targetVersion !== null &&
         !promptedVersions.includes(state.targetVersion)
       ) {

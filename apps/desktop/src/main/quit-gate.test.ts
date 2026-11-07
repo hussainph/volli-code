@@ -236,7 +236,9 @@ describe("renderer-scoped unsaved work (VC-1121)", () => {
     recordUnsavedDocuments({ names: ["main.md"] }, 11);
     recordUnsavedBoardWrites(1, 11);
     expect(planUnsavedQuit({ names: unsavedDocumentNames(22), skipConfirm: false })).toBe("quit");
-    expect(planUnsavedQuit({ names: unsavedDocumentNames(11), skipConfirm: false })).toBe("confirm");
+    expect(planUnsavedQuit({ names: unsavedDocumentNames(11), skipConfirm: false })).toBe(
+      "confirm",
+    );
     expect(planUnsavedQuit({ names: unsavedDocumentNames(), skipConfirm: false })).toBe("confirm");
   });
 

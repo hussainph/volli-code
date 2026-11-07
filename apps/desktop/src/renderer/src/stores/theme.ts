@@ -639,8 +639,12 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         const globalCanvas = stored ?? DEFAULT_CANVAS;
         const globalAppearance = isAppearance(appearance) ? appearance : "auto";
         const current = get();
-        if (painted !== null && current.globalAppearance === globalAppearance &&
-          JSON.stringify(current.globalCanvas) === JSON.stringify(globalCanvas)) return;
+        if (
+          painted !== null &&
+          current.globalAppearance === globalAppearance &&
+          JSON.stringify(current.globalCanvas) === JSON.stringify(globalCanvas)
+        )
+          return;
         // Boot is never eased: "the first paint is not a transition". A live
         // preference event from another window may ease an actual mode flip.
         // The boot distinction matters because by the time these

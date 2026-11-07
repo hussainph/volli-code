@@ -67,7 +67,9 @@ export function SettingsPage({
   const projects = useProjectsStore((s) => s.projects);
   const selectedId = useProjectsStore((s) => s.selectedProjectId);
   const addProject = useAddProject();
-  const [projectId, setProjectId] = React.useState(initialProjectId === undefined ? selectedId : initialProjectId);
+  const [projectId, setProjectId] = React.useState(
+    initialProjectId === undefined ? selectedId : initialProjectId,
+  );
   React.useEffect(() => {
     if (initialProjectId !== undefined) setProjectId(initialProjectId);
   }, [initialProjectId, navigationRevision]);
@@ -105,31 +107,38 @@ export function SettingsPage({
       readyNavigation.current = revision;
       onScopeReady?.(revision, error);
     };
-    const timeout = setTimeout(() => finish("Couldn't load the theme. Try opening Settings again."), 10_000);
+    const timeout = setTimeout(
+      () => finish("Couldn't load the theme. Try opening Settings again."),
+      10_000,
+    );
     // The first requested scope is a hard cut while hidden, not a transition
     // from App colors. Later user scope changes keep their ordinary motion.
-    void useThemeStore.getState().hydrate(
-      scope === "project" && project !== null
-        ? {
-            projectId: project.id,
-            canvas: project.themeCanvas ?? null,
-            appearance: project.themeAppearance ?? null,
-          }
-        : null,
-      revision !== undefined && readyNavigation.current !== revision ? "keyboard" : undefined,
-    ).then((hydrated: unknown) => {
-      if (!active || completed) return;
-      if (hydrated === false) {
-        finish("Couldn't load the theme. Try opening Settings again.");
-        return;
-      }
-      clearTimeout(timeout);
-      // A completed scope read is not yet a committed native frame. Leave a
-      // rendering opportunity between token adoption and its acknowledgement.
-      frame = requestAnimationFrame(() => {
-        committedFrame = requestAnimationFrame(() => finish());
-      });
-    }).catch(() => finish("Couldn't load the theme. Try opening Settings again."));
+    void useThemeStore
+      .getState()
+      .hydrate(
+        scope === "project" && project !== null
+          ? {
+              projectId: project.id,
+              canvas: project.themeCanvas ?? null,
+              appearance: project.themeAppearance ?? null,
+            }
+          : null,
+        revision !== undefined && readyNavigation.current !== revision ? "keyboard" : undefined,
+      )
+      .then((hydrated: unknown) => {
+        if (!active || completed) return;
+        if (hydrated === false) {
+          finish("Couldn't load the theme. Try opening Settings again.");
+          return;
+        }
+        clearTimeout(timeout);
+        // A completed scope read is not yet a committed native frame. Leave a
+        // rendering opportunity between token adoption and its acknowledgement.
+        frame = requestAnimationFrame(() => {
+          committedFrame = requestAnimationFrame(() => finish());
+        });
+      })
+      .catch(() => finish("Couldn't load the theme. Try opening Settings again."));
     return () => {
       active = false;
       clearTimeout(timeout);

@@ -392,6 +392,8 @@ const forceThemeSource = (app, source) =>
 const readWindowBackground = (app, role = "main") =>
   app
     .evaluate(({ BrowserWindow }, wanted) => {
+      // Serialized into Electron main; cannot capture the outer helper.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
       const isSettings = (window) => {
         try {
           return new URL(window.webContents.getURL()).hash === "#settings";
@@ -451,7 +453,8 @@ async function openProjectAppearance(page, projectName = null) {
   const nav = settingsRail(settings);
   // The Settings window follows the workbench selection through its open IPC;
   // wait for that project to land in the scope switch before choosing it.
-  if (projectName !== null) await nav.getByRole("button", { name: projectName, exact: true }).waitFor();
+  if (projectName !== null)
+    await nav.getByRole("button", { name: projectName, exact: true }).waitFor();
   await nav
     .locator('[aria-label="Settings scope"] button[aria-pressed]')
     .filter({ hasNotText: "All projects" })
@@ -1053,27 +1056,31 @@ try {
   });
 
   // ---- 3. the crossfade ----------------------------------------------------
-  await attempt(7, "a mode flip crossfades once in Settings, and the workbench follows", async () => {
-    await watchScopeRepaint(settings);
-    await segment(settings, "appearance-mode", "dark").click();
-    await waitForToken(settings, "--background", DARK["--background"]);
-    const during = await observedScopeRepaint(settings);
-    const after = await settledScopeRepaint(settings);
-    // The product window paints only the committed appearance; the crossfade
-    // assertion stays on the surface whose control made the change.
-    await waitForToken(page, "--background", DARK["--background"]);
-    return {
-      ok:
-        crossfaded(during) &&
-        // The engine owns the teardown, and this is where that claim is kept
-        // honest: nothing may still be running once the swap has settled.
-        after.active === false &&
-        crossfadedOnce(after) &&
-        crossfadeRanFor(after, CROSSFADE) &&
-        crossfadeBlendsAdditively(after),
-      detail: `runs=${JSON.stringify(after.runs)} active=${after.active} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)}`,
-    };
-  });
+  await attempt(
+    7,
+    "a mode flip crossfades once in Settings, and the workbench follows",
+    async () => {
+      await watchScopeRepaint(settings);
+      await segment(settings, "appearance-mode", "dark").click();
+      await waitForToken(settings, "--background", DARK["--background"]);
+      const during = await observedScopeRepaint(settings);
+      const after = await settledScopeRepaint(settings);
+      // The product window paints only the committed appearance; the crossfade
+      // assertion stays on the surface whose control made the change.
+      await waitForToken(page, "--background", DARK["--background"]);
+      return {
+        ok:
+          crossfaded(during) &&
+          // The engine owns the teardown, and this is where that claim is kept
+          // honest: nothing may still be running once the swap has settled.
+          after.active === false &&
+          crossfadedOnce(after) &&
+          crossfadeRanFor(after, CROSSFADE) &&
+          crossfadeBlendsAdditively(after),
+        detail: `runs=${JSON.stringify(after.runs)} active=${after.active} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)}`,
+      };
+    },
+  );
 
   await attempt(
     8,
@@ -1142,41 +1149,53 @@ cursor-style = block
   });
 
   // ---- 5. authoring a canvas through the real editor ------------------------
-  await attempt(12, "the canvas editor repaints live in Settings and persists what it painted", async () => {
-    settings = await openAppearanceSettings(page);
-    const before = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
-    const beforeSettings = await readAppliedTokens(settings, ["--canvas", "--primary", "--background"]);
-    await authorCanvas(settings, {
-      hex: AUTHORED_HEX,
-      vibrancy: AUTHORED_VIBRANCY,
-      grain: AUTHORED_GRAIN,
-    });
-    const beforeDrag = await storedGlobalCanvas(page);
-    const originX = beforeDrag.stops[beforeDrag.primaryIndex].x;
-    await dragPrimaryStop(settings, { dx: -90, dy: 40 });
+  await attempt(
+    12,
+    "the canvas editor repaints live in Settings and persists what it painted",
+    async () => {
+      settings = await openAppearanceSettings(page);
+      const before = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
+      const beforeSettings = await readAppliedTokens(settings, [
+        "--canvas",
+        "--primary",
+        "--background",
+      ]);
+      await authorCanvas(settings, {
+        hex: AUTHORED_HEX,
+        vibrancy: AUTHORED_VIBRANCY,
+        grain: AUTHORED_GRAIN,
+      });
+      const beforeDrag = await storedGlobalCanvas(page);
+      const originX = beforeDrag.stops[beforeDrag.primaryIndex].x;
+      await dragPrimaryStop(settings, { dx: -90, dy: 40 });
 
-    const stored = await waitUntil("the dragged stop to persist", async () => {
-      const canvas = await storedGlobalCanvas(page);
-      const stop = canvas?.stops[canvas.primaryIndex];
-      return stop !== undefined && Math.abs(stop.x - originX) > 0.02 ? canvas : null;
-    });
-    const afterSettings = await readAppliedTokens(settings, ["--canvas", "--primary", "--background"]);
-    await waitForToken(page, "--canvas", afterSettings["--canvas"], { timeout: 10000 });
-    const after = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
+      const stored = await waitUntil("the dragged stop to persist", async () => {
+        const canvas = await storedGlobalCanvas(page);
+        const stop = canvas?.stops[canvas.primaryIndex];
+        return stop !== undefined && Math.abs(stop.x - originX) > 0.02 ? canvas : null;
+      });
+      const afterSettings = await readAppliedTokens(settings, [
+        "--canvas",
+        "--primary",
+        "--background",
+      ]);
+      await waitForToken(page, "--canvas", afterSettings["--canvas"], { timeout: 10000 });
+      const after = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
 
-    return {
-      ok:
-        stored.stops[stored.primaryIndex].hex === AUTHORED_HEX &&
-        Math.abs(stored.vibrancy - Number(AUTHORED_VIBRANCY)) < 0.005 &&
-        Math.abs(stored.grain - Number(AUTHORED_GRAIN)) < 0.005 &&
-        beforeSettings["--canvas"] !== afterSettings["--canvas"] &&
-        afterSettings["--canvas"] === after["--canvas"] &&
-        after["--primary"] !== before["--primary"] &&
-        after["--canvas"] !== before["--canvas"] &&
-        after["--background"] === before["--background"],
-      detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]} settings=${afterSettings["--primary"]}`,
-    };
-  });
+      return {
+        ok:
+          stored.stops[stored.primaryIndex].hex === AUTHORED_HEX &&
+          Math.abs(stored.vibrancy - Number(AUTHORED_VIBRANCY)) < 0.005 &&
+          Math.abs(stored.grain - Number(AUTHORED_GRAIN)) < 0.005 &&
+          beforeSettings["--canvas"] !== afterSettings["--canvas"] &&
+          afterSettings["--canvas"] === after["--canvas"] &&
+          after["--primary"] !== before["--primary"] &&
+          after["--canvas"] !== before["--canvas"] &&
+          after["--background"] === before["--background"],
+        detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]} settings=${afterSettings["--primary"]}`,
+      };
+    },
+  );
 
   await attempt(13, "Escape in the hex field abandons the edit instead of saving it", async () => {
     // `cancelPreview` is the store's abandon path and had NO caller anywhere, so

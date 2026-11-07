@@ -421,7 +421,10 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
    * (whose working copy every reader re-measures).
    */
   const announce = (call: HandlerCall, change: DataChangeScope, always = false): void => {
-    if (call.origin === "desktop-window" && !always) return;
+    if (call.origin === "desktop-window" && !always) {
+      feed.untapped(() => options.events.publishToPeers?.("data-changed", change));
+      return;
+    }
     feed.untapped(() => options.events.publish("data-changed", change));
   };
 

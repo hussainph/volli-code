@@ -294,8 +294,12 @@ try {
     await pad.waitFor({ timeout: 15000 });
     await pad.scrollIntoViewIfNeeded();
     await settingsPage.getByTestId("canvas-stop-orb-0").waitFor({ timeout: 15000 });
-    await settingsPage.getByRole("slider", { name: "Vibrancy", exact: true }).waitFor({ timeout: 15000 });
-    await settingsPage.getByRole("slider", { name: "Grain", exact: true }).waitFor({ timeout: 15000 });
+    await settingsPage
+      .getByRole("slider", { name: "Vibrancy", exact: true })
+      .waitFor({ timeout: 15000 });
+    await settingsPage
+      .getByRole("slider", { name: "Grain", exact: true })
+      .waitFor({ timeout: 15000 });
     await parkPointer(settingsPage);
     await sleep(600);
     return capture("canvas-editor.png", settingsPage);
@@ -320,9 +324,11 @@ process.exit(summarize());
  */
 async function capture(name, targetPage) {
   const { base64, logicalWidth } = await app.evaluate(async ({ BrowserWindow }, targetUrl) => {
-    const win = BrowserWindow.getAllWindows().find((window) => targetUrl !== null
-      ? window.webContents.getURL() === targetUrl
-      : new URL(window.webContents.getURL()).hash !== "#settings");
+    const win = BrowserWindow.getAllWindows().find((window) =>
+      targetUrl !== null
+        ? window.webContents.getURL() === targetUrl
+        : new URL(window.webContents.getURL()).hash !== "#settings",
+    );
     if (!win) throw new Error("capture window is closed");
     const image = await win.webContents.capturePage();
     return { base64: image.toPNG().toString("base64"), logicalWidth: win.getContentSize()[0] };

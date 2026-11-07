@@ -325,7 +325,8 @@ it("reopens the signed-out workbench on a second launch when only Settings is op
     cloudEnabled: () => false,
     hasSettingsWindow: () => true,
     revealForLaunch,
-    show: vi.fn(), quiet: true,
+    show: vi.fn(),
+    quiet: true,
   });
   expect(revealForLaunch).toHaveBeenCalledOnce();
 });

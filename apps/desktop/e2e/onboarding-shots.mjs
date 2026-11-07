@@ -43,7 +43,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
-import { settingsPageOf, assertSettingsWindow, closeSettingsWindow } from "./lib/settings-window.mjs";
+import {
+  settingsPageOf,
+  assertSettingsWindow,
+  closeSettingsWindow,
+} from "./lib/settings-window.mjs";
 
 import {
   assertBuiltRendererLoaded,
@@ -163,7 +167,11 @@ try {
   // ---- 04: the provider's own key step (deep-linked into Settings) ---------
   await attempt(4, "04 sign-in key step (masked input)", async () => {
     await page.getByRole("menuitem", { name: PROVIDER_LABEL }).click();
-    settingsPage = await waitUntil("the provider's native Settings window", () => settingsPageOf(app), { timeout: 20000 });
+    settingsPage = await waitUntil(
+      "the provider's native Settings window",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
     await assertSettingsWindow(app, page, settingsPage);
     const panel = settingsPage.getByTestId(`sign-in-${PROVIDER_ID}`);
     await panel.waitFor({ timeout: 20000 });

@@ -97,31 +97,31 @@ const {
   worktreeWatch,
   appMode,
 } = vi.hoisted(() => ({
-    appMode: { isPackaged: false },
-    handlers: new Map<string, (...args: never[]) => unknown>(),
-    dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
-    appStateChangedSends: [] as Array<{ targetId: number; channel: string; payload: unknown }>,
-    windowPeers: [{ id: 0, destroyed: false }],
-    showItemInFolder: vi.fn(),
-    showSaveDialog: vi.fn(),
-    /**
-     * The VC-372 observer hooks of the most recently constructed watch manager.
-     * The stand-in below carries them so the snapshot cache sees the same
-     * coverage and change reports the real manager sends.
-     */
-    worktreeWatch: {
-      /** The client the last `watch` was asked for, as the IPC door built it. */
-      client: undefined as
-        | { onceClosed(listener: () => void): void; removeCloseListener(l: () => void): void }
-        | undefined,
-      options: undefined as
-        | {
-            onCoverageChange?: (ticketId: string, covered: boolean) => void;
-            onRelevantChange?: (ticketIds: readonly string[]) => void;
-          }
-        | undefined,
-    },
-  }));
+  appMode: { isPackaged: false },
+  handlers: new Map<string, (...args: never[]) => unknown>(),
+  dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
+  appStateChangedSends: [] as Array<{ targetId: number; channel: string; payload: unknown }>,
+  windowPeers: [{ id: 0, destroyed: false }],
+  showItemInFolder: vi.fn(),
+  showSaveDialog: vi.fn(),
+  /**
+   * The VC-372 observer hooks of the most recently constructed watch manager.
+   * The stand-in below carries them so the snapshot cache sees the same
+   * coverage and change reports the real manager sends.
+   */
+  worktreeWatch: {
+    /** The client the last `watch` was asked for, as the IPC door built it. */
+    client: undefined as
+      | { onceClosed(listener: () => void): void; removeCloseListener(l: () => void): void }
+      | undefined,
+    options: undefined as
+      | {
+          onCoverageChange?: (ticketId: string, covered: boolean) => void;
+          onRelevantChange?: (ticketIds: readonly string[]) => void;
+        }
+      | undefined,
+  },
+}));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -141,19 +141,20 @@ vi.mock("electron", () => ({
   // One default peer preserves existing broadcast assertions. Preference tests
   // install two identified renderers to verify targeted delivery and no echo.
   BrowserWindow: {
-    getAllWindows: () => windowPeers.map((peer) => ({
-      webContents: {
-        id: peer.id,
-        isDestroyed: () => peer.destroyed,
-        send: (channel: string, payload: unknown) => {
-          if (channel === "volli:app-state-changed") {
-            appStateChangedSends.push({ targetId: peer.id, channel, payload });
-          } else {
-            dataChangedSends.push({ channel, payload });
-          }
+    getAllWindows: () =>
+      windowPeers.map((peer) => ({
+        webContents: {
+          id: peer.id,
+          isDestroyed: () => peer.destroyed,
+          send: (channel: string, payload: unknown) => {
+            if (channel === "volli:app-state-changed") {
+              appStateChangedSends.push({ targetId: peer.id, channel, payload });
+            } else {
+              dataChangedSends.push({ channel, payload });
+            }
+          },
         },
-      },
-    })),
+      })),
     getFocusedWindow: () => undefined,
   },
   dialog: { showSaveDialog },
@@ -5023,9 +5024,11 @@ describe("volli:worktree-orphan-delete", () => {
 
 describe("cross-window preference snapshot writes (VC-1121)", () => {
   const seed = (key: string, value: string): void => {
-    ctx.db.prepare(
-      "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-    ).run(key, value, 0);
+    ctx.db
+      .prepare(
+        "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+      )
+      .run(key, value, 0);
   };
   const stored = (key: string): string | undefined => {
     const row = ctx.db.prepare("SELECT value FROM app_state WHERE key = ?").get(key) as
@@ -5807,4 +5810,22 @@ describe("the ticket wake bus (VC-85)", () => {
     expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["priority_changed"]);
     expectNoDataChange();
   });
+});
+
+it("delivers a committed Settings project mutation through the real handler bus to the other renderer only", () => {
+  const id = createProject();
+  windowPeers.splice(
+    0,
+    windowPeers.length,
+    { id: 0, destroyed: false },
+    { id: 22, destroyed: false },
+  );
+  const input = structuredClone({ id, baseBranch: "settings-peer-branch" });
+  const answer = structuredClone(invoke<ProjectUpdateResult>("volli:project-update", input));
+  expect(answer.ok).toBe(true);
+  expect(getProjectById(ctx.db, id)?.baseBranch).toBe("settings-peer-branch");
+  flushDataChangedForTest();
+  expect(dataChangedSends).toEqual([
+    { channel: "volli:data-changed", payload: { entity: "tickets", projectId: id } },
+  ]);
 });

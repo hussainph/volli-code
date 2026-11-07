@@ -242,7 +242,9 @@ try {
   launched = JSON.parse(output.stdout);
   const entry = await createRegistry().get(launched.id);
   const layout = instanceLayout(entry.scratch, entry.evidence);
-  driveWindows = windowTargeting((cmd, args = {}) => request(layout.driveSocket, cmd, args, { timeoutMs: 150_000 }));
+  driveWindows = windowTargeting((cmd, args = {}) =>
+    request(layout.driveSocket, cmd, args, { timeoutMs: 150_000 }),
+  );
   drive = driveWindows.call;
   proof.instance = { id: launched.id, evidence: launched.evidence };
   await step("Local ticket Session and worktree", async () => {

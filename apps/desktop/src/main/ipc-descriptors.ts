@@ -233,10 +233,7 @@ export const SETTINGS_WINDOW_IPC: {
   },
   "volli:settings-window-ready": {
     guard: (args): args is IpcArgs<"volli:settings-window-ready"> =>
-      args.length === 1 &&
-      typeof args[0] === "number" &&
-      Number.isInteger(args[0]) &&
-      args[0] >= 0,
+      args.length === 1 && typeof args[0] === "number" && Number.isInteger(args[0]) && args[0] >= 0,
     invalidError: "Invalid Settings readiness request",
   },
   "volli:settings-window-open-workspace": {

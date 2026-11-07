@@ -531,7 +531,7 @@ describe("pending reopen host", () => {
       "window",
       Object.assign(window, { api: { appState: { set: vi.fn(async () => ({ ok: true })) } } }),
     );
-    vi.spyOn(useThemeStore.getState(), "hydrate").mockResolvedValue();
+    vi.spyOn(useThemeStore.getState(), "hydrate").mockResolvedValue(true);
     act(() => useProjectsStore.getState().hydrate(useProjectsStore.getState().projects, "local"));
     act(() =>
       useProjectsStore.getState().beginRemoteRestore({

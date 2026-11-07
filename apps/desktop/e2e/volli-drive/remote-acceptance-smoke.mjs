@@ -43,7 +43,9 @@ let localKeepaliveStarted = false;
 let nativeQuitAttempted = false;
 let instance;
 let socket;
-const driveWindows = windowTargeting((cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 }));
+const driveWindows = windowTargeting((cmd, args = {}) =>
+  request(socket, cmd, args, { timeoutMs: 150_000 }),
+);
 const call = driveWindows.call;
 const snap = () => call("snapshot");
 const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;

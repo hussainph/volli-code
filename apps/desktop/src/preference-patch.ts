@@ -13,12 +13,21 @@ function patch(current: unknown, base: unknown, next: unknown): unknown {
     }
     const value = Object.hasOwn(base, key) ? patch(merged[key], base[key], next[key]) : next[key];
     // JSON keys are data, including __proto__; never invoke a prototype setter.
-    Object.defineProperty(merged, key, { value, enumerable: true, writable: true, configurable: true });
+    Object.defineProperty(merged, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return merged;
 }
 
-export function mergePreferenceSnapshot(current: string | undefined, base: string | undefined, next: string): string {
+export function mergePreferenceSnapshot(
+  current: string | undefined,
+  base: string | undefined,
+  next: string,
+): string {
   if (current === undefined || base === undefined || base === "" || next === "") return next;
   try {
     return JSON.stringify(patch(JSON.parse(current), JSON.parse(base), JSON.parse(next))) ?? next;
@@ -27,4 +36,5 @@ export function mergePreferenceSnapshot(current: string | undefined, base: strin
     return next;
   }
 }
-export const isSharedPreferenceKey = (key: string): boolean => key === "volli:ui" || key === "volli:style";
+export const isSharedPreferenceKey = (key: string): boolean =>
+  key === "volli:ui" || key === "volli:style";

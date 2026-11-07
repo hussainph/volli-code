@@ -201,9 +201,11 @@ export async function refreshPlanningData(
       .projects.find(({ id }) => id === selectedProjectId);
     const theme = useThemeStore.getState();
     const projectThemeChanged =
-      JSON.stringify(theme.projectOverride?.canvas ?? null) !== JSON.stringify(themeProject?.themeCanvas ?? null) ||
+      JSON.stringify(theme.projectOverride?.canvas ?? null) !==
+        JSON.stringify(themeProject?.themeCanvas ?? null) ||
       (theme.projectOverride?.appearance ?? null) !== (themeProject?.themeAppearance ?? null) ||
-      (theme.projectOverride?.terminalThemeName ?? null) !== (themeProject?.themeOverride?.terminalThemeName ?? null);
+      (theme.projectOverride?.terminalThemeName ?? null) !==
+        (themeProject?.themeOverride?.terminalThemeName ?? null);
     // SettingsPage owns its scope and readiness. Its project-row subscription
     // requests the fresh scope; a competing read here could supersede it with
     // the workbench selection while the native window is preparing to reveal.

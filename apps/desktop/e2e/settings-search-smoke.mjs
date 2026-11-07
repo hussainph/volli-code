@@ -32,7 +32,11 @@ import {
   makeScratch,
   seedProjects,
 } from "./lib/smoke-kit.mjs";
-import { assertSettingsWindow, closeSettingsWindow, openSettingsWindow } from "./lib/settings-window.mjs";
+import {
+  assertSettingsWindow,
+  closeSettingsWindow,
+  openSettingsWindow,
+} from "./lib/settings-window.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-settings-search-");
 const { attempt, must, summarize } = createRunner();
@@ -176,26 +180,34 @@ try {
 
   // Audit project overrides as well: moving their entry point must not remove
   // the searchability assertions previously exercised through Configure.
-  await settingsRail(settingsPage).getByRole("button", { name: "Search Fixture", exact: true }).click();
-  await settingsRail(settingsPage).getByRole("button", { name: "All projects", pressed: false }).waitFor();
+  await settingsRail(settingsPage)
+    .getByRole("button", { name: "Search Fixture", exact: true })
+    .click();
+  await settingsRail(settingsPage)
+    .getByRole("button", { name: "All projects", pressed: false })
+    .waitFor();
   const lastProject = await auditSurface(settingsPage, "Project settings", "Project", last + 1);
 
   // ---- the native window's own contract -----------------------------------
   const opened = await assertSettingsWindow(app, page, settingsPage);
-  await attempt(lastProject + 1, "a second Settings entry reuses the one native window (nonmodal)", async () => {
-    const before = opened;
-    settingsPage = await openSettingsWindow(app, page);
-    const after = await assertSettingsWindow(app, page, settingsPage);
-    return {
-      ok:
-        after.nativeWindowId === before.nativeWindowId &&
-        after.nativeSettingsCount === 1 &&
-        after.nativeWindowCount === before.nativeWindowCount &&
-        !after.mainHasSettingsDialog &&
-        !page.isClosed(),
-      detail: `before=${before.nativeWindowId} after=${after.nativeWindowId} windows=${after.nativeWindowCount} mainAlive=${!page.isClosed()}`,
-    };
-  });
+  await attempt(
+    lastProject + 1,
+    "a second Settings entry reuses the one native window (nonmodal)",
+    async () => {
+      const before = opened;
+      settingsPage = await openSettingsWindow(app, page);
+      const after = await assertSettingsWindow(app, page, settingsPage);
+      return {
+        ok:
+          after.nativeWindowId === before.nativeWindowId &&
+          after.nativeSettingsCount === 1 &&
+          after.nativeWindowCount === before.nativeWindowCount &&
+          !after.mainHasSettingsDialog &&
+          !page.isClosed(),
+        detail: `before=${before.nativeWindowId} after=${after.nativeWindowId} windows=${after.nativeWindowCount} mainAlive=${!page.isClosed()}`,
+      };
+    },
+  );
 
   await attempt(lastProject + 2, "Escape does not close the nonmodal Settings window", async () => {
     await settingsPage.keyboard.press("Escape");
@@ -210,25 +222,29 @@ try {
     };
   });
 
-  await must(lastProject + 3, "closing Settings leaves the workbench; reopening creates one new window", async () => {
-    const before = await assertSettingsWindow(app, page, settingsPage);
-    await closeSettingsWindow(app, settingsPage);
-    const workbenchAlive = !page.isClosed();
-    const mainDialog = (await page.locator("[data-settings-panel]").count()) > 0;
+  await must(
+    lastProject + 3,
+    "closing Settings leaves the workbench; reopening creates one new window",
+    async () => {
+      const before = await assertSettingsWindow(app, page, settingsPage);
+      await closeSettingsWindow(app, settingsPage);
+      const workbenchAlive = !page.isClosed();
+      const mainDialog = (await page.locator("[data-settings-panel]").count()) > 0;
 
-    settingsPage = await openSettingsWindow(app, page);
-    const after = await assertSettingsWindow(app, page, settingsPage);
-    return {
-      ok:
-        workbenchAlive &&
-        !mainDialog &&
-        after.nativeSettingsCount === 1 &&
-        after.nativeWindowCount === before.nativeWindowCount &&
-        after.nativeWindowId !== before.nativeWindowId &&
-        !after.mainHasSettingsDialog,
-      detail: `old=${before.nativeWindowId} new=${after.nativeWindowId} windows=${after.nativeWindowCount} workbenchAlive=${workbenchAlive}`,
-    };
-  });
+      settingsPage = await openSettingsWindow(app, page);
+      const after = await assertSettingsWindow(app, page, settingsPage);
+      return {
+        ok:
+          workbenchAlive &&
+          !mainDialog &&
+          after.nativeSettingsCount === 1 &&
+          after.nativeWindowCount === before.nativeWindowCount &&
+          after.nativeWindowId !== before.nativeWindowId &&
+          !after.mainHasSettingsDialog,
+        detail: `old=${before.nativeWindowId} new=${after.nativeWindowId} windows=${after.nativeWindowCount} workbenchAlive=${workbenchAlive}`,
+      };
+    },
+  );
 
   exitCode = summarize();
 } finally {

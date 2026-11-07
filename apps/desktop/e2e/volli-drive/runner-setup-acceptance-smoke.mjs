@@ -103,7 +103,9 @@ function record(number, status, assertion, detail = "") {
 
 /** One instance's drive: every action from a fresh tree, and no tree or secret in any error. */
 function driver(label, socket) {
-  const windows = windowTargeting((cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 }));
+  const windows = windowTargeting((cmd, args = {}) =>
+    request(socket, cmd, args, { timeoutMs: 150_000 }),
+  );
   const call = windows.call;
   const snap = () => call("snapshot");
   const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;

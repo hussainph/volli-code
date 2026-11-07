@@ -277,8 +277,16 @@ import { createClientStateFlush } from "./client-state-flush";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
-import { createSettingsWindowOwner, restoreSettingsFrame, SETTINGS_WINDOW_SIZE } from "./settings-window";
-import { registerSettingsWindowIpcHandlers, sendSettingsWindowNavigation, sendWorkspaceWindowNavigation } from "./settings-window-ipc";
+import {
+  createSettingsWindowOwner,
+  restoreSettingsFrame,
+  SETTINGS_WINDOW_SIZE,
+} from "./settings-window";
+import {
+  registerSettingsWindowIpcHandlers,
+  sendSettingsWindowNavigation,
+  sendWorkspaceWindowNavigation,
+} from "./settings-window-ipc";
 import { registerAppWindow, getAppContentsRole, mainWindows } from "./window-roles";
 import type { SettingsWindowNavigation, WorkspaceWindowNavigation } from "../ipc/settings-window";
 import { confirmDestructiveClose, prepareTerminalQuit, registerTerminalIpcHandlers } from "./pty";
@@ -485,7 +493,10 @@ if (ownsAppProfile) {
   app.on("second-instance", () => {
     answerSecondInstance(mainWindows()[0], {
       cloudEnabled: () => isExperimentEnabled("cloud"),
-      hasSettingsWindow: () => BrowserWindow.getAllWindows().some((window) => getAppContentsRole(window.webContents) === "settings"),
+      hasSettingsWindow: () =>
+        BrowserWindow.getAllWindows().some(
+          (window) => getAppContentsRole(window.webContents) === "settings",
+        ),
       revealForLaunch: revealWindowForLaunch,
       show: (window) => {
         revealWindow(window, nativeWindowPolicy);
@@ -608,14 +619,16 @@ function createWindow(
     // Usability floor: rail + max-width sidebar + a workable content column.
     minWidth: 940,
     minHeight: 600,
-    ...(settings ? {
-      ...SETTINGS_WINDOW_SIZE,
-      ...options.bounds,
-      title: "Settings",
-      vibrancy: "sidebar" as const,
-      visualEffectState: "followWindow" as const,
-      fullscreenable: false,
-    } : {}),
+    ...(settings
+      ? {
+          ...SETTINGS_WINDOW_SIZE,
+          ...options.bounds,
+          title: "Settings",
+          vibrancy: "sidebar" as const,
+          visualEffectState: "followWindow" as const,
+          fullscreenable: false,
+        }
+      : {}),
     show: false,
     // A quiet macOS smoke window must be incapable of becoming key. Playwright
     // focus emulation still gives its page document focus and CDP input.
@@ -1570,8 +1583,13 @@ const appStartup = app.whenReady().then(async () => {
   });
   registerSecretIpc(secrets, (sender) => {
     const role = getAppContentsRole(sender);
-    return role !== null && isSecretRenderer(
-      sender.getURL(), isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined, role,
+    return (
+      role !== null &&
+      isSecretRenderer(
+        sender.getURL(),
+        isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+        role,
+      )
     );
   });
   const mcpSettings = liveHost?.runtimeServices.mcp ?? null;
@@ -2458,7 +2476,8 @@ const appStartup = app.whenReady().then(async () => {
   onRawIpc(
     "volli:unsaved-documents" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {
-      if (getAppContentsRole(event.sender) !== null) recordUnsavedDocuments(args[0], event.sender.id);
+      if (getAppContentsRole(event.sender) !== null)
+        recordUnsavedDocuments(args[0], event.sender.id);
     },
   );
   // The accepted-quit coordinator registered above only holds the event
@@ -2655,27 +2674,46 @@ const appStartup = app.whenReady().then(async () => {
       settingsNativeReady = false;
       let bounds: Partial<Electron.Rectangle> = {};
       try {
-        bounds = restoreSettingsFrame(JSON.parse(readFileSync(settingsFramePath, "utf8")), screen.getAllDisplays().map((display) => display.workArea));
+        bounds = restoreSettingsFrame(
+          JSON.parse(readFileSync(settingsFramePath, "utf8")),
+          screen.getAllDisplays().map((display) => display.workArea),
+        );
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") log.warn("couldn't restore Settings frame", { error });
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          log.warn("couldn't restore Settings frame", { error });
       }
       // Settings initially paints App scope; project navigation is resolved before reveal.
-      const paint = dbHandle.ok ? resolveFirstPaint({
-        hint: null, canvas: getGlobalCanvas(dbHandle.db), appearance: getGlobalAppearance(dbHandle.db),
-        systemPrefersDark: nativeTheme.shouldUseDarkColors,
-      }) : currentFirstPaint();
-      const window = createWindow(ptyManager, paint, { role: "settings", revealOnReady: false, bounds });
-      window.once("ready-to-show", () => { settingsNativeReady = true; showSettings(window); });
+      const paint = dbHandle.ok
+        ? resolveFirstPaint({
+            hint: null,
+            canvas: getGlobalCanvas(dbHandle.db),
+            appearance: getGlobalAppearance(dbHandle.db),
+            systemPrefersDark: nativeTheme.shouldUseDarkColors,
+          })
+        : currentFirstPaint();
+      const window = createWindow(ptyManager, paint, {
+        role: "settings",
+        revealOnReady: false,
+        bounds,
+      });
+      window.once("ready-to-show", () => {
+        settingsNativeReady = true;
+        showSettings(window);
+      });
       window.webContents.on("did-start-navigation", (details) => {
         if (details.isMainFrame && !details.isSameDocument) settingsRendererReady = false;
       });
-      window.webContents.on("render-process-gone", () => { settingsRendererReady = false; });
+      window.webContents.on("render-process-gone", () => {
+        settingsRendererReady = false;
+      });
       const saveFrame = () => {
         if (window.isDestroyed()) return;
         try {
           writeFileSync(`${settingsFramePath}.tmp`, JSON.stringify(window.getNormalBounds()));
           renameSync(`${settingsFramePath}.tmp`, settingsFramePath);
-        } catch (error) { log.warn("couldn't save Settings frame", { error }); }
+        } catch (error) {
+          log.warn("couldn't save Settings frame", { error });
+        }
       };
       window.on("resized", saveFrame);
       window.on("moved", saveFrame);
@@ -2691,13 +2729,17 @@ const appStartup = app.whenReady().then(async () => {
     reveal: showSettings,
   });
   const assertSettingsRequester = (sender: Electron.WebContents): void => {
-    if (settingsWindow.current()?.webContents !== sender || getAppContentsRole(sender) !== "settings") {
+    if (
+      settingsWindow.current()?.webContents !== sender ||
+      getAppContentsRole(sender) !== "settings"
+    ) {
       throw new Error("Only the Settings window can receive Settings navigation.");
     }
   };
   registerSettingsWindowIpcHandlers({
     open: (navigation, sender) => {
-      if (getAppContentsRole(sender) === null) throw new Error("Only an app window can open Settings.");
+      if (getAppContentsRole(sender) === null)
+        throw new Error("Only an app window can open Settings.");
       settingsWindow.open(navigation);
     },
     openWorkspace: (navigation, sender) => {
@@ -2706,16 +2748,20 @@ const appStartup = app.whenReady().then(async () => {
       // longer scheduled for destruction when its draft flush acknowledges.
       appWindows.openForNotification(runnerEdge.menuBar());
       const focused = BrowserWindow.getFocusedWindow();
-      const window = focused !== null && getAppContentsRole(focused.webContents) === "main"
-        ? focused : mainWindows()[0] ?? createOwnedWindow();
+      const window =
+        focused !== null && getAppContentsRole(focused.webContents) === "main"
+          ? focused
+          : (mainWindows()[0] ?? createOwnedWindow());
       if (window.isMinimized()) window.restore();
-      if (workspaceRendererReady.has(window.id)) sendWorkspaceWindowNavigation(window.webContents, navigation);
+      if (workspaceRendererReady.has(window.id))
+        sendWorkspaceWindowNavigation(window.webContents, navigation);
       else pendingWorkspaceNavigation.set(window.id, navigation);
       revealWindow(window, nativeWindowPolicy);
       sealQuietAppActivation(app, nativeWindowPolicy);
     },
     pendingWorkspaceNavigation: (sender) => {
-      if (getAppContentsRole(sender) !== "main") throw new Error("Only a workspace window can receive workspace navigation.");
+      if (getAppContentsRole(sender) !== "main")
+        throw new Error("Only a workspace window can receive workspace navigation.");
       const window = BrowserWindow.fromWebContents(sender);
       if (window === null) throw new Error("The workspace window is closed.");
       workspaceRendererReady.add(window.id);
@@ -2723,7 +2769,10 @@ const appStartup = app.whenReady().then(async () => {
       pendingWorkspaceNavigation.delete(window.id);
       return navigation;
     },
-    pendingNavigation: (sender) => { assertSettingsRequester(sender); return settingsNavigation; },
+    pendingNavigation: (sender) => {
+      assertSettingsRequester(sender);
+      return settingsNavigation;
+    },
     ready: (appliedRevision, sender) => {
       assertSettingsRequester(sender);
       // An opening command can supersede the bootstrap read. Do not expose
@@ -2924,8 +2973,7 @@ const appStartup = app.whenReady().then(async () => {
     // The double-notify guard: with a window open the sidebar badge/dialog
     // owns the "downloaded" announcement; the native notification only speaks
     // when no window is left to show it (macOS keeps the app alive).
-    hasUpdateSurface: () =>
-      mainWindows().some((window) => !window.webContents.isDestroyed()),
+    hasUpdateSurface: () => mainWindows().some((window) => !window.webContents.isDestroyed()),
     // Settings → Updates' Status row survives a relaunch (VC-294); on a
     // broken db it lives for this run only, like the channel below.
     lastCheck: dbHandle.ok
@@ -3375,7 +3423,13 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
 
-  registerAppMenu(dbHandle, { installAgentTools, uninstallAgentTools, openSettings: () => { settingsWindow.open({}); } });
+  registerAppMenu(dbHandle, {
+    installAgentTools,
+    uninstallAgentTools,
+    openSettings: () => {
+      settingsWindow.open({});
+    },
+  });
 
   // Settings → CLI (VC-52): the detection surface over the silent install, and
   // the in-app doctor. Registered before the awaited socket work below for the

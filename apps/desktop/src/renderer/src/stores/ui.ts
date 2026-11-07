@@ -140,7 +140,9 @@ import type { SettingsWindowOpenInput } from "../../../ipc/settings-window";
 
 let settingsWindowOpener: ((navigation: SettingsWindowOpenInput) => void) | null = null;
 /** Installed by the desktop entry, leaving injected/test stores transport-free. */
-export function setSettingsWindowOpener(opener: ((navigation: SettingsWindowOpenInput) => void) | null): void {
+export function setSettingsWindowOpener(
+  opener: ((navigation: SettingsWindowOpenInput) => void) | null,
+): void {
   settingsWindowOpener = opener;
 }
 
