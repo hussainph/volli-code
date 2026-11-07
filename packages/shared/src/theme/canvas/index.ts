@@ -29,7 +29,8 @@ export { DEFAULT_CANVAS, parseCanvas } from "./parse";
 export { canvasBackground, effectiveStopHexes, grainLayer } from "./gradient";
 export { addStop, moveStop, removeStop, withPrimaryHex, withPrimaryIndex } from "./edit";
 export { canvasInk } from "./ink";
-export { deriveCanvasTokens, deriveLabelInk, windowBackground } from "./derive";
+export { readingInk, regularGlassBackdrop, regularGlassTone, writingGlass } from "./glass";
+export { deriveCanvasTokens, deriveLabelInk, tintCanvasNeutral, windowBackground } from "./derive";
 export {
   canvasElevation,
   type CanvasElevation,

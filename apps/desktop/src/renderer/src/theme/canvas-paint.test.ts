@@ -3,6 +3,8 @@ import {
   DEFAULT_CANVAS,
   effectiveStopHexes,
   compositeHex,
+  regularGlassBackdrop,
+  hexChannels,
   wcagContrast,
   THEME_TOKEN_NAMES,
   canvasBackground,
@@ -16,7 +18,6 @@ import {
   CANVAS_TOKEN_NAMES,
   applyResolvedAppearanceClass,
   deriveCanvasPaint,
-  regularGlassBackdrop,
   paintCanvas,
   resetSystemAppearanceWatchForTests,
   systemPrefersDark,
@@ -78,12 +79,12 @@ describe("deriveCanvasPaint", () => {
         TEAL,
         { ...DEFAULT_CANVAS, stops: [{ hex: "#ffffff", x: 0.5, y: 0.5 }] },
       ]) {
-        const { canvasTokens } = deriveCanvasPaint(canvas, mode);
+        const { tokens, canvasTokens } = deriveCanvasPaint(canvas, mode);
         expect(canvasTokens["--glass-pane-veil"]).toBe(
           mode === "light" ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
         );
         expect(canvasTokens["--glass-writing-veil"]).toBe(
-          mode === "light" ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
+          `rgb(${hexChannels(tokens["--popover"]).join(" ")} / 0.56)`,
         );
         expect(canvasTokens["--glass-rim"]).toContain("180deg");
         expect(canvasTokens["--glass-rim"]).toContain("transparent 78%");
@@ -121,14 +122,12 @@ describe("deriveCanvasPaint", () => {
         TEAL,
         { ...TEAL, stops: [...TEAL.stops, { hex: "#e0457b", x: 0.8, y: 0.2 }] },
       ]) {
-        const { canvasTokens } = deriveCanvasPaint(canvas, mode);
+        const { tokens, canvasTokens } = deriveCanvasPaint(canvas, mode);
         expect(canvasTokens["--canvas-accent"]).toBe(canvas.stops[0].hex);
         expect(canvasTokens["--flow"]).toContain(canvas.stops[0].hex);
         expect(canvasTokens["--flow"]).toContain("linear-gradient");
-        expect(canvasTokens["--glass-fill"]).toBe(mode === "light" ? "#fafafa" : "#282828");
-        for (const surface of mode === "light"
-          ? ["#ffffff", "#f6f6f6", "#e1e1e1"]
-          : ["#1e1e1e", "#282828", "#3e3e3e"]) {
+        expect(canvasTokens["--glass-fill"]).toBe(tokens["--popover"]);
+        for (const surface of [tokens["--card"], tokens["--muted"], tokens["--popover"]]) {
           expect(
             wcagContrast(canvasTokens["--tertiary-foreground"], surface),
           ).toBeGreaterThanOrEqual(3);

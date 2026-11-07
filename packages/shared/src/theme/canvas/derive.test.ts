@@ -1,43 +1,87 @@
 import { describe, expect, it } from "vite-plus/test";
-import { compositeHex, isHexColor, wcagContrast } from "../color";
+import { wcagContrast } from "culori";
+import { compositeHex, hexToOklch, isHexColor, oklchToHex } from "../color";
 import { THEME_TOKEN_NAMES } from "../tokens";
-import { deriveCanvasTokens, deriveLabelInk, windowBackground } from "./index";
+import { deriveCanvasTokens, deriveLabelInk, writingGlass, windowBackground } from "./index";
 import { baseFillHex } from "./gradient";
 import { DEFAULT_CANVAS } from "./parse";
 
-const hues = ["#e8652a", "#4653a2", "#18b6a4", "#f2d060", "#000000", "#ffffff"];
+// Ember, Dusk, Tide, purple, saturated green, near-grey and channel extremes,
+// plus the complete hue wheel. Use an independent contrast oracle on emitted bytes.
+const hues = [
+  "#e8652a",
+  "#4653a2",
+  "#18b6a4",
+  "#a020f0",
+  "#00ff00",
+  "#80817f",
+  "#ff00ff",
+  "#000000",
+  "#ffffff",
+  "#0000ff",
+  "#ffff00",
+  "#ff0000",
+  ...Array.from({ length: 24 }, (_, i) => oklchToHex(0.65, 0.25, i * 15)),
+];
 
-describe("neutral paper and glass", () => {
+describe("neutral paper and canvas-tinted materials", () => {
   for (const mode of ["light", "dark"] as const) {
-    it(`${mode}: secondary ≥4.5:1 and tertiary ≥3:1 on paper and all glass pools`, () => {
-      for (const hex of hues) {
-        for (const vibrancy of [0, 0.6, 1]) {
-          const canvas = { ...DEFAULT_CANVAS, stops: [{ hex, x: 0.3, y: 0.6 }], vibrancy };
-          const tokens = deriveCanvasTokens(canvas, mode);
-          // Worst possible pools under the 90% neutral veil, including arbitrary
-          // content beneath a floating menu. Intermediate mesh pools are bounded.
-          const surfaces = [
-            tokens["--card"],
-            tokens["--muted"],
-            ...(mode === "light" ? ["#e1e1e1", "#fbfbfb"] : ["#242424", "#3e3e3e"]),
-          ];
-          for (const surface of surfaces) {
-            expect(wcagContrast(tokens["--muted-foreground"], surface)).toBeGreaterThanOrEqual(4.5);
-            expect(
-              wcagContrast(mode === "light" ? "#666666" : "#aaaaaa", surface),
-            ).toBeGreaterThanOrEqual(3);
-            expect(wcagContrast(deriveLabelInk(tokens, mode), surface)).toBeGreaterThanOrEqual(4.5);
-          }
+    it.each(hues)(`${mode}/%s: secondary and labels clear AA on reading pools`, (hex) => {
+      for (const vibrancy of [0, 0.6, 1]) {
+        const canvas = { ...DEFAULT_CANVAS, stops: [{ hex, x: 0.3, y: 0.6 }], vibrancy };
+        const tokens = deriveCanvasTokens(canvas, mode);
+        // Actual emitted writing-glass pools, not the former 90%-veil approximation.
+        const surfaces = [
+          ...["--background", "--card", "--popover", "--muted", "--accent", "--sidebar"].map(
+            (name) => tokens[name as keyof typeof tokens],
+          ),
+          compositeHex(hex, 0.18, tokens["--card"]),
+          ...writingGlass(tokens["--popover"], mode).pools,
+        ];
+        for (const surface of surfaces) {
+          const context = `${hex}/${vibrancy}/${mode}/${surface}`;
+          expect(wcagContrast(tokens["--foreground"], surface), context).toBeGreaterThanOrEqual(
+            4.5,
+          );
           expect(
-            wcagContrast(tokens["--primary-text"], compositeHex(hex, 0.18, tokens["--card"])),
+            wcagContrast(tokens["--muted-foreground"], surface),
+            context,
           ).toBeGreaterThanOrEqual(4.5);
-          expect(tokens["--card"]).toBe(mode === "light" ? "#ffffff" : "#1e1e1e");
-          for (const name of THEME_TOKEN_NAMES) expect(isHexColor(tokens[name])).toBe(true);
-          expect(
-            wcagContrast(tokens["--primary"], tokens["--primary-foreground"]),
-          ).toBeGreaterThanOrEqual(4.5);
-          expect(wcagContrast(tokens["--ring"], tokens["--card"])).toBeGreaterThanOrEqual(3);
-          expect(deriveCanvasTokens(canvas, mode)).toEqual(tokens);
+
+          expect(wcagContrast(deriveLabelInk(tokens, mode), surface)).toBeGreaterThanOrEqual(4.5);
+        }
+        expect(
+          wcagContrast(tokens["--primary-text"], compositeHex(hex, 0.18, tokens["--card"])),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(tokens["--foreground"]).toBe(mode === "light" ? "#272727" : "#ededed");
+        expect(tokens["--sidebar-foreground"]).toBe(tokens["--foreground"]);
+        expect(tokens["--background"]).toBe(mode === "light" ? "#ffffff" : "#1e1e1e");
+        expect(tokens["--card"]).toBe(tokens["--background"]);
+        for (const name of THEME_TOKEN_NAMES) expect(isHexColor(tokens[name])).toBe(true);
+        expect(
+          wcagContrast(tokens["--primary"], tokens["--primary-foreground"]),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(wcagContrast(tokens["--ring"], tokens["--card"])).toBeGreaterThanOrEqual(3);
+        expect(deriveCanvasTokens(canvas, mode)).toEqual(tokens);
+      }
+    });
+    it(`${mode}: personality follows hue and vibrancy without inventing colour in greys`, () => {
+      const canvas = { ...DEFAULT_CANVAS, stops: [{ hex: "#18b6a4", x: 0.5, y: 0.5 }] };
+      const vivid = deriveCanvasTokens({ ...canvas, vibrancy: 1 }, mode);
+      const quiet = deriveCanvasTokens({ ...canvas, vibrancy: 0 }, mode);
+      const grey = deriveCanvasTokens(
+        { ...canvas, stops: [{ hex: "#808080", x: 0.5, y: 0.5 }] },
+        mode,
+      );
+      for (const name of ["--muted", "--border", "--muted-foreground"] as const) {
+        expect(hexToOklch(vivid[name]).C).toBeGreaterThan(0.018);
+        expect(hexToOklch(vivid[name]).C).toBeGreaterThan(hexToOklch(quiet[name]).C);
+        // One-byte rounding at the contrast boundary can leave sub-perceptual chroma.
+        expect(hexToOklch(grey[name]).C).toBeLessThan(0.002);
+        if (name !== "--muted-foreground") {
+          expect(Math.abs(hexToOklch(vivid[name]).L - hexToOklch(quiet[name]).L)).toBeLessThan(
+            0.005,
+          );
         }
       }
     });
@@ -46,12 +90,12 @@ describe("neutral paper and glass", () => {
         deriveCanvasTokens(
           {
             ...DEFAULT_CANVAS,
-            stops: [...DEFAULT_CANVAS.stops, { hex: "#18b6a4", x: 0.5, y: 0.5 }],
+            stops: [DEFAULT_CANVAS.stops[0], { hex: "#18b6a4", x: 0.5, y: 0.5 }],
             primaryIndex: 1,
           },
           mode,
-        )["--primary"],
-      ).toBe(deriveCanvasTokens(DEFAULT_CANVAS, mode)["--primary"]);
+        ),
+      ).toEqual(deriveCanvasTokens(DEFAULT_CANVAS, mode));
       expect(windowBackground(null, mode)).toBe(baseFillHex(DEFAULT_CANVAS, mode));
       expect(windowBackground(DEFAULT_CANVAS, mode)).toBe(baseFillHex(DEFAULT_CANVAS, mode));
     });

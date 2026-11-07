@@ -32,9 +32,12 @@ import {
   canvasInk,
   deriveCanvasTokens,
   deriveLabelInk,
-  hexToOklch,
-  oklchToHex,
-  solveLightnessOrCeiling,
+  readingInk,
+  regularGlassBackdrop,
+  regularGlassTone,
+  writingGlass,
+  tintCanvasNeutral,
+  hexChannels,
   type Canvas,
   type ResolvedAppearance,
 } from "@volli/shared";
@@ -151,6 +154,8 @@ export type CanvasTokens = Record<CanvasTokenName, string>;
 /** The two classes that name a resolved appearance on `<html>`. */
 const MODE_CLASSES = ["light", "dark"] as const;
 
+const translucent = (hex: string, alpha: number) => `rgb(${hexChannels(hex).join(" ")} / ${alpha})`;
+
 /**
  * Whether the system is currently asking for dark — the input `auto` resolves
  * against, as main read it off `nativeTheme` when this window was built.
@@ -190,48 +195,6 @@ export function systemPrefersDark(): boolean {
  * pool — so an ink chosen against the gradient alone would be chosen against
  * surfaces that are no longer the hardest ones on screen.
  */
-const REGULAR_TONE = {
-  light: [
-    ["contrast", 0.44174],
-    ["brightness", 1.44847],
-    ["saturate", 1.91139],
-  ],
-  dark: [
-    ["brightness", 1.56971],
-    ["contrast", 0.6149],
-    ["brightness", 0.7124],
-    ["saturate", 2.79074],
-  ],
-} as const;
-
-const clampGlassChannel = (value: number) => Math.max(0, Math.min(1, value));
-
-/** The CSS filter chain in sRGB, before the mock's neutral veil is composited.
- * Ink must be solved against measured glass, not against unfiltered canvas. */
-export function regularGlassBackdrop(hex: string, mode: ResolvedAppearance): string {
-  let rgb = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
-  for (const [kind, value] of REGULAR_TONE[mode]) {
-    if (kind === "saturate") {
-      const [r, g, b] = rgb,
-        s = value;
-      rgb = [
-        (0.213 + 0.787 * s) * r + (0.715 - 0.715 * s) * g + (0.072 - 0.072 * s) * b,
-        (0.213 - 0.213 * s) * r + (0.715 + 0.285 * s) * g + (0.072 - 0.072 * s) * b,
-        (0.213 - 0.213 * s) * r + (0.715 - 0.715 * s) * g + (0.072 + 0.928 * s) * b,
-      ].map(clampGlassChannel);
-    } else
-      rgb = rgb.map((channel) =>
-        clampGlassChannel(kind === "contrast" ? (channel - 0.5) * value + 0.5 : channel * value),
-      );
-  }
-  return `#${rgb
-    .map((channel) =>
-      Math.round(channel * 255)
-        .toString(16)
-        .padStart(2, "0"),
-    )
-    .join("")}`;
-}
 
 export function deriveCanvasPaint(
   canvas: Canvas,
@@ -241,14 +204,19 @@ export function deriveCanvasPaint(
   const elevation = canvasElevation(canvas, resolved, tokens);
   const { ink, inkLabel, inkMuted } = canvasInk(canvas, resolved, elevation.surfaces);
   // Diff counts and gutter marks are reading ink, not status fills. Solve
-  // against the worst 18%-selected paper pool (black / white canvas stops),
-  // which also bounds neutral glass, rather than diluting the status colour.
-  const diffSurface = resolved === "light" ? "#d1d1d1" : "#474747";
-  const diffInk = (status: string): string => {
-    const { C, h } = hexToOklch(status);
-    return oklchToHex(solveLightnessOrCeiling(75, C, h, diffSurface), C, h);
-  };
+  // against the worst 18%-selected tinted paper pool (black / white stops),
+  // which also bounds writing glass, rather than diluting the status colour.
+  const readingPools = [
+    compositeHex(resolved === "light" ? "#000000" : "#ffffff", 0.18, tokens["--card"]),
+    ...writingGlass(tokens["--popover"], resolved).pools,
+  ];
+  const diffInk = (status: string): string => readingInk(status, readingPools, resolved, 4.5);
   const light = resolved === "light";
+  const neutral = (hex: string) => tintCanvasNeutral(hex, canvas, resolved);
+  const fillInk = neutral(light ? "#272727" : "#ededed");
+  const raisedFace = neutral(light ? "#fafafa" : "#2a2a2a");
+  const writingVeil = writingGlass(tokens["--popover"], resolved).veil;
+  const tertiaryInk = readingInk(neutral(light ? "#666666" : "#aaaaaa"), readingPools, resolved, 3);
   const paneFill = light ? "#ffffff" : "#1a1a1c";
   const paneAlpha = light ? 0.46 : 0.52;
   // Solve meaningful glass text against every peak, not against neutral paper.
@@ -260,14 +228,18 @@ export function deriveCanvasPaint(
     Math.min(...glassPools.map((surface) => wcagContrast(hex, surface)));
   const darkInk = contrast("#171717") >= contrast("#f5f5f5");
   const glassInk = darkInk ? "#171717" : "#f5f5f5";
-  let glassSecondary = glassInk;
-  for (let byte = darkInk ? 90 : 185; darkInk ? byte >= 0 : byte <= 255; byte += darkInk ? -1 : 1) {
-    const hex = `#${byte.toString(16).padStart(2, "0").repeat(3)}`;
-    if (contrast(hex) >= 4.5) {
-      glassSecondary = hex;
-      break;
-    }
-  }
+  const rowInk = neutral(glassInk);
+  const glassReadingPools = glassPools.flatMap((surface) => [
+    surface,
+    compositeHex(rowInk, 0.047, surface),
+    compositeHex(rowInk, 0.09, surface),
+  ]);
+  const glassSecondary = readingInk(
+    neutral(darkInk ? "#5a5a5a" : "#b9b9b9"),
+    glassReadingPools,
+    darkInk ? "light" : "dark",
+    4.5,
+  );
   return {
     tokens,
     canvasTokens: {
@@ -290,33 +262,33 @@ export function deriveCanvasPaint(
       "--flow": `linear-gradient(120deg, ${canvas.stops.map((stop) => stop.hex).join(", ")}${canvas.stops.length === 1 ? `, ${canvas.stops[0].hex}` : ""})`,
       "--accent-tint": `color-mix(in srgb, ${canvas.stops[0].hex} 10%, ${tokens["--card"]})`,
       "--accent-selected": `color-mix(in srgb, ${canvas.stops[0].hex} 18%, ${tokens["--card"]})`,
-      "--tertiary-foreground": resolved === "light" ? "#666666" : "#aaaaaa",
-      "--glass-fill": resolved === "light" ? "#fafafa" : "#282828",
+      "--tertiary-foreground": tertiaryInk,
+      "--glass-fill": tokens["--popover"],
       "--glass-edge": light ? "rgb(0 0 0 / .11)" : "rgb(0 0 0 / .6)",
       "--canvas-mesh": canvasBackground(canvas, resolved, false),
-      "--glass-veil": light ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
+      "--glass-veil": writingVeil,
       "--glass-pane-veil": light ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
-      // Writing glass samples neutral paper, never the authored canvas hue.
-      "--glass-writing-veil": light ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
-      "--glass-tone": REGULAR_TONE[resolved].map(([kind, value]) => `${kind}(${value})`).join(" "),
+      // The same colour family as the paper beneath, not another canvas mesh.
+      "--glass-writing-veil": writingVeil,
+      "--glass-tone": regularGlassTone(resolved),
       "--glass-rim": light
         ? "linear-gradient(180deg, rgb(255 255 255 / .17), transparent 22%, transparent 78%, rgb(255 255 255 / .17))"
         : "linear-gradient(180deg, rgb(255 255 255 / .21), transparent 22%, transparent 78%, rgb(255 255 255 / .21))",
       "--glass-ink": glassInk,
       "--glass-secondary": glassSecondary,
-      "--fill-row-selected": `color-mix(in oklab, ${glassInk} 9%, transparent)`,
-      "--fill-row-hover": `color-mix(in oklab, ${glassInk} 4.7%, transparent)`,
-      "--fill-quaternary": light ? "rgb(0 0 0 / .027)" : "rgb(255 255 255 / .027)",
-      "--fill-secondary": light ? "rgb(0 0 0 / .078)" : "rgb(255 255 255 / .078)",
-      "--card-face": light ? "#ffffff" : "#2a2a2a",
+      "--fill-row-selected": `color-mix(in oklab, ${rowInk} 9%, transparent)`,
+      "--fill-row-hover": `color-mix(in oklab, ${rowInk} 4.7%, transparent)`,
+      "--fill-quaternary": translucent(fillInk, 0.027),
+      "--fill-secondary": translucent(fillInk, 0.078),
+      "--card-face": raisedFace,
       "--card-shadow": light
         ? "0 1px 2px rgb(0 0 0 / .05), 0 0 0 .5px rgb(0 0 0 / .07)"
         : "0 1px 2px rgb(0 0 0 / .35), 0 0 0 .5px rgb(255 255 255 / .06)",
-      "--control-face": light ? "#ffffff" : "rgb(255 255 255 / .14)",
+      "--control-face": light ? raisedFace : translucent(fillInk, 0.14),
       "--control-bezel-shadow": light
         ? "0 .5px 1.5px rgb(0 0 0 / .16), 0 0 0 .5px rgb(0 0 0 / .09), inset 0 .5px 0 rgb(255 255 255 / 1)"
         : "0 .5px 1.5px rgb(0 0 0 / .5), 0 0 0 .5px rgb(0 0 0 / .35), inset 0 .5px 0 rgb(255 255 255 / .14)",
-      "--tab-selected-face": light ? "#ffffff" : "rgb(255 255 255 / .14)",
+      "--tab-selected-face": light ? raisedFace : translucent(fillInk, 0.14),
       "--paper-shadow": "0 1px 3px rgb(0 0 0 / .06), 0 0 0 .5px var(--glass-edge)",
       "--diff-added": diffInk(tokens["--positive"]),
       "--diff-removed": diffInk(tokens["--destructive"]),

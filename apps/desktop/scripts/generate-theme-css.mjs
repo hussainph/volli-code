@@ -115,7 +115,8 @@ const NOTES = {
     "The canvas accent fill and label solved together for APCA Lc 60 AND\n" +
     "   WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields\n" +
     "   to legibility. The pair is shared by both appearances.",
-  "--primary-text": "The accent solved to APCA Lc 60 on the card for body-sized accent text.",
+  "--primary-text":
+    "Accent ink solved against the stronger selected paper tint for body-sized text.",
   "--ring":
     "Opaque surface-legible accent ink, re-solved in each appearance. Do not\n" +
     "   dilute focus indicators: the shipped control surfaces require 3:1.",
@@ -124,9 +125,9 @@ const NOTES = {
     "   and gone by convention, so their HUE never follows the canvas — a red\n" +
     "   canvas would otherwise make “delete” indistinguishable from “primary”.\n" +
     "   Everything else about them is solved against the card at APCA Lc 65, so\n" +
-    "   all four read at one weight in either appearance, and each label is\n" +
-    "   whichever of white or a near-black tint of its own hue wins on the fill\n" +
-    "   — which is why they flip polarity between the two blocks.",
+    "   all four read at one weight in either appearance. Labels prefer the\n" +
+    "   perceptual white/near-black pair, falling back to a neutral ink pole\n" +
+    "   where needed to retain small-text WCAG AA without moving the fill.",
   "--rail": "Two-tier sidebar depth: rail darkest, panel between rail and content.",
   "--sidebar-veil":
     "Veils (#74). The canvas paints the whole window behind the chrome, so the\n" +
