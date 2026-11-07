@@ -112,6 +112,24 @@ describe("HelpTag", () => {
     });
     expect(content()?.textContent).toBe("Provider");
   });
+  it("does not borrow a dialog or scrolling region's tabindex as an identity anchor", () => {
+    act(() =>
+      root.render(
+        <div role="dialog" tabIndex={-1}>
+          <button>Open as tab</button>
+          <HelpTag label="Provider">
+            <span>P</span>
+          </HelpTag>
+        </div>,
+      ),
+    );
+    const mark = container.querySelector<HTMLElement>('[data-slot="help-tag"]')!;
+    expect(mark.tabIndex).toBe(0);
+    act(() => container.querySelector("button")!.focus());
+    expect(content()).toBeNull();
+    act(() => mark.focus());
+    expect(content()?.textContent).toBe("Provider");
+  });
   it("reveals the keyboard's active option without adding focus stops or losing virtualisation", async () => {
     const items = Array.from({ length: 1000 }, (_, n) => ({
       id: String(n),

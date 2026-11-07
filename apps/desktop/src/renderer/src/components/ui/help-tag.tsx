@@ -8,7 +8,7 @@ const HELP_TAG_DELAY = 1500;
 // Survives windowed option recycling, without retaining unmounted command roots.
 const keyboardCommands = new WeakMap<Element, boolean>();
 const FOCUS_HOST =
-  'button, a[href], [role="option"], [role="menuitem"], [role="radio"], [tabindex]';
+  'button, a[href], [role="option"], [role="menuitem"], [role="radio"], [role="tab"], [role="combobox"]';
 
 /** Supplemental identity inside an existing anchor's tooltip. Ordinary title
  * help keeps its own timing; only this detail waits for a mark hover. Focus

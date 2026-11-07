@@ -361,6 +361,15 @@ describe("SubagentPeekDialog", () => {
     const home = document.createElement("button");
     document.body.append(home);
     await render({ ...props(agent(), onClose), returnFocus: () => home, store });
+    // A focused identity tag is the top layer. Escape dismisses that label
+    // first, without closing the conversation underneath it.
+    if (document.body.querySelector('[data-slot="tooltip-content"]')) {
+      await act(async () =>
+        dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+      );
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.body.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+    }
     await act(async () =>
       dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
     );

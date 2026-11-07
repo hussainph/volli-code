@@ -303,7 +303,7 @@ describe("a model row", () => {
 
     expect(text(markup)).not.toContain("Claude Opus 4.1 · Anthropic");
     expect(markup).toContain('aria-label="Model · Claude Opus 4.1"');
-    expect(markup).toContain('aria-label="Model · GPT-5.3 Codex · OpenAI"');
+    expect(markup).toContain('aria-label="Model · GPT-5.3 Codex"');
   });
 
   it("keeps the id for a model the catalogue cannot name", () => {

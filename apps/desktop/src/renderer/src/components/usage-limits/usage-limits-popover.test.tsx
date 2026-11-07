@@ -161,7 +161,8 @@ describe("UsageLimitsPopover", () => {
     await renderPopover(inspect);
 
     await act(async () => button("Usage limits").click());
-    expect(document.body.textContent).toContain("xAI");
+    expect(document.querySelector('[role="img"][aria-label="xAI"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("xAI");
     expect(document.body.textContent).toContain("4% left");
     // Opening costs no request: the answer it would ask for is the one the
     // mount is already holding for this revision.
@@ -238,7 +239,8 @@ describe("UsageLimitsPopover", () => {
       settleSecond?.(SNAPSHOT);
       await second;
     });
-    expect(document.body.textContent).toContain("xAI");
+    expect(document.querySelector('[role="img"][aria-label="xAI"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("xAI");
   });
 
   it("pins a window from its row, and the glyph reports it until unpinned", async () => {

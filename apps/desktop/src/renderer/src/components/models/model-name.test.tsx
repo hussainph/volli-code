@@ -65,7 +65,7 @@ describe("mark-only model identity", () => {
     expect(dom.querySelector("[title]")).toBeNull();
   });
   it("disambiguates colliding lettermarks and same-provider duplicate model labels in the tag", () => {
-    const first = { ...MODEL, providerId: "custom-a" };
+    const first = { ...MODEL, providerId: "custom-a", label: "Same model" };
     const html = renderToStaticMarkup(
       <ModelName
         model={first}
@@ -77,7 +77,7 @@ describe("mark-only model identity", () => {
       />,
     );
     expect(html).toContain('aria-label="Custom · custom-a · opus"');
-    expect(html.replace(/<[^>]+>/g, "")).toBe(`C${MODEL.label}`);
+    expect(html.replace(/<[^>]+>/g, "")).toBe(`C${first.label}`);
   });
   it("reveals the whole model and provider on host keyboard focus, with no nested stop", () => {
     const trigger = mount();

@@ -949,7 +949,7 @@ describe("responsive card width", () => {
     const providers = [
       { id: "cloudflare-workers-ai", label: "Cloudflare Workers AI" },
       { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway" },
-      { id: "qwen-token-plan-individual", label: "Qwen Token Plan (Individual)" },
+      { id: "qwen-token-plan-individual", label: "Qwen Token Plan Individual" },
     ];
     heldCatalogue.value = {
       providers: providers.map((provider) => ({

@@ -18,7 +18,7 @@ const held = vi.hoisted(() => ({ catalogue: null as ModelCatalogue | null }));
 vi.mock("@renderer/lib/use-model-catalogue", () => ({ useModelCatalogue: () => held.catalogue }));
 const noop = () => {};
 const providerId = "qwen-token-plan-individual";
-const providerLabel = "Qwen Token Plan (Individual)";
+const providerLabel = "Qwen Token Plan Individual";
 const provenance: SessionProvenance = {
   kind: "automation",
   automationRunId: null,
