@@ -156,7 +156,8 @@ const NOTES = {
     "   separate for glass and overlays on arbitrary underlying colours.",
   "--wash-ink":
     "Tinted material paint, not text. Navigation substitutes glass-wash-ink\n" +
-    "   to follow its own ink polarity; body foreground remains neutral.",
+    "   to follow its own ink polarity; bare canvas substitutes the adaptive\n" +
+    "   --canvas-ink. Body foreground remains neutral.",
   "--glass-outline-pressed":
     "Navigation outline press only: 7.8% optical shade/highlight opposite\n" +
     "   the navigation ink. Paper and other control variants retain their fills.",

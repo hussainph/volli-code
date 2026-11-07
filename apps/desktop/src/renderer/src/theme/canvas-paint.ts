@@ -32,7 +32,10 @@ import {
   canvasInk,
   deriveCanvasTokens,
   deriveLabelInk,
+  focusRing,
+  readingBackings,
   readingInk,
+  SECONDARY_FILL_ALPHA,
   regularGlassBackdrop,
   regularGlassTone,
   writingGlass,
@@ -230,7 +233,6 @@ export function deriveCanvasPaint(
     neutral(compositeHex(tokens["--foreground"], alpha, tokens["--background"]));
   const raisedFace = neutral(light ? "#fafafa" : "#2a2a2a");
   const controlAlpha = 0.14;
-  const secondaryFillAlpha = 0.078;
   const writingVeil = writingGlass(tokens["--popover"], resolved).veil;
   const tertiaryInk = readingInk(neutral(light ? "#666666" : "#aaaaaa"), readingPools, resolved, 3);
   const paneFill = light ? "#ffffff" : "#1a1a1c";
@@ -244,13 +246,17 @@ export function deriveCanvasPaint(
     Math.min(...glassPools.map((surface) => wcagContrast(hex, surface)));
   const darkInk = contrast("#171717") >= contrast("#f5f5f5");
   const glassInkBase = darkInk ? "#171717" : "#f5f5f5";
-  // Optical occlusion/highlight, not another authored palette: pressing must
-  // move the face away from its ink. A paper-pole fill moved green glass toward
-  // white text until even white failed AA. Keep the same 7.8% coverage.
+  // Optical occlusion/highlight, not another authored palette: pressing moves
+  // an outline face away from its ink, a shade under light ink and a highlight
+  // under dark ink, at the shared secondary coverage.
   const outlinePressedInk = darkInk ? "#ffffff" : "#000000";
-  // Material washes and secondary ink retain their existing navigation solve.
-  // A control's foreground constraint must not brighten unrelated row paint.
+  // Row washes and secondary ink are solved against the pane and its row
+  // fills. Control faces constrain only the foreground below, never row paint.
   const rowInk = neutral(glassInkBase);
+  // RAIL_FOOTER's `bg-popover/30` (the navigation tests pin the class), under
+  // Browse files and PR, beside the direct pane for other navigation controls.
+  const railFooterWash = (surface: string) => compositeHex(tokens["--popover"], 0.3, surface);
+  const navigationBackings = glassPools.flatMap((surface) => [surface, railFooterWash(surface)]);
   const glassReadingPools = glassPools.flatMap((surface) => [
     surface,
     compositeHex(rowInk, 0.047, surface),
@@ -262,14 +268,9 @@ export function deriveCanvasPaint(
   // no secondary text is drawn on them by the rail's outline callers.
   const glassForegroundPools = [
     ...glassReadingPools,
-    ...glassPools.flatMap((surface) => {
-      // Browse files and PR sit on RAIL_FOOTER's 30% popover wash. Also
-      // retain the direct pane backing for other navigation outline controls.
-      const backings = [surface, compositeHex(tokens["--popover"], 0.3, surface)];
-      return backings.flatMap((backing) => {
-        const control = light ? raisedFace : compositeHex(fillInk, controlAlpha, backing);
-        return [control, compositeHex(outlinePressedInk, secondaryFillAlpha, control)];
-      });
+    ...navigationBackings.flatMap((backing) => {
+      const control = light ? raisedFace : compositeHex(fillInk, controlAlpha, backing);
+      return [control, compositeHex(outlinePressedInk, SECONDARY_FILL_ALPHA, control)];
     }),
   ];
   // Keep the canvas-chosen polarity and move only as far as contrast needs.
@@ -282,13 +283,13 @@ export function deriveCanvasPaint(
     darkInk ? "light" : "dark",
     4.5,
   );
-  // Focus rings also draw on navigation glass and on the rail footer's 30%
-  // popover wash, which the paper pools never see. Move only as far as 3:1 needs.
-  const ring = readingInk(
-    tokens["--ring"],
-    glassPools.flatMap((surface) => [surface, compositeHex(tokens["--popover"], 0.3, surface)]),
+  // The painted ring: one solve from the unsolved accent ink against every
+  // paper/writing-glass backing the shared ring clears plus navigation glass
+  // and the rail footer wash, so neither set can undo the other.
+  const ring = focusRing(
+    tokens["--primary-text"],
+    [...readingBackings(canvas, resolved, tokens), ...navigationBackings],
     resolved,
-    3,
   );
   return {
     tokens: { ...tokens, "--ring": ring },
@@ -329,7 +330,7 @@ export function deriveCanvasPaint(
       "--fill-row-selected": `color-mix(in oklab, ${rowInk} 9%, transparent)`,
       "--fill-row-hover": `color-mix(in oklab, ${rowInk} 4.7%, transparent)`,
       "--fill-quaternary": translucent(fillInk, 0.027),
-      "--fill-secondary": translucent(fillInk, secondaryFillAlpha),
+      "--fill-secondary": translucent(fillInk, SECONDARY_FILL_ALPHA),
       "--surface-quaternary": paperSurface(0.027),
       "--surface-secondary": paperSurface(0.078),
       "--wash-ink": fillInk,
@@ -339,7 +340,7 @@ export function deriveCanvasPaint(
         ? "0 1px 2px rgb(0 0 0 / .05), 0 0 0 .5px rgb(0 0 0 / .07)"
         : "0 1px 2px rgb(0 0 0 / .35), 0 0 0 .5px rgb(255 255 255 / .06)",
       "--control-face": light ? raisedFace : translucent(fillInk, controlAlpha),
-      "--glass-outline-pressed": translucent(outlinePressedInk, secondaryFillAlpha),
+      "--glass-outline-pressed": translucent(outlinePressedInk, SECONDARY_FILL_ALPHA),
       "--control-bezel-shadow": light
         ? "0 .5px 1.5px rgb(0 0 0 / .16), 0 0 0 .5px rgb(0 0 0 / .09), inset 0 .5px 0 rgb(255 255 255 / 1)"
         : "0 .5px 1.5px rgb(0 0 0 / .5), 0 0 0 .5px rgb(0 0 0 / .35), inset 0 .5px 0 rgb(255 255 255 / .14)",

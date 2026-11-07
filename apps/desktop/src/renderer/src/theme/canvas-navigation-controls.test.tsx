@@ -133,18 +133,19 @@ describe("navigation outline pressed material", () => {
         ),
       );
       const button = host.querySelector("button")!;
-      for (const hover of [false, true]) {
-        button.toggleAttribute("data-test-hover", hover);
-        button.setAttribute("data-test-active", "false");
-        expect(button.matches(stateSelector(navigationSelector))).toBe(false);
-        button.setAttribute("data-test-active", "true");
-        expect(button.matches(stateSelector(navigationSelector))).toBe(optical);
-        if (optical) {
-          expect(button.matches(stateSelector(sharedSelector))).toBe(true);
-          expect(imageToken(navigationRule[2])).toBe("--glass-outline-pressed");
-        } else if (button.matches(stateSelector(sharedSelector))) {
-          expect(imageToken(rule(sharedSelector))).toBe("--fill-secondary");
-        }
+      // Neither pressed selector names :hover, so hover cannot change which
+      // pressed image applies; only the active state is substituted here.
+      expect(navigationSelector).not.toContain(":hover");
+      expect(sharedSelector).not.toContain(":hover");
+      button.setAttribute("data-test-active", "false");
+      expect(button.matches(stateSelector(navigationSelector))).toBe(false);
+      button.setAttribute("data-test-active", "true");
+      expect(button.matches(stateSelector(navigationSelector))).toBe(optical);
+      if (optical) {
+        expect(button.matches(stateSelector(sharedSelector))).toBe(true);
+        expect(imageToken(navigationRule[2])).toBe("--glass-outline-pressed");
+      } else if (button.matches(stateSelector(sharedSelector))) {
+        expect(imageToken(rule(sharedSelector))).toBe("--fill-secondary");
       }
     },
   );
@@ -178,82 +179,123 @@ describe("navigation outline pressed material", () => {
     expect(hoverCss).toContain("background-color: var(--accent)");
   });
 
-  it.each(["text", "focus"] as const)(
-    "retains %s floors on the emitted resting/hover/pressed/hover+pressed states",
-    (role) => {
-      const poles = new Set<boolean>();
-      const pressedToken = imageToken(navigationRule[2]);
-      for (const mode of ["light", "dark"] as const) {
-        for (const seed of [
-          "#00ff00",
-          "#ef8a4b",
-          "#2a7de8",
-          "#f8f0d8",
-          "#e6f6ff",
-          "#f5eaff",
-          "#ffffff",
-          "#000000",
-          "#18b6a4",
-          "#ffff00",
-          "#00ac4f",
-          "#00a97a",
-          "#00a692",
-          "#00a4a4",
-          "#00a1b5",
-          "#009ec7",
-        ]) {
-          for (const vibrancy of [0, 0.6, 1]) {
-            for (const primaryIndex of [0, 1, 2]) {
-              const canvas = {
-                ...DEFAULT_CANVAS,
-                vibrancy,
-                primaryIndex,
-                stops: [
-                  { hex: seed, x: 0, y: 1 },
-                  { hex: "#ffffff", x: 1, y: 0 },
-                  { hex: "#000000", x: 0.5, y: 0.5 },
-                ],
-              };
-              const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
-              const lightInk = hexToOklch(c["--glass-ink"]).L > 0.5;
-              poles.add(lightInk);
-              expect(c[pressedToken]).toBe(
-                lightInk ? "rgb(0 0 0 / 0.078)" : "rgb(255 255 255 / 0.078)",
-              );
-              for (const peak of effectiveStopHexes(canvas, mode)) {
-                const glass = emittedOver(c["--glass-pane-veil"], regularGlassBackdrop(peak, mode));
-                expect(RAIL_FOOTER).toContain("bg-popover/30");
-                for (const backing of [glass, compositeHex(t["--popover"], 0.3, glass)]) {
-                  const control = emittedOver(c["--control-face"], backing);
-                  for (const hover of [false, true]) {
-                    for (const pressed of [false, true]) {
-                      // Unlayered background-color wins over hover:bg-accent, and
-                      // the scoped active image wins over the shared paper press.
-                      const face = pressed ? emittedOver(c[pressedToken], control) : control;
-                      const context = `${mode}/${seed}/v${vibrancy}/primary${primaryIndex}/backing${backing}/hover${hover}/pressed${pressed}/${face}`;
-                      if (role === "text")
-                        expect(
-                          wcagContrast(c["--glass-ink"], face),
-                          `${context}/ink${c["--glass-ink"]}`,
-                        ).toBeGreaterThanOrEqual(4.5);
-                      // The real two-pixel ring offset is background, so its ring
-                      // touches that offset and the pane/footer, not the control fill.
-                      if (role === "focus")
-                        for (const adjacent of [t["--background"], backing]) {
-                          expect(
-                            wcagContrast(t["--ring"], adjacent),
-                            `${context}/focus${t["--ring"]}/adjacent${adjacent}`,
-                          ).toBeGreaterThanOrEqual(3);
-                        }
-                    }
-                  }
-                }
-              }
+  const seeds = [
+    "#00ff00",
+    "#ef8a4b",
+    "#2a7de8",
+    "#f8f0d8",
+    "#e6f6ff",
+    "#f5eaff",
+    "#ffffff",
+    "#000000",
+    "#18b6a4",
+    "#ffff00",
+    "#00ac4f",
+    "#00a97a",
+    "#00a692",
+    "#00a4a4",
+    "#00a1b5",
+    "#009ec7",
+  ];
+  const canvases = () =>
+    seeds.flatMap((seed) =>
+      [0, 0.6, 1].flatMap((vibrancy) =>
+        [0, 1, 2].map((primaryIndex) => ({
+          seed,
+          vibrancy,
+          primaryIndex,
+          canvas: {
+            ...DEFAULT_CANVAS,
+            vibrancy,
+            primaryIndex,
+            stops: [
+              { hex: seed, x: 0, y: 1 },
+              { hex: "#ffffff", x: 1, y: 0 },
+              { hex: "#000000", x: 0.5, y: 0.5 },
+            ],
+          },
+        })),
+      ),
+    );
+
+  // Hover leaves the face alone: the unlayered `--control-face` background
+  // beats the layered hover:bg-accent utility (the cascade test above), and no
+  // pressed selector names :hover. So resting and pressed are the two faces.
+  it("retains text floors on the emitted resting and pressed faces", () => {
+    const poles = new Set<boolean>();
+    const pressedToken = imageToken(navigationRule[2]);
+    for (const mode of ["light", "dark"] as const) {
+      for (const { seed, vibrancy, primaryIndex, canvas } of canvases()) {
+        const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+        const lightInk = hexToOklch(c["--glass-ink"]).L > 0.5;
+        poles.add(lightInk);
+        expect(c[pressedToken]).toBe(lightInk ? "rgb(0 0 0 / 0.078)" : "rgb(255 255 255 / 0.078)");
+        for (const peak of effectiveStopHexes(canvas, mode)) {
+          const glass = emittedOver(c["--glass-pane-veil"], regularGlassBackdrop(peak, mode));
+          expect(RAIL_FOOTER).toContain("bg-popover/30");
+          for (const backing of [glass, compositeHex(t["--popover"], 0.3, glass)]) {
+            const control = emittedOver(c["--control-face"], backing);
+            for (const [state, face] of [
+              ["rest", control],
+              ["pressed", emittedOver(c[pressedToken], control)],
+            ] as const) {
+              expect(
+                wcagContrast(c["--glass-ink"], face),
+                `${mode}/${seed}/v${vibrancy}/primary${primaryIndex}/backing${backing}/${state}/${face}/ink${c["--glass-ink"]}`,
+              ).toBeGreaterThanOrEqual(4.5);
             }
           }
         }
       }
-      expect(poles).toEqual(new Set([false, true]));
-    },
-  );
+    }
+    expect(poles).toEqual(new Set([false, true]));
+  });
+
+  // One painted ring for every place it draws. Its two-pixel offset is
+  // --background; around that sit paper, the under-page, the accent and editor
+  // selections, writing glass over any content, navigation glass and the rail
+  // footer wash. Backings are rebuilt from emitted tokens, not the solver's list.
+  it("paints one focus ring that clears reading, writing and navigation backings", () => {
+    const corners = [
+      "#000000",
+      "#ffffff",
+      "#ff0000",
+      "#00ff00",
+      "#0000ff",
+      "#ffff00",
+      "#00ffff",
+      "#ff00ff",
+    ];
+    for (const mode of ["light", "dark"] as const) {
+      for (const { seed, vibrancy, primaryIndex, canvas } of canvases()) {
+        const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+        const navigation = effectiveStopHexes(canvas, mode).flatMap((peak) => {
+          const glass = emittedOver(c["--glass-pane-veil"], regularGlassBackdrop(peak, mode));
+          return [
+            ["navigation", glass],
+            ["rail-footer", compositeHex(t["--popover"], 0.3, glass)],
+          ] as const;
+        });
+        for (const [role, backing] of [
+          ["offset", t["--background"]],
+          ["under-page", t["--muted"]],
+          ["accent-selection", compositeHex(seed, 0.18, t["--background"])],
+          ["editor-selection", compositeHex(c["--wash-ink"], 0.22, t["--background"])],
+          ...corners.map(
+            (corner) =>
+              [
+                `writing-glass${corner}`,
+                emittedOver(c["--glass-veil"], regularGlassBackdrop(corner, mode)),
+              ] as const,
+          ),
+          ...navigation,
+        ] as const) {
+          expect(
+            wcagContrast(t["--ring"], backing),
+            `${mode}/${seed}/v${vibrancy}/primary${primaryIndex}/${role}/${backing}/ring${t["--ring"]}`,
+          ).toBeGreaterThanOrEqual(3);
+        }
+      }
+    }
+  });
 });

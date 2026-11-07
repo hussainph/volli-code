@@ -122,7 +122,7 @@ describe("shell control material", () => {
             const hover = compositeHex(wash, 0.1, backing);
             expect(hover).toBe(compositeHex(c["--canvas-ink"], 0.1, backing));
             const baseL = hexToOklch(backing).L;
-            // Preserve the former adaptive hover's direction at either pole;
+            // The hover moves toward the adaptive ink at either pole;
             // arbitrary authored canvases do not imply a universal AA promise.
             expect((hexToOklch(hover).L - baseL) * (inkL - baseL)).toBeGreaterThan(0);
           }

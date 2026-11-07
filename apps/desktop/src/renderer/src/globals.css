@@ -360,7 +360,8 @@
   --surface-quaternary: #2f201a;
   --surface-secondary: #3a2a24;
   /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
-   to follow its own ink polarity; body foreground remains neutral. */
+   to follow its own ink polarity; bare canvas substitutes the adaptive
+   --canvas-ink. Body foreground remains neutral. */
   --wash-ink: #fee8df;
   --glass-wash-ink: #fff2ed;
   --card-face: #362620;
@@ -523,7 +524,8 @@
   --surface-quaternary: #fff7f4;
   --surface-secondary: #ffe9e0;
   /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
-   to follow its own ink polarity; body foreground remains neutral. */
+   to follow its own ink polarity; bare canvas substitutes the adaptive
+   --canvas-ink. Body foreground remains neutral. */
   --wash-ink: #34221c;
   --glass-wash-ink: #22120c;
   --card-face: #fff9f6;

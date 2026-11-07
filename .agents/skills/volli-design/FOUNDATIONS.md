@@ -25,8 +25,8 @@ Those tables describe the production tokens; use the tokens rather than copying 
   over canvas uses `tint`. Glass above paper, including the composer, uses a writing veil
   from the same tinted card family over neutral paper, never a raw-accent wash or duplicate canvas.
   The `tint` boolean selects canvas sampling; it does not switch generated neutral colour off.
-  Contrast wins over tint: writing glass yields chroma, never body-ink contrast, and the
-  generated ring clears 3:1 on navigation glass as well as paper.
+  Contrast wins over tint: writing glass yields chroma, never body-ink contrast. The painted
+  ring is solved once against paper, writing-glass and navigation backings; tests hold 3:1.
 - **Full glass** is an explicit bounded-overlay choice: cached device-resolution lensing,
   with post-displacement reconstruction. Menus/popovers and the search capsule have existing
   callers; do not spread refraction to every control or large pane. Read `ui/glass-optics.ts`

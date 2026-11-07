@@ -6,7 +6,7 @@ import { baseFillHex } from "./gradient";
 import { DEFAULT_CANVAS } from "./parse";
 import type { Canvas, ResolvedAppearance } from "./types";
 import { ARC_TUNING } from "./tuning";
-import { readingInk, writingGlass } from "./glass";
+import { SECONDARY_FILL_ALPHA, readingInk, writingGlass } from "./glass";
 
 /**
  * One chroma budget for the surrounding neutral family: fills, edges and secondary ink.
@@ -44,7 +44,7 @@ function writingGlassFill(
     writingGlass(hex, resolved).pools.every(
       (pool) =>
         wcagContrast(foreground, pool) >= 4.5 &&
-        wcagContrast(foreground, compositeHex(fill, ARC_TUNING.secondaryFillAlpha, pool)) >= 4.5,
+        wcagContrast(foreground, compositeHex(fill, SECONDARY_FILL_ALPHA, pool)) >= 4.5,
     );
   if (passes(tinted)) return tinted;
   const { L, C, h } = hexToOklch(tinted);
@@ -58,6 +58,40 @@ function writingGlassFill(
   return oklchToHex(L, C * low, h);
 }
 
+/**
+ * The paper-side backings reading ink and the focus ring clear: paper, the
+ * under-page, the accent selection, the editor selection and every filtered
+ * writing-glass corner. The renderer's painted ring adds its navigation
+ * backings to this same set, in one solve.
+ */
+export function readingBackings(
+  canvas: Canvas,
+  resolved: ResolvedAppearance,
+  tokens: Pick<ThemeTokens, "--background" | "--muted" | "--popover" | "--foreground">,
+): string[] {
+  const paper = tokens["--background"];
+  return [
+    paper,
+    tokens["--muted"],
+    compositeHex(canvas.stops[0].hex, 0.18, paper),
+    compositeHex(tintCanvasNeutral(tokens["--foreground"], canvas, resolved), 0.22, paper),
+    ...writingGlass(tokens["--popover"], resolved).pools,
+  ];
+}
+
+/**
+ * Non-text 3:1 focus indication: the accent ink, moved toward the appearance's
+ * pole only as far as every backing needs. Bounded at the pole; the contrast
+ * tests are what establish that a backing set admits it.
+ */
+export function focusRing(
+  ink: string,
+  backings: readonly string[],
+  resolved: ResolvedAppearance,
+): string {
+  return readingInk(ink, backings, resolved, 3);
+}
+
 /** Paper stays neutral; cards, controls, fills and secondary ink carry the canvas hue. */
 export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance): ThemeTokens {
   const dark = resolved === "dark";
@@ -69,7 +103,8 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
   const popover = writingGlassFill(
     neutral(dark ? "#282828" : "#fafafa"),
     foreground,
-    // The renderer's --fill-secondary ink: the same tinted foreground.
+    // The renderer's --fill-secondary ink: the same tinted foreground
+    // (canvas-paint.test pins the emitted fill to it).
     neutral(foreground),
     resolved,
   );
@@ -78,14 +113,12 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
   const accent = generateAccentTokens(seed);
   const { C, h } = hexToOklch(seed);
   const selected = compositeHex(seed, 0.18, paper);
-  const editorSelection = compositeHex(neutral(foreground), 0.22, paper);
-  const readingPools = [
-    paper,
-    under,
-    selected,
-    editorSelection,
-    ...writingGlass(popover, resolved).pools,
-  ];
+  const readingPools = readingBackings(canvas, resolved, {
+    "--background": paper,
+    "--muted": under,
+    "--popover": popover,
+    "--foreground": foreground,
+  });
   const ink = oklchToHex(solveLightnessOrCeiling(75, C, h, selected), C, h);
   // Actual glass pools and dark selections can compress the secondary hierarchy.
   const secondaryHex = readingInk(
@@ -112,7 +145,9 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
     "--sidebar-border": neutral(dark ? "#424242" : "#d2d2d2"),
     ...accent,
     "--primary-text": ink,
-    "--ring": readingInk(ink, readingPools, resolved, 3),
+    // The paper-side ring. The app paints deriveCanvasPaint's ring, solved once
+    // from this same ink against these backings plus navigation glass.
+    "--ring": focusRing(ink, readingPools, resolved),
     ...solveStatusTokens(paper),
   };
 }

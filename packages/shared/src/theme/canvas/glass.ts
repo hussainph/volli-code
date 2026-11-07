@@ -76,6 +76,13 @@ export function regularGlassTone(mode: ResolvedAppearance): string {
   return REGULAR_TONE[mode].map(([kind, value]) => `${kind}(${value})`).join(" ");
 }
 
+/**
+ * Coverage of the translucent `--fill-secondary` press/hover wash and of the
+ * navigation outline press. The renderer emits it; writing glass bounds its
+ * tint under it. Paper's opaque `--surface-secondary` rung is its own value.
+ */
+export const SECONDARY_FILL_ALPHA = 0.078;
+
 /** The veil and filtered RGB corner probes share one opacity, never two recipes. */
 export function writingGlass(
   fill: string,

@@ -156,16 +156,22 @@ describe("tinted material contrast", () => {
                   `${seed}/primary${primaryIndex}/v${vibrancy}/${mode}/outline-${surface === control ? "rest" : "pressed"}/ink${c["--glass-ink"]}/face${surface}/glass${glass}/black-on-glass${wcagContrast("#000000", glass)}/white-on-glass${wcagContrast("#ffffff", glass)}`,
                 ).toBeGreaterThanOrEqual(4.5);
               }
-              for (const surface of [
-                glass,
-                compositeHex(c["--glass-wash-ink"], 0.1, glass),
-                compositeHex(t["--popover"], 0.3, glass),
-                compositeHex(mode === "dark" ? t["--accent"] : t["--popover"], 0.5, glass),
-              ]) {
-                for (const ink of [c["--glass-ink"], c["--glass-secondary"]]) {
+              for (const [role, surface] of [
+                ["navigation", glass],
+                ["tile-wash", compositeHex(c["--glass-wash-ink"], 0.1, glass)],
+                ["rail-footer", compositeHex(t["--popover"], 0.3, glass)],
+                [
+                  "card-frame",
+                  compositeHex(mode === "dark" ? t["--accent"] : t["--popover"], 0.5, glass),
+                ],
+              ] as const) {
+                for (const [tier, ink] of [
+                  ["foreground", c["--glass-ink"]],
+                  ["secondary", c["--glass-secondary"]],
+                ] as const) {
                   expect(
                     wcagContrast(ink, surface),
-                    `${seed}/${primaryIndex}/${vibrancy}/${mode}/${surface === control ? "control" : surface === over(c["--fill-secondary"], control) ? "pressed-control" : "navigation"}/${ink === c["--glass-ink"] ? "foreground" : "secondary"}/${surface}/${ink}`,
+                    `${seed}/${primaryIndex}/${vibrancy}/${mode}/${role}/${tier}/${surface}/${ink}`,
                   ).toBeGreaterThanOrEqual(4.5);
                 }
               }

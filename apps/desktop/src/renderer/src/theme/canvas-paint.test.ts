@@ -7,6 +7,8 @@ import {
   readingInk,
   tintCanvasNeutral,
   hexChannels,
+  hexToOklch,
+  SECONDARY_FILL_ALPHA,
   wcagContrast,
   THEME_TOKEN_NAMES,
   canvasBackground,
@@ -119,7 +121,12 @@ describe("deriveCanvasPaint", () => {
       ]) {
         for (const vibrancy of [0, 0.6, 1]) {
           const canvas = { ...DEFAULT_CANVAS, vibrancy, stops: [{ hex: seed, x: 0.5, y: 0.5 }] };
-          const { canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+          const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+          // The shared writing-glass solve assumes this exact fill: the tinted
+          // foreground at the shared secondary coverage.
+          expect(c["--fill-secondary"]).toBe(
+            `rgb(${hexChannels(tintCanvasNeutral(t["--foreground"], canvas, mode)).join(" ")} / ${SECONDARY_FILL_ALPHA})`,
+          );
           const pools = effectiveStopHexes(canvas, mode).map((peak) =>
             compositeHex(
               mode === "light" ? "#ffffff" : "#1a1a1c",
@@ -213,12 +220,31 @@ describe("deriveCanvasPaint", () => {
     expect(canvasTokens["--canvas"]).toBe(canvasBackground(TEAL, "light"));
   });
 
-  it("returns the same token set the shared derivation does", () => {
-    // Nothing here re-derives; a second opinion about the ladder is the one
-    // thing this module must not have.
+  it("returns the shared token set, completing only the painted focus ring", () => {
+    // No second opinion about the ladder. The ring alone adds navigation
+    // backings to the shared ring's set, in one solve from the same ink, so it
+    // can only sit further toward the appearance's pole.
     const { tokens } = deriveCanvasPaint(TEAL, "dark");
+    const { "--ring": painted, ...rest } = tokens;
+    const { "--ring": shared, ...sharedRest } = deriveCanvasTokens(TEAL, "dark");
+    expect(rest).toEqual(sharedRest);
+    expect(hexToOklch(painted).L).toBeGreaterThanOrEqual(hexToOklch(shared).L - 1e-6);
 
-    expect(tokens).toEqual(deriveCanvasTokens(TEAL, "dark"));
+    // Light green over a black stop: navigation glass binds, so the painted
+    // ring is darker than the paper-side one.
+    const green: Canvas = {
+      ...DEFAULT_CANVAS,
+      vibrancy: 1,
+      primaryIndex: 0,
+      stops: [
+        { hex: "#00ff00", x: 0, y: 1 },
+        { hex: "#ffffff", x: 1, y: 0 },
+        { hex: "#000000", x: 0.5, y: 0.5 },
+      ],
+    };
+    const lightPainted = deriveCanvasPaint(green, "light").tokens["--ring"];
+    const lightShared = deriveCanvasTokens(green, "light")["--ring"];
+    expect(hexToOklch(lightPainted).L).toBeLessThan(hexToOklch(lightShared).L);
   });
 
   it("answers differently per mode — one canvas, two windows", () => {
