@@ -6,7 +6,6 @@ import { HomeSurface } from "@renderer/components/home/home-surface";
 import { CloudMoveReadOnlyBanner } from "@renderer/components/cloud-moves/cloud-moves";
 import { SettingsPanel } from "@renderer/components/settings/settings-panel";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
-import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 import { EmptyState } from "@renderer/components/ui/empty-state";
@@ -46,16 +45,10 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <CloudMoveReadOnlyBanner />
-      {/* Both measure THIS Mac's tools in the project's folder: a remote
-          project's folder is on its host (VC-711), so neither runs for it. */}
+      {/* Readiness measures THIS Mac's git in the project's folder; a remote
+          project's folder is on its host, so it does not run here. */}
       <LocalOnly projectId={selected?.id ?? null} fallback={null}>
         <SessionEnvironmentAlert />
-      </LocalOnly>
-      {/* Under the fault surface, because it is not one: an uninstalled
-          workspace is a normal state with an action attached, and it must
-          never be the loudest thing on a freshly added project (VC-156). */}
-      <LocalOnly projectId={selected?.id ?? null} fallback={null}>
-        <WorkspaceDependenciesOffer />
       </LocalOnly>
       {/* Home renders its own strip, its board (or the ticket that has taken it
           over) and its Session planes, in that DOM order, so the strip is the
