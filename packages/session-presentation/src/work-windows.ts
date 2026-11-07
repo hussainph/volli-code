@@ -68,7 +68,7 @@ function orderSlot(entries: readonly Activity[] | undefined): readonly Activity[
   const ordered: Activity[] = [];
   let run: Activity[] = [];
   for (const entry of entries) {
-    if (entry.start === null && entry.sequence === null) {
+    if (unplaced(entry)) {
       ordered.push(...orderRun(run), entry);
       run = [];
     } else run.push(entry);
@@ -110,6 +110,11 @@ function byStart(run: readonly Activity[]): readonly Activity[] {
       (sequenced ? left.sequence! - right.sequence! : 0) ||
       left.positionKey.localeCompare(right.positionKey),
   );
+}
+
+/** Neither a recorded start nor an observed position: fixed at its recorded place. */
+function unplaced(entry: Activity): boolean {
+  return entry.start === null && entry.sequence === null;
 }
 
 function clock(value: number | null | undefined): number | null {
@@ -245,8 +250,19 @@ export function projectWorkWindows(
     }
   }
   const slots = new Map<number, Activity[]>();
-  for (const entry of activities) {
-    if (entry.start !== null || entry.sequence !== null) {
+  // Unplaced work (neither a start nor an observed position) keeps its recorded
+  // slot, and nothing placed may cross it between slots either: the nearest one
+  // before an entry bounds how early it may move, the nearest after how late.
+  // Recorded slots never decrease with recorded order, so both are one pass.
+  const nextUnplacedSlot: number[] = [];
+  for (let index = activities.length - 1, next = Infinity; index >= 0; index -= 1) {
+    nextUnplacedSlot[index] = next;
+    if (unplaced(activities[index]!)) next = activities[index]!.slot;
+  }
+  let previousUnplacedSlot = -Infinity;
+  for (const [position, entry] of activities.entries()) {
+    if (unplaced(entry)) previousUnplacedSlot = entry.slot;
+    else {
       const lower =
         boundaries.findLastIndex(
           (item) => item.messageId === entry.messageId && item.order < entry.order,
@@ -268,7 +284,12 @@ export function projectWorkWindows(
       const target = candidate < 0 ? boundaries.length : candidate;
       const from = Math.min(target, entry.slot);
       const crossed = boundaries.slice(from, Math.max(target, entry.slot));
-      if (crossed.every((item, index) => follows(item, from + index) !== null)) entry.slot = target;
+      if (
+        target >= previousUnplacedSlot &&
+        target <= nextUnplacedSlot[position]! &&
+        crossed.every((item, index) => follows(item, from + index) !== null)
+      )
+        entry.slot = target;
     }
     const group = slots.get(entry.slot);
     if (group) group.push(entry);

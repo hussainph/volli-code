@@ -58,6 +58,7 @@ function frame(
 type Step =
   | { tool: string; start: number; end: number }
   | { reasoning: string }
+  | { text: string; at: number }
   | { prompt: string; at: number };
 
 /** Cold replay of one turn: each step's real message, at its own ledger sequence. */
@@ -115,8 +116,7 @@ function replay(steps: readonly Step[]) {
             message: {
               entryId: `e${sequence}`,
               role: "assistant",
-              text: "",
-              reasoning: step.reasoning,
+              ...("text" in step ? { text: step.text } : { text: "", reasoning: step.reasoning }),
             },
           };
     const [translated] = translator.replay(observation);
@@ -129,7 +129,7 @@ function replay(steps: readonly Step[]) {
         turnId: "turn",
         reference: { id: translated.id, digest: null, mediaType: null },
       },
-      translated.occurredAt,
+      "at" in step ? step.at : translated.occurredAt,
       translated.message,
     );
   });
@@ -301,4 +301,208 @@ it("orders tied parallel calls with and without an observed position by one key"
         : [],
     ),
   ).toEqual([["a", "m", "z"]]);
+});
+
+it("never pulls placed work across unplaced reasoning in an earlier slot after a clock step", () => {
+  expect(
+    replay([
+      { prompt: "Audit", at: 10 },
+      { tool: "x", start: 100, end: 150 },
+      { text: "Checking", at: 200 },
+      { reasoning: "Weighing results" },
+      { tool: "y", start: 50, end: 60 },
+    ]),
+  ).toEqual([["x"], ["R", "y"]]);
+  // Nor across one in an intermediate slot.
+  expect(
+    replay([
+      { prompt: "Audit", at: 10 },
+      { tool: "x", start: 100, end: 150 },
+      { text: "Checking", at: 200 },
+      { reasoning: "Weighing results" },
+      { text: "Still checking", at: 300 },
+      { tool: "y", start: 50, end: 60 },
+    ]),
+  ).toEqual([["x"], ["R"], ["y"]]);
+  // Nor push it later across one.
+  expect(
+    replay([
+      { prompt: "Audit", at: 10 },
+      { tool: "w", start: 300, end: 310 },
+      { reasoning: "Weighing results" },
+      { text: "Checking", at: 200 },
+    ]),
+  ).toEqual([["w", "R"]]);
+  // Without unplaced work in the way, a recorded start still moves, and sorts
+  // by start inside the slot it joins.
+  expect(
+    replay([
+      { prompt: "Audit", at: 10 },
+      { tool: "x", start: 100, end: 150 },
+      { text: "Checking", at: 200 },
+      { tool: "y", start: 50, end: 60 },
+    ]),
+  ).toEqual([["y", "x"]]);
+});
+
+/** A live turn: overlays carry the ledger position each item was first seen at. */
+function live() {
+  const translator = new RuntimeObservationTranslator({
+    namespace: "pi",
+    sessionId: "session",
+    attachmentId: "attachment",
+    now: () => 1000,
+  });
+  let sequence = 0;
+  let state = EMPTY_TRANSCRIPT;
+  const frames: ChatSessionFrame[] = [];
+  const overlays: SessionStreamOverlay[] = [];
+  const emit = async (observation: TranslatedObservation) => {
+    if (observation.kind === "transcript.delta") {
+      const decoded = chatSessionOverlay(
+        JSON.parse(
+          JSON.stringify({
+            kind: "overlay",
+            sessionId: "session",
+            throughSequence: sequence,
+            messageId: observation.messageId,
+            delta: observation.delta,
+          }),
+        ),
+      );
+      if (!decoded) throw new Error("Expected decoded production overlay");
+      overlays.push(decoded);
+    } else if (observation.kind === "transcript.message") {
+      sequence += 1;
+      frames.push(
+        frame(
+          sequence,
+          {
+            kind: "transcript.referenced",
+            attachmentId: "attachment",
+            turnId: "turn",
+            reference: { id: observation.id, digest: null, mediaType: null },
+          },
+          observation.occurredAt,
+          observation.message,
+        ),
+      );
+    }
+  };
+  const flush = () => {
+    state = appendFrames(state, frames.splice(0), overlays.splice(0));
+  };
+  frames.push(
+    frame(
+      ++sequence,
+      {
+        kind: "command.recorded",
+        command: {
+          id: "prompt",
+          sessionId: "session",
+          createdAt: 10,
+          route: null,
+          intent: {
+            kind: "message.submit",
+            reference: { id: "prompt", digest: null, mediaType: null },
+          },
+        },
+      },
+      10,
+      { id: "prompt", role: "user", parts: [{ type: "text", text: "Audit" }] },
+    ),
+  );
+  flush();
+  return {
+    async send(observation: RuntimeObservation) {
+      await translator.translate(observation, emit);
+      flush();
+    },
+    /** A durable fact with no transcript: the ledger moves on. */
+    advance() {
+      sequence += 1;
+      const event: SessionEvent = {
+        id: `event-${sequence}`,
+        sessionId: "session",
+        sequence,
+        occurredAt: 1000,
+        recordedAt: 1000,
+        provenance: { source: { kind: "system", id: "desktop", detail: null }, venue: null },
+        payload: { kind: "session.retitled", title: "Audit" },
+      };
+      const decoded = chatSessionFrame(
+        JSON.parse(
+          JSON.stringify({
+            sessionId: "session",
+            sequence,
+            event: scrubSessionEvent(event),
+            transcript: null,
+          }),
+        ),
+      );
+      frames.push(decoded!);
+      flush();
+    },
+    order() {
+      return projectWorkWindows(
+        projectTranscriptRows(
+          groupTurns(state.messages),
+          [],
+          [],
+          [],
+          transcriptMessageOrigins(state.frames),
+        ),
+        transcriptMessageTimes(state.frames),
+        true,
+        state,
+      ).flatMap((row) =>
+        row.kind === "work"
+          ? [
+              row.work.rows.map((activity) =>
+                activity.kind === "tool" ? activity.part.toolCallId : "R",
+              ),
+            ]
+          : [],
+      );
+    },
+  };
+}
+const started = (id: string, start: number): RuntimeObservation => ({
+  kind: "activity",
+  state: "started",
+  turnId: "turn",
+  activityId: id,
+  descriptor: {
+    kind: "other",
+    nativeToolName: "fixture",
+    subject: EMPTY_ACTIVITY_SUBJECT,
+    outcome: null,
+    startedAt: start,
+    endedAt: null,
+  },
+  input: {},
+  output: null,
+});
+
+it("orders live work by observed position before a stepped-back clock, ties by start", async () => {
+  const turn = live();
+  await turn.send({ kind: "delta", turnId: "turn", channel: "reasoning", text: "Weighing" });
+  await turn.send(started("z", 100));
+  turn.advance();
+  // The clock stepped back; both later calls were seen together.
+  await turn.send(started("a", 90));
+  await turn.send(started("b", 80));
+  expect(turn.order()).toEqual([["R", "z", "b", "a"]]);
+});
+
+it("keeps recorded order when live and durable-only work share no evidence", async () => {
+  const turn = live();
+  await turn.send({ kind: "delta", turnId: "turn", channel: "reasoning", text: "Weighing" });
+  await turn.send({
+    ...started("m", 50),
+    state: "completed",
+    output: "done",
+  } as RuntimeObservation);
+  // The durable call is laid down before the overlay still being written.
+  expect(turn.order()).toEqual([["m", "R"]]);
 });
